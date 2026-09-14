@@ -101,9 +101,14 @@ class CfApi {
   }
 
   async verifyToken() {
-    // First: is the token active? /user/tokens/verify works on any token regardless of
-    // scope, which separates "bad token" from "R2 not enabled on account".
-    const tokenCheck = await this.call('GET', `/user/tokens/verify`);
+    // First: is the token active? Account-owned tokens (the kind the R2 dashboard
+    // issues) only verify against the account endpoint; user-owned tokens only
+    // against /user/tokens/verify. Try the account one first, then fall back, so
+    // either kind separates "bad token" from "R2 not enabled on account".
+    let tokenCheck = await this.call('GET', `/accounts/${this.accountId}/tokens/verify`);
+    if (tokenCheck.status !== 200 || !tokenCheck.json?.success) {
+      tokenCheck = await this.call('GET', `/user/tokens/verify`);
+    }
     if (tokenCheck.status !== 200 || !tokenCheck.json?.success) {
       return {
         ok: false,

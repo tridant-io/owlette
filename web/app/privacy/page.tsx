@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 export default function PrivacyPage() {
-  const lastUpdated = 'July 26, 2026';
+  const lastUpdated = 'September 14, 2026';
   const router = useRouter();
 
   return (
@@ -349,8 +349,8 @@ export default function PrivacyPage() {
               <h3 className="text-lg font-medium text-foreground mt-6 mb-3">how to exercise your rights</h3>
               <p>
                 email{' '}
-                <a href="mailto:support@owlette.app" className="hl-link text-accent-cyan">
-                  support@owlette.app
+                <a href="mailto:support@tridant.io" className="hl-link text-accent-cyan">
+                  support@tridant.io
                 </a>{' '}
                 from the address on your account, or contact us as described in section 15. we respond
                 to requests within <strong>30 days</strong>. we may need to verify your identity before
@@ -402,8 +402,8 @@ export default function PrivacyPage() {
               </p>
               <p className="mt-4">
                 to report a suspected vulnerability or security issue, email{' '}
-                <a href="mailto:support@owlette.app" className="hl-link text-accent-cyan">
-                  support@owlette.app
+                <a href="mailto:support@tridant.io" className="hl-link text-accent-cyan">
+                  support@tridant.io
                 </a>{' '}
                 with &quot;security&quot; in the subject line.
               </p>
@@ -440,8 +440,8 @@ export default function PrivacyPage() {
               </p>
               <p className="mt-4">
                 <strong>email:</strong>{' '}
-                <a href="mailto:support@owlette.app" className="hl-link text-accent-cyan">
-                  support@owlette.app
+                <a href="mailto:support@tridant.io" className="hl-link text-accent-cyan">
+                  support@tridant.io
                 </a>
               </p>
               <p className="mt-2">

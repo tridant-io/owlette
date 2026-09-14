@@ -62,7 +62,7 @@
 #define MyAppName "Owlette"
 #define MyAppPublisher "Tridant Inc."
 #define MyAppURL "https://owlette.app"
-#define MyAppRepoURL "https://github.com/theexperiential/owlette"
+#define MyAppRepoURL "https://github.com/tridant-io/owlette"
 ; The desktop app (Tauri) is the product's face as of 3.0.0 — it replaced the
 ; pythonw-hosted tray and configuration GUI. Installed to {app}\app.
 #define MyAppExeName "owlette-desktop.exe"

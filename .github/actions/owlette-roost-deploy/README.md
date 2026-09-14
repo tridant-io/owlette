@@ -30,7 +30,7 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      - uses: theexperiential/owlette/.github/actions/owlette-roost-deploy@main
+      - uses: tridant-io/owlette/.github/actions/owlette-roost-deploy@main
         with:
           token: ${{ secrets.OWLETTE_TOKEN }}
           site-id: ${{ vars.OWLETTE_SITE_ID }}

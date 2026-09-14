@@ -58,10 +58,11 @@ test('row renders v3 badge, short description preview, timestamp, and three-dot 
   // Under the 40-char cap — rendered as-is.
   await expect(row.getByText('Bumped Q2 ads', { exact: true })).toBeVisible();
 
-  // `formatSiteScopedTimestamp` is absolute here, not relative. Match month +
-  // year + HH:MM so the assertion isn't pinned to wall-clock seconds.
+  // `formatSiteScopedTimestamp` is absolute here, not relative, and the row
+  // asks for the abbreviated month so the column can't overflow its box. Match
+  // month + year + HH:MM so the assertion isn't pinned to wall-clock seconds.
   await expect(
-    row.getByText(/(January|February|March|April|May|June|July|August|September|October|November|December) \d+, \d{4}(?:,?\s+| at )\d{1,2}:\d{2}/i)
+    row.getByText(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d+, \d{4}(?:,?\s+| at )\d{1,2}:\d{2}/i)
   ).toBeVisible();
 
   await expect(row.getByRole('button', { name: 'row actions' })).toBeVisible();

@@ -19,6 +19,8 @@ Owlette is a cloud-connected Windows process management and remote deployment sy
 - **Never modify the `firebase` section** of `config.json` during remote config updates — breaks agent registration
 - **Never use blocking operations** in the 5-second main service loop (`SLEEP_INTERVAL = 5`) — stalls all monitoring
 - **Never spawn reconnection logic** outside `ConnectionManager` — it has circuit breaker and backoff
+- **Never raise a UAC prompt unattended.** No path that runs without a deliberate click (service, silent installer, desktop auto-start, scheduled task) may `runas` / ShellExecute-elevate. Elevation is only ever the response to an explicit user click. This has shipped to the fleet twice (3.2.0, and again on every 3.2.0→3.3.x upgrade).
+- **A fleet-behavior fix must cover the upgrade path from every version still in the field.** During a self-update the OLD desktop app and OLD service are what run on the box. A fix that lives only in the new build does nothing for that upgrade; the installer is the only new code that executes on an old machine, so the upgrade-path half of the fix belongs there. Verify by upgrading from the oldest fielded version, not from dev.
 
 **Web landmines:**
 - **Never call Firestore directly from components** — use hooks in `web/hooks/`
@@ -265,4 +267,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-09-12
+**Last Updated**: 2026-09-13

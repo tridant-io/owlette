@@ -19,7 +19,7 @@ We take the security of Owlette seriously. If you believe you have found a secur
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
 
-Instead, please send an email to: **security@owlette.app**
+Instead, please send an email to: **support@tridant.io**
 
 Include the following information in your report:
 
@@ -100,6 +100,4 @@ Owlette implements the following security measures:
 
 ## Contact
 
-For general security questions (not vulnerability reports), contact: support@owlette.app
-
-For vulnerability reports: security@owlette.app
+For security questions and vulnerability reports, contact: support@tridant.io
