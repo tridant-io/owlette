@@ -711,15 +711,18 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
       return;
     }
 
-    // wait for user data
+    // Wait for access to resolve. AuthContext publishes `userSites` as undefined
+    // until the user doc AND membership listener have both delivered — before
+    // that `isSuperadmin` can still be a not-yet-read `false`.
     if (userSites === undefined || isSuperadmin === undefined || userId === undefined) {
       setLoading(true);
       return;
     }
 
-    // Do NOT remove: AuthContext renders one frame with `user` set but `userSites`
-    // still at its default `[]`, and without this reset the empty branch below
-    // latches loading=false — the "create your first site" flicker on reload.
+    // Do NOT remove: re-arms loading when access changes after it first
+    // resolves (a role change swaps branches, a membership adds a site), so the
+    // empty branch below can't latch loading=false over a list still arriving —
+    // the "create your first site" flicker.
     setLoading(true);
 
     try {
@@ -763,8 +766,17 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
       // the Firestore rules use get(), which rules can't evaluate for queries.
       const unsubscribes: (() => void)[] = [];
       const siteDataMap = new Map<string, Site>();
+      // Sites whose listener has answered at least once (data, absence, or error),
+      // against the distinct ids asked for — a repeated id must not hold it open.
+      const reported = new Set<string>();
+      const expected = new Set(userSites).size;
 
+      // Nothing is published until EVERY listener has answered. The snapshots
+      // land in any order, and a partial list with loading=false reads as the
+      // whole list: callers resolved their default site against it, missed
+      // `lastSiteId` because its snapshot hadn't arrived, and took `sites[0]`.
       const updateStateFromMap = () => {
+        if (reported.size < expected) return;
         const siteArray = Array.from(siteDataMap.values());
         siteArray.sort((a, b) => a.name.localeCompare(b.name));
         setSites(siteArray);
@@ -801,6 +813,7 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
               console.warn(`Site "${siteId}" not found in Firestore`);
             }
 
+            reported.add(siteId);
             updateStateFromMap();
           },
           (err) => {
@@ -810,7 +823,10 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
             // sites keep their own listeners; this reports the one that failed.
             console.error(`Error fetching site ${siteId}:`, err);
             setError(`site ${siteId}: ${err.message}`);
-            setLoading(false);
+            // A failed listener has answered too — without this one bad site
+            // would hold the whole list at loading forever.
+            reported.add(siteId);
+            updateStateFromMap();
           }
         );
         unsubscribes.push(unsubscribe);
