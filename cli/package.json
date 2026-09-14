@@ -6,12 +6,12 @@
   "license": "FSL-1.1-Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/theexperiential/owlette.git",
+    "url": "git+https://github.com/tridant-io/owlette.git",
     "directory": "cli"
   },
   "homepage": "https://owlette.app",
   "bugs": {
-    "url": "https://github.com/theexperiential/owlette/issues"
+    "url": "https://github.com/tridant-io/owlette/issues"
   },
   "bin": {
     "owlette": "bin/owlette"

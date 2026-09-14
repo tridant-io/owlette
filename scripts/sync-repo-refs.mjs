@@ -127,10 +127,15 @@ function syncPackageJsons({ owner, repo }, apply) {
   for (const rel of PACKAGE_JSONS) {
     const file = path.join(ROOT, rel);
     const before = fs.readFileSync(file, 'utf8');
-    const after = before.replace(
-      /(git\+https:\/\/github\.com\/)[^"]*?(\.git")/g,
-      `$1${owner}/${repo}$2`,
-    );
+    // `repository.url` (the form npm checks for provenance) and `bugs.url`, which
+    // carries the same slug in a plain https form the generic rules never see
+    // because `.json` is outside EXTENSIONS.
+    const after = before
+      .replace(/(git\+https:\/\/github\.com\/)[^"]*?(\.git")/g, `$1${owner}/${repo}$2`)
+      .replace(
+        new RegExp(`(https://github\\.com/)[A-Za-z0-9-]+/${REPO_NAME_PATTERN}(/issues")`, 'g'),
+        `$1${owner}/${repo}$2`,
+      );
     if (after === before) continue;
     if (apply) fs.writeFileSync(file, after, 'utf8');
     changed.push(rel);

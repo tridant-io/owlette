@@ -53,7 +53,7 @@ Use the [public API launch runbook](public-api-launch-runbook.md) to move from p
 | signup | `https://owlette.app/register` | must create or request access for the launch cohort |
 | download | `https://owlette.app/download` | must serve the current installer path or clear setup instructions |
 | API reference | `https://owlette.app/docs/api` | backed by `/api/openapi` |
-| full docs | `https://owlette.app/docs` | fumadocs, built with the app (`npm run build`); the old `theexperiential.github.io/owlette` MkDocs site was deleted 2026-05-20 |
+| full docs | `https://owlette.app/docs` | fumadocs, built with the app (`npm run build`); the old `tridant-io.github.io/owlette` MkDocs site was deleted 2026-05-20 |
 | status page | Instatus hosted URL | Wave 5.1 blocked until configured |
 | npm CLI | `@owlette/cli@rc` | Wave 5.3 blocked until published |
 | npm SDK | `@owlette/sdk@rc` | Wave 5.3 blocked until published |
