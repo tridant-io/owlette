@@ -2,9 +2,9 @@
 # Install with: pip install -r requirements-dev.txt
 
 # Testing Framework
-pytest==9.0.3
-pytest-cov==7.0.0
-pytest-mock==3.12.0
+pytest==9.1.1
+pytest-cov==7.1.0
+pytest-mock==3.15.1
 pytest-asyncio==1.4.0
 
 # Code Quality
@@ -16,5 +16,5 @@ flake8==6.1.0
 mypy==1.7.1
 
 # Testing Utilities
-responses==0.24.1  # Mock HTTP requests
-freezegun==1.4.0   # Mock datetime
+responses==0.26.3  # Mock HTTP requests
+freezegun==1.5.5   # Mock datetime
