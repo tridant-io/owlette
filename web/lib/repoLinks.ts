@@ -13,7 +13,7 @@
  */
 
 // -- synced from root package.json by scripts/sync-repo-refs.mjs --
-export const GITHUB_OWNER = 'theexperiential';
+export const GITHUB_OWNER = 'tridant-io';
 export const GITHUB_REPO = 'owlette';
 // -- end synced block --
 

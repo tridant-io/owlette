@@ -51,7 +51,7 @@ owlette: trial ends 2026-08-15T00:00:00.000Z; choose a plan to keep API access
 stdout is untouched, so `--json` output stays pipeable into `jq`. Once the
 trial ends, commands fail with `402 trial_expired` until a plan is chosen.
 
-full docs at [docs/cli/overview.md](https://github.com/theexperiential/owlette/tree/main/docs/cli/overview.md) (or owlette.app/docs/cli once published).
+full docs at [docs/cli/overview.md](https://github.com/tridant-io/owlette/tree/main/docs/cli/overview.md) (or owlette.app/docs/cli once published).
 
 ## license
 

@@ -1,0 +1,43 @@
+name: repo refs
+
+# Every committed reference to the GitHub owner/repo slug is derived from the
+# root package.json `repository.url` by scripts/sync-repo-refs.mjs. This job
+# fails when any tracked file has drifted from that source, so a repository
+# transfer is one edit + one script run, never a hunt.
+
+on:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'cli/package.json'
+      - 'sdks/node/package.json'
+      - 'scripts/sync-repo-refs.mjs'
+      - 'web/lib/repoLinks.ts'
+      - '.github/workflows/repo-refs.yml'
+  push:
+    branches: [main, dev]
+
+concurrency:
+  group: repo-refs-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege default: this job only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: repo slug references are in sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22'
+
+      - name: check every slug reference against package.json
+        run: node scripts/sync-repo-refs.mjs --check

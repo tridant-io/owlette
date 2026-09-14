@@ -15,7 +15,7 @@ that box can follow it step by step.
 ### A1. Pull the repo + install prerequisites
 
 ```powershell
-git clone https://github.com/theexperiential/owlette.git C:\Owlette-e2e
+git clone https://github.com/tridant-io/owlette.git C:\Owlette-e2e
 cd C:\Owlette-e2e
 git checkout dev
 ```
