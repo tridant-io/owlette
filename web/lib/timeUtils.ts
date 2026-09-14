@@ -61,18 +61,22 @@ export function formatTimeOnly(
   }
 }
 
-/** Unix seconds → "January 2, 2026, 3:09:15 PM EST" for tooltips. */
+/**
+ * Unix seconds → "January 2, 2026, 3:09:15 PM EST" for tooltips. `monthStyle`
+ * 'short' abbreviates the month ("Jan 2") for width-constrained list columns.
+ */
 export function formatFullTimestamp(
   timestampSeconds: number,
   timezone: string = 'UTC',
-  timeFormat: '12h' | '24h' = '12h'
+  timeFormat: '12h' | '24h' = '12h',
+  monthStyle: 'long' | 'short' = 'long'
 ): string {
   const date = new Date(timestampSeconds * 1000);
   const hour12 = timeFormat === '12h';
 
   try {
     return date.toLocaleString('en-US', {
-      month: 'long',
+      month: monthStyle,
       day: 'numeric',
       year: 'numeric',
       hour: 'numeric',
@@ -85,7 +89,7 @@ export function formatFullTimestamp(
   } catch {
     // Invalid timezone — render in the browser's zone.
     return date.toLocaleString('en-US', {
-      month: 'long',
+      month: monthStyle,
       day: 'numeric',
       year: 'numeric',
       hour: 'numeric',
@@ -267,14 +271,16 @@ export function formatTimezoneShortName(tz: string | undefined): string {
  * Timestamp for SITE-SCOPED surfaces (deployments, activity, tokens) that have
  * no single machine to anchor to; 'machine' mode therefore resolves to site →
  * browser. Accepts Date / ms number / parseable string / Firestore Timestamp.
- * Returns "Month D, YYYY, HH:MM:SS TZ", or '—' when unparseable.
+ * Returns "Month D, YYYY, HH:MM:SS TZ", or '—' when unparseable. Pass
+ * `'short'` as `monthStyle` where the column is narrow (the roosts list).
  */
 export function formatSiteScopedTimestamp(
   input: FirestoreTs,
   mode: TimeDisplayMode,
   userTz: string | undefined,
   siteTz: string | undefined,
-  timeFormat: '12h' | '24h' = '12h'
+  timeFormat: '12h' | '24h' = '12h',
+  monthStyle: 'long' | 'short' = 'long'
 ): string {
   if (input == null) return '—';
 
@@ -305,7 +311,7 @@ export function formatSiteScopedTimestamp(
   const seconds = Math.floor(ms / 1000);
   // No machine here — 'machine' mode falls through to site, browser, UTC.
   const tz = getDisplayTimezone(mode, userTz, undefined, siteTz);
-  return formatFullTimestamp(seconds, tz, timeFormat);
+  return formatFullTimestamp(seconds, tz, timeFormat, monthStyle);
 }
 
 /** Timezone selector shortlist, ordered west → east by UTC offset. */
