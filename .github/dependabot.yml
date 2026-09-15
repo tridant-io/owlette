@@ -56,6 +56,11 @@ updates:
       # fumadocs each declare 7.x support; then remove this rule and take the PR.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # commander 15 is ESM-only with a Node >=22.12 floor; the cli is CommonJS and supports
+      # Node >=20, so it stays on 14 (the last dual CJS/ESM major). Exit: the cli moves to ESM
+      # or raises its engines floor to >=22.12, then delete this rule and take the PR.
+      - dependency-name: "commander"
+        update-types: ["version-update:semver-major"]
 
   # Rust crates: the owlette-host service wrapper and the Tauri desktop app.
   - package-ecosystem: cargo
