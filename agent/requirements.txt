@@ -32,7 +32,7 @@ mss==9.0.2  # Fast cross-platform screenshot library
 HardwareMonitor==1.2.1
 pythonnet==3.1.0  # HardwareMonitor's CLR bridge (was transitive via WinTmp) — pinned like everything else
 wmi==1.5.1  # DIRECT dependency (hardware_profile + shared_utils disk/BIOS probes); used to arrive transitively through WinTmp
-nvidia-ml-py==12.560.30  # NVIDIA GPU fallback (NVML bindings); also used directly by mcp_tools
+nvidia-ml-py==13.610.43  # NVIDIA GPU fallback (NVML bindings); also used directly by mcp_tools
 
 # hoot (cortex on the wire) — the local Claude Code agent behind hoot turns.
 # Unblocked 2026-09-12: pywin32 306 -> 312 lifts the freeze this pin sat under
