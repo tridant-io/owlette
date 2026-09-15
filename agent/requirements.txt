@@ -1,8 +1,8 @@
 pywin32==312  # >=311 required by mcp 2.x (see the claude-agent-sdk note below)
 psutil==5.9.5
-email-validator==2.0.0
+email-validator==2.3.0
 GPUtil==1.4.0
-cryptography==50.0.0
+cryptography==50.0.1
 # Pillow is a DIRECT dependency: screenshot_capture + owlette_service compress
 # captures to JPEG with it. It used to arrive transitively through pystray, which
 # 3.0.0 dropped along with the rest of the python UI (customtkinter, CTkListbox,
@@ -12,7 +12,7 @@ Pillow==12.3.0
 packaging==24.2  # >=24.0 required by the wheel that get-pip bootstraps
 setuptools==83.0.0  # >=78.1.1 fixes PackageIndex.download path traversal (CVE-2025-47273)
 requests==2.34.2  # >=2.32.0/.4/2.33.0 CVE fixes; 2.34.0 also fixes greedy no_proxy matching
-tzlocal==5.2  # Convert Windows registry tz names to IANA (e.g. "Pacific Standard Time" -> "America/Los_Angeles") for dashboard timezone display
+tzlocal==5.4.4  # Convert Windows registry tz names to IANA (e.g. "Pacific Standard Time" -> "America/Los_Angeles") for dashboard timezone display
 # DIRECT dependency (R5). Windows ships no IANA database, so zoneinfo.ZoneInfo
 # can only resolve "America/Los_Angeles" out of this package. It arrived
 # transitively through tzlocal's Windows marker — a coincidence, not a contract:
@@ -58,7 +58,7 @@ claude-agent-sdk==0.2.152
 mcp==2.2.0
 
 # Error monitoring (optional — only active when DSN configured in config.json)
-sentry-sdk==2.66.1
+sentry-sdk==2.68.1
 
 # Firebase integration - now using REST API with OAuth tokens (no Admin SDK needed)
 # firebase-admin==6.4.0  # REMOVED - replaced with REST API client
