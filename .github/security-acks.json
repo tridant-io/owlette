@@ -1,0 +1,100 @@
+{
+  "$comment": [
+    "Standing waivers for scripts/check-security-alerts.mjs.",
+    "",
+    "Two kinds of entry live here, and they are NOT the same thing:",
+    "  - an assessed waiver: we read the finding, it cannot reach anything we",
+    "    ship, and the reason states the evidence (see alert:dependabot:230).",
+    "  - a time-boxed deferral: the finding is real and UNREAD, parked briefly so",
+    "    a gate can land, with a short expiry forcing the triage.",
+    "The reason field says which one it is. Neither is a way to quiet a noisy",
+    "gate. Every entry needs a reason, an owner, and an expiry - an expired",
+    "waiver stops applying and the finding blocks again, so nothing rots here.",
+    "",
+    "This file lives in git precisely so a waiver is reviewable in a PR and",
+    "attributable in `git log`, rather than evaporating with a shell argument.",
+    "`verify:*` keys can never be waived: a check that could not RUN must be",
+    "fixed, not accepted.",
+    "",
+    "The alert:code-scanning:* entries below are a TIME-BOXED BATCH, not individual assessments. They were added 2026-09-12 so the gate could land; they expire 2026-10-12 and must be triaged before then. Start with the auth-path ones (apiAuth.server.ts, _shared.ts)."
+  ],
+  "acks": {
+    "alert:dependabot:230": {
+      "reason": "glib 0.18.5 arrives only via Tauri 2.11's GTK backend, which is cfg(target_os = \"linux\")-gated. The desktop app is built on windows-latest only, always via `tauri build --no-bundle`, and `cargo tree --locked --target x86_64-pc-windows-msvc -i glib` prints 'nothing to print' \u2014 the crate is never compiled into anything shipped. No fix exists upstream: Tauri 2.x pins the whole gtk-rs 0.18 stack.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-12-12",
+      "revisit": "When Tauri moves the gtk-rs stack to glib 0.20, drop this entry and let the bump land normally."
+    },
+    "alert:code-scanning:315": {
+      "reason": "UNTRIAGED. js/tainted-format-string at web/lib/hoot/turnRunner.server.ts:518, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    },
+    "alert:code-scanning:313": {
+      "reason": "UNTRIAGED. js/remote-property-injection at web/lib/apiAuth.server.ts:470, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    },
+    "alert:code-scanning:312": {
+      "reason": "UNTRIAGED. js/remote-property-injection at web/lib/hoot-utils.server.ts:185, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    },
+    "alert:code-scanning:311": {
+      "reason": "UNTRIAGED. js/remote-property-injection at web/app/api/_shared.ts:370, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    },
+    "alert:code-scanning:310": {
+      "reason": "UNTRIAGED. js/insufficient-password-hash at web/lib/auditLogClient.ts:56, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    },
+    "alert:code-scanning:307": {
+      "reason": "UNTRIAGED. js/tainted-format-string at web/lib/hoot/approvalLedger.server.ts:74, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    },
+    "alert:code-scanning:303": {
+      "reason": "UNTRIAGED. js/file-system-race at scripts/migrations/backfill-mfa-factors.mjs:617, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    },
+    "alert:code-scanning:299": {
+      "reason": "UNTRIAGED. js/clear-text-logging at scripts/checks/smoke-r2-roundtrip.mjs:110, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    },
+    "alert:code-scanning:298": {
+      "reason": "UNTRIAGED. js/user-controlled-bypass at web/app/api/webhooks/test/route.ts:33, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    },
+    "alert:code-scanning:297": {
+      "reason": "UNTRIAGED. js/user-controlled-bypass at web/app/api/webhooks/test/route.ts:33, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-12",
+      "expires": "2026-10-12",
+      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    }
+  }
+}
