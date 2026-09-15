@@ -5,6 +5,38 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ---
 
+## [3.3.5] - 2026-09-15
+
+### changed — the agent's libraries are current again
+
+The libraries the agent uses to watch processes and read GPU state had fallen
+years behind: the process library was from 2023 and the NVIDIA bindings were a
+major version old. This release brings both current (psutil 7, nvidia-ml-py 13)
+together with the crypto, error-reporting and timezone libraries, and the
+desktop app's Windows and Tauri crates. Nothing the agent does has changed; the
+installer simply ships the versions their authors maintain today. Every one of
+these was proven with a full installer build and a check against a real GPU and
+process table before it was tagged.
+
+On the web side, the Next.js framework carries two critical security patches
+and a set of routine library updates.
+
+### changed — one support address
+
+Support is now support@tridant.io everywhere: the dashboard footer, the docs,
+the terms and privacy pages, and the security policy. The old owlette.app
+mailboxes are retired.
+
+### fixed — the dashboard opens where you left it
+
+Reloading the dashboard could land on a half-loaded site list instead of the
+site you were viewing. It now reopens the last viewed site.
+
+### fixed — two layout glitches
+
+Between 1024 and 1065 pixels wide the machine list scrolled sideways, and a
+roost row's timestamp could sit under its action menu. Both are corrected.
+
 ## [3.3.4] - 2026-09-12
 
 ### changed — hoot runs on a current Claude Code CLI again
