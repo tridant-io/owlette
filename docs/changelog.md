@@ -9,6 +9,26 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ---
 
+## [Unreleased]
+
+### added — pin a metric to read it on its own
+
+Clicking a stat card under a machine's metrics chart pins it: its line stays
+highlighted, the other cards dim, and the readout under the cursor lists only
+that metric while you scrub along the line. Click the card again to unpin.
+
+### fixed — every line on a metrics chart has a scale you can read
+
+Temperature lines now read off their own °C scale instead of the percent
+labels, and a chart showing only network or disk throughput puts its scale on
+the left rather than beside an empty percent column. Each side of the chart
+carries at most one scale, and it always belongs to what you're looking at: a
+pinned or hovered card shows only its own unit, and with usage, temperature
+and throughput on one chart the labels follow the device under the cursor,
+keeping a CPU's or GPU's percent and temperature on their sides. Throughput
+scales now step evenly, so both sides line up with the gridlines, and their
+labels no longer wrap onto two lines.
+
 ## [3.3.5] - 2026-09-15
 
 ### changed — the agent's libraries are current again

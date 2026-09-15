@@ -38,10 +38,11 @@ export function parseDiskIOKey(
     : null;
 }
 
-/** Round-number Y-axis ticks for a bytes/sec chart. Recharts divides the max by
- *  4 and produces ticks like "585.9 KB/s"; this picks a step from nice mantissas
- *  × binary bases so every tick formats cleanly. Null for non-positive max, so
- *  callers fall through to recharts' default scale. */
+/** Round-number Y-axis ticks for a bytes/sec chart, on four even steps so they share
+ *  the chart's quarter gridlines with every other axis. Recharts divides the max by 4
+ *  and produces ticks like "585.9 KB/s"; this picks the smallest step from nice
+ *  mantissas × binary bases whose four steps cover the max, so every tick formats
+ *  cleanly. Null for a non-positive or non-finite max. */
 export function computeNiceByteTicks(
   maxBytesPerSec: number,
 ): { domainMax: number; ticks: number[] } | null {
@@ -51,7 +52,7 @@ export function computeNiceByteTicks(
   const mantissas = [1, 2, 5, 10, 25, 50, 100, 250, 500];
   const bases = [1, 1024, 1024 * 1024, 1024 * 1024 * 1024];
 
-  // ~4 intervals: smallest candidate ≥ max/4.
+  // Smallest candidate ≥ max/4, so four steps cover the max.
   const rough = maxBytesPerSec / 4;
   let step = 0;
   outer: for (const base of bases) {
@@ -63,11 +64,11 @@ export function computeNiceByteTicks(
       }
     }
   }
-  // Beyond 500 GB/s: cap at the largest candidate rather than bail out.
-  if (step === 0) step = mantissas[mantissas.length - 1] * bases[bases.length - 1];
+  // Past the largest candidate (500 GB/s), round up to a multiple of it rather than bail out.
+  if (step === 0) {
+    const largest = mantissas[mantissas.length - 1] * bases[bases.length - 1];
+    step = Math.ceil(rough / largest) * largest;
+  }
 
-  const domainMax = Math.ceil(maxBytesPerSec / step) * step;
-  const ticks: number[] = [];
-  for (let v = 0; v <= domainMax; v += step) ticks.push(v);
-  return { domainMax, ticks };
+  return { domainMax: step * 4, ticks: [0, step, step * 2, step * 3, step * 4] };
 }

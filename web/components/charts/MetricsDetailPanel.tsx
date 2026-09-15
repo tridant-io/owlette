@@ -12,6 +12,9 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceLine,
+  useActiveTooltipCoordinate,
+  useActiveTooltipDataPoints,
+  useYAxisScale,
 } from 'recharts';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -22,7 +25,7 @@ import {
 } from '@/components/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
-import { X, ToggleLeft, ToggleRight, Monitor, HardDrive, ArrowDownUp, ArrowUp, ArrowDown, Thermometer, ChevronDown, Check } from 'lucide-react';
+import { X, ToggleLeft, ToggleRight, Monitor, HardDrive, ArrowDownUp, ArrowUp, ArrowDown, Thermometer, ChevronDown, Check, Pin } from 'lucide-react';
 import { TimeRangeSelector, type TimeRange } from './TimeRangeSelector';
 import { ChartTooltip, metricConfig, type MetricType } from './ChartTooltip';
 import {
@@ -160,11 +163,38 @@ function MachineSwitcher({
 // Tab-state helpers + types live in ./metricsTabs so the dashboard can import them
 // without pulling Recharts into the main bundle.
 
-// Recharts YAxis width; also the stats-grid left padding so cards align with the plot area.
-const CHART_Y_AXIS_WIDTH = 40;
+/** Units a visible line reads off; each has a hidden scale axis. */
+type ChartAxisId = 'default' | 'temp' | 'bytes';
 
-// Right-side bytes axis width — wider than the left to fit "1.2 MB/s" ticks.
-const CHART_BYTES_AXIS_WIDTH = 56;
+// Unit order for the idle label columns: the first unit present labels the left, the
+// next the right.
+const AXIS_PRIORITY: readonly ChartAxisId[] = ['default', 'temp', 'bytes'];
+
+// Label width per unit, to fit "100%", "100°C", and "1.2 MB/s" ticks.
+const AXIS_WIDTHS: Record<ChartAxisId, number> = { default: 40, temp: 44, bytes: 56 };
+
+/** A unit's y scale, on four even steps from 0 so every unit's ticks share the chart's
+ *  quarter gridlines. */
+interface AxisScaleSpec {
+  domainMax: number;
+  ticks: number[];
+  format: (value: number) => string;
+}
+
+const PERCENT_SCALE: AxisScaleSpec = {
+  domainMax: 100,
+  ticks: [0, 25, 50, 75, 100],
+  format: (value) => `${value}%`,
+};
+
+// An idle bytes series (no traffic in range) still gets a readable 0-1000 B/s scale.
+const IDLE_BYTES_PEAK = 1000;
+
+// Byte-rate tick label. The non-breaking space keeps "1.5 MB/s" on one line; recharts
+// word-wraps tick text to the axis width.
+function formatByteTick(bytesPerSec: number): string {
+  return formatDiskIO(bytesPerSec).replace(' ', '\u00A0');
+}
 
 // Once a visible peak hits this % of max rate (disk bandwidth / NIC link speed) the
 // series flip from the auto-scaled bytes axis to the 0-100% axis so saturation is
@@ -220,6 +250,44 @@ function resolveSelection(
   return initialMetricToState(initialMetric);
 }
 
+/** Chart child, since recharts' hooks only work inside the chart: reports the device of
+ *  the visible line nearest the cursor so the label columns can follow it. */
+function NearestDeviceProbe({
+  lines,
+  onNearest,
+}: {
+  lines: ReadonlyArray<{ key: string; axis: ChartAxisId; device: string }>;
+  onNearest: (device: string) => void;
+}) {
+  const cursor = useActiveTooltipCoordinate();
+  const point = useActiveTooltipDataPoints<Record<string, unknown>>()?.[0];
+  const percentScale = useYAxisScale('default');
+  const tempScale = useYAxisScale('temp');
+  const bytesScale = useYAxisScale('bytes');
+
+  let nearest: string | null = null;
+  if (cursor && point) {
+    const scales = { default: percentScale, temp: tempScale, bytes: bytesScale };
+    let nearestDistance = Infinity;
+    for (const line of lines) {
+      const value = point[line.key];
+      const y = typeof value === 'number' ? scales[line.axis]?.(value) : undefined;
+      if (y === undefined) continue;
+      const distance = Math.abs(y - cursor.y);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = line.device;
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (nearest) onNearest(nearest);
+  }, [nearest, onNearest]);
+
+  return null;
+}
+
 export function MetricsDetailPanel({
   machineId,
   machineName,
@@ -263,6 +331,12 @@ export function MetricsDetailPanel({
 
   // Hovered stat card highlights its line and dims the rest. Card `key` === Line `dataKey`.
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  // A clicked card pins that highlight and filters the tooltip to its line, so the line
+  // can be scrubbed on its own. Clicking it again unpins.
+  const [pinnedKey, setPinnedKey] = useState<string | null>(null);
+  // Device of the line last nearest the chart cursor. With three units on the chart it
+  // picks the label columns until the pointer leaves the chart.
+  const [cursorDevice, setCursorDevice] = useState<string | null>(null);
 
   // Sync when another tab/device changes the preference; skipped in demo (range is local).
   useEffect(() => {
@@ -427,7 +501,7 @@ export function MetricsDetailPanel({
   );
 
   // "percent" (shared 0-100 axis, saturation obvious) once a visible peak hits the
-  // threshold, else "bytes" (auto-scaled right axis, sub-%-of-max still legible).
+  // threshold, else "bytes" (auto-scaled bytes axis, sub-%-of-max still legible).
   const diskIOMode: 'percent' | 'bytes' = useMemo(() => {
     if (effectiveDiskIO.length === 0) return 'bytes';
     let peakPct = 0;
@@ -631,16 +705,15 @@ export function MetricsDetailPanel({
     }
   }, [timeRange, chartData, nowTs]);
 
-  // Render the right bytes axis only when some bytes-mode series is selected.
+  // Render the bytes axis only when some bytes-mode series is selected.
   const bytesAxisActive =
     (diskIOMode === 'bytes' && effectiveDiskIO.length > 0) ||
     (networkMode === 'bytes' && selectedNics.length > 0);
 
-  // Explicit round ticks (250 KB/s, 1 MB/s, …): Recharts' default divides the data max
-  // by 4 and lands on values like "585.9 KB/s". Scans the visible domain across every
-  // bytes-axis series so disk IO and NIC share one scale. Null when no data is in range,
-  // which falls back to recharts' auto scale.
-  const bytesAxis = useMemo(() => {
+  // Bytes scale on round steps (250 KB/s, 1 MB/s, …) sized to the visible peak across
+  // every bytes-axis series, so disk IO and NIC share one scale. Null when no series is
+  // in bytes mode.
+  const bytesAxis = useMemo((): AxisScaleSpec | null => {
     if (!bytesAxisActive) return null;
     const [start, end] = timeDomain;
     let max = 0;
@@ -663,7 +736,8 @@ export function MetricsDetailPanel({
         }
       }
     }
-    return computeNiceByteTicks(max);
+    const nice = computeNiceByteTicks(max > 0 ? max : IDLE_BYTES_PEAK);
+    return nice && { ...nice, format: formatByteTick };
   }, [bytesAxisActive, diskIOMode, effectiveDiskIO, networkMode, selectedNics, chartData, timeDomain]);
 
   // One tick per natural unit (hour/date/month) — no repeats, no gaps on sparse data.
@@ -746,33 +820,38 @@ export function MetricsDetailPanel({
   };
 
   // Active Line dataKeys. `hidden` renders a transparent stroke (tooltip-only data);
-  // `axis: 'bytes'` binds to the right auto-scaled axis so byte/sec doesn't blow out
-  // the shared 0-100% scale.
+  // `axis: 'bytes'` / `'temp'` bind to the bytes / °C scale axes so byte/sec and °C
+  // don't blow out the shared 0-100% scale. `device` groups one piece of hardware's
+  // lines (CPU usage + temperature, a NIC's TX/RX, a drive's storage + activity) so axis
+  // labels switch per device, not per line.
   const activeLines = useMemo(() => {
-    const lines: { key: string; color: string; label: string; hidden?: boolean; axis?: 'default' | 'hidden' | 'bytes' }[] = [];
+    const lines: { key: string; color: string; label: string; device: string; hidden?: boolean; axis?: 'bytes' | 'temp' }[] = [];
 
-    // Standard metrics
+    // Standard metrics; a temperature belongs to its usage metric's device.
     for (const metric of effectiveMetrics) {
       const config = metricConfig[metric];
       if (config) {
-        lines.push({ key: metric, color: config.color, label: config.label });
+        const isTemp = metric === 'cpuTemp' || metric === 'gpuTemp';
+        const device = metric === 'cpuTemp' ? 'cpu' : metric === 'gpuTemp' ? 'gpu' : metric;
+        lines.push({ key: metric, color: config.color, label: config.label, device, axis: isTemp ? 'temp' : undefined });
       }
     }
 
     // Per-NIC lines, same dual-family routing as disk IO: percent mode draws
     // `_tx_util`/`_rx_util` with hidden `_tx`/`_rx` bytes siblings for the tooltip;
-    // bytes mode draws `_tx`/`_rx` on the right axis and needs no siblings.
+    // bytes mode draws `_tx`/`_rx` on the bytes axis and needs no siblings.
     for (const nicName of selectedNics) {
       const nicIdx = nicNames.indexOf(nicName);
       const colors = getNicColors(nicIdx >= 0 ? nicIdx : 0);
+      const device = `nic:${nicName}`;
       if (networkMode === 'percent') {
-        lines.push({ key: `${nicName}_tx_util`, color: colors.tx, label: `${nicName} TX` });
-        lines.push({ key: `${nicName}_rx_util`, color: colors.rx, label: `${nicName} RX` });
-        lines.push({ key: `${nicName}_tx`, color: colors.tx, label: `${nicName} TX (bps)`, hidden: true });
-        lines.push({ key: `${nicName}_rx`, color: colors.rx, label: `${nicName} RX (bps)`, hidden: true });
+        lines.push({ key: `${nicName}_tx_util`, color: colors.tx, label: `${nicName} TX`, device });
+        lines.push({ key: `${nicName}_rx_util`, color: colors.rx, label: `${nicName} RX`, device });
+        lines.push({ key: `${nicName}_tx`, color: colors.tx, label: `${nicName} TX (bps)`, device, hidden: true });
+        lines.push({ key: `${nicName}_rx`, color: colors.rx, label: `${nicName} RX (bps)`, device, hidden: true });
       } else {
-        lines.push({ key: `${nicName}_tx`, color: colors.tx, label: `${nicName} TX`, axis: 'bytes' });
-        lines.push({ key: `${nicName}_rx`, color: colors.rx, label: `${nicName} RX`, axis: 'bytes' });
+        lines.push({ key: `${nicName}_tx`, color: colors.tx, label: `${nicName} TX`, device, axis: 'bytes' });
+        lines.push({ key: `${nicName}_rx`, color: colors.rx, label: `${nicName} RX`, device, axis: 'bytes' });
       }
     }
 
@@ -780,7 +859,7 @@ export function MetricsDetailPanel({
     for (const diskName of selectedDisks) {
       const diskIdx = diskNames.indexOf(diskName);
       const color = getDiskColors(diskIdx >= 0 ? diskIdx : 0);
-      lines.push({ key: `${diskName}_pct`, color, label: diskName });
+      lines.push({ key: `${diskName}_pct`, color, label: diskName, device: `drive:${diskName}` });
     }
 
     // Per-GPU lines: usage% + temperature per GPU
@@ -788,26 +867,51 @@ export function MetricsDetailPanel({
       const gpuIdx = gpuNames.indexOf(gpuName);
       const colors = getGpuColors(gpuIdx >= 0 ? gpuIdx : 0);
       const label = gpuDisplayLabel(gpuName);
-      lines.push({ key: `${gpuName}_usage`, color: colors.usage, label });
-      lines.push({ key: `${gpuName}_temp`, color: colors.temp, label });
+      const device = `gpu:${gpuName}`;
+      lines.push({ key: `${gpuName}_usage`, color: colors.usage, label, device });
+      lines.push({ key: `${gpuName}_temp`, color: colors.temp, label, device, axis: 'temp' });
     }
 
     // Per-volume disk IO: 2 visible lines (read + write) per volume. percent mode draws
     // `_pct` with hidden bytes siblings for the tooltip; bytes mode draws the bytes keys.
     for (const volumeId of effectiveDiskIO) {
+      // Same device as the drive's storage line, so the two keep their label sides.
+      const device = `drive:${volumeId}`;
       if (diskIOMode === 'percent') {
-        lines.push({ key: `${volumeId}_io_read_pct`, color: DISK_IO_COLORS.read, label: `${volumeId} read` });
-        lines.push({ key: `${volumeId}_io_write_pct`, color: DISK_IO_COLORS.write, label: `${volumeId} write` });
-        lines.push({ key: `${volumeId}_io_read`, color: DISK_IO_COLORS.read, label: `${volumeId} read (bps)`, hidden: true });
-        lines.push({ key: `${volumeId}_io_write`, color: DISK_IO_COLORS.write, label: `${volumeId} write (bps)`, hidden: true });
+        lines.push({ key: `${volumeId}_io_read_pct`, color: DISK_IO_COLORS.read, label: `${volumeId} read`, device });
+        lines.push({ key: `${volumeId}_io_write_pct`, color: DISK_IO_COLORS.write, label: `${volumeId} write`, device });
+        lines.push({ key: `${volumeId}_io_read`, color: DISK_IO_COLORS.read, label: `${volumeId} read (bps)`, device, hidden: true });
+        lines.push({ key: `${volumeId}_io_write`, color: DISK_IO_COLORS.write, label: `${volumeId} write (bps)`, device, hidden: true });
       } else {
-        lines.push({ key: `${volumeId}_io_read`, color: DISK_IO_COLORS.read, label: `${volumeId} read`, axis: 'bytes' });
-        lines.push({ key: `${volumeId}_io_write`, color: DISK_IO_COLORS.write, label: `${volumeId} write`, axis: 'bytes' });
+        lines.push({ key: `${volumeId}_io_read`, color: DISK_IO_COLORS.read, label: `${volumeId} read`, device, axis: 'bytes' });
+        lines.push({ key: `${volumeId}_io_write`, color: DISK_IO_COLORS.write, label: `${volumeId} write`, device, axis: 'bytes' });
       }
     }
 
     return lines;
   }, [effectiveMetrics, selectedNics, nicNames, networkMode, selectedDisks, diskNames, selectedGpus, gpuNames, effectiveDiskIO, diskIOMode, gpuDisplayLabel]);
+
+  // °C scale for the visible temperature lines; null when there are none. 0-100°C
+  // normally, widening in 5°C steps when a visible reading runs hotter.
+  const tempAxis = useMemo((): AxisScaleSpec | null => {
+    const tempKeys = activeLines.filter((line) => line.axis === 'temp').map((line) => line.key);
+    if (tempKeys.length === 0) return null;
+    const [start, end] = timeDomain;
+    let max = 0;
+    for (const d of chartData) {
+      if (d.time < start || d.time > end) continue;
+      for (const key of tempKeys) {
+        const v = d[key];
+        if (typeof v === 'number' && v > max) max = v;
+      }
+    }
+    const step = Math.max(25, Math.ceil(max / 20) * 5);
+    return {
+      domainMax: step * 4,
+      ticks: [0, step, step * 2, step * 3, step * 4],
+      format: (value) => `${value}°C`,
+    };
+  }, [activeLines, chartData, timeDomain]);
 
   // Stats-grid cards. `format: 'throughput'` renders byte rates; `valueKey` overrides the
   // avg/max/min source, so disk-IO cards hover the visible `_pct` line but report bytes.
@@ -912,6 +1016,63 @@ export function MetricsDetailPanel({
 
     return keys;
   }, [availableMetrics, effectiveMetrics, selectedNics, nicNames, networkMode, selectedDisks, diskNames, driveOrder, selectedGpus, gpuNames, effectiveDiskIO, diskIOMode, gpuDisplayLabel]);
+
+  // Cards that render; a card with no samples in range is skipped.
+  const visibleCardKeys = useMemo(
+    () =>
+      new Set(
+        statsKeys
+          .filter(({ key, valueKey }) => chartData.some((d) => d[valueKey ?? key] != null))
+          .map(({ key }) => key),
+      ),
+    [statsKeys, chartData],
+  );
+
+  // A pin applies only while its card renders. While the metric is toggled off, a
+  // disk/NIC mode flip has swapped its line, or the range holds no samples, the pin sits
+  // inert (rather than dimming every line with no card left to click) and resumes if the
+  // card returns.
+  const activePinnedKey = pinnedKey !== null && visibleCardKeys.has(pinnedKey) ? pinnedKey : null;
+  const togglePin = (key: string) => setPinnedKey((prev) => (prev === key ? null : key));
+
+  // Hover previews a card's line; a pin holds it while the pointer is elsewhere.
+  const focusKey = hoveredKey ?? activePinnedKey;
+
+  // Visible lines with the axis and device each reads off.
+  const visibleLines = useMemo(
+    () =>
+      activeLines
+        .filter((line) => !line.hidden)
+        .map((line) => ({ key: line.key, axis: line.axis ?? ('default' as const), device: line.device })),
+    [activeLines],
+  );
+
+  // Label columns: at most one per side, never two units stacked on a side, and never a
+  // unit that doesn't apply to what's in focus. Idle, the first unit present labels the
+  // left column (a lone NIC reads off the left rather than beside an empty percent
+  // gutter) and the second the right. A solo'd metric (hovered or pinned card) labels
+  // the left with its own unit and leaves the right empty. With three units, the line
+  // nearest the cursor brings its device's units in that same order, so a GPU's % and
+  // °C keep their sides as the cursor moves between its lines, and a one-unit device (a
+  // NIC) labels the left only. Columns come and go only with the unit count and keep the
+  // widest unit's width even when empty, so focus never shifts the plot.
+  const shownAxes = AXIS_PRIORITY.filter((axis) => visibleLines.some((line) => line.axis === axis));
+  const cursorTracked = shownAxes.length > 2;
+  const soloAxis = visibleLines.find((line) => line.key === focusKey)?.axis;
+  const cursorAxes = AXIS_PRIORITY.filter((axis) =>
+    visibleLines.some((line) => line.device === cursorDevice && line.axis === axis),
+  );
+  let labelAxes: readonly ChartAxisId[] = shownAxes;
+  if (soloAxis) labelAxes = [soloAxis];
+  else if (cursorTracked && cursorAxes.length > 0) labelAxes = cursorAxes;
+  // A shown unit always has its scale; percent only satisfies the type.
+  const scaleOf = (axis: ChartAxisId): AxisScaleSpec =>
+    (axis === 'temp' ? tempAxis : axis === 'bytes' ? bytesAxis : null) ?? PERCENT_SCALE;
+  const leftScale = scaleOf(labelAxes[0] ?? 'default');
+  const hasRightColumn = shownAxes.length > 1;
+  const rightScale = hasRightColumn && labelAxes.length > 1 ? scaleOf(labelAxes[1]) : null;
+  // Starts at percent's width, which also pads the stats grid when nothing is shown.
+  const columnWidth = shownAxes.reduce((width, axis) => Math.max(width, AXIS_WIDTHS[axis]), AXIS_WIDTHS.default);
 
   return (
     <Card className="border-border bg-card-sunken py-0 gap-0">
@@ -1108,8 +1269,11 @@ export function MetricsDetailPanel({
           <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
         </div>
 
-        {/* Chart Area */}
-        <div className="h-[280px] w-full rounded-lg border border-border/40 bg-card p-2">
+        {/* Chart Area — leaving it drops the cursor's label focus. */}
+        <div
+          className="h-[280px] w-full rounded-lg border border-border/40 bg-card p-2"
+          onMouseLeave={() => setCursorDevice(null)}
+        >
           {error ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-destructive">{error}</div>
@@ -1134,6 +1298,7 @@ export function MetricsDetailPanel({
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 12, right: 0, bottom: 5, left: 0 }}>
                 <CartesianGrid
+                  yAxisId="label-left"
                   strokeDasharray="3 3"
                   stroke="oklch(0.55 0.06 250)"
                   opacity={0.7}
@@ -1150,41 +1315,52 @@ export function MetricsDetailPanel({
                   axisLine={false}
                   scale="time"
                 />
+                {/* Label axes: one per side, never two stacked on a side. No line binds
+                    to them (allowDataOverflow lets an explicit domain render without
+                    data), so relabeling a column never moves a line. */}
                 <YAxis
-                  yAxisId="default"
-                  width={CHART_Y_AXIS_WIDTH}
-                  domain={[0, 100]}
+                  yAxisId="label-left"
+                  width={columnWidth}
+                  domain={[0, leftScale.domainMax]}
+                  ticks={leftScale.ticks}
+                  allowDataOverflow
                   stroke="oklch(0.708 0.05 250)"
                   fontSize={11}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(value) => `${value}%`}
+                  tickFormatter={leftScale.format}
                 />
-                {/* Hidden Y-axis for raw throughput lines (prevents them from blowing out the % scale) */}
-                <YAxis yAxisId="hidden" hide />
-                {/* Right-side bytes axis — visible whenever any byte-rate
-                    category (disk IO, NIC) is rendering in bytes mode. Ticks
-                    format via formatDiskIO so each level picks its own unit
-                    (KB/MB/GB), and the domain is the union across all
-                    bytes-axis-bound series (see `bytesAxis`). */}
-                {bytesAxisActive && (
+                {/* Empty while a metric is solo'd (or a one-unit device is under the
+                    cursor), but kept at its width so the plot never shifts. */}
+                {hasRightColumn && (
                   <YAxis
-                    yAxisId="bytes"
+                    yAxisId="label-right"
                     orientation="right"
-                    width={CHART_BYTES_AXIS_WIDTH}
+                    width={columnWidth}
+                    domain={[0, rightScale?.domainMax ?? PERCENT_SCALE.domainMax]}
+                    ticks={rightScale?.ticks}
+                    tick={rightScale !== null}
+                    allowDataOverflow
                     stroke="oklch(0.708 0.05 250)"
                     fontSize={11}
                     tickLine={false}
                     axisLine={false}
-                    tickFormatter={(v: number) => formatDiskIO(v)}
-                    {...(bytesAxis
-                      ? { domain: [0, bytesAxis.domainMax], ticks: bytesAxis.ticks }
-                      : {})}
+                    tickFormatter={rightScale?.format}
                   />
                 )}
-                <Tooltip content={<ChartTooltip formatTime={formatTooltipTime} gpuLabels={gpuLabels} />} />
+                {/* Scale axes the lines read off, all hidden: percent, °C, and bytes (disk
+                    IO and NIC share one). allowDataOverflow pins each to exactly the
+                    domain its labels show; width={0} because recharts still counts a
+                    hidden axis's width when stacking axes on a side. */}
+                <YAxis yAxisId="default" hide width={0} domain={[0, PERCENT_SCALE.domainMax]} allowDataOverflow />
+                {tempAxis && <YAxis yAxisId="temp" hide width={0} domain={[0, tempAxis.domainMax]} allowDataOverflow />}
+                {bytesAxis && <YAxis yAxisId="bytes" hide width={0} domain={[0, bytesAxis.domainMax]} allowDataOverflow />}
+                {/* Tooltip-only lines (raw bytes behind percent rows), off every scale. */}
+                <YAxis yAxisId="hidden" hide width={0} />
+                {cursorTracked && <NearestDeviceProbe lines={visibleLines} onNearest={setCursorDevice} />}
+                <Tooltip content={<ChartTooltip formatTime={formatTooltipTime} gpuLabels={gpuLabels} onlyKey={activePinnedKey ?? undefined} />} />
                 {/* Baseline reference line to show full time range */}
-                <ReferenceLine y={0} stroke="oklch(0.35 0.08 250)" strokeDasharray="3 3" />
+                <ReferenceLine yAxisId="label-left" y={0} stroke="oklch(0.35 0.08 250)" strokeDasharray="3 3" />
                 {activeLines.map((line) => {
                   if (line.hidden) {
                     // Tooltip-only lines on their own axis so raw bytes don't blow out the 0-100% scale.
@@ -1203,10 +1379,11 @@ export function MetricsDetailPanel({
                       />
                     );
                   }
-                  // axis: 'bytes' → right auto-scaled, 'hidden' → off-scale, default → shared percent.
-                  const yAxisId = line.axis === 'bytes' ? 'bytes' : line.axis === 'hidden' ? 'hidden' : 'default';
-                  const isHovered = hoveredKey === line.key;
-                  const isDimmed = hoveredKey !== null && !isHovered;
+                  // axis: 'bytes' → auto-scaled bytes, 'temp' → °C, unset → shared percent.
+                  // Dimmed lines drop their hover dot so a pinned line scrubs alone.
+                  const yAxisId = line.axis ?? 'default';
+                  const isFocused = focusKey === line.key;
+                  const isDimmed = focusKey !== null && !isFocused;
                   return (
                     <Line
                       key={line.key}
@@ -1215,10 +1392,10 @@ export function MetricsDetailPanel({
                       dataKey={line.key}
                       name={line.label}
                       stroke={line.color}
-                      strokeWidth={isHovered ? 3 : 2}
+                      strokeWidth={isFocused ? 3 : 2}
                       strokeOpacity={isDimmed ? 0.15 : 1}
                       dot={false}
-                      activeDot={{ r: 4, strokeWidth: 2 }}
+                      activeDot={isDimmed ? false : { r: 4, strokeWidth: 2 }}
                       isAnimationActive={false}
                     />
                   );
@@ -1228,12 +1405,12 @@ export function MetricsDetailPanel({
           )}
         </div>
 
-        {/* Stats Summary — left padding matches the chart's YAxis width so
+        {/* Stats Summary — left padding matches the chart's left axis width so
             cards align with the chart's plot area (the "0" on the x-axis). */}
         {chartData.length > 0 && hasSelection && (
           <div
             className="mt-2 flex flex-wrap gap-2"
-            style={{ paddingLeft: CHART_Y_AXIS_WIDTH }}
+            style={{ paddingLeft: columnWidth }}
             onMouseLeave={() => setHoveredKey(null)}
           >
             {statsKeys.map(({ key, valueKey, label, color, isNetwork, unit: explicitUnit, format, showThermometer, direction }) => {
@@ -1265,13 +1442,34 @@ export function MetricsDetailPanel({
               const fmtMax = isThroughput ? formatDiskIO(max) : `${max.toFixed(1)}${unit}`;
               const fmtMin = isThroughput ? formatDiskIO(min) : `${min.toFixed(1)}${unit}`;
 
+              const isPinned = activePinnedKey === key;
               return (
                 <div
                   key={key}
-                  className="flex items-center gap-4 px-3 py-2 rounded-lg bg-secondary border border-border/60 transition-colors hover:bg-accent/40 cursor-default"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={isPinned}
+                  title={isPinned ? 'click to unpin' : 'click to pin'}
+                  className={cn(
+                    'relative flex items-center gap-4 px-3 py-2 rounded-lg bg-secondary border border-border/60 transition cursor-pointer outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40',
+                    isPinned ? 'bg-accent ring-1 ring-primary/40' : 'hover:bg-accent/40',
+                    activePinnedKey !== null && !isPinned && 'opacity-50 hover:opacity-100',
+                  )}
                   style={{ borderLeftColor: color, borderLeftWidth: '3px' }}
                   onMouseEnter={() => setHoveredKey(key)}
+                  onClick={() => togglePin(key)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      togglePin(key);
+                    }
+                  }}
                 >
+                  {isPinned && (
+                    <span className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-primary/50 bg-card text-primary">
+                      <Pin className="h-2.5 w-2.5" aria-hidden />
+                    </span>
+                  )}
                   {/* Metric label — left. Thermometer icon for temp entries
                       (cpuTemp/gpuTemp and per-GPU _temp), ArrowUp/ArrowDown
                       for NIC TX/RX. Both disambiguate siblings that share the
