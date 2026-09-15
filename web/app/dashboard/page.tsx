@@ -686,6 +686,12 @@ export default function DashboardPage() {
   // Saved site from Firestore (cross-browser) or localStorage (same-browser fallback).
   // setState-in-effect is deliberate: `sites` + `lastSiteId` load async, so a lazy
   // initializer can't see them at mount.
+  //
+  // This picks ONCE, so it is only as good as the list it first sees settle. That
+  // is safe because `useSites` can't settle before access has resolved — user doc
+  // (so `lastSiteId`) and memberships both in — nor on a partial per-site list.
+  // Before that, a reload could latch `sites[0]` of a half-read list instead of
+  // the last viewed site.
   useEffect(() => {
     if (!sitesLoading && sites.length > 0 && !currentSiteId) {
       const savedSite = lastSiteId || localStorage.getItem('owlette_current_site');

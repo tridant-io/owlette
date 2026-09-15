@@ -244,7 +244,13 @@ describe('/share/[token] generateMetadata', () => {
     const metadata = await generateMetadata(props());
 
     expect(metadata.robots).toEqual({ index: false, follow: false, nocache: true });
-    expect(metadata.title).toBe('why did the render node drop offline — shared from owlette hoot');
+    // `absolute`, not a bare string: the root layout templates titles as
+    // "owlette - %s", and this one already carries the brand. Asserting the
+    // shape is the point — a plain string here would silently become
+    // "owlette - … — shared from owlette hoot" on a public page.
+    expect(metadata.title).toEqual({
+      absolute: 'why did the render node drop offline — shared from owlette hoot',
+    });
     expect(metadata.description).toBe('why did the render node drop offline last night?');
     expect(metadata.openGraph).toMatchObject({ type: 'article' });
     expect(metadata.twitter).toMatchObject({ card: 'summary_large_image' });
@@ -290,7 +296,7 @@ describe('/share/[token] generateMetadata', () => {
     const metadata = await generateMetadata(props());
 
     expect(metadata.robots).toEqual({ index: false, follow: false, nocache: true });
-    expect(metadata.title).toBe('shared conversation not available');
+    expect(metadata.title).toEqual({ absolute: 'shared conversation not available' });
     expect(String(metadata.description)).not.toMatch(/revoked|deleted/i);
   });
 });

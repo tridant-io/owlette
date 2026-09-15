@@ -124,7 +124,7 @@ function buildAutonomousTools(
     if (AUTONOMOUS_EXCLUDED_TOOLS.has(toolName)) continue;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tools[toolName] = tool<any, any>({
+    tools[toolName] = tool<any, any, any>({
       description: def.description,
       inputSchema: jsonSchema(def.parameters as Record<string, unknown>),
       execute: async (params) => {

@@ -11,6 +11,14 @@ const allowedDevOrigins = (process.env.NEXT_ALLOWED_DEV_ORIGINS ?? '')
 
 const nextConfig: NextConfig = {
   reactStrictMode: false,
+  // `ai` 7.x and the @ai-sdk/* providers are ESM-only (no CommonJS entry).
+  // This is also what makes them testable: next/jest builds its own
+  // transformIgnorePatterns and, in its words, "custom config can append to
+  // transformIgnorePatterns but not modify it" — a negated pattern in
+  // jest.config.js is inert. transpilePackages is the only lever that lets
+  // Jest transform them, so removing an entry here breaks 15 suites at load
+  // with "Cannot use import statement outside a module".
+  transpilePackages: ['ai', '@ai-sdk/react', '@ai-sdk/openai', '@ai-sdk/anthropic', '@ai-sdk/provider-utils', '@ai-sdk/provider', '@ai-sdk/gateway', '@ai-sdk/mcp', '@workflow/serde'],
   ...(e2eDistDir ? { distDir: e2eDistDir } : {}),
   env: {
     NEXT_PUBLIC_APP_VERSION: version,

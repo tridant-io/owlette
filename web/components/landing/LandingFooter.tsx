@@ -49,7 +49,7 @@ export function LandingFooter() {
               <Link href="/docs" className="hover:text-foreground transition-colors">docs</Link>
               <Link href="/privacy" className="hover:text-foreground transition-colors">privacy policy</Link>
               <Link href="/terms" className="hover:text-foreground transition-colors">terms of service</Link>
-              <a href="mailto:support@owlette.app" className="hover:text-foreground transition-colors">contact</a>
+              <a href="mailto:support@tridant.io" className="hover:text-foreground transition-colors">contact</a>
               <Link href="/for-ai" className="hover:text-foreground transition-colors">for AI</Link>
             </nav>
 

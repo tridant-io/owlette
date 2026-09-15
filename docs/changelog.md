@@ -9,7 +9,29 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ---
 
-## [Unreleased]
+## [3.3.4] - 2026-09-12
+
+### changed — hoot runs on a current Claude Code CLI again
+
+hoot drives the Claude Code CLI on each machine. A single pinned dependency
+had quietly held that CLI 138 releases behind: the agent pinned `pywin32` to a
+version that capped `mcp`, which in turn capped the Claude Agent SDK, and
+nothing ever failed — the installer resolved a valid set of packages and
+reported success. This release lifts all three together, so hoot runs on the
+CLI the SDK was built against.
+
+There is no change to how hoot behaves, what it can do, or the approval tiers.
+Machines pick up the new CLI on their next hoot start and keep the copy they
+already have if it still matches.
+
+### fixed — a conversation you open shows its messages again
+
+Opening a saved hoot conversation could render it empty — the right title, the
+right machines in the header, and no messages. Nothing errored; the history had
+been loaded into the previous conversation rather than the one on screen.
+Switching away and back was the only way to see it.
+
+## [3.3.3] - 2026-09-12
 
 ### added — a hoot chat talks to the machines you tick, and `@machine` narrows one turn
 
@@ -154,8 +176,6 @@ agent and CLI pairing links built their URLs from the host of the request that
 produced them. They now use the configured site address (`NEXT_PUBLIC_BASE_URL`),
 so a request served through another hostname — such as the failover origin — still
 sends people to owlette.app.
-
-## [3.3.3] - 2026-09-12
 
 ### fixed — a process you close by hand no longer keeps reading as running
 

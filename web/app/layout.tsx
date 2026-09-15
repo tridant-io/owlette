@@ -25,7 +25,17 @@ const siteUrl = process.env.RAILWAY_PUBLIC_DOMAIN
   : 'https://owlette.app';
 
 export const metadata: Metadata = {
-  title: "owlette — keep every windows machine running",
+  title: {
+    default: "owlette — keep every windows machine running",
+    // Every app route sets a short lowercase name (the nav label) and gets
+    // "owlette - <name>" in the tab.
+    //
+    // Pages whose title ALREADY carries the brand opt out with `absolute`, or
+    // the template doubles it: /for-ai and /share/[token]. Docs pages
+    // deliberately do NOT opt out — they set a bare page name, so the template
+    // is what gives them "owlette - Getting Started" instead of a brandless tab.
+    template: "owlette - %s",
+  },
   description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows machines.",
   icons: {
     icon: '/icon.svg',

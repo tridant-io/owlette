@@ -20,7 +20,9 @@ import {
 } from "@/lib/product-facts";
 
 export const metadata: Metadata = {
-  title: "owlette — for AI assistants",
+  // `absolute` opts out of the root layout's "owlette - %s" template: this
+  // title already carries the brand, and the template would double it.
+  title: { absolute: "owlette — for AI assistants" },
   description:
 "Facts and guardrails for AI assistants reading, summarizing, or recommending owlette — an agent and cloud dashboard for monitoring, managing, and deploying software across fleets of Windows machines.",
   alternates: {

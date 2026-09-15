@@ -62,7 +62,7 @@
 #define MyAppName "Owlette"
 #define MyAppPublisher "Tridant Inc."
 #define MyAppURL "https://owlette.app"
-#define MyAppRepoURL "https://github.com/theexperiential/owlette"
+#define MyAppRepoURL "https://github.com/tridant-io/owlette"
 ; The desktop app (Tauri) is the product's face as of 3.0.0 — it replaced the
 ; pythonw-hosted tray and configuration GUI. Installed to {app}\app.
 #define MyAppExeName "owlette-desktop.exe"
@@ -336,6 +336,32 @@ Type: files; Name: "{app}\python\python.sys"
 Type: files; Name: "{app}\python\pythonw.sys"
 Type: filesandordirs; Name: "{app}\python\Lib\site-packages\WinTmp"
 Type: filesandordirs; Name: "{app}\python\Lib\site-packages\WinTmp-1.2.0.dist-info"
+
+; Prune the whole of site-packages before the copy. [Files] uses
+; `ignoreversion recursesubdirs`, which OVERLAYS and never deletes, so every
+; upgrade used to leave the previous release's packages behind alongside the
+; new ones. It went unnoticed for as long as dependency versions never moved.
+; The 3.3.4 upgrade moved three of them and left 519 orphaned files / 252 MB on
+; an upgraded machine, two of which were not merely untidy:
+;
+;   - `claude_agent_sdk/_bundled/claude.exe` (241.5 MB) came BACK. The build
+;     strips it behind a verify-and-fail guard precisely so the installer stays
+;     small and agents fetch a sha256-pinned CLI instead; restoring the old one
+;     also hands `cortex_cli_fetch._unverified_fallback()` a STALE CLI whenever
+;     the pin cannot be read — the exact SDK/CLI mismatch the pin exists to stop.
+;   - a full ghost copy of `mcp` 1.x (58 modules, all of `mcp/server/fastmcp/**`
+;     and `mcp/client/stdio/`) sat importable beside 2.2.0.
+;
+; Safe to wipe wholesale: site-packages is installer-owned end to end. Nothing
+; pip-installs at runtime, the Claude CLI cache lives in
+; {commonappdata}\Owlette\cache\claude-cli, and config/tokens are elsewhere
+; again. This section runs BEFORE [Files] and after InitializeSetup stopped the
+; service, so nothing holds these open. This line makes the two WinTmp entries
+; above redundant — they are kept only because they carry the WinRing0
+; retraction rationale, which is still the reason that package must never come
+; back. The python.sys / pythonw.sys entries are NOT redundant: those sit in
+; {app}\python\ itself, outside site-packages.
+Type: filesandordirs; Name: "{app}\python\Lib\site-packages"
 
 [Icons]
 ; Start Menu shortcuts. Exactly ONE Start-menu entry registers the

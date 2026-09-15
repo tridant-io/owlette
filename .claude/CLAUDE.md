@@ -2,7 +2,7 @@
 
 Owlette is a cloud-connected Windows process management and remote deployment system for managing TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python Windows service (agent) + Next.js web dashboard (web) + Firebase/Firestore backend.
 
-**Version**: 3.3.3 | **License**: FSL-1.1-Apache-2.0
+**Version**: 3.3.4 | **License**: FSL-1.1-Apache-2.0
 
 ---
 
@@ -19,6 +19,8 @@ Owlette is a cloud-connected Windows process management and remote deployment sy
 - **Never modify the `firebase` section** of `config.json` during remote config updates — breaks agent registration
 - **Never use blocking operations** in the 5-second main service loop (`SLEEP_INTERVAL = 5`) — stalls all monitoring
 - **Never spawn reconnection logic** outside `ConnectionManager` — it has circuit breaker and backoff
+- **Never raise a UAC prompt unattended.** No path that runs without a deliberate click (service, silent installer, desktop auto-start, scheduled task) may `runas` / ShellExecute-elevate. Elevation is only ever the response to an explicit user click. This has shipped to the fleet twice (3.2.0, and again on every 3.2.0→3.3.x upgrade).
+- **A fleet-behavior fix must cover the upgrade path from every version still in the field.** During a self-update the OLD desktop app and OLD service are what run on the box. A fix that lives only in the new build does nothing for that upgrade; the installer is the only new code that executes on an old machine, so the upgrade-path half of the fix belongs there. Verify by upgrading from the oldest fielded version, not from dev.
 
 **Web landmines:**
 - **Never call Firestore directly from components** — use hooks in `web/hooks/`
@@ -145,6 +147,50 @@ Agents authenticate via a device code flow — no browser login on the target ma
 
 ---
 
+## Dependency Currency (standing policy)
+
+We fell 83 minor versions behind on `claude-agent-sdk` because a single `pywin32==306`
+pin transitively froze it, and nothing ever failed — pip backtracked to a satisfiable set
+and exited 0. Hoot ran on a Claude CLI 138 releases old for months. **A dependency that is
+silently stuck looks identical to one that is deliberately pinned.** This section exists so
+that stops being true.
+
+### Rules
+
+- **Every pin that holds a package BACK carries a written reason and an exit condition.**
+  Not "pinned for stability" — name the constraint, and name what would let us move. A pin
+  whose comment no longer matches reality is a bug; `agent/requirements.txt` carried one for
+  a month saying "pywin32 310, not higher" after the cap it described had lifted.
+- **Pin transitive dependencies you actually care about, explicitly.** `mcp` is pinned even
+  though it arrives through `claude-agent-sdk`, precisely because under a range pip picks
+  whatever the rest of the tree allows and never tells you.
+- **Review dependency currency every release cycle**, not when something breaks. Check the
+  gap, not just the CVEs — Dependabot raises security PRs and will happily leave you years
+  behind on a package with no advisories.
+- **A major-version bump is a task with waves, not a line edit.** Plan it, land it on `dev`,
+  let e2e prove it.
+- **Never bump a dependency you have not established is actually used.** The `openai` package
+  sat as a direct dependency that nothing imported and nothing depended on; the real provider
+  is `@ai-sdk/openai`. Upgrading dead weight is worse than leaving it — removing it is the fix.
+
+### Coupled versions — moving one MUST move the others
+
+| if you bump | you must also |
+| --- | --- |
+| `claude-agent-sdk` | re-run `scripts/upload-cortex-cli.mjs` for **dev AND prod** — the SDK vendors the Claude CLI, the pin in `installer_metadata/cortex_cli` moves with it, and agents keep fetching the old CLI until you do |
+| `mcp` to 2.x | `pywin32>=311` (mcp 1.11.0+ already needs `>=310`) |
+| `ai` / `@ai-sdk/*` | re-check the hoot test fixtures — `ai>=6.0.280` runs tools only on `finishReason.unified`, and string mock chunks silently skip tool calls |
+| `pywin32` | full agent suite **and** a real machine test — it is how the agent does services and COM, not an incidental dep |
+
+### The check that makes it visible
+
+Agent-side surface guards live in `agent/tests/unit/test_claude_agent_sdk_surface.py`: they
+assert the symbols and `ClaudeAgentOptions` fields `agent/src` actually uses, against the real
+installed SDK. The rest of the suite stubs the SDK out, so without them a breaking upgrade
+passes every test and fails on a real machine the first time someone opens a hoot chat.
+
+---
+
 ## Conventions & Review Discipline
 
 ### UI Copy Style
@@ -223,4 +269,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-09-12
+**Last Updated**: 2026-09-13

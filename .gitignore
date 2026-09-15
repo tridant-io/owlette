@@ -148,3 +148,7 @@ agent/pywin32_postinstall.py
 # Keep them on disk (they are the only safe rollback source) but never commit.
 scripts/*.log.json
 scripts/migrations/*.log.json
+
+# local credential files for other accounts (never commit)
+.claude/.env.*
+!.claude/.env.example

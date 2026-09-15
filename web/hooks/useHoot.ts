@@ -826,6 +826,13 @@ export function useOwletteChat({
 
   const hasMoreConversations = hasMoreUser || hasMoreAuto;
 
+  // NOTE: every setMessages below goes through `chatRef.current`, never the
+  // captured `chat`. @ai-sdk/react keys its Chat instance on `id`
+  // (`useMemo(() => new Chat(...), [chatKey])`), so `setChatId` above swaps in a
+  // NEW Chat on the next render. A post-await `chat.setMessages(...)` would
+  // write the loaded history into the PREVIOUS conversation's orphaned
+  // instance: the conversation opens, the header is right, and the transcript
+  // renders empty. `chatRef` is mirrored every render, so it is the live one.
   const loadChat = useCallback(
     async (conversationId: string) => {
       const requestId = loadChatRequestRef.current + 1;
@@ -841,7 +848,7 @@ export function useOwletteChat({
           if (!isMountedRef.current || requestId !== loadChatRequestRef.current) return;
           if (!chatDoc.exists()) {
             setChatLoadError('not_found');
-            chat.setMessages([]);
+            chatRef.current.setMessages([]);
             return;
           }
 
@@ -869,9 +876,9 @@ export function useOwletteChat({
           });
           onChatLoadedRef.current?.({ chatId: conversationId, siteId: chatSiteId, target });
           if (data?.messages && Array.isArray(data.messages)) {
-            chat.setMessages(data.messages as UIMessage[]);
+            chatRef.current.setMessages(data.messages as UIMessage[]);
           } else {
-            chat.setMessages([]);
+            chatRef.current.setMessages([]);
           }
         } catch (error) {
           if (!isMountedRef.current || requestId !== loadChatRequestRef.current) return;
@@ -882,7 +889,7 @@ export function useOwletteChat({
             console.error('Failed to load chat messages:', error);
           }
           setChatLoadError('not_found');
-          chat.setMessages([]);
+          chatRef.current.setMessages([]);
         }
       }
     },

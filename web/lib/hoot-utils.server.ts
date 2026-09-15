@@ -1979,7 +1979,7 @@ export function buildExecutableTools(
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tools[toolName] = tool<any, any>(toolConfig);
+    tools[toolName] = tool<any, any, any>(toolConfig);
   }
 
   return tools;

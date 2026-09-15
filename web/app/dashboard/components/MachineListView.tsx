@@ -109,6 +109,31 @@ function DeviceColumnHeader({
   );
 }
 
+/**
+ * COLUMN WIDTH BUDGET — keep both headers and `MachineRow`'s cells in sync.
+ *
+ * The table is `tableLayout: 'fixed'`, so these declared widths ARE the layout at
+ * each tier's narrowest viewport; above that the surplus is distributed
+ * proportionally, and below it the columns do NOT shrink — the table just
+ * overflows its card into a horizontal scrollbar. So each tier's sum must clear
+ * the container at that tier's breakpoint: `main` is `p-3 md:p-4` and the card
+ * adds a 1px border, leaving `viewport - 26` below md and `viewport - 34` from md.
+ *
+ *   tier        sum   container at breakpoint
+ *   sm  (640)   542   614
+ *   md  (768)   638   734
+ *   lg (1024)   978   990   ← binding constraint
+ *   xl (1280)  1108  1246
+ *
+ * lg used to sum to 1034 against 990, which scrolled sideways from 1024 up to
+ * ~1065 — the one band where every column is declared but the viewport hasn't
+ * caught up. Adding or widening a column here means re-checking that row.
+ *
+ * The trailing actions column is `w-12`, not `w-10`: its trigger is `h-8 w-8`
+ * and the cell's `p-2` leaves only 24px, so at w-10 the button rendered flush
+ * against the card's right border.
+ */
+
 /** Plain-label header for callers (demo, dashboard) that render the table directly and
  * don't wire `deviceUnion` through. */
 export const MemoizedTableHeader = memo(function MemoizedTableHeader() {
@@ -116,15 +141,15 @@ export const MemoizedTableHeader = memo(function MemoizedTableHeader() {
     <TableHeader className="sticky top-0 z-10 bg-card-header">
       <TableRow className="border-border/60 hover:bg-transparent">
         <TableHead className="text-foreground w-8"></TableHead>
-        <TableHead className="text-foreground w-[140px]">hostname</TableHead>
+        <TableHead className="text-foreground w-[130px]">hostname</TableHead>
         <TableHead className="text-foreground w-[72px]">status</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[160px] sm:overflow-visible sm:!px-2">cpu</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[120px] sm:overflow-visible sm:!px-2">ram</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[160px] lg:overflow-visible lg:!px-2">disk</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[200px] lg:overflow-visible lg:!px-2">gpu</TableHead>
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[150px] sm:overflow-visible sm:!px-2">cpu</TableHead>
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[110px] sm:overflow-visible sm:!px-2">ram</TableHead>
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[150px] lg:overflow-visible lg:!px-2">disk</TableHead>
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[190px] lg:overflow-visible lg:!px-2">gpu</TableHead>
         <TableHead className="text-foreground w-0 overflow-hidden !px-0 xl:w-[130px] xl:overflow-visible xl:!px-2">network</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 md:w-[110px] md:overflow-visible md:!px-2">last heartbeat</TableHead>
-        <TableHead className="text-foreground w-10"></TableHead>
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 md:w-[96px] md:overflow-visible md:!px-2">last heartbeat</TableHead>
+        <TableHead className="text-foreground w-12"></TableHead>
       </TableRow>
     </TableHeader>
   );
@@ -149,9 +174,9 @@ export const MachineTableHeader = memo(function MachineTableHeader({
     <TableHeader className="sticky top-0 z-10 bg-card-header">
       <TableRow className="border-border/60 hover:bg-transparent">
         <TableHead className="text-foreground w-8"></TableHead>
-        <TableHead className="text-foreground w-[140px]">hostname</TableHead>
+        <TableHead className="text-foreground w-[130px]">hostname</TableHead>
         <TableHead className="text-foreground w-[72px]">status</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[160px] sm:overflow-visible sm:!px-2">
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[150px] sm:overflow-visible sm:!px-2">
           <DeviceColumnHeader
             label="cpu"
             kind="cpu"
@@ -161,8 +186,8 @@ export const MachineTableHeader = memo(function MachineTableHeader({
             onSelect={setListPref}
           />
         </TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[120px] sm:overflow-visible sm:!px-2">ram</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[160px] lg:overflow-visible lg:!px-2">
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[110px] sm:overflow-visible sm:!px-2">ram</TableHead>
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[150px] lg:overflow-visible lg:!px-2">
           <DeviceColumnHeader
             label="disk"
             kind="disk"
@@ -172,7 +197,7 @@ export const MachineTableHeader = memo(function MachineTableHeader({
             onSelect={setListPref}
           />
         </TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[200px] lg:overflow-visible lg:!px-2">
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[190px] lg:overflow-visible lg:!px-2">
           <DeviceColumnHeader
             label="gpu"
             kind="gpu"
@@ -192,8 +217,8 @@ export const MachineTableHeader = memo(function MachineTableHeader({
             onSelect={setListPref}
           />
         </TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 md:w-[110px] md:overflow-visible md:!px-2">last heartbeat</TableHead>
-        <TableHead className="text-foreground w-10"></TableHead>
+        <TableHead className="text-foreground w-0 overflow-hidden !px-0 md:w-[96px] md:overflow-visible md:!px-2">last heartbeat</TableHead>
+        <TableHead className="text-foreground w-12"></TableHead>
       </TableRow>
     </TableHeader>
   );
@@ -367,7 +392,7 @@ export function MachineRow({
             />
           </div>
         </TableCell>
-        <TableCell className="w-[140px] font-medium text-white select-text overflow-hidden">
+        <TableCell className="w-[130px] font-medium text-white select-text overflow-hidden">
           <div className="flex flex-col gap-0.5 min-w-0">
             <div className="flex items-center gap-2">
               <div className="relative flex-shrink-0">
@@ -446,7 +471,7 @@ export function MachineRow({
         </TableCell>
         {/* CPU with Sparkline */}
         <TableCell
-          className="text-white p-0 w-0 sm:w-[160px] overflow-hidden"
+          className="text-white p-0 w-0 sm:w-[150px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('cpu'); }}
         >
           <div className={`relative cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden${staleClass}`}>
@@ -475,7 +500,7 @@ export function MachineRow({
         </TableCell>
         {/* Memory with Sparkline */}
         <TableCell
-          className="text-white p-0 w-0 sm:w-[120px] overflow-hidden"
+          className="text-white p-0 w-0 sm:w-[110px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('memory'); }}
         >
           <div className={`relative cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden${staleClass}`}>
@@ -499,7 +524,7 @@ export function MachineRow({
         </TableCell>
         {/* Disk with Sparkline */}
         <TableCell
-          className="text-white p-0 w-0 lg:w-[160px] overflow-hidden"
+          className="text-white p-0 w-0 lg:w-[150px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('disk'); }}
         >
           <div className={`relative cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden${staleClass}`}>
@@ -541,7 +566,7 @@ export function MachineRow({
         </TableCell>
         {/* GPU with Sparkline */}
         <TableCell
-          className="text-white p-0 w-0 lg:w-[200px] overflow-hidden"
+          className="text-white p-0 w-0 lg:w-[190px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('gpu'); }}
         >
           <div className={`relative cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden${staleClass}`}>
@@ -616,7 +641,7 @@ export function MachineRow({
             );
           })()}
         </TableCell>
-        <TableCell className="w-0 md:w-[110px] overflow-hidden p-0 md:p-2">
+        <TableCell className="w-0 md:w-[96px] overflow-hidden p-0 md:p-2">
           <Tooltip>
             <TooltipTrigger asChild>
               <span
@@ -631,7 +656,7 @@ export function MachineRow({
             </TooltipContent>
           </Tooltip>
         </TableCell>
-        <TableCell className="w-10 p-2" onClick={(e) => e.stopPropagation()}>
+        <TableCell className="w-12 p-2" onClick={(e) => e.stopPropagation()}>
           {!isDemo && (
             <MachineContextMenu
               machineId={machine.machineId}

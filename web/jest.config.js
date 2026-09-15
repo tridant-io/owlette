@@ -59,8 +59,16 @@ const config = {
     '/__tests__/rules/', // Firestore rules tests — use `npm run test:rules` (boots emulator).
   ],
 
+  // NO blanket '/node_modules/' entry here, deliberately. next/jest builds its
+  // own transformIgnorePatterns from `transpilePackages` in next.config.ts and
+  // then APPENDS whatever this array holds. Patterns are OR'd, so a bare
+  // '/node_modules/' re-ignores every package the carve-out just allowed —
+  // which is exactly how the `ai` 7.x ESM-only upgrade appeared to be
+  // untestable: 15 suites dying at load on "Cannot use import statement
+  // outside a module" while the resolved config looked correct.
+  // next/jest already excludes node_modules; this only adds the CSS-module
+  // case. To let another package through, add it to transpilePackages.
   transformIgnorePatterns: [
-    '/node_modules/',
     '^.+\\.module\\.(css|sass|scss)$',
   ],
 }

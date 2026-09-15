@@ -61,7 +61,7 @@ jobs:
         run: npm run build
 
       - name: Publish and deploy with Owlette
-        uses: theexperiential/owlette/.github/actions/owlette-roost-deploy@main
+        uses: tridant-io/owlette/.github/actions/owlette-roost-deploy@main
         with:
           token: ${{ secrets.OWLETTE_TOKEN }}
           api-url: ${{ env.OWLETTE_API_URL }}
@@ -135,7 +135,7 @@ jobs:
 Set `deploy: false` on the action when CI should publish a version for manual approval in the dashboard:
 
 ```yaml
-- uses: theexperiential/owlette/.github/actions/owlette-roost-deploy@main
+- uses: tridant-io/owlette/.github/actions/owlette-roost-deploy@main
   with:
     token: ${{ secrets.OWLETTE_TOKEN }}
     site-id: ${{ vars.OWLETTE_SITE_ID }}

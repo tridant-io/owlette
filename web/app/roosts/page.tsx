@@ -1,3 +1,9 @@
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: 'roost',
+};
+
 import { Suspense } from 'react';
 import { connection } from 'next/server';
 import RoostsPageClient from './RoostsPageClient';

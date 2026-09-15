@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 export default function TermsPage() {
-  const lastUpdated = 'December 30, 2025';
+  const lastUpdated = 'September 14, 2026';
   const router = useRouter();
 
   return (
@@ -200,8 +200,8 @@ export default function TermsPage() {
               <p>
                 before filing a claim against Tridant, you agree to try to resolve the dispute
                 informally by contacting us at{' '}
-                <a href="mailto:support@owlette.app" className="hl-link text-accent-cyan">
-                  support@owlette.app
+                <a href="mailto:support@tridant.io" className="hl-link text-accent-cyan">
+                  support@tridant.io
                 </a>
                 . we will try to resolve the dispute informally by contacting you via email.
                 if a dispute is not resolved within 30 days of submission, you or Tridant may
@@ -234,8 +234,8 @@ export default function TermsPage() {
               </p>
               <p className="mt-4">
                 <strong>email:</strong>{' '}
-                <a href="mailto:support@owlette.app" className="hl-link text-accent-cyan">
-                  support@owlette.app
+                <a href="mailto:support@tridant.io" className="hl-link text-accent-cyan">
+                  support@tridant.io
                 </a>
               </p>
               <p className="mt-2">

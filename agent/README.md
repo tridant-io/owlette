@@ -383,7 +383,7 @@ See [BUILD.md](BUILD.md) for comprehensive instructions on building the installe
 ## Support
 
 - **Documentation**: See [docs/](../docs/) folder
-- **Issues**: https://github.com/theexperiential/owlette/issues
+- **Issues**: https://github.com/tridant-io/owlette/issues
 - **Firebase Setup**: [docs/setup/firebase.md](../docs/setup/firebase.md)
 
 ---

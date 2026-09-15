@@ -478,13 +478,19 @@ export default function RoostsPageClient() {
                             <span className="text-foreground">{roost.targets.length}</span>
                             <span>target{roost.targets.length === 1 ? '' : 's'}</span>
                           </span>
-                          <span className="text-sm text-muted-foreground hidden sm:block w-[200px] text-right whitespace-nowrap">
+                          {/* `min-w`, not a fixed `w`: a nowrap line longer than
+                              the box overflows to the RIGHT (text-align only
+                              shifts when there IS free space), which painted the
+                              timestamp under the three-dot trigger. The floor
+                              still keeps the column aligned row to row. */}
+                          <span className="text-sm text-muted-foreground hidden sm:block min-w-[200px] text-right whitespace-nowrap tabular-nums">
                             {formatSiteScopedTimestamp(
                               roost.updatedAt ?? roost.createdAt,
                               userPreferences.timeDisplayMode || 'machine',
                               userPreferences.timezone,
                               siteTimezone,
                               userPreferences.timeFormat || '12h',
+                              'short',
                             )}
                           </span>
                         </div>

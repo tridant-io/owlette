@@ -4,11 +4,11 @@ name = "owlette-host"
 # for six releases because the sync script only knew about the desktop crate —
 # harmless while the binary carried no version resource, and wrong the moment
 # build.rs started stamping CARGO_PKG_VERSION into VERSIONINFO.
-version = "3.3.3"
+version = "3.3.4"
 description = "Windows service host for the owlette agent"
 authors = ["Tridant Inc."]
 license = "FSL-1.1-Apache-2.0"
-repository = "https://github.com/theexperiential/owlette"
+repository = "https://github.com/tridant-io/owlette"
 edition = "2021"
 rust-version = "1.77.2"
 publish = false

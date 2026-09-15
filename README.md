@@ -6,7 +6,7 @@
 
 ### ai-powered fleet management for Windows applications
 
-[![Version](https://img.shields.io/badge/version-3.3.3-blue)](https://github.com/theexperiential/owlette/releases)
+[![Version](https://img.shields.io/badge/version-3.3.4-blue)](https://github.com/tridant-io/owlette/releases)
 [![License](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](https://owlette.app)
 
@@ -91,7 +91,7 @@ For a new maintainer cloning this repo, start with the [maintainer quickstart](d
 
 **agent (Windows service):**
 ```bash
-git clone https://github.com/theexperiential/owlette.git
+git clone https://github.com/tridant-io/owlette.git
 cd owlette/agent
 pip install -r requirements.txt
 cd src && python configure_site.py       # pair this machine with a site
@@ -167,7 +167,7 @@ contributions are welcome! please open an issue or submit a pull request.
 - use `node scripts/sync-versions.js X.Y.Z` for version bumps
 - all PRs merge to `dev` first, then `dev` → `main` for production
 
-**[open an issue →](https://github.com/theexperiential/owlette/issues)**
+**[open an issue →](https://github.com/tridant-io/owlette/issues)**
 
 ## license
 

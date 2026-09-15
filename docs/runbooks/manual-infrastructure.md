@@ -238,12 +238,21 @@ Dry-run first with `--env=dev … --dry-run`. Publish the exact binary that
 
 **10. Register the cron jobs — last, once the routes are live.**
 
-The canonical list of scheduled endpoints is the table in
-`web/content/docs/setup/web-deployment.mdx` (§scheduled endpoints, lines 152-167). It is
-customer-facing and kept in step with the routes under `web/app/api` **by hand — nothing in CI
-enforces it**, so when you add a scheduled route, add its row there in the same commit. The table
-below is this runbook's operator-side rendering of it, carrying the client timeouts the customer doc
-does not.
+`infra/cron-jobs.json` is the **machine-checked** registry: `web/__tests__/infra/cronJobs.test.ts`
+fails if a route under `web/app/api/cron/` has no entry (or vice versa), if a declared auth header
+stops matching its route source, or if a job does not declare both dev and prod. Add a new
+scheduled route there first — that is the entry CI actually enforces.
+
+Two prose tables mirror it, and **neither is enforced by anything**:
+`web/content/docs/setup/web-deployment.mdx` (§scheduled endpoints) is the customer-facing one,
+and the table below is this runbook's operator-side rendering, carrying the client timeouts the
+customer doc does not. Update all three in the same commit.
+
+> **The registry is a declaration of intent, not a live read.** Nothing here queries cron-job.org,
+> so a job listed below may simply never have been created — and that failure is silent by design.
+> Read a job's own HISTORY in the cron-job.org UI before concluding anything about whether it runs;
+> do not infer it from data the job would have written, which can be absent for unrelated reasons
+> (a route that shipped after the records in question, for one).
 
 | endpoint | schedule | header | timeout |
 |---|---|---|---|
@@ -254,6 +263,7 @@ does not.
 | `GET /api/cron/health-check` | `*/5 * * * *` | `X-Cron-Secret: <CRON_SECRET>` | 60s+ recommended |
 | `GET /api/hoot/escalation` | `*/5 * * * *` | `Authorization: Bearer <CRON_SECRET>` | default |
 | `GET /api/cron/retention` | `0 4 * * *` (or any quiet hour) | `X-Cron-Secret: <CRON_SECRET>` | default |
+| `GET /api/cron/api-key-expiry` | `0 8 * * *` (any hour) | `X-Cron-Secret: <CRON_SECRET>` | 30s+ |
 
 Four things to get right:
 
@@ -269,7 +279,7 @@ Four things to get right:
   unbounded one — it iterates every site, then every machine, with serial Firestore writes and serial
   per-recipient sends — so give it headroom too. No other route defines a time budget.
 - **Verify each by hand after registering, and gate on the status code, not the body.** Healthy is
-  `200`. The six `/api/cron/*` routes answer `{"ok":true,…}`, but two bodies differ and will mislead
+  `200`. The seven `/api/cron/*` routes answer `{"ok":true,…}`, but two bodies differ and will mislead
   you: `/api/cron/status-ping` computes `ok` from component health (`route.ts:262`), so a correctly
   registered job legitimately returns `200` with `"ok":false` while any component is degraded; and
   `/api/hoot/escalation` answers `{"success":true,…}` with no `ok` field at all.

@@ -128,7 +128,10 @@ export async function generateMetadata({ params }: SharePageProps): Promise<Meta
 
   if (!share) {
     return {
-      title: NOT_AVAILABLE_TITLE,
+      // `absolute` throughout this file: the root layout templates app titles
+      // as "owlette - %s", and these are public pages whose titles already
+      // carry their own branding.
+      title: { absolute: NOT_AVAILABLE_TITLE },
       description: NOT_AVAILABLE_DESCRIPTION,
       robots: SHARE_ROBOTS,
       // Stated rather than inherited: without these the root layout's marketing
@@ -150,7 +153,7 @@ export async function generateMetadata({ params }: SharePageProps): Promise<Meta
   const description = shareDescription(share);
 
   return {
-    title,
+    title: { absolute: title },
     description,
     robots: SHARE_ROBOTS,
     // `images` is deliberately ABSENT from both blocks. Next fills og:image and
