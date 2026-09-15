@@ -48,7 +48,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Nothing ships past a live advisory. See .github/workflows/security-gate.yml:
+  # every release here is tag-triggered, so security-preflight.yml (branches
+  # only) never ran on this path.
+  security-gate:
+    # Granted at the call site: a called workflow's permissions can only be
+    # maintained or reduced through the chain, never elevated, so the caller
+    # must hand it the alert-read scopes explicitly.
+    permissions:
+      contents: read
+      vulnerability-alerts: read
+      security-events: read
+      pull-requests: read
+    uses: ./.github/workflows/security-gate.yml
+
   publish:
+    needs: [security-gate]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
