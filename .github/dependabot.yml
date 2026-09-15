@@ -44,6 +44,18 @@ updates:
           - patch
     commit-message:
       prefix: deps
+    # Majors declined on purpose (owner decision 2026-09-14). Each rule names its exit
+    # condition; re-check them every release cycle and delete the rule when it is met.
+    ignore:
+      # @types/node follows the runtime major. Everything runs Node 22 (engines, .nvmrc,
+      # CI, Cloud Functions). Exit: the runtime moves to a new LTS; bump the types in the
+      # same PR that moves the runtime.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 is the native (Go) compiler. Exit: Next.js, typescript-eslint and
+      # fumadocs each declare 7.x support; then remove this rule and take the PR.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Rust crates: the owlette-host service wrapper and the Tauri desktop app.
   - package-ecosystem: cargo
