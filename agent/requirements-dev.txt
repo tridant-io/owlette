@@ -9,7 +9,7 @@ pytest-asyncio==1.4.0
 
 # Code Quality
 pylint==3.0.3
-black==24.3.0
+black==26.3.1
 flake8==6.1.0
 
 # Type Checking
