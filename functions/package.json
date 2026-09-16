@@ -23,7 +23,7 @@
     "firebase-functions": "^7.3.2"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.5.0",
     "typescript": "^5.3.0"
   },
   "private": true,
