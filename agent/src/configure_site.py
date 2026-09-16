@@ -1168,11 +1168,12 @@ def _group_add_command() -> Optional[str]:
 REQUESTS_DIR = 'ipc/requests'
 REQUEST_NONCE_PATH = 'ipc/request_nonce'
 REQUEST_AUDIT_PATH = 'logs/privileged_requests.log'
-# Root-owned and group-readable, all three: the app reads the nonce it has to
-# quote and the answer it is waiting on, and can write neither.
+# Root-owned. The nonce and the reply are group-readable: the app reads the
+# nonce it has to quote and the answer it is waiting on, and can write neither.
+# The audit is root-only; nothing in the app's session reads it.
 REQUEST_NONCE_MODE = 0o640
 REQUEST_REPLY_MODE = 0o640
-REQUEST_AUDIT_MODE = 0o640
+REQUEST_AUDIT_MODE = 0o600
 REQUEST_SUFFIX = '.json'
 REQUEST_REPLY_SUFFIX = '.result'
 # A request is one verb and one nonce. The directory is group-writable, so the

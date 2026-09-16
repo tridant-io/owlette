@@ -597,7 +597,8 @@ def test_a_live_managed_process_is_adopted_rather_than_launched_again(
     """
     monkeypatch.setattr(
         shared_utils, 'RESULT_FILE_PATH', str(tmp_path / 'app_states.json'))
-    exe = shutil.copy2('/bin/sleep', tmp_path / 'kiosk-app')
+    exe = shutil.copy('/bin/sleep', tmp_path / 'kiosk-app')
+    os.chmod(exe, 0o755)
     child = subprocess.Popen([str(exe), '30'])
     svc = SimpleNamespace(last_started={}, firebase_client=None)
     svc._find_running_process_by_exe = _bound(
