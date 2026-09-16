@@ -8,6 +8,7 @@ import psutil
 import pytest
 import json
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -797,7 +798,8 @@ class TestIdentityPathNormalisation:
         full match nor the basename match could ever be true and every tier
         below it — adoption, kill, restart — was unreachable on Linux.
         """
-        exe = shutil.copy2('/bin/sleep', tmp_path / 'kiosk-app')
+        exe = shutil.copy('/bin/sleep', tmp_path / 'kiosk-app')
+        os.chmod(exe, 0o755)
         child = subprocess.Popen([str(exe), '30'])
         try:
             found = shared_utils.find_running_process_by_exe(str(exe))
