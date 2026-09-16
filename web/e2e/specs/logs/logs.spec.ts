@@ -111,13 +111,19 @@ test('the process column reveals a clipped name, and stays quiet when it fits', 
   ]);
   await gotoSiteALogs(page);
 
-  const clipped = page.getByTestId('log-row-e2e-log-long-proc').getByTestId('log-process');
-  await expect(clipped).toBeVisible();
-  await clipped.hover();
-  await expect(page.getByRole('tooltip')).toContainText('constellation renderer node 07 (primary)');
-
-  // Fits its column — hovering it must reveal nothing at all.
+  // The quiet case goes FIRST, while no tooltip exists anywhere: an open tooltip
+  // renders over the row beneath it, so hovering the second cell would land on
+  // the first cell's tooltip and Radix would keep it open.
   const whole = page.getByTestId('log-row-e2e-log-short-proc').getByTestId('log-process');
+  await expect(whole).toBeVisible();
+  // Radix stamps `data-state` on the trigger it wraps; a cell that fits is a
+  // bare span with no trigger at all.
+  await expect(whole).not.toHaveAttribute('data-state');
   await whole.hover();
   await expect(page.getByRole('tooltip')).toHaveCount(0);
+
+  const clipped = page.getByTestId('log-row-e2e-log-long-proc').getByTestId('log-process');
+  await expect(clipped).toHaveAttribute('data-state', 'closed');
+  await clipped.hover();
+  await expect(page.getByRole('tooltip')).toContainText('constellation renderer node 07 (primary)');
 });
