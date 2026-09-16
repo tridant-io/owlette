@@ -58,7 +58,7 @@ METADATA_DOC_PREFIX = 'installer_metadata/cortex_cli'
 _PlatformCli = namedtuple('_PlatformCli', 'filename arch_slot executable')
 
 # What the CLI looks like per OS family. Windows ships ``claude.exe`` and has no
-# mode bit; every other family ships ``claude`` and needs 0755 after the
+# mode bit; every other family ships ``claude`` and needs 0750 after the
 # download. ``arch_slot`` pins the id of a family whose build is not
 # arch-specific: macOS is one universal2 binary and Windows is one x64 build that
 # Windows-on-ARM runs emulated (plan decision 12), so neither keys its document
@@ -114,7 +114,10 @@ def _apply_executable_mode(path: str) -> None:
     """Give a freshly installed CLI the exec bit POSIX needs to run it. A no-op
     on Windows, which has no mode bit to set."""
     if _platform_cli()[1].executable:
-        os.chmod(path, 0o755)
+        # Group-executable, not world: the cache directory belongs to the
+        # daemon's group (the data-root mode table), and that group is how
+        # the kiosk user's hoot process runs the binary.
+        os.chmod(path, 0o750)
 
 
 def _ensure_executable(path: str) -> str:

@@ -221,7 +221,7 @@ def _seed_machine_id_file(path, machine_id):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     temp_path = f"{path}.{os.getpid()}.tmp"
     try:
-        fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
         try:
             os.write(fd, machine_id.encode('utf-8'))
         finally:

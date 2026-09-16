@@ -573,7 +573,7 @@ def _long_path(path: str) -> str:
 
 def _open_partial(partial_str: str):
     """The `.partial` sidecar, opened for writing and never through a symlink."""
-    return os.fdopen(os.open(partial_str, _PARTIAL_FILE_FLAGS, 0o666), 'wb')
+    return os.fdopen(os.open(partial_str, _PARTIAL_FILE_FLAGS, 0o644), 'wb')
 
 
 def _ensure_parent_dir(target: 'Path', extract_root: 'Path') -> None:

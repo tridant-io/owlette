@@ -605,7 +605,7 @@ class TestPlatformMatrix:
         if executable:
             # On the partial: the rename then publishes bytes and mode together.
             mock_chmod.assert_called_once_with(
-                os.path.join(cache_dir, filename + '.part'), 0o755)
+                os.path.join(cache_dir, filename + '.part'), 0o750)
         else:
             mock_chmod.assert_not_called()
 
@@ -650,7 +650,7 @@ class TestPlatformMatrix:
 
         assert result == cached
         if executable:
-            mock_chmod.assert_called_once_with(cached, 0o755)
+            mock_chmod.assert_called_once_with(cached, 0o750)
         else:
             mock_chmod.assert_not_called()
 
@@ -664,7 +664,7 @@ class TestPlatformMatrix:
             result = cortex_cli_fetch.ensure_cli(make_db(None))
 
         assert result == cached
-        mock_chmod.assert_called_once_with(cached, 0o755)
+        mock_chmod.assert_called_once_with(cached, 0o750)
 
     def test_a_chmod_failure_keeps_an_adopted_binary(self, cache_dir, no_bundled, as_platform):
         """Best effort off the download path: a read-only SDK copy is usually
