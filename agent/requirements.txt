@@ -23,7 +23,7 @@ tzlocal==5.4.4  # Convert Windows registry tz names to IANA (e.g. "Pacific Stand
 tzdata==2026.3
 
 # Screenshot capture
-mss==9.0.2  # Fast cross-platform screenshot library
+mss==10.2.0  # Fast cross-platform screenshot library
 
 # Temperature monitoring
 # HardwareMonitor wraps LibreHardwareMonitorLib 0.9.6, which uses the signed
