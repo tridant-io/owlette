@@ -18,10 +18,7 @@ from typing import Dict, Any, Callable, Optional
 from datetime import datetime
 
 import shared_utils
-import registry_utils
 import hardware_profile
-import display_manager
-import nvapi_display
 import config_sync
 
 # OAuth REST modules — deliberately not firebase_admin
@@ -149,7 +146,7 @@ class FirebaseClient:
         self.auth_manager = auth_manager
         self.project_id = project_id
         self.site_id = site_id
-        self.machine_id = shared_utils.get_hostname()
+        self.machine_id = shared_utils.get_machine_id()
         self.config_cache_path = config_cache_path
 
         self.db: Optional[FirestoreRestClient] = None
@@ -336,8 +333,8 @@ class FirebaseClient:
 
         try:
             # PRESENCE FIRST — it needs no hardware data. Everything below is a
-            # round trip or (in _ensure_profile) tens of seconds of WMI +
-            # nvidia-smi, so this keeps time-to-online = connect time. Mirrored
+            # round trip or (in _ensure_profile) tens of seconds of WMI and
+            # sensor work, so this keeps time-to-online = connect time. Mirrored
             # in start(); do not reorder.
             self._update_presence(True)
             self.logger.debug("Heartbeat sent after connection")
@@ -577,7 +574,7 @@ class FirebaseClient:
         return self.connection_manager.is_connected
 
     def get_machine_id(self) -> str:
-        """Get the machine ID (hostname)."""
+        """Get the persisted machine identity — this machine's document id."""
         return self.machine_id
 
     def get_site_id(self) -> str:
@@ -606,7 +603,7 @@ class FirebaseClient:
 
         # ORDER IS LOAD-BEARING: _update_presence needs no hardware data, so it
         # must precede the first _upload_metrics (whose _ensure_profile() does slow
-        # WMI + nvidia-smi work). Mirrored in _on_connected().
+        # WMI and sensor work). Mirrored in _on_connected().
         if self.connected:
             try:
                 self._update_presence(True)
@@ -1217,6 +1214,8 @@ class FirebaseClient:
 
             {'ok': False, 'error': str, 'code': DisplayErrorCode}
         """
+        import display_manager
+
         # Kill switch, same check as `_ensure_display_profile`.
         try:
             if shared_utils.read_config(['displays', 'enabled']) is False:
@@ -1373,6 +1372,9 @@ class FirebaseClient:
         online/lastHeartbeat. Errors are swallowed — heartbeat must not crash.
         Returns the profile, the cached one when rate-limited, or None.
         """
+        import display_manager
+        import nvapi_display
+
         # Kill switch, checked ahead of the rate-limit gate so a toggle takes
         # effect immediately. Fail-open on unreadable config (first boot).
         try:
@@ -1508,6 +1510,8 @@ class FirebaseClient:
             # On every heartbeat so list/card views can draw the drift dot without
             # each opening its own assigned-layout subscription.
             try:
+                import display_manager
+
                 live_monitors = (
                     self._cached_display_profile.get('monitors')
                     if isinstance(self._cached_display_profile, dict) else None
@@ -2451,7 +2455,7 @@ class FirebaseClient:
                 'action': action,
                 'level': level,
                 'machineId': self.machine_id,
-                'machineName': self.machine_id,
+                'machineName': shared_utils.get_hostname(),
             }
 
             if process_name:
@@ -2724,6 +2728,8 @@ class FirebaseClient:
 
         force=True syncs even when the hash is unchanged (on-demand refresh).
         """
+        import registry_utils
+
         if not self.connected or not self.db:
             return
 
@@ -2821,57 +2827,3 @@ class FirebaseClient:
             self.logger.error(f"Failed to sync software inventory: {e}")
             self.logger.exception("Software inventory sync error details:")
             self.connection_manager.report_error(e, "Software inventory sync")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    from auth_manager import AuthManager
-    auth_manager = AuthManager(api_base="https://owlette.app/api")
-
-    client = FirebaseClient(
-        auth_manager=auth_manager,
-        project_id="owlette-dev-3838a",
-        site_id="test_site_001"
-    )
-
-    def handle_command(cmd_id, cmd_data):
-        cmd_type = cmd_data.get('type')
-        print(f"Received command: {cmd_type}")
-
-        if cmd_type == 'restart_process':
-            process_name = cmd_data.get('process_name')
-            print(f"Restarting process: {process_name}")
-            return f"Process {process_name} restarted"
-
-        elif cmd_type == 'kill_process':
-            process_name = cmd_data.get('process_name')
-            print(f"Killing process: {process_name}")
-            return f"Process {process_name} killed"
-
-        return "Command executed"
-
-    client.register_command_callback(handle_command)
-    client.start()
-
-    test_config = {
-        "version": "2.0.3",
-        "processes": [
-            {
-                "name": "TouchDesigner",
-                "exe_path": "C:\\TouchDesigner\\bin\\TouchDesigner.exe"
-            }
-        ]
-    }
-    client.upload_config(test_config)
-
-    try:
-        print("Firebase client running... Press Ctrl+C to stop")
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nStopping...")
-        client.stop()

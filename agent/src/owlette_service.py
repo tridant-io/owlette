@@ -11,46 +11,40 @@ if src_dir not in sys.path:
 
 import shared_utils
 import installer_utils
-import registry_utils
 import reboot_state
 import session_state
 import watchdog_state
-import display_manager
-import nvapi_display
 import config_sync
 from command_router import CommandRouter
+from screenshot_capture import ScreenshotCaptureError, capture_and_upload
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-import win32serviceutil
 import win32service
-import win32event
 import win32process
 import win32profile
 import win32ts
 import win32con
 import win32security
-import servicemanager
 import logging
 import psutil
 import time
 import json
 import datetime
 import atexit
+import base64
 import re
 import shlex
 import subprocess
 import tempfile
 
-FIREBASE_IMPORT_ERROR = None
 try:
     from firebase_client import FirebaseClient
     FIREBASE_AVAILABLE = True
-except ImportError as e:
+except ImportError:
     FIREBASE_AVAILABLE = False
-    FIREBASE_IMPORT_ERROR = str(e)
     # Note: logging not initialized yet, so we can't log here
 
 # Health probe (stdlib-only module, safe to import unconditionally)
-from health_probe import HealthProbe, HealthState, STATUS_OK, reprobe_if_network_error, wait_for_network
+from health_probe import HealthState, STATUS_OK
 
 # Error monitoring (optional, no-ops if not configured)
 import sentry_utils
@@ -184,96 +178,6 @@ REBOOT_OS_COUNTDOWN_SECONDS = 60
 # A boot found within this window after a scheduled instant counts as
 # fulfilling that entry (retroactive lastFiredByEntry stamp).
 REBOOT_SUCCESS_DETECTION_WINDOW_SECONDS = 60 * 60
-
-# The screenshot snippet run inside the interactive user session. mss cannot
-# reach the desktop from session 0, so every capture path ships this same body
-# to the session executor and differs only in what it grabs, how hard it
-# compresses, and what it echoes back on stdout.
-_SCREENSHOT_CAPTURE_TEMPLATE = """
-import mss
-import io
-import os
-from mss.tools import to_png
-
-with mss.mss() as sct:
-{grab}
-    png_bytes = to_png(screenshot.rgb, screenshot.size)
-
-try:
-    from PIL import Image
-    img = Image.open(io.BytesIO(png_bytes))
-    max_width = {max_width}
-    if img.width > max_width:
-        ratio = max_width / img.width
-        img = img.resize((max_width, int(img.height * ratio)), Image.LANCZOS)
-    buffer = io.BytesIO()
-    img.save(buffer, format='JPEG', quality={quality})
-    jpeg_bytes = buffer.getvalue()
-except ImportError:
-    jpeg_bytes = png_bytes
-
-out_path = os.path.join(output_dir, 'screenshot.jpg')
-with open(out_path, 'wb') as f:
-    f.write(jpeg_bytes)
-{trailer}"""
-
-
-def _screenshot_capture_code(monitor, max_width, quality, trailer=''):
-    """Build the user-session capture snippet.
-
-    `monitor` None grabs the virtual "all monitors" screen; an index grabs that
-    monitor, falling back to the virtual screen when it is out of range.
-    `trailer` is appended verbatim, for callers that echo diagnostics on stdout.
-    """
-    if monitor is None:
-        grab = "    screenshot = sct.grab(sct.monitors[0])"
-    else:
-        grab = (
-            "    mon_idx = {m} if {m} > 0 and {m} < len(sct.monitors) else 0\n"
-            "    screenshot = sct.grab(sct.monitors[mon_idx])"
-        ).format(m=monitor)
-    return _SCREENSHOT_CAPTURE_TEMPLATE.format(
-        grab=grab, max_width=max_width, quality=quality, trailer=trailer,
-    )
-
-
-def _read_session_screenshot():
-    """Read the screenshot the capture snippet left behind.
-
-    Returns (jpeg_bytes, screenshot_b64, result_dir), or (None, None, None)
-    when no result dir holds one. The caller discards result_dir itself, so it
-    can log against the file before the directory goes away.
-    """
-    import base64
-
-    # Locate the screenshot in the most recent execution's result dir.
-    ipc_dir = shared_utils.get_data_path('ipc')
-    results_base = os.path.join(ipc_dir, 'results')
-    screenshot_path = None
-    for d in sorted(os.listdir(results_base), reverse=True):
-        candidate = os.path.join(results_base, d, 'screenshot.jpg')
-        if os.path.exists(candidate):
-            screenshot_path = candidate
-            break
-
-    if not screenshot_path:
-        return None, None, None
-
-    with open(screenshot_path, 'rb') as f:
-        jpeg_bytes = f.read()
-
-    screenshot_b64 = base64.b64encode(jpeg_bytes).decode('ascii')
-
-    return jpeg_bytes, screenshot_b64, os.path.dirname(screenshot_path)
-
-
-def _discard_session_result_dir(result_dir):
-    """Drop a consumed user-session result dir, best effort."""
-    try:
-        import shutil
-        shutil.rmtree(result_dir, ignore_errors=True)
-    except Exception:
-        pass
 
 
 def _display_error_result(result):
@@ -812,47 +716,26 @@ class Util:
         return process.get('name', 'Error retrieving process name')
 
 
-class OwletteService(win32serviceutil.ServiceFramework):
-    _svc_name_ = 'OwletteService'
-    _svc_display_name_ = 'owlette Service'
+class OwletteService:
 
-    def __init__(self, args):
-        win32serviceutil.ServiceFramework.__init__(self, args)
+    def _init_state(self):
+        """Every attribute main() and its helpers read, set in one place.
+
+        owlette_runner builds the service with object.__new__ and calls this —
+        it owns the startup sequence itself — so this is the one place new
+        service state may be added. Split the two and the hosted path dies with
+        AttributeError in production. Beyond the attributes it reads the api
+        base out of config.json and registers the command-router handlers;
+        nothing else here touches the network or the disk.
+        """
         self._service_start_time = time.time()
-
-        log_level = shared_utils.get_log_level_from_config()
-        shared_utils.initialize_logging("service", level=log_level)
-
-        # Initialize Sentry error monitoring (after logging, before exception hooks)
-        sentry_utils.initialize_sentry(shared_utils.read_config(), shared_utils.APP_VERSION)
-
-        # Wire global exception hooks (after logging is configured)
-        sys.excepthook = _handle_unhandled_exception
-        threading.excepthook = _handle_thread_exception
-
-        # Only initialize results file if it doesn't exist (don't clear existing PIDs!)
-        if not os.path.exists(shared_utils.RESULT_FILE_PATH):
-            Util.initialize_results_file()
-            logging.info("Initialized new app_states.json file")
-
-        logging.debug(f"Config path: {shared_utils.CONFIG_PATH}")
-        shared_utils.upgrade_config()
-
-        _t0 = time.time()
-        api_base = shared_utils.read_config(['firebase', 'api_base']) or shared_utils.get_api_base_url()
-        self._health_state: HealthState = HealthProbe(
-            config_path=shared_utils.CONFIG_PATH,
-            api_base=api_base
-        ).run()
-        logging.info(f"Health probe: status={self._health_state.status}  ({round(time.time() - _t0, 3)}s)")
-        if not self._health_state.is_ok():
-            logging.error(f"Health probe failed: {self._health_state.error_code} — {self._health_state.error_message}")
-
-        self._auth_manager = None
-        self._api_base = api_base
+        # Replaced by the startup probe in both construction paths.
+        self._health_state = None
+        self._api_base = shared_utils.read_config(['firebase', 'api_base']) or shared_utils.get_api_base_url()
 
         # _write_service_status throttle; initialised so the first call is always
-        # refresh-due. That method also hasattr-guards, for pre-__init__ callers.
+        # refresh-due. That method also hasattr-guards, for callers that
+        # reach it before _init_state.
         self._last_status_signature = None
         self._last_status_write_time = 0.0
 
@@ -896,15 +779,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
         # default, so a blind watcher used to leave no trace at all.
         self._scm_query_failure_logged = False
 
-        # Write early status so tray can show health alerts before Firebase init
-        self._write_service_status_early()
-
-        self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         self.is_alive = True
         self._restart_exit_code = 0
-        # Self-restart watchdog: set to True at top of SvcStop so an in-flight
-        # hard-exit timer yields to operator-initiated stop (tray Exit / net stop)
-        self._scm_stop_requested = False
         self.tray_icon_pid = None
         self.cortex_pid = None
         # time.monotonic() deadline past which a launched reboot-countdown prompt
@@ -946,6 +822,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
         # Same single-flight shape as _roost_scrub_thread: the Cortex IPC pump
         # runs off-loop because one capture_screenshot takes ~55s.
         self._cortex_ipc_thread = None
+        # Single-flight handle for the off-loop reboot-pending check.
+        self._reboot_pending_future = None
         self._shutting_down = False  # Suppresses crash alerts during reboot/shutdown
         self._live_view_active = False
         self._live_view_stop_time = 0
@@ -979,62 +857,17 @@ class OwletteService(win32serviceutil.ServiceFramework):
             logging.warning(f"Failed to register process-control handlers: {e}")
 
         self.firebase_client = None
-        logging.debug(f"Firebase check - Available: {FIREBASE_AVAILABLE}")
 
-        if not FIREBASE_AVAILABLE and FIREBASE_IMPORT_ERROR:
-            logging.warning(f"Firebase client not available - Import error: {FIREBASE_IMPORT_ERROR}")
-            logging.warning("Running in local-only mode")
+    @property
+    def _auth_manager(self):
+        """The AuthManager the cloud client was built with, or None.
 
-        if FIREBASE_AVAILABLE:
-            firebase_enabled = shared_utils.read_config(['firebase', 'enabled'])
-            logging.debug(f"Firebase config - enabled: {firebase_enabled}")
-
-            if firebase_enabled:
-                try:
-                    site_id = shared_utils.read_config(['firebase', 'site_id'])
-                    project_id = shared_utils.read_config(['firebase', 'project_id']) or shared_utils.get_project_id()
-                    api_base = shared_utils.read_config(['firebase', 'api_base']) or shared_utils.get_api_base_url()
-                    cache_path = shared_utils.get_data_path('cache/firebase_cache.json')
-
-                    logging.debug(f"Firebase config - site: {site_id}, project: {project_id}")
-
-                    # Cold boot reaches service start before the NIC has a route,
-                    # and constructing AuthManager there burns the first token
-                    # refresh into a pointless backoff. Bounded and non-fatal.
-                    try:
-                        if wait_for_network(api_base):
-                            # The startup probe predates the NIC on a cold boot;
-                            # re-probe and republish so the tray isn't stale.
-                            refreshed = reprobe_if_network_error(
-                                self._health_state, shared_utils.CONFIG_PATH, api_base)
-                            if refreshed is not self._health_state:
-                                self._health_state = refreshed
-                                self._write_service_status_early()
-                    except Exception as e:
-                        logging.warning(f"Network gate error (proceeding anyway): {e}")
-
-                    from auth_manager import AuthManager
-                    auth_manager = AuthManager(api_base=api_base)
-                    self._auth_manager = auth_manager  # Store for health alerting
-
-                    if not auth_manager.is_authenticated():
-                        logging.error("Agent not authenticated - no refresh token found")
-                        logging.error("Please run the installer or re-authenticate via web dashboard")
-                        self.firebase_client = None
-                    else:
-                        _t0 = time.time()
-                        self.firebase_client = FirebaseClient(
-                            auth_manager=auth_manager,
-                            project_id=project_id,
-                            site_id=site_id,
-                            config_cache_path=cache_path
-                        )
-                        logging.info(f"Firebase client initialized for site: {site_id}  ({round(time.time() - _t0, 3)}s)")
-
-                except Exception as e:
-                    logging.error(f"Failed to initialize Firebase client: {e}")
-                    logging.exception("Firebase initialization error details:")
-                    self.firebase_client = None
+        Read off firebase_client rather than mirrored onto the service: a second
+        copy has to be assigned by the startup sequence, and when that
+        assignment went missing the health and reboot-pending alerts silently
+        stopped firing with nothing to fail on.
+        """
+        return getattr(self.firebase_client, 'auth_manager', None)
 
     def _initialize_or_restart_firebase_client(self):
         """
@@ -1196,7 +1029,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
             running: Whether service is currently running (False when stopping)
         """
         # A listener callback can fire during connection_manager wiring, before
-        # __init__ has set the throttle state.
+        # _init_state has set the throttle state.
         if not hasattr(self, '_last_status_signature'):
             self._last_status_signature = None
         if not hasattr(self, '_last_status_write_time'):
@@ -1724,7 +1557,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
                 try:
                     token = self._auth_manager.get_valid_token()
                     site_id = self._auth_manager.get_site_id() or ''
-                    machine_id = socket.gethostname()
+                    machine_id = shared_utils.get_machine_id()
                     api_base = self._api_base or shared_utils.get_api_base_url()
                     requests.post(
                         f"{api_base}/agent/alert",
@@ -1745,13 +1578,45 @@ class OwletteService(win32serviceutil.ServiceFramework):
             t = threading.Thread(target=_send_alert, daemon=True)
             t.start()
 
+    def _submit_reboot_pending_check(self):
+        """Hand the reboot-pending check to a worker; never run it on the loop.
+
+        check_pending_reboot shells out to schtasks with a 10s timeout — twice
+        the tick — so on the loop thread it stalls every monitor on the machine.
+        Single-flight: a check still running when the next 15-minute mark
+        arrives is left alone rather than stacked.
+        """
+        future = self._reboot_pending_future
+        if future is not None and not future.done():
+            return
+
+        def _run():
+            try:
+                self._check_and_alert_reboot_pending()
+            except Exception as e:
+                logging.debug(f"Reboot-pending check failed (non-critical): {e}")
+
+        # Manual lifecycle, like the display-topology pool: shutdown(wait=False)
+        # retires the worker once the task finishes without blocking the loop.
+        # Dispatch failure is non-critical — a thread-starved machine must not
+        # take the main loop down over a 15-minute housekeeping check.
+        try:
+            pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='reboot-pending')
+            try:
+                self._reboot_pending_future = pool.submit(_run)
+            finally:
+                pool.shutdown(wait=False)
+        except Exception as e:
+            logging.debug(f"Reboot-pending dispatch failed (non-critical): {e}")
+
     def _check_and_alert_reboot_pending(self):
         """Background check: detect Windows reboot-pending state and emit a
         site event once per pending-state transition.
 
-        Runs every ~15 min from the main loop. Uses a flag file to avoid
-        re-alerting every 15 min for the same pending state; clears the flag
-        once the system is no longer pending.
+        Dispatched every ~15 min by _submit_reboot_pending_check, on a worker
+        rather than the loop thread. Uses a flag file to avoid re-alerting every
+        15 min for the same pending state; clears the flag once the system is no
+        longer pending.
         """
         if not self._auth_manager:
             return
@@ -1790,10 +1655,10 @@ class OwletteService(win32serviceutil.ServiceFramework):
             try:
                 token = self._auth_manager.get_valid_token()
                 site_id = self._auth_manager.get_site_id() or ''
-                machine_id = socket.gethostname()
+                machine_id = shared_utils.get_machine_id()
                 api_base = self._api_base or shared_utils.get_api_base_url()
                 message = (
-                    f"Reboot pending on {machine_id} "
+                    f"Reboot pending on {shared_utils.get_hostname()} "
                     f"(reasons: {', '.join(reasons) or 'unknown'})"
                 )
                 if next_scheduled.get('next_run'):
@@ -1875,18 +1740,12 @@ class OwletteService(win32serviceutil.ServiceFramework):
         can wedge the exit), logs a visible banner, sets the session intent
         so the startup classifier treats the next boot as planned, then
         signals the main loop to exit cleanly with the provided code (43).
-
-        The hard-exit timer yields if the operator issues `net stop` / tray
-        Exit during the 30s window — see `_scm_stop_requested`.
         """
         # 1. Arm hard-exit FIRST. If anything below wedges (e.g. set_intent
         #    blocks on a corrupt state file, main loop takes >30s to unwind),
         #    the timer guarantees the process dies so the host restarts us.
         def _hard_exit():
             try:
-                if getattr(self, '_scm_stop_requested', False):
-                    logging.info("[WATCHDOG] Hard-exit aborted — SCM stop in progress, yielding to operator")
-                    return
                 # No offline flush — the host restarts us at once and online:false
                 # would just flap the dashboard. Bounded join so a wedged client
                 # can't defeat the hard exit.
@@ -1927,42 +1786,6 @@ class OwletteService(win32serviceutil.ServiceFramework):
         # 4. Signal main loop to exit cleanly via existing exit-code mechanism
         self._restart_exit_code = exit_code
         self.is_alive = False
-
-    def SvcStop(self):
-        # Makes an in-flight exit-43 hard-exit timer abort, so this clean exit-0
-        # wins and the host honours the operator's stop.
-        self._scm_stop_requested = True
-
-        # Try to report service status (may fail when hosted by owlette-host,
-        # which owns the SCM handle)
-        try:
-            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-        except AttributeError:
-            # Hosted by owlette-host — this process has no SCM control handler
-            logging.info("SvcStop called under the service host (no SCM control handler here)")
-
-        # Log service stop with stack trace info to identify caller
-        import inspect
-        caller_frame = inspect.currentframe().f_back
-        caller_info = f"{caller_frame.f_code.co_filename}:{caller_frame.f_lineno}" if caller_frame else "unknown"
-        logging.warning(f"=== SERVICE STOP REQUESTED === (called from {caller_info})")
-
-        # One shutdown path shared with the console handler and SCM watcher;
-        # whichever arrives first does the flush, log and final status write.
-        self.graceful_shutdown('svc_stop')
-
-        self.terminate_cortex()
-
-        win32event.SetEvent(self.hWaitStop)
-
-    def SvcDoRun(self):
-        try:
-            servicemanager.LogMsg(servicemanager.EVENTLOG_INFORMATION_TYPE,
-                  servicemanager.PYS_SERVICE_STARTED,
-                  (self._svc_name_, ''))
-            self.main()
-        except Exception as e:
-            logging.error(f"An unhandled exception occurred: {e}")
 
     def recover_running_processes(self):
         """
@@ -2232,25 +2055,6 @@ class OwletteService(win32serviceutil.ServiceFramework):
             logging.debug("Could not launch Cortex (no user session?)")
             return False
 
-    def terminate_cortex(self):
-        """Terminate the Cortex process if running.
-
-        Not identity-gated on purpose: cortex_pid is the service's OWN helper
-        child, bound in-memory at spawn (_try_launch_cortex) and never
-        persisted, so there is no recorded row to verify against and no
-        restart gap for the pid to be recycled across -- the provenance IS
-        the launch.
-        """
-        if self.cortex_pid:
-            try:
-                psutil.Process(self.cortex_pid).terminate()
-                logging.info(f"Cortex process terminated (PID {self.cortex_pid})")
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-            except Exception as e:
-                logging.error(f"Error terminating Cortex: {e}")
-            self.cortex_pid = None
-
     def _process_cortex_ipc_commands(self):
         """Hand any pending Cortex IPC commands to the drain worker.
 
@@ -2352,8 +2156,11 @@ class OwletteService(win32serviceutil.ServiceFramework):
             schedules = tool_params.get('schedules')
             return self._handle_cortex_set_launch_mode(process_name, mode, schedules)
         elif tool_name == 'capture_screenshot':
+            # The on-machine agent renders the bytes as an MCP image block, and
+            # an IPC result is a local file rather than a Firestore document.
             return self._handle_capture_screenshot({
                 'monitor': tool_params.get('monitor', 0),
+                'include_image': True,
             })
         else:
             return {'error': f'Unknown Cortex IPC tool: {tool_name}'}
@@ -2492,7 +2299,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
             'processName': process_name,
             'errorMessage': error_message,
             'eventType': event_type,
-            'machineId': socket.gethostname(),
+            'machineId': shared_utils.get_machine_id(),
             'machineName': socket.gethostname(),
             'timestamp': time.time(),
         }
@@ -4950,7 +4757,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
                     return "Error: No checksum provided for self-update - refusing to install unverified binary"
 
                 # ANTI-FRAGILE: Idempotency guard - prevent concurrent update execution
-                update_marker_path = os.path.join(os.environ.get('ProgramData', 'C:\\ProgramData'), 'owlette', 'logs', 'update_in_progress.json')
+                update_marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
                 if os.path.exists(update_marker_path):
                     try:
                         with open(update_marker_path, 'r') as f:
@@ -4981,7 +4788,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
                     # ~100MB installer + ~200MB extraction, with the old install
                     # still on disk.
                     import shutil
-                    install_drive = os.path.splitdrive(os.environ.get('ProgramData', 'C:\\ProgramData'))[0] or 'C:'
+                    install_drive = os.path.splitdrive(shared_utils.get_data_path())[0] or 'C:'
                     disk_usage = shutil.disk_usage(install_drive + '\\')
                     free_mb = disk_usage.free / (1024 * 1024)
                     logging.debug(f"Disk space on {install_drive}: {free_mb:.0f} MB free")
@@ -4993,7 +4800,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
 
                     # Our own temp dir, not WINDOWS\TEMP — security software blocks
                     # execution from system temp.
-                    owlette_tmp_dir = os.path.join(os.environ.get('ProgramData', 'C:\\ProgramData'), 'owlette', 'tmp')
+                    owlette_tmp_dir = shared_utils.get_data_path('tmp')
                     os.makedirs(owlette_tmp_dir, exist_ok=True)
                     temp_installer_path = os.path.join(owlette_tmp_dir, 'owlette-Update.exe')
 
@@ -5054,7 +4861,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
 
                     # Task Scheduler, so the installer survives Inno Setup killing
                     # the service.
-                    log_path = os.path.join(os.environ.get('ProgramData', 'C:\\ProgramData'), 'owlette', 'logs', 'installer_update.log')
+                    log_path = shared_utils.get_data_path('logs/installer_update.log')
                     # Inno Setup APPENDS to /LOG and every update refreshes the
                     # mtime, so cleanup_old_logs never ages it out. Rotate here,
                     # the last moment before the installer opens it.
@@ -5179,6 +4986,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
                     return f"Cancellation failed: {message}"
 
             elif cmd_type == 'uninstall_software':
+                import registry_utils
+
                 software_name = cmd_data.get('software_name')
                 uninstall_command = cmd_data.get('uninstall_command')
                 silent_flags = cmd_data.get('silent_flags', '')
@@ -5393,6 +5202,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
                 layout = cmd_data.get('layout')
                 apply_id = cmd_data.get('applyId') or cmd_data.get('apply_id')
                 try:
+                    import display_manager
+
                     result = display_manager.apply_topology(
                         layout,
                         firebase_client=self.firebase_client,
@@ -5447,6 +5258,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
                 # `applyId` is rejected.
                 apply_id = cmd_data.get('applyId') or cmd_data.get('apply_id')
                 try:
+                    import display_manager
+
                     result = display_manager.ack_apply(
                         apply_id=apply_id, firebase_client=self.firebase_client,
                     )
@@ -5466,6 +5279,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
                 # before enabling `displays.remoteApplyEnabled`, so it bypasses
                 # the apply kill switch.
                 try:
+                    import display_manager
+
                     result = display_manager._self_test_via_user_session()
                     if isinstance(result, dict) and result.get('ok'):
                         seen = result.get('monitors_seen', 0)
@@ -5510,6 +5325,9 @@ class OwletteService(win32serviceutil.ServiceFramework):
         the original apply.
         """
         try:
+            import display_manager
+            import nvapi_display
+
             # Retry a deferred startup revert once a console session appears;
             # both probes are cheap.
             if getattr(display_manager, '_deferred_revert_pending', False):
@@ -5791,6 +5609,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
         changes. Unlike the dashboard, this intentionally ignores fields the
         apply path cannot enforce.
         """
+        import display_manager
+
         live_monitors = (
             profile.get('monitors') if isinstance(profile, dict) else None
         ) or []
@@ -5926,6 +5746,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
         changed, so at least one event is expected (modulo edge cases where
         only unhashed fields flipped, which is fine — no events emitted).
         """
+        import display_manager
+
         prev_monitors = prev_profile.get('monitors') or []
         new_monitors = new_profile.get('monitors') or []
 
@@ -6059,6 +5881,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
         daemon thread (off-loop so the apply call never stalls process
         monitoring).
         """
+        import display_manager
+
         # Gate 1: kill switch — displays feature must not be explicitly disabled.
         try:
             if shared_utils.read_config(['displays', 'enabled']) is False:
@@ -6148,6 +5972,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
 
     @staticmethod
     def _auto_restore_apply_was_skip(result: dict) -> bool:
+        import display_manager
+
         code = result.get('code') if isinstance(result, dict) else None
         if code in (
             display_manager.DisplayErrorCode.AUTO_RESTORE_RATE_LIMITED,
@@ -6170,6 +5996,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
         — always logs + swallows so a stray exception can't kill the thread
         without trace.
         """
+        import display_manager
+
         try:
             import uuid
             apply_id = uuid.uuid4().hex
@@ -6255,10 +6083,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
                 from sync_commands import _state_for
                 from sync_scrub import scrub_all_due
                 state = _state_for(self)
-                report_dir = os.path.join(
-                    os.environ.get('PROGRAMDATA', r'C:\ProgramData'),
-                    'Owlette', 'logs', 'roost_scrub_reports'
-                )
+                report_dir = shared_utils.get_data_path('logs/roost_scrub_reports')
                 reports = scrub_all_due(state, report_dir=report_dir)
                 if reports:
                     drifted = sum(1 for r in reports if not r.healthy)
@@ -7020,10 +6845,11 @@ class OwletteService(win32serviceutil.ServiceFramework):
             if not api_key:
                 return "Error: No API key provided"
 
-            # Encrypt with the same machine-specific Fernet key used by SecureStorage
+            # The same machine-bound key the token store uses; owlette_cortex
+            # reads it back through decrypt_value.
             from secure_storage import get_storage
             storage = get_storage()
-            encrypted = storage._fernet.encrypt(api_key.encode('utf-8')).decode('utf-8')
+            encrypted = storage.encrypt_value(api_key)
 
             # write_config takes (key path, value) — the whole branch is written
             # in one call so the three fields land together, and re-reading the
@@ -7090,46 +6916,77 @@ class OwletteService(win32serviceutil.ServiceFramework):
             }
 
         if tool_name == 'capture_screenshot':
-            result = self._handle_capture_screenshot({
+            return self._handle_capture_screenshot({
                 'monitor': tool_params.get('monitor', 0),
             })
-            if isinstance(result, dict):
-                # Strip base64 before Firestore serialization (1MB doc limit)
-                return {k: v for k, v in result.items() if k != 'base64'}
-            return result
 
         return None  # Not a user-session tool, fall through
+
+    def _run_capture_pipeline(self, monitor=0, include_image_bytes=False, **budget):
+        """Capture one screenshot in the console session and upload it.
+
+        The single agent-side capture path: grab through session_exec, PUT the
+        JPEG to a signed url, then finalize so web writes machine.lastScreenshot.
+        Returns capture_and_upload's envelope and raises ScreenshotCaptureError
+        — what a failure means is the caller's decision.
+
+        `budget` (max_width / quality / capture_timeout_s /
+        max_upload_attempts) is forwarded to capture_and_upload, which holds the
+        on-demand defaults; the crash and live-view callers pass their own.
+        """
+        fb = self.firebase_client
+        site_id = getattr(fb, 'site_id', None)
+        machine_id = getattr(fb, 'machine_id', None)
+        auth_manager = getattr(fb, 'auth_manager', None)
+        if not site_id or not machine_id or auth_manager is None:
+            raise ScreenshotCaptureError(
+                'capture: no authenticated cloud client to upload through'
+            )
+
+        try:
+            token = auth_manager.get_valid_token()
+        except Exception as e:
+            raise ScreenshotCaptureError(
+                f'capture: could not obtain a valid auth token: {e}'
+            ) from e
+
+        return capture_and_upload(
+            user_session_executor=self.execute_in_user_session,
+            api_base=shared_utils.get_api_base_url(),
+            site_id=site_id,
+            machine_id=machine_id,
+            bearer_token=token,
+            monitor=monitor,
+            include_image_bytes=include_image_bytes,
+            **budget,
+        )
 
     def _capture_crash_screenshot(self):
         """Best-effort screenshot capture on process crash. Returns URL or None.
 
-        Uses the same capture pipeline as _handle_capture_screenshot but with
-        lower quality settings for speed, and never blocks the relaunch path.
+        Shares the capture pipeline with _handle_capture_screenshot and never
+        raises into the relaunch path. Runs inline on the monitor loop, so the
+        whole call is held to the ~38s worst case the single-request upload it
+        replaced had: 8s to capture plus 10s for each of the three round-trips,
+        one attempt. A slow upload here stalls every other process on the
+        machine.
         """
         try:
-            capture_code = _screenshot_capture_code(None, 1920, 60)
-            result = self.execute_in_user_session('python', capture_code, timeout=8, trusted=True)
-
-            if result.get('error') or 'screenshot.jpg' not in result.get('files', []):
-                logging.debug("Crash screenshot capture failed — proceeding with relaunch")
-                return None
-
-            jpeg_bytes, screenshot_b64, result_dir = _read_session_screenshot()
-
-            if not result_dir:
-                return None
-
-            _discard_session_result_dir(result_dir)
-
-            upload_result = self._upload_screenshot(screenshot_b64)
-            url = upload_result.get('url', '') if upload_result else ''
-            if url:
-                logging.info(f"Crash screenshot captured: {len(jpeg_bytes) // 1024}KB")
-            return url or None
-
+            result = self._run_capture_pipeline(
+                max_width=1920,
+                quality=60,
+                capture_timeout_s=8,
+                request_timeout_s=10,
+                max_upload_attempts=1,
+            )
         except Exception as e:
             logging.debug(f"Crash screenshot failed: {e}")
             return None
+
+        url = result.get('url') or None
+        if url:
+            logging.info(f"Crash screenshot captured: {result['size_kb']}KB")
+        return url
 
     # Tier 3 tools that warrant site-log entries on success
     _TIER3_TOOLS = frozenset([
@@ -7178,92 +7035,53 @@ class OwletteService(win32serviceutil.ServiceFramework):
             logging.debug(f"Failed to log Cortex tool event: {e}")
 
     def _handle_capture_screenshot(self, command_data):
-        """Handle screenshot capture via user-session execution."""
-        try:
-            monitor = command_data.get('monitor', 0)
+        """Handle screenshot capture via user-session execution.
 
-            capture_code = _screenshot_capture_code(
-                monitor, 7680, 72,
-                trailer=(
-                    "print(f'size_kb={len(jpeg_bytes) // 1024}')\n"
-                    "print(f'monitors={len(sct.monitors) - 1}')\n"
-                ),
+        Returns the on-demand envelope the hoot tool and the Cortex IPC
+        caller read: {message, url, size_kb, monitor}, or {error}. With
+        `include_image` the envelope also carries the jpeg as `base64`, which
+        only the Cortex IPC caller asks for — the hoot tool result is json-dumped
+        into a Firestore command document and has a 1 MB ceiling.
+        """
+        try:
+            include_image = bool(command_data.get('include_image'))
+            result = self._run_capture_pipeline(
+                command_data.get('monitor', 0),
+                include_image_bytes=include_image,
             )
 
-            result = self.execute_in_user_session('python', capture_code, timeout=20, trusted=True)
+            size_kb = result['size_kb']
+            monitor = result['monitor']
+            url = result['url']
 
-            if result.get('error'):
-                return {'error': f"Screenshot failed: {result['error']}"}
-
-            if 'screenshot.jpg' not in result.get('files', []):
-                stderr = result.get('stderr', '')
-                return {'error': f"Screenshot capture failed{': ' + stderr if stderr else ''}"}
-
-            jpeg_bytes, screenshot_b64, result_dir = _read_session_screenshot()
-
-            if not result_dir:
-                return {'error': 'Screenshot file not found after capture'}
-
-            size_kb = len(jpeg_bytes) / 1024
-
-            logging.info(f"Screenshot captured: {size_kb:.0f}KB")
-
-            _discard_session_result_dir(result_dir)
-
-            upload_result = self._upload_screenshot(screenshot_b64)
+            logging.info(f"Screenshot captured: {size_kb}KB")
 
             self.firebase_client.log_event(
                 action='command_executed',
                 level='info',
-                details=f'Screenshot captured ({size_kb:.0f}KB)'
+                details=f'Screenshot captured ({size_kb}KB)'
             )
 
-            url = upload_result.get('url', '') if upload_result else ''
             monitor_label = f'monitor {monitor}' if monitor > 0 else 'all monitors'
-            message = f"Screenshot captured ({monitor_label}, {size_kb:.0f}KB)"
+            message = f"Screenshot captured ({monitor_label}, {size_kb}KB)"
             if url:
                 message += f" — URL: {url}"
 
-            return {
+            response = {
                 'message': message,
                 'url': url,
-                'base64': screenshot_b64,
-                'size_kb': round(size_kb, 1),
+                'size_kb': size_kb,
                 'monitor': monitor,
             }
+            image_bytes = result.get('image_bytes')
+            if image_bytes:
+                response['base64'] = base64.b64encode(image_bytes).decode('ascii')
+            return response
 
+        except ScreenshotCaptureError as e:
+            return {'error': f"Screenshot failed: {e}"}
         except Exception as e:
-            return {'error': f"Screenshot failed: {str(e)}"}
-
-    def _upload_screenshot(self, screenshot_b64):
-        """Upload screenshot base64 to web API for storage in Firebase Storage.
-
-        Returns:
-            dict with 'url' and 'sizeKB' on success, None on failure.
-        """
-        try:
-            token = self.firebase_client.auth_manager.get_valid_token()
-            api_base = shared_utils.get_api_base_url()
-            response = requests.post(
-                f"{api_base}/agent/screenshot",
-                json={
-                    'siteId': self.firebase_client.site_id,
-                    'machineId': self.firebase_client.machine_id,
-                    'screenshot': screenshot_b64,
-                    'agentVersion': shared_utils.APP_VERSION,
-                },
-                headers={'Authorization': f'Bearer {token}'},
-                timeout=30
-            )
-            if response.status_code != 200:
-                logging.warning(f"Screenshot upload failed: {response.status_code} {response.text}")
-                return None
-            else:
-                logging.info("Screenshot uploaded successfully")
-                return response.json()
-        except Exception as e:
-            logging.warning(f"Screenshot upload failed: {e}")
-            return None
+            return {'error': f"Screenshot failed: {type(e).__name__}: {e}"}
 
     def _handle_start_live_view(self, command_data):
         """Start periodic screenshot capture for live view."""
@@ -7319,19 +7137,19 @@ class OwletteService(win32serviceutil.ServiceFramework):
 
             while self._live_view_active and time.time() < self._live_view_stop_time:
                 try:
-                    capture_code = _screenshot_capture_code(None, 1920, 50)
-                    result = self.execute_in_user_session('python', capture_code, timeout=10, trusted=True)
-
-                    if result.get('error') or 'screenshot.jpg' not in result.get('files', []):
-                        logging.debug(f"Live view capture failed: {result.get('error', 'no screenshot file')}")
-                    else:
-                        _, screenshot_b64, result_dir = _read_session_screenshot()
-
-                        if result_dir:
-                            _discard_session_result_dir(result_dir)
-
-                            self._upload_screenshot(screenshot_b64)
-
+                    # A refreshing modal frame every 5-60s does not need the
+                    # full-resolution on-demand image, and a frame that is
+                    # slow to land is worth dropping rather than retrying:
+                    # the next one is already due.
+                    self._run_capture_pipeline(
+                        max_width=1920,
+                        quality=50,
+                        capture_timeout_s=10,
+                        request_timeout_s=10,
+                        max_upload_attempts=1,
+                    )
+                except ScreenshotCaptureError as e:
+                    logging.debug(f"Live view capture failed: {e}")
                 except Exception as e:
                     logging.warning(f"Live view capture error: {e}")
 
@@ -7358,10 +7176,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
         Also detects stale markers from updates that never completed (crash, power loss, etc.)
         """
         try:
-            update_marker_path = os.path.join(
-                os.environ.get('ProgramData', 'C:\\ProgramData'),
-                'owlette', 'logs', 'update_in_progress.json'
-            )
+            update_marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
 
             if not os.path.exists(update_marker_path):
                 return  # No update was in progress
@@ -7442,10 +7257,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
             logging.warning(f"Error checking update status: {e}")
             # An unreadable marker would block every future update.
             try:
-                update_marker_path = os.path.join(
-                    os.environ.get('ProgramData', 'C:\\ProgramData'),
-                    'owlette', 'logs', 'update_in_progress.json'
-                )
+                update_marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
                 if os.path.exists(update_marker_path):
                     os.remove(update_marker_path)
                     logging.info("Cleaned up unreadable update marker")
@@ -7478,8 +7290,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
         if os.name != 'nt':
             return  # legacy layout only exists on windows LocalSystem
 
-        program_data = os.environ.get('PROGRAMDATA', 'C:\\ProgramData')
-        flag_dir = os.path.join(program_data, 'Owlette', '.migrations')
+        flag_dir = shared_utils.get_data_path('.migrations')
         flag_path = os.path.join(flag_dir, 'content-store-moved')
         if os.path.exists(flag_path):
             return  # already migrated on a prior boot
@@ -7588,8 +7399,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
         if os.name != 'nt':
             return
 
-        program_data = os.environ.get('PROGRAMDATA', 'C:\\ProgramData')
-        flag_dir = os.path.join(program_data, 'Owlette', '.migrations')
+        flag_dir = shared_utils.get_data_path('.migrations')
         flag_path = os.path.join(flag_dir, 'legacy-launch-tasks-swept')
         if os.path.exists(flag_path):
             return
@@ -7895,6 +7705,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
         # dead, so revert immediately regardless of deadline — an unacknowledged
         # apply must never survive.
         try:
+            import display_manager
+
             sentinel_path = shared_utils.get_data_path('.display_revert_pending')
             if os.path.exists(sentinel_path):
                 logging.warning(
@@ -8207,10 +8019,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
                 # Reboot-pending check every 15 min (180 iterations at SLEEP_INTERVAL=5s)
                 reboot_pending_counter += 1
                 if reboot_pending_counter >= 180:
-                    try:
-                        self._check_and_alert_reboot_pending()
-                    except Exception as e:
-                        logging.debug(f"Reboot-pending check failed (non-critical): {e}")
+                    self._submit_reboot_pending_check()
                     reboot_pending_counter = 0
 
                 log_cleanup_counter += 1
@@ -8279,14 +8088,14 @@ class OwletteService(win32serviceutil.ServiceFramework):
 
             logging.info("Service cleanup complete - exiting")
 
-if __name__ == '__main__':
-    # No arguments = hosted by owlette-host or run directly for debugging.
-    import sys
 
-    if len(sys.argv) == 1:
-        print("Starting owlette service (hosted mode)...")
-        service = OwletteService(None)
-        service.SvcDoRun()
-    else:
-        # Has arguments - use normal win32serviceutil command-line handling
-        win32serviceutil.HandleCommandLine(OwletteService)
+if __name__ == '__main__':
+    # The service verbs this module used to accept went with the pywin32
+    # ServiceFramework; owlette-host is the service now. Exiting loudly keeps a
+    # stale `owlette_service.py install|start|debug` from looking like a success.
+    print(
+        "owlette_service is a module, not an entry point - run "
+        "`python owlette_runner.py --debug` to start the service loop.",
+        file=sys.stderr,
+    )
+    sys.exit(2)

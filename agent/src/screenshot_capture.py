@@ -39,6 +39,7 @@ FINALIZE_PATH_TMPL = "/sites/{site_id}/machines/{machine_id}/screenshots/finaliz
 DEFAULT_CONTENT_TYPE = "image/jpeg"
 SCREENSHOT_FILENAME_PNG = "screenshot.png"
 
+UPLOAD_URL_TIMEOUT_S = 15
 UPLOAD_TIMEOUT_S = 30
 FINALIZE_TIMEOUT_S = 15
 MAX_UPLOAD_ATTEMPTS = 3
@@ -91,7 +92,11 @@ print(f'monitors={{monitors_count}} size={{len(png_bytes)}}')
 """
 
 
-def _compress_to_jpeg(png_bytes: bytes) -> tuple[bytes, str]:
+def _compress_to_jpeg(
+    png_bytes: bytes,
+    max_width: int = MAX_IMAGE_WIDTH_PX,
+    quality: int = JPEG_QUALITY,
+) -> tuple[bytes, str]:
     """
     Compress the raw PNG to JPEG service-side (Pillow ships with the service);
     returns (bytes, content_type). Falls back to the untouched PNG if PIL is
@@ -108,22 +113,23 @@ def _compress_to_jpeg(png_bytes: bytes) -> tuple[bytes, str]:
         return png_bytes, 'image/png'
 
     img = Image.open(io.BytesIO(png_bytes))
-    if img.width > MAX_IMAGE_WIDTH_PX:
-        ratio = MAX_IMAGE_WIDTH_PX / img.width
+    if img.width > max_width:
+        ratio = max_width / img.width
         img = img.resize(
-            (MAX_IMAGE_WIDTH_PX, int(img.height * ratio)),
+            (max_width, int(img.height * ratio)),
             Image.LANCZOS,
         )
     if img.mode != 'RGB':
         img = img.convert('RGB')
     buf = io.BytesIO()
-    img.save(buf, format='JPEG', quality=JPEG_QUALITY, optimize=True)
+    img.save(buf, format='JPEG', quality=quality, optimize=True)
     return buf.getvalue(), 'image/jpeg'
 
 
 def capture_in_user_session(
     executor: UserSessionExecutor,
     monitor: int = 0,
+    timeout_s: int = CAPTURE_TIMEOUT_S,
 ) -> tuple[bytes, int]:
     """
     Capture in the active user's desktop session → (raw_png_bytes,
@@ -134,7 +140,7 @@ def capture_in_user_session(
     result = executor(
         'python',
         capture_code,
-        timeout=CAPTURE_TIMEOUT_S,
+        timeout=timeout_s,
         trusted=True,
     )
     if not isinstance(result, dict):
@@ -199,6 +205,7 @@ def request_upload_url(
     machine_id: str,
     bearer_token: str,
     content_type: str = DEFAULT_CONTENT_TYPE,
+    timeout_s: int = UPLOAD_URL_TIMEOUT_S,
 ) -> dict:
     """
     POST .../screenshots/upload-url → `{uploadUrl, storagePath, contentType,
@@ -214,7 +221,7 @@ def request_upload_url(
     body = {'contentType': content_type}
 
     try:
-        resp = requests.post(url, json=body, headers=headers, timeout=15)
+        resp = requests.post(url, json=body, headers=headers, timeout=timeout_s)
     except requests.RequestException as e:
         raise ScreenshotCaptureError(f"upload-url: network error: {e}") from e
 
@@ -249,6 +256,7 @@ def upload_to_signed_url(
     max_attempts: int = MAX_UPLOAD_ATTEMPTS,
     backoff_s: float = INITIAL_BACKOFF_S,
     sleep_fn: Any = time.sleep,
+    timeout_s: int = UPLOAD_TIMEOUT_S,
 ) -> None:
     """
     PUT to the signed URL, retrying 5xx + network errors with backoff. 4xx
@@ -261,7 +269,7 @@ def upload_to_signed_url(
                 upload_url,
                 data=image_bytes,
                 headers={'Content-Type': content_type},
-                timeout=UPLOAD_TIMEOUT_S,
+                timeout=timeout_s,
             )
             if 200 <= resp.status_code < 300:
                 return
@@ -293,6 +301,7 @@ def finalize_screenshot(
     size_kb: int,
     monitor: int,
     content_type: str = DEFAULT_CONTENT_TYPE,
+    timeout_s: int = FINALIZE_TIMEOUT_S,
 ) -> dict:
     """
     POST .../screenshots/finalize. Web flips the object to public-read, writes
@@ -313,7 +322,7 @@ def finalize_screenshot(
     }
 
     try:
-        resp = requests.post(url, json=body, headers=headers, timeout=FINALIZE_TIMEOUT_S)
+        resp = requests.post(url, json=body, headers=headers, timeout=timeout_s)
     except requests.RequestException as e:
         raise ScreenshotCaptureError(f"finalize: network error: {e}") from e
 
@@ -345,11 +354,28 @@ def capture_and_upload(
     machine_id: str,
     bearer_token: str,
     monitor: Any = 0,
+    max_width: int = MAX_IMAGE_WIDTH_PX,
+    quality: int = JPEG_QUALITY,
+    capture_timeout_s: int = CAPTURE_TIMEOUT_S,
+    max_upload_attempts: int = MAX_UPLOAD_ATTEMPTS,
+    request_timeout_s: Optional[int] = None,
+    include_image_bytes: bool = False,
 ) -> dict:
     """
     Full pipeline; returns the command's `result` envelope:
     `{storage_path, url, size_kb, monitor, monitor_count}` — `url` is the
     public read URL finalize also wrote to machine.lastScreenshot.
+
+    The budget arguments default to the on-demand settings; a caller that runs
+    somewhere it cannot afford them — the crash path is inline on the monitor
+    loop, live view repeats every few seconds — passes its own.
+    `request_timeout_s` caps each of the three round-trips, which is the only
+    way to bound the pipeline's total wall time: left unset they keep their
+    individual defaults and the worst case is 15 + 30 + 15 seconds.
+
+    `include_image_bytes` adds the compressed `image_bytes` to the envelope for
+    the local Cortex IPC consumer, which renders them as an MCP image block.
+    Leave it off for anything that ends up in a Firestore document.
 
     Failures raise ScreenshotCaptureError tagged with the step
     (capture / upload-url / upload / finalize).
@@ -360,10 +386,10 @@ def capture_and_upload(
         monitor_int = 0
 
     png_bytes, monitor_count = capture_in_user_session(
-        user_session_executor, monitor_int
+        user_session_executor, monitor_int, timeout_s=capture_timeout_s
     )
 
-    image_bytes, content_type = _compress_to_jpeg(png_bytes)
+    image_bytes, content_type = _compress_to_jpeg(png_bytes, max_width, quality)
     size_kb = max(1, round(len(image_bytes) / 1024))
 
     # Content-type is pinned at signing time to whatever we actually produced.
@@ -373,12 +399,15 @@ def capture_and_upload(
         machine_id=machine_id,
         bearer_token=bearer_token,
         content_type=content_type,
+        timeout_s=request_timeout_s or UPLOAD_URL_TIMEOUT_S,
     )
 
     upload_to_signed_url(
         upload_url=issued['uploadUrl'],
         image_bytes=image_bytes,
         content_type=content_type,
+        max_attempts=max_upload_attempts,
+        timeout_s=request_timeout_s or UPLOAD_TIMEOUT_S,
     )
 
     finalized = finalize_screenshot(
@@ -390,12 +419,16 @@ def capture_and_upload(
         size_kb=size_kb,
         monitor=monitor_int,
         content_type=content_type,
+        timeout_s=request_timeout_s or FINALIZE_TIMEOUT_S,
     )
 
-    return {
+    envelope = {
         'storage_path': issued['storagePath'],
         'url': finalized['url'],
         'size_kb': size_kb,
         'monitor': monitor_int,
         'monitor_count': monitor_count,
     }
+    if include_image_bytes:
+        envelope['image_bytes'] = image_bytes
+    return envelope

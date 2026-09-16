@@ -4,14 +4,61 @@ Pytest Configuration and Shared Fixtures
 This file contains shared fixtures and configuration for all tests.
 """
 
+import os
 import pytest
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import Mock, MagicMock
 
 # Add src directory to path so tests can import modules
 src_path = Path(__file__).parent.parent / 'src'
 sys.path.insert(0, str(src_path))
+
+# Sandbox the agent data root for the whole run, here rather than in a fixture:
+# shared_utils freezes CONFIG_PATH and its siblings off the root at import, and
+# test modules are imported before any fixture runs. Modules resolve paths under
+# the root while merely being constructed — the persisted machine identity among
+# them — so without this a test that forgets a stub writes into
+# %PROGRAMDATA%\Owlette and can re-key the agent paired on the machine running
+# the suite.
+_OWNED_DATA_ROOT = None
+if not os.environ.get('OWLETTE_DATA_ROOT'):
+    _OWNED_DATA_ROOT = tempfile.mkdtemp(prefix='owlette-tests-')
+    os.environ['OWLETTE_DATA_ROOT'] = _OWNED_DATA_ROOT
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Remove the sandboxed data root, if this run is the one that made it."""
+    if _OWNED_DATA_ROOT:
+        shutil.rmtree(_OWNED_DATA_ROOT, ignore_errors=True)
+
+
+@pytest.fixture(scope='session', autouse=True)
+def _macos_tmp_is_an_extract_root(tmp_path_factory):
+    """Let the suite's own temp tree serve as a roost extract root on macOS.
+
+    pytest hands out `tmp_path` under `/private/var/folders`, which
+    destination_allowlist refuses as a macOS system path — correctly, and that
+    is shipped policy. The carve-out belongs to the tests, so it is injected
+    here for this session's base temp only and never to the shipped table.
+    """
+    if sys.platform != 'darwin':
+        yield
+        return
+
+    import destination_allowlist
+
+    base = tmp_path_factory.getbasetemp()
+    original = destination_allowlist._POSIX_SYSTEM_PATH_EXCEPTIONS['macos']
+    destination_allowlist._POSIX_SYSTEM_PATH_EXCEPTIONS['macos'] = original | {
+        str(base), str(base.resolve()),
+    }
+    try:
+        yield
+    finally:
+        destination_allowlist._POSIX_SYSTEM_PATH_EXCEPTIONS['macos'] = original
 
 
 @pytest.fixture
@@ -150,3 +197,20 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "integration: mark test as an integration test"
     )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip @pytest.mark.windows tests when not running on Windows.
+
+    The marker carries its own reason when the test has one to give
+    (@pytest.mark.windows(reason='...')); otherwise the skip reads
+    'windows-only'.
+    """
+    if sys.platform == 'win32':
+        return
+
+    for item in items:
+        marker = item.get_closest_marker('windows')
+        if marker is None:
+            continue
+        item.add_marker(pytest.mark.skip(reason=marker.kwargs.get('reason', 'windows-only')))

@@ -3,8 +3,10 @@
 The 3.0.1 cutover shipped four artifacts that no `git push` deploys: the talons Firestore indexes
 (`firestore.indexes.json`), the Cloud Functions that back the display and `process_restarted` talon
 taps (`functions/src/talonLogEvents.ts`), the cron-job.org registration for `/api/cron/talons`, and
-the `installer_metadata/cortex_cli` pin that a 3.0.0+ installer needs or Cortex is dead on every
-fresh install (`docs/internal/cortex-cli-provisioning.md:28`). Two runbooks disagreed on the order:
+the cortex CLI pins that a 3.0.0+ installer needs or Cortex is dead on every fresh install —
+`installer_metadata/cortex_cli_<osFamily>_<arch>` for a 3.4+ agent, the legacy
+`installer_metadata/cortex_cli` for everything fielded before it
+(`docs/internal/cortex-cli-provisioning.md`). Two runbooks disagreed on the order:
 `docs/runbooks/talons.md:75-99` says indexes first, wait for `Enabled`, register the cron last, while
 `docs/runbooks/production-deploy.md:152-206` deploys the web app at step 6 and Firestore at step 8 —
 the exact reversal that talons.md exists to prevent.
@@ -57,7 +59,7 @@ work simply never happens. Those are the rows that bite.
 | agent installer — build | manual | `cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"` | no | LOUD (exit code + log), but it **hangs a non-interactive shell forever** without `< NUL` — the batch file ends with `pause` and pauses on every error branch. Invoke by full path; never cd-then-run. |
 | agent installer — CI build + SLSA L3 provenance | git tag | `git tag v3.0.2 && git push origin v3.0.2` | no | LOUD (the verify job runs `slsa-verifier`). The **silent** part is what it does not do: it attaches the exe and attestation to the GitHub Release and stops. No Firebase Storage push, no `installer_metadata`, no `latest` pointer — tagging rolls out nothing. |
 | agent installer — rollout to agents | manual | 3-step signed-URL upload — see below | yes | LOUD: 400 without an `Idempotency-Key` (`web/lib/idempotency.ts:103-115`), 403 on a key without `installer=*:write`, 412 `checksum_mismatch` on corruption, and the signed URL dies after 15 minutes. **Silent failure = skipping it entirely**: a green CI run on a tag looks like a release while no agent ever sees the version. |
-| cortex CLI pin (`installer_metadata/cortex_cli`) | manual | `node scripts/upload-cortex-cli.mjs --env=prod --file="<path to claude.exe>" --yes` | yes | **SILENT per machine** — a fresh Firebase project has no pin, so `ensure_cli()` fails closed, `main()` writes `cortexStatus.error` and exits without an exception, backing off 5 min to 1 h (`agent/src/cortex_cli_fetch.py:93-94`). A 3.0.0+ installer promoted into an environment with a missing pin leaves Cortex dead on every fresh install. |
+| cortex CLI pins (`installer_metadata/cortex_cli_<osFamily>_<arch>`, plus the legacy `cortex_cli` every pre-3.4 agent reads) | manual | `node scripts/upload-cortex-cli.mjs --env=prod --windows-x64="<claude.exe>" --macos-universal="<claude>" --linux-x64="<claude>" --linux-arm64="<claude>" --yes` | yes | **SILENT per machine** — a fresh Firebase project has no pin, so `ensure_cli()` fails closed, `main()` writes `cortexStatus.error` and exits without an exception, backing off 5 min to 1 h (`agent/src/cortex_cli_fetch.py:93-94`). A 3.0.0+ installer promoted into an environment with a missing pin leaves Cortex dead on every fresh install. |
 
 ### the two commands that do not fit a table cell
 
@@ -230,11 +232,16 @@ gcloud scheduler jobs list --project owlette-prod-90a12 --location us-central1
 
 ```bash
 node scripts/upload-cortex-cli.mjs --env=prod \
-  --file="C:/ProgramData/Owlette/python/Lib/site-packages/claude_agent_sdk/_bundled/claude.exe" --yes
+  --windows-x64="C:/ProgramData/Owlette/python/Lib/site-packages/claude_agent_sdk/_bundled/claude.exe" \
+  --macos-universal="<claude>" --linux-x64="<claude>" --linux-arm64="<claude>" --yes
 ```
 
-Dry-run first with `--env=dev … --dry-run`. Publish the exact binary that
-`pip install -r agent/requirements.txt` produced, never a separately downloaded CLI.
+Dry-run first with `--env=dev … --dry-run`. Publish the exact binaries that
+`pip install -r agent/requirements.txt` produced on each platform, never a separately downloaded CLI —
+except `--macos-universal`, which takes a `lipo -create` join of the arm64 and x64 builds because the
+SDK's wheels are per-arch and both Macs read the one id (a thin Mach-O fails the run).
+One run per environment covers every platform you pass; a 3.4+ agent reads only its own
+`cortex_cli_<osFamily>_<arch>` document, so a platform you skip has no working hoot there.
 
 **10. Register the cron jobs — last, once the routes are live.**
 
@@ -360,8 +367,11 @@ deploys the web app before the Firestore indexes it queries and collapses rules 
 
 Agent installer releases run on their own track and are **not** part of this sequence — see
 [agent-installer-release.md](agent-installer-release.md). The only ordering constraint they share is
-step 1, and the cortex CLI pin gate: provision `installer_metadata/cortex_cli` in an environment
-*before* promoting a 3.0.0+ installer there.
+step 1, and the cortex CLI pin gate: provision every `installer_metadata/cortex_cli_<osFamily>_<arch>`
+document whose platform you are promoting an installer for *before* promoting it — a 3.4+ agent
+reads only its own, so a platform you skip has no working hoot there. The legacy
+`installer_metadata/cortex_cli`, which the Windows payload rewrites on every run, covers only what
+was fielded before 3.4.
 
 ---
 

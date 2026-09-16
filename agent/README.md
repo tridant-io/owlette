@@ -141,9 +141,8 @@ If the installer doesn't work, follow these manual steps:
    scripts\install.bat
    ```
    The service is hosted by `tools\owlette-host.exe`, which `install.bat`
-   registers, configures and starts. Do **not** use
-   `python owlette_service.py install` — that registers a second, pywin32-hosted
-   `OwletteService` and the two definitions fight over the same name.
+   registers, configures and starts. `owlette_service.py` no longer accepts
+   service verbs — the pywin32 service framework is gone.
 
 ---
 
@@ -155,7 +154,7 @@ For development/testing:
 
 ```cmd
 cd agent/src
-python owlette_service.py debug
+python owlette_runner.py --debug
 ```
 
 **Note:** Requires administrator privileges to access Windows service APIs.
@@ -347,10 +346,9 @@ agent/
 ├── logs/                          # Log files (gitignored)
 │   └── service.log
 ├── tmp/                           # Temporary files (gitignored)
+├── scripts/                       # Packaged service install/uninstall scripts
 ├── build_installer_full.bat       # Full build script
 ├── build_installer_quick.bat      # Quick build script
-├── install.bat                    # Installation script
-├── uninstall.bat                  # Uninstallation script
 ├── owlette_installer.iss          # Inno Setup script
 ├── requirements.txt               # Python dependencies
 ├── config.template.json           # Config template

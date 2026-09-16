@@ -19,6 +19,7 @@ import json
 import os
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -130,7 +131,7 @@ def _write_sentinel(path, age_seconds=0, control='stop'):
 
 
 def make_service(firebase_client=None):
-    """An OwletteService with only the shutdown state __init__ would set."""
+    """An OwletteService with only the shutdown state _init_state sets."""
     service = object.__new__(owlette_service.OwletteService)
     service._service_start_time = time.time()
     service.is_alive = True
@@ -531,11 +532,41 @@ class TestConnectionStatusListener:
     '_shutdown_trigger',
     '_connection_status_manager',
 ])
-def test_mockservice_mirrors_every_new_attribute(attribute):
-    """owlette_runner.MockService must carry everything OwletteService.__init__
-    sets, or the hosted path raises AttributeError in production."""
-    import pathlib
-    source = pathlib.Path(owlette_service.__file__).with_name('owlette_runner.py')
-    assert f'self.{attribute}' in source.read_text(encoding='utf-8'), (
-        f'{attribute} is missing from MockService.__init__'
-    )
+def test_the_hosted_instance_carries_every_shutdown_attribute(attribute, monkeypatch):
+    """owlette_runner builds the service through _init_state(), the only place
+    service state is set, so the state the stop path reads has to come from there.
+
+    Its predecessor scanned owlette_runner.py for the literal `self.<attr>` and
+    kept passing against a second copy of the attribute wall that had drifted;
+    this builds the object the runner actually hands to main().
+    """
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'read_config', lambda *a, **kw: {})
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'get_api_base_url',
+        lambda: 'https://example.invalid/api')
+
+    service = object.__new__(owlette_service.OwletteService)
+    service._init_state()
+
+    assert hasattr(service, attribute)
+
+
+def test_the_auth_manager_comes_from_the_cloud_client(monkeypatch):
+    """The health and reboot-pending alerts read `_auth_manager`, and when it was
+    a second copy the startup sequence had to assign, it stopped being assigned
+    and both alerts went quiet with nothing to fail on. It is derived now.
+    """
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'read_config', lambda *a, **kw: {})
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'get_api_base_url',
+        lambda: 'https://example.invalid/api')
+
+    service = object.__new__(owlette_service.OwletteService)
+    service._init_state()
+    assert service._auth_manager is None
+
+    auth_manager = object()
+    service.firebase_client = SimpleNamespace(auth_manager=auth_manager)
+    assert service._auth_manager is auth_manager

@@ -236,13 +236,14 @@ launched: managed processes and the desktop app are never in scope.
 
 ## owlette_runner.py Bridge
 
-**Why it exists**: the host runs a console application. The Owlette service
-class is built on `win32serviceutil.ServiceFramework`, a Windows Service API.
-`owlette_runner.py` bridges the gap by:
+**Why it exists**: the host runs a console application, so the service needs a
+plain `__main__`. `owlette_runner.py` is it, and it owns the whole startup
+sequence — `OwletteService` has no constructor of its own:
 
-1. Creating a `MockService` that mimics ServiceFramework attributes
-2. Binding `OwletteService.main()` to the mock instance
-3. Running `main()` as a regular Python process
+1. Building the instance with `object.__new__` and calling `_init_state()`,
+   the single place service attributes are set
+2. Wiring the health probe and the Firebase client onto it
+3. Running `OwletteService.main()` as a regular Python process
 
 **The stop path is critical**: the SCM stop watcher (started by the runner) is
 what notices a stop. It must:

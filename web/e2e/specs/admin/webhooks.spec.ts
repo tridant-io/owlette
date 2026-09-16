@@ -60,7 +60,7 @@ async function seedWebhook(name = SEEDED_WEBHOOK.name, url = SEEDED_WEBHOOK.url)
 async function gotoWebhooksForSeededSite(page: Page) {
   await page.goto('/admin/webhooks');
   // Superadmin always gets the site selector; pick the seeded site by name. 10s because
-  // RequireSuperadmin gates on AuthContext hydrating against the auth emulator, which races the
+  // RequireAdminAccess gates on AuthContext hydrating against the auth emulator, which races the
   // default 5s timeout on cold-emulator runs.
   await expect(
     page.getByRole('heading', { name: 'webhooks', exact: true }),

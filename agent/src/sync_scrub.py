@@ -29,6 +29,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
+import shared_utils
 from sync_downloader import _default_content_store
 from sync_version import Version, VersionFile, fetch_version, VersionError
 from sync_state import SyncState
@@ -37,22 +38,14 @@ logger = logging.getLogger(__name__)
 
 def _default_scrub_report_dir() -> str:
     """
-    default report dir: %PROGRAMDATA%\\Owlette\\scrub-reports on windows,
-    $XDG_DATA_HOME/owlette/scrub-reports (else ~/.local/share/...) on POSIX.
+    default report dir: `scrub-reports` under the agent's data root.
 
     See sync_state._default_state_db_path() for why `~/Documents/` is avoided
     under LocalSystem.
     """
-    if os.name == 'nt':
-        program_data = os.environ.get('PROGRAMDATA', 'C:\\ProgramData')
-        return os.path.join(program_data, 'Owlette', 'scrub-reports')
-    xdg = os.environ.get('XDG_DATA_HOME')
-    if xdg:
-        return os.path.join(xdg, 'owlette', 'scrub-reports')
-    return os.path.join(os.path.expanduser('~'), '.local', 'share', 'owlette', 'scrub-reports')
+    return shared_utils.get_data_path('scrub-reports')
 
 
-DEFAULT_SCRUB_REPORT_DIR = _default_scrub_report_dir()
 _SCRUB_BUFFER_BYTES = 1024 * 1024  # 1 MiB read buffer
 
 # Hourly scrub dispatch would otherwise grow this dir forever; only recent
@@ -164,7 +157,7 @@ def scrub_distribution(
         drifts=drifts,
     )
 
-    # Default recomputed per call so an XDG_DATA_HOME test override applies.
+    # Default recomputed per call so an OWLETTE_DATA_ROOT override applies.
     _write_report(report, report_dir or _default_scrub_report_dir())
 
     if report.healthy:

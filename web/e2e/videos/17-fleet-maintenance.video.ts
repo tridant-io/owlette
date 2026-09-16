@@ -14,7 +14,7 @@
  *                                     its route are BOTH site-admin as of
  *                                     e0c8341a, and the beat says so out loud,
  *                                     so it must not be shot as a superadmin.
- *   17-fleet-maintenance-b06-tokens.mp4 — /admin/tokens, which is superadmin-only.
+ *   17-fleet-maintenance-b06-tokens.mp4 — /admin/tokens, shot as a superadmin.
  *
  * Fixture `dashboard-mixed-states` plus three things it does not carry, seeded
  * here and cleaned up after:
@@ -316,9 +316,9 @@ test('episode 17 — keeping the fleet current', async ({ browser }) => {
       },
     );
 
-    // ── Clip 2: the token ledger, superadmin-only ────────────────────────────
-    // [b06] (~23.2s). /admin/tokens is wrapped in RequireSuperadmin, and the
-    // list route demands GLOBAL_SETTINGS_WRITE.
+    // ── Clip 2: the token ledger ─────────────────────────────────────────────
+    // [b06] (~23.2s). /admin/tokens is wrapped in RequireAdminAccess at
+    // minRole 'admin', and the list route is site-scoped AGENT_TOKEN_REVOKE.
     await recordScene(
       browser,
       '17-fleet-maintenance-b06-tokens',

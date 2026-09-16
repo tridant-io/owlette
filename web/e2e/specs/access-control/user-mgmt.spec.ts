@@ -1,5 +1,5 @@
 /**
- * Access-control — /admin/users (RequireSuperadmin). Covers the stats row,
+ * Access-control — /admin/users (RequireAdminAccess, superadmin). Covers the stats row,
  * per-role badges, the three sites-column variants, the "You" badge, the
  * role-change dialog, and the self-demote guard.
  */

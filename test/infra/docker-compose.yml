@@ -83,11 +83,11 @@ services:
       init-buckets:
         condition: service_completed_successfully
     environment:
-      PROGRAMDATA: /tmp/owlette-programdata
-      XDG_DATA_HOME: /tmp/owlette-data
+      # The one data-tree override, honoured before osadapter picks a
+      # platform arm: the sync modules resolve the data root at import.
+      OWLETTE_DATA_ROOT: /tmp/owlette-data
       OWLETTE_ENVIRONMENT: development
       OWLETTE_FIREBASE_PROJECT_ID: demo-test
-      FIRESTORE_EMULATOR_HOST: firestore:8080
       OWLETTE_R2_ENDPOINT: http://minio:9000
       OWLETTE_R2_ACCESS_KEY_ID: minioadmin
       OWLETTE_R2_SECRET_ACCESS_KEY: minioadmin

@@ -29,11 +29,21 @@ for mod_name, mock_obj in _MOCK_MODULES.items():
         _patches[mod_name] = mock_obj
 
 try:
+    _before = set(sys.modules)
     with patch.dict("sys.modules", _patches):
         from firebase_client import FirebaseClient, DISPLAY_ALERT_EVENT_TYPES
         from connection_manager import ConnectionManager, ConnectionState
         from firestore_rest_client import FirestoreRestClient
         from auth_manager import AuthManager
+        # patch.dict restores sys.modules wholesale on exit, evicting every
+        # module these imports added while the classes above stay bound to it.
+        # A later patch("firebase_client.<name>") would then import a SECOND
+        # firebase_client and stub that one, leaving the constructor reading the
+        # real shared_utils — which reads and seeds the machine identity. Keep
+        # what the imports produced; in a full-suite run they were already there.
+        _imported = {name: module for name, module in sys.modules.items()
+                     if name not in _before and name not in _patches}
+    sys.modules.update(_imported)
 except ImportError as exc:
     pytest.skip(f"firebase_client not importable: {exc}", allow_module_level=True)
 except Exception as exc:
@@ -73,8 +83,7 @@ def mock_rest_client():
 def firebase_client(mock_auth_manager, mock_rest_client):
     """Create a FirebaseClient with all dependencies mocked out."""
     with patch("firebase_client.FirestoreRestClient", return_value=mock_rest_client), \
-         patch("firebase_client.shared_utils") as mock_su, \
-         patch("firebase_client.registry_utils") as mock_ru:
+         patch("firebase_client.shared_utils") as mock_su:
         # shared_utils stubs
         mock_su.get_data_path.return_value = "/tmp/owlette"
         mock_su.get_system_metrics.return_value = {"cpu": 10, "memory": 50}
@@ -82,7 +91,7 @@ def firebase_client(mock_auth_manager, mock_rest_client):
         # machine_id is read straight off shared_utils in __init__; without a
         # stub it becomes a MagicMock and every id-shaped assertion depends on
         # whether this module was still in sys.modules when patch() resolved it.
-        mock_su.get_hostname.return_value = "TEST-MACHINE"
+        mock_su.get_machine_id.return_value = "TEST-MACHINE"
 
         try:
             client = FirebaseClient(
@@ -113,9 +122,11 @@ class TestInit:
         assert firebase_client.site_id == "test-site"
 
     def test_machine_id_is_set(self, firebase_client):
-        """machine_id should be set (hostname or from config)."""
-        assert firebase_client.machine_id is not None
-        assert len(firebase_client.machine_id) > 0
+        """The persisted identity, taken from the stub rather than from the
+        machine — an id that is really the hostname means the fixture's
+        shared_utils stub landed on a different module object than the
+        constructor reads, and the constructor seeded a real identity file."""
+        assert firebase_client.machine_id == "TEST-MACHINE"
 
 
 # TestPresence — heartbeat writes to the correct Firestore path
@@ -565,6 +576,7 @@ class TestSiteMetadataRefresh:
 
 
 # TestEnsureDisplayModesCatalogue — A3.2 cache-by-signature guard
+@pytest.mark.windows(reason='patches display_manager, which is windows-only')
 class TestEnsureDisplayModesCatalogue:
     """`_ensure_display_modes_catalogue` uploads once per signatureHash. The
     dashboard dispatches `enumerate_display_modes` every time the editor opens,
@@ -590,9 +602,9 @@ class TestEnsureDisplayModesCatalogue:
         }
 
     def _patch_enumerate(self, monkeypatch, result):
-        import firebase_client as fc
+        import display_manager
         monkeypatch.setattr(
-            fc.display_manager,
+            display_manager,
             'enumerate_modes_via_user_session',
             lambda: result,
         )

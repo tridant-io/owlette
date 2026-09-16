@@ -180,11 +180,11 @@ def test_add_poll_includes_machine_id_and_version():
     }
 
 
-def test_machine_id_uses_shared_hostname_source(monkeypatch):
-    """AuthManager, FirebaseClient, and /ADD= poll should share hostname source."""
-    sentinel = "SENTINEL-HOST"
+def test_machine_id_uses_the_persisted_identity(monkeypatch):
+    """AuthManager, FirebaseClient, and /ADD= poll should share one identity source."""
+    sentinel = "SENTINEL-ID"
     storage = _storage()
-    monkeypatch.setattr(shared_utils, "get_hostname", lambda: sentinel)
+    monkeypatch.setattr(shared_utils, "get_machine_id", lambda: sentinel)
     monkeypatch.setattr("auth_manager.get_storage", lambda: storage)
 
     auth_manager = AuthManager(api_base="https://owlette.app/api", storage=storage)

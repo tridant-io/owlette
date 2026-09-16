@@ -383,7 +383,7 @@ stateDiagram-v2
 
 ### in-process / firestore boundaries
 
-Module-state held by `display_manager.py`: `_apply_in_flight`, `_apply_lock`, `_current_apply_id`, `_last_apply_time`, `_last_apply_finished_at`, `_ack_event`. These coordinate the apply path and the suppression window across threads but never touch Firestore directly — Firestore writes go through `firebase_client` helpers (`_ensure_display_profile`, `_ensure_display_modes_catalogue`, `update_display_autorestore_state`, `log_event`). Service-class state held by `OwletteService`: `_drift_pending_tick_count` (per-tick counter for the persistence gate). The `MockService` in `owlette_runner.py` mirrors every new instance attribute so startup under owlette-host doesn't crash on a missing field.
+Module-state held by `display_manager.py`: `_apply_in_flight`, `_apply_lock`, `_current_apply_id`, `_last_apply_time`, `_last_apply_finished_at`, `_ack_event`. These coordinate the apply path and the suppression window across threads but never touch Firestore directly — Firestore writes go through `firebase_client` helpers (`_ensure_display_profile`, `_ensure_display_modes_catalogue`, `update_display_autorestore_state`, `log_event`). Service-class state held by `OwletteService`: `_drift_pending_tick_count` (per-tick counter for the persistence gate). `OwletteService._init_state()` is the one place instance attributes are initialised, so startup under owlette-host — which builds the service through that method — can't crash on a missing field.
 
 ---
 
@@ -474,7 +474,7 @@ on a single-machine site the canary *is* the whole fleet: the canary wave holds 
 ### security floor
 
 - **per-tenant signed-URL paths**: a signed URL issued for `site-a` cannot read `site-b`'s chunks — paths are scoped before signing
-- **allowlist**: fail-closed at the agent; admin UI at `web/components/AllowlistEditor.tsx`
+- **allowlist**: fail-closed at the agent; roots come from `agent_config.allowed_extract_roots` in the machine's `config.json` — there is no dashboard editor
 - **hash-chained audit log**: every `signed_url_issued` / `distribution_started` / `manifest_pointer_changed` / `api_key_used` / `gc_run` record embeds `hash(prev || canonicalPayload)` — tamper detection survives deletion + mutation
 - **no-token-logs lint gate**: `scripts/check-no-token-logs.mjs` blocks any commit that logs auth tokens (CI + optional pre-commit)
 

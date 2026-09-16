@@ -530,7 +530,7 @@ def _host_service(action: str, timeout: int = 60) -> bool:
 
 
 def _machine_document(project_id: str, api_base: str, site_id: str):
-    """Resolve `sites/{site_id}/machines/{hostname}` through the agent's client.
+    """Resolve `sites/{site_id}/machines/{machine_id}` through the agent's client.
 
     Returns (client, document_ref). The caller closes the client. Raises
     RuntimeError when this machine has no usable credentials — the desktop app
@@ -550,7 +550,7 @@ def _machine_document(project_id: str, api_base: str, site_id: str):
 
     client = FirestoreRestClient(project_id=project_id, auth_manager=auth_manager)
     document = client.collection('sites').document(site_id) \
-        .collection('machines').document(shared_utils.get_hostname())
+        .collection('machines').document(shared_utils.get_machine_id())
     return client, document
 
 
@@ -711,7 +711,8 @@ def build_report_data(category: str, description: str) -> dict:
     """Gather system info and recent logs for a feedback submission.
 
     Ported from `report_issue.build_report_data`; GPU probing is skipped because
-    `nvidia-smi` flashes a console window on the operator's desktop.
+    the load and temperature probes are the slow part of a report the operator
+    is waiting on.
     """
     config = shared_utils.read_config()
     firebase_cfg = config.get('firebase', {})

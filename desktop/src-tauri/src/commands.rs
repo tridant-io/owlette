@@ -14,7 +14,6 @@ use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::agent_cli::{self, Runs};
-use crate::exe_icon;
 use crate::json_io::{self, WriteOutcome};
 use crate::paths::{self, SERVICE_STATUS_REL};
 use crate::process_ctl::{self, TerminateOutcome, DEFAULT_GRACEFUL_TIMEOUT};
@@ -180,16 +179,6 @@ pub fn open_owlette_path(path: String) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn open_external_url(url: String) -> Result<(), String> {
   shell_open::open_url(&url)
-}
-
-/// The icon Windows draws for `path`, as a base64 PNG.
-///
-/// `None` = no icon to give for any ordinary reason (blank path, missing file,
-/// target has none); the list draws a fallback glyph. `Err` is a failed Win32
-/// call — same fallback, but worth having in the log.
-#[tauri::command(async)]
-pub fn exe_icon(path: String) -> Result<Option<String>, String> {
-  exe_icon::icon_base64(&path)
 }
 
 /// Width the process-list sidebar should open at, in logical pixels. Shares the

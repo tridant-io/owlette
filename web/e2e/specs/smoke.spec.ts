@@ -38,7 +38,7 @@ test.describe('smoke — superadmin', () => {
     await page.goto('/admin/users');
     await expect(page).toHaveURL(/\/admin\/users/);
     // Heading-scoped: "user management" is also in the sidebar. 10s because
-    // RequireSuperadmin's "verifying permissions..." gate can outlast the 5s
+    // RequireAdminAccess's "verifying permissions..." gate can outlast the 5s
     // default on cold-start runs.
     await expect(
       page.getByRole('heading', { name: 'user management' }),

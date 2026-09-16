@@ -404,6 +404,130 @@ def test_capture_and_upload_full_pipeline_happy_path(tmp_path):
     assert mock_finalize.call_args.kwargs['content_type'] == 'image/jpeg'
 
 
+def test_capture_and_upload_returns_image_bytes_only_when_asked(tmp_path):
+    """The bytes exist for the local Cortex IPC consumer; every other caller
+    json-dumps this envelope, so they must not appear by default."""
+    from screenshot_capture import capture_and_upload
+
+    output_dir = str(tmp_path / 'capture-run')
+    jpeg_bytes = b'\xff\xd8\xff' + b'\x22' * 512
+
+    def fake_executor(*_a, **_kw):
+        return _make_executor_result(output_dir, b'\x89PNG\r\n', 'screenshot.png')
+
+    def run(**kwargs):
+        with patch(
+            'screenshot_capture._compress_to_jpeg',
+            return_value=(jpeg_bytes, 'image/jpeg'),
+        ), patch(
+            'screenshot_capture.request_upload_url',
+            return_value={'uploadUrl': 'https://signed.example/write',
+                          'storagePath': 'p.jpg'},
+        ), patch(
+            'screenshot_capture.upload_to_signed_url'
+        ), patch(
+            'screenshot_capture.finalize_screenshot',
+            return_value={'url': 'https://cdn.example/p.jpg'},
+        ):
+            return capture_and_upload(
+                user_session_executor=fake_executor,
+                api_base='https://owlette.app/api',
+                site_id='site_a',
+                machine_id='mach_x',
+                bearer_token='tok',
+                **kwargs,
+            )
+
+    assert 'image_bytes' not in run()
+    assert run(include_image_bytes=True)['image_bytes'] == jpeg_bytes
+
+
+def test_capture_and_upload_applies_the_callers_budget(tmp_path):
+    """A caller on the monitor loop bounds its own worst case: the capture
+    timeout, the retry count, the per-request timeout and the image budget all
+    have to reach the steps that spend the time. The three round-trips are what
+    the crash caller's total is made of — miss one and its 38s budget is 53s."""
+    from screenshot_capture import capture_and_upload
+
+    output_dir = str(tmp_path / 'capture-run')
+
+    def fake_executor(*_a, **kw):
+        fake_executor.timeout = kw.get('timeout')
+        return _make_executor_result(output_dir, b'\x89PNG\r\n', 'screenshot.png')
+
+    with patch(
+        'screenshot_capture._compress_to_jpeg',
+        return_value=(b'\xff\xd8\xff', 'image/jpeg'),
+    ) as mock_compress, patch(
+        'screenshot_capture.request_upload_url',
+        return_value={'uploadUrl': 'https://signed.example/write',
+                      'storagePath': 'p.jpg'},
+    ) as mock_issue, patch(
+        'screenshot_capture.upload_to_signed_url'
+    ) as mock_upload, patch(
+        'screenshot_capture.finalize_screenshot',
+        return_value={'url': 'https://cdn.example/p.jpg'},
+    ) as mock_finalize:
+        capture_and_upload(
+            user_session_executor=fake_executor,
+            api_base='https://owlette.app/api',
+            site_id='site_a',
+            machine_id='mach_x',
+            bearer_token='tok',
+            max_width=1920,
+            quality=60,
+            capture_timeout_s=8,
+            request_timeout_s=10,
+            max_upload_attempts=1,
+        )
+
+    assert fake_executor.timeout == 8
+    assert mock_compress.call_args.args[1:] == (1920, 60)
+    assert mock_upload.call_args.kwargs['max_attempts'] == 1
+    assert mock_issue.call_args.kwargs['timeout_s'] == 10
+    assert mock_upload.call_args.kwargs['timeout_s'] == 10
+    assert mock_finalize.call_args.kwargs['timeout_s'] == 10
+
+
+def test_capture_and_upload_keeps_the_default_request_timeouts(tmp_path):
+    """Unset, each round-trip keeps its own default — the on-demand path runs on
+    a worker and should not inherit the crash path's tighter budget."""
+    from screenshot_capture import (
+        capture_and_upload, FINALIZE_TIMEOUT_S, UPLOAD_TIMEOUT_S,
+        UPLOAD_URL_TIMEOUT_S,
+    )
+
+    output_dir = str(tmp_path / 'capture-run')
+
+    def fake_executor(*_a, **_kw):
+        return _make_executor_result(output_dir, b'\x89PNG\r\n', 'screenshot.png')
+
+    with patch(
+        'screenshot_capture._compress_to_jpeg',
+        return_value=(b'\xff\xd8\xff', 'image/jpeg'),
+    ), patch(
+        'screenshot_capture.request_upload_url',
+        return_value={'uploadUrl': 'https://signed.example/write',
+                      'storagePath': 'p.jpg'},
+    ) as mock_issue, patch(
+        'screenshot_capture.upload_to_signed_url'
+    ) as mock_upload, patch(
+        'screenshot_capture.finalize_screenshot',
+        return_value={'url': 'https://cdn.example/p.jpg'},
+    ) as mock_finalize:
+        capture_and_upload(
+            user_session_executor=fake_executor,
+            api_base='https://owlette.app/api',
+            site_id='site_a',
+            machine_id='mach_x',
+            bearer_token='tok',
+        )
+
+    assert mock_issue.call_args.kwargs['timeout_s'] == UPLOAD_URL_TIMEOUT_S
+    assert mock_upload.call_args.kwargs['timeout_s'] == UPLOAD_TIMEOUT_S
+    assert mock_finalize.call_args.kwargs['timeout_s'] == FINALIZE_TIMEOUT_S
+
+
 def test_capture_and_upload_propagates_executor_error(tmp_path):
     """If the user-session capture step fails, capture_and_upload raises
     ScreenshotCaptureError before any network call is attempted."""

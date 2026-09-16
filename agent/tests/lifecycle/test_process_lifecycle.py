@@ -42,10 +42,7 @@ from .conftest import (
     write_config,
 )
 
-pytestmark = [
-    pytest.mark.windows,
-    pytest.mark.skipif(os.name != 'nt', reason='windows-only process semantics'),
-]
+pytestmark = pytest.mark.windows(reason='windows-only process semantics')
 
 
 def reap(pid):

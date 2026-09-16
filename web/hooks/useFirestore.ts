@@ -255,6 +255,12 @@ export interface Machine {
   agent_version?: string;  // Agent version for update detection (e.g., "2.0.0")
   machineTimezone?: string;  // IANA tz from the agent's tzlocal lookup; undefined on pre-IANA agent builds.
   cortexEnabled?: boolean;  // kill switch for Hoot tool-call delivery; undefined = enabled.
+  /**
+   * Agent-written capability handshake: the version of each remote operation
+   * this agent can dispatch (`displayRemoteApply` gates the display panel's
+   * restore). Undefined on agents predating the map, which reads as unsupported.
+   */
+  capabilities?: Record<string, number>;
   // `reboot*` are agent-written wire contracts; the legacy spelling is deliberate (UI says "restart").
   rebooting?: boolean;
   shuttingDown?: boolean;
@@ -1307,6 +1313,7 @@ export function useMachines(siteId: string) {
               // only an explicit false disables hoot — absent means enabled, matching
               // the server's `isHootEnabled` (hoot-utils.server.ts)
               cortexEnabled: data.cortexEnabled !== false,
+              capabilities: data.capabilities,
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
               rebootScheduledAt: restartScheduledAt,

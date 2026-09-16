@@ -34,8 +34,9 @@ import {
   validateSiteIdBody,
 } from '../../../_shared';
 
-// Must match the agent's destination_allowlist DEFAULT_ROOTS and the cloud
-// function's DEFAULT_EXTRACT_ROOT — same literal, so `~` expands identically.
+// Must match the windows entry of the agent's destination_allowlist
+// `default_roots()` and the cloud function's DEFAULT_EXTRACT_ROOT — same
+// literal, so `~` expands identically.
 const DEFAULT_EXTRACT_ROOT = '~/Documents/Owlette';
 
 interface RouteParams {

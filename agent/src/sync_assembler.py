@@ -28,6 +28,7 @@ from typing import Iterable, List, Optional, Set, Tuple
 from destination_allowlist import (
     DestinationAllowlist,
     DestinationNotAllowedError,
+    get_interactive_user_ids,
     get_interactive_username,
 )
 from sync_downloader import chunk_path, _default_content_store
@@ -45,6 +46,16 @@ _ASSEMBLE_BUFFER_BYTES = 1024 * 1024  # 1 MiB
 # windows MAX_PATH. at/above this, win32 APIs need the `\\?\` prefix even with
 # LongPathsEnabled set — some of them still cap at 260 without it.
 _WINDOWS_MAX_PATH = 260
+
+# The `.partial` sidecar is derived from the target string and never goes
+# through allowlist.validate(), and on POSIX the folder around it belongs to
+# the kiosk user once _ensure_parent_dir has handed it over — so a symlink
+# planted there would redirect a root write. O_NOFOLLOW refuses one; windows
+# has no such flag, and O_BINARY there keeps the writes byte-exact.
+_PARTIAL_FILE_FLAGS = (
+    os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)
+)
 
 
 class AssembleError(Exception):
@@ -216,14 +227,20 @@ def _assemble_one(
     target_str = str(extract_root / target_relative)
     resolved_target = allowlist.validate(target_str)
 
+    # ahead of the skip check: the mkdir is a no-op once the folders exist,
+    # and a re-sync is how folders an earlier run created before anyone was
+    # logged in get handed to the interactive user.
+    _ensure_parent_dir(resolved_target, extract_root)
+
     # idempotent skip on a size match; full-content verification is the
     # periodic scrub's job, not the hot path.
     if resolved_target.exists():
         try:
             if resolved_target.stat().st_size == version_file.size:
-                # Re-harden even on skip: a re-sync is how stale DACLs from
-                # older builds get fixed, and it's one cheap syscall.
+                # Re-harden even on skip: a re-sync is how stale DACLs and
+                # stale ownership get fixed, and it's one cheap syscall.
                 _harden_acl(_long_path(str(resolved_target)))
+                _chown_to_interactive_user(_long_path(str(resolved_target)))
                 state.set_file_state(distribution_id, version_file.path, 'committed')
                 logger.debug(f"sync_assembler: {version_file.path!r} already present + matches size")
                 return False
@@ -234,7 +251,6 @@ def _assemble_one(
 
     # `.partial` sidecar so a crash mid-write leaves the live file untouched.
     partial = resolved_target.with_suffix(resolved_target.suffix + '.partial')
-    _ensure_parent_dir(resolved_target)
 
     # open() / os.replace / os.fsync all accept the `\\?\` prefix on windows.
     partial_str = _long_path(str(partial))
@@ -242,7 +258,7 @@ def _assemble_one(
 
     bytes_written = 0
     try:
-        with open(partial_str, 'wb') as out:
+        with _open_partial(partial_str) as out:
             for chunk in version_file.chunks:
                 src = chunk_path(content_store, chunk.hash)
                 if not src.exists():
@@ -287,8 +303,10 @@ def _assemble_one(
             finally:
                 os.close(dir_fd)
 
-        # best-effort, windows-only: never fail the assembly over an ACL.
+        # best-effort, one per OS: never fail the assembly over an ACL or an
+        # owner. _harden_acl is windows-only, the chown POSIX-only.
         _harden_acl(target_str)
+        _chown_to_interactive_user(target_str)
 
         state.set_file_state(distribution_id, version_file.path, 'committed')
         logger.debug(
@@ -553,10 +571,24 @@ def _long_path(path: str) -> str:
     return '\\\\?\\' + normalized
 
 
-def _ensure_parent_dir(target: 'Path') -> None:
+def _open_partial(partial_str: str):
+    """The `.partial` sidecar, opened for writing and never through a symlink."""
+    return os.fdopen(os.open(partial_str, _PARTIAL_FILE_FLAGS, 0o666), 'wb')
+
+
+def _ensure_parent_dir(target: 'Path', extract_root: 'Path') -> None:
     """
-    mkdir -p on target.parent. Path.mkdir rejects the `\\?\` prefix on older
-    python, so long paths go through os.makedirs on the prefixed string.
+    mkdir -p on target.parent, then hand every directory below the extract
+    root to the interactive user. Path.mkdir rejects the `\\?\` prefix on
+    older python, so long paths go through os.makedirs on the prefixed string.
+
+    the POSIX daemon is root, so a project folder it creates is one the kiosk
+    app can read from but not write beside (a TouchDesigner Backup/, a lock
+    file), where windows inherits the user's ACE from the profile the extract
+    root sits in. re-applied on every pass rather than only at creation: a run
+    that found nobody logged in leaves root-owned folders behind, and the next
+    sync is what repairs them. the extract root is the installer's, and stays
+    untouched.
     """
     parent = target.parent
     parent_str = str(parent)
@@ -564,6 +596,26 @@ def _ensure_parent_dir(target: 'Path') -> None:
         os.makedirs(_long_path(parent_str), exist_ok=True)
     else:
         parent.mkdir(parents=True, exist_ok=True)
+    # Nothing to hand over on windows, where ownership is a DACL, or with no
+    # console user: skip the ancestor walk rather than pay it per file.
+    if get_interactive_user_ids() is None:
+        return
+    for directory in _dirs_under_root(parent, extract_root):
+        _chown_to_interactive_user(str(directory))
+
+
+def _dirs_under_root(parent: 'Path', extract_root: 'Path') -> List['Path']:
+    """`parent` and the directories above it down to `extract_root`, which is
+    excluded - outermost first. empty when `parent` is not under the root."""
+    chain: List[Path] = []
+    current = parent
+    while current != extract_root:
+        if current.parent == current:
+            return []
+        chain.append(current)
+        current = current.parent
+    chain.reverse()
+    return chain
 
 
 def _verify_under_root(resolved_target: 'Path', extract_root: 'Path') -> None:
@@ -702,3 +754,29 @@ def _harden_acl(path_str: str) -> None:
         )
     except Exception as e:
         logger.warning(f"sync_assembler: ACL hardening failed for {path_str!r}: {e}")
+
+
+def _chown_to_interactive_user(path_str: str) -> None:
+    """
+    give an extracted file to the user at the machine. POSIX-only, best-effort —
+    failure warns and never raises.
+
+    the daemon runs as root, so an assembled file is root-owned and the kiosk
+    account the customer's app runs as cannot open it. windows says the same
+    thing as a DACL in `_harden_acl`, and `get_interactive_user_ids` is None
+    there.
+    """
+    ids = get_interactive_user_ids()
+    if ids is None:
+        return
+    uid, gid = ids
+    try:
+        # follow_symlinks=False: roost created this path itself, so a link
+        # sitting at it is tampering by whoever owns the folder, never a real
+        # case. NotImplementedError is a platform without lchown - still not a
+        # reason to fail an assembly.
+        os.chown(path_str, uid, gid, follow_symlinks=False)
+    except (OSError, NotImplementedError) as e:
+        logger.warning(
+            f"sync_assembler: could not give {path_str!r} to uid {uid}: {e}"
+        )

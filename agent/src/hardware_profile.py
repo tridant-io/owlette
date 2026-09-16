@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 
 # GPU temperature cache (used only when multiple GPUs are present to avoid
-# repeated nvidia-smi / sensor reads inside a single metrics tick).
+# repeated sensor reads inside a single metrics tick).
 _gpu_temp_cache: dict = {}
 _gpu_temp_cache_time: float = 0.0
 _GPU_TEMP_TTL = 5.0
@@ -132,16 +132,7 @@ def _collect_disks() -> list:
 
 def _collect_gpus() -> list:
     gpus = []
-    gputil = shared_utils._get_gputil()
-    if gputil is None:
-        return gpus
-    try:
-        handles = gputil.getGPUs()
-    except Exception as e:
-        logger.warning('GPUtil.getGPUs() failed: %s', e)
-        return gpus
-
-    for idx, gpu in enumerate(handles):
+    for idx, gpu in enumerate(shared_utils.get_gpus()):
         name = getattr(gpu, 'name', '') or 'Unknown GPU'
         uuid = getattr(gpu, 'uuid', None)
         if uuid:
@@ -297,14 +288,10 @@ def collect_dynamic_metrics(profile: dict) -> dict:
     gpus_out = {}
     profile_gpus = profile.get('gpus', []) or []
     multi_gpu = len(profile_gpus) > 1
-    gputil = shared_utils._get_gputil()
-    live_gpus = []
-    if gputil is not None:
-        try:
-            live_gpus = gputil.getGPUs() or []
-        except Exception as e:
-            logger.warning('GPUtil.getGPUs() failed in metrics: %s', e)
-            live_gpus = []
+    # Joined on the profile's GPU id (the NVML uuid _collect_gpus stored): a
+    # device NVML cannot read is missing from the live list, which would shift a
+    # positional join onto the wrong GPU.
+    live_by_id = {g.uuid: g for g in shared_utils.get_gpus() if g.uuid}
 
     temps = _gpu_temps_cached(multi_gpu)
     temp_by_index = {t['index']: t['temperature'] for t in temps if isinstance(t, dict) and 'index' in t}
@@ -315,8 +302,8 @@ def collect_dynamic_metrics(profile: dict) -> dict:
             continue
         usage_pct = 0.0
         vram_used_gb = 0.0
-        if idx < len(live_gpus):
-            g = live_gpus[idx]
+        g = live_by_id.get(gpu_id)
+        if g is not None:
             try:
                 usage_pct = round(float(g.load) * 100.0, 1)
             except (TypeError, ValueError, AttributeError):

@@ -285,7 +285,7 @@ def timeout_launch_service(tmp_path, monkeypatch, state_file):
     from owlette_service import OwletteService
 
     # Everything get_data_path() resolves must land in the sandbox.
-    monkeypatch.setenv('PROGRAMDATA', str(tmp_path))
+    monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path / 'Owlette'))
     (tmp_path / 'Owlette' / 'tmp').mkdir(parents=True)
     monkeypatch.setattr(shared_utils, 'get_python_exe_path',
                         lambda: sys.executable)

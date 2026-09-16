@@ -951,6 +951,7 @@ export default function DashboardPage() {
                   machineId={heldDetailPanel.machineId}
                   machineName={heldDetailPanel.machineName}
                   siteId={currentSiteId}
+                  capabilities={machines.find((m) => m.machineId === heldDetailPanel.machineId)?.capabilities}
                   onClose={handleCloseDetailPanel}
                 />
               ) : (

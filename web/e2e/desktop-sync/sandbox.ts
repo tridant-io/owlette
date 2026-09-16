@@ -103,12 +103,19 @@ export function dataRootOf(programData: string): string {
  * to de-duplicate the Windows environment block case-insensitively, but relying
  * on that is how the redirect silently fails somewhere else later — and the cost
  * of that failure is an agent writing to the operator's live install.
+ *
+ * OWLETTE_DATA_ROOT is stripped too: it outranks PROGRAMDATA in the agent's path
+ * resolution (agent/src/osadapter/__init__.py), so an inherited one would point
+ * the agent somewhere other than this sandbox.
  */
 export function agentEnv(programData: string, extra: Record<string, string> = {}) {
   assertSandboxSafe(programData)
   const inherited = Object.fromEntries(
     Object.entries(process.env).filter(
-      ([key]) => !/^(programdata|firestore_emulator_host|owlette_disable_watchdog_restart)$/i.test(key),
+      ([key]) =>
+        !/^(programdata|owlette_data_root|firestore_emulator_host|owlette_disable_watchdog_restart)$/i.test(
+          key,
+        ),
     ),
   )
   return {
@@ -164,7 +171,8 @@ export function probeAgentEnv(programData: string): AgentEnvProbe {
       'desktop-sync refuses to run: the agent resolved a DIFFERENT data root than the sandbox.\n' +
         `  sandbox expects: ${dataRootOf(programData)}\n` +
         `  agent resolved:  ${probe.dataRoot}\n` +
-        'PROGRAMDATA did not reach the child. Do NOT retry until the spawn env is fixed — ' +
+        'PROGRAMDATA did not reach the child, or an OWLETTE_DATA_ROOT override outranked it. ' +
+        'Do NOT retry until the spawn env is fixed — ' +
         'the next attempt would drive the live install.',
     )
   }

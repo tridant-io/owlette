@@ -9,10 +9,12 @@ import platform
 import subprocess
 import sys
 import threading
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-import winreg
 import time
 from pathlib import Path
+
+import osadapter
 
 # VERSION MANAGEMENT
 def get_app_version():
@@ -121,12 +123,161 @@ class _CrossProcessLock:
 def get_hostname():
     return socket.gethostname()
 
+# `(osFamily, arch)` the way the fleet spells them: the machine document's
+# fields, the cortex CLI's pin id and the installer artefact's family all key on
+# this pair, so the normalisation for the wire lives here. An unrecognised value
+# travels verbatim rather than being forced into a wrong bucket.
+# `destination_allowlist._os_family()` is the deliberate second reader: a
+# security gate buckets an unknown platform into 'linux' rather than leaving it
+# unmatched, and stays injectable so its POSIX arms drive from any host.
+_OS_FAMILIES = {'win32': 'windows', 'darwin': 'macos', 'linux': 'linux'}
+# Keyed case-folded: Windows reports PROCESSOR_ARCHITECTURE verbatim ('AMD64',
+# 'ARM64'), POSIX reports uname's spelling ('x86_64', 'aarch64').
+_ARCHITECTURES = {'amd64': 'x64', 'x86_64': 'x64', 'arm64': 'arm64', 'aarch64': 'arm64'}
+
+_unrecognised_platform_logged = set()
+
+
+def _log_unrecognised_platform(source, value):
+    """Once per process — the platform is a constant for the life of it."""
+    if (source, value) in _unrecognised_platform_logged:
+        return
+    _unrecognised_platform_logged.add((source, value))
+    logging.warning(f"Unrecognised {source} '{value}' — reporting it verbatim")
+
+
+def get_os_family_arch():
+    """This machine as ('windows'|'macos'|'linux', 'x64'|'arm64')."""
+    raw_family, raw_arch = sys.platform, platform.machine()
+
+    family = _OS_FAMILIES.get(raw_family)
+    if family is None:
+        _log_unrecognised_platform('sys.platform', raw_family)
+        family = raw_family
+
+    arch = _ARCHITECTURES.get(raw_arch.lower())
+    if arch is None:
+        _log_unrecognised_platform('platform.machine()', raw_arch)
+        arch = raw_arch
+
+    return family, arch
+
+
+MACHINE_ID_FILE = 'config/machine_id'
+MACHINE_ID_READ_ATTEMPTS = 3
+MACHINE_ID_READ_BACKOFF = 0.1
+
+_machine_id = None
+_machine_id_lock = threading.Lock()
+
+
+def get_machine_id():
+    """The identity this machine is known by — its Firestore document id.
+
+    Persisted at config/machine_id and seeded from the hostname the first time
+    it is read, so a machine that is already registered keeps the document it
+    has and is stable afterwards: a rename, or a DHCP-driven change to a macOS
+    `Name.local`, no longer forks the document or bricks the token store.
+
+    Only a persisted identity is cached. A file that exists but could not be
+    read yields the hostname for that call alone, so a scanner holding it open
+    for a few seconds cannot pin the process to an identity the machine's token
+    does not cover.
+    """
+    global _machine_id
+    if _machine_id is not None:
+        return _machine_id
+
+    with _machine_id_lock:
+        if _machine_id is not None:
+            return _machine_id
+
+        machine_id, persisted = _read_or_seed_machine_id()
+        if persisted:
+            _machine_id = machine_id
+        return machine_id
+
+
+def _read_machine_id_file(path):
+    """The persisted id, or None when the file is missing or empty.
+
+    An OSError propagates: an id that is on disk but momentarily unreadable —
+    an antivirus scan, a sharing violation — must never be reseeded over.
+    """
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def _seed_machine_id_file(path, machine_id):
+    """Write the seed through a temp file and rename it into place.
+
+    A machine killed mid-seed then comes back to either no file or a complete
+    one, never to the empty file every later run would read as "no identity
+    yet" — which would put the hostname back in the identity's place.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temp_path = f"{path}.{os.getpid()}.tmp"
+    try:
+        fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            os.write(fd, machine_id.encode('utf-8'))
+        finally:
+            os.close(fd)
+        os.replace(temp_path, path)
+    except OSError:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+
+
+def _read_or_seed_machine_id():
+    """(identity, persisted) — config/machine_id, created from the current
+    hostname when it is missing.
+
+    `persisted` is False when the identity could be neither read nor written:
+    the hostname stands in, but the caller must not keep it. The read is
+    retried first, because the usual cause is another process holding the file
+    open for a moment.
+    """
+    path = get_data_path(MACHINE_ID_FILE)
+
+    for attempt in range(MACHINE_ID_READ_ATTEMPTS):
+        try:
+            persisted = _read_machine_id_file(path)
+            break
+        except OSError as e:
+            if attempt + 1 == MACHINE_ID_READ_ATTEMPTS:
+                logging.warning(
+                    f"Failed to read {MACHINE_ID_FILE}: {e} — using the hostname "
+                    f"for this call only"
+                )
+                return get_hostname(), False
+            time.sleep(MACHINE_ID_READ_BACKOFF)
+
+    if persisted:
+        return persisted, True
+
+    machine_id = get_hostname()
+    try:
+        _seed_machine_id_file(path, machine_id)
+        logging.info(f"Machine identity seeded from the hostname: {machine_id}")
+    except OSError as e:
+        logging.warning(f"Failed to persist {MACHINE_ID_FILE}: {e} — using the hostname")
+        return machine_id, False
+
+    return machine_id, True
+
+
 def get_machine_timezone():
     """Machine timezone as the Windows registry name (e.g. "Pacific Standard
     Time"). Diagnostics/back-compat only — the dashboard consumes the IANA form
     from get_machine_timezone_iana().
     """
     try:
+        import winreg
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                             r'SYSTEM\CurrentControlSet\Control\TimeZoneInformation') as key:
             return winreg.QueryValueEx(key, 'TimeZoneKeyName')[0]
@@ -154,6 +305,7 @@ def get_cpu_name():
     """
     # 1. Registry — fast, no admin rights
     try:
+        import winreg
         key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                             r'HARDWARE\DESCRIPTION\System\CentralProcessor\0')
         cpu_name = winreg.QueryValueEx(key, 'ProcessorNameString')[0].strip()
@@ -776,26 +928,16 @@ def get_python_exe_path():
     )
 
 def get_data_path(filename=None):
-    """Absolute path under %PROGRAMDATA%\Owlette — where a Windows service is
-    supposed to keep runtime data.
+    """Absolute path under the agent's data root — where a Windows service is
+    supposed to keep runtime data. OWLETTE_DATA_ROOT relocates the whole tree.
 
     get_data_path() -> C:\ProgramData\Owlette
     get_data_path('config/config.json') -> C:\ProgramData\Owlette\config\config.json
     """
-    program_data = os.environ.get('PROGRAMDATA', 'C:\\ProgramData')
-    owlette_data = os.path.join(program_data, 'Owlette')
-
-    if filename is not None:
-        path = os.path.join(owlette_data, filename)
-    else:
-        path = owlette_data
-
-    path = os.path.normpath(path)
-
-    return path
+    return osadapter.data_root(filename)
 
 def ensure_data_directories():
-    """Create every required ProgramData directory. True if all exist after."""
+    """Create every required data-root directory. True if all exist after."""
     directories = [
         get_data_path(),
         get_data_path('config'),
@@ -932,96 +1074,110 @@ def is_desktop_window_open():
     """True while the operator has the desktop app's main window on screen."""
     return read_desktop_pid(GUI_PID_PATH) is not None
 
-# Lazy GPUtil import — eager probing at module load costs ~5-10 MB plus startup
-# delay for every importer. Failures are sticky only for _GPUTIL_RETRY_BACKOFF so
-# a transient error during a driver update recovers on its own.
-_gputil_module = None
-_gputil_retry_after = 0.0  # monotonic seconds; 0 = retry immediately
-_gputil_popen_patched = False
-_GPUTIL_RETRY_BACKOFF = 300.0  # 5 min between retries after a failed import
+# NVML is probed lazily. The verdicts that mean "no NVIDIA GPU on this box" —
+# the library is absent, or it is present but no driver is loaded, which is what
+# a machine that once had an NVIDIA card reports — are cached for
+# _NVML_RETRY_BACKOFF, so the 5s monitor loop stops re-probing on every tick; a
+# driver install still recovers on its own. Every other failure (a driver
+# reload, a TDR) retries on the next tick, so a transient error costs one sample
+# rather than minutes of blank GPU data.
+_nvml_retry_after = 0.0  # monotonic seconds; 0 = probe immediately
+_NVML_RETRY_BACKOFF = 300.0  # 5 min between retries once NVML is known absent
+_nvml_warn_after = {}  # message -> monotonic seconds; throttles _nvml_warn()
 
-def _ensure_gputil_no_window_popen_patched():
-    global _gputil_popen_patched
-    if _gputil_popen_patched:
-        return
-    if sys.platform != 'win32':
-        _gputil_popen_patched = True
-        return
+GpuReading = namedtuple(
+    'GpuReading',
+    ['id', 'uuid', 'name', 'load', 'memoryTotal', 'memoryUsed', 'memoryFree'],
+)
 
+
+def _nvml_str(value):
+    """NVML text is str on nvidia-ml-py 12.x and bytes on older builds."""
+    return value.decode('utf-8', 'replace') if isinstance(value, bytes) else value
+
+
+def _nvml_warn(message):
+    """WARNING at most once per _NVML_RETRY_BACKOFF per distinct message.
+
+    A driver fault has to be tellable from 'no NVIDIA GPU here' at the default
+    log level, but get_gpus() runs every 5s on three threads, so an unthrottled
+    line per GPU per tick would bury service.log.
+    """
+    now = time.monotonic()
+    if now < _nvml_warn_after.get(message, 0.0):
+        return
+    _nvml_warn_after[message] = now + _NVML_RETRY_BACKOFF
+    logging.warning(message)
+
+
+def get_gpus():
+    """Live per-GPU readings, or [] when no NVIDIA GPU is visible.
+
+    `load` is 0.0-1.0 and the three memory values are MB. Never raises: callers
+    read it inline in the metrics path.
+    """
+    global _nvml_retry_after
+    if time.monotonic() < _nvml_retry_after:
+        return []
     try:
-        import GPUtil.GPUtil as _gputil_impl
-
-        def _wrap_popen(original_popen):
-            if getattr(original_popen, '_owlette_create_no_window', False):
-                return original_popen
-
-            def _popen_no_window(*args, **kwargs):
-                kwargs['creationflags'] = (
-                    (kwargs.get('creationflags') or 0)
-                    | subprocess.CREATE_NO_WINDOW
-                )
-                return original_popen(*args, **kwargs)
-
-            _popen_no_window._owlette_create_no_window = True
-            _popen_no_window._owlette_original_popen = original_popen
-            return _popen_no_window
-
-        patched_targets = []
-
-        popen = getattr(_gputil_impl, 'Popen', None)
-        if popen is not None:
-            _gputil_impl.Popen = _wrap_popen(popen)
-            patched_targets.append('GPUtil.GPUtil.Popen')
-
-        gputil_subprocess = getattr(_gputil_impl, 'subprocess', None)
-        subprocess_popen = getattr(gputil_subprocess, 'Popen', None)
-        if subprocess_popen is not None:
-            class _SubprocessProxy:
-                def __init__(self, module, popen_wrapper):
-                    self._module = module
-                    self.Popen = popen_wrapper
-
-                def __getattr__(self, name):
-                    return getattr(self._module, name)
-
-            _gputil_impl.subprocess = _SubprocessProxy(
-                gputil_subprocess,
-                _wrap_popen(subprocess_popen),
-            )
-            patched_targets.append('GPUtil.GPUtil.subprocess.Popen')
-
-        if patched_targets:
-            logging.debug(
-                "Patched GPUtil Popen for hidden Windows launches: %s",
-                ", ".join(patched_targets),
-            )
-        else:
-            logging.debug(
-                "GPUtil Popen patch warning: no supported Popen reference found"
-            )
-    except Exception as e:
-        logging.debug(
-            "GPUtil Popen patch warning: failed to apply hidden Windows launch: %s",
-            e,
-            exc_info=True,
+        from pynvml import (
+            nvmlInit, nvmlShutdown, nvmlDeviceGetCount,
+            nvmlDeviceGetHandleByIndex, nvmlDeviceGetName, nvmlDeviceGetUUID,
+            nvmlDeviceGetMemoryInfo, nvmlDeviceGetUtilizationRates,
+            nvmlMemory_v2, NVMLError, NVMLError_DriverNotLoaded,
+            NVMLError_LibraryNotFound,
         )
-    finally:
-        _gputil_popen_patched = True
+    except ImportError as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[GPU] NVML unavailable: {e}")
+        return []
 
-def _get_gputil():
-    global _gputil_module, _gputil_retry_after
-    if _gputil_module is not None:
-        return _gputil_module
-    if time.monotonic() < _gputil_retry_after:
-        return None
     try:
-        import GPUtil as _g
-        _ensure_gputil_no_window_popen_patched()
-        _gputil_module = _g
-        return _gputil_module
-    except Exception:
-        _gputil_retry_after = time.monotonic() + _GPUTIL_RETRY_BACKOFF
-        return None
+        nvmlInit()
+    except (NVMLError_LibraryNotFound, NVMLError_DriverNotLoaded) as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[GPU] NVML unavailable: {e}")
+        return []
+    except Exception as e:
+        _nvml_warn(f"[GPU] NVML init failed: {e}")
+        return []
+
+    gpus = []
+    try:
+        for i in range(nvmlDeviceGetCount()):
+            try:
+                handle = nvmlDeviceGetHandleByIndex(i)
+                try:
+                    # v2 leaves driver-reserved VRAM out of `used`, the number
+                    # nvidia-smi reports and the fleet's history is built on; v1
+                    # counts it. v2 needs driver 510+, so the fallback stands.
+                    mem = nvmlDeviceGetMemoryInfo(handle, version=nvmlMemory_v2)
+                except NVMLError:
+                    mem = nvmlDeviceGetMemoryInfo(handle)
+                try:
+                    load = nvmlDeviceGetUtilizationRates(handle).gpu / 100.0
+                except Exception:
+                    load = 0.0
+                gpus.append(GpuReading(
+                    id=i,
+                    uuid=_nvml_str(nvmlDeviceGetUUID(handle)),
+                    name=_nvml_str(nvmlDeviceGetName(handle)),
+                    load=load,
+                    memoryTotal=mem.total / (1024 ** 2),
+                    memoryUsed=mem.used / (1024 ** 2),
+                    memoryFree=mem.free / (1024 ** 2),
+                ))
+            except Exception as e:
+                _nvml_warn(f"[GPU] NVML read failed for GPU {i}: {e}")
+    except Exception as e:
+        _nvml_warn(f"[GPU] NVML enumeration failed: {e}")
+    finally:
+        try:
+            nvmlShutdown()
+        except Exception:
+            pass
+
+    return gpus
 
 # mtime-invalidated config cache: read_config() runs several times per 5s tick
 # across three threads. Semantics are unchanged — external edits land as soon as
@@ -1213,6 +1369,7 @@ def _get_windows_version_string():
     """Return friendly Windows version e.g. 'Windows 11 Pro 23H2 (Build 22631)'.
     Falls back to platform.version() if registry read fails."""
     try:
+        import winreg
         key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                              r'SOFTWARE\Microsoft\Windows NT\CurrentVersion')
         product = winreg.QueryValueEx(key, 'ProductName')[0]
@@ -1269,8 +1426,7 @@ def log_startup_system_snapshot():
         logging.info(f"  RAM          : {mem_gb} GB total")
         logging.info(f"  Disk (C:\\)   : {disk_str}")
         try:
-            _g = _get_gputil()
-            gpus = _g.getGPUs() if _g else []
+            gpus = get_gpus()
             if gpus:
                 for i, gpu in enumerate(gpus):
                     vram_gb = round(gpu.memoryTotal / 1024, 1)
@@ -2243,8 +2399,7 @@ def get_system_info():
     cpu_usage = psutil.cpu_percent()
     memory_info = psutil.virtual_memory()
     disk_info = psutil.disk_usage('/')
-    _g = _get_gputil()
-    gpus = _g.getGPUs() if _g else []
+    gpus = get_gpus()
     gpu_info = gpus[0] if gpus else "No GPU detected"
 
     bytes_to_gb = lambda x: round(x / (1024 ** 3), 2)
@@ -2265,7 +2420,7 @@ def get_system_metrics(skip_gpu=False):
     """System metrics for Firebase: CPU model/%, memory and disk in GB, GPU
     usage % and VRAM GB, plus per-process config + runtime state.
 
-    skip_gpu: skip GPU probes, which flash a console window when called from a UI.
+    skip_gpu: skip the GPU load and temperature probes.
     """
     # mtime-cached read; returns a deep copy, safe to pass down.
     config = read_config()
@@ -2280,7 +2435,7 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
     instead.
 
     config: reuse a dict to skip a disk read; None goes through the mtime cache.
-    skip_gpu: skip the nvidia-smi / sensor probes that flash a console window.
+    skip_gpu: skip the NVML and temperature sensor probes.
     """
     if config is None:
         config = read_config()
@@ -2314,8 +2469,7 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
         gpu_temp = None
         if not skip_gpu:
             try:
-                _g = _get_gputil()
-                gpus = _g.getGPUs() if _g else []
+                gpus = get_gpus()
                 if gpus:
                     g0 = gpus[0]
                     gpu_usage_percent = round(g0.load * 100, 1)

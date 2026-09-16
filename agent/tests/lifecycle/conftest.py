@@ -38,9 +38,9 @@ This conftest builds three things and documents the honesty contract of each.
    command line without raising in a repo checkout.
 
 3. ISOLATION. shared_utils freezes CONFIG_PATH / RESULT_FILE_PATH at import
-   from %PROGRAMDATA%, so a plain env redirect is NOT enough once the module
+   from the data root, so a plain env redirect is NOT enough once the module
    is imported (and the wider suite imports it first). The seam used here is
-   both: os.environ['PROGRAMDATA'] is set (covers every runtime
+   both: os.environ['OWLETTE_DATA_ROOT'] is set (covers every runtime
    get_data_path() call - launcher handoff files, restart flag, sentinels)
    AND the two import-frozen module constants are monkeypatched onto
    tmp_path. An autouse probe then re-resolves every path the suite can
@@ -306,7 +306,7 @@ def data_root(tmp_path, monkeypatch):
     (root / 'logs').mkdir()
 
     # Runtime seam: everything that calls get_data_path() from now on.
-    monkeypatch.setenv('PROGRAMDATA', str(tmp_path))
+    monkeypatch.setenv('OWLETTE_DATA_ROOT', str(root))
     # Import-frozen seam: constants resolved before this fixture existed.
     monkeypatch.setattr(shared_utils, 'CONFIG_PATH',
                         str(root / 'config' / 'config.json'))
@@ -471,8 +471,8 @@ def service_factory(monkeypatch, decoy_env):
     # -- double builder ---------------------------------------------------
     def _make():
         svc = SimpleNamespace(
-            # attribute set mirrors OwletteService.__init__ (the slice these
-            # methods touch); MockService parity rule applies to src, not here
+            # attribute set mirrors OwletteService._init_state (the slice
+            # these methods touch); the parity rule applies to src, not here
             last_started={},
             install_locks={},
             relaunch_attempts={},

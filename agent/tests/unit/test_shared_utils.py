@@ -6,9 +6,12 @@ Tests utility functions for configuration, system metrics, and process managemen
 
 import pytest
 import json
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch, mock_open, MagicMock
 import sys
+import types
 
 # Import the module under test
 import shared_utils
@@ -154,24 +157,143 @@ class TestSystemMetrics:
 
     def test_get_system_metrics_with_gpu(self):
         """Test system metrics collection includes GPU section"""
-        mock_gpu = Mock()
-        mock_gpu.load = 0.75
-        mock_gpu.memoryUsed = 8192  # MB
-        mock_gpu.memoryTotal = 16384  # MB
-        mock_gpu.name = "Test GPU"
-        mock_gpu.temperature = 65
+        gpu = shared_utils.GpuReading(
+            id=0,
+            uuid='GPU-test-0',
+            name='Test GPU',
+            load=0.75,
+            memoryTotal=16384,
+            memoryUsed=8192,
+            memoryFree=8192,
+        )
 
-        # GPUtil is now lazy-loaded via _get_gputil(). Return a fake module
-        # whose getGPUs() returns our mock GPU object.
-        fake_gputil_module = Mock()
-        fake_gputil_module.getGPUs = Mock(return_value=[mock_gpu])
-
-        with patch('shared_utils._get_gputil', return_value=fake_gputil_module):
+        with patch('shared_utils.get_gpus', return_value=[gpu]):
             with patch('shared_utils.get_gpu_temperatures', return_value=[{'temperature': 65}]):
                 metrics = shared_utils.get_system_metrics(skip_gpu=False)
 
         assert metrics['gpu']['usage_percent'] == 75.0
         assert metrics['gpu']['name'] == 'Test GPU'
+
+
+@pytest.mark.unit
+class TestGetGpus:
+    """Tests for the NVML-backed GPU reader"""
+
+    @pytest.fixture(autouse=True)
+    def _clear_backoff(self):
+        shared_utils._nvml_retry_after = 0.0
+        shared_utils._nvml_warn_after.clear()
+        yield
+        shared_utils._nvml_retry_after = 0.0
+        shared_utils._nvml_warn_after.clear()
+
+    class NvmlError(Exception):
+        """Stands in for pynvml.NVMLError."""
+
+    class LibraryNotFound(NvmlError):
+        """Stands in for pynvml.NVMLError_LibraryNotFound."""
+
+    class DriverNotLoaded(NvmlError):
+        """Stands in for pynvml.NVMLError_DriverNotLoaded."""
+
+    def _fake_pynvml(self, init_error=None):
+        mod = types.ModuleType('pynvml')
+        mod.NVMLError = self.NvmlError
+        mod.NVMLError_LibraryNotFound = self.LibraryNotFound
+        mod.NVMLError_DriverNotLoaded = self.DriverNotLoaded
+        mod.nvmlMemory_v2 = 2
+        mod.nvmlInit = Mock(side_effect=init_error)
+        mod.nvmlShutdown = Mock()
+        mod.nvmlDeviceGetCount = Mock(return_value=1)
+        mod.nvmlDeviceGetHandleByIndex = Mock(return_value='handle-0')
+        mod.nvmlDeviceGetName = Mock(return_value=b'NVIDIA Test 4090')
+        mod.nvmlDeviceGetUUID = Mock(return_value='GPU-abc')
+        mod.nvmlDeviceGetMemoryInfo = Mock(return_value=SimpleNamespace(
+            total=24 * 1024 ** 3, used=6 * 1024 ** 3, free=18 * 1024 ** 3))
+        mod.nvmlDeviceGetUtilizationRates = Mock(return_value=SimpleNamespace(gpu=42))
+        return mod
+
+    def test_reads_every_device(self):
+        fake = self._fake_pynvml()
+
+        with patch.dict(sys.modules, {'pynvml': fake}):
+            gpus = shared_utils.get_gpus()
+
+        assert len(gpus) == 1
+        assert gpus[0].id == 0
+        assert gpus[0].uuid == 'GPU-abc'
+        assert gpus[0].name == 'NVIDIA Test 4090'  # bytes decoded
+        assert gpus[0].load == 0.42
+        assert gpus[0].memoryTotal == 24 * 1024
+        assert gpus[0].memoryUsed == 6 * 1024
+        # v2 excludes driver-reserved VRAM from `used`; v1 would inflate it.
+        assert fake.nvmlDeviceGetMemoryInfo.call_args.kwargs['version'] == 2
+        assert fake.nvmlShutdown.call_count == 1
+
+    def test_falls_back_to_v1_memory_when_v2_is_unsupported(self):
+        fake = self._fake_pynvml()
+
+        def mem_info(handle, version=None):
+            if version is not None:
+                raise self.NvmlError('Function Not Found')
+            return SimpleNamespace(
+                total=24 * 1024 ** 3, used=7 * 1024 ** 3, free=17 * 1024 ** 3)
+
+        fake.nvmlDeviceGetMemoryInfo = Mock(side_effect=mem_info)
+
+        with patch.dict(sys.modules, {'pynvml': fake}):
+            gpus = shared_utils.get_gpus()
+
+        # Driver older than 510: the reading still arrives, off a v1 struct.
+        assert gpus[0].memoryUsed == 7 * 1024
+
+    def test_missing_library_backs_off_instead_of_raising(self):
+        fake = self._fake_pynvml(init_error=self.LibraryNotFound('nvml.dll'))
+
+        with patch.dict(sys.modules, {'pynvml': fake}):
+            assert shared_utils.get_gpus() == []
+            # NVML is absent for good: the next tick must not re-probe.
+            assert shared_utils.get_gpus() == []
+
+        assert fake.nvmlInit.call_count == 1
+        assert shared_utils._nvml_retry_after > 0.0
+
+    def test_no_driver_backs_off_like_a_missing_library(self):
+        # A box that once had an NVIDIA card keeps nvml.dll: init reaches the
+        # library and fails with DriverNotLoaded, which means the same thing as
+        # the library being absent and must not re-probe every 5s forever.
+        fake = self._fake_pynvml(init_error=self.DriverNotLoaded('driver'))
+
+        with patch.dict(sys.modules, {'pynvml': fake}):
+            assert shared_utils.get_gpus() == []
+            assert shared_utils.get_gpus() == []
+
+        assert fake.nvmlInit.call_count == 1
+        assert shared_utils._nvml_retry_after > 0.0
+
+    def test_device_read_failure_warns_once_per_window(self, caplog):
+        fake = self._fake_pynvml()
+        fake.nvmlDeviceGetHandleByIndex = Mock(
+            side_effect=RuntimeError('GPU is lost'))
+
+        with patch.dict(sys.modules, {'pynvml': fake}), caplog.at_level(logging.WARNING):
+            assert shared_utils.get_gpus() == []
+            assert shared_utils.get_gpus() == []
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert 'GPU is lost' in warnings[0].getMessage()
+
+    def test_transient_init_failure_retries_on_the_next_call(self):
+        fake = self._fake_pynvml(init_error=RuntimeError('driver reloading'))
+
+        with patch.dict(sys.modules, {'pynvml': fake}):
+            assert shared_utils.get_gpus() == []
+            assert shared_utils.get_gpus() == []
+
+        # A driver reload costs one sample, not a whole backoff window.
+        assert fake.nvmlInit.call_count == 2
+        assert shared_utils._nvml_retry_after == 0.0
 
 
 class TestProcessUtils:
@@ -257,6 +379,55 @@ class TestEnvironmentAccessors:
         assert shared_utils.get_environment_label('staging') == 'staging (owlette.app)'
         assert shared_utils.get_api_base_url('staging') == 'https://owlette.app/api'
         assert shared_utils.get_project_id('staging') == 'owlette-prod-90a12'
+
+
+class TestPlatformNormalisation:
+    """(osFamily, arch) as the fleet spells it. Every reader of the heartbeat
+    fields and of the cortex CLI's pin id depends on these exact strings."""
+
+    @pytest.mark.parametrize('sys_platform,expected', [
+        ('win32', 'windows'),
+        ('darwin', 'macos'),
+        ('linux', 'linux'),
+    ])
+    def test_os_family_mapping(self, monkeypatch, sys_platform, expected):
+        monkeypatch.setattr(sys, 'platform', sys_platform)
+        monkeypatch.setattr(shared_utils.platform, 'machine', lambda: 'x86_64')
+
+        assert shared_utils.get_os_family_arch() == (expected, 'x64')
+
+    @pytest.mark.parametrize('machine,expected', [
+        ('AMD64', 'x64'),
+        ('x86_64', 'x64'),
+        ('arm64', 'arm64'),
+        ('aarch64', 'arm64'),
+        # Windows reports PROCESSOR_ARCHITECTURE verbatim, uppercase.
+        ('ARM64', 'arm64'),
+    ])
+    def test_arch_mapping(self, monkeypatch, machine, expected):
+        monkeypatch.setattr(sys, 'platform', 'linux')
+        monkeypatch.setattr(shared_utils.platform, 'machine', lambda: machine)
+
+        assert shared_utils.get_os_family_arch() == ('linux', expected)
+
+    def test_unrecognised_values_travel_verbatim(self, monkeypatch):
+        monkeypatch.setattr(sys, 'platform', 'freebsd14')
+        monkeypatch.setattr(shared_utils.platform, 'machine', lambda: 'riscv64')
+
+        assert shared_utils.get_os_family_arch() == ('freebsd14', 'riscv64')
+
+    def test_an_unrecognised_value_is_logged_once(self, monkeypatch, caplog):
+        """The platform is a constant for the life of the process, so an
+        unrecognised value is worth exactly one warning."""
+        monkeypatch.setattr(shared_utils, '_unrecognised_platform_logged', set())
+        monkeypatch.setattr(sys, 'platform', 'freebsd14')
+        monkeypatch.setattr(shared_utils.platform, 'machine', lambda: 'x86_64')
+
+        with caplog.at_level(logging.WARNING):
+            shared_utils.get_os_family_arch()
+            shared_utils.get_os_family_arch()
+
+        assert len([r for r in caplog.records if 'freebsd14' in r.getMessage()]) == 1
 
 
 # ─── external log rotation ───────────────────────────────────────────
