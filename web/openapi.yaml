@@ -1042,8 +1042,8 @@ paths:
       summary: Clear site logs
       description: |
         Deletes log entries from `sites/{siteId}/logs`. Optional filters
-        match the current logs view: action, machineId, level, and a
-        `since`/`until` timestamp window. Whole-site clearing (no filters)
+        match the current logs view: action (or `actions` for several),
+        machineId, level, and a `since`/`until` timestamp window. Whole-site clearing (no filters)
         requires explicit `all: true`. Note: full-text search is client-side
         and does NOT scope deletion. API-key callers must hold
         `site=<siteId>:admin`; session callers need the site-log management
@@ -1066,6 +1066,15 @@ paths:
                   description: Required and true when clearing all logs without filters.
                 action:
                   type: string
+                  description: Match one action value exactly. Mutually exclusive with `actions`.
+                actions:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                  description: |
+                    Match any one of these action values, mirroring a multi-select
+                    logs view. Mutually exclusive with `action`.
                 machineId:
                   type: string
                 level:

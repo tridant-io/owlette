@@ -370,4 +370,60 @@ describe('DELETE /api/sites/{siteId}/logs', () => {
       { action: 'process_crash', machineId: 'm1', level: 'error' },
     );
   });
+
+  it('clears with a multi-action scope', async () => {
+    mockClearLogs.mockResolvedValueOnce({
+      siteId: SITE,
+      deletedCount: 4,
+      filters: { actions: ['process_crash', 'agent_started'] },
+    });
+
+    const res = await logsDELETE(
+      createMockRequest(`http://localhost/api/sites/${SITE}/logs`, {
+        method: 'DELETE',
+        headers: { 'Idempotency-Key': 'clear-actions' },
+        body: { actions: ['process_crash', 'agent_started'] },
+      }),
+      routeContext(),
+    );
+
+    // An actions list is a filter, so `all: true` must NOT be required — the
+    // multi-select view would otherwise fall through to clearing the site.
+    expect(res.status).toBe(200);
+    expect(mockClearLogs).toHaveBeenCalledWith(
+      { siteId: SITE, auditActor: 'user:admin-uid' },
+      { actions: ['process_crash', 'agent_started'] },
+    );
+  });
+
+  it('rejects action and actions together', async () => {
+    const res = await logsDELETE(
+      createMockRequest(`http://localhost/api/sites/${SITE}/logs`, {
+        method: 'DELETE',
+        headers: { 'Idempotency-Key': 'clear-both' },
+        body: { action: 'process_crash', actions: ['agent_started'] },
+      }),
+      routeContext(),
+    );
+
+    expect(res.status).toBe(400);
+    expect(mockClearLogs).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed actions list', async () => {
+    for (const actions of [[], [''], 'process_crash', [1]]) {
+      mockClearLogs.mockClear();
+      const res = await logsDELETE(
+        createMockRequest(`http://localhost/api/sites/${SITE}/logs`, {
+          method: 'DELETE',
+          headers: { 'Idempotency-Key': `clear-bad-${JSON.stringify(actions)}` },
+          body: { actions },
+        }),
+        routeContext(),
+      );
+
+      expect(res.status).toBe(400);
+      expect(mockClearLogs).not.toHaveBeenCalled();
+    }
+  });
 });

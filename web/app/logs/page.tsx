@@ -6,7 +6,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { Card } from '@/components/ui/card';
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { PageHeader } from '@/components/PageHeader';
 import { collection, query, orderBy, limit, getDocs, where, startAfter, Query, DocumentData, Timestamp, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
@@ -14,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronsUpDown, ChevronsDownUp, Filter, X, Trash2, ScrollText, AlertTriangle, AlertCircle, Camera, Search } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { TruncatedText } from '@/components/ui/truncated-text';
+import { actionDeleteScope, planActionFilter } from '@/lib/logFilters';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -123,7 +125,8 @@ const toYMD = (d: Date) =>
 const fromYMD = (s: string): Date | undefined => (s ? new Date(s + 'T00:00:00') : undefined);
 
 /**
- * Action-type filter options, grouped for the select. Every `value` is a string a
+ * Action-type filter options, grouped for the multi-select. There is no `all`
+ * sentinel option: an empty selection means every action. Every `value` is a string a
  * real writer puts in `sites/{siteId}/logs.action` — an option nothing emits is a
  * dead filter, which `scheduled_reboot` was: the agent only ever writes the five
  * `scheduled_reboot_*` outcomes. Wire values keep the legacy "reboot" spelling on
@@ -132,7 +135,6 @@ const fromYMD = (s: string): Date | undefined => (s ? new Date(s + 'T00:00:00') 
  * and the talon tooltip name an event the same way.
  */
 const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; label: string }[] }[] = [
-  { group: null, options: [{ value: 'all', label: 'all actions' }] },
   {
     group: 'agent',
     options: [
@@ -214,6 +216,13 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
 /** Flat view for value→label lookups (the clear-logs scope copy). */
 const ACTION_TYPES = ACTION_TYPE_GROUPS.flatMap((group) => group.options);
 
+/** Selecting this many is the same as selecting none — see `planActionFilter`. */
+const ACTION_TYPE_COUNT = ACTION_TYPES.length;
+
+/** Wire value → display label, falling back to the raw value. */
+const actionLabel = (value: string) =>
+  ACTION_TYPES.find((type) => type.value === value)?.label ?? value;
+
 // Level badges styling
 const getLevelBadge = (level: string) => {
   const base = "inline-flex items-center rounded-full px-1.5 text-[11px] font-medium leading-5 whitespace-nowrap";
@@ -242,11 +251,15 @@ const SEARCH_POOL_CAP = 2000;
 // Firestore query for a site's logs honouring the active filters. Always ordered by
 // timestamp desc so the page shows the most recent matches, not an arbitrary
 // __name__-ordered slice. Every filter combination is backed by a composite index in
-// firestore.indexes.json, so ordering, date window and equality resolve server-side.
+// firestore.indexes.json, so ordering, date window and equality resolve server-side
+// — `in` reads as repeated equality, so it needs no index the `==` did not.
+//
+// Past 30 selected actions the query drops the action clause entirely and the
+// caller narrows in memory; see `planActionFilter`.
 function buildLogsQuery(
   logsRef: Query,
   filters: {
-    action: string;
+    actions: string[];
     machine: string;
     level: string;
     datePreset: DatePreset;
@@ -259,7 +272,8 @@ function buildLogsQuery(
 
   let q: Query = query(logsRef, orderBy('timestamp', 'desc'), limit(max));
 
-  if (filters.action !== 'all') q = query(q, where('action', '==', filters.action));
+  const actionPlan = planActionFilter(filters.actions, ACTION_TYPE_COUNT);
+  if (actionPlan.inValues) q = query(q, where('action', 'in', actionPlan.inValues));
   if (filters.machine !== 'all') q = query(q, where('machineId', '==', filters.machine));
   if (filters.level !== 'all') q = query(q, where('level', '==', filters.level));
   if (dateRange.from) q = query(q, where('timestamp', '>=', Timestamp.fromDate(dateRange.from)));
@@ -439,7 +453,7 @@ export default function LogsPage() {
   const [lastDoc, setLastDoc] = useState<DocumentData | null>(null);
   const [hasMore, setHasMore] = useState(false);
 
-  const [filterAction, setFilterAction] = useState<string>('all');
+  const [filterActions, setFilterActions] = useState<string[]>([]);
   const [filterMachine, setFilterMachine] = useState<string>('all');
   const [filterLevel, setFilterLevel] = useState<string>('all');
   const [filterDatePreset, setFilterDatePreset] = useState<DatePreset>('all');
@@ -524,10 +538,25 @@ export default function LogsPage() {
   // Client-side substring filter: Firestore has no full-text query, so match in JS against
   // the search pool (the full filtered set, loaded on demand; on-screen logs until it
   // arrives) over formatted label, raw action, machine, process, level and details.
+  const actionPlan = useMemo(
+    () => planActionFilter(filterActions, ACTION_TYPE_COUNT),
+    [filterActions],
+  );
+
+  // Selections too wide for Firestore's `in` are narrowed here instead, so what
+  // is on screen always matches the filter however the query was resolved.
+  const clientActionSet = useMemo(
+    () => (actionPlan.clientSide ? new Set(filterActions) : null),
+    [actionPlan, filterActions],
+  );
+
   const filteredLogs = useMemo(() => {
-    if (!searchTerm) return logs;
-    const source = searchPool ?? logs;
-    return source.filter(log =>
+    const base = searchTerm ? (searchPool ?? logs) : logs;
+    const scoped = clientActionSet
+      ? base.filter(log => clientActionSet.has(log.action))
+      : base;
+    if (!searchTerm) return scoped;
+    return scoped.filter(log =>
       formatAction(log.action).toLowerCase().includes(searchTerm) ||
       log.action.toLowerCase().includes(searchTerm) ||
       log.machineName?.toLowerCase().includes(searchTerm) ||
@@ -536,7 +565,7 @@ export default function LogsPage() {
       log.details?.toLowerCase().includes(searchTerm) ||
       log.level.toLowerCase().includes(searchTerm)
     );
-  }, [logs, searchPool, searchTerm]);
+  }, [logs, searchPool, searchTerm, clientActionSet]);
 
   const allExpanded = filteredLogs.length > 0 && filteredLogs.every(l => expandedLogIds.has(l.id));
 
@@ -580,7 +609,7 @@ export default function LogsPage() {
     const logsRef = collection(db, 'sites', currentSiteId, 'logs');
     const q = buildLogsQuery(
       logsRef,
-      { action: filterAction, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
+      { actions: filterActions, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
       LOGS_PER_PAGE + 1
     );
 
@@ -605,7 +634,7 @@ export default function LogsPage() {
     });
 
     return () => unsubscribe();
-  }, [currentSiteId, sitesLoading, filterAction, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
+  }, [currentSiteId, sitesLoading, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
 
   // While searching, load the full set matching the current server-side filters (capped)
   // so search spans the whole scope. Re-runs on filter change, not per keystroke.
@@ -625,7 +654,7 @@ export default function LogsPage() {
         const logsRef = collection(db, 'sites', currentSiteId, 'logs');
         const q = buildLogsQuery(
           logsRef,
-          { action: filterAction, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
+          { actions: filterActions, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
           SEARCH_POOL_CAP + 1
         );
         const snapshot = await getDocs(q);
@@ -646,7 +675,7 @@ export default function LogsPage() {
 
     return () => { cancelled = true; };
     // `isSearching` (not `searchTerm`) so we don't refetch on every keystroke.
-  }, [isSearching, currentSiteId, filterAction, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
+  }, [isSearching, currentSiteId, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
 
   // Infinite scroll — load more logs
   const loadMore = useCallback(async () => {
@@ -660,7 +689,7 @@ export default function LogsPage() {
       const logsRef = collection(db, 'sites', currentSiteId, 'logs');
       const baseQuery = buildLogsQuery(
         logsRef,
-        { action: filterAction, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
+        { actions: filterActions, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
         LOGS_PER_PAGE + 1
       );
       const q = query(baseQuery, startAfter(lastDoc));
@@ -685,7 +714,7 @@ export default function LogsPage() {
     } finally {
       setIsFetchingMore(false);
     }
-  }, [currentSiteId, lastDoc, hasMore, isFetchingMore, filterAction, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
+  }, [currentSiteId, lastDoc, hasMore, isFetchingMore, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
 
   // IntersectionObserver for infinite scroll sentinel
   useEffect(() => {
@@ -708,7 +737,7 @@ export default function LogsPage() {
   }, [hasMore, isFetchingMore, loadMore, searchTerm]);
 
   const resetFilters = () => {
-    setFilterAction('all');
+    setFilterActions([]);
     setFilterMachine('all');
     setFilterLevel('all');
     setFilterDatePreset('all');
@@ -737,8 +766,12 @@ export default function LogsPage() {
       const until = clearTo
         ? zonedTimeToUtcMs(clearTo.getFullYear(), clearTo.getMonth(), clearTo.getDate(), 23, 59, 59, 999, clearTz)
         : undefined;
+      // Exactly what the view is showing. Sending fewer would delete rows the
+      // user cannot see; sending none would fall through to `all: true` and
+      // delete the whole site's logs.
+      const clearActions = actionDeleteScope(filterActions, ACTION_TYPE_COUNT);
       const hasFilters =
-        filterAction !== 'all' ||
+        clearActions.length > 0 ||
         filterMachine !== 'all' ||
         filterLevel !== 'all' ||
         since !== undefined ||
@@ -754,7 +787,8 @@ export default function LogsPage() {
           'Idempotency-Key': `dashboard-clear-logs-${idempotencySuffix}`,
         },
         body: JSON.stringify({
-          ...(filterAction !== 'all' ? { action: filterAction } : {}),
+          ...(clearActions.length === 1 ? { action: clearActions[0] } : {}),
+          ...(clearActions.length > 1 ? { actions: clearActions } : {}),
           ...(filterMachine !== 'all' ? { machineId: filterMachine } : {}),
           ...(filterLevel !== 'all' ? { level: filterLevel } : {}),
           ...(since !== undefined ? { since } : {}),
@@ -995,32 +1029,26 @@ export default function LogsPage() {
         <Collapsible open={showFilters} onOpenChange={setShowFilters}>
           <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
           <Card className="p-4 bg-card border-border mb-6">
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-              <div>
-                <Label className="text-foreground text-sm mb-2">action type</Label>
-                <Select value={filterAction} onValueChange={setFilterAction}>
-                  <SelectTrigger data-testid="logs-filter-action" className="bg-muted border-border">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ACTION_TYPE_GROUPS.map(group => (
-                      <SelectGroup key={group.group ?? 'all'}>
-                        {group.group && (
-                          <SelectLabel className="text-muted-foreground">{group.group}</SelectLabel>
-                        )}
-                        {group.options.map(type => (
-                          <SelectItem key={type.value} value={type.value}>
-                            {type.label}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ))}
-                  </SelectContent>
-                </Select>
+            {/* One row, packed left, with reset pushed to the far edge. The
+                custom from/to fields join this row rather than opening a second
+                one — there is width to spare, and a whole extra row for two
+                date fields reads as a layout accident. */}
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="w-full sm:w-48">
+                <Label className="text-foreground text-sm mb-2 block">action type</Label>
+                <MultiSelect
+                  groups={ACTION_TYPE_GROUPS}
+                  selected={filterActions}
+                  onChange={setFilterActions}
+                  allLabel="all actions"
+                  itemNoun="actions"
+                  searchPlaceholder="search actions…"
+                  data-testid="logs-filter-action"
+                />
               </div>
 
-              <div>
-                <Label className="text-foreground text-sm mb-2">machine</Label>
+              <div className="w-full sm:w-40">
+                <Label className="text-foreground text-sm mb-2 block">machine</Label>
                 <Select value={filterMachine} onValueChange={setFilterMachine}>
                   <SelectTrigger data-testid="logs-filter-machine" className="bg-muted border-border">
                     <SelectValue />
@@ -1036,8 +1064,8 @@ export default function LogsPage() {
                 </Select>
               </div>
 
-              <div>
-                <Label className="text-foreground text-sm mb-2">level</Label>
+              <div className="w-full sm:w-32">
+                <Label className="text-foreground text-sm mb-2 block">level</Label>
                 <Select value={filterLevel} onValueChange={setFilterLevel}>
                   <SelectTrigger data-testid="logs-filter-level" className="bg-muted border-border">
                     <SelectValue />
@@ -1051,8 +1079,8 @@ export default function LogsPage() {
                 </Select>
               </div>
 
-              <div>
-                <Label className="text-foreground text-sm mb-2">date range</Label>
+              <div className="w-full sm:w-40">
+                <Label className="text-foreground text-sm mb-2 block">date range</Label>
                 <Select value={filterDatePreset} onValueChange={(v) => setFilterDatePreset(v as DatePreset)}>
                   <SelectTrigger data-testid="logs-filter-date" className="bg-muted border-border">
                     <SelectValue />
@@ -1067,8 +1095,28 @@ export default function LogsPage() {
                 </Select>
               </div>
 
-              <div>
-                <Label className="text-foreground text-sm mb-2">&nbsp;</Label>
+              {filterDatePreset === 'custom' && (
+                <>
+                  <div className="w-full sm:w-36">
+                    <Label className="text-foreground text-sm mb-2 block">from</Label>
+                    <DatePicker
+                      value={fromYMD(filterDateFrom)}
+                      onChange={(d) => setFilterDateFrom(d ? toYMD(d) : '')}
+                      placeholder="start date"
+                    />
+                  </div>
+                  <div className="w-full sm:w-36">
+                    <Label className="text-foreground text-sm mb-2 block">to</Label>
+                    <DatePicker
+                      value={fromYMD(filterDateTo)}
+                      onChange={(d) => setFilterDateTo(d ? toYMD(d) : '')}
+                      placeholder="end date"
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="w-full sm:ml-auto sm:w-auto">
                 <Button
                   variant="outline"
                   onClick={resetFilters}
@@ -1079,28 +1127,6 @@ export default function LogsPage() {
                 </Button>
               </div>
             </div>
-
-            {/* Custom date range inputs */}
-            {filterDatePreset === 'custom' && (
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4 pt-4 border-t border-border/50">
-                <div>
-                  <Label className="text-foreground text-sm mb-2 block">from</Label>
-                  <DatePicker
-                    value={fromYMD(filterDateFrom)}
-                    onChange={(d) => setFilterDateFrom(d ? toYMD(d) : '')}
-                    placeholder="start date"
-                  />
-                </div>
-                <div>
-                  <Label className="text-foreground text-sm mb-2 block">to</Label>
-                  <DatePicker
-                    value={fromYMD(filterDateTo)}
-                    onChange={(d) => setFilterDateTo(d ? toYMD(d) : '')}
-                    placeholder="end date"
-                  />
-                </div>
-              </div>
-            )}
           </Card>
           </CollapsibleContent>
         </Collapsible>
@@ -1205,7 +1231,12 @@ export default function LogsPage() {
         title="clear event logs"
         description={(() => {
           const scope: string[] = [];
-          if (filterAction !== 'all') scope.push(`• action: ${ACTION_TYPES.find(t => t.value === filterAction)?.label}`);
+          const scopeActions = actionDeleteScope(filterActions, ACTION_TYPE_COUNT);
+          if (scopeActions.length === 1) {
+            scope.push(`• action: ${actionLabel(scopeActions[0])}`);
+          } else if (scopeActions.length > 1) {
+            scope.push(`• actions: ${scopeActions.map(actionLabel).join(', ')}`);
+          }
           if (filterMachine !== 'all') scope.push(`• machine: ${filterMachine}`);
           if (filterLevel !== 'all') scope.push(`• level: ${filterLevel}`);
           if (clearFrom) scope.push(`• from: ${clearFrom.toLocaleDateString()}`);

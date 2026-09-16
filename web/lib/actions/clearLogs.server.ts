@@ -1,6 +1,6 @@
 /**
  * clearLogs action core — deletes `sites/{siteId}/logs/*` in batches of 500
- * (Firestore's per-batch limit). Filters mirror the UI dropdowns (action /
+ * (Firestore's per-batch limit). Filters mirror the UI filters (action(s) /
  * machine / level) so clearing a filtered view deletes only what it shows.
  *
  * Gated by the site-scoped `SITE_LOGS_MANAGE` capability; the route boundary
@@ -18,6 +18,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
 import logger from '@/lib/logger';
 import { SITE_ID_RE } from '@/lib/sitePolicy.server';
+import { FIRESTORE_IN_LIMIT } from '@/lib/logFilters';
 
 const FIRESTORE_BATCH_LIMIT = 500;
 const VALID_LEVELS = new Set(['debug', 'info', 'warning', 'error', 'critical']);
@@ -33,6 +34,11 @@ export interface ClearLogsContext {
 export interface ClearLogsInput {
   /** Match the `action` field exactly. Omit for all actions. */
   action?: string;
+  /**
+   * Match `action` against ANY of these — the multi-select logs view. Mutually
+   * exclusive with `action`, which stays for single-value callers.
+   */
+  actions?: string[];
   /** Match the `machineId` field exactly. Omit for all machines. */
   machineId?: string;
   /** Match the `level` field exactly. Omit for all levels. */
@@ -74,6 +80,21 @@ export async function clearLogs(
   if (input.action !== undefined && typeof input.action !== 'string') {
     throw new ClearLogsValidationError('action', 'action must be a string when provided');
   }
+  if (input.actions !== undefined) {
+    if (
+      !Array.isArray(input.actions) ||
+      input.actions.length === 0 ||
+      input.actions.some((value) => typeof value !== 'string' || value === '')
+    ) {
+      throw new ClearLogsValidationError(
+        'actions',
+        'actions must be a non-empty array of non-empty strings when provided',
+      );
+    }
+    if (input.action !== undefined) {
+      throw new ClearLogsValidationError('actions', 'provide either action or actions, not both');
+    }
+  }
   if (input.machineId !== undefined && typeof input.machineId !== 'string') {
     throw new ClearLogsValidationError('machineId', 'machineId must be a string when provided');
   }
@@ -101,16 +122,25 @@ export async function clearLogs(
   const db = ctx.db ?? getAdminDb();
   const logsCol = db.collection('sites').doc(ctx.siteId).collection('logs');
 
+  // One list either way, so the two strategies below share a single matcher.
+  const actionValues = input.actions ?? (input.action !== undefined ? [input.action] : undefined);
+
   // Two index-free strategies:
   //  - No date window: equality filters server-side + batch-delete loop (every
   //    fetched doc matches, so re-querying from the front terminates).
   //  - Date window: timestamp range only (single-field index, as the GET handler)
   //    with cursor pagination and in-memory action/machine/level matching, which
   //    avoids the composite index an equality+range query would need.
+  //
+  // More actions than `in` accepts takes the cursor path too. The equality path
+  // deletes every document it fetches — safe only because the query proves they
+  // all match — so a filter it cannot express must never be left to it.
+  const actionsExceedInLimit =
+    actionValues !== undefined && actionValues.length > FIRESTORE_IN_LIMIT;
   const deletedCount =
-    input.sinceMs !== undefined || input.untilMs !== undefined
-      ? await clearByTimestampWindow(db, logsCol, input)
-      : await clearByEqualityFilters(db, logsCol, input);
+    input.sinceMs !== undefined || input.untilMs !== undefined || actionsExceedInLimit
+      ? await clearByTimestampWindow(db, logsCol, input, actionValues)
+      : await clearByEqualityFilters(db, logsCol, input, actionValues);
 
   emitMutation({
     kind: 'site_mutated',
@@ -148,9 +178,16 @@ async function clearByEqualityFilters(
   db: Firestore,
   logsCol: CollectionReference,
   input: ClearLogsInput,
+  actionValues: string[] | undefined,
 ): Promise<number> {
   let q: Query = logsCol;
-  if (input.action !== undefined) q = q.where('action', '==', input.action);
+  if (actionValues !== undefined) {
+    // `in` reads as repeated equality, so every fetched doc still matches.
+    q =
+      actionValues.length === 1
+        ? q.where('action', '==', actionValues[0])
+        : q.where('action', 'in', actionValues);
+  }
   if (input.machineId !== undefined) q = q.where('machineId', '==', input.machineId);
   if (input.level !== undefined) q = q.where('level', '==', input.level);
 
@@ -178,7 +215,9 @@ async function clearByTimestampWindow(
   db: Firestore,
   logsCol: CollectionReference,
   input: ClearLogsInput,
+  actionValues: string[] | undefined,
 ): Promise<number> {
+  const actionSet = actionValues !== undefined ? new Set(actionValues) : null;
   let cursor: QueryDocumentSnapshot | null = null;
   let deletedCount = 0;
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
@@ -200,7 +239,7 @@ async function clearByTimestampWindow(
     let matched = 0;
     for (const doc of snap.docs) {
       const d = doc.data();
-      if (input.action !== undefined && d.action !== input.action) continue;
+      if (actionSet !== null && !actionSet.has(d.action)) continue;
       if (input.machineId !== undefined && d.machineId !== input.machineId) continue;
       if (input.level !== undefined && d.level !== input.level) continue;
       batch.delete(doc.ref);

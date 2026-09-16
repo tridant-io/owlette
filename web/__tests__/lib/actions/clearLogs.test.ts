@@ -131,6 +131,77 @@ describe('clearLogs', () => {
     expect(mockDb.batch).not.toHaveBeenCalled();
   });
 
+  it('matches any of several actions with a single `in`', async () => {
+    mockGet.mockResolvedValueOnce(snapFor([]));
+
+    await clearLogs(
+      { siteId: 'site-a', auditActor: AUDIT_ACTOR, db: mockDb as unknown as Firestore },
+      { actions: ['process_started', 'process_crash'] },
+    );
+
+    expect(mockWhere).toHaveBeenCalledWith('action', 'in', ['process_started', 'process_crash']);
+  });
+
+  it('uses equality for a one-entry actions list', async () => {
+    mockGet.mockResolvedValueOnce(snapFor([]));
+
+    await clearLogs(
+      { siteId: 'site-a', auditActor: AUDIT_ACTOR, db: mockDb as unknown as Firestore },
+      { actions: ['process_crash'] },
+    );
+
+    expect(mockWhere).toHaveBeenCalledWith('action', '==', 'process_crash');
+  });
+
+  it('narrows in memory past the `in` limit instead of deleting what it fetched', async () => {
+    // The data-loss guard. The equality path deletes EVERY document it fetches,
+    // which is safe only because the query proves they all match. Firestore
+    // rejects an `in` over 30 values, so a selection that wide must take the
+    // cursor path — sending it to the equality path would delete the whole site.
+    const many = Array.from({ length: 31 }, (_, i) => `action_${i}`);
+    mockGet.mockResolvedValueOnce(
+      snapForData([
+        { id: 'selected', action: 'action_0' },
+        { id: 'not-selected', action: 'something_else' },
+      ]),
+    );
+
+    const result = await clearLogs(
+      { siteId: 'site-a', auditActor: AUDIT_ACTOR, db: mockDb as unknown as Firestore },
+      { actions: many },
+    );
+
+    expect(result.deletedCount).toBe(1);
+    expect(mockOrderBy).toHaveBeenCalledWith('timestamp', 'desc');
+    expect(mockWhere).not.toHaveBeenCalledWith('action', expect.anything(), expect.anything());
+    expect(mockBatchInstances[0].delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects action and actions together', async () => {
+    await expect(
+      clearLogs(
+        { siteId: 'site-a', auditActor: AUDIT_ACTOR, db: mockDb as unknown as Firestore },
+        { action: 'process_crash', actions: ['agent_started'] },
+      ),
+    ).rejects.toBeInstanceOf(ClearLogsValidationError);
+  });
+
+  it('rejects an empty or malformed actions list', async () => {
+    const ctx = {
+      siteId: 'site-a',
+      auditActor: AUDIT_ACTOR,
+      db: mockDb as unknown as Firestore,
+    };
+
+    await expect(clearLogs(ctx, { actions: [] })).rejects.toBeInstanceOf(ClearLogsValidationError);
+    await expect(clearLogs(ctx, { actions: [''] })).rejects.toBeInstanceOf(
+      ClearLogsValidationError,
+    );
+    await expect(
+      clearLogs(ctx, { actions: [1 as unknown as string] }),
+    ).rejects.toBeInstanceOf(ClearLogsValidationError);
+  });
+
   it('continues fetching while full batches are returned', async () => {
     mockGet
       .mockResolvedValueOnce(snapFor(Array.from({ length: 500 }, (_, i) => `log-${i}`)))

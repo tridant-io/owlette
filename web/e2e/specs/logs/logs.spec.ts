@@ -43,7 +43,10 @@ test('filters by action, machine, level, and custom date; reset restores rows', 
 
   await page.getByRole('button', { name: /reset filters/i }).click();
   await page.getByTestId('logs-filter-action').click();
-  await page.getByRole('option', { name: 'scheduled restart completed', exact: true }).click();
+  // 47 actions deep: the search field is how you reach one of them.
+  await page.getByTestId('logs-filter-action-search').fill('scheduled restart completed');
+  await page.getByRole('checkbox', { name: 'scheduled restart completed' }).click();
+  await page.keyboard.press('Escape');
   await expect(page.getByText(/no logs found for this site/i)).toBeVisible();
 
   await page.getByRole('button', { name: /reset filters/i }).click();
@@ -126,4 +129,29 @@ test('the process column reveals a clipped name, and stays quiet when it fits', 
   await expect(clipped).toHaveAttribute('data-state', 'closed');
   await clipped.hover();
   await expect(page.getByRole('tooltip')).toContainText('constellation renderer node 07 (primary)');
+});
+
+test('the action filter selects several types at once, and resets', async ({ page }) => {
+  await gotoSiteALogs(page);
+  await page.getByRole('button', { name: /show filters/i }).click();
+
+  const actionFilter = page.getByTestId('logs-filter-action');
+  await expect(actionFilter).toHaveText(/all actions/);
+
+  await actionFilter.click();
+  await page.getByRole('checkbox', { name: 'process crashed' }).click();
+  await page.getByRole('checkbox', { name: 'agent started' }).click();
+  await page.keyboard.press('Escape');
+
+  // Two picks read as a count, not a truncated list of labels.
+  await expect(actionFilter).toHaveText(/2 actions/);
+
+  // Both selected kinds survive; the third seeded row (deployment failed) does not.
+  await expect(page.getByTestId('log-row-e2e-log-crash')).toBeVisible();
+  await expect(page.getByTestId('log-row-e2e-log-info')).toBeVisible();
+  await expect(page.getByTestId('log-row-e2e-log-warning')).toHaveCount(0);
+
+  await page.getByRole('button', { name: /reset filters/i }).click();
+  await expect(actionFilter).toHaveText(/all actions/);
+  await expect(page.getByTestId('log-row-e2e-log-warning')).toBeVisible();
 });
