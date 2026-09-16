@@ -13,6 +13,7 @@ import { db } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronsUpDown, ChevronsDownUp, Filter, X, Trash2, ScrollText, AlertTriangle, AlertCircle, Camera, Search } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { TruncatedText } from '@/components/ui/truncated-text';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -347,26 +348,16 @@ const LogRow = React.memo(function LogRow({
               </TooltipContent>
             </Tooltip>
             {/* event */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="text-foreground font-medium truncate cursor-help">{formatAction(log.action)}</span>
-              </TooltipTrigger>
-              <TooltipContent>{formatAction(log.action)}</TooltipContent>
-            </Tooltip>
+            <TruncatedText text={formatAction(log.action)} className="text-foreground font-medium" />
             {/* machine */}
-            <span className="text-foreground truncate">{log.machineName}</span>
-            {/* process */}
-            <span className="text-muted-foreground truncate">{log.processName || '—'}</span>
+            <TruncatedText text={log.machineName ?? ''} className="text-foreground" data-testid="log-machine" />
+            {/* process — long names are the reason this column has a tooltip at all */}
+            <TruncatedText text={log.processName || '—'} className="text-muted-foreground" data-testid="log-process" />
             {/* details preview (flex, truncates) + screenshot indicator — hidden once expanded, where the full details render below (avoids duplicating the text). Below `md` it takes its own full-width line under the other fields. */}
             <div className="flex items-center gap-2 min-w-0 w-full md:w-auto">
               {!isExpanded && log.screenshotUrl && <Camera className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
               {!isExpanded && (log.details ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="text-muted-foreground truncate min-w-0 cursor-help">{log.details}</span>
-                  </TooltipTrigger>
-                  <TooltipContent><p className="max-w-sm whitespace-pre-wrap break-words">{log.details}</p></TooltipContent>
-                </Tooltip>
+                <TruncatedText text={log.details} className="text-muted-foreground min-w-0" data-testid="log-details" />
               ) : (
                 <span className="text-muted-foreground/40">—</span>
               ))}

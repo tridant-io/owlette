@@ -88,3 +88,36 @@ test('clear filtered logs removes only matching rows', async ({ page }) => {
     .get();
   expect(remaining.docs.map((doc) => doc.id).sort()).toEqual(['e2e-log-crash', 'e2e-log-info']);
 });
+
+test('the process column reveals a clipped name, and stays quiet when it fits', async ({ page }) => {
+  // jsdom can't prove this one — it needs real layout in a 116px column.
+  await seedLogEvents('site-A', [
+    {
+      id: 'e2e-log-long-proc',
+      action: 'process_crash',
+      level: 'error',
+      machineId: 'e2e-logs-machine',
+      processName: 'constellation renderer node 07 (primary)',
+      timestamp: new Date(),
+    },
+    {
+      id: 'e2e-log-short-proc',
+      action: 'agent_started',
+      level: 'info',
+      machineId: 'e2e-logs-machine',
+      processName: 'td',
+      timestamp: new Date(Date.now() - 60_000),
+    },
+  ]);
+  await gotoSiteALogs(page);
+
+  const clipped = page.getByTestId('log-row-e2e-log-long-proc').getByTestId('log-process');
+  await expect(clipped).toBeVisible();
+  await clipped.hover();
+  await expect(page.getByRole('tooltip')).toContainText('constellation renderer node 07 (primary)');
+
+  // Fits its column — hovering it must reveal nothing at all.
+  const whole = page.getByTestId('log-row-e2e-log-short-proc').getByTestId('log-process');
+  await whole.hover();
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+});
