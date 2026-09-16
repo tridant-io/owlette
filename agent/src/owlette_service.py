@@ -1,4 +1,5 @@
 import os
+import stat
 import sys
 import threading
 import socket
@@ -9,21 +10,17 @@ src_dir = os.path.dirname(os.path.abspath(__file__))
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
+import osadapter
 import shared_utils
 import installer_utils
 import reboot_state
 import session_state
 import watchdog_state
 import config_sync
-from command_router import CommandRouter
+import configure_site
+from command_router import COMMAND_DEFERRED, CommandRouter
 from screenshot_capture import ScreenshotCaptureError, capture_and_upload
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-import win32service
-import win32process
-import win32profile
-import win32ts
-import win32con
-import win32security
 import logging
 import psutil
 import time
@@ -558,7 +555,7 @@ def _discovered_pid_identity_ok(pid, process):
     identity = shared_utils.read_process_identity(pid)
     if identity is None:
         return False
-    exe_path = (process.get('exe_path') or '').replace('/', '\\').lower()
+    exe_path = shared_utils.normalize_exe_path(process.get('exe_path'))
     live_basename = os.path.basename(identity['exe'])
     if exe_path.endswith(('.bat', '.cmd')):
         return live_basename == 'cmd.exe'
@@ -644,7 +641,7 @@ def _schedule_stop_allowed(pid, process):
     identity = shared_utils.read_process_identity(pid)
     if identity is None:
         return False, 'identity unreadable - refusing to stop an unverifiable pid'
-    expected = (process.get('exe_path') or '').replace('/', '\\').lower()
+    expected = shared_utils.normalize_exe_path(process.get('exe_path'))
     if not expected or identity['exe'] != expected:
         return False, (f"recordless tracked pid runs '{identity['exe']}', not "
                        f"the entry's configured executable - not managed by owlette")
@@ -709,7 +706,24 @@ class Util:
 
     @staticmethod
     def is_pid_running(pid):
-        return psutil.pid_exists(pid)
+        """True while `pid` names a live process.
+
+        On POSIX a zombie is not one: a managed process the daemon spawned keeps
+        its pid until it is reaped, and reading that as "still running" leaves a
+        crashed application unrelaunched. _is_tray_alive draws the same line for
+        the desktop app. Windows has no such state, so there the pid is the
+        whole answer.
+        """
+        if not psutil.pid_exists(pid):
+            return False
+        if sys.platform == 'win32':
+            return True
+        try:
+            return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.AccessDenied:
+            return True
 
     @staticmethod
     def get_process_name(process):
@@ -799,6 +813,15 @@ class OwletteService:
         self._last_seen_launch_modes = {} # Service-owned launch_mode snapshot for transition diffs
         self._last_seen_launch_schedules = {} # Schedule signatures for scheduled-mode edit logging
         self._skip_launch_delay = set()  # Process IDs that should skip time_delay on next launch
+        # The seat, resolved at most once per loop iteration (see _seat_absent);
+        # None means "not resolved this tick". Cleared at the top of every
+        # iteration, so no answer is ever carried across a tick.
+        self._seat_probe = None
+        # The thread the memo belongs to; every other one resolves live.
+        self._seat_probe_thread = None
+        # Entries whose launches are currently refused for want of a seat, so
+        # the refusal is said once per episode rather than once a minute.
+        self._seatless_entries = set()
         self._cached_site_timezone = None  # Cached from firebase_client
         # Persisted source of truth is reboot_state.py. Monotonic clock so DST/NTP
         # corrections can't trigger false retries.
@@ -822,6 +845,9 @@ class OwletteService:
         # Same single-flight shape as _roost_scrub_thread: the Cortex IPC pump
         # runs off-loop because one capture_screenshot takes ~55s.
         self._cortex_ipc_thread = None
+        # And again for the POSIX privileged-request seam: a `pair` request
+        # starts a ten-minute poll.
+        self._privileged_requests_thread = None
         # Single-flight handle for the off-loop reboot-pending check.
         self._reboot_pending_future = None
         self._shutting_down = False  # Suppresses crash alerts during reboot/shutdown
@@ -1340,6 +1366,8 @@ class OwletteService:
         without a service. Any failure to read the SCM is reported as "not
         stopping" — a watcher that cannot see the SCM must not invent a stop.
         """
+        import win32service
+
         try:
             manager = win32service.OpenSCManager(
                 None, None, win32service.SC_MANAGER_CONNECT)
@@ -1463,7 +1491,15 @@ class OwletteService:
 
         Runs on its own daemon thread — never on the main loop, which must not
         block — and exits as soon as it has handed off to graceful_shutdown().
+
+        Windows only, and returns None elsewhere: both the SCM it polls and
+        the sentinel it stats are owlette-host's, which is never built for
+        POSIX — there launchd and systemd deliver a real SIGTERM, which the
+        runner's signal handler already answers.
         """
+        if sys.platform != 'win32':
+            return None
+
         # Process start, not watcher start: a stop control arriving during
         # python's multi-second startup writes a real sentinel, and anything from
         # before this instant belongs to the previous session.
@@ -1955,7 +1991,7 @@ class OwletteService:
                 proc = psutil.Process(self.tray_icon_pid)
                 if (proc.is_running()
                         and proc.status() != psutil.STATUS_ZOMBIE
-                        and (proc.name() or '').lower() == shared_utils.DESKTOP_EXE_NAME):
+                        and (proc.name() or '').lower() == osadapter.desktop_process_name()):
                     return True
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
@@ -2001,7 +2037,9 @@ class OwletteService:
         separate process, so there is nothing for the service to scan for; it
         tracks its own launch instead (see RESTART_PROMPT_ACTIVE_SECONDS). The
         gate is conservative in the right direction — expiring early would
-        re-prompt an operator who is already looking at the countdown.
+        re-prompt an operator who is already looking at the countdown. Off
+        Windows there is no countdown to end it, so the escalation arms a gate
+        that only a dashboard dismiss clears.
         """
         return time.monotonic() < self._restart_prompt_until
 
@@ -2052,6 +2090,14 @@ class OwletteService:
             logging.info("Cortex process launched")
             return True
         else:
+            # Off Windows resolving the console user is loginctl
+            # subprocesses with a five-second budget each, and a failure the
+            # cooldown never stamped was asked again on every 5s tick — a
+            # kiosk with hoot enabled and nobody signed in paid for them on
+            # the loop thread forever. Paced like the tray launcher beside
+            # it, which stamps before its attempt for the same reason.
+            if sys.platform != 'win32':
+                self._cortex_last_launch_time = now
             logging.debug("Could not launch Cortex (no user session?)")
             return False
 
@@ -2068,7 +2114,18 @@ class OwletteService:
         Single-flight, mirroring _roost_scrub_thread: one worker at a time
         preserves the serial execution order Cortex expects, since it issues one
         tool call and blocks on its result.
+
+        Gated on the hoot kill switch, not just on hoot being up: the queue
+        is group-writable so the console user's hoot process can reach it,
+        and with hoot off nothing legitimate writes there — draining it
+        anyway would run whatever was dropped in. A kill switch and not a
+        privilege boundary: config.json is group-writable as well, so this
+        stops a stranger and an idle machine, not the group member who can
+        switch hoot back on.
         """
+        if not shared_utils.is_cortex_enabled():
+            return
+
         if self._cortex_ipc_thread is not None and self._cortex_ipc_thread.is_alive():
             return
 
@@ -2137,6 +2194,73 @@ class OwletteService:
                     os.remove(cmd_path)
                 except OSError:
                     pass
+
+    def _restart_requested(self, path):
+        """Whether a restart flag the daemon should honour is waiting.
+
+        On Windows the desktop app writes it after its own elevated click and
+        the tree is ACL'd. Off Windows `tmp/` is group-writable, so a flag the
+        console user wrote would restart the agent with none of the privileged
+        seam's nonce, rate limit or audit — the app asks through
+        `ipc/requests/` there instead, and a flag from any other account is
+        removed rather than obeyed.
+
+        Off a link and not through one: `os.stat` on a symlink reports the
+        target's owner, so a link to any root-owned file planted under this
+        name would read back as the daemon's own flag and restart the agent on
+        every tick.
+        """
+        try:
+            info = os.lstat(path)
+        except OSError:
+            return False
+        if sys.platform == 'win32':
+            return True
+        if stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid():
+            return True
+        logging.warning(
+            f"Ignoring a restart flag the daemon did not write (uid "
+            f"{info.st_uid}): restarting the agent is a privileged request, "
+            f"not a file in tmp/")
+        try:
+            # A directory goes whole: anything in the group can create one
+            # under this name, and an entry the daemon cannot remove logs the
+            # same refusal every five seconds.
+            if stat.S_ISDIR(info.st_mode):
+                import shutil
+
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as e:
+            logging.debug(f"Could not remove the foreign restart flag: {e}")
+        return False
+
+    def _process_privileged_requests(self):
+        """Hand any pending desktop-app requests to a drain worker.
+
+        `configure_site`'s POSIX seam: off Windows the app runs as the console
+        user and can neither write the token store nor control the daemon, so
+        pairing, an agent restart and a machine reboot are requests the daemon
+        executes. Gated exactly like the hoot queue beside it — a platform that
+        has no seam, a single-flight worker and one directory listing — because
+        a `pair` polls for ten minutes and a `restart` ends this process, and
+        neither is the 5s tick's to hold.
+        """
+        thread = self._privileged_requests_thread
+        if thread is not None and thread.is_alive():
+            return
+
+        if not configure_site.poll_request_seam():
+            return
+
+        t = threading.Thread(
+            target=configure_site.drain_privileged_requests,
+            daemon=True,
+            name='ipc-requests',
+        )
+        t.start()
+        self._privileged_requests_thread = t
 
     def _execute_cortex_command(self, tool_name, tool_params):
         """Execute a Cortex IPC tool command using existing service logic.
@@ -2397,6 +2521,9 @@ class OwletteService:
 
         try:
             import ctypes
+            import win32process
+            import win32security
+
             process_token = win32security.OpenProcessToken(
                 win32process.GetCurrentProcess(),
                 win32security.TOKEN_ADJUST_PRIVILEGES | win32security.TOKEN_QUERY
@@ -2444,6 +2571,8 @@ class OwletteService:
             (token, environment) on success, (None, None) on failure.
         """
         import ctypes
+        import win32profile
+        import win32security
 
         PROCESS_QUERY_INFORMATION = 0x0400
 
@@ -2520,6 +2649,9 @@ class OwletteService:
         2. Token cloning from explorer.exe (fallback, no SE_TCB needed)
         3. Cached token from previous successful call (last resort)
         """
+        import win32profile
+        import win32ts
+
         try:
             session_id = win32ts.WTSGetActiveConsoleSessionId()
             if session_id == 0xFFFFFFFF:
@@ -2595,6 +2727,9 @@ class OwletteService:
         try:
             import ctypes
             import win32api
+            import win32profile
+            import win32security
+            import win32ts
 
             session_id = win32ts.WTSGetActiveConsoleSessionId()
             if session_id == 0xFFFFFFFF:
@@ -2643,6 +2778,9 @@ class OwletteService:
         launch failed.
         """
         try:
+            import win32con
+            import win32process
+
             # Refresh token to handle session changes since service startup
             self._refresh_user_token()
             if not self.console_user_token:
@@ -2680,14 +2818,42 @@ class OwletteService:
             return False
 
         script_path = shared_utils.get_path(script_name)
-        command_line = f'"{python_exe}" "{script_path}" {args}' if args else f'"{python_exe}" "{script_path}"'
-        pid = self._launch_command_as_user(command_line, f"script {script_name}")
+        description = f"script {script_name}"
+        if sys.platform != 'win32':
+            pid = self._spawn_as_console_user(
+                [python_exe, script_path, *shlex.split(args or '')], description)
+        else:
+            command_line = f'"{python_exe}" "{script_path}" {args}' if args else f'"{python_exe}" "{script_path}"'
+            pid = self._launch_command_as_user(command_line, description)
         if pid is None:
             return False
 
         if 'owlette_cortex.py' in script_name:
             self.cortex_pid = pid
         return True
+
+    def _spawn_as_console_user(self, argv, description):
+        """Run `argv` as the user at the machine, off Windows.
+
+        The counterpart of the token ladder: hoot is a kiosk-user process on
+        every platform - that is what makes `ipc/cortex_commands` a
+        user-to-root channel rather than root talking to itself - and the
+        adapter resolves the account and the environment its display lives in.
+
+        Returns the new PID, or None when nobody is signed in or the spawn
+        failed.
+        """
+        import pwd
+
+        user = osadapter.console_user()
+        if user is None:
+            logging.error(f"Cannot launch {description}: no interactive user session")
+            return None
+        try:
+            return osadapter.spawn_as_user(argv, pwd.getpwnam(user).pw_uid)
+        except (KeyError, OSError, ValueError) as e:
+            logging.error(f"Failed to start {description}: {e}")
+            return None
 
     def launch_desktop_app_as_user(self, *args):
         """Launch owlette-desktop.exe in the interactive session.
@@ -2701,6 +2867,12 @@ class OwletteService:
 
         Returns True when the launch was issued.
         """
+        # Off Windows the init system starts the app and the daemon never
+        # launches it (plan decision 2), so there is no token ladder to run and
+        # no `.exe` under the install root to name in a warning either.
+        if sys.platform != 'win32':
+            return False
+
         exe_path = shared_utils.get_desktop_exe_path()
         if not exe_path:
             # Not a crash — mid-upgrade and dev boxes just have no local UI. Warn
@@ -2744,7 +2916,10 @@ class OwletteService:
 
         Launches session_exec.py via CreateProcessAsUser, which runs
         Python/cmd/PowerShell in the user's session and writes the result
-        to an IPC file.
+        to an IPC file. Windows only: off it, `ipc/jobs` is the resident
+        desktop app's queue and `osadapter.run_job` is how a job is put there,
+        so a second writer executing out of band would have the app run the
+        same job over again.
 
         Args:
             job_type: 'python', 'cmd', or 'powershell'
@@ -2757,8 +2932,13 @@ class OwletteService:
             output directory the user-session process wrote to, so callers
             (e.g. screenshot_capture) can read files['screenshot.jpg'] etc.
             without racing on `ipc/results/` directory enumeration.
-            On failure returns dict with 'error' key (plus 'outputDir').
+            On failure returns dict with 'error' key (plus 'outputDir');
+            the off-Windows refusal carries the error alone.
         """
+        if sys.platform != 'win32':
+            return {'error': 'unsupported_on_platform: user-session execution '
+                             'is the windows arm of osadapter.run_job'}
+
         import uuid
         import json as _json
 
@@ -2839,6 +3019,13 @@ class OwletteService:
         return resolved
 
     def launch_process_as_user(self, process):
+        # Managed launch stays in the daemon on every OS, but only Windows
+        # does it through a token: off Windows the adapter resolves the
+        # console user and spawns as them, and the record below is shared.
+        if sys.platform != 'win32':
+            return self._record_launch(
+                process, osadapter.launch_managed_process(process))
+
         visibility = process.get('visibility', 'Show')
 
         priority = process.get('priority', 'Normal')
@@ -2906,6 +3093,8 @@ class OwletteService:
         # ShellExecuteEx's the target so it gets full desktop/GPU context.
         import json as json_module
         import uuid
+        import win32con
+        import win32process
 
         # The uuid suffix is required: os.getpid() is constant for the service's
         # life, so two concurrent launches in the same second shared handoff
@@ -3015,6 +3204,18 @@ class OwletteService:
                 except Exception as e:
                     logging.debug(f"Could not clean up temp file {f}: {e}")
 
+        return self._record_launch(process, pid)
+
+    def _record_launch(self, process, pid):
+        """Record a launched managed process in app_states.json; returns its pid.
+
+        Both arms of launch_process_as_user end here: the mechanism that
+        starts the process is per-OS, the durable identity record it is
+        bound by is not. A launch that produced no pid records nothing.
+        """
+        if pid is None:
+            return None
+
         self.current_timestamp = int(time.time())
 
         # Read existing results from the output file
@@ -3068,7 +3269,63 @@ class OwletteService:
 
         return pid
 
+    def _seat_absent(self):
+        """Off Windows, whether nobody is at a graphical seat right now.
+
+        console_user() shells out to loginctl once for the session list and
+        again per session listed, and the 5-second loop asks it for every
+        managed entry that is down: the answer is resolved once an iteration
+        at most and cleared at the top of the next one, so a tick costs one
+        round-trip however many entries are down and nothing is carried
+        across ticks. The memo is that thread's alone: every other caller --
+        a dashboard start or restart, the cortex queue, a config update --
+        resolves live, because the loop's answer can be a whole tick old and
+        somebody signing in inside that tick would otherwise have the launch
+        they asked for refused on a reading taken before they did.
+        """
+        if sys.platform == 'win32':
+            return False
+        if threading.get_ident() != self._seat_probe_thread:
+            return osadapter.console_user() is None
+        if self._seat_probe is None:
+            self._seat_probe = osadapter.console_user() is None
+        return self._seat_probe
+
     def reached_max_relaunch_attempts(self, process):
+        # The gate before anything else: while a reboot is pending nothing
+        # relaunches, and off Windows nothing but a dashboard dismiss ends
+        # that. Asking who is at the seat first billed the 5-second loop a
+        # loginctl round-trip every tick, for the life of the gate, to settle
+        # a question already settled - and on a box with no seat resolved it
+        # answered the kill-and-relaunch door before the gate could refuse
+        # it, terminating the kiosk app of a machine frozen to preserve it.
+        if self._is_restart_prompt_active():
+            return True
+        # A launch that never happened is not a crash, and off Windows a box
+        # with nobody at a graphical seat — logged out, at the display
+        # manager's greeter, or imaged before its first login — refuses
+        # every managed launch (plan decision 4). Spending the relaunch budget
+        # on those escalated a crash that never happened, and with no countdown
+        # off Windows to end the gate it armed, nothing on the machine launched
+        # again — not even after the user logged back in. Every door that
+        # launches spends the budget here, the monitor loop's and the
+        # kill-and-relaunch a dashboard restart asks for alike, so the rule
+        # lives with the accounting rather than at one of them. Windows keeps
+        # the budget on every attempt: its own no-session case self-limits,
+        # because launch_desktop_app_as_user returns False without a session
+        # and the escalation never arms the gate.
+        if self._seat_absent():
+            return False
+        # And the launch that ends a seatless episode is a first launch, not
+        # a relaunch. The refusal above records the same `failed` cooldown
+        # marker a failed launch does — that marker is what holds the retry
+        # to once a minute — and the next launch read it back as a crashed
+        # previous attempt, booking 'relaunch attempt: 1 of N' once per entry
+        # per logout. Whatever budget the entry accrued before the seat went
+        # away is neither spent here nor cleared; the entry leaves the set at
+        # the launch itself.
+        if process.get('id') in self._seatless_entries:
+            return False
         process_name = Util.get_process_name(process)
         try:
             attempts = self.relaunch_attempts.get(process_name, 0 if self.first_start else 1)
@@ -3107,19 +3364,41 @@ class OwletteService:
                 # `unlimited` never escalates — that is the whole point of 0.
                 if not unlimited and attempts > relaunches_to_attempt:
                     # Write reboot_pending to Firestore so dashboard can approve/dismiss remotely
-                    if self.firebase_client and self.firebase_client.is_connected():
-                        self.firebase_client.set_reboot_pending(
+                    pending_written = bool(
+                        self.firebase_client
+                        and self.firebase_client.is_connected()
+                        and self.firebase_client.set_reboot_pending(
                             process_name=process_name,
                             reason=f'{process_name} crashed {relaunches_to_attempt} times',
                             timestamp=time.time()
-                        )
+                        ))
 
-                    # If a restart prompt isn't already running, open one (local fallback)
-                    started_restart_prompt = self.launch_desktop_app_as_user(
+                    # If a restart prompt isn't already running, open one (local fallback).
+                    # Off Windows the init system owns the desktop app and the
+                    # daemon never launches it (plan decision 2), so there is no
+                    # prompt to open — and the budget still has to stop the
+                    # relaunch loop, or a crashing kiosk process is relaunched
+                    # every tick forever. The escalation lands on the same
+                    # terminal state the prompt leaves behind: reboot pending on
+                    # the dashboard, no further relaunch until the gate expires.
+                    escalated = sys.platform != 'win32' or self.launch_desktop_app_as_user(
                         shared_utils.DESKTOP_RESTART_PROMPT_ARG
                     )
-                    if started_restart_prompt:
-                        self._restart_prompt_until = time.monotonic() + RESTART_PROMPT_ACTIVE_SECONDS
+                    if escalated:
+                        # Windows ends the gate itself: the prompt counts down
+                        # and reboots. Off Windows nothing does, so an expiring
+                        # one re-escalated every RESTART_PROMPT_ACTIVE_SECONDS —
+                        # another reboot_pending write and another 'reboot
+                        # imminent' alert, for the life of the install. It is
+                        # held until the dashboard dismisses the pending reboot
+                        # — and only when that row reached Firestore: an
+                        # escalation nobody can see is not one to freeze the
+                        # service on, so an unwritten one takes the timed gate
+                        # and escalates again once the agent is connected.
+                        indefinite = sys.platform != 'win32' and pending_written
+                        self._restart_prompt_until = (
+                            float('inf') if indefinite
+                            else time.monotonic() + RESTART_PROMPT_ACTIVE_SECONDS)
                         self.log_and_notify(
                             process,
                             f'Terminated {process_name} {relaunches_to_attempt} times. System reboot imminent'
@@ -3129,7 +3408,10 @@ class OwletteService:
                     else:
                         logging.info('Failed to open restart prompt.')
             else:
-                return True # If it's running, we've already reached the max attempts
+                # Re-read after the config reads above: another entry's
+                # escalation on another thread arms this same service-wide
+                # gate, and a second reboot must not be raised behind it.
+                return True
 
             self.relaunch_attempts[process_name] = attempts + 1
             return False
@@ -3315,6 +3597,28 @@ class OwletteService:
             last_time = last_info.get('time')
 
             if last_time is None or (last_time is not None and (self.current_time - last_time).total_seconds() >= (time_to_init or TIME_TO_INIT)):
+                # The adapter refuses a managed launch with nobody at a seat
+                # (plan decision 4), so off Windows one is not attempted: the
+                # refusal costs a second seat lookup, and a machine sitting at
+                # its greeter wrote an ERROR and rewrote app_states.json once a
+                # minute per entry for a launch that never happened. Said once
+                # when the seat goes and once when it comes back. The `failed`
+                # cooldown is still recorded: it is what holds the retry to
+                # once a minute until somebody signs in.
+                if self._seat_absent():
+                    if process_list_id not in self._seatless_entries:
+                        self._seatless_entries.add(process_list_id)
+                        logging.warning(
+                            f"Not launching '{Util.get_process_name(process)}': nobody is "
+                            f"signed in at a graphical session - launching when somebody is")
+                    self.last_started[process_list_id] = {
+                        'time': datetime.datetime.now(), 'pid': None, 'failed': True}
+                    return None
+                if process_list_id in self._seatless_entries:
+                    self._seatless_entries.discard(process_list_id)
+                    logging.info(
+                        f"Somebody is signed in again - launching "
+                        f"'{Util.get_process_name(process)}'")
                 # Skip delay on first launch (delay is for crash recovery spacing,
                 # not fresh starts) and on manual mode changes
                 if last_time is None or last_info.get('failed') or process_list_id in self._skip_launch_delay:
@@ -3484,10 +3788,16 @@ class OwletteService:
                     shared_utils.update_process_status_in_json(last_pid, 'LAUNCHING', self.firebase_client, process_id=process_list_id)
                     new_pid = None
                 else:
-                    self.launch_python_script_as_user(
-                        shared_utils.get_path('owlette_scout.py'),
-                        str(last_pid)
-                    )
+                    # owlette_scout is IsHungAppWindow — a Windows concept,
+                    # in a module that imports win32gui at module scope. Off
+                    # Windows this is an error per managed process per tick
+                    # today, and a process that dies on the import the moment
+                    # the packaged interpreter exists.
+                    if sys.platform == 'win32':
+                        self.launch_python_script_as_user(
+                            shared_utils.get_path('owlette_scout.py'),
+                            str(last_pid)
+                        )
                     new_pid = self.handle_unresponsive_process(last_pid, process)
 
                 if not new_pid:
@@ -3651,6 +3961,11 @@ class OwletteService:
             if stale_skips:
                 self._skip_launch_delay -= stale_skips
                 logging.info(f"[OK] Cleaned up {len(stale_skips)} stale entries from _skip_launch_delay")
+
+            stale_seatless = self._seatless_entries - current_process_ids
+            if stale_seatless:
+                self._seatless_entries -= stale_seatless
+                logging.info(f"[OK] Cleaned up {len(stale_seatless)} stale entries from _seatless_entries")
 
             # Clean up app_states.json (results file) — remove PIDs that no longer exist
             if self.results:
@@ -4302,11 +4617,14 @@ class OwletteService:
                 self.last_started.pop(project_id, None)
 
         for exe_name in close_processes:
-            exe_name_lower = (exe_name or '').lower()
+            # The platform's own spelling, like every other exe comparison:
+            # folding separators and case resolved a deployment's names
+            # against no managed entry at all on a case-sensitive filesystem.
+            wanted = shared_utils.normalize_exe_path(exe_name)
             matching_entries = [
                 p for p in config_processes
                 if os.path.basename(
-                    (p.get('exe_path') or '').replace('/', '\\').lower()) == exe_name_lower
+                    shared_utils.normalize_exe_path(p.get('exe_path'))) == wanted
             ]
             if not matching_entries:
                 logging.info(
@@ -4738,232 +5056,7 @@ class OwletteService:
                         logging.warning(f"Error in cleanup finally block: {cleanup_error}")
 
             elif cmd_type == 'update_owlette':
-                # Launched via Task Scheduler so the installer survives the service
-                # stop; a watchdog task brings the service back afterwards.
-                installer_url = cmd_data.get('installer_url')
-                deployment_id = cmd_data.get('deployment_id')
-                expected_sha256 = cmd_data.get('checksum_sha256')
-
-                target_version = cmd_data.get('target_version')
-                if not target_version:
-                    version_match = re.search(r'v(\d+\.\d+\.\d+)', installer_url or '')
-                    target_version = version_match.group(1) if version_match else 'unknown'
-
-                if not installer_url:
-                    return "Error: No installer URL provided for update"
-
-                # ANTI-FRAGILE: Require checksum for self-updates (supply chain protection)
-                if not expected_sha256:
-                    return "Error: No checksum provided for self-update - refusing to install unverified binary"
-
-                # ANTI-FRAGILE: Idempotency guard - prevent concurrent update execution
-                update_marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
-                if os.path.exists(update_marker_path):
-                    try:
-                        with open(update_marker_path, 'r') as f:
-                            existing_marker = json.load(f)
-                        started_at = existing_marker.get('started_at', '')
-                        # Do NOT add `from datetime import datetime` here — it shadows
-                        # the module for the whole function and breaks the
-                        # kill_process branch above.
-                        marker_time = datetime.datetime.strptime(started_at, '%Y-%m-%d %H:%M:%S')
-                        age_minutes = (datetime.datetime.now() - marker_time).total_seconds() / 60
-                        if age_minutes < 10:
-                            logging.warning(f"Update already in progress (started {age_minutes:.1f}m ago) - rejecting duplicate command")
-                            return f"Update already in progress (started {age_minutes:.1f}m ago)"
-                        else:
-                            logging.warning(f"Stale update marker found ({age_minutes:.1f}m old) - proceeding with new update")
-                    except Exception as marker_err:
-                        logging.warning(f"Could not read existing update marker, proceeding: {marker_err}")
-
-                logging.info("="*60)
-                logging.info("OWLETTE SELF-UPDATE INITIATED")
-                logging.info(f"Current version: {shared_utils.APP_VERSION}")
-                logging.info(f"Target version: {target_version}")
-                logging.info("="*60)
-                logging.debug(f"Installer URL: {installer_url}")
-                logging.debug(f"Checksum: {expected_sha256[:16]}...")
-
-                try:
-                    # ~100MB installer + ~200MB extraction, with the old install
-                    # still on disk.
-                    import shutil
-                    install_drive = os.path.splitdrive(shared_utils.get_data_path())[0] or 'C:'
-                    disk_usage = shutil.disk_usage(install_drive + '\\')
-                    free_mb = disk_usage.free / (1024 * 1024)
-                    logging.debug(f"Disk space on {install_drive}: {free_mb:.0f} MB free")
-                    if free_mb < 500:
-                        raise Exception(f"Insufficient disk space: {free_mb:.0f} MB free, need at least 500 MB for safe update")
-
-                    if self.firebase_client:
-                        self.firebase_client.update_command_progress(cmd_id, 'downloading', deployment_id)
-
-                    # Our own temp dir, not WINDOWS\TEMP — security software blocks
-                    # execution from system temp.
-                    owlette_tmp_dir = shared_utils.get_data_path('tmp')
-                    os.makedirs(owlette_tmp_dir, exist_ok=True)
-                    temp_installer_path = os.path.join(owlette_tmp_dir, 'owlette-Update.exe')
-
-                    logging.info("Downloading installer (3 retries with exponential backoff)...")
-                    download_success, actual_path = installer_utils.download_file(
-                        installer_url,
-                        temp_installer_path,
-                        progress_callback=None,  # Progress already tracked via Firestore status
-                        max_retries=3,
-                        connect_timeout=30,
-                        read_timeout=600
-                    )
-
-                    if not download_success:
-                        raise Exception(f"Failed to download installer after 3 retries from {installer_url}")
-
-                    temp_installer_path = actual_path
-                    logging.debug(f"Installer downloaded to: {temp_installer_path}")
-
-                    # Sanity check - Inno Setup installer should be at least 1MB
-                    file_size = os.path.getsize(temp_installer_path)
-                    logging.debug(f"Installer file size: {file_size:,} bytes")
-                    if file_size < 1_000_000:
-                        raise Exception(f"Downloaded file too small ({file_size} bytes) - likely not a valid installer")
-
-                    # Verify it's a valid PE executable (check MZ header)
-                    with open(temp_installer_path, 'rb') as f:
-                        header = f.read(2)
-                        if header != b'MZ':
-                            raise Exception("Downloaded file is not a valid Windows executable")
-
-                    # SHA256 checksum verification (MANDATORY for self-updates)
-                    logging.info("Verifying installer checksum...")
-                    if not installer_utils.verify_checksum(temp_installer_path, expected_sha256):
-                        installer_utils.cleanup_installer(temp_installer_path, force=True)
-                        raise Exception("Checksum verification FAILED - installer may be corrupted or tampered. Update aborted.")
-                    logging.info("[OK] Checksum verification passed")
-
-                    logging.info("Installer verified successfully")
-
-                    # Survives the service restart; _check_update_status() reads it
-                    # afterwards to report success or failure.
-                    update_marker = {
-                        'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
-                        'old_version': shared_utils.APP_VERSION,
-                        'target_version': target_version,
-                        'installer_url': installer_url,
-                        'installer_path': temp_installer_path,
-                        'command_id': cmd_id,
-                        'deployment_id': deployment_id
-                    }
-                    with open(update_marker_path, 'w') as f:
-                        json.dump(update_marker, f, indent=2)
-                    logging.debug(f"Update marker created: {update_marker_path}")
-
-                    if self.firebase_client:
-                        self.firebase_client.update_command_progress(cmd_id, 'installing', deployment_id)
-
-                    # Task Scheduler, so the installer survives Inno Setup killing
-                    # the service.
-                    log_path = shared_utils.get_data_path('logs/installer_update.log')
-                    # Inno Setup APPENDS to /LOG and every update refreshes the
-                    # mtime, so cleanup_old_logs never ages it out. Rotate here,
-                    # the last moment before the installer opens it.
-                    shared_utils.rotate_log_if_oversized(log_path)
-                    silent_flags = f'/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /ALLUSERS /LOG="{log_path}"'
-                    task_name = f"OwletteUpdate_{int(time.time())}"
-
-                    logging.debug(f"Creating scheduled task: {task_name}")
-                    logging.debug(f"Installer flags: {silent_flags}")
-                    logging.debug(f"Installer log will be written to: {log_path}")
-
-                    schtasks_cmd = [
-                        'schtasks',
-                        '/Create',
-                        '/TN', task_name,
-                        '/TR', f'"{temp_installer_path}" {silent_flags}',
-                        '/SC', 'ONCE',
-                        '/ST', '00:00',
-                        '/RU', 'SYSTEM',
-                        '/RL', 'HIGHEST',
-                        '/F'
-                    ]
-
-                    result = subprocess.run(
-                        schtasks_cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
-
-                    if result.returncode != 0:
-                        raise Exception(f"Failed to create scheduled task: {result.stderr}")
-
-                    logging.debug(f"Scheduled task created: {task_name}")
-
-                    run_result = subprocess.run(
-                        ['schtasks', '/Run', '/TN', task_name],
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
-
-                    if run_result.returncode != 0:
-                        logging.warning(f"Task run command returned: {run_result.stderr}")
-                    else:
-                        logging.info("Installer task started successfully")
-
-                    # Watchdog: after 5 min, `net start` the service if the update
-                    # left it down. Start-Sleep keeps the delay non-interactive.
-                    recovery_task_name = f"OwletteRecovery_{int(time.time())}"
-                    recovery_cmd = (
-                        f'powershell -NoProfile -Command "Start-Sleep 300" && '
-                        f'sc query OwletteService | findstr "RUNNING" > nul || '
-                        f'(net start OwletteService & '
-                        f'schtasks /Delete /TN "{recovery_task_name}" /F)'
-                    )
-                    try:
-                        subprocess.run(
-                            ['schtasks', '/Create',
-                             '/TN', recovery_task_name,
-                             '/TR', f'cmd /c {recovery_cmd}',
-                             '/SC', 'ONCE', '/ST', '00:00',
-                             '/RU', 'SYSTEM', '/RL', 'HIGHEST', '/F'],
-                            capture_output=True, text=True, timeout=10
-                        )
-                        subprocess.run(
-                            ['schtasks', '/Run', '/TN', recovery_task_name],
-                            capture_output=True, text=True, timeout=10
-                        )
-                        logging.info(f"Recovery watchdog scheduled: {recovery_task_name} (will check service in ~5 min)")
-                    except Exception as recovery_err:
-                        logging.warning(f"Failed to create recovery watchdog (non-fatal): {recovery_err}")
-
-                    cleanup_proc = subprocess.Popen(
-                        ['cmd', '/c',
-                         f'powershell -NoProfile -Command "Start-Sleep 300" && '
-                         f'schtasks /Delete /TN "{task_name}" /F && '
-                         f'schtasks /Delete /TN "{recovery_task_name}" /F'],
-                        shell=False,
-                        creationflags=0x00000008,  # DETACHED_PROCESS
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    del cleanup_proc  # Release Popen handle — process runs detached
-
-                    logging.debug("Installer will handle service restart automatically")
-                    logging.debug("Recovery watchdog will attempt restart if service doesn't come back")
-                    logging.debug("="*60)
-
-                    return "Self-update initiated via Task Scheduler"
-
-                except Exception as e:
-                    error_msg = f"Error initiating update: {str(e)}"
-                    logging.error(error_msg)
-                    logging.exception("Update initiation failed")
-                    # Clean up marker on failure so we don't block future updates
-                    try:
-                        if os.path.exists(update_marker_path):
-                            os.remove(update_marker_path)
-                    except OSError as marker_err:
-                        logging.warning(f"Could not remove update marker: {marker_err}")
-                    return error_msg
+                return self._handle_update_owlette(cmd_id, cmd_data)
 
             elif cmd_type == 'cancel_installation':
                 installer_name = cmd_data.get('installer_name')
@@ -5306,6 +5399,55 @@ class OwletteService:
             logging.error(error_msg, exc_info=True)
             return error_msg
 
+    def _revert_stale_display_sentinel(self):
+        """Revert a display apply whose watchdog thread did not survive.
+
+        A sentinel present at startup means the previous watchdog thread is
+        dead, so revert immediately regardless of deadline — an
+        unacknowledged apply must never survive.
+        """
+        # Ahead of the import rather than behind it: display_manager is
+        # Windows-only and never ported, and off Windows the import alone
+        # raises, which the `except` below reports as a failed check in the
+        # log on every single service start.
+        if sys.platform != 'win32':
+            return
+
+        try:
+            import display_manager
+
+            sentinel_path = shared_utils.get_data_path('.display_revert_pending')
+            if os.path.exists(sentinel_path):
+                logging.warning(
+                    f"Found stale display revert sentinel at {sentinel_path} — "
+                    "previous apply did not complete cleanly, reverting"
+                )
+                apply_revert = getattr(display_manager, 'apply_revert_from_sentinel', None)
+                if callable(apply_revert):
+                    try:
+                        # Pass firebase_client so the no-console-session deferral
+                        # path (Wave 5) can emit `display_revert_deferred`.
+                        result = apply_revert(firebase_client=self.firebase_client)
+                        logging.info(f"Display revert from sentinel: {result}")
+                    except Exception as revert_err:
+                        logging.error(f"Display revert from sentinel failed: {revert_err}")
+                        # Still try to delete the sentinel so we don't loop on next start.
+                        try:
+                            os.remove(sentinel_path)
+                        except OSError as rm_err:
+                            logging.warning(f"Failed to delete stale display sentinel: {rm_err}")
+                else:
+                    logging.warning(
+                        "display_manager.apply_revert_from_sentinel not available; "
+                        "deleting sentinel without revert"
+                    )
+                    try:
+                        os.remove(sentinel_path)
+                    except OSError as rm_err:
+                        logging.warning(f"Failed to delete stale display sentinel: {rm_err}")
+        except Exception as e:
+            logging.warning(f"Display sentinel check failed: {e}")
+
     def _check_display_topology(self):
         """Snapshot the current display topology and log changes.
 
@@ -5324,9 +5466,17 @@ class OwletteService:
         finishes even if the operator toggled ``displays.enabled`` off after
         the original apply.
         """
+        # Ahead of the imports, not behind the kill switch with everything
+        # else: display_manager is Windows-only and never ported, and the
+        # import alone would log a warning on every tick that no switch here
+        # can silence.
+        if sys.platform != 'win32':
+            return
+
         try:
             import display_manager
             import nvapi_display
+            import win32ts
 
             # Retry a deferred startup revert once a console session appears;
             # both probes are cheap.
@@ -6319,13 +6469,9 @@ class OwletteService:
         # 5. Issue OS shutdown.
         self._shutting_down = True
         try:
-            subprocess.run(
-                [
-                    'shutdown', '/r',
-                    '/t', str(REBOOT_OS_COUNTDOWN_SECONDS),
-                    '/c', 'Owlette scheduled reboot — cancellable from dashboard'
-                ],
-                check=True, timeout=15
+            osadapter.reboot(
+                REBOOT_OS_COUNTDOWN_SECONDS,
+                'Owlette scheduled reboot — cancellable from dashboard',
             )
             logging.info(
                 f"Scheduled reboot command issued ({REBOOT_OS_COUNTDOWN_SECONDS}s OS countdown)"
@@ -6434,7 +6580,12 @@ class OwletteService:
         return self._now_in_local_tz().date().isoformat()
 
     def _clean_shutdown_in_event_log(self, window_start, window_end):
-        """True if Windows recorded an orderly shutdown in the given epoch window.
+        """Whether the OS recorded an orderly shutdown in the given epoch window.
+
+        Three answers, not two: True with a record, False with none, and None
+        where this OS keeps no record the agent can read. Without a source,
+        an absent record is the absence of evidence rather than evidence of a
+        crash, and the classifier must not report one.
 
         EventID 1074 (User32 — a shutdown was initiated, by whom and why) and
         6006 (the event log service stopped) are the OS's own record of a clean
@@ -6448,6 +6599,8 @@ class OwletteService:
         Bounded subprocess, and any failure or timeout means NO evidence: an
         unexpected reboot must never be explained away by a broken query.
         """
+        if sys.platform != 'win32':
+            return None
         if window_end <= window_start:
             return False
 
@@ -6545,24 +6698,37 @@ class OwletteService:
                         f'boot detected after clean shutdown signal, '
                         f'last alive {gap}s before boot'
                     )
-                elif last_alive > 0 and self._clean_shutdown_in_event_log(
-                        last_alive - SHUTDOWN_EVIDENCE_LEAD_SECONDS,
-                        last_alive + SHUTDOWN_EVIDENCE_TRAIL_SECONDS):
-                    # Same verdict as intent=='external_clean' above, reached the
-                    # other way: the agent lost the race to write its own signal,
-                    # but Windows kept the receipt.
-                    action = 'external_reboot'
-                    details = (
-                        f'clean shutdown corroborated by Windows event log (1074/6006); '
-                        f'agent captured no shutdown signal, '
-                        f'last alive {gap}s before boot'
-                    )
                 else:
-                    action = 'unexpected_reboot'
-                    details = (
-                        f'boot detected with no shutdown signal, '
-                        f'last alive {gap}s before boot'
-                    )
+                    corroborated = self._clean_shutdown_in_event_log(
+                        last_alive - SHUTDOWN_EVIDENCE_LEAD_SECONDS,
+                        last_alive + SHUTDOWN_EVIDENCE_TRAIL_SECONDS,
+                    ) if last_alive > 0 else False
+                    if corroborated is None:
+                        # No record to consult on this platform, so nothing
+                        # distinguishes an orderly restart from a crash —
+                        # reporting one would warn on every clean POSIX boot.
+                        logging.info(
+                            f"Session classifier: boot with no shutdown signal and "
+                            f"no corroboration source on this platform — silent "
+                            f"(last alive {gap}s before boot)"
+                        )
+                        return
+                    if corroborated:
+                        # Same verdict as intent=='external_clean' above, reached
+                        # the other way: the agent lost the race to write its own
+                        # signal, but Windows kept the receipt.
+                        action = 'external_reboot'
+                        details = (
+                            f'clean shutdown corroborated by Windows event log (1074/6006); '
+                            f'agent captured no shutdown signal, '
+                            f'last alive {gap}s before boot'
+                        )
+                    else:
+                        action = 'unexpected_reboot'
+                        details = (
+                            f'boot detected with no shutdown signal, '
+                            f'last alive {gap}s before boot'
+                        )
                 logging.warning(f"Session classifier: {action} — {details}")
                 self._pending_anomaly_event = (action, details)
             else:
@@ -6680,7 +6846,8 @@ class OwletteService:
                 logging.debug(f"session_state.set_intent failed in manual reboot: {e}")
             target_reboot_at_unix = int(
                 (datetime.datetime.now(datetime.timezone.utc)
-                 + datetime.timedelta(seconds=30)).timestamp()
+                 + datetime.timedelta(
+                     seconds=REBOOT_OS_COUNTDOWN_SECONDS)).timestamp()
             )
             try:
                 self.firebase_client.set_machine_flags({
@@ -6696,13 +6863,14 @@ class OwletteService:
                     f"Failed to announce manual reboot to Firestore (proceeding anyway): {flag_err}"
                 )
 
-            # Schedule reboot with 30-second delay (gives agent time to complete Firestore writes)
-            subprocess.run(
-                ['shutdown', '/r', '/t', '30', '/c', 'owlette remote reboot requested'],
-                check=True, timeout=15
-            )
+            # The pill's countdown and the OS's are the same constant:
+            # whole minutes is the coarsest grain a platform schedules on
+            # (the Linux arm rounds up and never rests below one), so a
+            # shorter announcement reaches zero before the machine goes.
+            osadapter.reboot(
+                REBOOT_OS_COUNTDOWN_SECONDS, 'owlette remote reboot requested')
 
-            return "Reboot scheduled in 30 seconds"
+            return f"Reboot scheduled in {REBOOT_OS_COUNTDOWN_SECONDS} seconds"
         except Exception as e:
             return f"Reboot failed: {str(e)}"
 
@@ -6722,7 +6890,8 @@ class OwletteService:
                 logging.debug(f"session_state.set_intent failed in manual shutdown: {e}")
             target_shutdown_at_unix = int(
                 (datetime.datetime.now(datetime.timezone.utc)
-                 + datetime.timedelta(seconds=30)).timestamp()
+                 + datetime.timedelta(
+                     seconds=REBOOT_OS_COUNTDOWN_SECONDS)).timestamp()
             )
             try:
                 self.firebase_client.set_machine_flags({
@@ -6736,26 +6905,24 @@ class OwletteService:
                     f"Failed to announce manual shutdown to Firestore (proceeding anyway): {flag_err}"
                 )
 
-            subprocess.run(
-                ['shutdown', '/s', '/t', '30', '/c', 'owlette remote shutdown requested'],
-                check=True, timeout=15
-            )
+            osadapter.shutdown(
+                REBOOT_OS_COUNTDOWN_SECONDS,
+                'owlette remote shutdown requested')
 
-            return "Shutdown scheduled in 30 seconds"
+            return f"Shutdown scheduled in {REBOOT_OS_COUNTDOWN_SECONDS} seconds"
         except Exception as e:
             return f"Shutdown failed: {str(e)}"
 
     def _handle_cancel_reboot(self, command_data):
         """Cancel a pending reboot/shutdown.
 
-        Aborts the OS-level shutdown via `shutdown /a`, clears all in-flight
+        Aborts the OS-level shutdown through the adapter, clears all in-flight
         reboot state both locally and in Firestore, and — critically — stamps
         lastFiredByEntry for any in-progress scheduled-reboot attempt so the
         same entry cannot re-fire today on the next scheduler tick.
         """
         try:
-            cancel_result = subprocess.run(['shutdown', '/a'], capture_output=True, timeout=15)
-            os_cancel_ok = (cancel_result.returncode == 0)
+            os_cancel_ok = osadapter.cancel_reboot()
 
             self._shutting_down = False
             self._reboot_attempt_started_monotonic = None
@@ -6797,7 +6964,7 @@ class OwletteService:
                     logging.warning(f"Failed to clear reboot flags on cancel: {e}")
 
             if os_cancel_ok:
-                # Only on a successful `shutdown /a`: if the OS already committed,
+                # Only on a cancel the OS accepted: if it already committed,
                 # the intent must survive so the reboot still classifies as
                 # planned.
                 try:
@@ -6807,7 +6974,7 @@ class OwletteService:
                 return "Reboot/shutdown cancelled"
             return "No pending OS reboot to cancel (state cleared)"
         except subprocess.TimeoutExpired:
-            return "Cancel timed out (shutdown /a hung)"
+            return "Cancel timed out (the OS cancel hung)"
 
     def _handle_dismiss_reboot_pending(self, command_data):
         """Dismiss a reboot pending prompt and reset relaunch counters."""
@@ -7169,6 +7336,367 @@ class OwletteService:
                     pass
             logging.info("Live view loop ended")
 
+    def _handle_update_owlette(self, cmd_id, cmd_data):
+        """Accept a self-update and hand the install to something that outlives us.
+
+        The installer stops the agent, so it never runs as a child of this
+        process: Windows hands it to Task Scheduler, POSIX to a transient
+        systemd unit or a launchd job. Off Windows the download and the package
+        manager's own pre-check run on a worker as well - update_owlette shares
+        the slow-command lane with every install and roost job, and an apt-get
+        waiting on a held dpkg lock would hold all of them behind it. That arm
+        answers COMMAND_DEFERRED: the worker outlives this call, so the
+        terminal status is the worker's to write once the handoff resolves.
+        """
+        installer_url = cmd_data.get('installer_url')
+        expected_sha256 = cmd_data.get('checksum_sha256')
+
+        target_version = cmd_data.get('target_version')
+        if not target_version:
+            version_match = re.search(r'v(\d+\.\d+\.\d+)', installer_url or '')
+            target_version = version_match.group(1) if version_match else 'unknown'
+
+        if not installer_url:
+            return "Error: No installer URL provided for update"
+
+        # ANTI-FRAGILE: Require checksum for self-updates (supply chain protection)
+        if not expected_sha256:
+            return "Error: No checksum provided for self-update - refusing to install unverified binary"
+
+        # ANTI-FRAGILE: Idempotency guard - prevent concurrent update execution
+        in_progress = self._update_already_in_progress()
+        if in_progress:
+            return in_progress
+
+        logging.info("="*60)
+        logging.info("OWLETTE SELF-UPDATE INITIATED")
+        logging.info(f"Current version: {shared_utils.APP_VERSION}")
+        logging.info(f"Target version: {target_version}")
+        logging.info("="*60)
+        logging.debug(f"Installer URL: {installer_url}")
+        logging.debug(f"Checksum: {expected_sha256[:16]}...")
+
+        os_family = shared_utils.get_os_family_arch()[0]
+
+        # Before the download, not after it: off Windows the command lane is
+        # released the moment this returns, so a marker written once the
+        # installer is on disk would leave the guard above covering nothing
+        # for the minutes a download takes.
+        self._write_update_marker(cmd_id, cmd_data, target_version)
+
+        if os_family == 'windows':
+            return self._run_self_update(cmd_id, cmd_data, target_version, os_family)
+
+        threading.Thread(
+            target=self._self_update_worker,
+            args=(cmd_id, cmd_data, target_version, os_family),
+            name='self-update',
+            daemon=True,
+        ).start()
+        return COMMAND_DEFERRED
+
+    def _update_already_in_progress(self):
+        """The refusal for a self-update that is already running, else None.
+
+        A marker older than ten minutes belongs to an update that never
+        finished; it must not block the retry.
+        """
+        marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
+        if not os.path.exists(marker_path):
+            return None
+
+        try:
+            with open(marker_path, 'r') as f:
+                existing_marker = json.load(f)
+            marker_time = datetime.datetime.strptime(
+                existing_marker.get('started_at', ''), '%Y-%m-%d %H:%M:%S')
+            age_minutes = (datetime.datetime.now() - marker_time).total_seconds() / 60
+        except Exception as marker_err:
+            logging.warning(f"Could not read existing update marker, proceeding: {marker_err}")
+            return None
+
+        if age_minutes < 10:
+            logging.warning(
+                f"Update already in progress (started {age_minutes:.1f}m ago) - "
+                f"rejecting duplicate command")
+            return f"Update already in progress (started {age_minutes:.1f}m ago)"
+
+        logging.warning(
+            f"Stale update marker found ({age_minutes:.1f}m old) - proceeding with new update")
+        return None
+
+    def _self_update_worker(self, cmd_id, cmd_data, target_version, os_family):
+        """Run the self-update off the command lane and write its own result.
+
+        The lane was released the moment the update was accepted, so the
+        terminal status is this thread's to write: an install that never
+        started leaves this version running, and nothing else would ever say
+        so. One that does start reports again from the next boot, through the
+        marker.
+        """
+        result = self._run_self_update(cmd_id, cmd_data, target_version, os_family)
+        if result.startswith('Error:'):
+            logging.error(result)
+        else:
+            logging.info(result)
+
+        if self.firebase_client:
+            try:
+                self.firebase_client.finish_command(cmd_id, cmd_data, result)
+            except Exception as e:
+                logging.error(f"Could not report the self-update result: {e}")
+
+    def _run_self_update(self, cmd_id, cmd_data, target_version, os_family):
+        """Download, verify and hand off the installer; returns the result string."""
+        installer_url = cmd_data.get('installer_url')
+        expected_sha256 = cmd_data.get('checksum_sha256')
+        deployment_id = cmd_data.get('deployment_id')
+        update_marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
+
+        try:
+            self._check_update_disk_space()
+
+            if self.firebase_client:
+                self.firebase_client.update_command_progress(cmd_id, 'downloading', deployment_id)
+
+            # Our own staging dir, not the system temp one - security
+            # software blocks execution from there. The name carries the
+            # family's extension: apt-get refuses a package that is not
+            # called `.deb`.
+            temp_installer_path = os.path.join(
+                self._update_staging_dir(),
+                installer_utils.UPDATE_ARTIFACT_NAMES[os_family])
+
+            logging.info("Downloading installer (3 retries with exponential backoff)...")
+            download_success, actual_path = installer_utils.download_file(
+                installer_url,
+                temp_installer_path,
+                progress_callback=None,  # Progress already tracked via Firestore status
+                max_retries=3,
+                connect_timeout=30,
+                read_timeout=600
+            )
+
+            if not download_success:
+                raise Exception(f"Failed to download installer after 3 retries from {installer_url}")
+
+            temp_installer_path = actual_path
+            logging.debug(f"Installer downloaded to: {temp_installer_path}")
+
+            # The size floor and this family's magic, before anything is run:
+            # MACHINE_EXEC_COMMAND is held by the cortex and talon actors too,
+            # so a correctly-checksummed package for another OS would otherwise
+            # be a way to brick a kiosk.
+            installer_utils.verify_artifact_family(temp_installer_path, os_family)
+
+            # SHA256 checksum verification (MANDATORY for self-updates)
+            logging.info("Verifying installer checksum...")
+            if not installer_utils.verify_checksum(temp_installer_path, expected_sha256):
+                installer_utils.cleanup_installer(temp_installer_path, force=True)
+                raise Exception("Checksum verification FAILED - installer may be corrupted or tampered. Update aborted.")
+            logging.info("[OK] Checksum verification passed")
+
+            logging.info("Installer verified successfully")
+
+            # Rewritten now that there is a verified installer to name,
+            # which also starts the ten-minute staleness clock at the handoff
+            # rather than at the download the guard already covers.
+            self._write_update_marker(
+                cmd_id, cmd_data, target_version, temp_installer_path)
+
+            if self.firebase_client:
+                self.firebase_client.update_command_progress(cmd_id, 'installing', deployment_id)
+
+            if os_family == 'windows':
+                return self._start_windows_update(temp_installer_path)
+            return self._start_posix_update(
+                temp_installer_path, os_family, update_marker_path)
+
+        except Exception as e:
+            # The "Error:" prefix is the whole command lane's failure
+            # predicate, worker included - without it a refused artifact or a
+            # failed checksum reads as a completed update.
+            error_msg = f"Error: initiating update failed: {str(e)}"
+            logging.error(error_msg)
+            logging.exception("Update initiation failed")
+            # Clean up marker on failure so we don't block future updates
+            self._clear_update_marker(update_marker_path)
+            return error_msg
+
+    def _write_update_marker(self, cmd_id, cmd_data, target_version,
+                             installer_path=None):
+        """Record the update in progress, for the guard and for the next start.
+
+        Written before the download so the idempotency guard brackets the whole
+        operation, and again once there is a verified installer to name. It
+        survives the restart the install causes; _check_update_status() reads
+        it afterwards to report success or failure against this command.
+        """
+        marker = {
+            'started_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'old_version': shared_utils.APP_VERSION,
+            'target_version': target_version,
+            'installer_url': cmd_data.get('installer_url'),
+            'command_id': cmd_id,
+            'deployment_id': cmd_data.get('deployment_id'),
+        }
+        if installer_path:
+            marker['installer_path'] = installer_path
+
+        marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
+        with open(marker_path, 'w') as f:
+            json.dump(marker, f, indent=2)
+        logging.debug(f"Update marker written: {marker_path}")
+
+    def _update_staging_dir(self):
+        """Where the update artifact is downloaded, verified and installed from.
+
+        Under `cache/`, which decision 4's mode table keeps closed to the
+        agent's group, and not the 0770 `tmp/` the desktop app shares: the
+        package is checked by name and then handed to a root install by name,
+        so anything that can write that directory - or rename it aside - can
+        swap the artifact between the checksum and the install.
+        """
+        staging = shared_utils.get_data_path('cache/update')
+        os.makedirs(staging, exist_ok=True)
+        os.chmod(staging, 0o700)
+        return staging
+
+    def _check_update_disk_space(self):
+        """Refuse an update the disk cannot hold.
+
+        ~100MB installer plus ~200MB of extraction, with the old install still
+        on disk.
+        """
+        import shutil
+
+        data_root = shared_utils.get_data_path()
+        drive = os.path.splitdrive(data_root)[0]
+        target = drive + os.sep if drive else data_root
+        free_mb = shutil.disk_usage(target).free / (1024 * 1024)
+        logging.debug(f"Disk space on {target}: {free_mb:.0f} MB free")
+        if free_mb < 500:
+            raise Exception(
+                f"Insufficient disk space: {free_mb:.0f} MB free, need at least "
+                f"500 MB for safe update")
+
+    def _clear_update_marker(self, update_marker_path):
+        """Remove the in-progress marker; one left behind blocks every later update."""
+        try:
+            if os.path.exists(update_marker_path):
+                os.remove(update_marker_path)
+        except OSError as marker_err:
+            logging.warning(f"Could not remove update marker: {marker_err}")
+
+    def _start_posix_update(self, installer_path, os_family, update_marker_path):
+        """Hand the package to the init system, or leave this version running.
+
+        A refusal takes the marker with it: the installed version is still the
+        one running, so leaving it would have the next start report a failed
+        update and would block the retry the refusal is asking for.
+        """
+        started, detail = installer_utils.start_self_update(installer_path, os_family)
+        if not started:
+            self._clear_update_marker(update_marker_path)
+            return f"Error: {detail}"
+        return f"Self-update initiated: {detail}"
+
+    def _start_windows_update(self, temp_installer_path):
+        """Hand the installer to Task Scheduler and let it stop the service."""
+        # Task Scheduler, so the installer survives Inno Setup killing
+        # the service.
+        log_path = shared_utils.get_data_path('logs/installer_update.log')
+        # Inno Setup APPENDS to /LOG and every update refreshes the
+        # mtime, so cleanup_old_logs never ages it out. Rotate here,
+        # the last moment before the installer opens it.
+        shared_utils.rotate_log_if_oversized(log_path)
+        silent_flags = f'/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /ALLUSERS /LOG="{log_path}"'
+        task_name = f"OwletteUpdate_{int(time.time())}"
+
+        logging.debug(f"Creating scheduled task: {task_name}")
+        logging.debug(f"Installer flags: {silent_flags}")
+        logging.debug(f"Installer log will be written to: {log_path}")
+
+        schtasks_cmd = [
+            'schtasks',
+            '/Create',
+            '/TN', task_name,
+            '/TR', f'"{temp_installer_path}" {silent_flags}',
+            '/SC', 'ONCE',
+            '/ST', '00:00',
+            '/RU', 'SYSTEM',
+            '/RL', 'HIGHEST',
+            '/F'
+        ]
+
+        result = subprocess.run(
+            schtasks_cmd,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode != 0:
+            raise Exception(f"Failed to create scheduled task: {result.stderr}")
+
+        logging.debug(f"Scheduled task created: {task_name}")
+
+        run_result = subprocess.run(
+            ['schtasks', '/Run', '/TN', task_name],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if run_result.returncode != 0:
+            logging.warning(f"Task run command returned: {run_result.stderr}")
+        else:
+            logging.info("Installer task started successfully")
+
+        # Watchdog: after 5 min, `net start` the service if the update
+        # left it down. Start-Sleep keeps the delay non-interactive.
+        recovery_task_name = f"OwletteRecovery_{int(time.time())}"
+        recovery_cmd = (
+            f'powershell -NoProfile -Command "Start-Sleep 300" && '
+            f'sc query OwletteService | findstr "RUNNING" > nul || '
+            f'(net start OwletteService & '
+            f'schtasks /Delete /TN "{recovery_task_name}" /F)'
+        )
+        try:
+            subprocess.run(
+                ['schtasks', '/Create',
+                 '/TN', recovery_task_name,
+                 '/TR', f'cmd /c {recovery_cmd}',
+                 '/SC', 'ONCE', '/ST', '00:00',
+                 '/RU', 'SYSTEM', '/RL', 'HIGHEST', '/F'],
+                capture_output=True, text=True, timeout=10
+            )
+            subprocess.run(
+                ['schtasks', '/Run', '/TN', recovery_task_name],
+                capture_output=True, text=True, timeout=10
+            )
+            logging.info(f"Recovery watchdog scheduled: {recovery_task_name} (will check service in ~5 min)")
+        except Exception as recovery_err:
+            logging.warning(f"Failed to create recovery watchdog (non-fatal): {recovery_err}")
+
+        cleanup_proc = subprocess.Popen(
+            ['cmd', '/c',
+             f'powershell -NoProfile -Command "Start-Sleep 300" && '
+             f'schtasks /Delete /TN "{task_name}" /F && '
+             f'schtasks /Delete /TN "{recovery_task_name}" /F'],
+            shell=False,
+            creationflags=0x00000008,  # DETACHED_PROCESS
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        del cleanup_proc  # Release Popen handle — process runs detached
+
+        logging.debug("Installer will handle service restart automatically")
+        logging.debug("Recovery watchdog will attempt restart if service doesn't come back")
+        logging.debug("="*60)
+
+        return "Self-update initiated via Task Scheduler"
+
     def _check_update_status(self):
         """
         Check if a self-update was in progress when the service started.
@@ -7512,19 +8040,18 @@ class OwletteService:
 
     def main(self):
 
-        self.startup_info = win32process.STARTUPINFO()
-        self.startup_info.dwFlags = win32process.STARTF_USESHOWWINDOW
-
-        # LocalSystem is assigned these but the child can inherit them disabled,
-        # so enable them before the first token acquisition.
-        self._enable_privileges()
-
-        # Refreshed before every launch via _refresh_user_token() to survive
-        # logout/login, RDP and user switches.
+        # The token ladder is Windows': off Windows the adapter spawns into
+        # the console user's session and there is no token to hold.
         self.console_user_token = None
         self.environment = None
         self._last_logged_session_id = None
-        self._refresh_user_token()
+        if sys.platform == 'win32':
+            # LocalSystem is assigned these but the child can inherit them
+            # disabled, so enable them before the first token acquisition.
+            self._enable_privileges()
+            # Refreshed before every launch via _refresh_user_token() to
+            # survive logout/login, RDP and user switches.
+            self._refresh_user_token()
 
         # Tray icon launch tracking — avoid thrashing (crash-relaunch loops)
         self._tray_last_launch_time = 0
@@ -7701,43 +8228,7 @@ class OwletteService:
 
         self._detect_reboot_success_on_startup()
 
-        # A sentinel present at startup means the previous watchdog thread is
-        # dead, so revert immediately regardless of deadline — an unacknowledged
-        # apply must never survive.
-        try:
-            import display_manager
-
-            sentinel_path = shared_utils.get_data_path('.display_revert_pending')
-            if os.path.exists(sentinel_path):
-                logging.warning(
-                    f"Found stale display revert sentinel at {sentinel_path} — "
-                    "previous apply did not complete cleanly, reverting"
-                )
-                apply_revert = getattr(display_manager, 'apply_revert_from_sentinel', None)
-                if callable(apply_revert):
-                    try:
-                        # Pass firebase_client so the no-console-session deferral
-                        # path (Wave 5) can emit `display_revert_deferred`.
-                        result = apply_revert(firebase_client=self.firebase_client)
-                        logging.info(f"Display revert from sentinel: {result}")
-                    except Exception as revert_err:
-                        logging.error(f"Display revert from sentinel failed: {revert_err}")
-                        # Still try to delete the sentinel so we don't loop on next start.
-                        try:
-                            os.remove(sentinel_path)
-                        except OSError as rm_err:
-                            logging.warning(f"Failed to delete stale display sentinel: {rm_err}")
-                else:
-                    logging.warning(
-                        "display_manager.apply_revert_from_sentinel not available; "
-                        "deleting sentinel without revert"
-                    )
-                    try:
-                        os.remove(sentinel_path)
-                    except OSError as rm_err:
-                        logging.warning(f"Failed to delete stale display sentinel: {rm_err}")
-        except Exception as e:
-            logging.warning(f"Display sentinel check failed: {e}")
+        self._revert_stale_display_sentinel()
 
         cleanup_counter = 0  # Counter for periodic cleanup
         log_cleanup_counter = 0  # Counter for log cleanup (runs less frequently)
@@ -7780,10 +8271,16 @@ class OwletteService:
                 # "quit owlette" is an elevated SCM stop. A flag was tried and
                 # failed — the supervisor relaunches any non-clean exit.
 
+                # One seat lookup per iteration at most, never one from a
+                # previous tick, and answered from on this thread alone
+                # (see _seat_absent).
+                self._seat_probe = None
+                self._seat_probe_thread = threading.get_ident()
+
                 # Exit 42 makes the host relaunch us; exit 0 would stop the
                 # service (agent/host/src/supervisor.rs).
                 restart_flag = shared_utils.get_data_path('tmp/restart.flag')
-                if os.path.exists(restart_flag):
+                if self._restart_requested(restart_flag):
                     logging.info("Restart flag detected — exiting for a host restart")
                     try:
                         os.remove(restart_flag)
@@ -7811,6 +8308,8 @@ class OwletteService:
                 self._try_launch_cortex()
 
                 self._process_cortex_ipc_commands()
+
+                self._process_privileged_requests()
 
                 # A plain attribute read — the client refreshes it every 900s on
                 # the metrics thread, so nothing here blocks the 5s tick. Without

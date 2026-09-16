@@ -215,8 +215,12 @@ if __name__ == '__main__':
             logging.error(f"Failed to wire the connection status listener: {e}")
 
         signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+        # SIGTERM is the stop launchd and systemd deliver; SIGBREAK is a
+        # Windows console event, and the attribute itself is absent
+        # elsewhere, so reading it has to happen behind the guard.
         signal.signal(signal.SIGTERM, signal_handler)  # Termination request
-        signal.signal(signal.SIGBREAK, signal_handler) # Ctrl+Break (Windows)
+        if sys.platform == 'win32':
+            signal.signal(signal.SIGBREAK, signal_handler)  # Ctrl+Break
         logging.info("Signal handlers registered for graceful shutdown")
 
         # a Windows console stop is a control event, not a POSIX signal

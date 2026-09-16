@@ -25,6 +25,7 @@ import config_sync
 from auth_manager import AuthManager, AuthenticationError, TokenRefreshError
 from firestore_rest_client import FirestoreRestClient, SERVER_TIMESTAMP, DELETE_FIELD, timestamp_to_ms
 
+from command_router import COMMAND_DEFERRED
 from connection_manager import ConnectionManager, ConnectionState, ConnectionEvent
 
 # Per-request cap once shutdown starts. Windows gives roughly 5s at OS shutdown,
@@ -1372,9 +1373,6 @@ class FirebaseClient:
         online/lastHeartbeat. Errors are swallowed — heartbeat must not crash.
         Returns the profile, the cached one when rate-limited, or None.
         """
-        import display_manager
-        import nvapi_display
-
         # Kill switch, checked ahead of the rate-limit gate so a toggle takes
         # effect immediately. Fail-open on unreadable config (first boot).
         try:
@@ -1382,6 +1380,18 @@ class FirebaseClient:
                 return self._cached_display_profile
         except Exception:
             pass
+
+        # Behind the kill switch and inside a try, like every other lazy
+        # display import: the module is Windows-only and never ported, so
+        # importing it above the switch takes the heartbeat down elsewhere.
+        # Not ImportError - display_manager asserts the Windows x64 ABI while
+        # it builds its structures, so off Windows it is an AssertionError.
+        try:
+            import display_manager
+            import nvapi_display
+        except Exception as e:
+            self.logger.debug(f"Display enumeration is not available here: {e}")
+            return self._cached_display_profile
 
         now = time.monotonic()
         if not force and self._cached_display_profile is not None and (now - self._last_display_check) < self._DISPLAY_CHECK_INTERVAL:
@@ -1626,42 +1636,13 @@ class FirebaseClient:
             if self.command_callback:
                 result = self.command_callback(cmd_id, cmd_data)
 
-                is_error = isinstance(result, str) and result.startswith("Error:")
+                if result is COMMAND_DEFERRED:
+                    # The handler's own thread is still working and owns the
+                    # terminal write; marking the command here would put a
+                    # completed status in front of the progress that follows.
+                    return
 
-                if cmd_id in self._cancelled_commands:
-                    # cancel_mcp_tool already wrote the terminal 'cancelled' entry
-                    # — re-assert it, don't clobber it with the dead subprocess's
-                    # completed/failed result.
-                    self._cancelled_commands.discard(cmd_id)
-                    self._mark_command_cancelled(cmd_id, 'cancelled by user', deployment_id, cmd_type)
-                elif cmd_type == 'cancel_installation':
-                    self._mark_command_cancelled(cmd_id, result, deployment_id, cmd_type)
-                elif is_error:
-                    self._mark_command_failed(cmd_id, result, deployment_id, cmd_type)
-                else:
-                    self._mark_command_completed(cmd_id, result, deployment_id, cmd_type)
-
-                # Deployment lifecycle → site logs (audit trail)
-                deployment_cmd_types = ('install_software', 'uninstall_software', 'update_owlette')
-                if cmd_type in deployment_cmd_types and deployment_id:
-                    software_name = cmd_data.get('installer_name') or cmd_data.get('software_name') or cmd_type
-                    if cmd_type == 'cancel_installation':
-                        self.log_event('deployment_cancelled', 'warning', software_name,
-                                       f"Deployment {deployment_id} cancelled: {result}")
-                    elif is_error:
-                        self.log_event('deployment_failed', 'error', software_name,
-                                       f"Deployment {deployment_id} failed: {result}")
-                    else:
-                        self.log_event('deployment_completed', 'info', software_name,
-                                       f"Deployment {deployment_id}: {result}")
-
-                # Push metrics now so the dashboard reflects the state change
-                try:
-                    metrics = shared_utils.get_system_metrics()
-                    self._upload_metrics(metrics)
-                    self.logger.debug(f"Immediate metrics push after command {cmd_id}")
-                except Exception as me:
-                    self.logger.warning(f"Post-command metrics push failed: {me}")
+                self.finish_command(cmd_id, cmd_data, result)
             else:
                 self.logger.warning(f"No command callback registered, ignoring command {cmd_id}")
 
@@ -1680,6 +1661,53 @@ class FirebaseClient:
                 software_name = cmd_data.get('installer_name') or cmd_data.get('software_name') or cmd_type
                 self.log_event('deployment_failed', 'error', software_name,
                                f"Deployment {dep_id} failed: {e}")
+
+    def finish_command(self, cmd_id: str, cmd_data: Dict[str, Any], result: Any):
+        """Write a command's terminal status, its audit row and a fresh metric.
+
+        The end of _execute_command, reachable on its own so a handler that
+        returned COMMAND_DEFERRED can call it from the thread that finishes the
+        work - the self-update off Windows, which hands the install to the init
+        system minutes after the lane was released.
+        """
+        cmd_type = cmd_data.get('type')
+        deployment_id = cmd_data.get('deployment_id')
+        is_error = isinstance(result, str) and result.startswith("Error:")
+
+        if cmd_id in self._cancelled_commands:
+            # cancel_mcp_tool already wrote the terminal 'cancelled' entry
+            # — re-assert it, don't clobber it with the dead subprocess's
+            # completed/failed result.
+            self._cancelled_commands.discard(cmd_id)
+            self._mark_command_cancelled(cmd_id, 'cancelled by user', deployment_id, cmd_type)
+        elif cmd_type == 'cancel_installation':
+            self._mark_command_cancelled(cmd_id, result, deployment_id, cmd_type)
+        elif is_error:
+            self._mark_command_failed(cmd_id, result, deployment_id, cmd_type)
+        else:
+            self._mark_command_completed(cmd_id, result, deployment_id, cmd_type)
+
+        # Deployment lifecycle → site logs (audit trail)
+        deployment_cmd_types = ('install_software', 'uninstall_software', 'update_owlette')
+        if cmd_type in deployment_cmd_types and deployment_id:
+            software_name = cmd_data.get('installer_name') or cmd_data.get('software_name') or cmd_type
+            if cmd_type == 'cancel_installation':
+                self.log_event('deployment_cancelled', 'warning', software_name,
+                               f"Deployment {deployment_id} cancelled: {result}")
+            elif is_error:
+                self.log_event('deployment_failed', 'error', software_name,
+                               f"Deployment {deployment_id} failed: {result}")
+            else:
+                self.log_event('deployment_completed', 'info', software_name,
+                               f"Deployment {deployment_id}: {result}")
+
+        # Push metrics now so the dashboard reflects the state change
+        try:
+            metrics = shared_utils.get_system_metrics()
+            self._upload_metrics(metrics)
+            self.logger.debug(f"Immediate metrics push after command {cmd_id}")
+        except Exception as me:
+            self.logger.warning(f"Post-command metrics push failed: {me}")
 
     def _handle_cancel_mcp_tool(self, cmd_data: Dict[str, Any]) -> str:
         """Cancel an in-flight mcp_tool_call subprocess (Cortex cancel button).
@@ -2346,9 +2374,15 @@ class FirebaseClient:
         )
 
     def set_reboot_pending(self, process_name, reason, timestamp):
-        """Write a reboot_pending object to the machine document when relaunch limit is exceeded."""
+        """Write a reboot_pending object to the machine document when relaunch limit is exceeded.
+
+        True when the row reached Firestore. Off Windows the relaunch gate
+        the escalation arms is cleared by a dashboard dismiss and nothing
+        else, so a caller that armed it on an unwritten row froze every
+        relaunch on the machine with nothing on screen to clear it.
+        """
         if not self.connected or not self.db:
-            return
+            return False
 
         try:
             machine_ref = self.db.collection('sites').document(self.site_id)\
@@ -2363,8 +2397,10 @@ class FirebaseClient:
                 }
             }, merge=True)
             self.logger.info(f"[FLAG] Reboot pending set for process: {process_name}")
+            return True
         except Exception as e:
             self.logger.error(f"Failed to set reboot pending: {e}")
+            return False
 
     def clear_reboot_pending(self):
         """Clear the reboot_pending flag on the machine document."""
@@ -2723,18 +2759,18 @@ class FirebaseClient:
 
     def _sync_software_inventory(self, force=False):
         """
-        Upload registry-detected software to
+        Upload the platform's installed-software inventory to
         sites/{site_id}/machines/{machine_id}/installed_software.
 
         force=True syncs even when the hash is unchanged (on-demand refresh).
         """
-        import registry_utils
+        import osadapter
 
         if not self.connected or not self.db:
             return
 
         try:
-            installed_software = registry_utils.get_installed_software()
+            installed_software = osadapter.installed_software()
 
             if not installed_software:
                 self.logger.debug("No installed software detected")

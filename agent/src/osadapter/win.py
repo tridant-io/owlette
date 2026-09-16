@@ -3,7 +3,7 @@
 Each operation routes to the implementation the agent already ships, with no
 behaviour change; the data root is the exception — the %PROGRAMDATA% lookup
 lives here, and shared_utils.get_data_path() reads it back through the
-package. The five operations OwletteService owns on Windows — the
+package. The four operations OwletteService owns on Windows — the
 user-session and managed-process work, which runs off the live service object
 and its token ladder — raise NotSupportedHere rather than duplicate it; no
 Windows call site routes through them.
@@ -78,11 +78,19 @@ def run_job(job: dict) -> dict:
     )
 
 
-def capture_screen(path: str) -> int:
-    """Not routed here: capture goes through the service's user-session executor."""
-    raise NotSupportedHere(
-        'capture_screen: screenshot_capture.capture_in_user_session captures '
-        'through the service'
+def capture_screen(monitor: int, *, executor, timeout_s: int) -> dict:
+    """Grab `monitor` in the console session, through the service's executor.
+
+    `executor` is OwletteService.execute_in_user_session: the service is
+    LocalSystem in session 0, where a grab returns a blank LocalSystem display,
+    so the code runs in the console user's session through CreateProcessAsUser.
+    It is handed back untouched — the executor's result dict is the operation's.
+    """
+    return executor(
+        'python',
+        _build_capture_code(monitor),
+        timeout=timeout_s,
+        trusted=True,
     )
 
 
@@ -165,8 +173,13 @@ def shutdown(delay: int, message: str | None = None) -> None:
 
 
 def cancel_reboot() -> bool:
-    """Abort a pending reboot or shutdown; True when Windows accepted the abort."""
-    result = subprocess.run(['shutdown', '/a'], capture_output=True, timeout=15)
+    """Abort a pending reboot or shutdown; True when Windows accepted the abort.
+
+    CREATE_NO_WINDOW for the reason `_issue_shutdown` carries it: this runs from
+    the same CLI the desktop app spawns without a console of its own.
+    """
+    result = subprocess.run(['shutdown', '/a'], capture_output=True, timeout=15,
+                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     return result.returncode == 0
 
 
@@ -203,6 +216,36 @@ def streamer_capable() -> bool:
     return True
 
 
+def _build_capture_code(monitor: int) -> str:
+    """Source for the user-session interpreter: mss grab -> raw PNG at
+    `<output_dir>/screenshot.png`, nothing else. No JPEG step here — that
+    interpreter often can't import PIL.
+
+    `output_dir` is injected into the namespace by session_exec.run_python.
+    Callers must pass `trusted=True` so unrestricted imports (mss) work.
+    """
+    import screenshot_capture
+
+    # Caller has already coerced `monitor` to an int, so this f-string can only
+    # substitute a number.
+    return f"""
+import os
+import mss
+from mss.tools import to_png
+
+with mss.mss() as sct:
+    mon_idx = {monitor} if {monitor} > 0 and {monitor} < len(sct.monitors) else 0
+    grabbed = sct.grab(sct.monitors[mon_idx])
+    png_bytes = to_png(grabbed.rgb, grabbed.size)
+    monitors_count = len(sct.monitors) - 1
+
+out_path = os.path.join(output_dir, {screenshot_capture.SCREENSHOT_FILENAME_PNG!r})
+with open(out_path, 'wb') as f:
+    f.write(png_bytes)
+print(f'monitors={{monitors_count}} size={{len(png_bytes)}}')
+"""
+
+
 def _machine_guid() -> str:
     """MachineGuid from the registry, falling back to uuid.getnode()."""
     try:
@@ -219,8 +262,14 @@ def _machine_guid() -> str:
 
 
 def _issue_shutdown(flag: str, delay: int, message: str | None) -> None:
-    """`shutdown /r|/s /t <delay> [/c <message>]`, raising when the OS refuses."""
+    """`shutdown /r|/s /t <delay> [/c <message>]`, raising when the OS refuses.
+
+    CREATE_NO_WINDOW because the desktop app spawns the CLI with no console of
+    its own: a console child left to allocate one flashes a window across the
+    kiosk display on the way out.
+    """
     command = ['shutdown', flag, '/t', str(int(delay))]
     if message:
         command += ['/c', message]
-    subprocess.run(command, check=True, timeout=15)
+    subprocess.run(command, check=True, timeout=15,
+                   creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

@@ -1,8 +1,8 @@
 """The split hoot tool surface: mcp_tools + tools_windows + tools_posix.
 
 From 3.4.0 the agent runs on three operating systems. The seventeen
-Windows-shaped handlers moved out of `mcp_tools` into `tools_windows`; six tools
-gained macOS and Linux backends (five in `tools_posix`, plus `run_command`,
+Windows-shaped handlers moved out of `mcp_tools` into `tools_windows`; seven
+tools gained macOS and Linux backends (six in `tools_posix`, plus `run_command`,
 which stays in the core because it is cancellable and reaches this platform
 through its allow-list); every other Windows-only tool refuses structurally
 rather than dying on a missing executable.
@@ -21,20 +21,21 @@ from types import SimpleNamespace
 import pytest
 
 import mcp_tools
+import osadapter
 import tools_posix
 
 
-# The tools whose only implementation is Windows: the twelve relocated ones,
+# The tools whose only implementation is Windows: the eleven relocated ones,
 # which the POSIX table simply does not carry, plus the two PowerShell shells
 # that stayed in the core and are dispatched on every platform.
 SHELLS = ('run_powershell', 'execute_script')
 DISPATCH_GATED = sorted(mcp_tools.WINDOWS_ONLY_TOOLS - set(SHELLS))
 
-# The five relocated tools with a POSIX backend. run_command is the sixth and
+# The six relocated tools with a POSIX backend. run_command is the seventh and
 # lives in mcp_tools.
 POSIX_BACKED = {
     'get_event_logs', 'get_service_status', 'check_pending_reboot',
-    'get_gpu_processes', 'manage_windows_service',
+    'show_notification', 'get_gpu_processes', 'manage_windows_service',
 }
 
 JOURNAL_LINES = (
@@ -169,13 +170,36 @@ def test_check_pending_reboot_shim_reaches_the_posix_arm(linux, monkeypatch):
     }
 
 
-def test_show_notification_shim_refuses_where_there_is_no_arm(linux):
-    """osadapter.notify's Windows arm calls this; POSIX notifications are the
-    desktop app's job (task 3.2), so the shim refuses rather than raises."""
-    result = mcp_tools._show_notification({'title': 'owlette', 'message': 'hi'}, None)
+def test_show_notification_hands_the_message_to_the_desktop_app(linux, monkeypatch):
+    """The pair is wired in opposite directions per platform: on Windows
+    osadapter.notify() calls this tool, and here the tool calls osadapter,
+    whose job seam is the only way a root daemon reaches a session.
 
-    assert result['error'] == 'unsupported_on_platform'
-    assert result['tool'] == 'show_notification'
+    Set into the package's namespace rather than through setattr: the
+    operations are served by a module __getattr__ that selects this machine's
+    arm, and reading one here — on a Windows box calling itself linux — would
+    import the POSIX arm's pwd and grp.
+    """
+    notified = []
+
+    def notify(title, body):
+        notified.append((title, body))
+        return {'status': 'sent'}
+
+    monkeypatch.setitem(osadapter.__dict__, 'notify', notify)
+
+    result = mcp_tools.execute_tool(
+        'show_notification', {'title': 'owlette', 'message': 'the projector is off'},
+    )
+
+    assert result == {'status': 'sent'}
+    assert notified == [('owlette', 'the projector is off')]
+
+
+def test_show_notification_needs_something_to_say(linux):
+    result = mcp_tools.execute_tool('show_notification', {'title': 'owlette'})
+
+    assert result['error'] == 'message is required'
 
 
 # ─── file tools: the allowed bases ──────────────────────────────────────────

@@ -18,8 +18,10 @@ not here: chunk download (sync_downloader), version fetch (sync_version), HTTP.
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
+import stat
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +57,34 @@ _WINDOWS_MAX_PATH = 260
 _PARTIAL_FILE_FLAGS = (
     os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)
+)
+
+# Whether a file's mode is a thing this platform has: on windows what a file
+# may do is its DACL, which _harden_acl sets.
+_HAS_FILE_MODES = os.name == 'posix'
+
+# The first bytes of what a POSIX system has to be allowed to execute: an
+# interpreter line, an ELF binary, and the Mach-O magics in both byte orders
+# (thin 32- and 64-bit, and the fat header). The v1 manifest has no mode field
+# — the browser uploader has no mode to send — so the content is the only
+# signal there is for whether a synced file is a program.
+_EXECUTABLE_MAGICS = (
+    b'#!', b'\x7fELF',
+    b'\xfe\xed\xfa\xce', b'\xce\xfa\xed\xfe',
+    b'\xfe\xed\xfa\xcf', b'\xcf\xfa\xed\xfe',
+    b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca',
+)
+_EXECUTABLE_MODE = 0o755
+_DATA_MODE = 0o644
+
+# Read and re-moded through one descriptor on the file itself: on POSIX the
+# folder around it belongs to the kiosk user by then, so a link swapped in after
+# the rename would otherwise take root's chmod somewhere else, and a fifo left
+# there would stall the sync thread in the open — O_NONBLOCK and the
+# regular-file check below are what refuse it.
+_MODE_READ_FLAGS = (
+    os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0)
 )
 
 
@@ -237,8 +267,10 @@ def _assemble_one(
     if resolved_target.exists():
         try:
             if resolved_target.stat().st_size == version_file.size:
-                # Re-harden even on skip: a re-sync is how stale DACLs and
-                # stale ownership get fixed, and it's one cheap syscall.
+                # Re-harden even on skip: a re-sync is how a stale DACL, a
+                # stale owner and a mode that did not take get fixed, and each
+                # is one cheap syscall.
+                _apply_file_mode(_long_path(str(resolved_target)))
                 _harden_acl(_long_path(str(resolved_target)))
                 _chown_to_interactive_user(_long_path(str(resolved_target)))
                 state.set_file_state(distribution_id, version_file.path, 'committed')
@@ -303,8 +335,10 @@ def _assemble_one(
             finally:
                 os.close(dir_fd)
 
-        # best-effort, one per OS: never fail the assembly over an ACL or an
-        # owner. _harden_acl is windows-only, the chown POSIX-only.
+        # best-effort, one per OS: never fail the assembly over a mode, an ACL
+        # or an owner. _harden_acl is windows-only, the mode and the chown
+        # POSIX-only.
+        _apply_file_mode(target_str)
         _harden_acl(target_str)
         _chown_to_interactive_user(target_str)
 
@@ -754,6 +788,37 @@ def _harden_acl(path_str: str) -> None:
         )
     except Exception as e:
         logger.warning(f"sync_assembler: ACL hardening failed for {path_str!r}: {e}")
+
+
+def _apply_file_mode(path_str: str) -> None:
+    """
+    give an assembled file the mode its content asks for. POSIX-only,
+    best-effort — failure warns and never raises.
+
+    the `.partial` sidecar is opened 0644 and os.replace carries that mode
+    across, so without this a synced program arrives with no execute bit and
+    the kiosk app cannot start it. the mode is set from the file's own first
+    bytes because the v1 version schema has none to carry.
+    """
+    if not _HAS_FILE_MODES:
+        return
+    fd = None
+    try:
+        fd = os.open(path_str, _MODE_READ_FLAGS)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, 'not a regular file', path_str)
+        head = os.read(fd, 4)
+        os.fchmod(
+            fd,
+            _EXECUTABLE_MODE if head.startswith(_EXECUTABLE_MAGICS) else _DATA_MODE,
+        )
+    except OSError as e:
+        logger.warning(
+            f"sync_assembler: could not set the mode of {path_str!r}: {e}"
+        )
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _chown_to_interactive_user(path_str: str) -> None:

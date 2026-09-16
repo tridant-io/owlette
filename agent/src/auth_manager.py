@@ -406,7 +406,7 @@ class AuthManager:
                     'machineId': self.machine_id,
                 },
                 headers={
-                    'User-Agent': f'Owlette-Agent/{shared_utils.APP_VERSION} (Windows; {self.machine_id})',
+                    'User-Agent': f'Owlette-Agent/{shared_utils.APP_VERSION} ({shared_utils.get_os_family_arch()[0]}; {self.machine_id})',
                     'X-Owlette-Agent-Version': shared_utils.APP_VERSION,
                     'Content-Type': 'application/json',
                 },
