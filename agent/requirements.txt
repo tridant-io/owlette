@@ -58,7 +58,7 @@ claude-agent-sdk==0.2.152
 mcp==2.2.0
 
 # Error monitoring (optional — only active when DSN configured in config.json)
-sentry-sdk==2.68.1
+sentry-sdk==2.69.1
 
 # Firebase integration - now using REST API with OAuth tokens (no Admin SDK needed)
 # firebase-admin==6.4.0  # REMOVED - replaced with REST API client
