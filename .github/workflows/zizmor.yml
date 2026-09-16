@@ -1,8 +1,15 @@
 name: Actions Security
 
 # Static analysis of the GitHub Actions workflows themselves (zizmor). Runs on
-# every PR and on pushes to main so misconfigurations (unpinned actions, leaked
-# credentials, injection, over-broad permissions) are caught before they ship.
+# every PR and on pushes to main AND dev so misconfigurations (unpinned actions,
+# leaked credentials, injection, over-broad permissions) are caught before they
+# ship.
+#
+# `dev` is not optional here. Scanning only `main` meant every code-scanning
+# alert described `main`'s workflows while `dev` — where all work actually lands
+# — went unscanned for months, so the Security tab was a report on a branch
+# nobody commits to. Same trap as the Dependabot alerts (see
+# scripts/check-security-alerts.mjs).
 #
 # This repo is public, so results are uploaded as SARIF to the Security tab
 # (free code scanning). In this mode zizmor reports findings without failing the
@@ -12,6 +19,7 @@ on:
   push:
     branches:
       - main
+      - dev
   pull_request:
   workflow_dispatch:
 
@@ -29,9 +37,9 @@ jobs:
       contents: read # checkout
       security-events: write # upload SARIF to the Security tab (public repo -> free)
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Run zizmor
-        uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa # v0.5.7
+        uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3

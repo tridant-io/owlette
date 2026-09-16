@@ -72,6 +72,9 @@ interface ChartTooltipProps {
   /** UUID -> friendly name for GPUs. Chart keys stay UUID-based; this only
    *  changes the displayed label. */
   gpuLabels?: ReadonlyMap<string, string>;
+  /** Show only this series' row (a pinned stat card). The full payload stays
+   *  available for sibling lookups, e.g. the bytes behind a percent NIC row. */
+  onlyKey?: string;
 }
 
 function defaultFormatTime(timestamp: number): string {
@@ -94,7 +97,7 @@ function defaultFormatTime(timestamp: number): string {
   });
 }
 
-export function ChartTooltip({ active, payload, label, formatTime = defaultFormatTime, gpuLabels }: ChartTooltipProps) {
+export function ChartTooltip({ active, payload, label, formatTime = defaultFormatTime, gpuLabels, onlyKey }: ChartTooltipProps) {
   if (!active || !payload || payload.length === 0) {
     return null;
   }
@@ -111,6 +114,7 @@ export function ChartTooltip({ active, payload, label, formatTime = defaultForma
       <div className="space-y-1">
         {payload.map((entry, _index) => {
           const key = String(entry.dataKey ?? '');
+          if (onlyKey !== undefined && key !== onlyKey) return null;
           const config = metricConfig[key as MetricType];
           const netInfo = !config ? parseNetworkKey(key) : null;
           const diskInfo = !config && !netInfo ? parseDiskKey(key) : null;

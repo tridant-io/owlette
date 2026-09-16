@@ -76,7 +76,9 @@ test.describe('public routes', () => {
     const scalar = await request.get('/docs/api');
     expect(scalar.status()).toBe(200);
     const scalarHtml = await scalar.text();
-    expect(scalarHtml).toContain('Scalar.createApiReference');
+    // Scalar boots the reference with createApiReference('#app', {...}); 0.10 exposed it as a
+    // `Scalar.` global, 0.11+ imports it as an ES module, so match the call, not the namespace.
+    expect(scalarHtml).toContain('createApiReference(');
     expect(scalarHtml).toContain('"url": "/api/openapi"');
 
     const authentication = await request.get('/docs/api/authentication');

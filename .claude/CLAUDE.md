@@ -2,7 +2,7 @@
 
 Owlette is a cloud-connected Windows process management and remote deployment system for managing TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python Windows service (agent) + Next.js web dashboard (web) + Firebase/Firestore backend.
 
-**Version**: 3.3.4 | **License**: FSL-1.1-Apache-2.0
+**Version**: 3.3.5 | **License**: FSL-1.1-Apache-2.0
 
 ---
 
@@ -97,6 +97,8 @@ Version files: `/VERSION`, `agent/VERSION`, `web/package.json`, `firestore.rules
 - All changes must be self-contained and fully functional — never commit something that "works but will need a follow-up fix"
 
 **Lint as you go — don't let errors accumulate.** After editing any web file, run `npx eslint <file>` on that file (or `npm run lint` for a broader change) and fix every error and warning you introduced before moving on. Never commit new lint errors, and never rationalise them as "pre-existing" if your edit touched the same file. The repo has historical lint debt — your job is to not add to it, and to clean up any issues in lines you modified. Same principle for TypeScript: if `tsc` / IDE diagnostics flag your change, fix it before the next edit, not at commit time.
+
+**Security alerts are a release gate, not a notification.** Run `node scripts/check-security-alerts.mjs` before any release build and as part of `/preflight`. It resolves every open GitHub alert against *this branch's* lockfiles, because Dependabot files security alerts and PRs against `main` (`target-branch` does not apply to them) and `main` trails `dev` — so the raw alert list mixes live vulnerabilities with ones fixed on `dev` weeks ago. Exit 1 means a vulnerable version is still pinned here: fix it, dismiss it on GitHub with a written reason, or get explicit user acceptance and re-run with `--ack "<key>=<why>"` — every ack needs a written reason, `verify:*` keys are refused outright (a check that could not run must be fixed, not waived), and acked items go in the release commit body so the decision is on record. Never ack on your own judgment. The `security preflight` workflow runs the same check daily and on every push to `dev`/`main`. Security PRs land on `dev` by hand; a Dependabot PR open past 30 days is itself a blocker.
 
 **E2E verification (two layers).** The `playwright e2e` GitHub Action ([.github/workflows/e2e.yml](../.github/workflows/e2e.yml)) gates pushes to `dev`/`main` that touch `web/**`, `firestore.rules`, or `firebase.json`.
 - **Proactive (preferred):** before pushing such changes, run `/preflight` — it runs lint, typecheck, unit tests, and the local e2e suite (the exact mirror of CI, ~45s steady-state). Fix reds locally; don't ship them to a branch that auto-deploys.
@@ -267,4 +269,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-09-13
+**Last Updated**: 2026-09-15
