@@ -1,0 +1,69 @@
+[package]
+name = "bakeoff-host"
+version = "0.1.0"
+description = "swoop spike 0.2 — video-path bake-off, host half (capture → encode → one VideoSink arm)"
+edition = "2021"
+publish = false
+
+# Standalone on purpose, exactly like the other spikes and like agent/host. An
+# empty [workspace] table stops a future parent Cargo.toml (agent/swoop's crate,
+# Task 1.2) from absorbing this spike. Run every cargo command with this
+# directory as the working directory, never --manifest-path (which silently
+# drops .cargo/config.toml and with it +crt-static).
+[workspace]
+
+[[bin]]
+name = "bakeoff-host"
+path = "src/main.rs"
+
+[dependencies]
+# WebRTC, sans-IO. plan.md D4's first choice, and the only reason this spike can
+# measure arm B at all. Pinned to 0.23.1 because that is the release the
+# transport bake-off (research/05 §2) was written against: RFC 7798 H.265
+# packetizer with a VPS/SPS/PPS aggregation-packet cache, the libwebrtc GoogCC
+# port, and per-packet header extensions (which is how playout-delay is set).
+# Exit condition: move when 0.24 lands and arm A's `sctp-proto` patch is rebased.
+#
+# default-features = false drops `aws-lc-rs` (needs NASM on Windows) and the
+# `examples` feature (which pulls rouille + rustls). No OpenSSL, no C toolchain,
+# nothing new in an installer.
+#
+# `wincrypto-dimpl`, not `wincrypto`: the plain feature does DTLS through Windows
+# SChannel, and measured against Chrome 153 that handshake fails with
+# "DTLS error: crypto error: decryption failed" on every attempt (see the memo).
+# `wincrypto-dimpl` keeps Windows CNG for SRTP and hashing but does DTLS in
+# `dimpl`, str0m's own implementation — which is where str0m is heading anyway
+# (PR #1038 removes SChannel outright).
+str0m = { version = "=0.23.1", default-features = false, features = ["wincrypto-dimpl"] }
+
+# NVENC bindings. Same crate and same reason as spike 0.9 (nvenc-probe): the
+# only crate on crates.io that vendors pre-generated nvEncodeAPI bindings AND
+# dlopens the entry points, so no Video Codec SDK zip and no libclang, and the
+# binary still links on a builder with no NVIDIA driver.
+moq-nvenc = "0.0.5"
+
+# D3D11 device, DXGI Desktop Duplication, the motion window's flip-model
+# swapchain, and the Win32 event objects NVENC async mode waits on.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+# Copied from agent/host/Cargo.toml, like every other swoop spike: the Bearfoos
+# quarantine makes a dense, stripped, metadata-free PE a liability on this
+# fleet. A spike binary is never shipped, but keeping one profile means these
+# numbers were measured with the codegen settings the product will use.
+opt-level = 2
+lto = "thin"
+strip = false
