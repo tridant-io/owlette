@@ -1,24 +1,28 @@
 # tri-platform agent — macOS handoff
 
-**For:** the agent working on the MacBook Air (Apple Silicon, macOS 26). **Written:** 2026-09-15 by the Windows-side orchestrator.
-**Why this file exists:** the plan lives in `dev/active/tri-platform-agent/`, which is gitignored and stays on the Windows box. Everything you need to work the macOS half is copied here verbatim, plus the state of the tree as it actually is after Waves 0–3. Treat this file as the spec; where it and the code disagree, say so in the log rather than guessing.
+**For:** the agent working on the MacBook Air (Apple Silicon, macOS 26). **Written:** 2026-09-15 by the Windows-side orchestrator. **Refreshed:** 2026-09-16, after the Linux lane merged, then corrected the same day against the merged code (§8 items 12–15) — sections 1–11 describe the tree as it is at `47e5cae0`; sections 12–15 are the verbatim plan text and are unchanged, including the four places §8 records as stale.
+**Why this file exists:** the plan lives in `dev/active/tri-platform-agent/`, which is gitignored and stays on the Windows box. Everything you need to work the macOS half is copied here verbatim, plus the state of the tree as it actually is after Waves 0–3 and the Linux lane. Treat this file as the spec; where it and the code disagree, say so in the log rather than guessing.
 
-## 1. Branching and coordination (three platforms at once)
+## 1. Branching and coordination
 
 - `dev` is the integration branch and auto-deploys `dev.owlette.app`. **Never commit to `dev` or `main`.**
-- `feat/tri-platform-agent` carries Waves 0–3 (Windows-verified; PR open against `dev`). It is the base for all platform work until it merges.
-- Create **`feat/tri-platform-macos`** from `feat/tri-platform-agent`. Push it; open its PR against `dev` only after `feat/tri-platform-agent` has merged (rebase then). The Linux work runs on **`feat/tri-platform-linux`** from the same base, on the Windows box's Ubuntu VM.
-- **Who owns which file** (so the two platform branches never fight):
-  - macOS branch: `agent/src/osadapter/darwin.py`, `agent/packaging/macos/**`, `agent/build/macos/**`, `desktop/src-tauri/src/{capture,tcc}.rs` and the macOS arms of `service_ctl.rs`/`process_ctl.rs`/`startup_link.rs`/`shell_open.rs`, `desktop/src/components/PermissionBanner.tsx`, `dev/handoff/tri-platform-macos-log.md`, the macOS spike results.
-  - Linux branch (Windows box): `agent/src/osadapter/posix.py` (**Task 3.1 — the shared POSIX arm — is being built on the Linux side first; pull it in when it lands, do not write your own**), `osadapter/linux.py`, `agent/packaging/linux/**`, `agent/build/linux/**`, the Linux arms of the same Rust files, `test/infra/**`.
-  - Shared, single writer at a time (coordinate in the log before touching): `agent/src/osadapter/__init__.py` (the `get()` selector — add the `darwin` branch in one line), `agent/src/owlette_service.py` (Task 3.4 — the Linux side takes the shared wiring; you add only the macOS-specific arms after it lands), `agent/src/configure_site.py` (3.7 — same rule), `.github/workflows/agent-tests.yml` (the macOS `--ignore` list: remove entries only as they stop failing), `desktop/src-tauri/src/lib.rs`, `desktop/src-tauri/Cargo.toml`.
-- Small, frequent commits on your branch are fine (the no-commit rule on the Windows box was about reviewing before things land in shared history; your branch is yours). Conventional commit messages (`feat(agent-macos): …`, `test(desktop): …`).
+- **`feat/tri-platform-agent` is your base, at or after `47e5cae0`.** It carries Waves 0–3 (Windows-verified) **and the whole Linux lane** — Tasks 3.1, 3.2, 3.4 and 3.7 — merged as PR #167 on 2026-09-16. Its own PR against `dev` (#150) is still open.
+- Create **`feat/tri-platform-macos`** from it. Push it; open its PR against `dev` only after `feat/tri-platform-agent` has merged (rebase then).
+- **The two-branch picture is over.** `feat/tri-platform-linux` is merged and closed; there is no second platform branch to coordinate with, and nothing is arriving from the Linux side any more. It is you and the base.
+- **Who owns which file** now that the Linux lane has landed:
+  - Yours: `agent/src/osadapter/darwin.py`, `agent/packaging/macos/**`, `agent/build/macos/**`, `desktop/src-tauri/src/{capture,tcc}.rs` and the macOS arms of `service_ctl.rs`/`process_ctl.rs`/`startup_link.rs`/`shell_open.rs`, `desktop/src/components/PermissionBanner.tsx`, `dev/handoff/tri-platform-macos-log.md`, the macOS spike results.
+  - **Shipped and shared — read them, do not rewrite them:** `agent/src/osadapter/posix.py` (the shared POSIX arm, 969 lines), `osadapter/linux.py`, `owlette_service.py`, `configure_site.py`, `shared_utils.py`, `installer_utils.py`, `agent/tests/conftest.py`, `agent/tests/unit/test_osadapter_contract.py`. Each carries production Linux behaviour that is verified on real hardware. A change to `posix.py` is a change to Linux's arm as well: make it only when the darwin arm genuinely cannot be written around it, and log the reason. **One such case is already established and sanctioned:** `_graphical_session()`, `_session_display_environ()` and `_spawn()` each need a `sys.platform == 'darwin'` arm, because their callers resolve them at `posix` module scope and a `darwin.py` override never reaches them — §5 has the table and the rules for it.
+  - `agent/src/osadapter/__init__.py` needs **no edit at all** — see §5.
+  - Still shared, single writer at a time (coordinate in the log): `.github/workflows/agent-tests.yml` (four `--ignore` entries left, all permanent), `desktop/src-tauri/src/lib.rs`, `desktop/src-tauri/Cargo.toml`.
+- Small, frequent commits on your branch are fine. Conventional commit messages (`feat(agent-macos): …`, `test(desktop): …`).
 
 ## 2. Setup on the Mac
 
 ```bash
 git clone https://github.com/tridant-io/owlette.git && cd owlette
-git fetch origin feat/tri-platform-agent && git checkout -b feat/tri-platform-macos origin/feat/tri-platform-agent
+git fetch origin feat/tri-platform-agent
+git checkout -b feat/tri-platform-macos origin/feat/tri-platform-agent
+git log -1 --format=%H            # must be 47e5cae0… or later. If it is 3cc6e8cc, you are on the pre-Linux base — refetch.
 # python: 3.11 (uv is the fastest way)
 uv venv .venv --python 3.11 && source .venv/bin/activate
 uv pip install -r agent/requirements.txt pytest==9.1.1   # the sys_platform markers skip pywin32/wmi/pythonnet/HardwareMonitor
@@ -27,17 +31,54 @@ uv pip install -r agent/requirements.txt pytest==9.1.1   # the sys_platform mark
 # rust + tauri: rustup stable, Xcode command line tools; `cargo check` in desktop/src-tauri
 ```
 
-Test commands and what to expect **before** 3.1/3.2 land:
+**The macOS CI leg already runs this suite for real, and it is green.** On `47e5cae0` the `agent tests` workflow reports:
+
+| leg | result |
+|---|---|
+| `macos-15` | **1351 passed / 278 skipped** in 16.0 s |
+| `ubuntu-24.04` | 1491 passed / 138 skipped in 9.5 s |
+| `windows-latest` | 1585 passed / 201 skipped in 72.8 s |
+
+Reproduce the macOS leg exactly:
 
 ```bash
-# agent suite — on macOS today it needs OWLETTE_DATA_ROOT (osadapter.get() raises off Windows until posix.py exists)
-# and the same --ignore list the CI macos-15 leg carries (copy PYTEST_ADDOPTS from .github/workflows/agent-tests.yml)
 OWLETTE_DATA_ROOT=/tmp/owlette-data PYTEST_ADDOPTS="$(sed -n '/macos-15/,/ubuntu-24.04/p' .github/workflows/agent-tests.yml | grep -o -- '--ignore=[^ ]*' | tr '\n' ' ')" \
-  python -m pytest agent/tests/ -q -p no:cacheprovider
-# Windows baseline for the same tree: 1489 passed / 5 skipped (2026-09-15).
-(cd web && npx tsc --noEmit && npm test)            # 5168 tests on Windows
+  python -m pytest agent/tests/ -x -q
+python -c "import firebase_client, owlette_service, configure_site"   # the import-smoke step; it gates on all three legs now
+```
+
+The `sed` trick still works; it now yields **four** entries, not eighteen. `OWLETTE_DATA_ROOT` is still required: `shared_utils` builds `CONFIG_PATH` at import, `osadapter.data_root()` answers from the override without needing an arm, and without the override it falls through to `get()`, which raises `NotImplementedError` on a Mac until `darwin.py` exists.
+
+**The skip pattern you should see, exactly.** Of the 278 skips, **69 are the no-arm gate** — `@pytest.mark.needs_os_arm` and the `os_arm` fixture in `agent/tests/conftest.py`, skipping with the reason `no osadapter arm for this platform yet`. They break down as:
+
+| module | tests the gate skips today |
+|---|---|
+| `agent/tests/unit/test_configure_site_headless.py` | 52 (`TestPreseed`, `TestRequestSeam`, `TestServiceControl`) |
+| `agent/tests/unit/test_screenshot_capture.py` | 9 |
+| `agent/tests/unit/test_posix_loop_duties.py` | 5 |
+| `agent/tests/unit/test_service_shutdown.py` | 2 |
+| `agent/tests/unit/test_osadapter_contract.py` | 1 (the gate's own negative control) |
+
+**All 69 start running the day `darwin.py` lands** — the gate resolves the arm once at collection and stops skipping anything the moment `osadapter.get()` succeeds.
+
+The other 209 split three ways, and only one of the three stays skipped forever:
+
+| why it skips | count | what it means for you |
+|---|---|---|
+| `@pytest.mark.windows` | 125 | Windows-only. Skipped forever on a Mac; nothing to do. |
+| the contract test's `linux_only` skipif (`test_osadapter_contract.py:38`, reason `a Linux mechanism; macOS answers it in darwin.py`) | 71 | **`TestLinux` plus the `@linux_only` members of `TestPosix` — this is the list of behaviours `TestDarwin` has to re-assert against the macOS mechanism.** Read them, do not dismiss them. |
+| other `skipif`s (`as_root`, platform guards elsewhere in the suite) | 13 | Same on Linux; not yours. |
+
+69 + 125 + 71 + 13 = 278, and ubuntu's 138 = 125 + 13 is the cross-check that the split is right.
+
+**The passed counts are pinned to `47e5cae0` and move with anything that lands on the branch after it; the four skip counts are the tripwire.** A `posix_only` test added by a later Windows-side commit runs on your Mac and raises the passed number without touching any of the four — so check the split, and only treat a *skip* count that has moved as evidence this file is stale.
+
+Other suites:
+
+```bash
+(cd web && npx tsc --noEmit && npm test)              # 5168 tests on Windows
 (cd desktop && npx vitest run)                        # 489
-(cd desktop/src-tauri && cargo test && cargo clippy)  # the crate is still Windows-only until Task 4.1 gates the deps — expect it NOT to build on macOS until 4.1 is done; that is your first Rust task
+(cd desktop/src-tauri && cargo test && cargo clippy)  # the crate is still Windows-only until Task 4.1 gates the deps — expect it NOT to build on macOS until 4.1 is done
 ```
 
 The deploy hook (`.claude/hooks/deploy-agent.mjs`) mirrors `agent/src/*.py` into `C:\ProgramData\Owlette` on Windows; on a Mac it finds no install root and exits — inert. Do not modify `.claude/hooks/` or `.claude/settings.json` (owner rule).
@@ -46,47 +87,155 @@ The deploy hook (`.claude/hooks/deploy-agent.mjs`) mirrors `agent/src/*.py` into
 
 - Never import `firebase_admin`; never log OAuth tokens or key material; never touch `firestore.rules`.
 - No new npm/pip/cargo packages without an owner ruling — **owner Q5** is exactly the ScreenCaptureKit/`image` crate question; ask before adding.
-- Never raise a UAC-style prompt unattended: no `osascript … with administrator privileges`, no `sudo` from the daemon; privileged actions from the app go through the `ipc/` seam (decision 4).
+- Never raise a UAC-style prompt unattended: no `osascript … with administrator privileges`, no `sudo` from the daemon; privileged actions from the app go through the `ipc/` seam (decision 4), which is built and proven — see §7.
 - UI copy lowercase (proper nouns Windows/macOS/Linux keep their case), colours from tokens, `lucide-react` only.
 - Reviews: every finding cites file:line and a failure path; a clean review is valid.
-- Keep the AST import guard green: `agent/tests/unit/test_no_platform_imports.py` fails on a module-scope import of any Windows-only module, of `osadapter.win`, or of `tools_windows`, from a non-exempt file. `osadapter/darwin.py` and `osadapter/posix.py` are POSIX arms — they must not import pywin32 anything, and nothing outside `osadapter/__init__.py`'s `get()` should import them at module scope.
+- Keep the AST import guard green: `agent/tests/unit/test_no_platform_imports.py` fails on a module-scope import of any Windows-only module, of `osadapter.win`, or of `tools_windows`, from a non-exempt file. `osadapter/darwin.py` is a POSIX arm — it must not import pywin32 anything, and nothing outside `osadapter/__init__.py`'s `get()` should import it at module scope.
+- **Every root write under the data root goes through `shared_utils.open_new_file()`** (unlink a stale `<name>.tmp`, `O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW` at 0600, carry the destination's identity with `fchmod`/`fchown` on that descriptor, then `os.replace`). The 3.1 close review proved the plain-`open()` version was a live kiosk-to-root overwrite-and-regrant primitive on the group-writable tree. The same `O_NOFOLLOW` + `S_ISREG` + `O_NONBLOCK` discipline applies to everything `darwin.py` reads out of a path it did not build itself.
 
-## 4. State of the tree you are starting from (Waves 0–3, Windows-verified)
+## 4. State of the tree you are starting from (Waves 0–3 + the Linux lane, at `47e5cae0`)
 
-- **`agent/src/osadapter/`** — `__init__.py` defines the 19-operation `typing.Protocol` `OSAdapter`, an `OPERATIONS` tuple, `get()` (returns `win` on `win32`, raises `NotImplementedError` elsewhere — **your `darwin` branch goes here**), `NotSupportedHere`, and PEP 562 `__getattr__` so call sites spell `osadapter.reboot(30)`. `win.py` is the Windows arm and the reference for signatures. The contract test `agent/tests/unit/test_osadapter_contract.py` is one shared body parametrised by adapter — add `pytest.param('darwin', marks=…)` rows; its assertions are OS-neutral by design.
-- The Windows arm raises `NotSupportedHere` for the five service-bound rows (`session_env`, `spawn_as_user`, `run_job`, `capture_screen`, `launch_managed_process`); on POSIX those are real (decisions 4/5).
-- **`capture_screen(path)` is sealed at the spec's spelling and must be widened by Task 3.2** to `capture_screen(monitor, *, executor, timeout_s)` returning `{outputDir, files, stdout}` (see the 3.2 block below — the dated correction is in the text).
-- **Data root:** `shared_utils.get_data_path()` → `osadapter.data_root()`; `OWLETTE_DATA_ROOT` overrides (Python side only). macOS root is `/Library/Application Support/Owlette` (decision 4 mode table). `shared_utils` resolves `CONFIG_PATH` at import, so until `posix.py`/`darwin.py` exist, set `OWLETTE_DATA_ROOT` to import anything.
-- **Identity (3.3):** `shared_utils.get_machine_id()` reads `config/machine_id` (seeded from the hostname on first read); key material is `osadapter.key_material()` — **macOS arm = `IOPlatformUUID`** (`ioreg -rd1 -c IOPlatformExpertDevice`), no hostname term; `stable_machine_id()` likewise. `secure_storage` migrates a pre-3.4 store once; on POSIX it writes `.tokens.enc` with `O_NOFOLLOW`+0600 and chmods — those flags are in place, unverified on a real POSIX filesystem: **verify them** (Task 3.3 Done-when (d)).
+- **`agent/src/osadapter/`** — `__init__.py` defines the 19-operation `typing.Protocol` `OSAdapter`, an `OPERATIONS` tuple, `NotSupportedHere`, `resolve_data_root()`, and PEP 562 `__getattr__` so call sites spell `osadapter.reboot(30)`. `_ARMS` is `{'win32': 'win', 'linux': 'linux', 'darwin': 'darwin'}` and `_arm()` resolves through `importlib.util.find_spec`, so **an arm that is not in the tree yet raises `NotImplementedError`, not `ImportError`** — and the day `darwin.py` appears, `get()` returns it with no other change. `win.py` (275 lines) is the Windows arm, `posix.py` (969) the shared POSIX arm, `linux.py` (297) the Linux one.
+- The Windows arm raises `NotSupportedHere` for **four** service-bound rows (`session_env`, `spawn_as_user`, `run_job`, `launch_managed_process`); on POSIX those are real (decisions 4/5). `capture_screen` is **not** one of them any more — `_build_capture_code()` moved into `win.py` and the Windows arm runs the executor round-trip itself.
+- **The capture seam is already widened.** The Protocol row is `capture_screen(monitor, *, executor, timeout_s) -> dict` returning the `{outputDir, files, stdout}` dict `screenshot_capture.capture_in_user_session` parses. Task 3.2's "first widen the seam 2.1 sealed" is done; do not redo it.
+- **Data root:** `shared_utils.get_data_path()` → `osadapter.data_root()`; `OWLETTE_DATA_ROOT` overrides. `posix.py` already resolves `DATA_ROOT = '/Library/Application Support/Owlette'`, `GROUP = '_owlette'` and `GROUP_ADD = 'dseditgroup -o edit -a USER -t user _owlette'` behind its own `sys.platform == 'darwin'` switch (`posix.py:42-50`). Nothing to add; **do not move those into `darwin.py`** without logging it — that switch is how one module serves both POSIX arms.
+- **Identity (3.3):** `shared_utils.get_machine_id()` reads `config/machine_id` (seeded from the hostname on first read, 0o640 root:`<group>`); key material is `osadapter.key_material()` — **macOS arm = `IOPlatformUUID`** (`ioreg -rd1 -c IOPlatformExpertDevice`), no hostname term; `stable_machine_id()` likewise. `secure_storage` migrates a pre-3.4 store once; on POSIX it writes `.tokens.enc` with `O_NOFOLLOW`+0600 and chmods — the Linux VM proved the whole 15-row mode table on real hardware, but `.tokens.enc` landing 0600 root on a Mac is still owed (Task 4.7's Done-when).
 - **Platform normaliser:** `shared_utils.get_os_family_arch()` → `('macos', 'arm64')` on your machine; the cortex CLI pin id is `installer_metadata/cortex_cli_macos_universal` (decision 12: universal2).
-- **Hoot tools (3.5):** `mcp_tools.py` is the cross-platform core; `tools_windows.py`/`tools_posix.py` are the arms, registered inside `mcp_tools._platform_handlers()`. `tools_posix.py` already carries the macOS arms of `get_event_logs` (`log show --style json`), `get_service_status`/`manage_windows_service` (`launchctl`), `check_pending_reboot` (`softwareupdate -l`), `run_command`, `get_gpu_processes`; `show_notification` is gated off until `osadapter.notify()` exists (3.2 un-gates it).
-- **Roost destinations (3.8):** `destination_allowlist.default_roots('macos')` → `/Users/Shared/Owlette`; the POSIX dangerous-root arm covers the `/private/...` resolutions; `sync_assembler` chowns to `osadapter.console_user()`'s uid/gid on POSIX — that needs your `console_user()` (macOS: `stat -f%Su /dev/console`, `None` when it is `root`).
-- **CI:** `.github/workflows/agent-tests.yml` runs the suite on `macos-15` with 18 `--ignore` entries (modules that import `owlette_service`/`display_manager`); Task 3.4 removes the transitional ones. `loc-metric.yml` prints the line delta on every PR.
-- **Known one-liners left for the shared 3.4 sweep (Linux side):** `auth_manager.py` User-Agent still says `(Windows; …)`; `firebase_client._ensure_display_profile` imports `display_manager`/`nvapi_display` above its kill switch; `tray.rs` calls `COMPUTERNAME` "the name the fleet knows".
-- **Design conflict to settle with the Linux side before 3.1:** the Windows arm implements `json_lock()` *as* `shared_utils._CrossProcessLock()`, while Task 3.1 says to give `_CrossProcessLock` a POSIX branch that calls `json_lock()` — one must own the lock. Recommendation: `_CrossProcessLock` owns it (named mutex on Windows, `flock` on `<data_root>/tmp/json.lock` on POSIX) and `json_lock()` just returns it, on all three OSes.
+- **Hoot tools (3.5):** `mcp_tools.py` is the cross-platform core; `tools_windows.py`/`tools_posix.py` are the arms. `tools_posix.py` carries the macOS arms of `get_event_logs` (`log show --style json`), `get_service_status`/`manage_windows_service` (`launchctl`), `check_pending_reboot` (`softwareupdate --list --no-scan`), `run_command`, `get_gpu_processes` — **and `show_notification`, which is no longer gated**: it left `mcp_tools.WINDOWS_ONLY_TOOLS` and calls `osadapter.notify()` (13 gated / 6 POSIX-armed). Known disagreement, flagged for you: the adapter maps the agent's SCM name to a unit/label while `tools_posix` passes `service_name` to the init system verbatim — a single authority needs `darwin.py`'s launchctl half plus 5.1/5.2.
+- **Roost destinations (3.8):** `destination_allowlist.default_roots('macos')` → `/Users/Shared/Owlette`; the POSIX dangerous-root arm covers the `/private/...` resolutions; `sync_assembler` chowns to `osadapter.console_user()`'s uid/gid on POSIX and sets 0755/0644 after `os.replace` through an `O_NOFOLLOW` descriptor — the chown needs your `console_user()`.
+- **CI:** `.github/workflows/agent-tests.yml` runs the suite on `windows-latest`, `macos-15` and `ubuntu-24.04` with **four** `--ignore` entries on each POSIX leg, all four `display_manager`'s and all four **permanent** (that module is never ported and asserts its own struct layout at import). Every transitional entry is gone. `-x` is on, the import-smoke step gates on all three legs, and `fail-fast: false` keeps a red leg from cancelling the others. `loc-metric.yml` prints the line delta on every PR.
+- **The Linux lane's own verification, for calibration:** the four tasks ran sequentially through 24 agents, then a close review (two confirmed highs), then a first run on a real Hyper-V kiosk (`owlette-kiosk`, Ubuntu 24.04.5, GDM auto-login, Xorg seat0), three defect-fix workflows and two re-verification passes. Read `vm-verify-2026-09-16*.md` on the Windows box if you want the evidence; the behaviours it settled are in §6, and they are the ones your arm has to reproduce.
 
-## 5. Your order of work
+## 5. What `darwin.py` must provide
 
-1. **Spike 0.2 (TCC capture) and the macOS half of 0.4 (LaunchAgent / login items)** — only a Mac can answer these, they gate 4.4, 5.1 and swoop's C2, and your machine is on **macOS 26** (newer than the plan's Sequoia assumptions): record the OS build in every result, and flag anything that differs from the Sequoia behaviour the plan describes. Write results into `dev/handoff/tri-platform-macos-log.md` in the "Done when" shape each spike names.
-2. **Task 3.2 `darwin.py`** (against the Protocol; `posix.py` arrives from the Linux side — until then implement the darwin-specific rows and leave the shared ones to a thin import of `posix` once it exists).
-3. **Task 4.1** (cargo gating — nothing in `desktop/src-tauri` builds on macOS until this), then **4.3/4.4** (job runner, capture + TCC surface) per spike 0.2's transport, then **4.2/4.5/4.7**.
-4. **Task 5.1** (`.pkg`) once **Q4** (Apple Developer Program, both certificate types) is answered — signing and notarization cannot start without it; the unsigned build path can.
-5. The shared tasks (3.4 macOS arms, 3.7 macOS bits, 4.6 CI legs) after the Linux side lands their shared halves — coordinate in the log.
+`linux.py` is your template. It re-exports **nine** shared rows from `posix` and answers **ten** itself; 9 + 10 = the sealed nineteen. `darwin.py` ends up the same shape — but **do not copy its import line before reading the next two paragraphs**: four of the nine are shared in name only.
 
-## 6. Reporting back
+**Genuinely unchanged on darwin — re-export them the way `linux.py` does:** `data_root`, `desktop_process_name`, `json_lock`, `notify`, `run_job`. Five rows: `data_root` answers off the `sys.platform` switch at `posix.py:42-50`, and the rest are a constant (`desktop_process_name`), the `flock` (`json_lock`), the job seam itself (`run_job`) and one of its clients (`notify`).
 
-Append dated entries to `dev/handoff/tri-platform-macos-log.md` (tracked on your branch): what landed, every deviation from the task text with the reason, what was verified on the real machine vs. only unit-tested, and open questions. The Windows-side orchestrator folds them into the plan's `tasks.md`. Commit the log with the code it describes.
+**The other four rows `linux.py` re-exports are Linux-bound, and a `darwin.py` override cannot fix them.** `console_user` (`posix.py:164`) is `_graphical_session()`; `session_env` (`:175`) is `_graphical_session()` + `_session_display_environ()`; `spawn_as_user` (`:204`) calls `session_env(uid)` and `_spawn`; `launch_managed_process` (`:316`, `:333`) calls `console_user()` and `session_env()`. **All four resolve those names at `posix` module scope**, so a `console_user()` defined in `darwin.py` is never the one `posix.launch_managed_process` calls — putting the overrides there leaves the bug intact and harder to see. The darwin answers go **inside three private helpers of `posix.py`, one `sys.platform` arm each**, the way `DATA_ROOT`/`GROUP`/`GROUP_ADD` already branch at `posix.py:42-50`:
 
-## 7. Owner questions that affect you (answers pending unless stated)
+| posix helper | what it does today | the darwin arm it needs |
+|---|---|---|
+| `_graphical_session()` (`:487`) | `loginctl list-sessions`, then `show-session` per session, filtered on `Active`/`Class`/`State`/`Type` — the input to both `console_user()` and `session_env()` | `stat -f%Su /dev/console`, with `root` **and** `loginwindow` meaning no seat — see the subsection below |
+| `_session_display_environ()` (`:517`) | the session scope's `cgroup.procs`, then a `/proc` walk, then the `user@<uid>.service` subtree — the input to `session_env()` | the console user's launchd `gui/<uid>` domain — see the subsection below. The plan's Task 3.1 addendum names this one outright: *"the macOS lane must give `_session_display_environ` a darwin arm or `session_env()` there will quietly return the account environment with no display"* |
+| `_spawn()` (`:767`) | `subprocess.Popen(argv, user=, group=, extra_groups=, start_new_session=True, env=)` — the spawn beneath **both** `spawn_as_user` and `launch_managed_process` | decision 4's root-invoked **`launchctl asuser <uid>` wrapping `sudo -u <user>`**. `Popen(user=)` alone leaves a GUI child in the system bootstrap namespace with no Aqua session; `asuser` adopts the session's namespace but does **not** drop privileges, which is what the `sudo -u` is for (§13, decision 4) |
+
+Once those three answer on darwin, `darwin.py`'s import line is `linux.py`'s nine names verbatim and 9 + 10 = the sealed nineteen still holds. **This is the one sanctioned exception to §1's "read `posix.py`, do not rewrite it"**: a new arm beside an existing branch, each behind `sys.platform`, every Linux path left byte-identical — and logged. Ship `darwin.py` without the three arms and `console_user()` answers None on every tick, `_seat_absent()` (§6) is permanently True, and every managed process, hoot spawn and privileged request is refused while the machine reports healthy.
+
+**The ten `linux.py` overrides, and what macOS must answer instead:**
+
+| operation | Linux | macOS |
+|---|---|---|
+| `capture_screen(monitor, *, executor, timeout_s)` | refuses with `{'error': 'unsupported_on_platform', …}` off an x11 seat, else delegates to `posix.capture_screen` | gate on TCC Screen Recording grant state, not on a session type; then delegate to `posix.capture_screen`, which submits a `capture` job through `run_job`. The transport inside the app is spike 0.2's to decide; the daemon side is the job either way. Refuse in the **same dict shape** — `error` is the failure channel, never a raise (`NotSupportedHere` means a routing mistake, not a capability gap) |
+| `stable_machine_id()` | `/etc/machine-id` | `IOPlatformUUID` via `ioreg -rd1 -c IOPlatformExpertDevice` (decision 8) |
+| `key_material()` | the same file, as bytes | the same UUID, as bytes — **no hostname term**, and never logged |
+| `service_control(verb, name)` | `systemctl` + `is-active`, with `systemctl show -p LoadState` so a stop against an unknown unit is a failure | `launchctl print` / `kickstart -k` / `bootout`+`bootstrap` on `system/app.owlette.agent`; map `shared_utils.SERVICE_NAME` to the label the way `linux._unit()` maps it to `owlette-agent.service`, and answer False for a label launchd does not know |
+| `pending_reboot()` | `import mcp_tools; return mcp_tools.check_pending_reboot({}, None)` (`linux.py:160-165`) — a platform-agnostic delegation, **not** a Linux marker reader | **the same three lines, verbatim.** `tools_posix.check_pending_reboot` (`tools_posix.py:366`) already carries the macOS arm — `softwareupdate --list --no-scan`, the `[restart]` tag parse, returning exactly the four keys the contract pins (`pending`, `reasons`, `last_update_installed`, `next_scheduled_update`). Do not write a second `softwareupdate` parse in `darwin.py`: it would fork a payload shape asserted identically across platforms, and a bare `softwareupdate -l` without `--no-scan` hits Apple's update servers on every call (tens of seconds) — the reason the shipped arm passes it |
+| `reboot(delay, message)` | `shutdown -r +N`, one-minute floor, recording nothing — `/run/systemd/shutdown/scheduled` is the record | `shutdown -r +N`, same floor, **plus a durable record of the scheduled job**, because BSD `shutdown` has no `-c`. Read the `cancel_reboot()` row before you write this one — the pid to record is not the one `Popen` hands you |
+| `shutdown(delay, message)` | `shutdown -h +N` | `shutdown -h +N`, recorded the same way |
+| `cancel_reboot()` | reads `/run/systemd/shutdown/scheduled` first so nothing-scheduled is False, then `shutdown -c` | **verify the mechanism on the Mac before writing it.** BSD `shutdown(8)` forks a background child; the parent prints `shutdown: [pid N]` and exits at once — which is why `killall shutdown` is the documented macOS cancel — so `subprocess.Popen(['shutdown', '-r', '+1']).pid` names the parent, not the scheduler. Measure first: `shutdown -r +2`, then `ps -o pid,command -ax \| grep shutdown`, and compare the pid `shutdown` printed against the one `Popen` returned. Take the pid from `shutdown`'s own `[pid N]` line, **persist it under the data root** so the record survives a daemon restart (an in-memory pid answers False while a reboot is still scheduled), and confirm the pid still names a `shutdown` process before signalling it — a recycled pid could be the kiosk app. With no record the answer is False, as on Windows |
+| `installed_software()` | `dpkg-query` | `system_profiler SPApplicationsDataType`. Carry `install_location` and `installer_type` on every row beyond the Protocol's four fields — `web/components/UninstallDialog.tsx` reads both off every row and crashes without them |
+| `streamer_capable()` | x11 seat | Screen Recording granted (published into the seam by `tcc.rs`, Task 4.4). Not a session-type probe — macOS has no equivalent question |
+
+Plus the macOS-only work Task 3.2's text names and no arm has done: **`resolve_exec_target(exe_path)`** for `.app` bundles (stdlib `plistlib` → `Contents/MacOS/<CFBundleExecutable>`), applied at `find_running_process_by_exe`, the `graceful_terminate` callers and the launch-path validation; and decision 4's **disclaiming `posix_spawn`** (`responsibility_spawnattrs_setdisclaim`) so a customer's managed `.app` owns its own TCC grants instead of inheriting owlette's.
+
+### The shared-arm hooks that are Linux-shaped and need a darwin answer
+
+`posix.py` is shared in name, but four of its mechanisms are logind-, cgroup-, X11- and Linux-spawn-shaped. They were written that way *after* the VM proved the alternatives wrong, and they are the reason `_ARMS` does not fall back to `posix` on darwin — a Mac raises `NotImplementedError` rather than running a `loginctl` that is not there. Each one below is a `sys.platform` arm **inside `posix.py`**, per the table above; none of them can be answered from `darwin.py`.
+
+- **`console_user()`** — `posix.console_user()` goes through `_graphical_session()`, which shells `loginctl list-sessions` and then `show-session` per session and filters on `Active == yes`, `Class == user`, `State in {active, online}` and `Type in {x11, wayland}`. None of that exists on macOS. The darwin answer is **`stat -f%Su /dev/console`**, with **`root` — and `loginwindow` — meaning no seat, i.e. `None`** (Task 3.1's text, and decision 4's "every caller treats None as *no interactive session*"). Every caller already fails closed on None: the sync assembler's chown, the seam's owner check, the managed-launch door, the hoot spawn.
+- **`session_env(uid)`** — the in-session process lookup **cannot** be ported. `posix._session_display_environ()` walks, in order, the session scope's `cgroup.procs`, then `/proc` for kernels that do not publish it, then the whole `user@<uid>.service` subtree, taking the first process owned by the session uid that actually carries a display; `/proc/<pid>/environ` and `/proc/<pid>/status` are how it reads each one. macOS has neither `/proc` nor cgroups. The darwin arm must answer from the console user's **launchd `gui/<uid>` domain** — `launchctl print gui/<uid>` / `launchctl asuser <uid> launchctl getenv <name>` — or from a process known to be inside the console session (the resident desktop app, whose pid `posix._desktop_pid()` already reads out of `tmp/tray.pid` platform-neutrally) via `libproc`/`ps -E` rather than `/proc`. Two hard constraints carried over from the VM findings: **`USER`, `HOME`, `LOGNAME` and `PATH` must stay the account's** — `posix._account_env(uid)` supplies them from `pwd` and `_SESSION_VARIABLES` deliberately no longer contains them, because GDM's root PAM worker overwrote them and nothing the daemon spawned could open a display; and **an empty value is never lifted**.
+- **`_spawn()`** — `posix._spawn()` (`:767`) is `subprocess.Popen(argv, user=uid, group=gid, extra_groups=…, start_new_session=True, env=…)`, deliberately without a `preexec_fn` (CPython documents it as unsafe in a threaded process, and this daemon runs a thread pool). The setuid half is right on macOS and the session half is not: a child spawned that way lands in the daemon's own system bootstrap namespace with no Aqua session, so a GUI process started from it reaches no WindowServer. Decision 4's answer is root-invoked **`launchctl asuser <uid>`** wrapping **`sudo -u <user>`** — `asuser` adopts the console session's bootstrap namespace and does not drop privileges, so the `sudo -u` is what makes the child the user's. A managed `.app` additionally goes through the disclaiming `posix_spawn` (`responsibility_spawnattrs_setdisclaim`) so it owns its own TCC grants; `open -a` is never used for a managed process — LaunchServices reparents it and leaves no supervisable pid.
+- **The `XAUTHORITY` ladder is irrelevant on macOS.** `posix._xauthority()` (the in-session value → `/run/user/<uid>/gdm/Xauthority` → `~/.Xauthority` → omitted) exists because GDM, LightDM and SDDM each hide the X cookie somewhere else. Quartz has no cookie. Do not carry it into `darwin.py`, and do not synthesise a `DISPLAY`.
+- **`GROUP` / `GROUP_ADD` / `DATA_ROOT` are already correct** for darwin in `posix.py:42-50`. `configure_site._group_add_command()` already prints the `dseditgroup` line on a Mac. `harden_data_root()` and `_group_gid()` are platform-neutral (`grp`, `pwd`, `fchmod`, `fchown`) and will pick up `_owlette` once Task 5.1's `postinstall` creates it — verify that on a real Mac rather than assuming it.
+- **`_session_type()` is underscore-private on `linux.py` and is not a Protocol row** — the plan text in §15 still calls it "a `session_type()` probe", which is stale. It exists there only to answer `capture_screen` and `streamer_capable`, and it has a second rung (`_app_session_type()`, the resident app's `/proc/<tray pid>/environ`) that is pure Linux. **macOS needs its own private rules for the same two questions, and the input is TCC grant state, not a display-server name.** Spike 0.2 is what tells you whether the grant can even be read from the daemon side or must come through the seam from `tcc.rs`.
+
+### The test surface
+
+- `agent/tests/unit/test_osadapter_contract.py`: `ADAPTERS` is `[pytest.param('win', marks=pytest.mark.windows), pytest.param('linux', marks=linux_only)]`. **Add `pytest.param('darwin', marks=darwin_only)`** beside it and a `TestDarwin` class beside `TestLinux`.
+- `TestPosix` (the shared arm's own class, `posix_only`) already runs on your Mac. Its `@linux_only` members are exactly the ones asserting a logind / cgroup / `/proc` mechanism, against a `_FakeSeat` that writes a `/proc` and cgroup tree of its own — those stay Linux's. Anything of theirs that describes a rule rather than a mechanism (§6) needs a darwin equivalent written against your mechanism. **`TestLinux` and those `TestPosix` members are the 71 `linux_only` skips §2 counts** — that number is the size of the surface `TestDarwin` owes, and the three `posix.py` arms above are what those tests will exercise through the shared functions.
+- **Retiring the gate is your first check, not a chore.** Delete `@pytest.mark.needs_os_arm`, the `os_arm` fixture and `_osadapter_arm_missing()` from `agent/tests/conftest.py`, the marker's nine sites and the four fixtures that request it (`data_root` and `seam` in `test_configure_site_headless.py`, `console_user` in `test_posix_loop_duties.py`, `capture` in `test_screenshot_capture.py`) once `darwin.py` lands — and keep `test_a_platform_with_an_arm_runs_what_needs_one`, the negative control that proves the gate stopped firing. `test_a_platform_with_no_arm_has_nothing_to_stub` (which monkeypatches `_ARMS` to `{}`) stays either way; it is the reason the gate was needed and the record of it.
+- `agent/tests/conftest.py` is a shared file. Removing the gate is a one-way change for all three legs: do it in one commit, with the suite green on macOS, and say so in the log.
+
+## 6. The seat rules the Mac must honour identically
+
+These are not macOS design choices. They were settled by measurement on the Linux kiosk and they live in `owlette_service.py`, above the adapter — your `console_user()` is the input and every one of them is already wired. Reproduce the *behaviour*, and expect the reviewers to hold you to it.
+
+- **A login window is not a seat.** On Linux, `_graphical_session()` requires `Class == 'user'`: at the GDM greeter logind lists `Name=gdm Class=greeter Type=x11 Active=yes`, which the deployed code had accepted — `console_user()` answered `gdm`, `streamer_capable()` was True and the privileged seam trusted uid 123, so the daemon would have run the kiosk app as the display manager's system account on an unattended login screen. A session that reports no `Class` at all fails closed. **The macOS analogue is `/dev/console` reading `root` (or `loginwindow`) at the login window — both are no seat.** Measure what fast-user-switching and the lock screen do, and record it.
+- **A session in teardown is not a seat.** logind keeps a session listed through its whole 90-second teardown with `Active=yes`, `Class=user` and `Type=x11` unchanged long after the X server exited; only `State` moves, so `_graphical_session()` additionally requires `State in {active, online}` and a logind too old to publish the property is judged as before. Launching into a dying session succeeds, the process dies with the display, and a logout spent a GUI entry's whole relaunch budget. Measured on the VM: a GNOME logout removes the session within **26.6 ms (X11) / 4.8 ms (Wayland)** of the display server exiting, 0 of 774 and 0 of 768 samples ever showing a seat outlive its display. **Measure the same window on macOS** — how long `/dev/console` keeps naming a user after their session ends — and say so in the log.
+- **A launch refused for want of a seat spends no relaunch budget.** The rule lives at the single choke point `OwletteService.reached_max_relaunch_attempts()` (`owlette_service.py:3294`), which both launch doors pass through — the monitor loop and the kill-and-relaunch a dashboard restart reaches. A seatless entry is a **non-attempt**: one line per entry per episode - a WARNING from the launch door when the entry was already down, or an INFO from the dead-pid arm when the entry was running and ended with the operator's session (that arm also raises no crash event, alert or crash screenshot) - one INFO when the seat returns, no `app_states.json` rewrite, and it still takes the 60 s failed cooldown so it retries when somebody logs in. The launch that ends a seatless episode is booked as a **first** launch — budget accrued before the seat left is neither spent nor cleared, and the entry leaves `_seatless_entries` at the launch door itself.
+- **The armed reboot gate sits above the seat check.** `_is_restart_prompt_active()` is the first line of `reached_max_relaunch_attempts`, deliberately: asking who is at the seat first billed the 5-second loop a `loginctl` round-trip every tick for the life of the gate, and on a box with no seat it answered the kill-and-relaunch door before the gate could refuse it — terminating the kiosk app of a machine frozen to preserve it. Escalation reaches its terminal state **without a prompt** off Windows: `reboot_pending` written, gate armed, one "System reboot imminent" alert, counter cleared, no relaunch — and it is indefinite **only after a confirmed `set_reboot_pending` write**; otherwise the timed `RESTART_PROMPT_ACTIVE_SECONDS` (300 s, `owlette_service.py:86`) gate applies, so an escalation nobody can see retries when connectivity returns.
+- **The seat is read once per tick, on the loop thread only.** `_seat_absent()` (`owlette_service.py:3272`) memoises the answer for one loop iteration and clears it at the top of the next; every other caller — a dashboard start or restart, the cortex queue, a config update, the privileged-request drain — resolves **live**, because the loop's answer can be a whole tick old and somebody signing in inside that tick would otherwise have their launch refused on a stale reading. Measured on the VM: **zero `loginctl` execve in 60 s of steady state**, six in a minute with an entry down. **Whatever `darwin.console_user()` shells out to inherits that budget** — one cheap round-trip per tick at most, and correct on the tick the seat changes. A launch still pays two un-memoised resolutions inside the adapter; that is a recorded follow-up, not a licence to add more.
+
+## 7. Already solved — do not redo any of this
+
+Everything in this list is shipped on your base, has a test, and in most cases has been run on real Linux hardware. Re-implementing any of it is the failure mode this section exists to prevent.
+
+- **The macOS self-update arm.** `installer_utils._start_macos_update()` runs `launchctl submit -l app.owlette.update -- /usr/sbin/installer -pkg <path> -target /` (`UPDATE_JOB_LABEL = 'app.owlette.update'`), as a launchd job rather than a child, because the package stops the daemon and `bootout` takes its whole process group; 30 s handoff timeout, typed `update_handoff_failed`. `UPDATE_ARTIFACT_NAMES['macos'] = 'owlette-update.pkg'` because `installer -pkg` refuses a file not named `.pkg`. The whole POSIX update runs on a worker thread with `COMMAND_DEFERRED` acceptance and `FirebaseClient.finish_command()` on resolution. **Unverifiable on the Linux rig** — argv and the failure path are unit-tested against a stubbed runner and nothing more; proving it on a real Mac is Wave 5's.
+- **`verify_artifact_family`'s `xar!` row.** `installer_utils.ARTIFACT_MAGIC['macos'] = (b'xar!', 'a macOS installer package')`, behind a 1 MB floor, with a table-driven test that feeds `MZ`/`xar!`/`!<arch>` under each `osFamily` and refuses all six mismatches before any execution (negative control: removing the family arm fails the test). Verified on the VM: 3 accepted, 6 refused.
+- **The macOS metric arms.** `shared_utils._IS_MACOS`, `_sysctl_cpu_name()` (`sysctl -n machdep.cpu.brand_string`), `_route_get_gateway()` (`route -n get default`), and the ping `-W` unit split — **1000 on darwin, 1 on iputils**, because BSD ping counts it in milliseconds. `_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)` at module scope. `TestPosixMetricProbes` asserts each arm against its own mechanism. These were added by the 3.2 close review precisely so a Mac would not report `platform.processor()` and never ping a gateway.
+- **`pending_reboot()` on macOS.** `tools_posix.check_pending_reboot` (`tools_posix.py:366`) already carries the darwin arm — `softwareupdate --list --no-scan`, `[restart]`-tagged, the same four keys. `darwin.pending_reboot()` is `linux.py:160-165`'s three-line delegation to `mcp_tools.check_pending_reboot({}, None)` and nothing more; a second `softwareupdate` parse inside `darwin.py` is the duplication this list exists to prevent.
+- **`get_python_exe_path()`** already resolves `/Library/Application Support/Owlette/runtime/python/bin/python3` on darwin (`shared_utils.py:1145`) — the Task 5.1 payload path, never the app bundle.
+- **The conftest gate** (`needs_os_arm` / `os_arm`). It is what keeps `macos-15` green today. Retire it, do not extend it (§5).
+- **The exe-path normaliser.** `shared_utils.normalize_exe_path()` folds case and swaps separators **on Windows only**; off Windows it returns the path exactly as the kernel reports it. Do not re-fold on macOS because APFS is usually case-insensitive — folding made `/usr/bin/Foo` and `/usr/bin/foo` the same file and the separator swap stored `\usr\bin\sleep` in every identity record. The VM run confirmed forward-slash `exe` paths throughout `app_states.json`.
+- **The privileged-request seam.** `configure_site.py` + the drain wired beside the cortex queue in `owlette_service.py`: `ipc/requests/<id>.json` honoured only when owned by the uid `console_user()` resolves, no group or world write bit, quoting the one-shot nonce the daemon publishes to the root-owned 0640 `ipc/request_nonce`; anything else unlinked and logged. Verbs are **`pair`, `restart`, `reboot` only — no `leave`**, held by two negative controls. `restart`/`reboot` one per five minutes; every executed verb writes an append-only audit row to `logs/privileged_requests.log` (**0600** root:root, rotated — `configure_site.REQUEST_AUDIT_MODE`, tightened from 0640 by the 3.1 close review in `21ad3fea` because nothing in the app's session reads it; the plan's Task 3.7 status line still says 0640 and is stale on that point). Answers go to `ipc/requests/<id>.result`. **7/7 scenarios passed on the golden kiosk against a real logind-resolved console user with nothing monkeypatched.** On macOS the only untested half is `console_user()` itself. Writer contract for your Task 4.7 work: the app must create a request **0600 or 0640 with an explicit `fchmod` on the descriptor before the rename** (a default session umask lands 0664 and is refused), and remove `<id>.result` only after a terminal event (`authorized` or `error`), never on first read — the `pair` child writes into it for up to 600 s.
+- **`--preseed`.** `configure_site.py --preseed` reads `<data_root>/config/pairing.json` (`phrase` / `kiosk_user` / `server`) or `OWLETTE_ADD`, mirrors `owlette_installer.iss`'s `ShouldConfigureSite` (an explicit phrase always re-pairs; a machine already carrying a site never does), renames to `pairing.json.used` on success only, and resolves the kiosk user from the preseed then `osadapter.console_user()`, printing the per-OS group-add command rather than guessing. Packaging note for Task 5.1: against an unreachable backend it polls until `TIMEOUT_SECONDS`, so `postinstall` must not call it synchronously.
+- **And the rest of the Linux lane's sweep, all of which is cross-platform:** `_build_capture_code()` in `win.py`; `posix.capture_screen` / `posix.notify` as job clients with `_JOB_HANDOVER_SECONDS`; `show_notification` un-gated; `firebase_client._sync_software_inventory` calling `osadapter.installed_software()`; `hardware_profile` no longer dropping non-root POSIX volumes; `sync_assembler`'s exec-bit branch; `graceful_terminate` skipping the `WM_CLOSE` branch off Windows; `_clean_shutdown_in_event_log`'s third `None` state so a POSIX boot is not downgraded to `unexpected_reboot`; the four `shutdown` call sites routed through the adapter; `owlette_scout` and the stale display sentinel Windows-gated; `update_process_status_in_json` skipping a byte-identical rewrite.
+
+## 8. Corrections to the 2026-09-15 draft, and to the verbatim plan text
+
+The first version of this file was written before the Linux lane existed. If you read a cached copy, these are the statements that were wrong and are now fixed above. Items 7 and 13–15 correct the **plan text carried verbatim in §§12–15**, which is reproduced unedited on purpose: where it and §§1–11 disagree, §§1–11 are current and the plan block is the record of what was decided before the code existed.
+
+1. **"Tasks 3.1/3.2 are being built on the Linux side; pull them in when they land."** They landed and are merged at `47e5cae0`. `posix.py`, `linux.py`, the 3.4 service wiring and the 3.7 pairing work are all on your base. Nothing is arriving later.
+2. **"Test commands and what to expect *before* 3.1/3.2 land."** There is no before any more. §2 carries the real invocation and the real numbers.
+3. **"`get()` returns `win` on `win32`, raises `NotImplementedError` elsewhere — your `darwin` branch goes here."** `_ARMS` already maps `'darwin': 'darwin'` and `_arm()` uses `find_spec`. **Do not edit `osadapter/__init__.py`.** The file being absent is the whole mechanism.
+4. **"`capture_screen(path)` is sealed and must be widened by Task 3.2."** Already widened, to `capture_screen(monitor, *, executor, timeout_s) -> dict`.
+5. **"The Windows arm raises `NotSupportedHere` for the five service-bound rows."** Four, not five — `capture_screen` is real on Windows now.
+6. **"18 `--ignore` entries on `macos-15`; Task 3.4 removes the transitional ones."** Four remain and all four are permanent (`display_manager`'s). 3.4 removed all fourteen transitional entries and made the import-smoke step gate rather than warn.
+7. **The plan text's "Linux: a `session_type()` probe"** (§15, Task 3.2) describes a Protocol-shaped operation that does not exist. It shipped as `linux._session_type()`, underscore-private, with an `_app_session_type()` fallback. macOS needs its own private rules keyed on TCC grant state — see §5.
+8. **"Known one-liners left for the shared 3.4 sweep."** Two of the three are done: `auth_manager.py`'s User-Agent now carries the real OS family, and `firebase_client._ensure_display_profile`'s display imports moved behind the kill switch (with the guard widened to `except Exception`, because `display_manager` raises `AssertionError`, not `ImportError`, off Windows). **Still open and now yours:** `tray.rs` reads `%COMPUTERNAME%` and calls it "the name the fleet knows" — Task 4.1.
+9. **"Design conflict to settle with the Linux side before 3.1"** (who owns the JSON lock). Settled as recommended: `shared_utils._CrossProcessLock` owns it on every OS — named mutex on Windows, `flock(2)` on `<data_root>/tmp/json.lock` on POSIX — and `json_lock()` returns it. Nothing left to decide.
+10. **"`show_notification` is gated off until `osadapter.notify()` exists."** It exists; the tool is un-gated and `tools_posix` has the arm.
+11. **The two-branch coordination picture** in §1, and the shared-writer warnings that went with it, are retired. `feat/tri-platform-linux` is merged.
+12. **This file's own 2026-09-16 refresh said the nine `linux.py` re-exports carry over "unchanged".** Four of them do not: `console_user`, `session_env`, `spawn_as_user` and `launch_managed_process` are Linux-bound through three private helpers of `posix.py`, and because their callers resolve them at `posix` module scope, overriding them in `darwin.py` changes nothing. §5 now carries the corrected split and the three arms that fix it. It also said `pending_reboot()` "delegates to the one marker reader" on Linux — it is a platform-agnostic delegation whose macOS arm already ships.
+13. **The plan's Task 3.4 "Do" (§15) says "SIGTERM to the recorded `shutdown` pid on macOS".** The instruction is right about the mechanism and silent about the hard part: BSD `shutdown` forks and the parent exits immediately, so the pid `Popen` returns is not the scheduler's, and an in-memory record does not survive a daemon restart. §5's `cancel_reboot()` row carries the measurement to run before writing it.
+14. **The plan's Task 3.2 "Do" (§15) spells the macOS reboot check `softwareupdate -l`.** The shipped arm is `softwareupdate --list --no-scan` (`tools_posix.py:366`); without `--no-scan` the call reaches Apple's servers, which is exactly the cost the "off the loop" note is about.
+15. **The plan's Task 3.7 status line gives the privileged-request audit log as 0640 root:root.** It is 0600 (`configure_site.REQUEST_AUDIT_MODE`), tightened by the close review in `21ad3fea`. Verify 0600 on the Mac; do not "correct" the code back to 0640.
+16. **Open question Q24 is ruled.** `startx`-from-tty kiosks stay **unsupported** until logind (or an equally root-owned signal) can name the seat; `console_user()` does not get the desktop-app fallback. Task 6.4 documents it. The equivalent question on macOS is whether `/dev/console` is a root-owned signal in the same sense — it is, which is why it is the mechanism.
+
+## 9. Your first hour on the Mac, then the order of work
+
+Do these in order. The point of the first five steps is that you see the gate skip, then see it retire, rather than taking this file's word for either.
+
+1. **Clone and branch** exactly as §2 spells it, and confirm `git log -1` shows `47e5cae0` or later. If it shows `3cc6e8cc`, you have the pre-Linux base and everything below will mislead you.
+2. **`uv venv .venv --python 3.11`**, activate, install `agent/requirements.txt` + `pytest==9.1.1`. The `sys_platform` markers drop `pywin32`/`wmi`/`pythonnet`/`HardwareMonitor` on their own.
+3. **Run the suite with the CI's own invocation** (§2) and check the shape of the result, not just the colour: **1351 passed / 278 skipped**, and 69 of those skips reading `no osadapter arm for this platform yet`, spread across the five modules in §2's table. Drop the `-x` and add `-rs` for this one run and the skip reasons are listed by name; count the `no osadapter arm` lines. If the count is not 69, the tree moved and this file is stale — say so in the log before you write a line of code. The same `-rs` output shows the 71 lines reading `a Linux mechanism; macOS answers it in darwin.py` — that is `TestDarwin`'s brief (§2's table), not noise.
+4. **Run the import smoke** (`python -c "import firebase_client, owlette_service, configure_site"`). It must pass. It is the step that proves the 3.4 gating holds on a Mac and not only on Linux.
+5. **Create `agent/src/osadapter/darwin.py`** — even as a skeleton that re-exports the nine shared rows and raises on the rest — and **re-run the suite without `-x`.** Watch the gate retire: those 69 skips become runs, and most of them will fail until the ten rows are real. That failure set is your task list for 3.2, in the order the contract test names them.
+6. **Then, and only then, run the spikes.** **Spike 0.2 (macOS capture + TCC)** and the macOS half of **spike 0.4 (LaunchAgent / login items)** still come before the Rust work: only a Mac can answer them, they gate Tasks 4.4, 5.1 and swoop's Wave 8, and your machine is on **macOS 26**, newer than the plan's Sequoia assumptions — record the OS build in every result and flag anything that differs from the behaviour the plan describes. Write the results into `dev/handoff/tri-platform-macos-log.md` in the "Done when" shape each spike names (§15 carries both blocks verbatim).
+7. **Task 3.2's `darwin.py` proper**, per §5 and the verbatim block in §15.
+8. **Task 4.1** (cargo gating — nothing in `desktop/src-tauri` builds on macOS until this), then **4.3/4.4** (job runner, capture + TCC surface) per spike 0.2's transport, then **4.2/4.5/4.7**.
+9. **Task 5.1** (`.pkg`) once **Q4** (Apple Developer Program, both certificate types) is answered — signing and notarization cannot start without it; the unsigned build path can.
+10. **The macOS halves of the shared tasks** — 3.4's launchctl arm is already written and needs proving on hardware, 3.7's `console_user()`-dependent seam likewise, 4.6's CI legs last.
+
+**Contracts your Wave 4 `jobrunner.rs` must match or capture and notify fail closed:** a capture job is `{type:'capture', monitor, timeout_s}` whose `result.json` must carry `files:[…]` plus an integer `monitors` (turned into the `monitors=N` stdout line `screenshot_capture` parses); a notify job is `{type:'notify', title, body}` and any result without an `error` key reads as sent; the daemon-side wait stays `run_job`'s 120 s and `timeout_s` rides inside the payload as the runner's own budget, because widening `run_job`'s signature would break the row 2.1 sealed.
+
+## 10. Reporting back
+
+Append dated entries to `dev/handoff/tri-platform-macos-log.md` (tracked on your branch): what landed, every deviation from the task text with the reason, what was verified on the real machine vs. only unit-tested, and open questions. The Windows-side orchestrator folds them into the plan's `tasks.md`. Commit the log with the code it describes. The Linux lane's status lines are the standard: every deviation named with its reason, a **Rejected, do not re-raise** list, and an explicit **Unverifiable on this rig** list — that last one is what the orchestrator schedules hardware time against.
+
+## 11. Owner questions that affect you (answers pending unless stated)
 
 - **Q4** Apple Developer Program entity / team id / the eight CI secrets — the owner is enrolling; nothing signed or notarized before it.
 - **Q5** ScreenCaptureKit + `image` crates only if spike 0.2's shell path fails; **Q6** whether `capabilities.screenCapture: 0` on macOS would be shippable if both fail.
 - **Q12** the `_owlette` group; **Q15** the Sequoia monthly re-prompt (spike 0.2 measures it); **Q16** MDM enrolment of target Macs.
+- **Q23** (wave 3b) POSIX self-update reporting: a refusal reaches the command row as a generic failure with the reason only in the result string plus an `update_failed` site-log event. Execution assumption is "leave it in the string"; no wire change made. It affects your Mac the same way it affects Linux.
+- **Q24** (wave 3b) **ruled 2026-09-16: keep as is** — startx-from-tty kiosks stay unsupported; `console_user()` gets no desktop-app fallback. Do not re-open it for macOS by anchoring `console_user()` on `tmp/tray.pid`.
 - Decision 12 (resolved): universal2 build, any GPU; macOS min-OS floor is 14.0 in `distribution.xml` — your spike runs on 26, the floor still needs a Sonoma/Sequoia VM check.
 
 ---
 
-## 8. Wire names (verbatim from the plan)
+## 12. Wire names (verbatim from the plan)
 
 ### Wire names (chosen once, lowercase)
 
@@ -112,7 +261,7 @@ Append dated entries to `dev/handoff/tri-platform-macos-log.md` (tracked on your
 
 ---
 
-## 9. Decisions this half of the plan rests on (verbatim)
+## 13. Decisions this half of the plan rests on (verbatim)
 
 1. **`agent/host` is not ported and never compiled for POSIX. Zero Rust changes to that crate.** launchd/systemd
    own supervision; `registration.rs` (508 lines) is pure SCM/NSSM migration with no analogue; `supervisor.rs`
@@ -235,7 +384,7 @@ Append dated entries to `dev/handoff/tri-platform-macos-log.md` (tracked on your
 
 ---
 
-## 10. Cross-plan rules C2 and C3 (verbatim from context.md)
+## 14. Cross-plan rules C2 and C3 (verbatim from context.md)
 
 **C2 — swoop's spawn path per OS.** Windows: the service spawns `owlette-swoop.exe` via `CreateProcessAsUser`
 with the session bundle on stdin (swoop decision 3). macOS: the daemon writes a `launch` job and the resident
@@ -266,7 +415,7 @@ presence-derived. `capabilities.swoop` is `1` iff the streamer binary is present
 
 ---
 
-## 11. The task blocks (verbatim from tasks.md, including every dated 2026-09-15 correction)
+## 15. The task blocks (verbatim from tasks.md, including every dated 2026-09-15 correction)
 
 Read the `Do`, `Done when` and any `Status`/`addendum` lines. Line numbers are hints anchored at `a49ed4cc`; re-resolve by symbol.
 
