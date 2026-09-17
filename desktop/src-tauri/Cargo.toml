@@ -39,8 +39,26 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 # Registered for the next task's filesystem browsing; no frontend usage yet.
 tauri-plugin-fs = "2"
-# The host side is Windows-only by design (it drives the SCM, a named mutex and
-# WM_CLOSE), so these are unconditional rather than target-gated.
+# Seam-file watching, which notify does on all three platforms.
 notify = "8"
+
+# The SCM, the named mutex and WM_CLOSE have no analogue off Windows, so the
+# crates behind them build only there.
+[target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_EnhancedStorage", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_Security"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_EnhancedStorage", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_SystemInformation", "Win32_System_Variant", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_Security"] }
+
+# `gethostname(2)`, for the name the fleet records this machine under; the
+# Windows arm asks GetComputerNameExW for the same string. Off Windows the app
+# also serves the daemon's GUI job seam, which needs flock, the file modes the
+# data-root table sets and a pipe to a spawned child.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The X11 screen grab behind the seam's `capture` job, taken in process through
+# the toolkit tauri already links on linux (`gdk` and the `gdk-pixbuf` it
+# re-exports are both in this crate's tree through tauri-runtime-wry). A stock
+# Ubuntu kiosk ships no screenshot binary to shell out to, and this is the same
+# library the window system is already talking to.
+[target.'cfg(target_os = "linux")'.dependencies]
+gdk = "0.18"

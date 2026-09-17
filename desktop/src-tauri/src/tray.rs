@@ -333,7 +333,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
   let menu = build_menu(app, &view)?;
   let tray = TrayIconBuilder::with_id(TRAY_ID)
     .icon(icon_for(view.code))
-    .tooltip(tooltip(&root, &view))
+    .tooltip(tooltip(&view))
     .menu(&menu.menu)
     // Windows defaults to the menu on either button; left click must open the
     // window or there is no one-click way back to it.
@@ -522,7 +522,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
           last_flash = now;
         }
         apply_menu(&app, &view);
-        wanted_tooltip = Some(tooltip(&root, &view));
+        wanted_tooltip = Some(tooltip(&view));
       }
 
       // Only the Error tier toasts (narrowed 2026-08-14): a Warning is what
@@ -913,11 +913,10 @@ fn notify(app: &AppHandle, title: &str, body: String) {
 
 
 fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
-  let root = paths::data_root();
   let version = MenuItem::with_id(
     app,
     "version",
-    format!("owlette v{}", agent_version(&root)),
+    format!("owlette v{}", agent_version(&paths::install_root())),
     false,
     None::<&str>,
   )?;
@@ -972,10 +971,10 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   })
 }
 
-fn tooltip(root: &Path, view: &TrayView) -> String {
+fn tooltip(view: &TrayView) -> String {
   format!(
     "owlette v{}\nhostname: {}\n{}\n{}",
-    agent_version(root),
+    agent_version(&paths::install_root()),
     hostname(),
     view.service,
     view.status
@@ -993,8 +992,59 @@ fn agent_version(root: &Path) -> String {
     .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
+/// The name the fleet records this machine under — `socket.gethostname()` on
+/// the python side, the same name each arm here asks the OS for.
 pub(crate) fn hostname() -> String {
-  std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string())
+  named(os_hostname())
+}
+
+/// What the tray shows when the OS will not give a name: blank would read as a
+/// machine with no identity rather than one we could not ask.
+fn named(reported: Option<String>) -> String {
+  reported
+    .map(|name| name.trim().to_string())
+    .filter(|name| !name.is_empty())
+    .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[cfg(windows)]
+fn os_hostname() -> Option<String> {
+  use windows::core::PWSTR;
+  use windows::Win32::System::SystemInformation::{
+    ComputerNamePhysicalDnsHostname, GetComputerNameExW,
+  };
+
+  // The DNS host name winsock would answer with, not `%COMPUTERNAME%`'s
+  // NetBIOS form: the agent registers the machine under the former.
+  let mut buffer = [0u16; 256];
+  let mut length = buffer.len() as u32;
+  // SAFETY: the buffer outlives the call and `length` is its size in wide
+  // characters, which is what the API reads and then overwrites with the
+  // length it wrote.
+  unsafe {
+    GetComputerNameExW(
+      ComputerNamePhysicalDnsHostname,
+      Some(PWSTR(buffer.as_mut_ptr())),
+      &mut length,
+    )
+    .ok()?;
+  }
+  Some(String::from_utf16_lossy(&buffer[..length as usize]))
+}
+
+#[cfg(unix)]
+fn os_hostname() -> Option<String> {
+  let mut buffer = [0 as libc::c_char; 256];
+  // SAFETY: the pointer is this buffer's, and the length is one short of it so
+  // a truncated name keeps the terminator POSIX does not promise to write.
+  let result = unsafe { libc::gethostname(buffer.as_mut_ptr(), buffer.len() - 1) };
+  if result != 0 {
+    return None;
+  }
+  // SAFETY: the call above terminated the name inside the buffer, which is
+  // still borrowed here.
+  let name = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) };
+  Some(name.to_string_lossy().into_owned())
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -1841,5 +1891,25 @@ mod tests {
     assert_eq!(agent_version(&dir), "2.12.21");
 
     let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn the_os_answers_with_a_hostname_on_this_platform() {
+    let name = hostname();
+    assert_ne!(name, "unknown", "the platform hostname call failed");
+    // A name carrying the terminator or the padding of the buffer it was read
+    // into is a name the dashboard would never match against the agent's.
+    assert!(!name.chars().any(char::is_control), "{name:?}");
+    assert!(!name.chars().any(char::is_whitespace), "{name:?}");
+  }
+
+  /// Negative control for the test above: "unknown" is reachable, from the one
+  /// path that should reach it, so a failing platform call cannot pass as a
+  /// hostname.
+  #[test]
+  fn a_name_the_os_will_not_give_reads_as_unknown() {
+    assert_eq!(named(None), "unknown");
+    assert_eq!(named(Some("  \n".to_string())), "unknown");
+    assert_eq!(named(Some("  kiosk-01\n".to_string())), "kiosk-01");
   }
 }

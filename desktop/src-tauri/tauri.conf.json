@@ -33,7 +33,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "app", "deb"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -43,6 +43,22 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1",
+          "librsvg2-2",
+          "dbus-user-session",
+          "xdg-utils"
+        ]
+      }
+    },
+    "macOS": {
+      "signingIdentity": null,
+      "minimumSystemVersion": "14.0"
     }
   }
 }

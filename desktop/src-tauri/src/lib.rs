@@ -1,5 +1,7 @@
 mod agent_cli;
 mod commands;
+#[cfg(unix)]
+mod jobrunner;
 mod json_io;
 mod paths;
 mod pid_file;
@@ -49,6 +51,10 @@ struct SecondInstance {
 
 /// Holds the file watchers for the life of the app; dropping this stops them.
 struct Watchers(Mutex<Option<watchers::WatchHandle>>);
+
+/// Holds the POSIX job runner for the life of the app; dropping this stops it.
+#[cfg(unix)]
+struct JobRunner(Mutex<Option<jobrunner::Handle>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -167,6 +173,24 @@ pub fn run() {
       };
       app.manage(Watchers(Mutex::new(watchers)));
 
+      // The GUI job seam: off Windows the daemon has no session of its own, so capture,
+      // notification and session spawns are jobs this app runs. Failing to serve it costs those
+      // jobs the typed `desktop_not_running` refusal their callers already handle.
+      #[cfg(unix)]
+      {
+        let runner = match jobrunner::spawn(app.handle().clone(), &root) {
+          Ok(runner) => Some(runner),
+          Err(error) => {
+            log::error!(
+              "could not serve the job seam under {}: {error}",
+              root.display()
+            );
+            None
+          }
+        };
+        app.manage(JobRunner(Mutex::new(runner)));
+      }
+
       Ok(())
     })
     .on_window_event(|window, event| {
@@ -216,6 +240,12 @@ pub fn run() {
         }
         if let Some(watchers) = app.try_state::<Watchers>() {
           if let Ok(mut handle) = watchers.0.lock() {
+            drop(handle.take());
+          }
+        }
+        #[cfg(unix)]
+        if let Some(runner) = app.try_state::<JobRunner>() {
+          if let Ok(mut handle) = runner.0.lock() {
             drop(handle.take());
           }
         }

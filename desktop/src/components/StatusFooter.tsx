@@ -17,7 +17,7 @@ interface StatusFooterProps {
   status: ServiceStatus | null
   statusFile: ServiceStatusFile | null
   config: OwletteConfig | null
-  /** COMPUTERNAME, shown as-is — machine names keep their real casing. */
+  /** The machine's hostname, shown as-is — machine names keep their real casing. */
   hostname?: string | null
   starting: boolean
   onStart: () => void

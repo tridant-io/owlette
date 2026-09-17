@@ -21,7 +21,7 @@ use crate::service_ctl::{self, ServiceCommandOutcome, ServiceStatus};
 use crate::shell_open;
 use crate::window_state::{DetailSections, LayoutState};
 
-/// Absolute path of the owlette data root (`%PROGRAMDATA%\Owlette`). The frontend
+/// Absolute path of the owlette data root, per OS (`crate::paths`). The frontend
 /// otherwise uses relative paths; this is for spawning the bundled interpreter or
 /// showing the operator where the tree lives.
 #[tauri::command(async)]
@@ -40,7 +40,7 @@ pub fn launch_args() -> Vec<String> {
   std::env::args().collect()
 }
 
-/// This machine's name, as the fleet knows it (`COMPUTERNAME`).
+/// This machine's name, as the fleet knows it (`gethostname`).
 #[tauri::command(async)]
 pub fn hostname() -> String {
   crate::tray::hostname()

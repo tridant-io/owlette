@@ -116,7 +116,7 @@ export interface TerminateOutcome {
   imagePath: string | null
 }
 
-/** Absolute path of the owlette data root (`%PROGRAMDATA%\Owlette`). */
+/** Absolute path of the owlette data root, per OS. */
 export function owletteDataRoot(): Promise<string> {
   return invoke<string>('owlette_data_root')
 }
@@ -165,7 +165,7 @@ export function launchArgs(): Promise<string[]> {
   return invoke<string[]>('launch_args')
 }
 
-/** This machine's name, as the fleet knows it (`COMPUTERNAME`). */
+/** This machine's name, as the fleet knows it (`gethostname`). */
 export function hostname(): Promise<string> {
   return invoke<string>('hostname')
 }

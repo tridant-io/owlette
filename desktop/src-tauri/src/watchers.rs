@@ -1,4 +1,5 @@
-//! Directory watchers for the three seam files the service publishes.
+//! Directory watchers for the three seam files the service publishes, and for the job queue the
+//! service fills off Windows.
 //!
 //! `config.json`, `tmp/app_states.json` and `tmp/service_status.json` are never written in place —
 //! both sides scratch-write and rename over the target (`shared_utils.write_json_to_file`). A watch
@@ -160,6 +161,72 @@ where
   })
 }
 
+/// Watch one directory, reporting that it changed — never what changed, because the only caller
+/// (the POSIX job runner) rescans it whole and executes each request once.
+///
+/// The same 120 ms window as the seam files, taken at the leading edge: a job's result is due
+/// inside 300 ms of the request landing, and a trailing-edge wait would spend nearly half of that
+/// before the work started. The first event reports at once and the rest of the burst — the
+/// daemon's scratch write, its rename, and its removal of the request afterwards — collapses into
+/// one more report at the end of the window.
+#[cfg(unix)]
+pub fn spawn_directory<F>(directory: &Path, sink: F) -> notify::Result<WatchHandle>
+where
+  F: Fn() + Send + 'static,
+{
+  if let Err(error) = std::fs::create_dir_all(directory) {
+    log::warn!(
+      "could not create {} for watching: {error}",
+      directory.display()
+    );
+  }
+
+  let (tx, rx) = mpsc::channel();
+  let mut watcher = notify::recommended_watcher(tx)?;
+  watcher.watch(directory, RecursiveMode::NonRecursive)?;
+
+  let worker = thread::Builder::new()
+    .name("owlette-jobs-watch".into())
+    .spawn(move || {
+      let mut window: Option<Instant> = None;
+      let mut pending = false;
+
+      loop {
+        let received = match window {
+          None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+          Some(at) => rx.recv_timeout(at.saturating_duration_since(Instant::now())),
+        };
+
+        match received {
+          Ok(Ok(_)) => match window {
+            None => {
+              sink();
+              window = Some(Instant::now() + DEBOUNCE);
+            }
+            Some(_) => pending = true,
+          },
+          Ok(Err(error)) => log::warn!("owlette job watcher error: {error}"),
+          Err(RecvTimeoutError::Timeout) => {
+            if pending {
+              sink();
+              pending = false;
+              window = Some(Instant::now() + DEBOUNCE);
+            } else {
+              window = None;
+            }
+          }
+          Err(RecvTimeoutError::Disconnected) => break,
+        }
+      }
+    })
+    .map_err(notify::Error::io)?;
+
+  Ok(WatchHandle {
+    watcher: Some(watcher),
+    worker: Some(worker),
+  })
+}
+
 /// One watched file: absolute path plus the key events are matched against.
 struct Target {
   file: OwletteFile,
@@ -270,6 +337,60 @@ mod tests {
     atomic_replace(&scratch.0.join(OwletteFile::Config.relative_path()), "{}");
     let change = rx.recv_timeout(Duration::from_secs(5)).expect("event");
     assert_eq!(change.file, OwletteFile::Config);
+
+    drop(handle);
+  }
+
+  /// The job queue's watch answers at once: a result is due inside 300 ms of the request
+  /// landing, and a trailing-edge wait would spend nearly half of that before the runner looked.
+  #[test]
+  #[cfg(unix)]
+  fn reports_a_queued_job_without_waiting_out_the_window() {
+    let scratch = Scratch::new("jobs");
+    let jobs = scratch.0.join("ipc").join("jobs");
+    let (tx, rx) = channel();
+    let handle = spawn_directory(&jobs, move || {
+      let _ = tx.send(Instant::now());
+    })
+    .expect("spawn watcher");
+
+    let queued = Instant::now();
+    atomic_replace(&jobs.join("a1b2.json"), "{}");
+
+    let reported = rx.recv_timeout(Duration::from_secs(5)).expect("event");
+    assert!(
+      reported.duration_since(queued) < DEBOUNCE,
+      "the queue was reported {:?} after the request landed",
+      reported.duration_since(queued)
+    );
+
+    drop(handle);
+  }
+
+  #[test]
+  #[cfg(unix)]
+  fn collapses_a_burst_of_queued_jobs_into_one_further_report() {
+    let scratch = Scratch::new("jobsburst");
+    let jobs = scratch.0.join("ipc").join("jobs");
+    let (tx, rx) = channel();
+    let handle = spawn_directory(&jobs, move || {
+      let _ = tx.send(Instant::now());
+    })
+    .expect("spawn watcher");
+
+    atomic_replace(&jobs.join("first.json"), "{}");
+    rx.recv_timeout(Duration::from_secs(5))
+      .expect("first report");
+    for index in 0..3 {
+      atomic_replace(&jobs.join(format!("burst{index}.json")), "{}");
+    }
+
+    rx.recv_timeout(Duration::from_secs(5))
+      .expect("the burst reports once more");
+    assert!(
+      rx.recv_timeout(DEBOUNCE * 4).is_err(),
+      "expected the burst to collapse into a single further report"
+    );
 
     drop(handle);
   }
