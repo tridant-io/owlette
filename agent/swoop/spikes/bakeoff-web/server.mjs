@@ -14,7 +14,7 @@
 // Routes:
 //   GET  /                     the page
 //   GET  /bakeoff.js           the harness
-//   GET  /receivers/*.js       the seam and its arms
+//   GET  /receivers/*.js       the seam, its three arms and arm C's worker
 //   GET  /health               {"ok":true}
 //   GET  /progress?m=…         the page's own log, echoed to this server's stdout
 //   POST /result               a run; written to <out>/<arm>-<placement>-<codec>-<stamp>.json
@@ -53,6 +53,18 @@ const STATIC = new Map([
   ['/bakeoff.js', ['public/bakeoff.js', 'text/javascript; charset=utf-8']],
   ['/receivers/receiver.js', ['public/receivers/receiver.js', 'text/javascript; charset=utf-8']],
   ['/receivers/rtp-track.js', ['public/receivers/rtp-track.js', 'text/javascript; charset=utf-8']],
+  ['/receivers/data-channel.js', ['public/receivers/data-channel.js', 'text/javascript; charset=utf-8']],
+  [
+    '/receivers/script-transform.js',
+    ['public/receivers/script-transform.js', 'text/javascript; charset=utf-8'],
+  ],
+  // Arm C's `RTCRtpScriptTransform` worker. Same origin as the page, which is
+  // what `new Worker()` requires.
+  [
+    '/receivers/transform-worker.js',
+    ['public/receivers/transform-worker.js', 'text/javascript; charset=utf-8'],
+  ],
+  ['/receivers/webcodecs.js', ['public/receivers/webcodecs.js', 'text/javascript; charset=utf-8']],
 ]);
 
 function safeName(part, fallback) {
@@ -119,6 +131,10 @@ const server = createServer(async (req, res) => {
         `arm${safeName(parsed.arm, 'x')}`,
         safeName(parsed.placement, 'unknown'),
         safeName(parsed.host?.codec, 'codec'),
+        // Arm A's reliability mode is part of the row's identity, so it is part
+        // of the file name: three runs of arm A that differ only in mode would
+        // otherwise be told apart only by their timestamps.
+        ...(parsed.dcMode ? [safeName(parsed.dcMode, 'mode')] : []),
         safeName(parsed.label, 'run'),
         stamp,
       ].join('-');

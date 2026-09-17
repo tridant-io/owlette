@@ -1,0 +1,25 @@
+--- a/src/sctp/mod.rs
++++ b/src/sctp/mod.rs
+@@ -27,7 +27,21 @@
+ pub use error::SctpError;
+ 
+ /// Bytes that can be buffered inside str0m across all streams.
+-const MAX_BUFFERED_ACROSS_STREAMS: usize = 128 * 1024;
++///
++/// swoop spike 0.2, review-1 F1. **Opt-in, and measured harmful on a clean
++/// path.** Upstream's 128 KiB is shared across every channel and is the whole
++/// send window, so at a 40 ms RTT it caps the association at
++/// 128 KiB / 0.04 s = 26 Mbps however fast the link is. Chrome's own dcSCTP
++/// allows `max_send_buffer_size = 2_000_000` with a separate per-stream limit
++/// (`dcsctp_options.h`), which is the value here.
++///
++/// On loopback it made throughput worse, not better. Offered 100 Mbps to
++/// Chrome 153 over a 17.5 s window, str0m carried 43.7 Mbps with the buffer
++/// pegged at 1 999 999 bytes; unpatched, 100.0 Mbps with 131 063 bytes over
++/// 17.1 s. sctp-proto has no pacer and no `max_burst`, so the extra room
++/// becomes a standing queue rather than throughput. Apply it only with an
++/// impaired path to justify it.
++const MAX_BUFFERED_ACROSS_STREAMS: usize = 2_000_000;
+ 
+ /// Maximum message size we advertise in SDP (what we can receive)
+ pub const LOCAL_MAX_MESSAGE_SIZE: u32 = 256 * 1024;

@@ -14,13 +14,24 @@
 //   finer than that exchange's own uncertainty — §2.5;
 // - a same-machine row carries the literal words "ranking only" — §2.2.
 //
-//   ?arm=b&codec=h264&n=150&host=http://127.0.0.1:17441&autorun=1
+//   ?arm=b&n=150&host=http://127.0.0.1:17441&autorun=1
+//   ?arm=a&dcmode=unordered-nortx&n=150          # arm A's reliability matrix
+//   ?arm=c&n=150                                 # RTCRtpScriptTransform
+//
+// `?arm=` must match the host's `--arm`; a mismatch is refused rather than
+// measured.
 
 import { createReceiver, registeredArms } from './receivers/receiver.js';
+import './receivers/data-channel.js';
 import './receivers/rtp-track.js';
+import './receivers/script-transform.js';
 
 const params = new URLSearchParams(location.search);
 const ARM = params.get('arm') ?? 'b';
+// Arm A only. review-1 F2's reliability matrix is a browser-side
+// `createDataChannel` option, so it is a URL parameter and not a host flag.
+// The spellings are the keys of `DC_MODES` in `receivers/data-channel.js`.
+const DC_MODE = params.get('dcmode') ?? 'ordered-lifetime';
 const N = Number(params.get('n') ?? 150);
 // 120 frames is two seconds. Measured on arm B, a freshly connected stream
 // starts about six refresh periods behind and drains one period per refresh
@@ -39,10 +50,20 @@ const out = document.getElementById('out');
 const stateEl = document.getElementById('state');
 const video = document.getElementById('stage');
 const canvas = document.getElementById('probe');
+// Arms A and C present here; arm B presents into the `<video>` above and leaves
+// this empty. Both are in the DOM for every run so no arm is measured against a
+// layout the others did not have.
+const present = document.getElementById('present');
 
+// Everything the page says also goes to the page server's stdout. Spike 0.9
+// lost a run to a page that loaded, silently did nothing and left no trace
+// anywhere, and stage 2 lost one to a receiver that threw a message only the
+// browser window ever saw. A run that stalls has to be diagnosable from the
+// terminal that started it.
 function say(line) {
   out.textContent += `${line}\n`;
   out.scrollTop = out.scrollHeight;
+  fetch(`/progress?m=${encodeURIComponent(line)}`).catch(() => {});
 }
 function state(s) {
   stateEl.textContent = s;
@@ -177,12 +198,28 @@ function pick(report, keys) {
   return o;
 }
 
+// Arm A has no inbound-rtp at all — its video is SCTP — so the data-channel
+// report is the only place its byte count and message count exist.
+const DATA_CHANNEL_KEYS = [
+  'label', 'protocol', 'dataChannelIdentifier', 'state',
+  'messagesSent', 'bytesSent', 'messagesReceived', 'bytesReceived',
+];
+
 async function collectStats(pc) {
   const stats = await pc.getStats();
   const byId = new Map();
   stats.forEach((r) => byId.set(r.id, r));
-  const out = { inboundVideo: null, selectedPair: null, localCandidate: null, remoteCandidate: null, codec: null, transport: null };
+  const out = {
+    inboundVideo: null,
+    selectedPair: null,
+    localCandidate: null,
+    remoteCandidate: null,
+    codec: null,
+    transport: null,
+    dataChannels: [],
+  };
   stats.forEach((r) => {
+    if (r.type === 'data-channel') out.dataChannels.push(pick(r, DATA_CHANNEL_KEYS));
     if (r.type === 'inbound-rtp' && r.kind === 'video') {
       out.inboundVideo = pick(r, INBOUND_KEYS);
       const codec = byId.get(r.codecId);
@@ -259,7 +296,10 @@ async function connect(receiver, clientConfig) {
 async function run() {
   state('running');
   out.textContent = '';
-  say(`arm ${ARM} (registered: ${registeredArms().join(', ')}), n=${N}, warmup=${WARMUP}`);
+  say(
+    `arm ${ARM} (registered: ${registeredArms().join(', ')}), n=${N}, warmup=${WARMUP}` +
+      (ARM === 'a' ? `, dcmode=${DC_MODE}` : ''),
+  );
 
   const granularityMs = clockGranularityMs();
   say(`performance.now() granularity: ${granularityMs} ms`);
@@ -276,7 +316,22 @@ async function run() {
   // after it finishes cannot be debugged when it stalls; this is how a run in
   // progress is interrogated (`Runtime.evaluate` over CDP, or the console).
   globalThis.swoopDiag = () => ({ frames: frames.length, receiver: receiver.diagnostics() });
-  const { pc, hostReply } = await connect(receiver, { metaChannel: 'swoop-meta' });
+  const { pc, hostReply } = await connect(receiver, {
+    metaChannel: 'swoop-meta',
+    videoChannel: 'swoop-video',
+    transformWorker: '/receivers/transform-worker.js',
+    dcMode: DC_MODE,
+  });
+  // The host answers with the arm it was started as. A page pointed at a host
+  // running a different arm produces an offer the host cannot use, and the
+  // failure looks like "no frames" rather than like a mismatch — so it is
+  // refused here instead.
+  if (hostReply.client?.arm && hostReply.client.arm !== ARM) {
+    throw new Error(
+      `host is running arm ${hostReply.client.arm}, page asked for arm ${ARM}` +
+        ' — restart the host with --arm ' + ARM,
+    );
+  }
   // Part of the same live-inspection hook as `swoopDiag`: a run that stalls has
   // to be answerable while it is stalled, and `getStats` is where the answer is.
   globalThis.swoopStats = () => collectStats(pc);
@@ -284,7 +339,10 @@ async function run() {
   const negotiated = extmapLines(pc.remoteDescription.sdp);
   const playoutDelayNegotiated = negotiated.some((l) => l.includes('playout-delay'));
   say(`answer extmap: ${negotiated.length} lines, playout-delay ${playoutDelayNegotiated ? 'PRESENT' : 'ABSENT'}`);
-  if (!playoutDelayNegotiated) {
+  // Arm A negotiates no media line, so there is no RTP, no jitter buffer and
+  // nothing for a header extension to be carried on. Only arms B and C have
+  // something to warn about.
+  if (!playoutDelayNegotiated && ARM !== 'a') {
     say('WARNING: playout-delay was not negotiated. Chrome\'s jitter buffer is free to grow to 40950 ms.');
   }
 
@@ -298,6 +356,7 @@ async function run() {
   // replaced and the first frames would be lost.
   await receiver.start(pc, {
     video,
+    present,
     canvas,
     onFrame: (frame) => {
       frames.push(frame);
@@ -305,14 +364,31 @@ async function run() {
       if (frames.length >= N + WARMUP) resolveDone();
     },
   });
+  // The series length decides the deadline, not a constant: the 60 s 50 Mbps
+  // arm A row is 3 600 frames and would trip a fixed 90 s budget on the last
+  // hundred.
+  const budgetMs = Math.max(90000, Math.round(((N + WARMUP) / 60) * 1000 * 1.8));
+  // A run that produces no frames at all fails at the deadline with nothing but
+  // "0 frames" to go on, which is the least useful moment to have to start
+  // debugging. These two reports cost nothing when the run is healthy — they
+  // only fire while `frames` is still empty.
+  const stillNothing = [5000, 20000].map((at) =>
+    setTimeout(() => {
+      if (frames.length === 0) say(`no frames after ${at / 1000} s: ${JSON.stringify(receiver.diagnostics())}`);
+    }, at),
+  );
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`only ${frames.length} frames in 90 s`)), 90000);
+    timer = setTimeout(
+      () => reject(new Error(`only ${frames.length} frames in ${(budgetMs / 1000).toFixed(0)} s`)),
+      budgetMs,
+    );
   });
   try {
     await Promise.race([done, timeout]);
   } finally {
     clearTimeout(timer);
+    stillNothing.forEach(clearTimeout);
   }
 
   const stats = await collectStats(pc);
@@ -383,6 +459,24 @@ function build(ctx) {
   const presentToRv = [];
   const readbackCost = [];
   const stimulusPhase = [];
+  // Arms A and C only: they own their presentation, so the two steps arm B's
+  // user agent performs for it are visible here and are measured separately
+  // rather than folded into one number that would not mean the same thing.
+  const decodeOutToDrawn = [];
+  const drawnToRv = [];
+  const workerHop = [];
+  // The arm-B-comparable instant for arms A and C.
+  //
+  // `_rv` is defined as the renderer reading its pixels back (spike 0.1 §2.1),
+  // and for a canvas arm that is literally what the probe does — so arm A's and
+  // arm C's `_rv` carries the probe's own cost, while arm B's comes from the
+  // user agent's `presentationTime` and carries none (`receiver.js` explains
+  // why arm B cannot afford a per-frame readback). Comparing the three on `_rv`
+  // alone would charge A and C for an instrument B was not charged for, so the
+  // draw instant — the same "submitted for composition" boundary the user agent
+  // reports for arm B — is published as its own row and the difference between
+  // the two is `drawn -> readback`.
+  const presentToDrawn = [];
   const rafPeriods = ctx.rafResult.periods.filter((p) => p > 0);
   // The startup drain, kept as evidence rather than dropped: a reader has to be
   // able to see that the excluded frames were a monotonic drain and not an
@@ -410,6 +504,12 @@ function build(ctx) {
       presentToRv.push(f.callbackMs - f.presentedMs);
     }
     if (Number.isFinite(f.readbackCostMs)) readbackCost.push(f.readbackCostMs);
+    if (Number.isFinite(f.drawnMs) && Number.isFinite(f.callbackMs)) {
+      decodeOutToDrawn.push(f.drawnMs - f.callbackMs);
+    }
+    if (Number.isFinite(f.drawnMs) && Number.isFinite(f.rvMs)) drawnToRv.push(f.rvMs - f.drawnMs);
+    if (Number.isFinite(f.drawnMs)) presentToDrawn.push(f.drawnMs - presentPerf);
+    if (Number.isFinite(f.workerHopMs)) workerHop.push(f.workerHopMs);
     // How much of the refresh period the stimulus actually sampled. On a
     // same-machine row the host compositor and Chrome's compositor share one
     // vsync, so this can be narrow — which is a finding, not a defect, and it
@@ -421,6 +521,7 @@ function build(ctx) {
   const rankingOnly = placement === 'same-machine';
   const rows = [
     ['_rv  present -> composition', summarize(rvf)],
+    ['_rv* present -> drawn (A/C)', summarize(presentToDrawn)],
     ['     present -> rVFC callback', summarize(rvfcf)],
     ['host capture (present->acquire)', summarize(hostCapture)],
     ['host encode (submit->done)', summarize(hostEncode)],
@@ -430,14 +531,17 @@ function build(ctx) {
     ['decode (processingDuration)', summarize(decode)],
     ['arrival -> composition', summarize(arrivalToRv)],
     ['rVFC callback - presentation', summarize(presentToRv)],
-    ['readback cost (sampled 1:30)', summarize(readbackCost)],
+    ['decoder output -> drawn (A/C)', summarize(decodeOutToDrawn)],
+    ['drawn -> readback (A/C)', summarize(drawnToRv)],
+    ['transform worker hop (C)', summarize(workerHop)],
+    ['readback cost (probe)', summarize(readbackCost)],
     ['rafPeriodContinuous', summarize(rafPeriods)],
     ['stimulus phase within refresh', summarize(stimulusPhase)],
     ['warmup _rv (drain, excluded)', summarize(warmupRv)],
   ];
 
   const header = [
-    `arm ${ARM} · ${ctx.hostReport?.codec ?? '?'} · placement "${placement}"` +
+    `arm ${ARM}${ARM === 'a' ? ` (${DC_MODE})` : ''} · ${ctx.hostReport?.codec ?? '?'} · placement "${placement}"` +
       (rankingOnly ? '  << RANKING ONLY — never an absolute product latency (0.1 §2.2) >>' : ''),
     `n measured ${measured.length} (warmup ${WARMUP} dropped) · rafPeriodContinuous p50 ${rafP50.toFixed(2)} ms` +
       ` · ${rafP50 >= 16.6 && rafP50 <= 16.8 ? '60 Hz client confirmed' : 'NOT a 60 Hz client — this row is unlabelled'}`,
@@ -445,13 +549,18 @@ function build(ctx) {
       ` no cross-clock figure below is quoted finer than that`,
     'C_photon(60 Hz, this box) = 10.1 ms (compositor, measured proxy) + S, where S = scanout + panel =' +
       ' PENDING [human] (spike 0.1 §5.3). Every figure here is renderer-visible (_rv). No photon number exists.',
+    '_rv* is the arms A/C row that is comparable with arm B\'s _rv: arm B\'s comes from the user' +
+      ' agent\'s presentationTime and carries no readback, and these arms read back per frame.',
   ].join('\n');
 
   const text = `${header}\n\n${table(rows)}`;
 
   const json = {
-    spike: '0.2 stage 1',
+    spike: '0.2 stage 2',
     arm: ARM,
+    // Arm A's reliability mode. Recorded for every arm so a row can never be
+    // read as a mode it was not taken in; it is `null` where it means nothing.
+    dcMode: ARM === 'a' ? DC_MODE : null,
     label: LABEL,
     when: new Date().toISOString(),
     placement,
@@ -499,6 +608,8 @@ function build(ctx) {
       presentedMs: f.presentedMs,
       expectedDisplayMs: f.expectedDisplayMs,
       callbackMs: f.callbackMs,
+      drawnMs: f.drawnMs ?? null,
+      workerHopMs: f.workerHopMs ?? null,
       rvMs: f.rvMs,
       readbackMs: f.readbackMs,
       readbackCostMs: f.readbackCostMs,

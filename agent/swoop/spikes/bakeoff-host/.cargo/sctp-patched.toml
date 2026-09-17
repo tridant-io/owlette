@@ -1,0 +1,23 @@
+# The patched-SCTP build of arm A, as a cargo config overlay.
+#
+# It lives under `.cargo/` so that the `vendor/` paths below resolve against
+# this crate's root: cargo resolves a config file's relative paths against the
+# parent of its `.cargo` directory, and from anywhere else `vendor/str0m`
+# resolves one directory too high.
+#
+#   cd agent/swoop/spikes/bakeoff-host
+#   bash sctp-patches/apply.sh                       # materialises vendor/
+#   cargo run --release --config .cargo/sctp-patched.toml -- serve --arm a --dc-load 50000000
+#
+# It is an overlay rather than a `[patch.crates-io]` section in `Cargo.toml` so
+# that the default build — and therefore `cargo clippy -- -D warnings` and
+# `cargo test` — stays on the released crates and needs no `vendor/` directory.
+# The patched build is one flag, and every row in the run's JSON says which it
+# was: the patched `MAX_BUFFERED_ACROSS_STREAMS` shows up in arm A's own
+# `str0mMaxBufferedAcrossStreams` diagnostic.
+#
+# What the four patches are and why: `sctp-patches/*.patch`.
+
+[patch.crates-io]
+str0m = { path = "vendor/str0m" }
+sctp-proto = { path = "vendor/sctp-proto" }

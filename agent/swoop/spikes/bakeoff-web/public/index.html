@@ -34,6 +34,10 @@
       /* srcObject only — proxy.ts sets no media-src, so a blob URL would be
          blocked in the product and this page keeps the product's habit. */
       video { width: 100%; background: #000; border: 1px solid #242a33; }
+      /* Arms A and C present here: they own their surface, which is what lets
+         them read pixels back per frame where arm B cannot. Sized from the
+         first decoded frame; the CSS width only scales what is already drawn. */
+      #present { width: 100%; background: #000; border: 1px solid #242a33; }
       /* The measurement canvas. In the DOM and presented, because spike 0.1 §6
          measured a detached canvas reading back at up to 62 ms. */
       #probe { width: 160px; height: 90px; border: 1px solid #242a33; image-rendering: pixelated; }
@@ -47,12 +51,14 @@
       <span id="state">idle</span>
       <button id="go">run</button>
       <span class="hint">
-        ?arm=b&amp;n=150&amp;warmup=30&amp;host=http://127.0.0.1:17441&amp;label=…&amp;autorun=1
+        ?arm=a|b|c&amp;dcmode=ordered-lifetime&amp;n=150&amp;warmup=120&amp;host=http://127.0.0.1:17441&amp;label=…&amp;autorun=1
       </span>
     </header>
     <main>
       <div>
         <video id="stage" autoplay playsinline muted></video>
+        <p class="hint">arm a / arm c presentation canvas:</p>
+        <canvas id="present" width="16" height="9"></canvas>
         <p class="hint">readback probe:</p>
         <canvas id="probe" width="160" height="90"></canvas>
         <p class="hint">

@@ -6,9 +6,12 @@
 // encode, decode or presentation". This file is that seam for spike 0.2, shaped
 // so the product file can be a typed copy of it.
 //
-// Stage 1 registers arm B only (`rtp-track.js`). Stage 2 adds arm A
+// Stage 1 registered arm B only (`rtp-track.js`). Stage 2 added arm A
 // (`data-channel.js`) and arm C (`script-transform.js`) by calling
-// `registerReceiver` and changing nothing in `bakeoff.js`.
+// `registerReceiver`; `bakeoff.js` gained three import lines, a presentation
+// canvas to hand to `start`, and three rows that are empty for arm B.
+// Everything an arm does between "a peer connection exists" and "a frame is
+// visible" stayed inside the arm.
 //
 // ## The contract
 //

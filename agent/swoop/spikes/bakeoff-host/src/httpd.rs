@@ -29,10 +29,14 @@ use std::sync::{Arc, Mutex};
 
 use crate::clock::{qpc, qpf, ticks_to_ms};
 use crate::json::J;
-use crate::sink::VideoSink;
+use crate::sink::{Arm, VideoSink};
 
 /// Everything the HTTP thread needs from the rest of the process.
 pub struct Signaling {
+    /// Which of plan.md D3's arms to build for an offer. The page's `?arm=`
+    /// must agree; the answer carries the arm back so the page can refuse a
+    /// mismatch rather than measure a run neither side meant.
+    pub arm: Arm,
     /// Address the arm's UDP socket binds to. One concrete address, never
     /// `0.0.0.0` — see [`crate::sinks::rtp_track::RtpTrackSink::bind`].
     pub udp_bind: SocketAddr,
@@ -42,6 +46,10 @@ pub struct Signaling {
     /// Whether the arm enables bandwidth estimation, and with it str0m's
     /// leaky-bucket pacer. Off for latency rows - see `rtp_track`'s module doc.
     pub bwe: bool,
+    /// Arm A only: total bytes per second to offer the data channel, video
+    /// included, or 0 for "whatever the encoder produces". See
+    /// [`crate::sinks::data_channel::DataChannelSink::bind`].
+    pub dc_load_bps: u64,
     pub sink_tx: SyncSender<Box<dyn VideoSink + Send>>,
     /// The host half of the run report, refreshed by the capture and pipeline
     /// threads. `GET /hostreport` renders whatever is in it at the time.
@@ -162,23 +170,59 @@ fn serve_connection(stream: TcpStream, signaling: Arc<Signaling>) {
     }
 }
 
+/// Build the arm the host was started as, answer the offer, and hand the sink
+/// to the transport thread.
+///
+/// The three branches are the only place in the process that names a concrete
+/// arm. `pipeline.rs` drives whatever comes out of here through
+/// [`VideoSink`] alone, which is what "the seam is real" was supposed to mean
+/// and, measured across stage 2, is what it cost: two new arms, three branches
+/// here, and no change to capture or encode.
 fn handle_offer(signaling: &Signaling, offer: &str) -> Result<String, String> {
     if offer.trim().is_empty() {
         return Err("empty offer body".into());
     }
-    let mut sink =
-        crate::sinks::rtp_track::RtpTrackSink::bind(
-            signaling.udp_bind,
-            signaling.codec,
-            signaling.encoder_bps,
-            signaling.bwe,
-        )?;
-    let answer = sink.accept_offer(offer)?;
-    let client = sink.client_config().render();
-    let udp = sink.local_addr();
+    let (answer, client, udp, sink): (String, String, SocketAddr, Box<dyn VideoSink + Send>) =
+        match signaling.arm {
+            Arm::DataChannel => {
+                let mut sink = crate::sinks::data_channel::DataChannelSink::bind(
+                    signaling.udp_bind,
+                    signaling.codec,
+                    signaling.dc_load_bps,
+                )?;
+                let answer = sink.accept_offer(offer)?;
+                let client = sink.client_config().render();
+                let udp = sink.local_addr();
+                (answer, client, udp, Box::new(sink))
+            }
+            Arm::RtpTrack => {
+                let mut sink = crate::sinks::rtp_track::RtpTrackSink::bind(
+                    signaling.udp_bind,
+                    signaling.codec,
+                    signaling.encoder_bps,
+                    signaling.bwe,
+                )?;
+                let answer = sink.accept_offer(offer)?;
+                let client = sink.client_config().render();
+                let udp = sink.local_addr();
+                (answer, client, udp, Box::new(sink))
+            }
+            Arm::RtpScriptTransform => {
+                let mut sink = crate::sinks::script_transform::ScriptTransformSink::bind(
+                    signaling.udp_bind,
+                    signaling.codec,
+                    signaling.encoder_bps,
+                    signaling.bwe,
+                )?;
+                let answer = sink.accept_offer(offer)?;
+                let client = sink.client_config().render();
+                let udp = sink.local_addr();
+                (answer, client, udp, Box::new(sink))
+            }
+        };
     signaling
         .sink_tx
-        .try_send(Box::new(sink))
+        .try_send(sink)
         .map_err(|e| format!("pipeline is not accepting peers: {e}"))?;
     Ok(format!(
         "{{\"answer\":{},\"client\":{client},\"hostUdp\":{},\"qpcFreq\":{}}}",

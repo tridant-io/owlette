@@ -1,20 +1,29 @@
 //! swoop spike 0.2 — video-path bake-off, host half.
 //!
-//! **Stage 1 scope: the shared front half plus arm B.** Arms A and C are stage
-//! 2 and slot in behind [`sink::VideoSink`] without touching capture, encode or
-//! this file's plumbing.
+//! All three arms of plan.md D3 behind [`sink::VideoSink`]: **A** encoded
+//! access units over an `RTCDataChannel`, **B** an RTP track into a `<video>`,
+//! **C** arm B's sender read back through a receive-side
+//! `RTCRtpScriptTransform`. Adding A and C in stage 2 touched neither
+//! `capture.rs`, `nvenc.rs`, `dxgi.rs` nor `pipeline.rs`.
 //!
 //! ```text
 //! cd agent/swoop/spikes/bakeoff-host   # never --manifest-path: it drops
 //!                                      # .cargo/config.toml and +crt-static
 //! cargo build --release
 //! cargo run --release -- outputs
-//! cargo run --release -- serve                                  # 127.0.0.1, H.264
+//! cargo run --release -- serve                                  # arm B, 127.0.0.1, H.264
+//! cargo run --release -- serve --arm a                          # data channel
+//! cargo run --release -- serve --arm c                          # script transform
+//! cargo run --release -- serve --arm a --bitrate 50000000 --dc-load 50000000
 //! cargo run --release -- serve --codec hevc
 //! cargo run --release -- serve --bind 192.168.1.50 --http-bind 0.0.0.0   # LAN row
 //! cargo run --release -- serve --vui-off                        # negative control
 //! cargo run --release -- serve --bwe                            # with str0m's pacer
 //! ```
+//!
+//! The page's `?arm=` must match `--arm`: the host answers with its own arm in
+//! `client.arm` and the harness refuses a mismatch rather than measuring a run
+//! neither side meant.
 //!
 //! Then start the page server and point Chrome at it:
 //!
@@ -113,6 +122,12 @@ struct Args {
     /// default: measured on this box the pacer, not the video path, dominated
     /// every figure (see `sinks::rtp_track`'s module doc).
     bwe: bool,
+    /// Arm A only. Total bits per second to offer the data channel, video
+    /// included. 0 means "whatever the encoder produces"; the flag exists
+    /// because on this box NVENC will not exceed ~31 Mbps on desktop content
+    /// and review-1 F1's criterion is written at 50 Mbps. Padding is counted
+    /// and reported separately, never as video goodput.
+    dc_load_bps: u64,
     /// Recorded verbatim in the run's JSON. `same-machine` rows carry the words
     /// *ranking only* into the file itself (spike 0.1 §2.2).
     placement: String,
@@ -134,6 +149,7 @@ impl Default for Args {
             allow_secondary: false,
             bitstream_restriction: true,
             bwe: false,
+            dc_load_bps: 0,
             placement: "same-machine".into(),
         }
     }
@@ -201,6 +217,9 @@ fn parse_args_from(raw: &[String]) -> Result<Args, String> {
             "--bind" => args.bind = value,
             "--http-bind" => args.http_bind = value,
             "--http-port" => args.http_port = value.parse().map_err(|_| "--http-port N")?,
+            "--dc-load" => {
+                args.dc_load_bps = value.parse().map_err(|_| "--dc-load BITS_PER_SECOND")?
+            }
             "--placement" => args.placement = value,
             other => return Err(format!("unknown flag {other}")),
         }
@@ -270,13 +289,6 @@ fn truncate(s: &str, n: usize) -> String {
 }
 
 fn serve(args: Args) -> Result<(), String> {
-    if args.arm != Arm::RtpTrack {
-        return Err(format!(
-            "arm {} ({}) is stage 2 of spike 0.2. Stage 1 ships the shared front half and arm b              only; both other arms slot in behind VideoSink without touching capture or encode.",
-            args.arm.as_str(),
-            args.arm.name()
-        ));
-    }
     let all = dxgi::enumerate_outputs().map_err(|e| format!("enumerate: {e}"))?;
     let index = match args.output {
         Some(i) => i,
@@ -351,10 +363,12 @@ fn serve(args: Args) -> Result<(), String> {
     }
 
     let signaling = Arc::new(httpd::Signaling {
+        arm: args.arm,
         udp_bind,
         codec: args.codec,
         encoder_bps: args.bitrate_bps as u64,
         bwe: args.bwe,
+        dc_load_bps: args.dc_load_bps,
         sink_tx,
         report: Arc::clone(&published),
     });
@@ -373,7 +387,7 @@ fn serve(args: Args) -> Result<(), String> {
     }
 
     let config = vec![
-        ("spike", J::s("0.2 stage 1 — shared front half + arm B")),
+        ("spike", J::s("0.2 stage 2 — all three arms of plan.md D3")),
         ("arm", J::s(args.arm.as_str())),
         ("armName", J::s(args.arm.name())),
         ("codec", J::s(codec_name(args.codec))),
@@ -381,6 +395,7 @@ fn serve(args: Args) -> Result<(), String> {
         ("bitrateBps", J::Uint(args.bitrate_bps as u64)),
         ("bitstreamRestriction", J::Bool(args.bitstream_restriction)),
         ("bwe", J::Bool(args.bwe)),
+        ("dcLoadBps", J::Uint(args.dc_load_bps)),
         ("motionWindow", J::Bool(args.motion)),
         ("udpBind", J::s(args.bind.clone())),
         ("placement", J::s(args.placement.clone())),
@@ -420,13 +435,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stage_one_refuses_the_two_arms_it_did_not_build() {
-        for arm in ["a", "c"] {
-            let raw = vec!["serve".to_string(), "--arm".to_string(), arm.to_string()];
-            let parsed = parse_args_from(&raw).expect("parse");
-            let err = serve(parsed).expect_err("stage 1 must refuse it");
-            assert!(err.contains("stage 2"), "{err}");
+    fn every_arm_of_plan_d3_is_selectable() {
+        // Stage 1 refused `a` and `c` here. Stage 2's whole claim is that the
+        // seam made adding them a choice of implementation in `httpd.rs` and
+        // nothing more, so the refusal is gone and all three parse.
+        for (flag, arm) in [
+            ("a", Arm::DataChannel),
+            ("b", Arm::RtpTrack),
+            ("c", Arm::RtpScriptTransform),
+        ] {
+            let raw = vec!["serve".to_string(), "--arm".to_string(), flag.to_string()];
+            assert_eq!(parse_args_from(&raw).expect("parse").arm, arm);
         }
+        let raw = vec!["serve".to_string(), "--arm".to_string(), "d".to_string()];
+        assert!(parse_args_from(&raw).is_err());
     }
 
     #[test]
