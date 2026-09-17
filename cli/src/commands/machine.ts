@@ -11,8 +11,8 @@
  * `Idempotency-Key`. Screenshot is queue → poll → download the signed-url bytes
  * to `--output <path>` (default `screenshot-<machineId>-<timestamp>.png`).
  *
- * `live-view` is the only remaining c-tier `stubExit()` shim — reframed as a
- * WebRTC-native feature and deferred outside the public API MVP.
+ * `live-view` is the only remaining c-tier `stubExit()` shim — remote desktop is
+ * shipping as swoop, and this verb lands with it.
  */
 
 import { Command } from 'commander';
@@ -433,10 +433,9 @@ export function registerMachineCommands(program: Command): void {
       stubExit({
         noun: 'machine',
         verb: 'live-view',
-        reason:
-          'live-view streaming is being reframed as a webrtc-native feature; resume when prioritized',
+        reason: 'remote desktop is shipping as swoop; this verb lands with it',
         dashboardUrl: `${apiUrl}/dashboard`,
-        futurePlan: 'public-api deferred: live-view-webrtc',
+        futurePlan: 'public-api deferred: swoop',
         cmd,
       });
     });

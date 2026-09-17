@@ -1,6 +1,6 @@
 /**
  * Stub-command coverage. `machine live-view` is the CLI's last deferred stub
- * (out of MVP until the WebRTC-native implementation lands); every other verb is
+ * (out of MVP until remote desktop ships as swoop); every other verb is
  * now a real http handler covered by its own `*-http.test.ts`.
  *
  * Asserts exit code 3, human-mode stderr carrying the dashboard url +
@@ -39,7 +39,7 @@ const FIXTURES: StubFixture[] = [
     verb: 'live-view',
     argv: ['machine', 'live-view', 'm-1', '--site', 'site-1'],
     dashboardPath: '/dashboard',
-    futurePlanSubstr: 'live-view-webrtc',
+    futurePlanSubstr: 'public-api deferred: swoop',
   },
 ];
 

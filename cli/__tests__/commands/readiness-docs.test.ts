@@ -57,7 +57,7 @@ describe('CLI readiness docs', () => {
   it('captures the only shipped CLI stub and the planned webhook noun', () => {
     const readiness = readRepoFile(`${cliDocsDir}/readiness.mdx`);
     expect(readiness).toContain('machine live-view');
-    expect(readiness).toContain('public-api deferred: live-view-webrtc');
+    expect(readiness).toContain('public-api deferred: swoop');
     expect(readiness).toContain('`owlette webhook` is not registered');
   });
 });
