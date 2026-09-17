@@ -34,10 +34,6 @@ import shared_utils
 ENTRY = {'id': 'proc-1', 'name': 'Demo App', 'exe_path': 'C:\\apps\\demo.exe',
          'launch_mode': 'always'}
 
-# Through the normaliser, not spelled out: the fold is the Windows comparison,
-# and off Windows a path is stored exactly as it is read.
-EXE_NORMALISED = shared_utils.normalize_exe_path(ENTRY['exe_path'])
-
 
 class FakeProc:
     """The minimal psutil.Process surface read_process_identity touches."""
@@ -125,7 +121,7 @@ def test_identity_match_readopts_row(state_file, config, monkeypatch, caplog):
     """Recorded create_time equals the live process's -> re-adopt, keep row."""
     install_process_table(monkeypatch, {
         500: FakeProc(500, 1111.5, 'C:\\apps\\demo.exe')})
-    states = {'500': identity_row(1111.5, EXE_NORMALISED)}
+    states = {'500': identity_row(1111.5, 'c:\\apps\\demo.exe')}
     write_states(state_file, states)
     svc = make_recovery_service()
 
@@ -145,7 +141,7 @@ def test_create_time_mismatch_refuses_and_cleans(
     path can resolve it."""
     install_process_table(monkeypatch, {
         500: FakeProc(500, 2222.0, 'C:\\apps\\demo.exe')})
-    write_states(state_file, {'500': identity_row(1111.5, EXE_NORMALISED)})
+    write_states(state_file, {'500': identity_row(1111.5, 'c:\\apps\\demo.exe')})
     svc = make_recovery_service()
 
     with caplog.at_level(logging.DEBUG):
@@ -182,10 +178,10 @@ def test_dead_pid_swept_while_live_match_adopted(
     proven rows are re-adopted in the same pass."""
     install_process_table(monkeypatch, {
         500: FakeProc(500, 1111.5, 'C:\\apps\\demo.exe')})
-    live_row = identity_row(1111.5, EXE_NORMALISED)
+    live_row = identity_row(1111.5, 'c:\\apps\\demo.exe')
     write_states(state_file, {
         '500': live_row,
-        '600': identity_row(3333.0, EXE_NORMALISED),  # dead
+        '600': identity_row(3333.0, 'c:\\apps\\demo.exe'),  # dead
         'None': {'status': 'LAUNCHING'},  # failed-launch junk
     })
     svc = make_recovery_service()
@@ -207,7 +203,7 @@ def test_inactive_launch_mode_keeps_row_but_does_not_track(
     entry = dict(ENTRY, launch_mode='off')
     monkeypatch.setattr(shared_utils, 'read_config',
                         lambda *a, **k: {'processes': [entry]})
-    states = {'500': identity_row(1111.5, EXE_NORMALISED)}
+    states = {'500': identity_row(1111.5, 'c:\\apps\\demo.exe')}
     write_states(state_file, states)
     svc = make_recovery_service()
 
@@ -235,7 +231,7 @@ def test_non_numeric_key_survives_the_guarded_sweep(
     svc = SimpleNamespace(
         last_started={}, relaunch_attempts={}, install_locks={},
         active_installations={}, manual_overrides={},
-        _skip_launch_delay=set(), _seatless_entries=set(),
+        _skip_launch_delay=set(),
         results={
             'None': {'status': 'LAUNCHING'},
             'not-a-pid': {'status': 'RUNNING'},
@@ -328,7 +324,7 @@ def test_launch_record_row_shape_preserves_scout_fields(
         'id': 'proc-x',
         'status': 'LAUNCHING',
         'create_time': 1234.25,
-        'exe': shared_utils.normalize_exe_path(launch_service.exe),
+        'exe': launch_service.exe.replace('/', '\\').lower(),
         'managed': True,
         'origin': 'launched',
     }

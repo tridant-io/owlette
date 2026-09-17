@@ -42,9 +42,6 @@ SERVICE_NAME = 'OwletteService'
 
 # OS
 _IS_WINDOWS = sys.platform == 'win32'
-# The two POSIX arms answer the shelling metric probes differently: macOS has
-# no /proc and no iproute2, and its ping counts -W in milliseconds.
-_IS_MACOS = sys.platform == 'darwin'
 
 # Windows' "no console flash" flag, and nothing at all where there are no
 # console windows to flash: every creationflags site in this module passes it,
@@ -455,14 +452,13 @@ def get_cpu_name():
         except Exception as e:
             logging.debug(f"PowerShell CPU detection failed: {e}")
     else:
-        # 1. What the OS itself holds — the same string the registry holds on
-        #    Windows: sysctl on macOS, /proc/cpuinfo on Linux and no spawn
+        # 1. /proc/cpuinfo — the same string the registry holds, no spawn
         try:
-            cpu_name = _sysctl_cpu_name() if _IS_MACOS else _proc_cpu_name()
+            cpu_name = _proc_cpu_name()
             if cpu_name:
                 return cpu_name
         except Exception as e:
-            logging.debug(f"POSIX CPU detection failed: {e}")
+            logging.debug(f"/proc/cpuinfo CPU detection failed: {e}")
 
     # 3. platform.processor() — incomplete but always available
     try:
@@ -474,14 +470,6 @@ def get_cpu_name():
 
     logging.warning("All CPU detection methods failed")
     return "Unknown CPU"
-
-
-def _sysctl_cpu_name():
-    """The brand string macOS keeps the CPU name in, '' when sysctl has none —
-    Apple Silicon answers `Apple M2`, Intel the full Intel string."""
-    return subprocess.check_output(
-        ['sysctl', '-n', 'machdep.cpu.brand_string'], text=True, timeout=5
-    ).strip()
 
 
 def _proc_cpu_name():
@@ -743,11 +731,6 @@ def _wmi_logical_disk_with_timeout(timeout: float = 10.0):
     spaced ~16 min apart matching SCM event 7040. The metrics loop has its own
     thread, so a 10s call stalls nothing else.
     """
-    # The counter set is Windows'; off it the import can only fail, and this
-    # sits on every metrics tick.
-    if not _IS_WINDOWS:
-        return None
-
     def _query():
         try:
             import pythoncom
@@ -956,20 +939,14 @@ _ping_thread: threading.Thread = None
 
 
 def _detect_default_gateway() -> str:
-    """Detect default gateway IP: ipconfig on Windows, `route -n get default` on
-    macOS, `ip route` on Linux."""
+    """Detect default gateway IP: ipconfig on Windows, `ip route` on POSIX."""
     global _cached_gateway, _cached_gateway_time
     now = time.time()
     # Cache gateway for 5 minutes
     if _cached_gateway and now - _cached_gateway_time < 300:
         return _cached_gateway
     try:
-        if _IS_WINDOWS:
-            ip = _ipconfig_gateway()
-        elif _IS_MACOS:
-            ip = _route_get_gateway()
-        else:
-            ip = _ip_route_gateway()
+        ip = _ipconfig_gateway() if _IS_WINDOWS else _ip_route_gateway()
     except Exception:
         return ''
     if ip:
@@ -1008,23 +985,10 @@ def _ip_route_gateway() -> str:
     return ''
 
 
-def _route_get_gateway() -> str:
-    """`route -n get default` prints the route macOS would actually take as
-    indented `key: value` lines; `gateway` is the hop this measures."""
-    output = subprocess.check_output(
-        ['route', '-n', 'get', 'default'], text=True, timeout=5
-    )
-    for line in output.splitlines():
-        key, separator, value = line.partition(':')
-        if separator and key.strip() == 'gateway':
-            return value.strip()
-    return ''
-
-
 def _run_ping(target: str) -> dict:
     """Run ping and parse results. Returns {latency_ms, packet_loss_pct}.
 
-    Four echoes with a one-second wait for each on every platform; a ping that
+    Four echoes with a one-second wait for each on both platforms; a ping that
     loses every packet exits non-zero and comes back unmeasured rather than as
     100% loss, which is the reading the Windows agent has always reported.
     """
@@ -1035,12 +999,8 @@ def _run_ping(target: str) -> dict:
                 text=True, timeout=10, creationflags=_NO_WINDOW
             )
             return _parse_windows_ping(output)
-        # `-W` is the wait for one reply and the unit is the ping's:
-        # seconds on iputils, milliseconds on the BSD ping macOS ships — where
-        # `1` waits a millisecond and reports the whole link as lost.
-        wait = '1000' if _IS_MACOS else '1'
         output = subprocess.check_output(
-            ['ping', '-c', '4', '-W', wait, target], text=True, timeout=10
+            ['ping', '-c', '4', '-W', '1', target], text=True, timeout=10
         )
         return _parse_posix_ping(output)
     except subprocess.TimeoutExpired:
@@ -2099,38 +2059,15 @@ def read_json_from_file(file_path, max_retries=3, initial_delay=0.1):
 
         return {}  # All retries exhausted
 
-def open_new_file(temp_path, mode=0o600):
-    """A descriptor on a temp file this process created itself.
-
-    Off Windows `config/` and `tmp/` are group-writable, so a fixed temp name
-    the daemon is about to write is one the kiosk session can occupy first: a
-    plain open would follow a symlink and hand a root-owned file outside the
-    tree the write, the mode and the group that follow, and os.replace would
-    then move the link over the destination. A stale temp from a killed write
-    is removed, O_EXCL refuses anything still under the name, and O_NOFOLLOW
-    refuses a link planted in the race.
-    """
-    try:
-        os.unlink(temp_path)
-    except FileNotFoundError:
-        pass
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
-    return os.open(temp_path, flags, mode)
-
-
-def _carry_file_identity(destination, temp_fd):
+def _carry_file_identity(destination, temp_path):
     """Carry the destination's mode and group onto its replacement.
 
-    POSIX only, and onto the descriptor rather than the name: the temp file
-    sits in a group-writable directory, so a path-based chmod is one more thing
-    that can be redirected between the write and the replace. A destination
-    that is not a file of its own — missing, or a link planted in that same
-    directory — has no identity to carry and takes its directory's instead.
-
-    The write is a temp file plus os.replace, so a file the data-root mode table
-    opened to the desktop app — config.json is 0660 root:<group> — would
-    otherwise come back at the daemon's umask and lock that writer out until the
-    next service start.
+    POSIX only. The write is a temp file plus os.replace, so a file the
+    data-root mode table opened to the desktop app — config.json is 0660
+    root:<group> — would otherwise come back at the daemon's umask and lock that
+    writer out until the next service start. A destination that is not a file of
+    its own — missing, or a link planted in a group-writable directory — has no
+    identity to carry and takes its directory's instead.
     """
     if _IS_WINDOWS:
         return
@@ -2139,34 +2076,34 @@ def _carry_file_identity(destination, temp_fd):
     except OSError:
         existing = None
     if existing is None or stat.S_ISLNK(existing.st_mode):
-        _seed_file_identity(destination, temp_fd)
+        _seed_file_identity(destination, temp_path)
         return
     try:
         # 0o777 and not 0o7777: a setuid or setgid bit sitting on the
         # destination is not one to carry onto a file the daemon wrote as root.
-        os.fchmod(temp_fd, existing.st_mode & 0o777)
-        if os.fstat(temp_fd).st_gid != existing.st_gid:
-            os.fchown(temp_fd, -1, existing.st_gid)
+        os.chmod(temp_path, existing.st_mode & 0o777)
+        if os.stat(temp_path).st_gid != existing.st_gid:
+            os.chown(temp_path, -1, existing.st_gid)
     except OSError as e:
         logging.debug(
             f"Could not carry {destination}'s mode onto its replacement: {e}"
         )
 
 
-def _seed_file_identity(destination, temp_fd):
+def _seed_file_identity(destination, temp_path):
     """Give a file written for the first time the access its directory grants.
 
     There is no mode to carry yet, and the daemon's umask would leave the file
-    0600 root inside a directory the mode table opened to the group — config.json
+    0644 root inside a directory the mode table opened to the group — config.json
     on a machine paired before the next service start is exactly that file.
     """
     try:
         directory = os.stat(os.path.dirname(destination) or '.')
         if not directory.st_mode & stat.S_IWGRP:
             return
-        os.fchmod(temp_fd, 0o660)
-        if os.fstat(temp_fd).st_gid != directory.st_gid:
-            os.fchown(temp_fd, -1, directory.st_gid)
+        os.chmod(temp_path, 0o660)
+        if os.stat(temp_path).st_gid != directory.st_gid:
+            os.chown(temp_path, -1, directory.st_gid)
     except OSError as e:
         logging.debug(
             f"Could not open {destination} to the group of the directory "
@@ -2184,10 +2121,10 @@ def write_json_to_file(data, file_path, max_retries=3, initial_delay=0.1):
 
         for attempt in range(max_retries):
             try:
-                with os.fdopen(open_new_file(temp_path), 'w') as f:
+                with open(temp_path, 'w') as f:
                     json.dump(data, f, indent=4)
-                    _carry_file_identity(file_path, f.fileno())
 
+                _carry_file_identity(file_path, temp_path)
                 # os.replace is atomic on Windows; os.rename is not.
                 os.replace(temp_path, file_path)
 
@@ -2415,7 +2352,7 @@ def graceful_terminate(pid, timeout=5, exe_path=None):
         return False
 
     # Snapshot while the parent lives — afterwards orphans are unattributable.
-    wrapper_target = normalize_exe_path(exe_path).endswith(('.bat', '.cmd'))
+    wrapper_target = bool(exe_path) and exe_path.replace('/', '\\').lower().endswith(('.bat', '.cmd'))
     child_snapshot = []
     if wrapper_target:
         try:
@@ -2471,31 +2408,16 @@ def graceful_terminate(pid, timeout=5, exe_path=None):
 
 # PROCESSES
 
-def normalize_exe_path(path):
-    """One spelling for the executable paths owlette compares.
-
-    Windows is case-insensitive and accepts either separator, so a comparison
-    there has to fold both. POSIX filesystems are case-sensitive and `/` is the
-    only separator, so the path is compared exactly as the kernel reports it:
-    folding it made /usr/bin/Foo and /usr/bin/foo the same file, and the
-    separator swap stored "\\usr\\bin\\sleep" in every Linux identity record.
-    """
-    text = str(path or '')
-    if sys.platform != 'win32':
-        return text
-    return text.replace('/', '\\').lower()
-
-
 def read_process_identity(pid):
     """Snapshot a live process's identity: {pid, create_time, exe}.
 
     The record half of the managed-or-inherited rule: owlette operations touch
     only processes owlette launched or deliberately inherited, and both cases
     are later proven by comparing this snapshot against the live process
-    (identity_matches). The exe is stored through normalize_exe_path, so the
-    record one run writes compares against the live process on the next
-    without re-normalising on every check -- and on POSIX it is the path the
-    kernel reports, not a Windows spelling of it.
+    (identity_matches). The exe is normalised the way the matching code in
+    find_running_process_by_exe normalises paths (forward slashes to back,
+    lowercase) so stored records compare cheaply, without re-normalising on
+    every check.
 
     Returns None on ANY failure (dead pid, access denied, zombie) -- a caller
     that cannot read an identity must treat the process as unmanaged.
@@ -2510,7 +2432,7 @@ def read_process_identity(pid):
         return {
             'pid': int(pid),
             'create_time': create_time,
-            'exe': normalize_exe_path(exe),
+            'exe': exe.replace('/', '\\').lower(),
         }
     except Exception as e:
         logging.debug(f"read_process_identity({pid}) failed: {e}")
@@ -2555,10 +2477,9 @@ def identity_matches(record, pid):
     recorded_exe = record.get('exe')
     if recorded_exe:
         # Records written by read_process_identity are already normalised;
-        # normalise again anyway so a hand-written or legacy record compares
-        # fairly. Off Windows the path IS the identity, so one differing in
-        # case or separator is a different file and the refusal is right.
-        recorded_exe_normalised = normalize_exe_path(recorded_exe)
+        # normalise again anyway so hand-written or legacy records compare
+        # fairly instead of failing on slash direction or case.
+        recorded_exe_normalised = str(recorded_exe).replace('/', '\\').lower()
         if recorded_exe_normalised != live['exe']:
             logging.warning(
                 f"identity_matches: pid {recorded_pid} create_time matches but "
@@ -2591,30 +2512,12 @@ def update_process_status_in_json(pid, new_status, firebase_client=None, process
     if str(pid) not in data:
         data[str(pid)] = {}
 
-    previous = dict(data[str(pid)]) if isinstance(data[str(pid)], dict) else None
-
     data[str(pid)]['status'] = new_status
     if process_id:
         data[str(pid)]['id'] = process_id
     if isinstance(extra, dict):
         data[str(pid)].update(extra)
-    # The 5-second loop stamps RUNNING on every managed process on every
-    # tick, so a machine whose processes are all up rewrote the same bytes
-    # ~17,000 times a day: the content-signature skip service_status.json
-    # already applies, covering that stamp. It covers this writer only.
-    # owlette_scout -- launched per running managed process per tick on
-    # Windows -- rewrites the same responsive row through write_json_to_file
-    # on every call, as does every other caller of that function. Nothing
-    # reads this file's mtime -- the desktop app watches the directory for
-    # the atomic replace and re-reads the content -- so an identical
-    # document is not worth a write.
-    if data[str(pid)] == previous:
-        return
     write_json_to_file(data, RESULT_FILE_PATH)
-
-def _normalized_cmdline(proc):
-    """A live command line in the spelling the configured paths compare in."""
-    return normalize_exe_path(' '.join(proc.cmdline()))
 
 def find_running_process_by_exe(exe_path, file_path=None, strict=False,
                                 expected_cmdline=None):
@@ -2648,67 +2551,60 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
 
     strict=True additionally refuses bare image-name candidates outright.
     Anything that kills or restarts MUST pass strict=True.
-
-    Every comparison runs through normalize_exe_path, the same spelling
-    read_process_identity records: Windows folds case and separators, POSIX
-    compares the path exactly as the kernel reports it. Folding it there turned
-    the configured /usr/bin/app into \\usr\\bin\\app, whose basename is the whole
-    string, so no candidate could ever match and every adoption tier was
-    unreachable on Linux.
     """
     try:
-        exe_key = normalize_exe_path(exe_path)
-        exe_basename = os.path.basename(exe_key)
-        file_path_key = normalize_exe_path(file_path) if file_path else None
+        exe_lower = exe_path.replace('/', '\\').lower()
+        exe_basename = os.path.basename(exe_lower)
+        file_path_lower = file_path.replace('/', '\\').lower() if file_path else None
         # Same normalisation as the live cmdlines below, so recorded evidence
         # compares exactly regardless of slash direction or case.
-        expected_key = (normalize_exe_path(expected_cmdline)
-                        if expected_cmdline else None)
-        is_script = exe_key.endswith(('.bat', '.cmd'))
+        expected_lower = (expected_cmdline.replace('/', '\\').lower()
+                          if expected_cmdline else None)
+        is_script = exe_lower.endswith(('.bat', '.cmd'))
         candidates = []      # (pid, full_match, cmdline-or-None) -- exe targets
         script_matches = []  # (pid, cmdline) -- cmd.exe wrappers for a script
         for proc in psutil.process_iter(['pid', 'exe']):
             try:
                 if not proc.info['exe']:
                     continue
-                proc_exe = normalize_exe_path(proc.info['exe'])
+                proc_exe = proc.info['exe'].lower()
                 if is_script:
                     # The wrapper is cmd.exe; identify it by its command line.
                     if os.path.basename(proc_exe) != 'cmd.exe':
                         continue
                     try:
-                        cmdline = _normalized_cmdline(proc)
+                        cmdline = ' '.join(proc.cmdline()).replace('/', '\\').lower()
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
-                    if exe_key not in cmdline:
+                    if exe_lower not in cmdline:
                         continue
-                    if file_path_key and file_path_key not in cmdline:
+                    if file_path_lower and file_path_lower not in cmdline:
                         continue
                     # Collect instead of returning first: several wrappers for
                     # one script are ambiguous and must refuse (D3).
                     script_matches.append((proc.info['pid'], cmdline))
                     continue
-                full_match = proc_exe == exe_key
+                full_match = proc_exe == exe_lower
                 basename_match = os.path.basename(proc_exe) == exe_basename
                 if not (full_match or basename_match):
                     continue
                 # Strict: a bare basename match is never enough.
-                if strict and not full_match and not file_path_key:
+                if strict and not full_match and not file_path_lower:
                     continue
-                if file_path_key:
+                if file_path_lower:
                     try:
-                        cmdline = _normalized_cmdline(proc)
-                        if file_path_key not in cmdline:
+                        cmdline = ' '.join(proc.cmdline()).replace('/', '\\').lower()
+                        if file_path_lower not in cmdline:
                             continue  # wrong instance
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue  # unverifiable cmdline -- don't risk a false match
                     return proc.info['pid']  # cmdline-corroborated
                 cmdline = None
-                if expected_key:
+                if expected_lower:
                     # Reading a cmdline is a per-process syscall -- only pay
                     # for it when there is recorded evidence to compare with.
                     try:
-                        cmdline = _normalized_cmdline(proc)
+                        cmdline = ' '.join(proc.cmdline()).replace('/', '\\').lower()
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         cmdline = None  # unreadable -> can never corroborate
                 candidates.append((proc.info['pid'], full_match, cmdline))
@@ -2717,9 +2613,9 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
         if is_script:
             if len(script_matches) == 1:
                 return script_matches[0][0]
-            if expected_key:
+            if expected_lower:
                 exact = [pid for pid, cmdline in script_matches
-                         if cmdline == expected_key]
+                         if cmdline == expected_lower]
                 if len(exact) == 1:
                     return exact[0]
             if script_matches:
@@ -2743,9 +2639,9 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
         # exactly one winner. Zero exact matches is a mismatch, several is
         # still ambiguity -- both refuse, because a wrong guess here is
         # precisely the disease D3 cures.
-        if expected_key:
+        if expected_lower:
             exact = [pid for pid, _, cmdline in candidates
-                     if cmdline == expected_key]
+                     if cmdline == expected_lower]
             if len(exact) == 1:
                 return exact[0]
         if candidates:

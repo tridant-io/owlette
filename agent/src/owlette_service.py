@@ -555,7 +555,7 @@ def _discovered_pid_identity_ok(pid, process):
     identity = shared_utils.read_process_identity(pid)
     if identity is None:
         return False
-    exe_path = shared_utils.normalize_exe_path(process.get('exe_path'))
+    exe_path = (process.get('exe_path') or '').replace('/', '\\').lower()
     live_basename = os.path.basename(identity['exe'])
     if exe_path.endswith(('.bat', '.cmd')):
         return live_basename == 'cmd.exe'
@@ -641,7 +641,7 @@ def _schedule_stop_allowed(pid, process):
     identity = shared_utils.read_process_identity(pid)
     if identity is None:
         return False, 'identity unreadable - refusing to stop an unverifiable pid'
-    expected = shared_utils.normalize_exe_path(process.get('exe_path'))
+    expected = (process.get('exe_path') or '').replace('/', '\\').lower()
     if not expected or identity['exe'] != expected:
         return False, (f"recordless tracked pid runs '{identity['exe']}', not "
                        f"the entry's configured executable - not managed by owlette")
@@ -813,15 +813,6 @@ class OwletteService:
         self._last_seen_launch_modes = {} # Service-owned launch_mode snapshot for transition diffs
         self._last_seen_launch_schedules = {} # Schedule signatures for scheduled-mode edit logging
         self._skip_launch_delay = set()  # Process IDs that should skip time_delay on next launch
-        # The seat, resolved at most once per loop iteration (see _seat_absent);
-        # None means "not resolved this tick". Cleared at the top of every
-        # iteration, so no answer is ever carried across a tick.
-        self._seat_probe = None
-        # The thread the memo belongs to; every other one resolves live.
-        self._seat_probe_thread = None
-        # Entries whose launches are currently refused for want of a seat, so
-        # the refusal is said once per episode rather than once a minute.
-        self._seatless_entries = set()
         self._cached_site_timezone = None  # Cached from firebase_client
         # Persisted source of truth is reboot_state.py. Monotonic clock so DST/NTP
         # corrections can't trigger false retries.
@@ -2037,9 +2028,7 @@ class OwletteService:
         separate process, so there is nothing for the service to scan for; it
         tracks its own launch instead (see RESTART_PROMPT_ACTIVE_SECONDS). The
         gate is conservative in the right direction — expiring early would
-        re-prompt an operator who is already looking at the countdown. Off
-        Windows there is no countdown to end it, so the escalation arms a gate
-        that only a dashboard dismiss clears.
+        re-prompt an operator who is already looking at the countdown.
         """
         return time.monotonic() < self._restart_prompt_until
 
@@ -2090,14 +2079,6 @@ class OwletteService:
             logging.info("Cortex process launched")
             return True
         else:
-            # Off Windows resolving the console user is loginctl
-            # subprocesses with a five-second budget each, and a failure the
-            # cooldown never stamped was asked again on every 5s tick — a
-            # kiosk with hoot enabled and nobody signed in paid for them on
-            # the loop thread forever. Paced like the tray launcher beside
-            # it, which stamps before its attempt for the same reason.
-            if sys.platform != 'win32':
-                self._cortex_last_launch_time = now
             logging.debug("Could not launch Cortex (no user session?)")
             return False
 
@@ -2867,12 +2848,6 @@ class OwletteService:
 
         Returns True when the launch was issued.
         """
-        # Off Windows the init system starts the app and the daemon never
-        # launches it (plan decision 2), so there is no token ladder to run and
-        # no `.exe` under the install root to name in a warning either.
-        if sys.platform != 'win32':
-            return False
-
         exe_path = shared_utils.get_desktop_exe_path()
         if not exe_path:
             # Not a crash — mid-upgrade and dev boxes just have no local UI. Warn
@@ -3269,63 +3244,7 @@ class OwletteService:
 
         return pid
 
-    def _seat_absent(self):
-        """Off Windows, whether nobody is at a graphical seat right now.
-
-        console_user() shells out to loginctl once for the session list and
-        again per session listed, and the 5-second loop asks it for every
-        managed entry that is down: the answer is resolved once an iteration
-        at most and cleared at the top of the next one, so a tick costs one
-        round-trip however many entries are down and nothing is carried
-        across ticks. The memo is that thread's alone: every other caller --
-        a dashboard start or restart, the cortex queue, a config update --
-        resolves live, because the loop's answer can be a whole tick old and
-        somebody signing in inside that tick would otherwise have the launch
-        they asked for refused on a reading taken before they did.
-        """
-        if sys.platform == 'win32':
-            return False
-        if threading.get_ident() != self._seat_probe_thread:
-            return osadapter.console_user() is None
-        if self._seat_probe is None:
-            self._seat_probe = osadapter.console_user() is None
-        return self._seat_probe
-
     def reached_max_relaunch_attempts(self, process):
-        # The gate before anything else: while a reboot is pending nothing
-        # relaunches, and off Windows nothing but a dashboard dismiss ends
-        # that. Asking who is at the seat first billed the 5-second loop a
-        # loginctl round-trip every tick, for the life of the gate, to settle
-        # a question already settled - and on a box with no seat resolved it
-        # answered the kill-and-relaunch door before the gate could refuse
-        # it, terminating the kiosk app of a machine frozen to preserve it.
-        if self._is_restart_prompt_active():
-            return True
-        # A launch that never happened is not a crash, and off Windows a box
-        # with nobody at a graphical seat — logged out, at the display
-        # manager's greeter, or imaged before its first login — refuses
-        # every managed launch (plan decision 4). Spending the relaunch budget
-        # on those escalated a crash that never happened, and with no countdown
-        # off Windows to end the gate it armed, nothing on the machine launched
-        # again — not even after the user logged back in. Every door that
-        # launches spends the budget here, the monitor loop's and the
-        # kill-and-relaunch a dashboard restart asks for alike, so the rule
-        # lives with the accounting rather than at one of them. Windows keeps
-        # the budget on every attempt: its own no-session case self-limits,
-        # because launch_desktop_app_as_user returns False without a session
-        # and the escalation never arms the gate.
-        if self._seat_absent():
-            return False
-        # And the launch that ends a seatless episode is a first launch, not
-        # a relaunch. The refusal above records the same `failed` cooldown
-        # marker a failed launch does — that marker is what holds the retry
-        # to once a minute — and the next launch read it back as a crashed
-        # previous attempt, booking 'relaunch attempt: 1 of N' once per entry
-        # per logout. Whatever budget the entry accrued before the seat went
-        # away is neither spent here nor cleared; the entry leaves the set at
-        # the launch itself.
-        if process.get('id') in self._seatless_entries:
-            return False
         process_name = Util.get_process_name(process)
         try:
             attempts = self.relaunch_attempts.get(process_name, 0 if self.first_start else 1)
@@ -3364,41 +3283,19 @@ class OwletteService:
                 # `unlimited` never escalates — that is the whole point of 0.
                 if not unlimited and attempts > relaunches_to_attempt:
                     # Write reboot_pending to Firestore so dashboard can approve/dismiss remotely
-                    pending_written = bool(
-                        self.firebase_client
-                        and self.firebase_client.is_connected()
-                        and self.firebase_client.set_reboot_pending(
+                    if self.firebase_client and self.firebase_client.is_connected():
+                        self.firebase_client.set_reboot_pending(
                             process_name=process_name,
                             reason=f'{process_name} crashed {relaunches_to_attempt} times',
                             timestamp=time.time()
-                        ))
+                        )
 
-                    # If a restart prompt isn't already running, open one (local fallback).
-                    # Off Windows the init system owns the desktop app and the
-                    # daemon never launches it (plan decision 2), so there is no
-                    # prompt to open — and the budget still has to stop the
-                    # relaunch loop, or a crashing kiosk process is relaunched
-                    # every tick forever. The escalation lands on the same
-                    # terminal state the prompt leaves behind: reboot pending on
-                    # the dashboard, no further relaunch until the gate expires.
-                    escalated = sys.platform != 'win32' or self.launch_desktop_app_as_user(
+                    # If a restart prompt isn't already running, open one (local fallback)
+                    started_restart_prompt = self.launch_desktop_app_as_user(
                         shared_utils.DESKTOP_RESTART_PROMPT_ARG
                     )
-                    if escalated:
-                        # Windows ends the gate itself: the prompt counts down
-                        # and reboots. Off Windows nothing does, so an expiring
-                        # one re-escalated every RESTART_PROMPT_ACTIVE_SECONDS —
-                        # another reboot_pending write and another 'reboot
-                        # imminent' alert, for the life of the install. It is
-                        # held until the dashboard dismisses the pending reboot
-                        # — and only when that row reached Firestore: an
-                        # escalation nobody can see is not one to freeze the
-                        # service on, so an unwritten one takes the timed gate
-                        # and escalates again once the agent is connected.
-                        indefinite = sys.platform != 'win32' and pending_written
-                        self._restart_prompt_until = (
-                            float('inf') if indefinite
-                            else time.monotonic() + RESTART_PROMPT_ACTIVE_SECONDS)
+                    if started_restart_prompt:
+                        self._restart_prompt_until = time.monotonic() + RESTART_PROMPT_ACTIVE_SECONDS
                         self.log_and_notify(
                             process,
                             f'Terminated {process_name} {relaunches_to_attempt} times. System reboot imminent'
@@ -3408,10 +3305,7 @@ class OwletteService:
                     else:
                         logging.info('Failed to open restart prompt.')
             else:
-                # Re-read after the config reads above: another entry's
-                # escalation on another thread arms this same service-wide
-                # gate, and a second reboot must not be raised behind it.
-                return True
+                return True # If it's running, we've already reached the max attempts
 
             self.relaunch_attempts[process_name] = attempts + 1
             return False
@@ -3597,28 +3491,6 @@ class OwletteService:
             last_time = last_info.get('time')
 
             if last_time is None or (last_time is not None and (self.current_time - last_time).total_seconds() >= (time_to_init or TIME_TO_INIT)):
-                # The adapter refuses a managed launch with nobody at a seat
-                # (plan decision 4), so off Windows one is not attempted: the
-                # refusal costs a second seat lookup, and a machine sitting at
-                # its greeter wrote an ERROR and rewrote app_states.json once a
-                # minute per entry for a launch that never happened. Said once
-                # when the seat goes and once when it comes back. The `failed`
-                # cooldown is still recorded: it is what holds the retry to
-                # once a minute until somebody signs in.
-                if self._seat_absent():
-                    if process_list_id not in self._seatless_entries:
-                        self._seatless_entries.add(process_list_id)
-                        logging.warning(
-                            f"Not launching '{Util.get_process_name(process)}': nobody is "
-                            f"signed in at a graphical session - launching when somebody is")
-                    self.last_started[process_list_id] = {
-                        'time': datetime.datetime.now(), 'pid': None, 'failed': True}
-                    return None
-                if process_list_id in self._seatless_entries:
-                    self._seatless_entries.discard(process_list_id)
-                    logging.info(
-                        f"Somebody is signed in again - launching "
-                        f"'{Util.get_process_name(process)}'")
                 # Skip delay on first launch (delay is for crash recovery spacing,
                 # not fresh starts) and on manual mode changes
                 if last_time is None or last_info.get('failed') or process_list_id in self._skip_launch_delay:
@@ -3788,16 +3660,10 @@ class OwletteService:
                     shared_utils.update_process_status_in_json(last_pid, 'LAUNCHING', self.firebase_client, process_id=process_list_id)
                     new_pid = None
                 else:
-                    # owlette_scout is IsHungAppWindow — a Windows concept,
-                    # in a module that imports win32gui at module scope. Off
-                    # Windows this is an error per managed process per tick
-                    # today, and a process that dies on the import the moment
-                    # the packaged interpreter exists.
-                    if sys.platform == 'win32':
-                        self.launch_python_script_as_user(
-                            shared_utils.get_path('owlette_scout.py'),
-                            str(last_pid)
-                        )
+                    self.launch_python_script_as_user(
+                        shared_utils.get_path('owlette_scout.py'),
+                        str(last_pid)
+                    )
                     new_pid = self.handle_unresponsive_process(last_pid, process)
 
                 if not new_pid:
@@ -3961,11 +3827,6 @@ class OwletteService:
             if stale_skips:
                 self._skip_launch_delay -= stale_skips
                 logging.info(f"[OK] Cleaned up {len(stale_skips)} stale entries from _skip_launch_delay")
-
-            stale_seatless = self._seatless_entries - current_process_ids
-            if stale_seatless:
-                self._seatless_entries -= stale_seatless
-                logging.info(f"[OK] Cleaned up {len(stale_seatless)} stale entries from _seatless_entries")
 
             # Clean up app_states.json (results file) — remove PIDs that no longer exist
             if self.results:
@@ -4617,14 +4478,11 @@ class OwletteService:
                 self.last_started.pop(project_id, None)
 
         for exe_name in close_processes:
-            # The platform's own spelling, like every other exe comparison:
-            # folding separators and case resolved a deployment's names
-            # against no managed entry at all on a case-sensitive filesystem.
-            wanted = shared_utils.normalize_exe_path(exe_name)
+            exe_name_lower = (exe_name or '').lower()
             matching_entries = [
                 p for p in config_processes
                 if os.path.basename(
-                    shared_utils.normalize_exe_path(p.get('exe_path'))) == wanted
+                    (p.get('exe_path') or '').replace('/', '\\').lower()) == exe_name_lower
             ]
             if not matching_entries:
                 logging.info(
@@ -5398,55 +5256,6 @@ class OwletteService:
             error_msg = f"Error: executing command {cmd_type}: {e}"
             logging.error(error_msg, exc_info=True)
             return error_msg
-
-    def _revert_stale_display_sentinel(self):
-        """Revert a display apply whose watchdog thread did not survive.
-
-        A sentinel present at startup means the previous watchdog thread is
-        dead, so revert immediately regardless of deadline — an
-        unacknowledged apply must never survive.
-        """
-        # Ahead of the import rather than behind it: display_manager is
-        # Windows-only and never ported, and off Windows the import alone
-        # raises, which the `except` below reports as a failed check in the
-        # log on every single service start.
-        if sys.platform != 'win32':
-            return
-
-        try:
-            import display_manager
-
-            sentinel_path = shared_utils.get_data_path('.display_revert_pending')
-            if os.path.exists(sentinel_path):
-                logging.warning(
-                    f"Found stale display revert sentinel at {sentinel_path} — "
-                    "previous apply did not complete cleanly, reverting"
-                )
-                apply_revert = getattr(display_manager, 'apply_revert_from_sentinel', None)
-                if callable(apply_revert):
-                    try:
-                        # Pass firebase_client so the no-console-session deferral
-                        # path (Wave 5) can emit `display_revert_deferred`.
-                        result = apply_revert(firebase_client=self.firebase_client)
-                        logging.info(f"Display revert from sentinel: {result}")
-                    except Exception as revert_err:
-                        logging.error(f"Display revert from sentinel failed: {revert_err}")
-                        # Still try to delete the sentinel so we don't loop on next start.
-                        try:
-                            os.remove(sentinel_path)
-                        except OSError as rm_err:
-                            logging.warning(f"Failed to delete stale display sentinel: {rm_err}")
-                else:
-                    logging.warning(
-                        "display_manager.apply_revert_from_sentinel not available; "
-                        "deleting sentinel without revert"
-                    )
-                    try:
-                        os.remove(sentinel_path)
-                    except OSError as rm_err:
-                        logging.warning(f"Failed to delete stale display sentinel: {rm_err}")
-        except Exception as e:
-            logging.warning(f"Display sentinel check failed: {e}")
 
     def _check_display_topology(self):
         """Snapshot the current display topology and log changes.
@@ -8228,7 +8037,43 @@ class OwletteService:
 
         self._detect_reboot_success_on_startup()
 
-        self._revert_stale_display_sentinel()
+        # A sentinel present at startup means the previous watchdog thread is
+        # dead, so revert immediately regardless of deadline — an unacknowledged
+        # apply must never survive.
+        try:
+            import display_manager
+
+            sentinel_path = shared_utils.get_data_path('.display_revert_pending')
+            if os.path.exists(sentinel_path):
+                logging.warning(
+                    f"Found stale display revert sentinel at {sentinel_path} — "
+                    "previous apply did not complete cleanly, reverting"
+                )
+                apply_revert = getattr(display_manager, 'apply_revert_from_sentinel', None)
+                if callable(apply_revert):
+                    try:
+                        # Pass firebase_client so the no-console-session deferral
+                        # path (Wave 5) can emit `display_revert_deferred`.
+                        result = apply_revert(firebase_client=self.firebase_client)
+                        logging.info(f"Display revert from sentinel: {result}")
+                    except Exception as revert_err:
+                        logging.error(f"Display revert from sentinel failed: {revert_err}")
+                        # Still try to delete the sentinel so we don't loop on next start.
+                        try:
+                            os.remove(sentinel_path)
+                        except OSError as rm_err:
+                            logging.warning(f"Failed to delete stale display sentinel: {rm_err}")
+                else:
+                    logging.warning(
+                        "display_manager.apply_revert_from_sentinel not available; "
+                        "deleting sentinel without revert"
+                    )
+                    try:
+                        os.remove(sentinel_path)
+                    except OSError as rm_err:
+                        logging.warning(f"Failed to delete stale display sentinel: {rm_err}")
+        except Exception as e:
+            logging.warning(f"Display sentinel check failed: {e}")
 
         cleanup_counter = 0  # Counter for periodic cleanup
         log_cleanup_counter = 0  # Counter for log cleanup (runs less frequently)
@@ -8270,12 +8115,6 @@ class OwletteService:
                 # There is deliberately no "shutdown flag": the desktop app's
                 # "quit owlette" is an elevated SCM stop. A flag was tried and
                 # failed — the supervisor relaunches any non-clean exit.
-
-                # One seat lookup per iteration at most, never one from a
-                # previous tick, and answered from on this thread alone
-                # (see _seat_absent).
-                self._seat_probe = None
-                self._seat_probe_thread = threading.get_ident()
 
                 # Exit 42 makes the host relaunch us; exit 0 would stop the
                 # service (agent/host/src/supervisor.rs).

@@ -179,7 +179,7 @@ def _save_config(site_id: str, environment: str, api_base: str, project_id: str)
 
     # Atomic write: write to temp file, then replace
     tmp_path = CONFIG_PATH.with_suffix('.tmp')
-    with os.fdopen(shared_utils.open_new_file(str(tmp_path)), 'w') as f:
+    with open(tmp_path, 'w') as f:
         # `ShouldConfigureSite` in agent/owlette_installer.iss string-searches
         # this file for '"environment": "development"' and '"enabled": true' —
         # key, colon, ONE space, value — which depends on json.dump's default
@@ -189,12 +189,11 @@ def _save_config(site_id: str, environment: str, api_base: str, project_id: str)
         # indent=4 (`shared_utils.write_json_to_file`) while those searches
         # still match.
         json.dump(config, f, indent=2)
-        # POSIX: config.json is 0660 root:<group> so the desktop app can write
-        # it too, and a replacement written at the daemon's umask would lock
-        # that writer out until the next service start — a pairing through the
-        # request seam restarts nothing. Onto the descriptor, because config/
-        # is group-writable and the temp name is not the daemon's to trust.
-        shared_utils._carry_file_identity(CONFIG_PATH, f.fileno())
+    # POSIX: config.json is 0660 root:<group> so the desktop app can write it
+    # too, and a replacement written at the daemon's umask would lock that
+    # writer out until the next service start — a pairing through the request
+    # seam restarts nothing.
+    shared_utils._carry_file_identity(CONFIG_PATH, tmp_path)
     os.replace(tmp_path, CONFIG_PATH)
 
 
@@ -1013,7 +1012,8 @@ def _read_preseed(path: Path) -> dict:
     the operator pairs the machine from the dashboard instead.
     """
     try:
-        preseed = _read_entry_json(str(path))
+        with open(path, 'r', encoding='utf-8') as f:
+            preseed = json.load(f)
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as e:
@@ -1023,32 +1023,6 @@ def _read_preseed(path: Path) -> dict:
         logging.warning(f"Pairing preseed at {path} is not an object")
         return {}
     return preseed
-
-
-def _read_entry_json(path: str) -> object:
-    """The JSON in one entry, read off a descriptor on the entry itself.
-
-    `config/` is group-writable off Windows, so the checks run on the descriptor
-    rather than the name: O_NOFOLLOW turns away a link out of the tree,
-    O_NONBLOCK a fifo, and the fstat anything that is not a regular file the
-    daemon itself owns. Windows has neither flag and an ACL'd tree rather than a
-    grouped one, so there it is the plain read it has always been.
-    """
-    if sys.platform == 'win32':
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise ValueError('is not a regular file')
-        if info.st_uid != os.geteuid():
-            raise ValueError(f'is owned by uid {info.st_uid}, not by the daemon')
-    except BaseException:
-        os.close(fd)
-        raise
-    with os.fdopen(fd, 'r', encoding='utf-8') as f:
-        return json.load(f)
 
 
 def _consume_preseed(path: Path) -> None:
@@ -1179,11 +1153,6 @@ REQUEST_REPLY_SUFFIX = '.result'
 # size of what turns up in it is not the daemon's to trust: without a bound the
 # drain reads whatever was planted there straight into memory.
 REQUEST_MAX_BYTES = 4096
-# How far back the rate limit reads. Every accepted request appends a row and
-# nothing ages the file out, so an app asking on every tick grows it for as long
-# as the machine is up: the check reads a fixed tail rather than the whole file,
-# and the file itself is rotated once it passes shared_utils' external-log cap.
-REQUEST_AUDIT_TAIL_BYTES = 64 * 1024
 # One restart or reboot per five minutes. Both end the session the app is asking
 # from, and an app that has wedged must not be able to hold a kiosk in a loop.
 REQUEST_RATE_LIMIT_SECONDS = 300
@@ -1260,10 +1229,8 @@ def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Option
 
     Every refusal unlinks the request: one the daemon will not execute must not
     be left for the next drain to reconsider. A request that fails the ownership
-    check is answered with nothing but a log line — it was not written by the
-    session this seam serves, so there is nobody to answer. A mode refusal is
-    answered: the file is the console user's, and a writer whose session umask
-    left it group-writable would otherwise wait on an answer that never comes.
+    or mode check is answered with nothing but a log line — it was not written
+    by the session this seam serves, so there is nobody to answer.
 
     The directory is group-writable, so the entry is opened directly and the
     checks run on that descriptor: never a link the daemon follows out of the
@@ -1285,7 +1252,7 @@ def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Option
                 path, None, f'is owned by uid {info.st_uid}, not the console user')
         if stat.S_IMODE(info.st_mode) & 0o022:
             return _refuse(
-                path, reply_path,
+                path, None,
                 f'is mode {stat.S_IMODE(info.st_mode):04o} — group- or world-writable')
         try:
             payload = _read_request(fd)
@@ -1515,20 +1482,15 @@ def _open_reply(path: str) -> int:
     The directory is the app's to write, so an entry already under the name that
     the daemon did not create is removed rather than written through —
     O_NOFOLLOW turns away a symlink, the owner a file planted there, and the
-    link count a hard link aimed at something else in the tree. O_NONBLOCK is
-    what turns away a fifo: opening one for writing waits for a reader, and the
-    checks below only run once the open has returned, so without it a fifo left
-    under the answer's name wedges the drain thread for the life of the process
-    and the single-flight gate then refuses every later request.
+    link count a hard link aimed at something else in the tree.
     """
-    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK
-    fd = os.open(path, flags, REQUEST_REPLY_MODE)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                 REQUEST_REPLY_MODE)
     info = os.fstat(fd)
     if info.st_uid != os.geteuid() or info.st_nlink != 1:
         os.close(fd)
         _discard(path)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NONBLOCK,
-                     REQUEST_REPLY_MODE)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, REQUEST_REPLY_MODE)
     os.fchmod(fd, REQUEST_REPLY_MODE)
     return fd
 
@@ -1566,7 +1528,6 @@ def _audit(verb: str, outcome: str, detail: str) -> dict:
     path = shared_utils.get_data_path(REQUEST_AUDIT_PATH)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        shared_utils.rotate_log_if_oversized(path)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
                      REQUEST_AUDIT_MODE)
         try:
@@ -1584,45 +1545,22 @@ def _seconds_since_last(verb: str) -> Optional[float]:
     Only executed rows count. A refused one must not push the window forward, or
     a single rate-limited request would extend the block by another five
     minutes for as long as the app kept asking.
-
-    The live file's tail and then the one generation behind it: the audit is
-    rotated, and a rotation that carried the executed row away would reopen the
-    window it is there to hold shut.
-    """
-    path = shared_utils.get_data_path(REQUEST_AUDIT_PATH)
-    for candidate in (path, f'{path}.1'):
-        for row in reversed(_audit_tail(candidate)):
-            try:
-                if row.get('verb') != verb or row.get('outcome') != 'executed':
-                    continue
-                return max(0.0, time.time() - float(row['at']))
-            except (ValueError, TypeError, KeyError, AttributeError):
-                continue
-    return None
-
-
-def _audit_tail(path: str) -> list:
-    """The rows in the last REQUEST_AUDIT_TAIL_BYTES of `path`.
-
-    Read off the end so the rate-limit check costs the same on a machine that
-    has been up for a year as on one that booted this morning. The row the
-    offset lands in the middle of does not parse, which is what dropping an
-    unparseable line is for.
     """
     try:
-        with open(path, 'rb') as f:
-            f.seek(0, os.SEEK_END)
-            f.seek(max(0, f.tell() - REQUEST_AUDIT_TAIL_BYTES))
-            raw = f.read()
+        with open(shared_utils.get_data_path(REQUEST_AUDIT_PATH), 'r',
+                  encoding='utf-8') as f:
+            lines = f.readlines()
     except OSError:
-        return []
-    rows = []
-    for line in raw.decode('utf-8', 'replace').splitlines():
+        return None
+    for line in reversed(lines):
         try:
-            rows.append(json.loads(line))
-        except ValueError:
+            row = json.loads(line)
+            if row.get('verb') != verb or row.get('outcome') != 'executed':
+                continue
+            return max(0.0, time.time() - float(row['at']))
+        except (ValueError, TypeError, KeyError, AttributeError):
             continue
-    return rows
+    return None
 
 
 def _discard(path: str) -> None:

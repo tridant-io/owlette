@@ -3,7 +3,7 @@
 Each operation routes to the implementation the agent already ships, with no
 behaviour change; the data root is the exception — the %PROGRAMDATA% lookup
 lives here, and shared_utils.get_data_path() reads it back through the
-package. The four operations OwletteService owns on Windows — the
+package. The five operations OwletteService owns on Windows — the
 user-session and managed-process work, which runs off the live service object
 and its token ladder — raise NotSupportedHere rather than duplicate it; no
 Windows call site routes through them.

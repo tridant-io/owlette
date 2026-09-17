@@ -2374,15 +2374,9 @@ class FirebaseClient:
         )
 
     def set_reboot_pending(self, process_name, reason, timestamp):
-        """Write a reboot_pending object to the machine document when relaunch limit is exceeded.
-
-        True when the row reached Firestore. Off Windows the relaunch gate
-        the escalation arms is cleared by a dashboard dismiss and nothing
-        else, so a caller that armed it on an unwritten row froze every
-        relaunch on the machine with nothing on screen to clear it.
-        """
+        """Write a reboot_pending object to the machine document when relaunch limit is exceeded."""
         if not self.connected or not self.db:
-            return False
+            return
 
         try:
             machine_ref = self.db.collection('sites').document(self.site_id)\
@@ -2397,10 +2391,8 @@ class FirebaseClient:
                 }
             }, merge=True)
             self.logger.info(f"[FLAG] Reboot pending set for process: {process_name}")
-            return True
         except Exception as e:
             self.logger.error(f"Failed to set reboot pending: {e}")
-            return False
 
     def clear_reboot_pending(self):
         """Clear the reboot_pending flag on the machine document."""

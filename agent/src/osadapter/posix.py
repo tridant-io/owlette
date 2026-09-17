@@ -29,7 +29,6 @@ import threading
 import time
 import uuid
 from collections import namedtuple
-from collections.abc import Iterator
 
 from . import resolve_data_root
 
@@ -54,53 +53,17 @@ DESKTOP_PROCESS_NAME = 'owlette-desktop'
 # A session is a seat only when it is active and of a graphical type: a tty or
 # ssh login is listed exactly the same way and has no display to reach.
 _GRAPHICAL_SESSION_TYPES = frozenset({'x11', 'wayland'})
-# And only a login's own session. The display manager's greeter is an
-# active graphical session of its own — on the kiosk VM logind lists it as
-# `Class=greeter, Name=gdm, Type=x11, Active=yes` before the autologin and
-# after every logout — and answering with it ran the kiosk application as
-# the display manager's system account on an unattended login screen, and
-# let a request written by that account through the privileged seam.
-_USER_SESSION_CLASS = 'user'
-# And only while that login is still standing. logind keeps a session
-# listed through its whole teardown — on the kiosk VM for 90 seconds,
-# systemd's scope stop timeout, with Active=yes, Class=user and Type=x11
-# unchanged long after the X server it named had exited — and only State
-# moves: a session being stopped reports `closing` from the moment the stop
-# begins. Launching into one succeeds, the process dies with the display it
-# was handed, and a logout spent a GUI entry's whole relaunch budget. A
-# logind too old to publish the property leaves the session judged as before.
-_LIVE_SESSION_STATES = frozenset({'active', 'online'})
 _LOGINCTL_TIMEOUT_SECONDS = 5
 
-# Lifted from a process inside the session rather than assembled from
-# constants: GDM, LightDM and SDDM each put the X cookie somewhere different,
-# and a DISPLAY without an XAUTHORITY leaves root with "cannot open display".
-# The account's own variables are never among them — a session runs other
-# accounts' processes too, root's PAM worker above all.
+# Lifted from the session leader rather than assembled from constants: GDM,
+# LightDM and SDDM each put the X cookie somewhere different, and a DISPLAY
+# without an XAUTHORITY leaves root with "cannot open display".
 _SESSION_VARIABLES = frozenset({
-    'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR',
+    'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR',
     'DBUS_SESSION_BUS_ADDRESS', 'XDG_SESSION_TYPE',
+    'HOME', 'USER', 'LOGNAME', 'PATH',
 })
-# What tells a process of the session apart from a helper that merely runs
-# inside it.
-_DISPLAY_VARIABLES = ('DISPLAY', 'WAYLAND_DISPLAY')
-# How much of a search is opened before it gives up: a seat runs tens of
-# processes and the machine hundreds, and the search must never become a walk
-# of all of them. A cgroup's own `cgroup.procs` is the kernel's own list and
-# is read whole; what this bounds is what a search opens — the session user's
-# own processes, and the cgroup files under their systemd manager. Bounding
-# raw pids bounded it to the machine's numerically lowest 256, which on any
-# box that has run more than that are the boot's processes and never the
-# login's.
-_SESSION_SCAN_LIMIT = 256
 _DEFAULT_PATH = '/usr/local/bin:/usr/bin:/bin'
-
-# The three trees the kernel publishes a session through, named here rather
-# than written into each path: the suite points them at a seat it builds, which
-# is the only way to hold this to one the test machine does not have.
-PROC_ROOT = '/proc'
-CGROUP_ROOT = '/sys/fs/cgroup'
-RUNTIME_DIR_ROOT = '/run/user'
 
 # The GUI job seam the resident desktop app serves
 # (desktop/src-tauri/src/jobrunner.rs): the daemon drops a request in, the app
@@ -143,7 +106,7 @@ _FILE_MODES = (
 # user's hoot process cannot execute it.
 CLI_CACHE_DIR = 'cache/claude-cli'
 
-_Session = namedtuple('_Session', 'name type id uid')
+_Session = namedtuple('_Session', 'name leader type')
 
 _children = {}
 _children_lock = threading.Lock()
@@ -175,27 +138,19 @@ def console_user() -> str | None:
 def session_env(uid) -> dict[str, str]:
     """The environment a process needs to reach that user's display.
 
-    The account's own variables always, and the session's display variables
-    when that user is at a seat. What is lifted never overwrites the account's
-    half: HOME, USER, LOGNAME and PATH describe the account the process is
-    about to run as, and the session is not that account's alone to speak for.
-    A variable the session set to nothing is not lifted either: an empty
-    WAYLAND_DISPLAY names no socket, and a toolkit that picks its backend on
-    the variable's presence stops there rather than falling back to the
-    DISPLAY beside it — the reason the cookie ladder omits XAUTHORITY too.
+    The account's own variables always, the session leader's display variables
+    when that user is at a seat. XAUTHORITY falls back to the home directory's
+    cookie only when the leader carries none.
     """
     env = _account_env(uid)
     session = _graphical_session(uid)
     if session is not None:
-        lifted = _session_display_environ(session)
         env.update({
             name: value
-            for name, value in lifted.items()
-            if name in _SESSION_VARIABLES and value
+            for name, value in _process_environ(session.leader).items()
+            if name in _SESSION_VARIABLES
         })
-        cookie = _xauthority(lifted.get('XAUTHORITY'), uid)
-        if cookie:
-            env['XAUTHORITY'] = cookie
+        env.setdefault('XAUTHORITY', os.path.join(env['HOME'], '.Xauthority'))
     return env
 
 
@@ -487,9 +442,9 @@ def _group_gid() -> int | None:
 def _graphical_session(uid=None) -> _Session | None:
     """The active graphical session, `uid`'s when one is named; None if no seat.
 
-    A headless machine, a container, a box whose kiosk user has not logged in
-    yet and one sitting at the login screen all resolve to None here — there is
-    a session listed for each, and none of them is a login of a real account.
+    A headless machine, a container and a box whose kiosk user has not logged in
+    yet all resolve to None here — there is a session listed for each, and none
+    of them is a seat.
     """
     for line in _loginctl('list-sessions', '--no-legend').splitlines():
         columns = line.split()
@@ -498,158 +453,22 @@ def _graphical_session(uid=None) -> _Session | None:
         properties = _session_properties(columns[0])
         if properties.get('Active') != 'yes':
             continue
-        if properties.get('Class') != _USER_SESSION_CLASS:
-            continue
-        state = properties.get('State')
-        if state and state not in _LIVE_SESSION_STATES:
-            continue
         session_type = properties.get('Type')
         if session_type not in _GRAPHICAL_SESSION_TYPES:
             continue
         if uid is not None and properties.get('User') != str(uid):
             continue
-        name, session_uid = properties.get('Name'), properties.get('User', '')
-        if name and session_uid.isdigit():
-            return _Session(name, session_type, columns[0], int(session_uid))
+        name, leader = properties.get('Name'), properties.get('Leader', '')
+        if name and leader.isdigit():
+            return _Session(name, int(leader), session_type)
     return None
-
-
-def _session_display_environ(session: _Session) -> dict[str, str]:
-    """The environment of a process that is actually inside the session.
-
-    Not the session leader: on GDM — X11 and Wayland alike — logind names a
-    root-owned `gdm-session-worker` as the Leader, and its environment carries
-    no display at all, only root's own PATH and USER. logind has nothing else
-    to offer either, its `Display` property being empty on both session types.
-    The variables exist only on the processes the session itself started, so
-    one of those answers: the first process belonging to the session's own
-    user, in its scope or in the user units beside it, whose environment
-    names a display.
-    """
-    for pid in _session_pids(session):
-        if _process_uid(pid) != session.uid:
-            continue
-        environ = _process_environ(pid)
-        if any(environ.get(name) for name in _DISPLAY_VARIABLES):
-            return environ
-    logger.warning(
-        f"No process in {session.name}'s graphical session carries a display; "
-        f"a process launched into it would reach none either"
-    )
-    return {}
-
-
-def _session_pids(session: _Session) -> Iterator[int]:
-    """The processes to ask about the session, the exact ones first.
-
-    cgroup v2 keeps a logind session's processes in one scope, so that scope's
-    `cgroup.procs` is the list itself — read whole, because the kernel's own
-    answer is not ours to truncate. A machine that does not publish it there
-    — a v1 hierarchy, or a scope under some other slice — is answered by the
-    processes whose own cgroup line names the scope.
-
-    Since GNOME 3.34 the session is also a set of systemd *user* units, which
-    sit beside that scope rather than inside it: on Ubuntu 24.04 the scope
-    holds Xorg and the session binary while gnome-shell — the process
-    carrying WAYLAND_DISPLAY, and DISPLAY once XWayland has started — runs
-    under `user@<uid>.service`. That unit's own subtree of `cgroup.procs`
-    files answers for it, read after the scope and never instead of it. The
-    rest of the user's slice is never asked at all — an ssh login of the same
-    account is in it, and a forwarded DISPLAY is a screen on somebody else's
-    desk.
-    """
-    scope = f'session-{session.id}.scope'
-    listed = _read_pids(os.path.join(
-        CGROUP_ROOT, 'user.slice', f'user-{session.uid}.slice', scope,
-        'cgroup.procs',
-    ))
-    asked = set()
-    for pid in listed or _pids_under(scope, session.uid):
-        asked.add(pid)
-        yield pid
-    for pid in _user_manager_pids(session.uid):
-        if pid not in asked:
-            yield pid
-
-
-def _read_pids(path: str) -> list[int]:
-    """The pids one cgroup.procs names; empty when there is no such file."""
-    return [
-        int(entry)
-        for entry in _read_entry(path).decode(errors='replace').split()
-        if entry.isdigit()
-    ]
-
-
-def _pids_under(cgroup_name: str, uid) -> list[int]:
-    """`uid`'s live processes whose own cgroup names `cgroup_name`.
-
-    Ownership settles what is a candidate at all, and it settles it first:
-    only the session user's own processes are ever asked for a display, and
-    the bound belongs on those rather than on the machine's pids.
-    """
-    try:
-        listed = sorted(
-            int(name) for name in os.listdir(PROC_ROOT) if name.isdigit())
-    except OSError as e:
-        logger.debug(f"Could not list {PROC_ROOT}: {e}")
-        return []
-    pids = []
-    examined = 0
-    for pid in listed:
-        if _process_uid(pid) != uid:
-            continue
-        cgroup = _read_entry(_proc_path(pid, 'cgroup')).decode(errors='replace')
-        if cgroup_name in cgroup:
-            pids.append(pid)
-        examined += 1
-        if examined >= _SESSION_SCAN_LIMIT:
-            break
-    return pids
-
-
-def _user_manager_pids(uid) -> list[int]:
-    """The processes of `uid`'s systemd user manager, off the kernel's lists.
-
-    A `cgroup.procs` file names one cgroup's own processes and not its
-    children's, so the unit's whole subtree is read rather than its root:
-    gnome-shell is two levels down, under
-    `session.slice/org.gnome.Shell@wayland.service`, and it is the only
-    process on a Wayland seat that carries the display at all.
-
-    That subtree is the unified hierarchy's, and a hierarchy whose root
-    publishes no `cgroup.controllers` is not it: on a v1 or hybrid box none
-    of those directories exist and the walk would answer nothing at all. The
-    unit is matched the way the rung below matches the scope there — on the
-    processes whose own cgroup line names it, which a v1 systemd publishes
-    just as it does the scope's. The marker at the root is not a promise
-    about the path either — a delegated or renamed slice puts the manager
-    somewhere else — so a walk that opens no `cgroup.procs` at all falls
-    back to that same path-independent match rather than answering nothing.
-    """
-    unit = f'user@{uid}.service'
-    if not os.path.exists(os.path.join(CGROUP_ROOT, 'cgroup.controllers')):
-        return _pids_under(unit, uid)
-    root = os.path.join(
-        CGROUP_ROOT, 'user.slice', f'user-{uid}.slice', unit)
-    pids = []
-    opened = 0
-    for current, _directories, files in os.walk(root):
-        if 'cgroup.procs' not in files:
-            continue
-        pids.extend(_read_pids(os.path.join(current, 'cgroup.procs')))
-        opened += 1
-        if opened >= _SESSION_SCAN_LIMIT:
-            break
-    return pids if opened else _pids_under(unit, uid)
 
 
 def _session_properties(session_id: str) -> dict[str, str]:
     """What loginctl reports about one session, as a mapping."""
     output = _loginctl(
         'show-session', session_id,
-        '-p', 'Type', '-p', 'Active', '-p', 'Name', '-p', 'User',
-        '-p', 'Class', '-p', 'State',
+        '-p', 'Type', '-p', 'Active', '-p', 'Name', '-p', 'Leader', '-p', 'User',
     )
     properties = {}
     for line in output.splitlines():
@@ -680,56 +499,20 @@ def _loginctl(*args) -> str:
     return result.stdout
 
 
-def _proc_path(pid: int, name: str) -> str:
-    """One of the files the kernel publishes about a process."""
-    return os.path.join(PROC_ROOT, str(pid), name)
-
-
-def _read_entry(path: str) -> bytes:
-    """A kernel file, read off a descriptor on the entry itself.
-
-    /proc and /sys are the kernel's own, but the paths under them are built
-    from what loginctl reported, so they get the O_NOFOLLOW and regular-file
-    discipline everything under the data root gets.
-    """
-    try:
-        fd = _open_entry(path, False)
-    except OSError as e:
-        logger.debug(f"Could not open {path}: {e}")
-        return b''
-    try:
-        with os.fdopen(fd, 'rb') as f:
-            return f.read()
-    except OSError as e:
-        logger.debug(f"Could not read {path}: {e}")
-        return b''
-
-
 def _process_environ(pid: int) -> dict[str, str]:
     """The environment a running process was given, from /proc."""
+    try:
+        with open(f'/proc/{pid}/environ', 'rb') as f:
+            raw = f.read()
+    except OSError as e:
+        logger.debug(f"Could not read the environment of pid {pid}: {e}")
+        return {}
     environ = {}
-    for entry in _read_entry(_proc_path(pid, 'environ')).split(b'\0'):
+    for entry in raw.split(b'\0'):
         name, separator, value = entry.partition(b'=')
         if separator:
             environ[name.decode(errors='replace')] = value.decode(errors='replace')
     return environ
-
-
-def _process_uid(pid: int) -> int | None:
-    """The account a process runs as, or None when /proc will not say.
-
-    Taken from the process's own status rather than from the owner of its
-    /proc directory: both are the kernel's answer to the same question, and
-    this one can also be stated by a layout the suite writes.
-    """
-    status = _read_entry(_proc_path(pid, 'status')).decode(errors='replace')
-    for line in status.splitlines():
-        if line.startswith('Uid:'):
-            fields = line.split()
-            if len(fields) > 1 and fields[1].isdigit():
-                return int(fields[1])
-            return None
-    return None
 
 
 def _account_env(uid) -> dict[str, str]:
@@ -741,27 +524,6 @@ def _account_env(uid) -> dict[str, str]:
         'LOGNAME': account.pw_name,
         'PATH': _DEFAULT_PATH,
     }
-
-
-def _xauthority(lifted: str | None, uid) -> str | None:
-    """The X cookie to hand the process, or None when there is none to hand.
-
-    The in-session value first: every display manager keeps the cookie
-    somewhere else and only the session knows where. GDM's lives under the
-    user's runtime directory and never in the home directory `startx` and the
-    older managers write to, so the home-directory guess names nothing at all
-    on a GDM kiosk — and an XAUTHORITY naming nothing is worse than none,
-    because X stops there rather than falling back.
-    """
-    candidates = (
-        lifted,
-        os.path.join(RUNTIME_DIR_ROOT, str(uid), 'gdm', 'Xauthority'),
-        os.path.join(_account_env(uid)['HOME'], '.Xauthority'),
-    )
-    for candidate in candidates:
-        if candidate and os.path.isfile(candidate):
-            return candidate
-    return None
 
 
 def _spawn(argv, uid, env, cwd=None) -> int:

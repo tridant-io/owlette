@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import socket
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Optional
@@ -16,8 +15,6 @@ import shared_utils
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
-
-_IS_WINDOWS = sys.platform == 'win32'
 
 # GPU temperature cache (used only when multiple GPUs are present to avoid
 # repeated sensor reads inside a single metrics tick).
@@ -35,40 +32,37 @@ def _agent_version() -> str:
 
 def _collect_cpus() -> list:
     cpus = []
-    # Socket topology is WMI's; off Windows the query can only fail, and its
-    # fallback log is a warning on every profile rebuild.
-    if _IS_WINDOWS:
+    try:
+        # WMI uses COM; background threads must register with the COM runtime
+        # before making calls. Idempotent on threads that already initialized.
         try:
-            # WMI uses COM; background threads must register with the COM runtime
-            # before making calls. Idempotent on threads that already initialized.
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+        import wmi
+        c = wmi.WMI()
+        for idx, proc in enumerate(c.Win32_Processor()):
             try:
-                import pythoncom
-                pythoncom.CoInitialize()
-            except Exception:
-                pass
-            import wmi
-            c = wmi.WMI()
-            for idx, proc in enumerate(c.Win32_Processor()):
-                try:
-                    physical = int(getattr(proc, 'NumberOfCores', 0) or 0)
-                except (TypeError, ValueError):
-                    physical = 0
-                try:
-                    logical = int(getattr(proc, 'NumberOfLogicalProcessors', 0) or 0)
-                except (TypeError, ValueError):
-                    logical = 0
-                name = (getattr(proc, 'Name', '') or '').strip() or 'Unknown CPU'
-                cpus.append({
-                    'id': 'CPU{0}'.format(idx),
-                    'model': name,
-                    'physicalCores': physical,
-                    'logicalCores': logical,
-                    'socketIndex': idx,
-                })
-            if cpus:
-                return cpus
-        except Exception as e:
-            logger.warning('WMI Win32_Processor query failed, falling back: %s', e)
+                physical = int(getattr(proc, 'NumberOfCores', 0) or 0)
+            except (TypeError, ValueError):
+                physical = 0
+            try:
+                logical = int(getattr(proc, 'NumberOfLogicalProcessors', 0) or 0)
+            except (TypeError, ValueError):
+                logical = 0
+            name = (getattr(proc, 'Name', '') or '').strip() or 'Unknown CPU'
+            cpus.append({
+                'id': 'CPU{0}'.format(idx),
+                'model': name,
+                'physicalCores': physical,
+                'logicalCores': logical,
+                'socketIndex': idx,
+            })
+        if cpus:
+            return cpus
+    except Exception as e:
+        logger.warning('WMI Win32_Processor query failed, falling back: %s', e)
 
     # Fallback: single-socket inference from psutil + registry.
     try:

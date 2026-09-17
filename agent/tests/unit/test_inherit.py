@@ -43,9 +43,7 @@ import shared_utils
 ENTRY = {'id': 'proc-1', 'name': 'Demo App', 'exe_path': 'C:\\apps\\demo.exe',
          'launch_mode': 'always'}
 
-# Through the normaliser, not spelled out: the fold is the Windows comparison,
-# and off Windows a path is stored exactly as it is read.
-EXE_NORMALISED = shared_utils.normalize_exe_path(ENTRY['exe_path'])
+EXE_NORMALISED = 'c:\\apps\\demo.exe'
 
 INHERIT_FIELDS = {'create_time': 1111.5, 'exe': EXE_NORMALISED,
                   'managed': True, 'origin': 'inherited'}
@@ -339,7 +337,7 @@ def test_fallback_scan_inherits_with_record(
         'id': 'proc-x',
         'status': 'LAUNCHING',
         'create_time': 987.5,
-        'exe': shared_utils.normalize_exe_path(exe),
+        'exe': exe.replace('/', '\\').lower(),
         'managed': True,
         'origin': 'inherited',
     }

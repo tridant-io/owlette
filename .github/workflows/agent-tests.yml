@@ -55,20 +55,14 @@ jobs:
           # names a tree that is, so these legs fail on the regressions they
           # are here to catch rather than on the data root.
           #
-          # All four ignored modules are display_manager's, which is never
+          # The four ignored modules import display_manager, which is never
           # ported (test_no_platform_imports lists it as Windows-only) and
-          # asserts its own struct layout at import. Three import it at module
-          # scope, so collecting them off Windows fails before a test runs;
-          # test_display_enumeration_gate.py imports it inside its bodies and
-          # collects, then fails every test on the same assertion. `-x` aborts
-          # the leg on either, which is why both kinds are --ignore rather than
-          # markers. Everything else gates: a POSIX regression fails the leg.
+          # asserts its own struct layout at import, so collecting them off
+          # Windows fails before a test runs — and `-x` would abort the leg
+          # there. Everything else gates: a POSIX regression fails the leg.
           # Anything Windows-only inside a module that does collect carries
           # @pytest.mark.windows instead, which reports as a skip rather than
-          # hiding the whole file — and a test that needs an osadapter arm
-          # this platform has no module for carries @pytest.mark.needs_os_arm,
-          # which is what keeps macos-15 green while osadapter/darwin.py is
-          # still on the Mac branch.
+          # hiding the whole file.
           - os: macos-15
             data_root: /tmp/owlette-data
             pytest_addopts: >-

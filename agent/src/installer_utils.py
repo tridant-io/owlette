@@ -603,7 +603,7 @@ def cancel_installation(installer_name: str, active_processes: Dict[str, int]) -
 
 # The transient unit and the launchd job the update runs as. Named rather than
 # spawned: the installer stops the agent, and a child of the daemon dies with it
-# — `systemd-run --collect` and `launchctl submit` both outlive the process that
+# - `systemd-run --collect` and `launchctl submit` both outlive the process that
 # asked for them.
 UPDATE_UNIT_NAME = 'owlette-update'
 UPDATE_JOB_LABEL = 'app.owlette.update'
@@ -625,7 +625,7 @@ def start_self_update(installer_path: str, os_family: str) -> tuple[bool, str]:
 
     Returns ``(True, detail)`` once the installer is running somewhere the
     agent's own shutdown cannot reach, and ``(False, '<code>: ...')`` when the
-    installed version keeps running instead — ``update_unsatisfiable`` for a
+    installed version keeps running instead - ``update_unsatisfiable`` for a
     package this system cannot resolve, ``update_deferred`` for a lock that will
     clear, ``update_handoff_failed`` when the init system refused the job. Only
     a handoff that actually started reports one.
@@ -659,8 +659,8 @@ def _apt_can_install(installer_path: str) -> tuple[bool, str]:
     """Whether apt can satisfy the package, with one recovery attempt.
 
     ``--simulate`` resolves the whole dependency graph without touching the
-    system, so a package whose ``Depends:`` cannot be met is refused here — with
-    the installed version still running — rather than half-installed. It takes
+    system, so a package whose ``Depends:`` cannot be met is refused here - with
+    the installed version still running - rather than half-installed. It takes
     no lock, which is what lets it run at all while another package operation
     is under way, so the lock is a separate question: the install itself runs
     inside a transient unit whose failure nobody reads back, and unattended
@@ -693,7 +693,7 @@ def _apt_can_install(installer_path: str) -> tuple[bool, str]:
 def _dpkg_frontend_lock_held() -> bool:
     """Whether another package operation holds apt's frontend lock.
 
-    A POSIX record lock, which is the kind apt takes — a probe of any other
+    A POSIX record lock, which is the kind apt takes - a probe of any other
     kind contends with nothing and would report every lock free. A file that
     cannot be opened is reported as free: the install is still the authority
     on whether it can run, and refusing an update over a failed probe would be
@@ -744,7 +744,7 @@ def _run_update_command(command: List[str], timeout_seconds: int):
 
 
 def _complaint(result) -> str:
-    """What a failed command said, stdout included — apt reports unmet
+    """What a failed command said, stdout included - apt reports unmet
     dependencies on stdout and only the summary line on stderr."""
     if result is None:
         return 'the command could not be run'

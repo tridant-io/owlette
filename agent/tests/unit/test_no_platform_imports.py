@@ -41,8 +41,8 @@ WINDOWS_ONLY_MODULES = frozenset({
 
 # The Windows arms themselves: exempt from rule 1, and rule 2 keeps the rest of
 # the tree from importing them at module scope. They have no exemption to retire,
-# so rule 3 does not police this set — an arm may be listed here before it
-# exists.
+# so rule 3 does not police this set — which is why tools_windows.py can be
+# listed here before Task 3.5 creates it.
 WINDOWS_ARMS = frozenset({
     'osadapter/win.py',
     'tools_windows.py',

@@ -4,11 +4,9 @@ Unit tests for shared_utils module
 Tests utility functions for configuration, system metrics, and process management.
 """
 
-import psutil
 import pytest
 import json
 import logging
-import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -434,21 +432,13 @@ class TestPlatformNormalisation:
 
 
 class TestPosixMetricProbes:
-    """The heartbeat's three shelling metrics, off Windows. The platform flags
-    are monkeypatched rather than skipped, so both POSIX arms are exercised
-    from the Windows dev box as well as from the macOS and Linux CI legs — and
-    each against its own mechanism, since macOS ships neither /proc nor
-    iproute2 and its ping counts `-W` in milliseconds."""
+    """The heartbeat's three shelling metrics, off Windows. `_IS_WINDOWS` is
+    monkeypatched rather than skipped, so the POSIX arms are exercised from the
+    Windows dev box as well as from the macOS and Linux CI legs."""
 
     @pytest.fixture
-    def linux(self, monkeypatch):
+    def posix(self, monkeypatch):
         monkeypatch.setattr(shared_utils, '_IS_WINDOWS', False)
-        monkeypatch.setattr(shared_utils, '_IS_MACOS', False)
-
-    @pytest.fixture
-    def macos(self, monkeypatch):
-        monkeypatch.setattr(shared_utils, '_IS_WINDOWS', False)
-        monkeypatch.setattr(shared_utils, '_IS_MACOS', True)
 
     @pytest.fixture
     def uncached_gateway(self, monkeypatch):
@@ -466,7 +456,7 @@ class TestPosixMetricProbes:
 
         assert shared_utils._NO_WINDOW == expected
 
-    def test_the_cpu_name_comes_from_proc_cpuinfo(self, linux):
+    def test_the_cpu_name_comes_from_proc_cpuinfo(self, posix):
         cpuinfo = (
             'processor\t: 0\n'
             'vendor_id\t: GenuineIntel\n'
@@ -479,7 +469,7 @@ class TestPosixMetricProbes:
                 'Intel(R) Core(TM) i9-9900X CPU @ 3.50GHz'
             )
 
-    def test_a_cpu_that_names_itself_nowhere_falls_through(self, linux):
+    def test_a_cpu_that_names_itself_nowhere_falls_through(self, posix):
         """An arm64 board has no `model name` line at all; what is left is
         platform.processor(), which the Windows path also ends on."""
         with patch('builtins.open', mock_open(read_data='processor\t: 0\n')):
@@ -487,7 +477,7 @@ class TestPosixMetricProbes:
                 assert shared_utils.get_cpu_name() == 'aarch64'
 
     def test_the_default_gateway_is_the_route_traffic_takes(
-        self, linux, uncached_gateway, monkeypatch
+        self, posix, uncached_gateway, monkeypatch
     ):
         """iproute2 prints the default routes best first, so the first `via` is
         the one the latency this measures is actually spent on."""
@@ -507,7 +497,7 @@ class TestPosixMetricProbes:
         assert issued == [['ip', 'route', 'show', 'default']]
 
     def test_a_machine_with_no_default_route_has_no_gateway(
-        self, linux, uncached_gateway, monkeypatch
+        self, posix, uncached_gateway, monkeypatch
     ):
         monkeypatch.setattr(
             shared_utils.subprocess, 'check_output', lambda *a, **kw: '\n'
@@ -515,7 +505,7 @@ class TestPosixMetricProbes:
 
         assert shared_utils._detect_default_gateway() == ''
 
-    def test_the_ping_is_four_echoes_and_their_average(self, linux, monkeypatch):
+    def test_the_ping_is_four_echoes_and_their_average(self, posix, monkeypatch):
         output = (
             'PING 192.168.1.1 (192.168.1.1) 56(84) bytes of data.\n'
             '\n'
@@ -536,7 +526,7 @@ class TestPosixMetricProbes:
         }
         assert issued == [['ping', '-c', '4', '-W', '1', '192.168.1.1']]
 
-    def test_a_lossy_link_reports_what_it_lost(self, linux, monkeypatch):
+    def test_a_lossy_link_reports_what_it_lost(self, posix, monkeypatch):
         output = (
             '4 packets transmitted, 3 received, 25% packet loss, time 3004ms\n'
             'rtt min/avg/max/mdev = 1.1/2.2/3.3/0.4 ms\n'
@@ -549,62 +539,7 @@ class TestPosixMetricProbes:
             'latency_ms': 2.2, 'packet_loss_pct': 25.0,
         }
 
-    def test_the_cpu_name_comes_from_the_sysctl_brand_string(
-        self, macos, monkeypatch):
-        """macOS has no /proc at all: reading it there raises, is swallowed,
-        and the dashboard shows platform.processor() — `arm` — as the chip."""
-        issued = []
-
-        def check_output(command, **kwargs):
-            issued.append(list(command))
-            return 'Apple M2\n'
-
-        monkeypatch.setattr(shared_utils.subprocess, 'check_output', check_output)
-
-        assert shared_utils.get_cpu_name() == 'Apple M2'
-        assert issued == [['sysctl', '-n', 'machdep.cpu.brand_string']]
-
-    def test_the_default_gateway_is_the_route_macos_would_take(
-        self, macos, uncached_gateway, monkeypatch
-    ):
-        """`ip` is not a command macOS ships, so without this arm the gateway
-        never resolves and latency_ms / packet_loss_pct stay unmeasured for the
-        life of the machine."""
-        route = (
-            '   route to: default\n'
-            'destination: default\n'
-            '       mask: default\n'
-            '    gateway: 192.168.1.1\n'
-            '  interface: en0\n'
-        )
-        issued = []
-
-        def check_output(command, **kwargs):
-            issued.append(list(command))
-            return route
-
-        monkeypatch.setattr(shared_utils.subprocess, 'check_output', check_output)
-
-        assert shared_utils._detect_default_gateway() == '192.168.1.1'
-        assert issued == [['route', '-n', 'get', 'default']]
-
-    def test_the_ping_wait_is_the_unit_this_ping_counts_in(
-        self, macos, monkeypatch):
-        """BSD ping counts `-W` in milliseconds: `-W 1` waits one millisecond
-        for each reply and reports a healthy link as 100% lost."""
-        issued = []
-
-        def check_output(command, **kwargs):
-            issued.append(list(command))
-            return '4 packets transmitted, 4 received, 0% packet loss\n'
-
-        monkeypatch.setattr(shared_utils.subprocess, 'check_output', check_output)
-
-        shared_utils._run_ping('192.168.1.1')
-
-        assert issued == [['ping', '-c', '4', '-W', '1000', '192.168.1.1']]
-
-    def test_a_ping_that_never_answers_is_unmeasured(self, linux, monkeypatch):
+    def test_a_ping_that_never_answers_is_unmeasured(self, posix, monkeypatch):
         """ping exits non-zero when every packet is lost, and that has always
         come back unmeasured rather than as a reading of 100% loss."""
         def refuse(*args, **kwargs):
@@ -615,29 +550,6 @@ class TestPosixMetricProbes:
         assert shared_utils._run_ping('10.0.0.1') == {
             'latency_ms': None, 'packet_loss_pct': None,
         }
-
-
-class TestWmiProbesOffWindows:
-    """The WMI probe on the same metrics tick as the three above. Its
-    `import wmi` can only fail off Windows, and the failure is a WARNING on
-    every tick — the symptom the display probes were guarded against."""
-
-    def test_the_disk_io_probe_is_skipped_off_windows(self, monkeypatch, caplog):
-        monkeypatch.setattr(shared_utils, '_IS_WINDOWS', False)
-        pools = []
-
-        def record_pool(*args, **kwargs):
-            pools.append(args)
-
-        monkeypatch.setattr(shared_utils, 'ThreadPoolExecutor', record_pool)
-
-        with caplog.at_level(logging.DEBUG):
-            assert shared_utils.get_disk_io_metrics() == {}
-
-        # Negative control: without the guard the probe builds its worker pool
-        # per tick and the ModuleNotFoundError lands on logging.warning.
-        assert pools == []
-        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
 # ─── external log rotation ───────────────────────────────────────────
@@ -731,159 +643,3 @@ class TestPerOsProcessHelpers:
         packaged.unlink()
         with pytest.raises(FileNotFoundError, match='python3'):
             shared_utils.get_python_exe_path()
-
-
-class TestIdentityPathNormalisation:
-    """The spelling an identity record stores, and what a match compares.
-
-    One normaliser, and it is platform-aware: the Windows fold is the whole of
-    what it was, and on POSIX the path is the one the kernel reports.
-    """
-
-    @pytest.mark.windows(reason='the fold is the Windows comparison')
-    def test_windows_folds_separators_and_case(self):
-        assert shared_utils.normalize_exe_path(
-            'C:/Program Files/Owlette/Show.EXE'
-        ) == 'c:\\program files\\owlette\\show.exe'
-
-    @pytest.mark.skipif(
-        sys.platform == 'win32', reason='POSIX paths are what is stored here')
-    def test_a_posix_record_stores_the_path_the_kernel_reports(self):
-        """Every Linux row stored the path backslash-separated and folded —
-        harmless to the matcher, which mangled both sides equally, and wrong
-        for everything else that reads the record."""
-        child = _sleeping_child()
-        try:
-            record = shared_utils.read_process_identity(child.pid)
-            live_exe = psutil.Process(child.pid).exe()
-        finally:
-            _stop(child)
-
-        assert record['exe'] == live_exe
-        assert '\\' not in record['exe']
-
-    @pytest.mark.skipif(
-        sys.platform == 'win32', reason='POSIX paths are what is stored here')
-    def test_a_recorded_row_still_matches_after_a_restart(self, tmp_path, monkeypatch):
-        """What recovery has once `last_started` is empty: the row one run
-        wrote, read back by the next and held to the live process."""
-        monkeypatch.setattr(
-            shared_utils, 'RESULT_FILE_PATH', str(tmp_path / 'app_states.json'))
-        child = _sleeping_child()
-        try:
-            identity = shared_utils.read_process_identity(child.pid)
-            shared_utils.update_process_status_in_json(
-                child.pid, 'LAUNCHING', process_id='kiosk',
-                extra={'create_time': identity['create_time'],
-                       'exe': identity['exe']})
-
-            row = shared_utils.read_json_from_file(
-                shared_utils.RESULT_FILE_PATH)[str(child.pid)]
-
-            assert shared_utils.identity_matches(
-                {'pid': child.pid, 'create_time': row['create_time'],
-                 'exe': row['exe']},
-                child.pid) is True
-        finally:
-            _stop(child)
-
-    @pytest.mark.skipif(
-        sys.platform == 'win32',
-        reason='the Windows ladder is pinned by test_process_lookup')
-    def test_the_lookup_compares_the_path_the_kernel_reports(self, tmp_path):
-        """The third comparison of a configured path against a live image, and
-        the one that folded on every platform: `/usr/bin/app` became
-        `\\usr\\bin\\app`, whose basename is the whole string, so neither the
-        full match nor the basename match could ever be true and every tier
-        below it — adoption, kill, restart — was unreachable on Linux.
-        """
-        exe = shutil.copy2('/bin/sleep', tmp_path / 'kiosk-app')
-        child = subprocess.Popen([str(exe), '30'])
-        try:
-            found = shared_utils.find_running_process_by_exe(str(exe))
-            strict = shared_utils.find_running_process_by_exe(
-                str(exe), strict=True)
-        finally:
-            _stop(child)
-
-        assert found == child.pid
-        assert strict == child.pid
-
-    @pytest.mark.skipif(
-        sys.platform == 'win32', reason='Windows paths are case-insensitive')
-    def test_two_paths_that_differ_only_in_case_are_two_files(self):
-        """/usr/bin/Foo and /usr/bin/foo are different executables off Windows,
-        so folding the case let a record describing one match the other."""
-        child = _sleeping_child()
-        try:
-            record = shared_utils.read_process_identity(child.pid)
-            shouted = record['exe'].upper()
-            assert shouted != record['exe']
-
-            assert shared_utils.identity_matches(
-                {**record, 'exe': shouted}, child.pid) is False
-        finally:
-            _stop(child)
-
-
-class TestAppStateWrites:
-    """What reaches tmp/app_states.json, and what no longer does.
-
-    The five-second loop stamps RUNNING on every running managed process on
-    every tick, so a machine whose processes are all up rewrote the same
-    bytes ~17,000 times a day — measured on the Ubuntu kiosk, mtime advancing
-    every five seconds against an md5-identical file. Nothing reads this
-    file's mtime: the desktop app watches the directory for the atomic
-    replace and re-reads the content, and the agent's own readers read the
-    content too.
-    """
-
-    def test_an_unchanged_row_is_not_written_again(self, tmp_path, monkeypatch):
-        states = tmp_path / 'app_states.json'
-        monkeypatch.setattr(shared_utils, 'RESULT_FILE_PATH', str(states))
-        shared_utils.update_process_status_in_json(
-            4242, 'RUNNING', process_id='kiosk')
-
-        written = []
-        real_write = shared_utils.write_json_to_file
-
-        def _write(data, file_path, **kwargs):
-            written.append(file_path)
-            return real_write(data, file_path, **kwargs)
-
-        monkeypatch.setattr(shared_utils, 'write_json_to_file', _write)
-        for _ in range(3):
-            shared_utils.update_process_status_in_json(
-                4242, 'RUNNING', process_id='kiosk')
-
-        # The negative control: every one of those three rewrote the file.
-        assert written == []
-        assert json.loads(states.read_text(encoding='utf-8')) == {
-            '4242': {'status': 'RUNNING', 'id': 'kiosk'}}
-
-    def test_a_row_that_changes_is_written(self, tmp_path, monkeypatch):
-        """The half that must not be skipped: a status, an id or a row extra
-        the file does not already carry is the whole point of the write."""
-        states = tmp_path / 'app_states.json'
-        monkeypatch.setattr(shared_utils, 'RESULT_FILE_PATH', str(states))
-
-        shared_utils.update_process_status_in_json(
-            4242, 'LAUNCHING', process_id='kiosk')
-        shared_utils.update_process_status_in_json(4242, 'RUNNING')
-        shared_utils.update_process_status_in_json(
-            4242, 'RUNNING', extra={'exe': '/usr/bin/kiosk'})
-        shared_utils.update_process_status_in_json(4343, 'LAUNCHING')
-
-        assert json.loads(states.read_text(encoding='utf-8')) == {
-            '4242': {'status': 'RUNNING', 'id': 'kiosk', 'exe': '/usr/bin/kiosk'},
-            '4343': {'status': 'LAUNCHING'},
-        }
-
-
-def _sleeping_child():
-    return subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
-
-
-def _stop(child):
-    child.terminate()
-    child.wait(10)

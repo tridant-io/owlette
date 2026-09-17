@@ -170,7 +170,6 @@ def make_cleanup_service(results):
         active_installations={},
         manual_overrides={},
         _skip_launch_delay=set(),
-        _seatless_entries=set(),
         results=results,
     )
     svc.cleanup_stale_tracking_data = (

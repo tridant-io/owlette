@@ -10,7 +10,6 @@ operations on top of it; `darwin` joins it with the macOS arm.
 import importlib
 import inspect
 import json
-import logging
 import os
 import shutil
 import stat
@@ -95,17 +94,6 @@ def relocated(tmp_path, monkeypatch):
     return tmp_path
 
 
-@pytest.fixture
-def seat(posix, tmp_path, monkeypatch):
-    """A graphical seat, written into a /proc and a cgroup tree of our own.
-
-    The only way to hold the session lookup to a GDM kiosk from a machine that
-    has no graphical seat at all, and the layout is the one the kiosk reports
-    — down to the root-owned session leader that carries no display.
-    """
-    return _FakeSeat(posix, tmp_path, monkeypatch)
-
-
 def _parameters(signature):
     return [(p.name, p.kind, p.default) for p in signature.parameters.values()]
 
@@ -143,29 +131,6 @@ class TestSurface:
     def test_the_package_hides_everything_else(self):
         with pytest.raises(AttributeError):
             getattr(osadapter, 'reboot_the_planet')
-
-
-@pytest.mark.needs_os_arm
-def test_a_platform_with_an_arm_runs_what_needs_one():
-    """The negative control for conftest's needs_os_arm gate.
-
-    This platform has an arm, so a test carrying the marker must run rather
-    than skip — reaching the body at all is the assertion. A gate that fired
-    here would take every test the marker covers off this leg silently.
-    """
-    assert osadapter.get() is not None
-
-
-def test_a_platform_with_no_arm_has_nothing_to_stub(monkeypatch):
-    """What that gate reads, and why the marker exists: macOS runs this suite
-    with `darwin.py` still on the Mac branch, and `get()` is what raises there
-    — before `monkeypatch.setattr` or `patch.object` can put a stub in place,
-    since both read the attribute they are replacing first."""
-    monkeypatch.setattr(osadapter, '_ARMS', {})
-    monkeypatch.setattr(osadapter, '_adapter', None)
-
-    with pytest.raises(NotImplementedError):
-        osadapter.get()
 
 
 class TestBehaviour:
@@ -581,408 +546,59 @@ class TestPosix:
         """What a headless box, a container and WSL all look like: a login is
         listed, and none of them has a display to reach."""
         _stub_sessions(monkeypatch, posix, {
-            '4': 'User=0\nName=root\nClass=user\nLeader=291\nType=tty\nActive=yes\n',
+            '4': 'User=0\nName=root\nLeader=291\nType=tty\nActive=yes\n',
         })
         assert posix.console_user() is None
 
     def test_the_active_graphical_session_names_the_console_user(self, posix, monkeypatch):
         _stub_sessions(monkeypatch, posix, {
-            '2': 'User=0\nName=root\nClass=user\nLeader=291\nType=tty\nActive=yes\n',
-            '3': 'User=1000\nName=kiosk\nClass=user\nLeader=1402\nType=x11\nActive=yes\n',
+            '2': 'User=0\nName=root\nLeader=291\nType=tty\nActive=yes\n',
+            '3': 'User=1000\nName=kiosk\nLeader=1402\nType=x11\nActive=yes\n',
         })
         assert posix.console_user() == 'kiosk'
 
-    @pytest.mark.parametrize('state', ['State=online\n', ''])
-    def test_a_switched_away_session_is_not_the_console_user(
-        self, posix, monkeypatch, state
-    ):
-        """Another session holds the foreground, so nobody is at this one's
-        screen. logind answers `Active=no` and publishes `State=online` for
-        it — its other live state — while a logind too old to publish the
-        property publishes nothing. Neither reading may reach the seat.
-        """
+    def test_a_switched_away_session_is_not_the_console_user(self, posix, monkeypatch):
         _stub_sessions(monkeypatch, posix, {
-            '3': 'User=1000\nName=kiosk\nClass=user\nLeader=1402\n'
-                 f'Type=x11\nActive=no\n{state}',
+            '3': 'User=1000\nName=kiosk\nLeader=1402\nType=x11\nActive=no\n',
         })
-
-        # The negative control: `online` is in the State allowlist, so
-        # without the Active check this answers 'kiosk'.
-        assert posix.console_user() is None
-
-    def test_a_session_being_torn_down_is_not_a_seat(self, posix, monkeypatch):
-        """Measured on the kiosk VM: `loginctl terminate-user kiosk` killed
-        the X server at 18:38:34 and logind went on listing the session as
-        Active=yes, Class=user, Type=x11 until 18:40:04 — systemd's 90 s scope
-        stop timeout, because the root gdm-session-worker in the scope would
-        not exit. Every launch into that window returned a real pid and the
-        process died with the display it was handed: nine relaunches in forty
-        seconds, the budget gone and the reboot-pending gate armed, for an
-        operator logging out. logind publishes the one property that moves.
-        """
-        asked = []
-
-        def _loginctl(*args):
-            if args[0] == 'list-sessions':
-                return '1 1000 kiosk seat0 tty2 active no -\n'
-            asked.append(list(args))
-            return ('User=1000\nName=kiosk\nClass=user\nLeader=1402\n'
-                    'Type=x11\nActive=yes\nState=closing\n')
-
-        monkeypatch.setattr(posix, '_loginctl', _loginctl)
-
-        # The negative control: without the State check this answers 'kiosk',
-        # and without `-p State` in the query the property never arrives.
-        assert posix.console_user() is None
-        assert 'State' in asked[0]
-
-    def test_the_state_a_standing_session_reports_is_still_a_seat(
-        self, posix, monkeypatch
-    ):
-        """The other half. `active` is what a standing login reports, and
-        `online` is carried beside it because the allowlist is a statement
-        about State alone: logind's live-but-not-foreground state is not a
-        teardown. Active=yes never accompanies it — logind reports `active`
-        for exactly the sessions it reports Active=yes for, unless one is
-        closing or opening — so what keeps a background session out of the
-        seat is the Active check above, not this filter."""
-        for state in ('active', 'online'):
-            _stub_sessions(monkeypatch, posix, {
-                '1': 'User=1000\nName=kiosk\nClass=user\nLeader=1402\n'
-                     f'Type=x11\nActive=yes\nState={state}\n',
-            })
-            assert posix.console_user() == 'kiosk'
-
-    def test_a_session_that_is_still_opening_is_not_a_seat_yet(
-        self, posix, monkeypatch
-    ):
-        """logind's fourth State, and the one reading that can stand behind
-        Active=yes on a session nobody is at yet: `opening` is a session
-        created whose scope job has not finished, so its display server may
-        not be up. It fails closed — the refusal records the `failed`
-        cooldown and the retry comes a minute later, reading `active` and
-        launching then — because a launch into a session that is still
-        starting is the launch that dies with the display it was handed,
-        which is the same loss the `closing` half of this filter exists to
-        prevent."""
-        _stub_sessions(monkeypatch, posix, {
-            '1': 'User=1000\nName=kiosk\nClass=user\nLeader=1402\n'
-                 'Type=x11\nActive=yes\nState=opening\n',
-        })
-
-        # The negative control: with `opening` in the allowlist this answers
-        # 'kiosk' and the launch goes into the half-built session.
-        assert posix.console_user() is None
-
-    def test_the_login_screen_is_not_a_console_user(self, posix, monkeypatch):
-        """Proven on the kiosk VM: at the GDM greeter — before the autologin,
-        and after any logout, which does not re-fire it — logind lists an
-        active x11 session of its own, owned by the display manager's system
-        account. Answering with it made `gdm` the console user: the account a
-        managed process would then be started as on an unattended login
-        screen, and the uid the privileged request seam would trust.
-        """
-        _stub_sessions(monkeypatch, posix, {
-            'c1': 'User=123\nName=gdm\nClass=greeter\nLeader=1180\n'
-                  'Type=x11\nActive=yes\n',
-            '1': 'User=1000\nName=kiosk\nClass=user\nLeader=1402\n'
-                 'Type=tty\nActive=yes\n',
-        })
-
-        # The negative control: without the Class check this answers 'gdm'.
         assert posix.console_user() is None
 
     @linux_only
-    def test_the_display_comes_from_a_process_inside_the_session(self, posix, seat):
-        """Not from the session leader. On GDM — X11 and Wayland alike —
-        the Leader logind names is a root-owned `gdm-session-worker` whose
-        environment holds no DISPLAY, no cookie and root's own PATH, and
-        `loginctl show-session -p Display` is empty on both, so the only place
-        the variables exist is a process the session itself started.
-        """
-        cookie = seat.cookie(seat.runtime / 'gdm' / 'Xauthority')
-        seat.gdm()
-
-        env = posix.session_env(seat.UID)
+    def test_session_env_is_lifted_from_the_session_leader(self, posix, monkeypatch):
+        leader = _leader_carrying({
+            'DISPLAY': ':0',
+            'XAUTHORITY': '/run/user/1000/gdm/Xauthority',
+            'XDG_RUNTIME_DIR': '/run/user/1000',
+            'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1000/bus',
+            'XDG_SESSION_TYPE': 'x11',
+            'WAYLAND_DISPLAY': 'wayland-0',
+            'GNOME_KEYRING_CONTROL': '/run/user/1000/keyring',
+        })
+        try:
+            _stub_leader(monkeypatch, posix, leader.pid)
+            env = posix.session_env(os.getuid())
+        finally:
+            _stop_child(leader)
 
         assert env['DISPLAY'] == ':0'
-        assert env['XAUTHORITY'] == cookie
-        assert env['XDG_RUNTIME_DIR'] == f'/run/user/{seat.UID}'
-        assert env['DBUS_SESSION_BUS_ADDRESS'] == f'unix:path=/run/user/{seat.UID}/bus'
-        assert env['XDG_SESSION_TYPE'] == 'x11'
+        assert env['XAUTHORITY'] == '/run/user/1000/gdm/Xauthority'
+        assert env['XDG_RUNTIME_DIR'] == '/run/user/1000'
+        assert env['DBUS_SESSION_BUS_ADDRESS'] == 'unix:path=/run/user/1000/bus'
+        assert env['WAYLAND_DISPLAY'] == 'wayland-0'
         assert 'GNOME_KEYRING_CONTROL' not in env
 
     @linux_only
-    def test_the_account_half_is_never_taken_from_the_session(self, posix, seat):
-        """HOME, USER, LOGNAME and PATH describe the account the process is
-        about to run as; lifting them off the session handed the kiosk user
-        whatever the process they were read from happened to hold."""
-        seat.gdm()
+    def test_xauthority_falls_back_to_the_home_cookie(self, posix, monkeypatch):
+        """Only when the leader carries none — GDM, LightDM and SDDM each keep
+        the cookie somewhere else, and a guess would be the wrong one."""
+        leader = _leader_carrying({'DISPLAY': ':0', 'HOME': '/home/kiosk'})
+        try:
+            _stub_leader(monkeypatch, posix, leader.pid)
+            env = posix.session_env(os.getuid())
+        finally:
+            _stop_child(leader)
 
-        env = posix.session_env(seat.UID)
-
-        assert env['USER'] == 'kiosk'
-        assert env['LOGNAME'] == 'kiosk'
-        assert env['HOME'] == str(seat.home)
-        assert env['PATH'] == seat.account['PATH']
-
-    @linux_only
-    def test_the_session_leader_is_never_the_source(self, posix, seat):
-        """THE negative control: even a leader that does carry a display is
-        not the process asked, because it is not the session user's."""
-        seat.process(1292, 0, {'DISPLAY': ':99', 'USER': 'root'})
-        seat.process(1500, seat.UID, seat.session_environ())
-
-        assert posix.session_env(seat.UID)['DISPLAY'] == ':0'
-
-    @linux_only
-    def test_the_sessions_processes_are_the_ones_its_scope_names(self, posix, seat):
-        """cgroup v2 keeps them in one scope, and that list is the session —
-        an older process of the same account, in another session, is not."""
-        seat.process(900, seat.UID, {'DISPLAY': ':99'}, member=False)
-        seat.process(1500, seat.UID, seat.session_environ())
-
-        assert posix.session_env(seat.UID)['DISPLAY'] == ':0'
-
-    @linux_only
-    def test_a_machine_with_no_scope_file_walks_proc_instead(self, posix, seat):
-        """A v1 hierarchy, or a scope under another slice: the processes whose
-        own cgroup names the scope answer, and nothing else does."""
-        seat.process(900, seat.UID, {'DISPLAY': ':99'}, member=False)
-        seat.process(1500, seat.UID, seat.session_environ())
-        (seat.scope / 'cgroup.procs').unlink()
-
-        assert posix.session_env(seat.UID)['DISPLAY'] == ':0'
-
-    @linux_only
-    def test_the_display_can_come_from_a_user_unit_beside_the_scope(
-            self, posix, seat):
-        """The layout the kiosk VM actually has. Since GNOME 3.34 the session
-        is a set of systemd *user* units: the scope holds the PAM worker, Xorg
-        and the session binary, while gnome-shell — the process carrying
-        WAYLAND_DISPLAY, and DISPLAY once XWayland has started — runs under
-        `user@<uid>.service`, beside the scope and not inside it.
-        """
-        cookie = seat.cookie(seat.runtime / 'gdm' / 'Xauthority')
-        seat.process(1292, 0, {'USER': 'root'})
-        seat.process(1980, seat.UID, {'XDG_SESSION_TYPE': 'x11'})
-        seat.user_unit(2178, seat.UID, seat.session_environ())
-
-        env = posix.session_env(seat.UID)
-
-        assert env['DISPLAY'] == ':0'
-        assert env['XAUTHORITY'] == cookie
-        assert env['USER'] == 'kiosk'
-
-    @linux_only
-    def test_a_user_unit_of_another_account_is_still_never_the_source(
-            self, posix, seat):
-        """The widened rung keeps the narrow rule: only the session user's own
-        processes are asked, so nothing root runs in that slice can hand the
-        daemon a display."""
-        seat.user_unit(1292, 0, {'DISPLAY': ':99'}, unit='root-owned.service')
-        seat.user_unit(2178, seat.UID, seat.session_environ())
-
-        assert posix.session_env(seat.UID)['DISPLAY'] == ':0'
-
-    @linux_only
-    def test_the_user_manager_answers_on_a_machine_that_has_run_hundreds(
-            self, posix, seat):
-        """The rung that answers a Wayland seat at all, on a box that started
-        more than the bound's worth of processes before anyone logged in — an
-        ordinary kiosk. It was a /proc walk of the numerically lowest pids,
-        which are the boot's own: gnome-shell, started at login and numbered
-        accordingly, was never reached. The unit's own subtree of `cgroup.procs`
-        files is read instead, and a `cgroup.procs` names one cgroup and not its
-        children, so the shell two levels down is in the answer.
-        """
-        cookie = seat.cookie(seat.runtime / 'gdm' / 'Xauthority')
-        for pid in range(1, 320):
-            seat.process(pid, 0, {'USER': 'root'}, member=False)
-        seat.user_unit(
-            4021, seat.UID,
-            seat.session_environ(
-                WAYLAND_DISPLAY='wayland-0', XDG_SESSION_TYPE='wayland'),
-            unit='org.gnome.Shell@wayland.service')
-
-        env = posix.session_env(seat.UID)
-
-        # The negative control: bounded to the lowest 256 pids, the walk saw
-        # nothing but the boot's processes and this raised KeyError.
-        assert env['WAYLAND_DISPLAY'] == 'wayland-0'
-        assert env['XDG_SESSION_TYPE'] == 'wayland'
-        assert env['XAUTHORITY'] == cookie
-        assert env['USER'] == 'kiosk'
-
-    @linux_only
-    def test_the_user_manager_answers_on_a_legacy_hierarchy_too(
-            self, posix, seat):
-        """A box booted with systemd.unified_cgroup_hierarchy=0, or any
-        distro still on the hybrid one, publishes none of that subtree — so
-        the rung that answers a Wayland seat had nothing to read at all and
-        the lookup ended with the account half and no display. The unit is
-        matched the way the rung below matches the scope instead: on the
-        processes whose own cgroup line names it, which a v1 systemd
-        publishes just as it does the scope's.
-        """
-        cookie = seat.cookie(seat.runtime / 'gdm' / 'Xauthority')
-        seat.process(1292, 0, {'USER': 'root'}, member=False)
-        seat.user_unit(2178, seat.UID, seat.session_environ())
-        seat.legacy_hierarchy()
-
-        env = posix.session_env(seat.UID)
-
-        # The negative control: with the unified walk as the only rung,
-        # every one of these was absent and this raised KeyError.
-        assert env['DISPLAY'] == ':0'
-        assert env['XAUTHORITY'] == cookie
-        assert env['USER'] == 'kiosk'
-
-    @linux_only
-    def test_the_user_manager_answers_when_its_subtree_is_somewhere_else(
-            self, posix, seat):
-        """The marker at the root says the hierarchy is unified. It says
-        nothing about where this manager's subtree is, and a delegated or
-        renamed slice puts it somewhere the walk of `user.slice` never
-        reaches — a unified box answering nothing at all, on the one rung
-        that carries a Wayland display. The walk opening no `cgroup.procs`
-        is the same evidence a missing hierarchy gives, and takes the same
-        path-independent match.
-        """
-        cookie = seat.cookie(seat.runtime / 'gdm' / 'Xauthority')
-        seat.process(1292, 0, {'USER': 'root'}, member=False)
-        seat.user_unit(2178, seat.UID, seat.session_environ())
-        shutil.rmtree(seat.cgroup / 'user.slice' / f'user-{seat.UID}.slice'
-                      / f'user@{seat.UID}.service')
-
-        env = posix.session_env(seat.UID)
-
-        # The negative control: with no fallback below the unified walk this
-        # answered nothing and every one of these raised KeyError.
-        assert env['DISPLAY'] == ':0'
-        assert env['XAUTHORITY'] == cookie
-        assert env['USER'] == 'kiosk'
-
-    @linux_only
-    def test_the_walk_is_bounded_by_the_session_users_own_processes(
-            self, posix, seat, monkeypatch):
-        """The other half of the same bug, on the rung that does walk /proc.
-        Ownership is what makes a pid a candidate, so the bound counts those
-        and not the machine's — and ownership is settled before anything is
-        opened for a process that cannot answer.
-        """
-        monkeypatch.setattr(posix, '_SESSION_SCAN_LIMIT', 2)
-        for pid in range(100, 400):
-            seat.process(pid, 0, {'USER': 'root'}, member=False)
-        seat.process(9100, seat.UID, seat.session_environ(), member=False,
-                     cgroup=f'0::/user.slice/user-{seat.UID}.slice'
-                            f'/session-{seat.ID}.scope\n')
-        opened = []
-        read_entry = posix._read_entry
-        monkeypatch.setattr(posix, '_read_entry', lambda path: (
-            opened.append(path), read_entry(path))[1])
-
-        assert posix.session_env(seat.UID)['DISPLAY'] == ':0'
-        assert [path for path in opened if path.endswith('cgroup')] == [
-            posix._proc_path(9100, 'cgroup')]
-
-    @linux_only
-    def test_another_login_of_the_same_account_is_not_the_session(
-            self, posix, seat, caplog):
-        """The kiosk VM has this shape whenever it is administered: the seat is
-        one scope under the user's slice and the ssh login is another. A
-        forwarded DISPLAY belongs to a screen on somebody else's desk, so the
-        widened rung asks the session's user units and not the slice."""
-        seat.process(
-            2453, seat.UID, {'DISPLAY': 'localhost:10.0'}, member=False,
-            cgroup=f'0::/user.slice/user-{seat.UID}.slice/session-6.scope\n')
-
-        with caplog.at_level(logging.WARNING):
-            env = posix.session_env(seat.UID)
-
-        assert 'DISPLAY' not in env
-        assert 'carries a display' in caplog.text
-
-    @linux_only
-    def test_the_kernels_own_list_of_the_session_is_read_whole(self, posix, seat):
-        """`cgroup.procs` is the kernel's answer to what the session is, and
-        truncating it to the walk's limit dropped the display carrier on any
-        seat running more processes than that — a browser tree is enough."""
-        for pid in range(3000, 3000 + posix._SESSION_SCAN_LIMIT + 40):
-            seat.process(pid, seat.UID, {'XDG_SESSION_TYPE': 'x11'})
-        seat.process(9000, seat.UID, seat.session_environ())
-
-        assert posix.session_env(seat.UID)['DISPLAY'] == ':0'
-
-    @linux_only
-    def test_the_walk_is_bounded_by_what_it_opens_not_by_what_it_finds(
-            self, posix, seat, monkeypatch):
-        """The limit bounds the scan, not the result: a walk that matched
-        nothing read one cgroup file per process on the machine before giving
-        up, and said so in the same one line either way."""
-        monkeypatch.setattr(posix, '_SESSION_SCAN_LIMIT', 4)
-        for pid in range(900, 940):
-            seat.process(pid, seat.UID, {'DISPLAY': ':99'}, member=False)
-        opened = []
-        read_entry = posix._read_entry
-        monkeypatch.setattr(posix, '_read_entry', lambda path: (
-            opened.append(path), read_entry(path))[1])
-
-        assert 'DISPLAY' not in posix.session_env(seat.UID)
-        assert 0 < len(
-            [path for path in opened if path.endswith('cgroup')]) <= 2 * 4
-
-    @linux_only
-    def test_a_session_variable_set_to_nothing_is_not_lifted(self, posix, seat):
-        """An empty WAYLAND_DISPLAY names no socket, and a toolkit that picks
-        its backend on the variable's presence stops there rather than falling
-        back to the DISPLAY beside it."""
-        seat.gdm(environ=seat.session_environ(
-            WAYLAND_DISPLAY='', XDG_SESSION_TYPE=''))
-
-        env = posix.session_env(seat.UID)
-
-        assert env['DISPLAY'] == ':0'
-        assert 'WAYLAND_DISPLAY' not in env
-        assert 'XDG_SESSION_TYPE' not in env
-
-    @linux_only
-    def test_the_cookie_the_session_names_but_does_not_have_falls_through(
-            self, posix, seat):
-        """An XAUTHORITY naming nothing is worse than none at all: X stops
-        there rather than looking anywhere else."""
-        gdm_cookie = seat.cookie(seat.runtime / 'gdm' / 'Xauthority')
-        seat.gdm(environ=seat.session_environ(XAUTHORITY='/gone/Xauthority'))
-
-        assert posix.session_env(seat.UID)['XAUTHORITY'] == gdm_cookie
-
-    @linux_only
-    def test_the_home_cookie_is_the_last_resort(self, posix, seat):
-        """What `startx` and the older display managers write, and what GDM
-        never creates — so it is tried last and only when it is there."""
-        home_cookie = seat.cookie(seat.home / '.Xauthority')
-        seat.gdm(environ=seat.session_environ(XAUTHORITY='/gone/Xauthority'))
-
-        assert posix.session_env(seat.UID)['XAUTHORITY'] == home_cookie
-
-    @linux_only
-    def test_no_cookie_anywhere_is_no_variable_at_all(self, posix, seat):
-        seat.gdm(environ=seat.session_environ(XAUTHORITY='/gone/Xauthority'))
-
-        assert 'XAUTHORITY' not in posix.session_env(seat.UID)
-
-    @linux_only
-    def test_a_session_with_no_display_leaves_the_account_alone_and_says_so(
-            self, posix, seat, caplog):
-        seat.process(1292, 0, {'USER': 'root'})
-        seat.process(1500, seat.UID, {'LANG': 'C.UTF-8'})
-
-        with caplog.at_level(logging.WARNING):
-            env = posix.session_env(seat.UID)
-
-        assert 'DISPLAY' not in env and 'XAUTHORITY' not in env
-        assert env['USER'] == 'kiosk'
-        assert 'carries a display' in caplog.text
+        assert env['XAUTHORITY'] == '/home/kiosk/.Xauthority'
 
     def test_without_a_seat_the_environment_is_the_account_alone(self, posix, monkeypatch):
         monkeypatch.setattr(posix, '_graphical_session', lambda uid=None: None)
@@ -1031,43 +647,6 @@ class TestPosix:
             assert process.cmdline() == ['/bin/sleep', '30']
         finally:
             _stop_pid(posix, pid)
-
-    @as_root
-    def test_every_concurrent_managed_launch_comes_back_live(self, posix, monkeypatch):
-        """Why the spawn is `Popen(user=…)` and not a `preexec_fn`: the daemon
-        launches out of its 5-second loop with the alert, config-push and
-        roost-scrub threads running, and a fork-side callback in a threaded
-        process can deadlock on a lock it inherited mid-acquire. One launch in
-        a hundred that hangs is a kiosk that never comes up."""
-        account = _spawn_account()
-        monkeypatch.setattr(posix, 'console_user', lambda: account.pw_name)
-        spec = {'id': 'sleeper', 'exe_path': '/bin/sleep', 'file_path': '30'}
-        launched, taken = [], threading.Lock()
-
-        def launch():
-            for _ in range(25):
-                pid = posix.launch_managed_process(spec)
-                with taken:
-                    launched.append(pid)
-
-        threads = [threading.Thread(target=launch) for _ in range(4)]
-        try:
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(120)
-
-            assert len(launched) == 100
-            assert [pid for pid in launched if not pid] == []
-            for pid in launched:
-                process = psutil.Process(pid)
-                assert process.is_running()
-                assert process.status() != psutil.STATUS_ZOMBIE
-                assert process.uids().real == account.pw_uid
-        finally:
-            for pid in launched:
-                if pid:
-                    _stop_pid(posix, pid)
 
     def test_a_managed_process_needs_somebody_at_the_machine(self, posix, monkeypatch):
         """Never as root: a kiosk application the daemon owns has no display and
@@ -1414,67 +993,28 @@ class TestPosix:
         # Only a directory that grants the group write hands the group anything.
         assert not _mode(private / 'state.json') & stat.S_IWGRP
 
-    def test_a_write_does_not_follow_a_link_left_at_its_temp_name(
-        self, posix, relocated
-    ):
-        """`tmp/` and `config/` are group-writable, so the fixed `<name>.tmp`
-        every JSON write goes through is a name the kiosk session can occupy
-        first. Followed, it would truncate a root-only file outside the tree,
-        fill it with the daemon's JSON, hand it the destination's mode and the
-        daemon's group, and then move the link over the destination — which is
-        a file-overwrite-and-regrant primitive, not a state file."""
-        import shared_utils
-
-        assert shared_utils.ensure_data_directories() is True
-        states = Path(shared_utils.get_data_path('tmp/app_states.json'))
-        victim = relocated / 'victim.json'
-        victim.write_text('{"root": "only"}', encoding='utf-8')
-        os.chmod(victim, 0o600)
-        Path(f'{states}.tmp').symlink_to(victim)
-
-        shared_utils.write_json_to_file({'pid': 1}, str(states))
-
-        assert json.loads(victim.read_text(encoding='utf-8')) == {'root': 'only'}
-        assert _mode(victim) == 0o600
-        assert not os.path.islink(states)
-        assert json.loads(states.read_text(encoding='utf-8')) == {'pid': 1}
-
 
 @linux_only
 class TestLinux:
     """The Linux arm: the nine operations the shared POSIX half leaves to it."""
 
-    def test_the_seat_is_the_type_logind_reports(self, linux, posix, monkeypatch):
-        """logind's Type, and not a variable read off the session leader: on
-        GDM that leader is a root-owned PAM worker which declares nothing, so
-        the probe that used to read it only ever fell through to this."""
-        _seat(monkeypatch, posix, 'x11')
-        assert linux._session_type() == 'x11'
+    def test_the_seat_is_named_by_what_its_leader_declares(self, linux, posix, monkeypatch):
+        """The variable every process in the session reads, not the label
+        logind kept: a session can be re-typed under a running leader."""
+        _seat(monkeypatch, posix, 'x11', {'XDG_SESSION_TYPE': 'wayland'})
 
-        _seat(monkeypatch, posix, 'wayland')
-        assert linux._session_type() == 'wayland'
+        assert linux.session_type() == 'wayland'
+
+    def test_a_leader_that_declares_nothing_leaves_logind_to_say(self, linux, posix, monkeypatch):
+        _seat(monkeypatch, posix, 'x11', {})
+
+        assert linux.session_type() == 'x11'
 
     def test_without_a_seat_there_is_no_session_type(self, linux, posix, monkeypatch):
         monkeypatch.setattr(posix, '_graphical_session', lambda uid=None: None)
         monkeypatch.setattr(posix, '_desktop_pid', lambda: None)
 
-        assert linux._session_type() is None
-        assert linux.streamer_capable() is False
-
-    def test_the_login_screen_is_not_a_seat_to_stream(self, linux, posix, monkeypatch):
-        """The greeter's session is typed x11 and is active, so every gate that
-        reads the session type answered yes for a machine sitting at the login
-        screen: capture-capable, streamer-capable, an x11 seat to launch into.
-        It is no login of ours, and with no app resident there is no session.
-        """
-        _stub_sessions(monkeypatch, posix, {
-            'c1': 'User=123\nName=gdm\nClass=greeter\nLeader=1180\n'
-                  'Type=x11\nActive=yes\n',
-        })
-        monkeypatch.setattr(posix, '_desktop_pid', lambda: None)
-
-        # The negative control: without the Class check both answer x11/True.
-        assert linux._session_type() is None
+        assert linux.session_type() is None
         assert linux.streamer_capable() is False
 
     def test_a_seat_logind_does_not_list_is_named_by_the_app(
@@ -1489,7 +1029,7 @@ class TestLinux:
         monkeypatch.setattr(posix, '_desktop_pid', lambda: 4711)
         monkeypatch.setattr(posix, '_process_environ', lambda pid: {'DISPLAY': ':0'})
 
-        assert linux._session_type() == 'x11'
+        assert linux.session_type() == 'x11'
         assert linux.streamer_capable() is True
 
         monkeypatch.setattr(
@@ -1497,12 +1037,12 @@ class TestLinux:
             lambda pid: {'WAYLAND_DISPLAY': 'wayland-0', 'DISPLAY': ':0'},
         )
 
-        assert linux._session_type() == 'wayland'
+        assert linux.session_type() == 'wayland'
 
     def test_a_wayland_seat_refuses_the_capture(self, linux, posix, monkeypatch):
         """A grab from outside a Wayland session is a black frame, so the
         refusal is typed and the app is never asked for one."""
-        _seat(monkeypatch, posix, 'wayland')
+        _seat(monkeypatch, posix, 'wayland', {})
         monkeypatch.setattr(posix, 'capture_screen', _never_called)
 
         result = linux.capture_screen(0, executor=_never_called, timeout_s=5)
@@ -1512,7 +1052,7 @@ class TestLinux:
         assert linux.streamer_capable() is False
 
     def test_an_x11_seat_captures_through_the_shared_job(self, linux, posix, monkeypatch):
-        _seat(monkeypatch, posix, 'x11')
+        _seat(monkeypatch, posix, 'x11', {})
         captured = {'outputDir': '/tmp/out', 'files': ['screenshot.png']}
         monkeypatch.setattr(
             posix, 'capture_screen',
@@ -1684,148 +1224,13 @@ class TestLinux:
         assert set(linux.pending_reboot()) == PENDING_REBOOT_KEYS
 
 
-def _seat(monkeypatch, posix, declared):
-    """A graphical session logind types `declared`."""
+def _seat(monkeypatch, posix, declared, environ):
+    """A graphical session logind types `declared`, whose leader holds `environ`."""
     monkeypatch.setattr(
         posix, '_graphical_session',
-        lambda uid=None: posix._Session('kiosk', declared, '2', 1000),
+        lambda uid=None: posix._Session('kiosk', 1402, declared),
     )
-
-
-class _FakeSeat:
-    """A logind session as the kernel publishes one.
-
-    A scope naming the session's processes, and a /proc entry per process
-    carrying the account it runs as and the environment it was given. The
-    adapter's own roots are pointed here, so the lookup reads nothing outside
-    tmp_path and its answer does not depend on this machine having a display.
-    """
-
-    ID = '2'
-    UID = 1000
-
-    def __init__(self, posix, tmp_path, monkeypatch):
-        self.posix = posix
-        self.proc = tmp_path / 'proc'
-        self.cgroup = tmp_path / 'cgroup'
-        self.scope = (
-            self.cgroup / 'user.slice' / f'user-{self.UID}.slice'
-            / f'session-{self.ID}.scope'
-        )
-        self.runtime = tmp_path / 'run' / 'user' / str(self.UID)
-        self.home = tmp_path / 'home' / 'kiosk'
-        for directory in (self.proc, self.scope, self.runtime, self.home):
-            directory.mkdir(parents=True)
-        # The unified hierarchy's own marker at the root: the per-unit
-        # subtree exists only on a box that publishes this, and this seat
-        # is the kiosk VM's — Ubuntu 24.04, unified.
-        (self.cgroup / 'cgroup.controllers').write_text(
-            'cpuset cpu io memory pids', encoding='utf-8')
-        self.account = {
-            'HOME': str(self.home), 'USER': 'kiosk', 'LOGNAME': 'kiosk',
-            'PATH': '/usr/local/bin:/usr/bin:/bin',
-        }
-        self.members = []
-        monkeypatch.setattr(posix, 'PROC_ROOT', str(self.proc))
-        monkeypatch.setattr(posix, 'CGROUP_ROOT', str(self.cgroup))
-        monkeypatch.setattr(posix, 'RUNTIME_DIR_ROOT', str(tmp_path / 'run' / 'user'))
-        monkeypatch.setattr(posix, '_account_env', lambda uid: dict(self.account))
-        monkeypatch.setattr(
-            posix, '_graphical_session',
-            lambda uid=None: posix._Session('kiosk', 'x11', self.ID, self.UID),
-        )
-
-    def process(self, pid, uid, environ, *, member=True, cgroup=None):
-        """One process the kernel would publish, in this session or outside it."""
-        entry = self.proc / str(pid)
-        entry.mkdir()
-        (entry / 'status').write_text(
-            f'Name:\tproc{pid}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n',
-            encoding='utf-8')
-        (entry / 'environ').write_bytes(b''.join(
-            f'{name}={value}\0'.encode('utf-8')
-            for name, value in environ.items()))
-        (entry / 'cgroup').write_text(
-            cgroup or (
-                f'0::/user.slice/user-{self.UID}.slice/session-{self.ID}.scope\n'
-                if member else '0::/system.slice/cron.service\n'),
-            encoding='utf-8')
-        if member:
-            self.members.append(pid)
-            (self.scope / 'cgroup.procs').write_text(
-                ''.join(f'{member_pid}\n' for member_pid in self.members),
-                encoding='utf-8')
-
-    def user_unit(self, pid, uid, environ, unit='org.gnome.Shell@x11.service'):
-        """A process of a systemd user unit: inside the user's slice, outside
-        the session scope — where the kiosk VM's own gnome-shell runs.
-
-        Published the way the kernel publishes it: the unit's own cgroup lists
-        it, two levels below `user@<uid>.service`, and a `cgroup.procs` there
-        names that cgroup's processes and none of its children's.
-        """
-        relative = (
-            f'user.slice/user-{self.UID}.slice/user@{self.UID}.service'
-            f'/session.slice/{unit}')
-        self.process(pid, uid, environ, member=False,
-                     cgroup=f'0::/{relative}\n')
-        directory = self.cgroup / relative
-        directory.mkdir(parents=True, exist_ok=True)
-        with (directory / 'cgroup.procs').open('a', encoding='utf-8') as f:
-            f.write(f'{pid}\n')
-
-    def legacy_hierarchy(self):
-        """The same seat on a v1 or hybrid box; called once it is built.
-
-        None of the unified tree is there — no `cgroup.controllers` at the
-        root and none of the per-unit directories — and every process's own
-        cgroup line is in the shape a v1 systemd writes it.
-        """
-        (self.cgroup / 'cgroup.controllers').unlink()
-        shutil.rmtree(self.cgroup / 'user.slice')
-        for entry in self.proc.iterdir():
-            line = entry / 'cgroup'
-            line.write_text(
-                line.read_text(encoding='utf-8').replace(
-                    '0::/', '1:name=systemd:/'),
-                encoding='utf-8')
-
-    def gdm(self, leader=1292, shell=1500, environ=None):
-        """The Ubuntu 24.04 GDM layout: a root-owned PAM worker as the session
-        leader, and the user's own shell holding what a display needs."""
-        self.process(leader, 0, {
-            'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin',
-            'USER': 'root',
-            'LANG': 'C.UTF-8',
-            'GDM_SESSION_DBUS_ADDRESS': 'unix:abstract=/tmp/dbus-gdm',
-        })
-        self.process(
-            shell, self.UID,
-            self.session_environ() if environ is None else environ)
-
-    def session_environ(self, **overrides):
-        """What gnome-shell holds. The account variables are deliberately not
-        the kiosk user's: the session runs processes of more than one account,
-        so what is lifted from it can never stand in for the account's own.
-        """
-        environ = {
-            'DISPLAY': ':0',
-            'XAUTHORITY': str(self.runtime / 'gdm' / 'Xauthority'),
-            'XDG_RUNTIME_DIR': f'/run/user/{self.UID}',
-            'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{self.UID}/bus',
-            'XDG_SESSION_TYPE': 'x11',
-            'GNOME_KEYRING_CONTROL': f'/run/user/{self.UID}/keyring',
-            'USER': 'gdm', 'LOGNAME': 'gdm', 'HOME': '/var/lib/gdm',
-            'PATH': '/session/only',
-        }
-        environ.update(overrides)
-        return environ
-
-    def cookie(self, path):
-        """An X cookie that is really there, at `path`."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b'')
-        return str(path)
+    monkeypatch.setattr(posix, '_process_environ', lambda pid: dict(environ))
 
 
 class _FakeCommands:
@@ -1860,6 +1265,30 @@ def _stub_sessions(monkeypatch, posix, sessions):
         return sessions[args[1]]
 
     monkeypatch.setattr(posix, '_loginctl', _loginctl)
+
+
+def _stub_leader(monkeypatch, posix, pid):
+    """Make `pid` the leader of this machine's graphical session."""
+    monkeypatch.setattr(
+        posix, '_graphical_session',
+        lambda uid=None: posix._Session('kiosk', pid, 'x11'),
+    )
+
+
+def _leader_carrying(env):
+    """A live process holding exactly `env`, to read /proc back out of.
+
+    Waits for the exec: until then /proc reports the forked interpreter's
+    environment, which is the suite's own and carries no display at all.
+    """
+    leader = subprocess.Popen(['/bin/sleep', '30'], env=env)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if Path(f'/proc/{leader.pid}/environ').read_bytes().count(b'\0') == len(env):
+            return leader
+        time.sleep(0.01)
+    _stop_child(leader)
+    raise AssertionError('the session leader never took its own environment')
 
 
 def _never_called(*args, **kwargs):

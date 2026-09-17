@@ -42,6 +42,7 @@ MACHINE_ID_FILES = ('/etc/machine-id', '/var/lib/dbus/machine-id')
 # properly needs a client inside it — the desktop app's own work, in wave 4.
 CAPTURE_SESSION_TYPE = 'x11'
 _WAYLAND_SESSION_TYPE = 'wayland'
+_DISPLAY_SERVERS = frozenset({CAPTURE_SESSION_TYPE, _WAYLAND_SESSION_TYPE})
 
 # systemd's record of a shutdown it has scheduled: written when one is
 # scheduled, removed when it fires or is cancelled.
@@ -64,17 +65,20 @@ _DPKG_TIMEOUT_SECONDS = 30
 _DPKG_FORMAT = '${Package}\t${Version}\t${Maintainer}\t${db:Status-Status}\n'
 
 
-def _session_type() -> str | None:
+def session_type() -> str | None:
     """Which display server the console session runs; None when there is no seat.
 
-    What logind reports, which is the only source that is right on both a GDM
-    X11 and a GDM Wayland seat: `Display` is empty on each, and the process
-    logind names as the session's leader is a root-owned PAM worker that
-    declares nothing at all. A session logind does not type graphical is named
-    by the desktop app running in it instead.
+    What the session leader declares, because that is what every process in the
+    session reads, and what logind reported when the leader declares nothing —
+    a seat whose leader has already gone is still the seat logind listed. A
+    session logind does not type graphical at all is named by the desktop app
+    running in it instead.
     """
     session = posix._graphical_session()
-    return session.type if session is not None else _app_session_type()
+    if session is None:
+        return _app_session_type()
+    declared = posix._process_environ(session.leader).get('XDG_SESSION_TYPE', '').lower()
+    return declared if declared in _DISPLAY_SERVERS else session.type
 
 
 def _app_session_type() -> str | None:
@@ -101,7 +105,7 @@ def capture_screen(monitor: int, *, executor, timeout_s: int) -> dict:
     this machine cannot capture rather than uploading a black frame as a
     screenshot of the kiosk.
     """
-    seat = _session_type()
+    seat = session_type()
     if seat != CAPTURE_SESSION_TYPE:
         return {
             'error': 'unsupported_on_platform',
@@ -223,7 +227,7 @@ def installed_software() -> list[dict[str, str]]:
 def streamer_capable() -> bool:
     """Whether this machine can drive a streaming session: an X11 seat, the same
     signal the capture gate reads."""
-    return _session_type() == CAPTURE_SESSION_TYPE
+    return session_type() == CAPTURE_SESSION_TYPE
 
 
 def _machine_id() -> str:

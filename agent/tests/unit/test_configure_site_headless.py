@@ -17,8 +17,6 @@ import logging
 import os
 import stat
 import sys
-import threading
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -524,7 +522,6 @@ class TestReportIssue:
 
 
 class TestRebootModes:
-    @pytest.mark.needs_os_arm
     def test_the_reboot_intent_is_recorded_before_the_shutdown_is_issued(self, capsys):
         calls = []
         session_state = MagicMock()
@@ -545,7 +542,6 @@ class TestRebootModes:
         reboot.assert_called_once_with(1, configure_site._REBOOT_MESSAGE)
         assert _events(capsys)[-1] == {'event': 'done', 'value': {'rebooting': True}}
 
-    @pytest.mark.needs_os_arm
     def test_a_missing_intent_never_blocks_the_reboot(self):
         session_state = MagicMock()
         session_state.set_intent.side_effect = OSError('tmp is read-only')
@@ -557,7 +553,6 @@ class TestRebootModes:
         assert code == 0
         reboot.assert_called_once()
 
-    @pytest.mark.needs_os_arm
     def test_a_failed_shutdown_is_reported(self, capsys):
         session_state = MagicMock()
         with patch.object(configure_site.osadapter, 'reboot',
@@ -668,7 +663,6 @@ class TestInteractivePathUnchanged:
 # service control
 
 
-@pytest.mark.needs_os_arm
 class TestServiceControl:
     def test_the_verb_and_the_agent_service_go_to_the_adapter(self):
         # `owlette-host.exe` was the Windows spelling of this; the unit name on
@@ -710,7 +704,7 @@ class TestPreseed:
     """
 
     @pytest.fixture
-    def data_root(self, tmp_path, monkeypatch, os_arm):
+    def data_root(self, tmp_path, monkeypatch):
         monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path))
         monkeypatch.setattr(configure_site, 'CONFIG_PATH',
                             tmp_path / 'config' / 'config.json')
@@ -889,24 +883,6 @@ class TestPreseed:
         assert _events(capsys)[-1]['value']['reason'] == 'no pairing preseed'
 
     @posix_only
-    def test_a_preseed_swapped_for_a_link_is_not_read_through(
-            self, data_root, capsys):
-        """`config/` is group-writable, so the file `postinst` hands to
-        `--preseed` as root is one the session can replace — with a link at a
-        root-only JSON file whose fields would reach the log and the postinst's
-        stdout, or with a fifo that stalls the maintainer script."""
-        secret = data_root / 'secret.json'
-        secret.write_text(json.dumps({'kiosk_user': 'root-only-secret'}),
-                          encoding='utf-8')
-        (data_root / 'config' / 'pairing.json').symlink_to(secret)
-
-        with patch.object(configure_site, 'run_pairing_flow') as flow:
-            assert configure_site.run_preseed() == 0
-
-        flow.assert_not_called()
-        assert 'root-only-secret' not in capsys.readouterr().out
-
-    @posix_only
     def test_an_unresolvable_kiosk_user_prints_the_group_step(self, data_root, capsys):
         # Never guessed: the operator is told which account to add to the group
         # the seam runs through, because without it the app cannot reach the
@@ -969,7 +945,7 @@ class TestRequestSeam:
     """
 
     @pytest.fixture
-    def seam(self, tmp_path, monkeypatch, os_arm):
+    def seam(self, tmp_path, monkeypatch):
         import pwd
 
         monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path))
@@ -1140,12 +1116,6 @@ class TestRequestSeam:
 
         assert not request.exists()
         assert 'group- or world-writable' in caplog.text
-        # The file is the console user's own — Ubuntu ships pam_umask with
-        # USERGROUPS_ENAB, so a graphical session's default umask is 002 and an
-        # app that does not set the mode itself writes 0664 every time — so the
-        # writer is told why rather than left waiting on an answer.
-        assert 'group- or world-writable' in self._reply(seam).read_text(
-            encoding='utf-8')
 
     def test_a_request_owned_by_anyone_else_is_refused_and_logged(
             self, seam, monkeypatch, caplog):
@@ -1365,66 +1335,6 @@ class TestRequestSeam:
 
         assert not request.exists()
         assert "asks for 'leave'" in caplog.text
-
-
-    def test_a_fifo_at_the_answer_does_not_wedge_the_drain(self, seam):
-        """The answer's name is derived from the request's and the directory is
-        the app's to write, so a fifo can be left under it — and opening one
-        for writing waits for a reader. The drain runs on its own thread behind
-        a single-flight gate, so one that blocked would take `pair`, `restart`
-        and `reboot` out for the life of the process.
-
-        The wait is the assertion: without O_NONBLOCK this never returns.
-        """
-        self._request(seam, 'restart', 'not-the-nonce-the-daemon-issued')
-        os.mkfifo(self._reply(seam))
-        finished = threading.Event()
-
-        def drain():
-            configure_site.drain_privileged_requests()
-            finished.set()
-
-        thread = threading.Thread(target=drain, daemon=True)
-        thread.start()
-
-        assert finished.wait(10) is True
-
-    def test_the_audit_is_rotated_rather_than_grown_forever(
-            self, seam, monkeypatch):
-        """An accepted request appends a row every tick an app asks on, and
-        nothing ages the file out — cleanup_old_logs deletes by mtime, which one
-        being appended to never reaches. It is rotated at the same cap the
-        installer log is."""
-        controls = []
-        monkeypatch.setattr(configure_site, '_service_control',
-                            lambda verb: controls.append(verb) or True)
-        audit = seam / 'logs' / 'privileged_requests.log'
-        audit.write_text('x' * (shared_utils.EXTERNAL_LOG_MAX_BYTES + 1),
-                         encoding='utf-8')
-
-        self._request(seam, 'restart', configure_site._request_nonce())
-        configure_site.drain_privileged_requests()
-
-        assert (seam / 'logs' / 'privileged_requests.log.1').exists()
-        assert audit.stat().st_size < configure_site.REQUEST_MAX_BYTES
-        assert controls == ['restart']
-
-    def test_the_window_survives_the_rotation_that_carries_it_away(
-            self, seam, monkeypatch):
-        """The rate limit's only memory is the audit, and the audit is rotated:
-        an executed row can be one generation behind by the time the next
-        request asks, and a window read off the live file alone would reopen."""
-        monkeypatch.setattr(configure_site, '_service_control',
-                            lambda verb: pytest.fail('ran a rate-limited restart'))
-        (seam / 'logs' / 'privileged_requests.log.1').write_text(
-            json.dumps({'at': time.time(), 'verb': 'restart',
-                        'outcome': 'executed', 'detail': ''}) + '\n',
-            encoding='utf-8')
-        self._request(seam, 'restart', configure_site._request_nonce())
-
-        rows = configure_site.drain_privileged_requests()
-
-        assert rows[0]['outcome'] == 'rate_limited'
 
 
 class TestRequestSeamVerbs:

@@ -29,9 +29,9 @@ def test_identity_of_a_real_live_process_round_trips():
     assert ident is not None
     assert ident['pid'] == os.getpid()
     assert ident['create_time'] == psutil.Process(os.getpid()).create_time()
-    # exe is stored pre-normalised so later comparisons need no
-    # re-normalisation -- folded on Windows, verbatim off it.
-    assert ident['exe'] == shared_utils.normalize_exe_path(ident['exe'])
+    # exe is stored pre-normalised (backslashes, lowercase) so later
+    # comparisons need no re-normalisation.
+    assert ident['exe'] == ident['exe'].replace('/', '\\').lower()
     assert shared_utils.identity_matches(ident, os.getpid()) is True
 
 
@@ -97,13 +97,9 @@ def test_exe_mismatch_refuses_and_warns(caplog):
     assert warned, 'exe mismatch must log a warning'
 
 
-@pytest.mark.windows(reason='the fold is what a Windows comparison does')
 def test_unnormalised_recorded_exe_still_matches():
     """Hand-written or legacy records may carry forward slashes / upper case;
-    identity_matches normalises before comparing rather than refusing. Windows
-    only: off it, a path that differs in case or separator names a different
-    file, and the match is correct to refuse (test_shared_utils.py's
-    TestIdentityPathNormalisation pins that half)."""
+    identity_matches normalises before comparing rather than refusing."""
     ident = shared_utils.read_process_identity(os.getpid())
     ident['exe'] = ident['exe'].replace('\\', '/').upper()
     assert shared_utils.identity_matches(ident, os.getpid()) is True

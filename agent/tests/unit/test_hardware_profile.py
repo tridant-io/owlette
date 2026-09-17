@@ -5,9 +5,7 @@ Covers the join between the stored profile's GPU entries and the live NVML
 readings, which is keyed on the GPU id rather than list position.
 """
 
-import logging
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 from unittest.mock import patch
@@ -110,28 +108,3 @@ class TestCollectDynamicMetricsDisks:
         assert set(disks) == {'/', '/home', 'C:'}
         assert disks['/home']['percent'] == 42.0
         assert disks['/home']['usedGb'] == 10.0
-
-
-@pytest.mark.unit
-class TestCollectCpusOffWindows:
-    """The 300 s profile rebuild runs on the metrics thread, and off
-    Windows its socket-topology query can only fail — into a WARNING,
-    every rebuild."""
-
-    def test_the_wmi_socket_query_is_skipped_off_windows(self, monkeypatch, caplog):
-        monkeypatch.setattr(hardware_profile, '_IS_WINDOWS', False)
-        probe = ModuleType('wmi')
-
-        def reached():
-            raise AssertionError('wmi.WMI() was called off Windows')
-
-        probe.WMI = reached
-        monkeypatch.setitem(sys.modules, 'wmi', probe)
-
-        with caplog.at_level(logging.DEBUG):
-            cpus = hardware_profile._collect_cpus()
-
-        assert [cpu['id'] for cpu in cpus] == ['CPU0']
-        # Negative control: without the guard the stub is imported, WMI()
-        # raises and the fallback logs it at WARNING on every rebuild.
-        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
