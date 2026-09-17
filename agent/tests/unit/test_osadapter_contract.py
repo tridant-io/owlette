@@ -2183,7 +2183,9 @@ class TestDarwin:
             'version': '2025.31310',
             'publisher': '',
             'install_location': str(applications / 'TouchDesigner.app'),
-            'uninstall_command': '',
+            # The bundle itself: uninstalling an application removes it, and
+            # the dashboard refuses to queue an uninstall with no command.
+            'uninstall_command': str(applications / 'TouchDesigner.app'),
             'installer_type': 'app',
         }
         assert rows[1]['version'] == '7'

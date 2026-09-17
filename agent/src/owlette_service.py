@@ -700,6 +700,55 @@ def _stop_process_outside_window(service, process, pid):
             f"schedule window")
 
 
+def _processes_running_from(bundle):
+    """The live processes whose executable lies inside the directory `bundle`.
+
+    By path, never by image name. A deployment's close list is names and may
+    only reach managed processes, because a name can match anything that wears
+    it; an executable inside a bundle about to be removed can only be that
+    application's own, managed or not, and left running it would stay on
+    screen after its uninstall reported success, loading resources that are
+    no longer there.
+    """
+    inside = bundle + '/'
+    return [
+        proc for proc in psutil.process_iter(['exe'])
+        if (proc.info['exe'] or '').startswith(inside)
+    ]
+
+
+def _remove_tree_nofollow(path):
+    """Remove the directory tree at the absolute `path` without following a link.
+
+    shutil.rmtree refuses a link at `path` itself and unlinks the links inside
+    the tree rather than descending into them, because it walks the tree by
+    descriptor wherever `shutil.rmtree.avoids_symlink_attacks` is True - and it
+    is True on macOS, checked on the Python 3.11 the agent runs. It still
+    resolves the directories above `path` by name, though, so one of them
+    swapped for a link after the inventory named `path` would carry the
+    removal somewhere else. Those are opened one at a time with O_NOFOLLOW
+    instead, as the inventory walk never followed a link to reach `path`
+    either, and the tree is removed relative to the last of them. `dir_fd`
+    arrived in 3.11, and on a platform without the descriptor functions rmtree
+    raises for it rather than removing by name.
+    """
+    import shutil
+
+    directory_fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for name in os.path.dirname(path).split('/'):
+            if not name:
+                continue
+            child_fd = os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = child_fd
+        shutil.rmtree(os.path.basename(path), dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 class Util:
 
     @staticmethod
@@ -5101,6 +5150,9 @@ class OwletteService:
                     return f"Cancellation failed: {message}"
 
             elif cmd_type == 'uninstall_software':
+                if sys.platform == 'darwin':
+                    return self._handle_uninstall_app_bundle(cmd_id, cmd_data)
+
                 import registry_utils
 
                 software_name = cmd_data.get('software_name')
@@ -7357,6 +7409,115 @@ class OwletteService:
                 except Exception:
                     pass
             logging.info("Live view loop ended")
+
+    def _handle_uninstall_app_bundle(self, cmd_id, cmd_data):
+        """Uninstall an application on macOS: quit it, then remove its bundle.
+
+        An application bundle has no uninstaller to run. Removing it as root
+        once nothing runs from it is what fleet tooling does in place of a drag
+        to the Trash (owner ruling Q-M1), and like the drag it leaves behind
+        whatever a package installed outside the bundle.
+
+        The bundle arrives as the command's uninstall_command, so the command
+        cannot be what makes a path removable: a path is removed only while it
+        is exactly an install_location the inventory reports at that moment.
+        The inventory walk lists real bundle directories under /Applications
+        and the users' Applications folders and follows no link to reach them,
+        so a symlink, anything under /System and every other path a payload
+        can name are refused before anything is quit. The removal follows no
+        link either, so a directory swapped for one after the check fails the
+        uninstall instead of redirecting it.
+        """
+        software_name = cmd_data.get('software_name')
+        bundle = cmd_data.get('uninstall_command')
+        installer_type = cmd_data.get('installer_type', 'custom')
+        deployment_id = cmd_data.get('deployment_id')  # For tracking deployment progress
+
+        if not software_name or not bundle:
+            return "Error: Software name and uninstall command required"
+
+        if installer_type != 'app':
+            return (f"Error: Cannot uninstall {software_name}: only an application "
+                    f"bundle can be uninstalled on macOS, and its installer type is "
+                    f"'{installer_type}'")
+
+        if not any(row.get('install_location') == bundle
+                   for row in osadapter.installed_software()):
+            return (f"Error: Refusing to remove {bundle}: it is not an application "
+                    f"bundle in this machine's software inventory")
+
+        logging.info(f"Starting software uninstallation: {software_name}")
+        logging.debug(f"Application bundle: {bundle}")
+
+        try:
+            if self.firebase_client:
+                self.firebase_client.update_command_progress(cmd_id, 'uninstalling', deployment_id)
+
+            for proc in _processes_running_from(bundle):
+                # Quitting one process can take seconds, and a process that
+                # exited meanwhile may have left its pid to an unrelated one:
+                # is_running() tells the two apart by start time.
+                if not proc.is_running():
+                    continue
+                logging.info(f"Quitting {software_name} (PID {proc.pid}) before removing its bundle")
+                try:
+                    shared_utils.graceful_terminate(proc.pid)
+                except Exception as e:
+                    logging.warning(f"Failed to terminate PID {proc.pid}: {e}")
+
+            # Scanned again rather than asking after the ones quit: a process
+            # started from the bundle in the meantime runs from it just the same.
+            survivors = _processes_running_from(bundle)
+            if survivors:
+                pids = ', '.join(str(proc.pid) for proc in survivors)
+                error_msg = f"{software_name} is still running (PID {pids}), so {bundle} was not removed"
+                logging.warning(error_msg)
+                return f"Error: {error_msg}"
+
+            try:
+                _remove_tree_nofollow(bundle)
+            except OSError as e:
+                error_msg = f"Could not remove {bundle}: {e}"
+                if isinstance(e, PermissionError):
+                    # EPERM or EACCES. Not yet seen on hardware: from Ventura
+                    # on, App Management refuses a process that has not been
+                    # granted it - root included - changes to another
+                    # developer's application bundle, and an MDM grants it
+                    # through a PPPC profile's SystemPolicyAppBundles service.
+                    error_msg += (
+                        "; macOS may be blocking the removal through App Management "
+                        "(Ventura and later), which the agent would need granted in "
+                        "System Settings > Privacy & Security or through an MDM "
+                        "privacy preferences (PPPC) profile")
+                logging.error(error_msg)
+                return f"Error: {error_msg}"
+
+            # Not the "some files remain" completion a Windows uninstaller can
+            # end in: no reboot finishes a removal that has already returned,
+            # so a bundle at the path now is one this uninstall did not remove.
+            if os.path.lexists(bundle):
+                error_msg = f"{bundle} was removed, but something is at that path again"
+                logging.warning(error_msg)
+                return f"Error: {error_msg}"
+
+            result_msg = f"Uninstall completed successfully (removed {bundle})"
+            logging.info(result_msg)
+
+            try:
+                if self.firebase_client and self.firebase_client.is_connected():
+                    logging.info("Triggering software inventory sync after uninstall")
+                    self.firebase_client.sync_software_inventory()
+            except Exception as sync_error:
+                logging.warning(f"Failed to sync software inventory after uninstall: {sync_error}")
+                # Don't fail the uninstall if sync fails
+
+            return result_msg
+
+        except Exception as e:
+            error_msg = f"Unexpected error during uninstallation: {e}"
+            logging.error(error_msg)
+            logging.exception("Uninstall error details:")
+            return f"Error: {error_msg}"
 
     def _handle_update_owlette(self, cmd_id, cmd_data):
         """Accept a self-update and hand the install to something that outlives us.

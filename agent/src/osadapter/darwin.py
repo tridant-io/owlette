@@ -265,12 +265,15 @@ def installed_software() -> list[dict[str, str]]:
     """Installed applications: name, version, publisher, uninstall command.
 
     One row per application bundle, read out of its own Info.plist. A bundle
-    has no uninstaller to run and no publisher field — its signing identity is
-    the only place that names one, and asking `codesign` about every bundle is
-    a process per application on every inventory — so both are empty, and the
-    uninstall command handler refuses a row without a command rather than
-    guessing one. `install_location` and `installer_type` are carried on every
-    row: the dashboard's uninstall dialog reads both off each one.
+    has no publisher field — its signing identity is the only place that names
+    one, and asking `codesign` about every bundle is a process per application
+    on every inventory — so that is empty. Nor does it have an uninstaller to
+    run: uninstalling an application is quitting it and removing its bundle,
+    so the uninstall command is the bundle's own path — the dashboard queues
+    no uninstall for a row without one — and the uninstall command handler
+    removes that path only while this inventory still lists it.
+    `install_location` and `installer_type` are carried on every row: the
+    dashboard's uninstall dialog reads both off each one.
     """
     import shared_utils
 
@@ -285,7 +288,7 @@ def installed_software() -> list[dict[str, str]]:
             'version': version if isinstance(version, str) else '',
             'publisher': '',
             'install_location': bundle,
-            'uninstall_command': '',
+            'uninstall_command': bundle,
             'installer_type': 'app',
         })
     rows.sort(key=lambda row: (row['name'].lower(), row['install_location']))
