@@ -438,6 +438,61 @@ def verify_checksum(file_path: str, expected_sha256: str) -> bool:
         return False
 
 
+# The first bytes of the one installer kind each OS can run, and what to call it
+# in a refusal. MACHINE_EXEC_COMMAND is held by the cortex and talon system
+# actors as well as by an operator, so without this a correctly-checksummed
+# package for another OS is a reachable way to brick a kiosk.
+ARTIFACT_MAGIC = {
+    'windows': (b'MZ', 'a Windows executable'),
+    'macos': (b'xar!', 'a macOS installer package'),
+    'linux': (b'!<arch>', 'a Debian package'),
+}
+
+# The name the downloaded artifact is given. The extension is part of the
+# contract rather than cosmetic: `apt-get install <path>` refuses a package that
+# is not called `.deb`, and `installer -pkg` a file that is not called `.pkg`.
+UPDATE_ARTIFACT_NAMES = {
+    'windows': 'owlette-Update.exe',
+    'macos': 'owlette-update.pkg',
+    'linux': 'owlette-update.deb',
+}
+
+# Every shipped installer is far larger. Anything under this is an error page, a
+# redirect body or a truncated download rather than a package.
+MIN_ARTIFACT_BYTES = 1_000_000
+
+
+def verify_artifact_family(file_path: str, os_family: str) -> None:
+    """Refuse an update artifact that is not this OS's own installer.
+
+    Raises ``ValueError``; the caller renders it as the command's error. Both
+    halves run before anything is executed: a file under ``MIN_ARTIFACT_BYTES``
+    never was the object it claims to be, and the magic is what tells a ``.pkg``
+    from a ``.deb`` from an ``.exe`` once it was.
+    """
+    expected = ARTIFACT_MAGIC.get(os_family)
+    if expected is None:
+        raise ValueError(
+            f"No installer format is known for os family '{os_family}' - "
+            f"refusing to install the downloaded artifact"
+        )
+    magic, description = expected
+
+    size = os.path.getsize(file_path)
+    if size < MIN_ARTIFACT_BYTES:
+        raise ValueError(
+            f"Downloaded file too small ({size} bytes) - likely not a valid installer"
+        )
+
+    with open(file_path, 'rb') as f:
+        header = f.read(len(magic))
+    if header != magic:
+        raise ValueError(
+            f"Downloaded file is not {description} - refusing an artifact that is "
+            f"not this machine's own ({os_family})"
+        )
+
+
 def verify_installation(path: str) -> bool:
     """Verify an install landed, by checking that ``path`` exists."""
     exists = os.path.exists(path)
@@ -544,3 +599,153 @@ def cancel_installation(installer_name: str, active_processes: Dict[str, int]) -
         error_msg = f"Error cancelling installation: {str(e)}"
         logging.error(error_msg)
         return False, error_msg
+
+
+# The transient unit and the launchd job the update runs as. Named rather than
+# spawned: the installer stops the agent, and a child of the daemon dies with it
+# — `systemd-run --collect` and `launchctl submit` both outlive the process that
+# asked for them.
+UPDATE_UNIT_NAME = 'owlette-update'
+UPDATE_JOB_LABEL = 'app.owlette.update'
+
+_APT_SIMULATE_TIMEOUT = 120
+_UPDATE_HANDOFF_TIMEOUT = 30
+_DPKG_CONFIGURE_TIMEOUT = 300
+
+# What apt says when an earlier package operation was interrupted: nothing
+# installs at all until `dpkg --configure -a` finishes it.
+_DPKG_INTERRUPTED_MARKER = 'dpkg was interrupted'
+
+# The lock every package operation takes, and which the update must wait for.
+_DPKG_FRONTEND_LOCK = '/var/lib/dpkg/lock-frontend'
+
+
+def start_self_update(installer_path: str, os_family: str) -> tuple[bool, str]:
+    """Hand the verified package to the OS, outside this process's lifetime.
+
+    Returns ``(True, detail)`` once the installer is running somewhere the
+    agent's own shutdown cannot reach, and ``(False, '<code>: ...')`` when the
+    installed version keeps running instead — ``update_unsatisfiable`` for a
+    package this system cannot resolve, ``update_deferred`` for a lock that will
+    clear, ``update_handoff_failed`` when the init system refused the job. Only
+    a handoff that actually started reports one.
+    """
+    if os_family == 'linux':
+        return _start_linux_update(installer_path)
+    if os_family == 'macos':
+        return _start_macos_update(installer_path)
+    raise ValueError(f"No POSIX self-update path for os family '{os_family}'")
+
+
+def _start_linux_update(installer_path: str) -> tuple[bool, str]:
+    """apt, never `dpkg -i`: the package declares dependencies and dpkg resolves
+    none of them, so a dpkg install leaves the agent unconfigured and down."""
+    ready, refusal = _apt_can_install(installer_path)
+    if not ready:
+        return False, refusal
+
+    started = _run_update_command(
+        ['systemd-run', f'--unit={UPDATE_UNIT_NAME}', '--collect',
+         '--setenv=DEBIAN_FRONTEND=noninteractive',
+         '/usr/bin/apt-get', 'install', '-y', '--allow-downgrades', installer_path],
+        _UPDATE_HANDOFF_TIMEOUT,
+    )
+    if started is None or started.returncode != 0:
+        return False, f"update_handoff_failed: {_complaint(started)[:300]}"
+    return True, f"apt-get is installing the package as {UPDATE_UNIT_NAME}.service"
+
+
+def _apt_can_install(installer_path: str) -> tuple[bool, str]:
+    """Whether apt can satisfy the package, with one recovery attempt.
+
+    ``--simulate`` resolves the whole dependency graph without touching the
+    system, so a package whose ``Depends:`` cannot be met is refused here — with
+    the installed version still running — rather than half-installed. It takes
+    no lock, which is what lets it run at all while another package operation
+    is under way, so the lock is a separate question: the install itself runs
+    inside a transient unit whose failure nobody reads back, and unattended
+    upgrades hold that lock several times a day.
+    """
+    if _dpkg_frontend_lock_held():
+        return False, 'update_deferred: another package operation holds the dpkg lock'
+
+    result = _run_update_command(
+        ['apt-get', 'install', '--simulate', installer_path], _APT_SIMULATE_TIMEOUT)
+    if result is not None and result.returncode == 0:
+        return True, ''
+
+    complaint = _complaint(result)
+    lowered = complaint.lower()
+
+    if _DPKG_INTERRUPTED_MARKER in lowered:
+        logging.warning(
+            "An earlier package operation was interrupted - running dpkg --configure -a")
+        _run_update_command(['dpkg', '--configure', '-a'], _DPKG_CONFIGURE_TIMEOUT)
+        result = _run_update_command(
+            ['apt-get', 'install', '--simulate', installer_path], _APT_SIMULATE_TIMEOUT)
+        if result is not None and result.returncode == 0:
+            return True, ''
+        complaint = _complaint(result)
+
+    return False, f"update_unsatisfiable: {complaint[:300]}"
+
+
+def _dpkg_frontend_lock_held() -> bool:
+    """Whether another package operation holds apt's frontend lock.
+
+    A POSIX record lock, which is the kind apt takes — a probe of any other
+    kind contends with nothing and would report every lock free. A file that
+    cannot be opened is reported as free: the install is still the authority
+    on whether it can run, and refusing an update over a failed probe would be
+    worse than letting apt refuse it.
+    """
+    import fcntl
+
+    try:
+        fd = os.open(_DPKG_FRONTEND_LOCK, os.O_RDWR)
+    except OSError:
+        return False
+    try:
+        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return True
+    else:
+        fcntl.lockf(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
+def _start_macos_update(installer_path: str) -> tuple[bool, str]:
+    """`installer` as a launchd job rather than a child: the package stops the
+    daemon, and `launchctl bootout` takes the daemon's whole process group."""
+    result = _run_update_command(
+        ['launchctl', 'submit', '-l', UPDATE_JOB_LABEL, '--',
+         '/usr/sbin/installer', '-pkg', installer_path, '-target', '/'],
+        _UPDATE_HANDOFF_TIMEOUT,
+    )
+    if result is None or result.returncode != 0:
+        return False, f"update_handoff_failed: {_complaint(result)[:300]}"
+    return True, f"installer is running as the launchd job {UPDATE_JOB_LABEL}"
+
+
+def _run_update_command(command: List[str], timeout_seconds: int):
+    """A command's result, or None when it could not be run at all.
+
+    The difference matters: a handoff that never reached the OS is a failure
+    whatever the package manager would have said.
+    """
+    try:
+        return subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout_seconds)
+    except (OSError, subprocess.SubprocessError) as e:
+        logging.warning(f"{' '.join(command)} failed: {e}")
+        return None
+
+
+def _complaint(result) -> str:
+    """What a failed command said, stdout included — apt reports unmet
+    dependencies on stdout and only the summary line on stderr."""
+    if result is None:
+        return 'the command could not be run'
+    return f"{result.stderr or ''}{result.stdout or ''}".strip()

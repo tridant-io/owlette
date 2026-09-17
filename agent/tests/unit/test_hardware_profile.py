@@ -5,6 +5,10 @@ Covers the join between the stored profile's GPU entries and the live NVML
 readings, which is keyed on the GPU id rather than list position.
 """
 
+import logging
+import sys
+from types import ModuleType, SimpleNamespace
+
 import pytest
 from unittest.mock import patch
 
@@ -30,6 +34,18 @@ PROFILE = {
         {'id': 'GPU-bbb', 'name': 'NVIDIA Test 1', 'vramTotalGb': 8.0, 'pciBus': None},
     ],
     'disks': [],
+    'nics': [],
+}
+
+# _collect_disks stores a mount point with its separator stripped, which leaves
+# a POSIX volume as the path itself and a windows drive as a bare letter.
+DISK_PROFILE = {
+    'gpus': [],
+    'disks': [
+        {'id': '/', 'label': '/dev/sda2', 'fs': 'ext4', 'totalGb': 100.0},
+        {'id': '/home', 'label': '/dev/sda3', 'fs': 'ext4', 'totalGb': 900.0},
+        {'id': 'C:', 'label': 'C:', 'fs': 'NTFS', 'totalGb': 500.0},
+    ],
     'nics': [],
 }
 
@@ -67,3 +83,55 @@ class TestCollectDynamicMetricsGpus:
         assert out['GPU-aaa']['vramUsedGb'] == 0.0
         assert out['GPU-bbb']['usagePercent'] == 90.0
         assert out['GPU-bbb']['vramUsedGb'] == 4.0
+
+
+@pytest.mark.unit
+class TestCollectDynamicMetricsDisks:
+    """Every id in profile.disks has to come back with a reading"""
+
+    def test_a_posix_mount_point_is_asked_for_as_it_stands(self):
+        """'/home\\' is not a mount point and psutil answers nothing for it,
+        which dropped every volume on a POSIX machine but the root."""
+        asked = []
+
+        def usage(mount):
+            asked.append(mount)
+            return SimpleNamespace(percent=42.0, used=10 * 1024 ** 3)
+
+        with (
+            patch.object(hardware_profile, '_disk_usage_with_timeout', side_effect=usage),
+            patch.object(shared_utils, 'get_gpus', return_value=[]),
+            patch.object(hardware_profile, '_gpu_temps_cached', return_value=[]),
+            patch.object(shared_utils, 'get_network_metrics', return_value={}),
+        ):
+            disks = hardware_profile.collect_dynamic_metrics(DISK_PROFILE)['disks']
+
+        assert asked == ['/', '/home', 'C:\\']
+        assert set(disks) == {'/', '/home', 'C:'}
+        assert disks['/home']['percent'] == 42.0
+        assert disks['/home']['usedGb'] == 10.0
+
+
+@pytest.mark.unit
+class TestCollectCpusOffWindows:
+    """The 300 s profile rebuild runs on the metrics thread, and off
+    Windows its socket-topology query can only fail — into a WARNING,
+    every rebuild."""
+
+    def test_the_wmi_socket_query_is_skipped_off_windows(self, monkeypatch, caplog):
+        monkeypatch.setattr(hardware_profile, '_IS_WINDOWS', False)
+        probe = ModuleType('wmi')
+
+        def reached():
+            raise AssertionError('wmi.WMI() was called off Windows')
+
+        probe.WMI = reached
+        monkeypatch.setitem(sys.modules, 'wmi', probe)
+
+        with caplog.at_level(logging.DEBUG):
+            cpus = hardware_profile._collect_cpus()
+
+        assert [cpu['id'] for cpu in cpus] == ['CPU0']
+        # Negative control: without the guard the stub is imported, WMI()
+        # raises and the fallback logs it at WARNING on every rebuild.
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []

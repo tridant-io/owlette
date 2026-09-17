@@ -13,8 +13,9 @@ or missing allowlist allows nothing.
 - Windows: comparison is case-folded; NTFS is case-insensitive and a casing
   mismatch must not false-reject.
 - POSIX: `~` resolves through the console user, never the root daemon's own
-  home, and the per-OS system-path sets are compared after resolve(), so a
-  symlinked `/etc` arrives as `/private/etc` on macOS.
+  home, and is refused outright when nobody is at the machine; the per-OS
+  system-path sets are compared after resolve(), so a symlinked `/etc` arrives
+  as `/private/etc` on macOS.
 
 Out of scope: network/auth (upstream), chunk verification and extracted-file ACLs
 (sync_assembler). Consumed by sync_assembler during the atomic rename.
@@ -48,9 +49,9 @@ def _os_family() -> str:
 
 # Applied when config carries no explicit roots. `~` goes through
 # `_safe_expanduser`, never os.path.expanduser: under LocalSystem the stdlib
-# expands to C:\Windows\System32\config\systemprofile and under the root daemon
-# to /root (/var/root on macOS), all of which _is_dangerous_root then rejects,
-# leaving an empty allowlist.
+# expands to C:\Windows\System32\config\systemprofile, which _is_dangerous_root
+# rejects, and under the root daemon to /root (/var/root on macOS), which is
+# refused before it can be resolved at all.
 # Windows: `~/Documents`, not `~/Documents/Owlette`, so a relative extract path
 # like "projects/show1" lands directly under Documents; the empty-field fallback
 # still nests under `Owlette` (see the web-side `resolveExtractPath`).
@@ -212,14 +213,24 @@ def _get_interactive_home() -> str:
     return _cached_interactive_home_state
 
 
+class UnresolvableHomeError(ValueError):
+    """`~` under a privileged agent with nobody at the machine.
+
+    Expanding it would hand back the daemon's own home — /root, or /var/root on
+    macOS — which is never where the operator meant their files to go and which
+    they cannot even read, so the path is refused instead of quietly redirected.
+    """
+
+
 def _safe_expanduser(path: str) -> str:
     """
     os.path.expanduser, except that a privileged agent's `~` means the human at
     the machine and not the account the agent runs as: the stdlib expands it to
     C:\\Windows\\System32\\config\\systemprofile under LocalSystem and to /root
     (/var/root on macOS) under the root daemon, none of which the operator can
-    see. Everything else is stdlib behaviour, including substituting only a
-    leading `~`.
+    see. Raises UnresolvableHomeError when the agent is privileged and there is
+    no interactive session for a bare `~` to stand for. Everything else is
+    stdlib behaviour, including substituting only a leading `~`.
     """
     if not path:
         return path
@@ -228,15 +239,15 @@ def _safe_expanduser(path: str) -> str:
     # without a leading `~` is what the stdlib would hand back unchanged.
     if not path.startswith('~'):
         return path
+    # `~user/...` names its own account, which pwd resolves whoever is at the
+    # machine: only the bare form means "the human here". The stdlib leaves it
+    # unchanged when `user` doesn't exist — desired.
+    if not (path == '~' or path.startswith('~/') or path.startswith('~\\')):
+        return os.path.expanduser(path)
     home = _privileged_home()
     if home is None:
         return os.path.expanduser(path)
-    if path == '~':
-        return home
-    if path.startswith('~/') or path.startswith('~\\'):
-        return home + path[1:]
-    # `~user/...`: stdlib leaves it unchanged when `user` doesn't exist — desired.
-    return os.path.expanduser(path)
+    return home if path == '~' else home + path[1:]
 
 
 def _privileged_home() -> Optional[str]:
@@ -244,16 +255,21 @@ def _privileged_home() -> Optional[str]:
     The home `~` must mean while the agent runs privileged, or None when the
     stdlib answer is already right because the process is its own user.
 
-    On POSIX an unresolvable console user leaves the stdlib answer standing:
-    /root and /var/root sit in the system-path sets, so the daemon's own home is
-    refused as a root and matches no target.
+    Raises UnresolvableHomeError under the root daemon with no console user:
+    there is no interactive session, so there is no home `~` could honestly
+    stand for, and the daemon's own is not an answer.
     """
     if _os_family() == 'windows':
         return _get_interactive_home() if _running_as_system() else None
     if not _running_as_root():
         return None
     entry = _console_user_passwd()
-    return entry.pw_dir if entry is not None else None
+    if entry is None:
+        raise UnresolvableHomeError(
+            "'~' cannot be resolved: the agent is running as root and nobody is "
+            "signed in at this machine"
+        )
+    return entry.pw_dir
 
 
 def _running_as_root() -> bool:
@@ -356,6 +372,12 @@ class DestinationAllowlist:
                     continue
                 try:
                     expanded = Path(_safe_expanduser(r)).resolve(strict=False)
+                except UnresolvableHomeError as e:
+                    logger.error(
+                        f"destination_allowlist: REFUSING root {r!r}: {e} — give "
+                        f"an absolute path instead"
+                    )
+                    continue
                 except (OSError, ValueError) as e:
                     # ValueError = NULL-byte injection; OSError = transient.
                     logger.warning(
@@ -433,6 +455,8 @@ class DestinationAllowlist:
         # ValueError catches NULL-byte injection (`/path/file\x00.evil`).
         try:
             expanded = Path(_safe_expanduser(target))
+        except UnresolvableHomeError as e:
+            raise DestinationNotAllowedError(str(e)) from e
         except (ValueError, TypeError) as e:
             raise DestinationNotAllowedError(
                 f"invalid characters in target path {target!r}: {e}"

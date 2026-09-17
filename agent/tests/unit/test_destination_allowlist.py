@@ -159,7 +159,15 @@ def test_multiple_roots_any_match_allows(tmp_path):
     assert not allowlist.is_allowed(str(tmp_path / 'c' / 'file'))
 
 
-def test_tilde_in_root_is_expanded():
+def test_tilde_in_root_is_expanded(tmp_path, monkeypatch):
+    """an unprivileged agent is its own user, so `~` is the stdlib's answer.
+
+    the home is sandboxed rather than read off the machine: the suite runs as
+    root on the linux leg, and /root is a system path the allowlist refuses.
+    """
+    monkeypatch.setattr(mod, '_running_as_root', lambda: False)
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('USERPROFILE', str(tmp_path))  # ntpath.expanduser reads this one
     allowlist = DestinationAllowlist(['~/Documents/Owlette'])
     home = Path.home() / 'Documents' / 'Owlette'
     resolved_roots = allowlist.roots
@@ -168,7 +176,32 @@ def test_tilde_in_root_is_expanded():
     )
 
 
+def test_tilde_in_root_expands_through_the_console_user(tmp_path, monkeypatch):
+    """under the privileged daemon `~` is the human at the machine, wherever
+    the suite itself happens to be running from."""
+    home = tmp_path / 'home' / 'kiosk'
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(mod, '_console_user_passwd', lambda: FakePasswd(str(home)))
+
+    allowlist = DestinationAllowlist(['~/projects'])
+
+    assert allowlist.roots == [(home / 'projects').resolve()]
+
+
+def test_tilde_in_root_is_refused_with_nobody_at_the_machine(tmp_path, monkeypatch):
+    """negative control: no console user, no interactive home — the root is
+    dropped rather than quietly becoming the daemon's own."""
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(mod, '_console_user_passwd', lambda: None)
+
+    assert DestinationAllowlist(['~/projects']).roots == []
+    assert not DestinationAllowlist([str(tmp_path)]).is_allowed('~/projects/a.toe')
+
+
 def test_tilde_in_target_is_expanded(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, '_running_as_root', lambda: False)
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('USERPROFILE', str(tmp_path))  # windows
     allowed = tmp_path / 'Documents' / 'Owlette'
@@ -555,19 +588,40 @@ def test_posix_tilde_resolves_through_the_console_user(monkeypatch):
     assert mod._safe_expanduser('~/projects') == '/home/kiosk/projects'
 
 
-def test_posix_tilde_without_a_console_user_lands_somewhere_refused(monkeypatch):
+def test_posix_tilde_without_a_console_user_is_refused(monkeypatch):
     """
-    no console user → the stdlib answer stands, and it is the daemon's own home,
-    which the system-path set refuses as a root.
+    no console user → there is no interactive session, so `~` resolves to
+    nothing. the stdlib would answer /root, which the operator cannot even read.
     """
     monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
     monkeypatch.setattr(mod, '_running_as_root', lambda: True)
     monkeypatch.setattr(mod, '_console_user_passwd', lambda: None)
     monkeypatch.setenv('HOME', '/root')
     monkeypatch.setenv('USERPROFILE', '/root')  # ntpath.expanduser reads this one
-    expanded = mod._safe_expanduser('~/Documents')
-    assert expanded == '/root/Documents'
-    assert mod._is_dangerous_root(Path(expanded)) is True
+
+    with pytest.raises(mod.UnresolvableHomeError):
+        mod._safe_expanduser('~/Documents')
+
+    assert mod._safe_expanduser('/root/Documents') == '/root/Documents'
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='pwd resolves `~user` on POSIX')
+def test_posix_tilde_user_names_its_own_account(monkeypatch):
+    """
+    only the bare `~` means "the human at the machine". `~kiosk/...` names an
+    account pwd can resolve whoever is signed in, so it is not the daemon's home
+    and is not refused with nobody there.
+    """
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(mod, '_console_user_passwd', lambda: None)
+    import pwd
+
+    account = pwd.getpwuid(os.getuid())
+
+    expanded = mod._safe_expanduser(f'~{account.pw_name}/projects')
+
+    assert expanded == f'{account.pw_dir}/projects'
 
 
 def test_posix_tilde_is_stdlib_when_not_root(monkeypatch):

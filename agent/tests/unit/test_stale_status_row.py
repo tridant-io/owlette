@@ -73,6 +73,12 @@ class FakeProc:
     def exe(self):
         return self._exe
 
+    def status(self):
+        # Util.is_pid_running reads this off Windows to tell a live process
+        # from a zombie the daemon has not reaped yet; a double without it
+        # makes every identity check raise there and nowhere else.
+        return psutil.STATUS_RUNNING
+
 
 def install_process_table(monkeypatch, table):
     """Replace the live process view with `table` ({pid: FakeProc})."""
@@ -164,6 +170,7 @@ def make_cleanup_service(results):
         active_installations={},
         manual_overrides={},
         _skip_launch_delay=set(),
+        _seatless_entries=set(),
         results=results,
     )
     svc.cleanup_stale_tracking_data = (

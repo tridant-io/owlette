@@ -9,10 +9,11 @@ a handler that runs the full capture → upload → finalize pipeline.
 
 The handler is intentionally thin — all per-step error handling +
 return-shape contract live in `screenshot_capture.capture_and_upload`.
-We inject `service.execute_in_user_session` as the user-session executor
-so the actual screen grab runs inside the active user's desktop session
-(via CreateProcessAsUser) rather than in the LocalSystem Session-0
-context the service itself runs in.
+We inject `service.execute_in_user_session` as the user-session executor;
+where the grab actually runs is `osadapter.capture_screen`'s business —
+that executor on Windows, so the grab happens in the active user's
+desktop session rather than the LocalSystem Session-0 context the service
+runs in, and the resident desktop app's job seam on macOS and Linux.
 
 Return shape contract:
 - On success: the handler returns the dict produced by

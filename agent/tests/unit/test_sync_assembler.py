@@ -940,6 +940,169 @@ def test_prune_skipped_for_rows_without_an_extract_root(tmp_path):
         state.close()
 
 
+# file modes (POSIX, best-effort)
+
+
+@pytest.mark.parametrize('head', [
+    b'#!/bin/sh\nexit 0\n',
+    b'\x7fELF\x02\x01\x01\x00',
+    b'\xcf\xfa\xed\xfe\x0c\x00\x00\x01',   # Mach-O 64, little-endian
+    b'\xfe\xed\xfa\xce\x00\x00\x00\x12',   # Mach-O 32, big-endian
+    b'\xca\xfe\xba\xbe\x00\x00\x00\x02',   # a universal binary
+])
+def test_an_assembled_program_gets_its_execute_bit(head, monkeypatch, tmp_path):
+    """the .partial sidecar is opened 0644 and os.replace carries that mode
+    across, so without this a synced binary or script arrives unable to run.
+    the v1 version schema has no mode field -- the browser uploader has none to
+    send -- so the content is the only signal there is."""
+    import sync_assembler
+    monkeypatch.setattr(sync_assembler, '_HAS_FILE_MODES', True)
+    target = tmp_path / 'program'
+    target.write_bytes(head)
+
+    modes = _record_fchmod(monkeypatch)
+    sync_assembler._apply_file_mode(str(target))
+
+    assert modes == [0o755]
+
+
+@pytest.mark.parametrize('head', [b'\x89PNG\r\n\x1a\n', b'TOE\x00', b''])
+def test_an_assembled_document_is_not_made_executable(head, monkeypatch, tmp_path):
+    """negative control: a project file that arrived 0666 under a loose umask
+    is brought back to 0644, and nothing that is not a program is 0755."""
+    import sync_assembler
+    monkeypatch.setattr(sync_assembler, '_HAS_FILE_MODES', True)
+    target = tmp_path / 'show.toe'
+    target.write_bytes(head)
+
+    modes = _record_fchmod(monkeypatch)
+    sync_assembler._apply_file_mode(str(target))
+
+    assert modes == [0o644]
+
+
+def test_windows_leaves_the_mode_alone(monkeypatch, tmp_path):
+    """what a file may do on windows is its DACL, which _harden_acl sets;
+    a chmod there would only toggle the read-only bit."""
+    import sync_assembler
+    monkeypatch.setattr(sync_assembler, '_HAS_FILE_MODES', False)
+    target = tmp_path / 'program'
+    target.write_bytes(b'#!/bin/sh\n')
+
+    modes = _record_fchmod(monkeypatch)
+    sync_assembler._apply_file_mode(str(target))
+
+    assert modes == []
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fifos and O_NONBLOCK are POSIX')
+def test_a_fifo_at_the_target_is_not_chmodded(monkeypatch, tmp_path):
+    """negative control for the flags: the folder belongs to the kiosk user by
+    the time the mode is set, so a fifo swapped in over the renamed file would
+    otherwise block the sync thread in the open for good."""
+    import signal
+
+    import sync_assembler
+    monkeypatch.setattr(sync_assembler, '_HAS_FILE_MODES', True)
+    target = tmp_path / 'program'
+    os.mkfifo(target)
+
+    modes = _record_fchmod(monkeypatch)
+
+    def _blocked(signum, frame):
+        raise AssertionError('setting the mode blocked on the fifo')
+
+    previous = signal.signal(signal.SIGALRM, _blocked)
+    signal.alarm(3)
+    try:
+        sync_assembler._apply_file_mode(str(target))
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+    assert modes == []
+
+
+def _record_fchmod(monkeypatch):
+    """The modes _apply_file_mode sets, from either platform.
+
+    os.fchmod does not exist on windows at all, which is why the injected
+    platform has to be answered rather than run for real.
+    """
+    import sync_assembler
+    modes = []
+    monkeypatch.setattr(
+        sync_assembler.os, 'fchmod', lambda fd, mode: modes.append(mode),
+        raising=False,
+    )
+    return modes
+
+
+def test_assemble_sets_the_mode_of_what_it_wrote(tmp_path):
+    """end-to-end: the mode is applied to the target after the rename, not to
+    the sidecar that no longer exists."""
+    from unittest.mock import patch
+    state = SyncState(str(tmp_path / 'state.db'))
+    try:
+        content = tmp_path / 'content'
+        extract = tmp_path / 'extract'
+        extract.mkdir()
+        allowlist = DestinationAllowlist([str(extract)])
+
+        data = b'#!/bin/sh\nexit 0\n'
+        _put_chunk(content, data)
+        f = _mk_version_file('run.sh', [data])
+
+        dist_id = state.start_distribution(
+            site_id='s', roost_id='f', version_id='m', version_url='u',
+            files=[{'path': f.path, 'size': f.size}], chunks=[],
+        )
+        with patch('sync_assembler._apply_file_mode') as mock_mode:
+            assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+
+        assert mock_mode.call_count == 1
+        assert mock_mode.call_args[0][0].endswith('run.sh')
+    finally:
+        state.close()
+
+
+def test_a_resync_reapplies_the_mode_of_a_file_it_skipped(tmp_path):
+    """the mode is best-effort, so one that did not take is repaired the way a
+    stale owner and a stale DACL are — by syncing again, which skips the file
+    on its size and re-hardens it."""
+    from unittest.mock import patch
+    state = SyncState(str(tmp_path / 'state.db'))
+    try:
+        content = tmp_path / 'content'
+        extract = tmp_path / 'extract'
+        extract.mkdir()
+        allowlist = DestinationAllowlist([str(extract)])
+
+        data = b'#!/bin/sh\nexit 0\n'
+        _put_chunk(content, data)
+        f = _mk_version_file('run.sh', [data])
+        dist_id = _register(state, 'v1', [f], extract)
+
+        assemble_all(
+            distribution_id=dist_id, files=[f], extract_root=str(extract),
+            state=state, allowlist=allowlist, content_store=str(content),
+        )
+        with patch('sync_assembler._apply_file_mode') as mock_mode:
+            result = assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+
+        assert result.skipped == 1
+        assert mock_mode.call_count == 1
+        assert mock_mode.call_args[0][0].endswith('run.sh')
+    finally:
+        state.close()
+
+
 # file ownership (POSIX, best-effort)
 
 

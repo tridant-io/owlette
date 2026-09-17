@@ -34,6 +34,10 @@ import shared_utils
 ENTRY = {'id': 'proc-1', 'name': 'Demo App', 'exe_path': 'C:\\apps\\demo.exe',
          'launch_mode': 'always'}
 
+# Through the normaliser, not spelled out: the fold is the Windows comparison,
+# and off Windows a path is stored exactly as it is read.
+EXE_NORMALISED = shared_utils.normalize_exe_path(ENTRY['exe_path'])
+
 
 class FakeProc:
     """The minimal psutil.Process surface read_process_identity touches."""
@@ -51,6 +55,12 @@ class FakeProc:
 
     def exe(self):
         return self._exe
+
+    def status(self):
+        # Util.is_pid_running reads this off Windows to tell a live process
+        # from a zombie the daemon has not reaped yet; a double without it
+        # makes every identity check raise there and nowhere else.
+        return psutil.STATUS_RUNNING
 
 
 def install_process_table(monkeypatch, table):
@@ -115,7 +125,7 @@ def test_identity_match_readopts_row(state_file, config, monkeypatch, caplog):
     """Recorded create_time equals the live process's -> re-adopt, keep row."""
     install_process_table(monkeypatch, {
         500: FakeProc(500, 1111.5, 'C:\\apps\\demo.exe')})
-    states = {'500': identity_row(1111.5, 'c:\\apps\\demo.exe')}
+    states = {'500': identity_row(1111.5, EXE_NORMALISED)}
     write_states(state_file, states)
     svc = make_recovery_service()
 
@@ -135,7 +145,7 @@ def test_create_time_mismatch_refuses_and_cleans(
     path can resolve it."""
     install_process_table(monkeypatch, {
         500: FakeProc(500, 2222.0, 'C:\\apps\\demo.exe')})
-    write_states(state_file, {'500': identity_row(1111.5, 'c:\\apps\\demo.exe')})
+    write_states(state_file, {'500': identity_row(1111.5, EXE_NORMALISED)})
     svc = make_recovery_service()
 
     with caplog.at_level(logging.DEBUG):
@@ -172,10 +182,10 @@ def test_dead_pid_swept_while_live_match_adopted(
     proven rows are re-adopted in the same pass."""
     install_process_table(monkeypatch, {
         500: FakeProc(500, 1111.5, 'C:\\apps\\demo.exe')})
-    live_row = identity_row(1111.5, 'c:\\apps\\demo.exe')
+    live_row = identity_row(1111.5, EXE_NORMALISED)
     write_states(state_file, {
         '500': live_row,
-        '600': identity_row(3333.0, 'c:\\apps\\demo.exe'),  # dead
+        '600': identity_row(3333.0, EXE_NORMALISED),  # dead
         'None': {'status': 'LAUNCHING'},  # failed-launch junk
     })
     svc = make_recovery_service()
@@ -197,7 +207,7 @@ def test_inactive_launch_mode_keeps_row_but_does_not_track(
     entry = dict(ENTRY, launch_mode='off')
     monkeypatch.setattr(shared_utils, 'read_config',
                         lambda *a, **k: {'processes': [entry]})
-    states = {'500': identity_row(1111.5, 'c:\\apps\\demo.exe')}
+    states = {'500': identity_row(1111.5, EXE_NORMALISED)}
     write_states(state_file, states)
     svc = make_recovery_service()
 
@@ -225,7 +235,7 @@ def test_non_numeric_key_survives_the_guarded_sweep(
     svc = SimpleNamespace(
         last_started={}, relaunch_attempts={}, install_locks={},
         active_installations={}, manual_overrides={},
-        _skip_launch_delay=set(),
+        _skip_launch_delay=set(), _seatless_entries=set(),
         results={
             'None': {'status': 'LAUNCHING'},
             'not-a-pid': {'status': 'RUNNING'},
@@ -255,7 +265,7 @@ def launch_service(tmp_path, monkeypatch, state_file):
     file, no process is ever created. Mirrors the lifecycle conftest seam.
     """
     import sys
-    import owlette_service
+    import win32process
     from owlette_service import OwletteService
 
     # Everything get_data_path() resolves must land in the sandbox.
@@ -272,7 +282,7 @@ def launch_service(tmp_path, monkeypatch, state_file):
             json.dump({'pid': 4242}, f)
         return None, None, 9999, 0
 
-    monkeypatch.setattr(owlette_service.win32process, 'CreateProcessAsUser',
+    monkeypatch.setattr(win32process, 'CreateProcessAsUser',
                         fake_create_process_as_user)
 
     exe = tmp_path / 'target-app.exe'
@@ -285,10 +295,13 @@ def launch_service(tmp_path, monkeypatch, state_file):
     )
     svc.launch_process_as_user = (
         OwletteService.launch_process_as_user.__get__(svc, OwletteService))
+    svc._record_launch = (
+        OwletteService._record_launch.__get__(svc, OwletteService))
     svc._validate_path = OwletteService._validate_path
     return SimpleNamespace(svc=svc, exe=str(exe))
 
 
+@pytest.mark.windows(reason='CreateProcessAsUser is the Windows launch seam')
 def test_launch_record_row_shape_preserves_scout_fields(
         launch_service, state_file, monkeypatch):
     """The launch-success write records the full identity on the pid row --
@@ -315,7 +328,7 @@ def test_launch_record_row_shape_preserves_scout_fields(
         'id': 'proc-x',
         'status': 'LAUNCHING',
         'create_time': 1234.25,
-        'exe': launch_service.exe.replace('/', '\\').lower(),
+        'exe': shared_utils.normalize_exe_path(launch_service.exe),
         'managed': True,
         'origin': 'launched',
     }
@@ -329,6 +342,7 @@ def test_launch_record_row_shape_preserves_scout_fields(
         4242) is True
 
 
+@pytest.mark.windows(reason='CreateProcessAsUser is the Windows launch seam')
 def test_launch_record_skipped_when_child_dies_before_identity_read(
         launch_service, state_file, monkeypatch, caplog):
     """Child gone before the identity read: record NOTHING and let the normal

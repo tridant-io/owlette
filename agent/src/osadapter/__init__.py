@@ -2,11 +2,11 @@
 
 `get()` returns the module implementing `OSAdapter` for this machine, and every
 operation is reachable straight off the package (`osadapter.data_root()`).
-Windows is the only implementation today.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from contextlib import AbstractContextManager
@@ -45,8 +45,14 @@ class OSAdapter(Protocol):
     def run_job(self, job: dict) -> dict:
         """Run a GUI job in the desktop app's session and return its result."""
 
-    def capture_screen(self, path: str) -> int:
-        """Capture the user's screen to `path`; returns the monitor count."""
+    def capture_screen(self, monitor: int, *, executor, timeout_s: int) -> dict:
+        """Grab `monitor` where the user can see it.
+
+        Answers the `{outputDir, files, stdout}` dict
+        screenshot_capture.capture_in_user_session parses, or one carrying an
+        `error` the caller surfaces. `executor` is the service's user-session
+        round-trip, which only the Windows arm runs through.
+        """
 
     def launch_managed_process(self, spec: dict) -> int | None:
         """Start a configured managed process; returns its pid, None on failure."""
@@ -93,6 +99,13 @@ OPERATIONS = tuple(sorted(
     if not name.startswith('_') and callable(member)
 ))
 
+# The arm each platform runs. `posix` is the half macOS and Linux share and is
+# never selected in its own right — `linux.py` and `darwin.py` import what they
+# share from it and answer the rest themselves. An arm that is not in the tree
+# yet resolves to nothing, so a platform whose work is still to come raises
+# NotImplementedError instead of ImportError.
+_ARMS = {'win32': 'win', 'linux': 'linux', 'darwin': 'darwin'}
+
 _adapter = None
 
 
@@ -100,14 +113,25 @@ def get() -> OSAdapter:
     """The adapter for the OS this agent is running on."""
     global _adapter
     if _adapter is None:
-        if sys.platform == 'win32':
-            from . import win
-            _adapter = win
-        else:
+        name = _ARMS.get(sys.platform)
+        arm = _arm(name) if name else None
+        if arm is None:
             raise NotImplementedError(
                 f"no osadapter implementation for platform '{sys.platform}'"
             )
+        _adapter = arm
     return _adapter
+
+
+def _arm(name: str):
+    """The arm module, or None when that branch is not in the tree.
+
+    find_spec first, so an ImportError raised *inside* an arm is the caller's
+    to see rather than reading as an arm that is not there at all.
+    """
+    if importlib.util.find_spec(f'.{name}', __name__) is None:
+        return None
+    return importlib.import_module(f'.{name}', __name__)
 
 
 def resolve_data_root(default: str, sub: str | None = None) -> str:

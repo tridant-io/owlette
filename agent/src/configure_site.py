@@ -3,7 +3,7 @@ owlette site configuration — device code pairing flow.
 
 Runs during install: requests a 3-word pairing phrase, shows it, polls until an
 operator authorizes it on owlette.app/add or the dashboard, then stores the OAuth
-tokens (C:\\ProgramData\\owlette\\.tokens.enc) and writes site_id / project_id /
+tokens (`.tokens.enc` in the agent's data root) and writes site_id / project_id /
 api_base into config.json.
 
 Usage:
@@ -23,15 +23,22 @@ Headless modes (the desktop app's bridge into the agent — see
 else, and never touches the console/clipboard UI above:
 
     --json-progress      Pair this machine, emitting phrase/status/authorized/error.
+                         With --no-service-restart the agent is left running,
+                         which is what the daemon's own pairing child uses.
     --leave              Leave the current site (config, cache, service, machine doc).
     --report-issue FILE  Submit the feedback payload in FILE to `bug_reports`.
-    --reboot-now         Record an owlette-initiated reboot and restart Windows.
+    --reboot-now         Record an owlette-initiated reboot and restart the machine.
     --dismiss-reboot     Clear the cloud rebootPending flag for this machine.
+    --preseed            Pair from the preseed a POSIX package left in the tree.
 """
 
+import datetime
 import json
 import logging
 import os
+import secrets
+import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -39,12 +46,31 @@ import argparse
 from pathlib import Path
 from typing import Optional, Callable
 
+import osadapter
 import shared_utils
 
 CONFIG_PATH = Path(shared_utils.get_data_path('config/config.json'))
 
 # Default timeout for polling (10 minutes, matching server-side expiry)
 TIMEOUT_SECONDS = 600
+
+# The POSIX analogue of the Windows installer's `/ADD=<phrase> /SILENT`: the
+# package writes the operator's phrase here and `postinst` / `postinstall` runs
+# `configure_site.py --preseed`. Retired by renaming rather than deleting, so a
+# support case can still see what an image was built with.
+PRESEED_PATH = 'config/pairing.json'
+PRESEED_CONSUMED_PATH = 'config/pairing.json.used'
+# The explicit re-pair opt-in: set in the environment, it pairs even a machine
+# that already carries a site, which the preseed file alone never does.
+PRESEED_ENV_VAR = 'OWLETTE_ADD'
+
+# An owlette-initiated restart of the machine. One second is the shortest delay
+# Windows still lets the operator abort. The POSIX arms schedule in whole
+# minutes and round anything shorter up to one, so the same click reboots a
+# second later on Windows and a minute later there; the message is what a POSIX
+# shutdown broadcasts to the sessions it is about to end.
+_REBOOT_DELAY_SECONDS = 1
+_REBOOT_MESSAGE = 'owlette is restarting this machine'
 
 # ANSI color codes (Windows 10+ supports these natively)
 CYAN = '\033[96m'
@@ -153,7 +179,7 @@ def _save_config(site_id: str, environment: str, api_base: str, project_id: str)
 
     # Atomic write: write to temp file, then replace
     tmp_path = CONFIG_PATH.with_suffix('.tmp')
-    with open(tmp_path, 'w') as f:
+    with os.fdopen(shared_utils.open_new_file(str(tmp_path)), 'w') as f:
         # `ShouldConfigureSite` in agent/owlette_installer.iss string-searches
         # this file for '"environment": "development"' and '"enabled": true' —
         # key, colon, ONE space, value — which depends on json.dump's default
@@ -163,6 +189,12 @@ def _save_config(site_id: str, environment: str, api_base: str, project_id: str)
         # indent=4 (`shared_utils.write_json_to_file`) while those searches
         # still match.
         json.dump(config, f, indent=2)
+        # POSIX: config.json is 0660 root:<group> so the desktop app can write
+        # it too, and a replacement written at the daemon's umask would lock
+        # that writer out until the next service start — a pairing through the
+        # request seam restarts nothing. Onto the descriptor, because config/
+        # is group-writable and the temp name is not the daemon's to trust.
+        shared_utils._carry_file_identity(CONFIG_PATH, f.fileno())
     os.replace(tmp_path, CONFIG_PATH)
 
 
@@ -458,7 +490,7 @@ def run_pairing_flow(api_base: str = None, environment: str = None,
 _STATUS_HEARTBEAT_SECONDS = 15
 
 # Settle margin around service stop/start — now only for Firestore to catch up
-# with the leave write (`owlette-host stop`/`start` are synchronous, unlike nssm).
+# with the leave write (the adapter's controls are synchronous, unlike nssm).
 _SERVICE_STOP_SETTLE = 3
 _SERVICE_START_SETTLE = 2
 
@@ -473,6 +505,15 @@ _REPORT_CATEGORY_ALIASES = {
 }
 
 
+def _event_line(event: str, value=None) -> str:
+    """One line of the progress protocol, ASCII-escaped and newline-terminated.
+
+    Spelled once so the daemon's answers into the `ipc/` seam and the console's
+    own stdout are the same stream, parsed by the same reader.
+    """
+    return json.dumps({'event': event, 'value': value}) + '\n'
+
+
 def _emit(event: str, value=None) -> None:
     """Write one progress line to stdout and flush it.
 
@@ -480,52 +521,32 @@ def _emit(event: str, value=None) -> None:
     closing the pipe, and in that case this process must die rather than keep
     polling for ten minutes with nobody listening.
     """
-    sys.stdout.write(json.dumps({'event': event, 'value': value}) + '\n')
+    sys.stdout.write(_event_line(event, value))
     sys.stdout.flush()
 
 
-def _host_path() -> str:
-    """`<install>\\tools\\owlette-host.exe` — three directories up from this file."""
-    src_dir = os.path.dirname(os.path.abspath(__file__))
-    install_root = os.path.dirname(os.path.dirname(src_dir))
-    return os.path.join(install_root, 'tools', 'owlette-host.exe')
+def _service_control(verb: str) -> bool:
+    """start / stop / restart the agent service; True once it reached the state.
 
+    The adapter carries per platform what `owlette-host <verb>` did here, with
+    the two properties the callers rely on unchanged:
 
-def _host_service(action: str, timeout: int = 60) -> bool:
-    """Run `owlette-host <action>`. True only when the host reported success.
-
-    Replaced `nssm <action> OwletteService` in 3.0.0, when the service host
-    became ours. Two differences the callers rely on:
-
-    * `stop` is synchronous — it waits for the service to reach STOPPED, which
+    * `stop` is synchronous — it waits for the service to reach stopped, which
       is the window the agent uses to flush `online: false` and log
       agent_stopped. `nssm stop` returned while its child was still alive.
     * A service that is already in the requested state is a success, because
       what the caller wants is the state, not the transition.
 
-    Never raises: leaving a site must complete even on a machine where the
-    service cannot be controlled from this session (the host binary missing, or
-    no rights — a standard user is not granted SERVICE_STOP), exactly as the GUI
+    Never raises: leaving a site must complete even where the service cannot be
+    controlled from this session — a standard user is not granted SERVICE_STOP,
+    and off Windows the unit belongs to the init system — exactly as the GUI
     teardown behaved. The return value lets the caller tell the operator which
     half happened.
     """
-    host = _host_path()
-    if not os.path.exists(host):
-        logging.warning(f"Service host not found at {host}; skipping service {action}")
-        return False
     try:
-        completed = subprocess.run(
-            [host, action],
-            check=False,
-            capture_output=True,
-            timeout=timeout,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-        )
-        if completed.returncode != 0:
-            logging.warning(f"owlette-host {action} returned {completed.returncode}")
-        return completed.returncode == 0
+        return osadapter.service_control(verb, shared_utils.SERVICE_NAME)
     except Exception as e:
-        logging.warning(f"owlette-host {action} failed: {e}")
+        logging.warning(f"Service {verb} failed: {e}")
         return False
 
 
@@ -555,13 +576,19 @@ def _machine_document(project_id: str, api_base: str, site_id: str):
 
 
 def run_json_progress(api_base: str = None, environment: str = None,
-                      timeout_seconds: int = TIMEOUT_SECONDS) -> int:
+                      timeout_seconds: int = TIMEOUT_SECONDS,
+                      restart_service: bool = True) -> int:
     """Pair this machine, reporting progress as JSON lines.
 
     The same `run_pairing_flow` the installer runs, with the console and
     clipboard affordances switched off: the desktop app renders the phrase
     itself and owns the clipboard. Cancellation is the caller killing this
     process — the device code simply expires server-side.
+
+    `restart_service` is False for the run the daemon spawns into the `ipc/`
+    seam: that child is inside the unit it would otherwise stop, and stopping
+    it would take the child down with it wherever the init system kills by
+    control group.
     """
     _emit('status', 'requesting a pairing phrase')
 
@@ -609,13 +636,16 @@ def run_json_progress(api_base: str = None, environment: str = None,
     # immediate reconnect. Stopping OwletteService needs SERVICE_STOP, which a
     # standard user lacks — so the outcome is reported to the caller rather than
     # only logged, and failing it is not an error.
-    _emit('status', 'restarting the service')
-    stopped = _host_service('stop')
-    time.sleep(_SERVICE_STOP_SETTLE)
-    started = _host_service('start')
-    time.sleep(_SERVICE_START_SETTLE)
+    restarted = False
+    if restart_service:
+        _emit('status', 'restarting the service')
+        stopped = _service_control('stop')
+        time.sleep(_SERVICE_STOP_SETTLE)
+        started = _service_control('start')
+        time.sleep(_SERVICE_START_SETTLE)
+        restarted = stopped and started
 
-    _emit('authorized', {'siteId': site_id, 'serviceRestarted': stopped and started})
+    _emit('authorized', {'siteId': site_id, 'serviceRestarted': restarted})
     return 0
 
 
@@ -660,7 +690,7 @@ def run_leave_site() -> int:
         logging.warning(f"Failed to delete cached config (non-critical): {e}")
 
     _emit('status', 'stopping the service')
-    service_stopped = _host_service('stop')
+    service_stopped = _service_control('stop')
     if service_stopped:
         time.sleep(_SERVICE_STOP_SETTLE)
 
@@ -684,7 +714,7 @@ def run_leave_site() -> int:
                 pass
 
     _emit('status', 'restarting the service')
-    _host_service('start')
+    _service_control('start')
     time.sleep(_SERVICE_START_SETTLE)
 
     _emit('done', {
@@ -847,32 +877,33 @@ def run_report_issue(payload_path: str) -> int:
     return 0
 
 
-def run_reboot_now() -> int:
-    """Restart Windows, recorded as an owlette-initiated reboot.
+def _record_reboot_intent() -> None:
+    """Mark the reboot about to be issued as owlette's own.
 
-    Ported from `prompt_restart.PromptRestart.restart_now`: the intent is
-    written *before* the shutdown call so the next startup classifier treats the
-    reboot as planned and stays silent, and survives even if the call hangs.
+    Written *before* the call that fires it, so the next startup classifier
+    treats the reboot as planned and stays silent even if the call hangs. A
+    missing intent only costs a spurious "unexpected reboot" warning; it must
+    never stop the reboot the operator asked for.
     """
     try:
         import session_state
         session_state.set_intent('owlette_reboot')
     except Exception as e:
-        # A missing intent only costs a spurious "unexpected reboot" warning; it
-        # must never stop the reboot the operator asked for.
         logging.warning(f"session_state.set_intent failed before reboot: {e}")
 
-    _emit('status', 'restarting windows')
+
+def run_reboot_now() -> int:
+    """Restart this machine, recorded as an owlette-initiated reboot.
+
+    Ported from `prompt_restart.PromptRestart.restart_now`.
+    """
+    _record_reboot_intent()
+
+    _emit('status', 'restarting this machine')
     try:
-        subprocess.run(
-            ['shutdown', '/r', '/t', '1'],
-            check=False,
-            capture_output=True,
-            timeout=10,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-        )
+        osadapter.reboot(_REBOOT_DELAY_SECONDS, _REBOOT_MESSAGE)
     except Exception as e:
-        _emit('error', f"could not restart windows: {e}")
+        _emit('error', f"could not restart this machine: {e}")
         return 1
 
     _emit('done', {'rebooting': True})
@@ -924,6 +955,695 @@ def run_dismiss_reboot() -> int:
     return 0
 
 
+def run_preseed() -> int:
+    """Pair this machine from the preseed a POSIX package left in the tree.
+
+    `postinst` / `postinstall` writes `config/pairing.json` — `phrase`,
+    `kiosk_user`, `server` — or sets OWLETTE_ADD, then runs this. Device codes
+    are single-use server-side and a golden image clones the machine id and the
+    refresh token with everything else, so one preseed pairs one machine.
+
+    The decision order is `owlette_installer.iss`'s ShouldConfigureSite: an
+    explicit phrase always re-pairs, a machine already bound to a site never
+    does, and the preseed is retired the moment a pairing succeeds so a
+    re-install cannot spend a phrase the server has already consumed.
+
+    Exit 0 unless a pairing was attempted and failed, which is the only outcome
+    a maintainer script may want to treat as an install failure.
+    """
+    preseed_path = Path(shared_utils.get_data_path(PRESEED_PATH))
+    preseed = _read_preseed(preseed_path)
+    kiosk_user = _resolve_kiosk_user(preseed)
+
+    explicit = os.environ.get(PRESEED_ENV_VAR, '').strip()
+    phrase = explicit or str(preseed.get('phrase') or '').strip()
+
+    if not phrase:
+        _emit('done', {'paired': False, 'reason': 'no pairing preseed',
+                       'kioskUser': kiosk_user})
+        return 0
+
+    if not explicit and _is_paired():
+        _emit('done', {'paired': False, 'reason': 'already paired',
+                       'kioskUser': kiosk_user})
+        return 0
+
+    _emit('status', 'pairing this machine')
+    success, message, site_id = run_pairing_flow(
+        environment=_preseed_environment(preseed),
+        add_phrase=phrase,
+        show_prompts=False,
+    )
+
+    if not success:
+        # The preseed stays where it is: a phrase that expired mid-install is
+        # the operator's to retry, and consuming it would leave them nothing.
+        _emit('error', message)
+        return 1
+
+    _consume_preseed(preseed_path)
+    _emit('done', {'paired': True, 'siteId': site_id, 'kioskUser': kiosk_user})
+    return 0
+
+
+def _read_preseed(path: Path) -> dict:
+    """The preseed the package wrote, or an empty one when there is none.
+
+    A corrupt file is not a reason to fail an install: pairing is skipped and
+    the operator pairs the machine from the dashboard instead.
+    """
+    try:
+        preseed = _read_entry_json(str(path))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        logging.warning(f"Pairing preseed at {path} is unreadable: {e}")
+        return {}
+    if not isinstance(preseed, dict):
+        logging.warning(f"Pairing preseed at {path} is not an object")
+        return {}
+    return preseed
+
+
+def _read_entry_json(path: str) -> object:
+    """The JSON in one entry, read off a descriptor on the entry itself.
+
+    `config/` is group-writable off Windows, so the checks run on the descriptor
+    rather than the name: O_NOFOLLOW turns away a link out of the tree,
+    O_NONBLOCK a fifo, and the fstat anything that is not a regular file the
+    daemon itself owns. Windows has neither flag and an ACL'd tree rather than a
+    grouped one, so there it is the plain read it has always been.
+    """
+    if sys.platform == 'win32':
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('is not a regular file')
+        if info.st_uid != os.geteuid():
+            raise ValueError(f'is owned by uid {info.st_uid}, not by the daemon')
+    except BaseException:
+        os.close(fd)
+        raise
+    with os.fdopen(fd, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _consume_preseed(path: Path) -> None:
+    """Retire a spent preseed so the next install cannot re-use its phrase."""
+    try:
+        os.replace(path, shared_utils.get_data_path(PRESEED_CONSUMED_PATH))
+    except OSError as e:
+        logging.warning(f"Could not retire the pairing preseed: {e}")
+
+
+def _preseed_environment(preseed: dict) -> Optional[str]:
+    """The environment a preseed's `server` token names; None keeps the machine
+    on the one its config is already bound to.
+
+    A token that is neither is named in the log rather than quietly dropped: a
+    never-paired machine falls through to production, so a dev phrase written
+    `"server": "development"` would be spent against owlette.app and time out
+    ten minutes later with nothing saying why.
+    """
+    token = str(preseed.get('server') or '').strip().lower()
+    environment = {'dev': 'development', 'prod': 'production'}.get(token)
+    if token and environment is None:
+        logging.warning(
+            f"Pairing preseed names server {token!r}, which is neither 'dev' nor "
+            f"'prod' — pairing against {shared_utils.get_environment()}, the "
+            f"environment this machine's config carries")
+    return environment
+
+
+def _is_paired() -> bool:
+    """Whether this machine already carries a site.
+
+    The same question `owlette_installer.iss`'s ShouldConfigureSite asks of the
+    same file, read as JSON rather than string-searched: cloud sync on and a
+    non-empty site. A config written by the service but never paired has the
+    key and an empty value, which is not a paired machine.
+    """
+    try:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+            firebase_cfg = json.load(f)['firebase']
+        return bool(firebase_cfg['enabled']) and bool(firebase_cfg['site_id'])
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        # Missing, unreadable, unparseable, or not the shape a paired machine's
+        # config has — every one of which means pairing must run, exactly as
+        # the installer's own check treats them.
+        return False
+
+
+def _resolve_kiosk_user(preseed: dict) -> Optional[str]:
+    """The account the desktop app runs as: the preseed's, else whoever is at
+    the machine's graphical session.
+
+    Never guessed. An install with no seat — a kiosk imaged before anyone has
+    logged in — is told which account to add to the group by hand instead,
+    because group membership is how the app reaches the daemon at all.
+    """
+    named = str(preseed.get('kiosk_user') or '').strip()
+    if named:
+        return named
+    try:
+        user = osadapter.console_user()
+    except Exception as e:
+        logging.warning(f"Could not resolve the console user: {e}")
+        user = None
+    if user:
+        return user
+    command = _group_add_command()
+    if command:
+        _emit('status',
+              f'no graphical session — add the kiosk account by hand: {command}')
+    return None
+
+
+def _group_add_command() -> Optional[str]:
+    """How this OS adds an account to the group that reaches the data root;
+    None on Windows, where the tree is ACL'd rather than grouped."""
+    if sys.platform == 'win32':
+        return None
+    from osadapter import posix
+
+    return posix.GROUP_ADD
+
+
+# The privileged-request seam.
+#
+# Off Windows the desktop app runs as the console user: it reaches the data root
+# through the daemon's group, but it can neither write `.tokens.enc` nor control
+# the daemon. The actions that need root are therefore requests it drops into
+# `ipc/requests/` for the daemon to execute — and that directory is
+# group-writable, which makes the seam a privilege boundary rather than a queue.
+# A request runs only when all three hold:
+#
+#   * the file is owned by the uid `console_user()` resolves — nobody else's
+#     request is the app's;
+#   * it carries no group or world write bit, so what the daemon read is what
+#     the app wrote;
+#   * it quotes the nonce the daemon last issued, which is one-shot — a request
+#     file kept from an earlier session cannot be replayed.
+#
+# The app stages a request as `<id>.json.tmp` and renames it into place, the
+# same rule the hoot queue beside it carries: the daemon reads a `.json` the
+# moment it appears, and one caught half-written is refused and unlinked with
+# the app still waiting on an answer.
+#
+# Anything else is unlinked and logged. `leave` is deliberately not a verb:
+# deregistration stays an uninstall-time root operation (`prerm` /
+# `uninstall.sh`) and a dashboard command, never something the kiosk session can
+# ask for.
+#
+# The daemon answers beside the request, in `<id>.result` and the same JSON-line
+# protocol the headless modes write to stdout. The answer is the app's to remove
+# — it wrote the request, and the directory is its to write — but only once a
+# terminal event has landed in it (`authorized` or `error`): a `pair` is answered
+# by the pairing run itself, which keeps writing into that same file for the ten
+# minutes it polls, and an answer removed after the phrase line takes the
+# authorization with it.
+REQUESTS_DIR = 'ipc/requests'
+REQUEST_NONCE_PATH = 'ipc/request_nonce'
+REQUEST_AUDIT_PATH = 'logs/privileged_requests.log'
+# Root-owned. The nonce and the reply are group-readable: the app reads the
+# nonce it has to quote and the answer it is waiting on, and can write neither.
+# The audit is root-only; nothing in the app's session reads it.
+REQUEST_NONCE_MODE = 0o640
+REQUEST_REPLY_MODE = 0o640
+REQUEST_AUDIT_MODE = 0o600
+REQUEST_SUFFIX = '.json'
+REQUEST_REPLY_SUFFIX = '.result'
+# A request is one verb and one nonce. The directory is group-writable, so the
+# size of what turns up in it is not the daemon's to trust: without a bound the
+# drain reads whatever was planted there straight into memory.
+REQUEST_MAX_BYTES = 4096
+# How far back the rate limit reads. Every accepted request appends a row and
+# nothing ages the file out, so an app asking on every tick grows it for as long
+# as the machine is up: the check reads a fixed tail rather than the whole file,
+# and the file itself is rotated once it passes shared_utils' external-log cap.
+REQUEST_AUDIT_TAIL_BYTES = 64 * 1024
+# One restart or reboot per five minutes. Both end the session the app is asking
+# from, and an app that has wedged must not be able to hold a kiosk in a loop.
+REQUEST_RATE_LIMIT_SECONDS = 300
+
+REQUEST_VERBS = ('pair', 'restart', 'reboot')
+_RATE_LIMITED_VERBS = frozenset({'restart', 'reboot'})
+
+# The pairing this seam started, while it is still polling. A pairing runs for
+# ten minutes and writes the token store when it lands, so a second one started
+# beside it would race the first over `.tokens.enc` and over the site this
+# machine ends up bound to — and the app can ask for one on every tick.
+_pairing_child = None
+
+
+def poll_request_seam() -> bool:
+    """Publish the nonce a request has to quote; say whether one is waiting.
+
+    The service loop's tick on the seam — one directory listing and one small
+    read. The nonce is published from here rather than when a request arrives
+    because the app has to quote one the daemon has already issued: issuing it
+    as soon as there is a seam to issue it into is what makes a first request
+    possible without a round of refusals. Windows has no seam at all — the app
+    there controls the service through the SCM and elevates on a deliberate
+    click.
+    """
+    if sys.platform == 'win32':
+        return False
+    try:
+        with os.scandir(shared_utils.get_data_path(REQUESTS_DIR)) as entries:
+            waiting = any(entry.name.endswith(REQUEST_SUFFIX) for entry in entries)
+    except OSError:
+        return False
+    _request_nonce()
+    return waiting
+
+
+def drain_privileged_requests() -> list:
+    """Execute what the desktop app asked the daemon to do; the audit rows written.
+
+    Never called on the service loop: a `pair` starts a ten-minute poll and a
+    `restart` ends this process. Requests are taken oldest first and every one
+    that is honoured rotates the nonce, so a batch written against a single
+    nonce yields exactly one execution and the rest are refused.
+    """
+    if sys.platform == 'win32':
+        return []
+
+    directory = shared_utils.get_data_path(REQUESTS_DIR)
+    try:
+        names = sorted(
+            name for name in os.listdir(directory) if name.endswith(REQUEST_SUFFIX)
+        )
+    except OSError as e:
+        logging.debug(f"No request seam at {directory}: {e}")
+        return []
+
+    owner_uid = _request_owner_uid()
+    nonce = _request_nonce()
+    rows = []
+    for name in names:
+        path = os.path.join(directory, name)
+        reply_path = os.path.join(
+            directory, name[:-len(REQUEST_SUFFIX)] + REQUEST_REPLY_SUFFIX)
+        verb = _accept_request(path, reply_path, owner_uid, nonce)
+        if verb is None:
+            continue
+        nonce = _issue_request_nonce()
+        rows.append(_execute_request(verb, reply_path))
+    return rows
+
+
+def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Optional[str]:
+    """The verb one request asks for, or None when it is not the app's to ask.
+
+    Every refusal unlinks the request: one the daemon will not execute must not
+    be left for the next drain to reconsider. A request that fails the ownership
+    check is answered with nothing but a log line — it was not written by the
+    session this seam serves, so there is nobody to answer. A mode refusal is
+    answered: the file is the console user's, and a writer whose session umask
+    left it group-writable would otherwise wait on an answer that never comes.
+
+    The directory is group-writable, so the entry is opened directly and the
+    checks run on that descriptor: never a link the daemon follows out of the
+    seam, never a fifo it blocks on, and never a body read before it knows who
+    wrote it.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as e:
+        return _refuse(path, None, f'could not be opened: {e}')
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return _refuse(path, None, 'is not a regular file')
+        if owner_uid is None:
+            return _refuse(path, None, 'arrived with nobody at a graphical session')
+        if info.st_uid != owner_uid:
+            return _refuse(
+                path, None, f'is owned by uid {info.st_uid}, not the console user')
+        if stat.S_IMODE(info.st_mode) & 0o022:
+            return _refuse(
+                path, reply_path,
+                f'is mode {stat.S_IMODE(info.st_mode):04o} — group- or world-writable')
+        try:
+            payload = _read_request(fd)
+        except (OSError, ValueError) as e:
+            return _refuse(path, reply_path, f'could not be read: {e}')
+    finally:
+        os.close(fd)
+    if not isinstance(payload, dict):
+        return _refuse(path, reply_path, 'is not a request object')
+    verb = payload.get('verb')
+    if verb not in REQUEST_VERBS:
+        return _refuse(
+            path, reply_path, f'asks for {verb!r}, which the daemon does not execute')
+    if not nonce or payload.get('nonce') != nonce:
+        return _refuse(
+            path, reply_path, 'does not quote the nonce the daemon last issued')
+    _discard(path)
+    return verb
+
+
+def _read_request(fd: int) -> object:
+    """One request's payload, off the descriptor its writer was checked on.
+
+    Read last and bounded: the ownership and mode checks say whether this is the
+    app's request at all, and nothing a stranger left in the group-writable
+    directory is worth a byte of the daemon's memory before they have run.
+    """
+    raw = b''
+    while len(raw) <= REQUEST_MAX_BYTES:
+        chunk = os.read(fd, REQUEST_MAX_BYTES + 1 - len(raw))
+        if not chunk:
+            return json.loads(raw.decode('utf-8'))
+        raw += chunk
+    raise ValueError(f'is longer than the {REQUEST_MAX_BYTES} bytes a request is')
+
+
+def _refuse(path: str, reply_path: Optional[str], why: str) -> None:
+    """Unlink a request the daemon will not execute, and say why.
+
+    At warning: a refusal is either the app racing a nonce that has already been
+    spent or somebody else writing into the group-writable directory, and both
+    are worth a line in the service log.
+    """
+    logging.warning(f"Refused privileged request {os.path.basename(path)}: it {why}")
+    _discard(path)
+    if reply_path is not None:
+        _write_reply(reply_path, ('error', f'owlette did not run this request: it {why}'))
+    return None
+
+
+def _request_owner_uid() -> Optional[int]:
+    """The uid a request has to be owned by: whoever is at the machine.
+
+    None when nobody is, which refuses every request — one written while no
+    session exists is not the app's.
+    """
+    import pwd
+
+    try:
+        user = osadapter.console_user()
+    except Exception as e:
+        logging.warning(f"Could not resolve the console user: {e}")
+        return None
+    if not user:
+        return None
+    try:
+        return pwd.getpwnam(user).pw_uid
+    except KeyError:
+        logging.warning(f"The console user {user!r} has no account of its own")
+        return None
+
+
+def _request_nonce() -> str:
+    """The nonce a request has to quote; a fresh one when there is none yet.
+
+    Read off a descriptor on the entry itself, and only when that entry is the
+    file the daemon issued: `ipc/` is group-writable, so one planted under the
+    name would otherwise stand in for a nonce the daemon never wrote, and a
+    symlink left there would wedge the seam for good. Anything else is removed
+    and replaced, which is what makes the seam heal itself.
+    """
+    path = shared_utils.get_data_path(REQUEST_NONCE_PATH)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return _issue_request_nonce()
+    except OSError as e:
+        return _replace_request_nonce(path, e)
+    try:
+        with os.fdopen(fd, 'r', encoding='utf-8') as f:
+            info = os.fstat(f.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError('not a regular file')
+            if info.st_uid != os.geteuid():
+                raise ValueError(f'owned by uid {info.st_uid}, not by the daemon')
+            if stat.S_IMODE(info.st_mode) & 0o022:
+                raise ValueError(f'mode {stat.S_IMODE(info.st_mode):04o} — '
+                                 f'group- or world-writable')
+            nonce = f.read().strip()
+    except (OSError, ValueError) as e:
+        return _replace_request_nonce(path, e)
+    return nonce or _issue_request_nonce()
+
+
+def _replace_request_nonce(path: str, why) -> str:
+    """Discard a nonce the daemon did not issue and publish one it did."""
+    logging.warning(f"Replacing the request nonce: {why}")
+    _discard(path)
+    return _issue_request_nonce()
+
+
+def _issue_request_nonce() -> str:
+    """Retire the current nonce and publish its successor.
+
+    Root-owned 0640 in the group-readable tree: the app reads the nonce it must
+    quote and can never write one, so a request carrying it was written after
+    the daemon last issued it. Answers '' when the tree cannot be written, which
+    refuses every request rather than accepting any.
+
+    Created rather than truncated: writing through an entry already in the
+    group-writable directory would leave the nonce owned by whoever put it
+    there, to rewrite at will.
+    """
+    path = shared_utils.get_data_path(REQUEST_NONCE_PATH)
+    nonce = secrets.token_hex(16)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _discard(path)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                     REQUEST_NONCE_MODE)
+        try:
+            os.fchmod(fd, REQUEST_NONCE_MODE)
+            os.write(fd, nonce.encode())
+        finally:
+            os.close(fd)
+    except OSError as e:
+        logging.warning(f"Could not issue a request nonce: {e}")
+        return ''
+    shared_utils.grant_data_group(path)
+    return nonce
+
+
+def _execute_request(verb: str, reply_path: str) -> dict:
+    """Run one accepted verb, audit it, and answer the app.
+
+    The audit row goes in before the verb runs, not after: `restart` ends this
+    process and `reboot` ends the machine's session, so a row written afterwards
+    is a row that never exists — and the rate-limit window is read back out of
+    the audit for that same reason.
+    """
+    if verb == 'pair' and _pairing_in_flight():
+        _write_reply(reply_path,
+                     ('error', 'owlette is already pairing this machine'))
+        return _audit(verb, 'in_progress', 'a pairing started earlier is still polling')
+
+    if verb in _RATE_LIMITED_VERBS:
+        waited = _seconds_since_last(verb)
+        if waited is not None and waited < REQUEST_RATE_LIMIT_SECONDS:
+            _write_reply(reply_path,
+                         ('error', f'owlette ran a {verb} less than five minutes ago'))
+            return _audit(verb, 'rate_limited',
+                          f'{int(REQUEST_RATE_LIMIT_SECONDS - waited)}s left in the window')
+
+    row = _audit(verb, 'executed', '')
+    try:
+        if verb == 'pair':
+            _start_pairing(reply_path)
+        elif verb == 'restart':
+            _write_reply(reply_path, ('status', 'restarting the service'))
+            if not _service_control('restart'):
+                # A restart that worked has already ended this process, so
+                # reaching the next line at all means it did not.
+                _write_reply(reply_path, ('error', 'owlette could not restart the service'))
+                return _audit(verb, 'failed', 'the service did not restart')
+        else:
+            _write_reply(reply_path, ('status', 'restarting this machine'))
+            _record_reboot_intent()
+            osadapter.reboot(_REBOOT_DELAY_SECONDS, _REBOOT_MESSAGE)
+    except Exception as e:
+        logging.warning(f"Privileged request {verb} failed: {e}")
+        _write_reply(reply_path, ('error', f'owlette could not {verb}: {e}'))
+        return _audit(verb, 'failed', str(e))
+    return row
+
+
+def _pairing_in_flight() -> bool:
+    """Whether the pairing this seam started is still running."""
+    return _pairing_child is not None and _pairing_child.poll() is None
+
+
+def _start_pairing(reply_path: str) -> None:
+    """Pair this machine in the background, the app reading the phrase out of
+    the answer as it is written.
+
+    The same `--json-progress` run the desktop app spawns for itself on Windows,
+    except that off Windows only the daemon can write the token store — so it
+    runs here as root with its progress lines going into the seam instead of
+    down a pipe. Ten minutes of polling is not the daemon's to wait on, so
+    nothing does — the handle is kept only so a second request cannot start a
+    second pairing beside this one.
+
+    `--no-service-restart`: this child runs inside the unit that run would
+    otherwise stop, and the daemon picks the new site up on its own within two
+    loop iterations anyway.
+    """
+    global _pairing_child
+
+    argv = [shared_utils.get_python_exe_path(),
+            shared_utils.get_path('configure_site.py'), '--json-progress',
+            '--no-service-restart']
+    fd = _open_reply(reply_path)
+    try:
+        _pairing_child = subprocess.Popen(
+            argv, stdout=fd, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, start_new_session=True)
+    finally:
+        os.close(fd)
+    logging.info(f"Pairing this machine as pid {_pairing_child.pid}")
+    shared_utils.grant_data_group(reply_path)
+
+
+def _open_reply(path: str) -> int:
+    """A descriptor on one request's answer, owned by the daemon and 0640.
+
+    Appended to and never truncated: the answer is a line protocol, and a `pair`
+    hands this same descriptor to the subprocess that writes the rest of it.
+    The directory is the app's to write, so an entry already under the name that
+    the daemon did not create is removed rather than written through —
+    O_NOFOLLOW turns away a symlink, the owner a file planted there, and the
+    link count a hard link aimed at something else in the tree. O_NONBLOCK is
+    what turns away a fifo: opening one for writing waits for a reader, and the
+    checks below only run once the open has returned, so without it a fifo left
+    under the answer's name wedges the drain thread for the life of the process
+    and the single-flight gate then refuses every later request.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = os.open(path, flags, REQUEST_REPLY_MODE)
+    info = os.fstat(fd)
+    if info.st_uid != os.geteuid() or info.st_nlink != 1:
+        os.close(fd)
+        _discard(path)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NONBLOCK,
+                     REQUEST_REPLY_MODE)
+    os.fchmod(fd, REQUEST_REPLY_MODE)
+    return fd
+
+
+def _write_reply(path: str, *events) -> None:
+    """Answer one request in the line protocol the headless modes speak."""
+    try:
+        fd = _open_reply(path)
+        try:
+            os.write(fd, ''.join(
+                _event_line(event, value) for event, value in events).encode())
+        finally:
+            os.close(fd)
+    except OSError as e:
+        logging.warning(f"Could not answer {os.path.basename(path)}: {e}")
+        return
+    shared_utils.grant_data_group(path)
+
+
+def _audit(verb: str, outcome: str, detail: str) -> dict:
+    """Append one row to the privileged-request audit and return it.
+
+    An append-only record of what the kiosk session asked the daemon to do and
+    what came of it — and the only memory the rate limit has, since a `restart`
+    kills the process that would otherwise be holding one.
+    """
+    row = {
+        'at': time.time(),
+        'time': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+        'verb': verb,
+        'outcome': outcome,
+        'detail': detail,
+    }
+    logging.info(f"Privileged request {verb}: {outcome}")
+    path = shared_utils.get_data_path(REQUEST_AUDIT_PATH)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        shared_utils.rotate_log_if_oversized(path)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                     REQUEST_AUDIT_MODE)
+        try:
+            os.write(fd, (json.dumps(row) + '\n').encode())
+        finally:
+            os.close(fd)
+    except OSError as e:
+        logging.warning(f"Could not write the privileged-request audit: {e}")
+    return row
+
+
+def _seconds_since_last(verb: str) -> Optional[float]:
+    """How long ago the daemon last executed `verb`; None if it never has.
+
+    Only executed rows count. A refused one must not push the window forward, or
+    a single rate-limited request would extend the block by another five
+    minutes for as long as the app kept asking.
+
+    The live file's tail and then the one generation behind it: the audit is
+    rotated, and a rotation that carried the executed row away would reopen the
+    window it is there to hold shut.
+    """
+    path = shared_utils.get_data_path(REQUEST_AUDIT_PATH)
+    for candidate in (path, f'{path}.1'):
+        for row in reversed(_audit_tail(candidate)):
+            try:
+                if row.get('verb') != verb or row.get('outcome') != 'executed':
+                    continue
+                return max(0.0, time.time() - float(row['at']))
+            except (ValueError, TypeError, KeyError, AttributeError):
+                continue
+    return None
+
+
+def _audit_tail(path: str) -> list:
+    """The rows in the last REQUEST_AUDIT_TAIL_BYTES of `path`.
+
+    Read off the end so the rate-limit check costs the same on a machine that
+    has been up for a year as on one that booted this morning. The row the
+    offset lands in the middle of does not parse, which is what dropping an
+    unparseable line is for.
+    """
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - REQUEST_AUDIT_TAIL_BYTES))
+            raw = f.read()
+    except OSError:
+        return []
+    rows = []
+    for line in raw.decode('utf-8', 'replace').splitlines():
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    return rows
+
+
+def _discard(path: str) -> None:
+    """Remove an entry the seam owns, whether or not it is still there.
+
+    A directory goes whole rather than being skipped: anything in the group can
+    create one where a request belongs, and an entry the daemon cannot remove is
+    one the poll gate reports as waiting on every tick from then on.
+    """
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logging.warning(f"Could not remove {path}: {e}")
+
+
 def _run_headless_mode(args) -> Optional[int]:
     """Dispatch a headless mode, or None when this is an interactive run.
 
@@ -938,6 +1658,7 @@ def _run_headless_mode(args) -> Optional[int]:
             ('--report-issue', args.report_issue is not None),
             ('--reboot-now', args.reboot_now),
             ('--dismiss-reboot', args.dismiss_reboot),
+            ('--preseed', args.preseed),
         ) if chosen
     ]
     if not selected:
@@ -954,13 +1675,16 @@ def _run_headless_mode(args) -> Optional[int]:
             if args.url and not args.server:
                 _emit('error', "--url needs --server: re-run with --server dev or --server prod")
                 return 2
-            return run_json_progress(api_base=args.url, environment=args.server)
+            return run_json_progress(api_base=args.url, environment=args.server,
+                                     restart_service=not args.no_service_restart)
         if args.leave:
             return run_leave_site()
         if args.report_issue is not None:
             return run_report_issue(args.report_issue)
         if args.reboot_now:
             return run_reboot_now()
+        if args.preseed:
+            return run_preseed()
         return run_dismiss_reboot()
     except Exception as e:
         logging.exception("Headless mode failed")
@@ -994,9 +1718,18 @@ def main():
     parser.add_argument('--report-issue', type=str, default=None, metavar='PAYLOAD',
                         help='Submit the feedback payload in PAYLOAD (JSON file, deleted after read).')
     parser.add_argument('--reboot-now', action='store_true',
-                        help='Record an owlette-initiated reboot and restart Windows.')
+                        help='Record an owlette-initiated reboot and restart the machine.')
     parser.add_argument('--dismiss-reboot', action='store_true',
                         help="Clear this machine's cloud rebootPending flag.")
+    parser.add_argument('--no-service-restart', action='store_true',
+                        help='With --json-progress, leave the agent running once the '
+                             'machine is paired rather than restarting it. The '
+                             "daemon's own pairing child runs inside the service it "
+                             'would otherwise stop.')
+    parser.add_argument('--preseed', action='store_true',
+                        help=f'Pair from the preseed a POSIX package left at '
+                             f'{PRESEED_PATH} in the data root, or from '
+                             f'{PRESEED_ENV_VAR} in the environment.')
 
     args = parser.parse_args()
 

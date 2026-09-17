@@ -47,23 +47,28 @@ jobs:
           - os: windows-latest
             data_root: ''
             pytest_addopts: ''
-          # Two differences on the POSIX legs, each with its own exit condition.
+          # Two differences on the POSIX legs, both permanent.
           #
           # shared_utils builds CONFIG_PATH at module scope through osadapter,
-          # whose POSIX arm lands in Task 3.1. The override answers without an
-          # adapter, so these legs fail on the Windows imports they are here to
-          # catch rather than on the data root.
+          # which resolves /Library/Application Support/Owlette and
+          # /var/lib/owlette — neither writable on a runner. The override
+          # names a tree that is, so these legs fail on the regressions they
+          # are here to catch rather than on the data root.
           #
-          # The ignored modules import display_manager or owlette_service,
-          # neither of which imports off Windows — at module scope or from
-          # inside a test body, which is the same ImportError one call later —
-          # and `-x` would abort the leg on the first of them before a single
-          # test ran. The rest of the suite gates: a POSIX regression fails the
-          # leg. The owlette_service entries are transitional and come back
-          # when Task 3.4 gates that module's pywin32 block. The four display
-          # entries are permanent: test_no_platform_imports lists
-          # display_manager as never-ported, and test_display_enumeration_gate
-          # patches it.
+          # All four ignored modules are display_manager's, which is never
+          # ported (test_no_platform_imports lists it as Windows-only) and
+          # asserts its own struct layout at import. Three import it at module
+          # scope, so collecting them off Windows fails before a test runs;
+          # test_display_enumeration_gate.py imports it inside its bodies and
+          # collects, then fails every test on the same assertion. `-x` aborts
+          # the leg on either, which is why both kinds are --ignore rather than
+          # markers. Everything else gates: a POSIX regression fails the leg.
+          # Anything Windows-only inside a module that does collect carries
+          # @pytest.mark.windows instead, which reports as a skip rather than
+          # hiding the whole file — and a test that needs an osadapter arm
+          # this platform has no module for carries @pytest.mark.needs_os_arm,
+          # which is what keeps macos-15 green while osadapter/darwin.py is
+          # still on the Mac branch.
           - os: macos-15
             data_root: /tmp/owlette-data
             pytest_addopts: >-
@@ -71,20 +76,6 @@ jobs:
               --ignore=agent/tests/test_display_helper.py
               --ignore=agent/tests/unit/test_display_enumeration_gate.py
               --ignore=agent/tests/unit/test_display_manager.py
-              --ignore=agent/tests/unit/test_config_sync_client.py
-              --ignore=agent/tests/unit/test_cortex_ipc_offload.py
-              --ignore=agent/tests/unit/test_cortex_process_command.py
-              --ignore=agent/tests/unit/test_inherit.py
-              --ignore=agent/tests/unit/test_is_within_schedule.py
-              --ignore=agent/tests/unit/test_kill_safety.py
-              --ignore=agent/tests/unit/test_launch_failed.py
-              --ignore=agent/tests/unit/test_process_commands.py
-              --ignore=agent/tests/unit/test_recover_identity.py
-              --ignore=agent/tests/unit/test_relaunch_attempts_unlimited.py
-              --ignore=agent/tests/unit/test_screenshot_paths.py
-              --ignore=agent/tests/unit/test_service_shutdown.py
-              --ignore=agent/tests/unit/test_service_status_file.py
-              --ignore=agent/tests/unit/test_stale_status_row.py
           - os: ubuntu-24.04
             data_root: /tmp/owlette-data
             pytest_addopts: >-
@@ -92,20 +83,6 @@ jobs:
               --ignore=agent/tests/test_display_helper.py
               --ignore=agent/tests/unit/test_display_enumeration_gate.py
               --ignore=agent/tests/unit/test_display_manager.py
-              --ignore=agent/tests/unit/test_config_sync_client.py
-              --ignore=agent/tests/unit/test_cortex_ipc_offload.py
-              --ignore=agent/tests/unit/test_cortex_process_command.py
-              --ignore=agent/tests/unit/test_inherit.py
-              --ignore=agent/tests/unit/test_is_within_schedule.py
-              --ignore=agent/tests/unit/test_kill_safety.py
-              --ignore=agent/tests/unit/test_launch_failed.py
-              --ignore=agent/tests/unit/test_process_commands.py
-              --ignore=agent/tests/unit/test_recover_identity.py
-              --ignore=agent/tests/unit/test_relaunch_attempts_unlimited.py
-              --ignore=agent/tests/unit/test_screenshot_paths.py
-              --ignore=agent/tests/unit/test_service_shutdown.py
-              --ignore=agent/tests/unit/test_service_status_file.py
-              --ignore=agent/tests/unit/test_stale_status_row.py
     permissions:
       contents: read # checkout
     # The suite itself is ~95s locally. The rest of the budget is the pip
@@ -153,13 +130,11 @@ jobs:
         run: python -m pytest agent/tests/ -x -q
 
       # The three modules an import regression breaks first — the service host,
-      # the Firestore client and the pairing entrypoint. It gates on Windows.
-      # On the POSIX legs the remaining pywin32 imports in owlette_service.py
-      # keep it red until Task 3.4 gates them, so it only reports there; drop
-      # the flag in 3.4, whose Done-when is this import succeeding on all
-      # three legs.
+      # the Firestore client and the pairing entrypoint. It gates on all three
+      # legs: every Windows-only import below these is behind osadapter or
+      # inside the function that uses it, and a new module-scope one is a
+      # start-up crash on a customer's machine rather than a failing feature.
       - name: import the service entrypoints
-        continue-on-error: ${{ matrix.os != 'windows-latest' }}
         env:
           PYTHONPATH: agent/src
           OWLETTE_DATA_ROOT: ${{ matrix.data_root }}
@@ -211,8 +186,9 @@ jobs:
       - name: run sync engine tests
         env:
           PYTHONPATH: agent/src
-          # shared_utils resolves the data tree through osadapter, whose POSIX
-          # arm lands in Task 3.1; the override answers without an adapter.
+          # shared_utils resolves the data tree through osadapter, whose Linux
+          # arm names /var/lib/owlette; the override names a tree the runner
+          # can write.
           OWLETTE_DATA_ROOT: /tmp/owlette-data
           # Compose publishes MinIO on the runner's loopback, not on a
           # container network, so the endpoint is localhost here.

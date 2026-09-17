@@ -1,10 +1,10 @@
 """The POSIX arm of the hoot tool surface.
 
-Six of the tools `mcp_tools.execute_tool` publishes have a macOS and a Linux
+Seven of the tools `mcp_tools.execute_tool` publishes have a macOS and a Linux
 backend; every other Windows-shaped tool refuses through mcp_tools' one gate.
-`run_command` is the sixth and stays in mcp_tools — it is cancellable, and this
-platform reaches it through the allow-list — so five handlers live here, under
-their published Windows wire names.
+`run_command` is the seventh and stays in mcp_tools — it is cancellable, and
+this platform reaches it through the allow-list — so six handlers live here,
+under their published Windows wire names.
 
 Every backend shells out through `mcp_tools.run_capture`, so a missing binary or
 a hung query comes back as a -1 return code with the reason in stderr rather
@@ -21,6 +21,7 @@ from datetime import datetime
 import psutil
 
 import mcp_tools
+import osadapter
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +391,25 @@ def check_pending_reboot(params, config):
     }
 
 
+def show_notification(params, config):
+    """Show a message to whoever is at the machine.
+
+    The daemon runs as root with no session to draw in, so the message is the
+    desktop app's to show and this is the job seam osadapter puts it through —
+    an app that is down answers `desktop_not_running` rather than a toast
+    nobody sees. The Windows arm's style and duration have no counterpart here:
+    the app renders one kind of notification.
+    """
+    del config
+    title = params.get('title', 'Owlette')
+    message = params.get('message', '')
+    if not message:
+        return {'error': 'message is required'}
+
+    logger.info(f"[MCP-AUDIT] show_notification: title={title}")
+    return osadapter.notify(title, message)
+
+
 def get_gpu_processes(params, config):
     """Per-process GPU memory via nvidia-smi, with the NVML totals beside it.
 
@@ -493,6 +513,7 @@ HANDLERS = {
     'get_event_logs': get_event_logs,
     'get_service_status': get_service_status,
     'check_pending_reboot': check_pending_reboot,
+    'show_notification': show_notification,
     'get_gpu_processes': get_gpu_processes,
     'manage_windows_service': manage_windows_service,
 }

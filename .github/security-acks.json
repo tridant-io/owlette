@@ -20,7 +20,7 @@
   ],
   "acks": {
     "alert:dependabot:230": {
-      "reason": "glib 0.18.5 arrives only via Tauri 2.11's GTK backend, which is cfg(target_os = \"linux\")-gated. The desktop app is built on windows-latest only, always via `tauri build --no-bundle`, and `cargo tree --locked --target x86_64-pc-windows-msvc -i glib` prints 'nothing to print' — the crate is never compiled into anything shipped. No fix exists upstream: Tauri 2.x pins the whole gtk-rs 0.18 stack.",
+      "reason": "glib 0.18.5 arrives only via Tauri 2.11's GTK backend, which is cfg(target_os = \"linux\")-gated. The desktop app is built on windows-latest only, always via `tauri build --no-bundle`, and `cargo tree --locked --target x86_64-pc-windows-msvc -i glib` prints 'nothing to print' \u2014 the crate is never compiled into anything shipped. No fix exists upstream: Tauri 2.x pins the whole gtk-rs 0.18 stack.",
       "accepted_by": "rosco@theexperiential.com",
       "accepted_on": "2026-09-12",
       "expires": "2026-12-12",
@@ -97,7 +97,7 @@
       "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
     },
     "alert:code-scanning:356": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/shared_utils.py:224: config/machine_id is seeded 0o640. The file holds the machine's Firestore document id (today its hostname) — not a secret — and the desktop app runs as the kiosk user, a member of the daemon's group, and must read it (plan decision 4's mode table: the data root is 0750 root:<group>, so 'other' never reaches the file). Owner-only (0o600) would break the app; the rule flags any group bit, so this cannot be satisfied and stay correct.",
+      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/shared_utils.py:224: config/machine_id is seeded 0o640. The file holds the machine's Firestore document id (today its hostname) \u2014 not a secret \u2014 and the desktop app runs as the kiosk user, a member of the daemon's group, and must read it (plan decision 4's mode table: the data root is 0750 root:<group>, so 'other' never reaches the file). Owner-only (0o600) would break the app; the rule flags any group bit, so this cannot be satisfied and stay correct.",
       "accepted_by": "rosco@theexperiential.com",
       "accepted_on": "2026-09-16",
       "expires": "2027-03-16",
@@ -111,11 +111,46 @@
       "revisit": "When Task 3.1 (osadapter/posix.py) lands the POSIX data-root mode table, confirm the group on these paths is the dedicated `_owlette`/`owlette` group and not a general one; then either keep this entry or tighten the mode."
     },
     "alert:code-scanning:354": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/cortex_cli_fetch.py:120: the fetched Claude CLI binary is chmod 0o750 (owner rwx, group rx, no 'other'). The root daemon fetches it into the data-root cache (0750 root:<group>) and the kiosk user's hoot process, a group member, executes it — the group exec bit is the whole point, and the rule flags any group bit. It was 0o755 before this PR; this is already the tightest mode that works.",
+      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/cortex_cli_fetch.py:120: the fetched Claude CLI binary is chmod 0o750 (owner rwx, group rx, no 'other'). The root daemon fetches it into the data-root cache (0750 root:<group>) and the kiosk user's hoot process, a group member, executes it \u2014 the group exec bit is the whole point, and the rule flags any group bit. It was 0o755 before this PR; this is already the tightest mode that works.",
       "accepted_by": "rosco@theexperiential.com",
       "accepted_on": "2026-09-16",
       "expires": "2027-03-16",
       "revisit": "When Task 3.1 (osadapter/posix.py) lands the POSIX data-root mode table, confirm the group on these paths is the dedicated `_owlette`/`owlette` group and not a general one; then either keep this entry or tighten the mode."
+    },
+    "alert:code-scanning:364": {
+      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/shared_utils.py:131: tmp/json.lock is created 0o660. It is the cross-process JSON lock (flock) that BOTH the root daemon and the kiosk user's desktop app take around config.json writes (plan decision 4: 0660 root:<group>, inside a 0770 root:<group> tmp/ with no 'other' access). Owner-only would lock the app out of the config it must write; the rule flags any group bit.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-16",
+      "expires": "2027-03-16",
+      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
+    },
+    "alert:code-scanning:363": {
+      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/osadapter/posix.py:879: an ipc/jobs/<id>.json job file is written 0o640 by the root daemon for the kiosk user's job runner to read (the file seam that replaces the Windows user-session executor on POSIX). Group read is the whole point; ipc/ is 0770 root:<group>, so 'other' never reaches it. Verified on the kiosk VM: the kiosk user reads the job and root reads the result back.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-16",
+      "expires": "2027-03-16",
+      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
+    },
+    "alert:code-scanning:359": {
+      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/configure_site.py:1418: ipc/request_nonce is written 0o640 root:<group>. It is the one-shot nonce the daemon issues and the desktop app must QUOTE in a privileged request (pair/restart/reboot); the app must read it and cannot write it (verified live: a kiosk-user overwrite is refused, a planted symlink is replaced). Owner-only would make every request refusable; the rule flags any group bit.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-16",
+      "expires": "2027-03-16",
+      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
+    },
+    "alert:code-scanning:360": {
+      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/configure_site.py:1526: ipc/requests/<id>.result is the daemon's answer to the app's privileged request, opened 0o640 root:<group> (O_NOFOLLOW|O_NONBLOCK, owner and link count checked) so the app that wrote the request can read the answer. The directory is 0770 root:<group>; 'other' never reaches it.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-16",
+      "expires": "2027-03-16",
+      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
+    },
+    "alert:code-scanning:361": {
+      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/configure_site.py:1531: the O_EXCL fallback open of the same ipc/requests/<id>.result file (taken when a pre-created entry is not the daemon's own regular file), 0o640 root:<group> for the same reason as alert 360.",
+      "accepted_by": "rosco@theexperiential.com",
+      "accepted_on": "2026-09-16",
+      "expires": "2027-03-16",
+      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
     }
   }
 }

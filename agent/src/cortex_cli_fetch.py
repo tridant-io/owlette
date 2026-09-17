@@ -450,9 +450,13 @@ def _download_and_verify(pinned: Dict[str, Any], cache_dir: str) -> Optional[str
             continue
 
         try:
-            # Mode first: the rename then publishes a runnable binary in one
-            # step, and a chmod failure discards the download like any other.
+            # Mode and group first: the rename then publishes a runnable
+            # binary in one step, and a chmod failure discards the download like
+            # any other. 0o750 is only reachable by the kiosk user's hoot
+            # process if the daemon's group owns the file, and the data-root
+            # mode table ran long before this download.
             _apply_executable_mode(actual_path)
+            shared_utils.grant_data_group(actual_path)
             os.replace(actual_path, final_path)
         except OSError as e:
             logger.error(f"Could not install the Claude CLI to {final_path}: {e}")

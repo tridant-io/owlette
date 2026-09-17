@@ -218,7 +218,7 @@ WINDOWS_ONLY_TOOLS = frozenset({
     'configure_gpu_tdr', 'manage_windows_update', 'suppress_setup_screens',
     'manage_notifications', 'configure_power_plan', 'manage_scheduled_task',
     'network_reset', 'registry_operation', 'clean_disk_space',
-    'get_event_logs_filtered', 'manage_windows_feature', 'show_notification',
+    'get_event_logs_filtered', 'manage_windows_feature',
     'run_powershell', 'execute_script',
 })
 
@@ -265,7 +265,13 @@ def check_pending_reboot(params, config):
 
 
 def _show_notification(params, config):
-    """Show a message to whoever is at the machine (osadapter.notify's arm)."""
+    """Show a message to whoever is at the machine.
+
+    The two platforms wire this in opposite directions: on Windows
+    osadapter.notify() calls in here, and off Windows the POSIX arm calls back
+    out to it, because the job seam osadapter owns is the only way a daemon
+    with no session of its own reaches the screen.
+    """
     return _dispatch_platform_tool('show_notification', params, config)
 
 

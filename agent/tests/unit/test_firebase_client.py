@@ -32,6 +32,7 @@ try:
     _before = set(sys.modules)
     with patch.dict("sys.modules", _patches):
         from firebase_client import FirebaseClient, DISPLAY_ALERT_EVENT_TYPES
+        from command_router import COMMAND_DEFERRED
         from connection_manager import ConnectionManager, ConnectionState
         from firestore_rest_client import FirestoreRestClient
         from auth_manager import AuthManager
@@ -730,6 +731,40 @@ class TestTerminalCommandStatus:
         )
         client._mark_command_completed.assert_called_once()
         client._mark_command_failed.assert_not_called()
+
+    def test_a_deferred_command_gets_no_terminal_status_here(
+        self, firebase_client, monkeypatch,
+    ):
+        """A handler that kept working on a thread of its own owns the write.
+        Marking the command here puts a terminal status in front of the
+        progress that handler is still to report - and nothing rewrites a
+        status once the progress has landed on top of it."""
+        client = self._run(firebase_client, COMMAND_DEFERRED, monkeypatch)
+        client._mark_command_completed.assert_not_called()
+        client._mark_command_failed.assert_not_called()
+
+
+@pytest.mark.skipif(
+    sys.platform == 'win32', reason='display_manager imports fine on Windows')
+class TestDisplayProfileOffWindows:
+    """display_manager asserts the Windows x64 ABI while it builds its
+    structures, so off Windows the lazy import raises AssertionError rather
+    than ImportError - and a guard that caught only ImportError put that
+    assertion through every single heartbeat."""
+
+    def test_the_heartbeat_skips_display_enumeration(
+        self, firebase_client, monkeypatch, caplog,
+    ):
+        monkeypatch.delitem(sys.modules, 'display_manager', raising=False)
+        firebase_client._cached_display_profile = {'cached': True}
+
+        with caplog.at_level(logging.DEBUG):
+            assert firebase_client._ensure_display_profile() == {'cached': True}
+
+        # THE negative control: with `except ImportError` the assertion
+        # escapes instead, and the caller logs it as a warning every heartbeat.
+        assert 'not available here' in caplog.text
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
 # TestSendDisplayAlert — the funnels hand every audit action to

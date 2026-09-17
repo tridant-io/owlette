@@ -409,6 +409,7 @@ _REAL_METHODS = [
     '_kill_and_relaunch_locked',
     'handle_unresponsive_process',
     'reached_max_relaunch_attempts',
+    '_seat_absent',
     '_is_restart_prompt_active',
     'log_and_notify',
     '_find_running_process_by_exe',
@@ -416,6 +417,7 @@ _REAL_METHODS = [
     'recover_running_processes',
     '_terminate_processes_for_install',
     'launch_process_as_user',
+    '_record_launch',
     'handle_firebase_command',
     '_get_process_launch_mode',
     'main',
@@ -430,7 +432,7 @@ def service_factory(monkeypatch, decoy_env):
     files preserved IS the simulated service restart.
     """
     import shared_utils
-    import owlette_service
+    import win32process
     from owlette_service import OwletteService
 
     # -- launch seam (installed once per test) ----------------------------
@@ -465,7 +467,7 @@ def service_factory(monkeypatch, decoy_env):
         # (hProcess, hThread, dwProcessId, dwThreadId) of the helper.
         return None, None, popen.pid, 0
 
-    monkeypatch.setattr(owlette_service.win32process, 'CreateProcessAsUser',
+    monkeypatch.setattr(win32process, 'CreateProcessAsUser',
                         _fake_create_process_as_user)
 
     # -- double builder ---------------------------------------------------
@@ -481,6 +483,9 @@ def service_factory(monkeypatch, decoy_env):
             firebase_client=None,
             _shutting_down=False,
             _skip_launch_delay=set(),
+            _seat_probe=None,
+            _seat_probe_thread=threading.get_ident(),
+            _seatless_entries=set(),
             manual_overrides={},
             current_time=datetime.datetime.now(),
             current_timestamp=int(time.time()),
