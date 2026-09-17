@@ -62,8 +62,7 @@ def client(rest_client, tmp_path):
     auth.api_base = 'https://owlette.app/api'
 
     with patch('firebase_client.FirestoreRestClient', return_value=rest_client), \
-         patch('firebase_client.shared_utils') as su, \
-         patch('firebase_client.registry_utils'):
+         patch('firebase_client.shared_utils') as su:
         su.get_data_path.return_value = str(tmp_path)
         su.APP_VERSION = '3.0.1'
         try:

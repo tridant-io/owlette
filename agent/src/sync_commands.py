@@ -31,6 +31,7 @@ import logging
 import threading
 from typing import Any, Dict, Optional, Tuple
 
+import destination_allowlist
 from command_router import CommandRouter
 from destination_allowlist import DestinationAllowlist, DestinationNotAllowedError
 from roost_kill_switch import check_enabled as _roost_is_enabled
@@ -139,6 +140,39 @@ def register_handlers(router: CommandRouter) -> None:
     )
 
 
+# The extract root the fanout sends for every roost with no explicit
+# extractPath. It is the windows default spelled out, and the server cannot
+# know the target's OS, so a POSIX agent swaps in its own default rather than
+# refusing every unconfigured deploy. Agent-side by design: no wire change, so
+# fielded agents keep receiving the literal.
+_LEGACY_DEFAULT_EXTRACT_ROOT = '~/Documents/Owlette'
+_legacy_root_substitution_logged = False
+
+
+def _substitute_legacy_default_root(extract_root: str) -> str:
+    """This OS's default root in place of the server's windows-shaped one.
+
+    Byte-identical on windows, where the literal already IS the default root.
+    A root the operator chose is passed through untouched on every platform.
+    """
+    global _legacy_root_substitution_logged
+
+    normalised = extract_root.replace('\\', '/').rstrip('/')
+    if normalised != _LEGACY_DEFAULT_EXTRACT_ROOT:
+        return extract_root
+    if destination_allowlist._os_family() == 'windows':
+        return extract_root
+
+    substitute = destination_allowlist.default_roots()[0]
+    if not _legacy_root_substitution_logged:
+        _legacy_root_substitution_logged = True
+        logger.info(
+            f"sync_commands: extract root {extract_root!r} is the windows "
+            f"default; using this machine's own default {substitute!r} instead"
+        )
+    return substitute
+
+
 # handlers
 def _handle_sync_pull(cmd_data: dict, cmd_id: str, service: Any) -> str:
     """
@@ -171,7 +205,9 @@ def _handle_sync_pull(cmd_data: dict, cmd_id: str, service: Any) -> str:
 
     try:
         version_url = _require_str(cmd_data, 'version_url')
-        extract_root = _require_str(cmd_data, 'extract_root')
+        extract_root = _substitute_legacy_default_root(
+            _require_str(cmd_data, 'extract_root')
+        )
 
         cancelled = _cancelled_before_distribution('accepted')
         if cancelled:
@@ -575,7 +611,7 @@ def _require_str(d: dict, key: str) -> str:
 def _state_for(service: Any) -> SyncState:
     """
     lazily attach a SyncState to the service so all handlers share one
-    connection. the service owns its lifecycle (closed at SvcStop).
+    connection. the service owns its lifecycle.
     """
     state = getattr(service, '_sync_state', None)
     if state is None:
@@ -606,7 +642,7 @@ def _firestore_reader_for(service: Any) -> Any:
     if reader is not None:
         return reader
 
-    # Tests / MockService can quack like a reader themselves.
+    # Tests can quack like a reader themselves.
     if hasattr(service, 'get_site_doc'):
         service._roost_site_reader = service
         return service

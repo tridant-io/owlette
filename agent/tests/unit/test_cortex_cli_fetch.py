@@ -6,21 +6,25 @@ ensure_cli() is the only thing that puts a CLI back on a fresh machine. These
 tests cover the whole resolution ladder: sidecar cache hit, pin-mismatch
 re-fetch, adoption of an already-matching binary, corrupt-download rejection +
 retry, the unverified bundled fallback, the persisted failure backoff, and the
-give-up path.
+give-up path — plus the per-platform table that decides the pin document, the
+binary's name and its mode bit.
 
-The cache directory is redirected by overriding PROGRAMDATA (shared_utils
-resolves it per call), so nothing here touches the real machine's cache.
+The cache directory is redirected by overriding OWLETTE_DATA_ROOT
+(shared_utils resolves it per call), so nothing here touches the real
+machine's cache.
 """
 
 import hashlib
 import json
 import os
+import sys
 import time
 from unittest.mock import Mock, patch
 
 import pytest
 
 import cortex_cli_fetch
+import shared_utils
 
 
 PINNED_SHA = 'a' * 64
@@ -28,16 +32,39 @@ OTHER_SHA = 'b' * 64
 PINNED_VERSION = '2.1.121'
 DOWNLOAD_URL = 'https://storage.googleapis.com/bucket/cortex-cli/claude.exe?X-Goog-Signature=deadbeef'
 
+# (sys.platform, platform.machine(), pin document, binary name, needs the exec bit).
+# macOS ships one universal2 build and Windows one x64 build (ARM runs it
+# emulated), so those families share one pin across their machines.
+PLATFORM_MATRIX = [
+    ('win32', 'AMD64', 'installer_metadata/cortex_cli_windows_x64', 'claude.exe', False),
+    ('win32', 'ARM64', 'installer_metadata/cortex_cli_windows_x64', 'claude.exe', False),
+    ('darwin', 'arm64', 'installer_metadata/cortex_cli_macos_universal', 'claude', True),
+    ('darwin', 'x86_64', 'installer_metadata/cortex_cli_macos_universal', 'claude', True),
+    ('linux', 'x86_64', 'installer_metadata/cortex_cli_linux_x64', 'claude', True),
+    ('linux', 'aarch64', 'installer_metadata/cortex_cli_linux_arm64', 'claude', True),
+    ('linux', 'arm64', 'installer_metadata/cortex_cli_linux_arm64', 'claude', True),
+]
+
 
 # Helpers / fixtures
 
 @pytest.fixture
 def cache_dir(tmp_path, monkeypatch):
-    """Point %ProgramData% at a temp dir and return the CLI cache directory."""
-    monkeypatch.setenv('PROGRAMDATA', str(tmp_path))
+    """Point the data root at a temp dir and return the CLI cache directory."""
+    monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path))
     path = cortex_cli_fetch.get_cache_dir()
     os.makedirs(path, exist_ok=True)
     return path
+
+
+@pytest.fixture
+def as_platform(monkeypatch):
+    """Run a test as another OS/arch. The whole table resolves from these two
+    values, so a Windows box exercises every leg."""
+    def _apply(sys_platform, machine):
+        monkeypatch.setattr(sys, 'platform', sys_platform)
+        monkeypatch.setattr(shared_utils.platform, 'machine', lambda: machine)
+    return _apply
 
 
 @pytest.fixture
@@ -73,7 +100,7 @@ def write_json(path, data):
 
 
 def cli_path(cache_dir):
-    return os.path.join(cache_dir, cortex_cli_fetch.CLI_FILENAME)
+    return os.path.join(cache_dir, cortex_cli_fetch.get_cli_filename())
 
 
 def sidecar_path(cache_dir):
@@ -139,11 +166,6 @@ class TestReadPinnedMetadata:
     def test_lowercases_checksum(self):
         result = cortex_cli_fetch.read_pinned_metadata(make_db(pinned_doc(sha256='A' * 64)))
         assert result['sha256'] == 'a' * 64
-
-    def test_reads_the_expected_document_path(self):
-        db = make_db(pinned_doc())
-        cortex_cli_fetch.read_pinned_metadata(db)
-        db.get_document.assert_called_once_with('installer_metadata/cortex_cli')
 
     def test_none_db_returns_none(self):
         assert cortex_cli_fetch.read_pinned_metadata(None) is None
@@ -319,7 +341,8 @@ class TestChecksumRejection:
 
         assert result is None
         assert not os.path.exists(cli_path(cache_dir))
-        assert not os.path.exists(os.path.join(cache_dir, cortex_cli_fetch.PARTIAL_FILENAME))
+        assert not os.path.exists(
+            os.path.join(cache_dir, cortex_cli_fetch.get_partial_filename()))
 
     def test_persistent_corruption_gives_up_after_max_attempts(self, cache_dir, no_bundled):
         attempts = {'n': 0}
@@ -362,7 +385,7 @@ class TestBundledCli:
 
     @pytest.fixture
     def bundled(self, tmp_path, monkeypatch):
-        path = tmp_path / 'sdk' / '_bundled' / 'claude.exe'
+        path = tmp_path / 'sdk' / '_bundled' / cortex_cli_fetch.get_cli_filename()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b'bundled-bytes')
         monkeypatch.setattr(cortex_cli_fetch, 'get_bundled_cli_path', lambda: str(path))
@@ -427,15 +450,16 @@ class TestBundledCli:
         mock_download.assert_not_called()
 
     def test_locates_the_sdk_bundled_path(self, tmp_path, monkeypatch):
+        cli_name = cortex_cli_fetch.get_cli_filename()
         package = tmp_path / 'claude_agent_sdk'
         (package / '_bundled').mkdir(parents=True)
         (package / '__init__.py').write_text('')
-        (package / '_bundled' / 'claude.exe').write_bytes(b'x')
+        (package / '_bundled' / cli_name).write_bytes(b'x')
 
         fake_module = Mock()
         fake_module.__file__ = str(package / '__init__.py')
         with patch.dict('sys.modules', {'claude_agent_sdk': fake_module}):
-            assert cortex_cli_fetch.get_bundled_cli_path() == str(package / '_bundled' / 'claude.exe')
+            assert cortex_cli_fetch.get_bundled_cli_path() == str(package / '_bundled' / cli_name)
 
     def test_absent_bundled_path_returns_none(self, tmp_path):
         fake_module = Mock()
@@ -531,6 +555,134 @@ class TestFailurePath:
              patch('installer_utils.download_file', side_effect=fake_download(b'good')), \
              patch('installer_utils.verify_checksum', return_value=True):
             assert cortex_cli_fetch.ensure_cli(make_db(doc)) == cli_path(cache_dir)
+
+
+# Platform matrix
+
+class TestPlatformMatrix:
+    """One agent build serves Windows, macOS and Linux: the pin document, the
+    binary's name and its mode bit all resolve from (osFamily, arch)."""
+
+    @pytest.mark.parametrize('sys_platform,machine,doc_path,filename,executable', PLATFORM_MATRIX)
+    def test_pin_document_is_platform_keyed(self, as_platform, sys_platform, machine,
+                                            doc_path, filename, executable):
+        as_platform(sys_platform, machine)
+
+        assert cortex_cli_fetch.get_metadata_doc_path() == doc_path
+
+    @pytest.mark.parametrize('sys_platform,machine,doc_path,filename,executable', PLATFORM_MATRIX)
+    def test_binary_is_named_per_platform(self, as_platform, sys_platform, machine,
+                                          doc_path, filename, executable):
+        as_platform(sys_platform, machine)
+
+        assert cortex_cli_fetch.get_cli_filename() == filename
+        assert cortex_cli_fetch.get_partial_filename() == filename + '.part'
+
+    @pytest.mark.parametrize('sys_platform,machine,doc_path,filename,executable', PLATFORM_MATRIX)
+    def test_metadata_is_read_from_this_platforms_document(self, as_platform, sys_platform,
+                                                           machine, doc_path, filename,
+                                                           executable):
+        as_platform(sys_platform, machine)
+        db = make_db(pinned_doc())
+
+        cortex_cli_fetch.read_pinned_metadata(db)
+
+        db.get_document.assert_called_once_with(doc_path)
+
+    @pytest.mark.parametrize('sys_platform,machine,doc_path,filename,executable', PLATFORM_MATRIX)
+    def test_download_installs_the_platform_binary_with_its_mode(
+        self, cache_dir, no_bundled, as_platform, sys_platform, machine, doc_path,
+        filename, executable,
+    ):
+        as_platform(sys_platform, machine)
+
+        with patch('installer_utils.download_file', side_effect=fake_download(b'good')), \
+             patch('installer_utils.verify_checksum', return_value=True), \
+             patch('os.chmod') as mock_chmod:
+            result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc()))
+
+        assert result == os.path.join(cache_dir, filename)
+        if executable:
+            # On the partial: the rename then publishes bytes and mode together.
+            mock_chmod.assert_called_once_with(
+                os.path.join(cache_dir, filename + '.part'), 0o750)
+        else:
+            mock_chmod.assert_not_called()
+
+    @pytest.mark.parametrize('sys_platform,machine,doc_path,filename,executable', PLATFORM_MATRIX)
+    def test_bundled_copy_is_looked_up_under_the_platform_name(
+        self, tmp_path, as_platform, sys_platform, machine, doc_path, filename, executable,
+    ):
+        as_platform(sys_platform, machine)
+        package = tmp_path / 'claude_agent_sdk'
+        (package / '_bundled').mkdir(parents=True)
+        (package / '_bundled' / filename).write_bytes(b'x')
+
+        fake_module = Mock()
+        fake_module.__file__ = str(package / '__init__.py')
+        with patch.dict('sys.modules', {'claude_agent_sdk': fake_module}):
+            assert cortex_cli_fetch.get_bundled_cli_path() == str(package / '_bundled' / filename)
+
+    def test_a_chmod_failure_discards_the_download(self, cache_dir, no_bundled, as_platform):
+        """An unrunnable binary is not a usable CLI — nothing is installed."""
+        as_platform('linux', 'x86_64')
+
+        with patch('installer_utils.download_file', side_effect=fake_download(b'good')), \
+             patch('installer_utils.verify_checksum', return_value=True), \
+             patch('os.chmod', side_effect=OSError('read-only file system')):
+            assert cortex_cli_fetch.ensure_cli(make_db(pinned_doc())) is None
+
+        assert not os.path.exists(os.path.join(cache_dir, 'claude'))
+        assert not os.path.exists(os.path.join(cache_dir, 'claude.part'))
+
+    @pytest.mark.parametrize('sys_platform,machine,doc_path,filename,executable', PLATFORM_MATRIX)
+    def test_an_adopted_binary_gets_the_platform_mode(
+        self, cache_dir, no_bundled, as_platform, sys_platform, machine, doc_path,
+        filename, executable,
+    ):
+        """The download is not the only rung that hands back a binary to run."""
+        as_platform(sys_platform, machine)
+        cached = write_cli(cache_dir)
+
+        with patch('installer_utils.verify_checksum', return_value=True), \
+             patch('os.chmod') as mock_chmod:
+            result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc()))
+
+        assert result == cached
+        if executable:
+            mock_chmod.assert_called_once_with(cached, 0o750)
+        else:
+            mock_chmod.assert_not_called()
+
+    def test_an_unverified_fallback_gets_the_platform_mode(self, cache_dir, no_bundled,
+                                                           as_platform):
+        """The pin is unreadable, so this binary is all Cortex has — make it run."""
+        as_platform('linux', 'x86_64')
+        cached = write_cli(cache_dir)
+
+        with patch('os.chmod') as mock_chmod:
+            result = cortex_cli_fetch.ensure_cli(make_db(None))
+
+        assert result == cached
+        mock_chmod.assert_called_once_with(cached, 0o750)
+
+    def test_a_chmod_failure_keeps_an_adopted_binary(self, cache_dir, no_bundled, as_platform):
+        """Best effort off the download path: a read-only SDK copy is usually
+        already runnable, and discarding it would leave nothing."""
+        as_platform('linux', 'x86_64')
+        cached = write_cli(cache_dir)
+
+        with patch('installer_utils.verify_checksum', return_value=True), \
+             patch('os.chmod', side_effect=OSError('read-only file system')):
+            assert cortex_cli_fetch.ensure_cli(make_db(pinned_doc())) == cached
+
+    def test_an_unpublished_platform_keys_its_own_document(self, as_platform):
+        """A family with no build still reports honestly: its pin is missing."""
+        as_platform('freebsd14', 'riscv64')
+
+        assert (cortex_cli_fetch.get_metadata_doc_path()
+                == 'installer_metadata/cortex_cli_freebsd14_riscv64')
+        assert cortex_cli_fetch.get_cli_filename() == 'claude'
 
 
 # Logging hygiene

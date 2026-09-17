@@ -10,7 +10,7 @@ This document captures the architecture and design decisions of the Owlette agen
 ## Module Dependency Graph
 
 ```
-owlette_service.py          Main Windows service (ServiceFramework)
+owlette_service.py          Main service loop (OwletteService + main())
   ├── firebase_client.py    Cloud communication (Firestore REST API)
   │   ├── auth_manager.py   OAuth two-token system (access + refresh)
   │   │   └── secure_storage.py  Encrypted token file (Fernet AES)
@@ -39,15 +39,17 @@ window and the reboot countdown; the service launches it with `--tray` /
 ## Service Lifecycle
 
 ### Startup Flow
+`owlette_runner.py` owns the sequence — `OwletteService` has no constructor.
 ```
-SvcDoRun()
+owlette-host launches owlette_runner.py
  → initialize logging (RotatingFileHandler → C:\ProgramData\Owlette\logs\service.log)
  → upgrade_config() (schema migration)
+ → object.__new__(OwletteService) + _init_state()  (the one place service state is set)
+ → HealthProbe().run() (startup verdict for the tray)
  → lazy import FirebaseClient (FIREBASE_AVAILABLE flag, no crash if missing)
- → if firebase enabled + has OAuth tokens → init FirebaseClient + ConnectionManager
- → recover_running_processes() (adopt PIDs from previous session)
- → launch tray icon as user (schtasks)
- → obtain console user token (for process launching)
+ → if firebase enabled + has OAuth tokens → AuthManager + FirebaseClient + ConnectionManager
+ → _write_service_status_early() + _wire_connection_status_listener()
+ → register signal / console-control handlers, start_scm_stop_watcher()
  → main() loop
 ```
 
@@ -61,15 +63,20 @@ while self.is_alive:
 ```
 
 ### Shutdown Flow
+The SCM stop watcher sees owlette-host report STOP_PENDING; a console control
+event is the other trigger. Both land in `graceful_shutdown(trigger)`, which runs
+at most once per process — first caller wins.
 ```
-SvcStop()
+graceful_shutdown(trigger)
+ → session_state.set_intent_if_none("external_clean")  (before any network call)
+ → firebase_client.enter_shutdown_mode()  (caps the Firestore timeout at 3s)
  → self.is_alive = False (breaks main loop)
+ → log_event(agent_stopped)
  → firebase_client.stop() → marks machine offline, stops listeners
- → close all Owlette GUI windows
- → terminate tray icon process
  → write service_status.json (running=false)
- → signal hWaitStop event (allows Windows SCM to proceed)
 ```
+The desktop app is **not** in the service's process tree and is deliberately left
+running — see `build_detached_launch_command`.
 
 **Key state variables**:
 - `self.is_alive` — service running flag
@@ -264,10 +271,14 @@ Any state → FATAL_ERROR (unrecoverable: machine removed, auth permanently revo
 
 **Key derivation**:
 ```python
-key_material = f"{machine_guid}:{hostname}:owlette-agent"
+key_material = osadapter.key_material() + b":owlette-agent"
 key = base64url(SHA256(key_material))
 ```
-Machine GUID from Windows registry (`HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`).
+`osadapter.key_material()` is the machine binding and nothing else: MachineGuid from the Windows
+registry (`HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`), IOPlatformUUID on macOS,
+`/etc/machine-id` on Linux. The hostname is no longer part of it — a store written under the
+previous `{machine_guid}:{hostname}:owlette-agent` derivation is re-encrypted on first load, and
+the original is kept as `.tokens.enc.v1` for one minor.
 
 **Stored data**: `{refresh_token, access_token, token_expiry, site_id}`
 
@@ -292,7 +303,7 @@ Commands arrive via Firestore listener on `commands/pending/{commandId}`.
 | `shutdown_machine` | — | Set `shuttingDown` flag, run `shutdown /s /t 30` |
 | `cancel_reboot` | — | Run `shutdown /a`, clear `rebooting`/`shuttingDown` flags |
 | `dismiss_reboot_pending` | `process_name` | Clear `rebootPending` flag, reset relaunch counter for process, kill local prompt |
-| `capture_screenshot` | — | IPC to GUI → capture screenshot → upload base64 JPEG to `/api/agent/screenshot` |
+| `capture_screenshot` | — | Capture in the user session → signed-url PUT → `screenshots/finalize` |
 
 ### Machine Flags (Firestore)
 
@@ -401,4 +412,4 @@ Flow:
 - GUI logs: `C:\ProgramData\Owlette\logs\gui.log`
 - Status file: `C:\ProgramData\Owlette\tmp\service_status.json`
 - Config: `C:\ProgramData\Owlette\config\config.json`
-- Debug mode: `cd agent\src && python owlette_service.py debug` (admin prompt)
+- Debug mode: `cd agent\src && python owlette_runner.py --debug` (admin prompt)

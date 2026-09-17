@@ -10,7 +10,6 @@ form and the token normalization that prevents double quoting.
 """
 
 import subprocess
-import sys
 
 import pytest
 
@@ -46,7 +45,7 @@ def test_unspaced_tokens_stay_bare():
     assert cmd == 'cmd.exe /s /c "C:\\ops\\run.bat --verbose"'
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='requires cmd.exe')
+@pytest.mark.windows(reason='requires cmd.exe')
 def test_spaced_path_and_arg_actually_executes(tmp_path):
     # End-to-end: the exact combination that broke the naive list form
     # (>2 quote chars after /c) must launch and receive the arg intact.

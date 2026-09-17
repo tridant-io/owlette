@@ -17,8 +17,10 @@ a future change from going back to relying on a signal that may never arrive.
 
 import json
 import os
+import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -87,6 +89,7 @@ class FakeFirebaseClient:
 
     def __init__(self, fail_log=False, fail_stop=False):
         self.events = []
+        self.flags = []
         self.stop_calls = []
         self.calls = []  # ordered method names — the shutdown sequence matters
         self.shutdown_timeouts = []
@@ -103,6 +106,10 @@ class FakeFirebaseClient:
         if self._fail_log:
             raise RuntimeError('firestore unreachable')
         self.events.append(action)
+
+    def set_machine_flags(self, flags):
+        self.calls.append('set_machine_flags')
+        self.flags.append(flags)
 
     def is_connected(self):
         return self.connected
@@ -130,7 +137,7 @@ def _write_sentinel(path, age_seconds=0, control='stop'):
 
 
 def make_service(firebase_client=None):
-    """An OwletteService with only the shutdown state __init__ would set."""
+    """An OwletteService with only the shutdown state _init_state sets."""
     service = object.__new__(owlette_service.OwletteService)
     service._service_start_time = time.time()
     service.is_alive = True
@@ -254,6 +261,7 @@ class TestGracefulShutdown:
 
 # the SCM stop watcher
 
+@pytest.mark.windows(reason='the SCM and the host sentinel are Windows mechanisms')
 class TestScmStopWatcher:
     @pytest.fixture(autouse=True)
     def sentinel_path(self, tmp_path, monkeypatch):
@@ -410,26 +418,41 @@ class TestScmStopWatcher:
         assert service._shutdown_trigger == 'scm_stop'
         assert client.stop_calls == [False]
 
+    def test_the_poll_interval_fits_inside_the_hosts_kill_budget(self):
+        # owlette-host terminates the agent CHILD_STOP_GRACE (20s) after the
+        # stop control; NSSM did it at ~4.5s. A poll slower than the budget
+        # would notice the stop only after the process was already gone.
+        assert owlette_service.SCM_STOP_POLL_INTERVAL < owlette_service.SCM_STOP_GRACE_SECONDS
+        assert owlette_service.SCM_STOP_POLL_INTERVAL <= 0.5
+
+
+# the startup classifier
+
+def _boot_with_no_shutdown_signal(monkeypatch, last_alive, boot):
+    """A service whose previous session ended without writing an intent."""
+    monkeypatch.setattr(owlette_service.session_state, 'read_state', lambda: {
+        'schema': owlette_service.session_state.SCHEMA_VERSION,
+        'boot_time': last_alive - 3600,
+        'last_alive': last_alive,
+        'version': shared_utils.APP_VERSION,
+        'shutdown_intent': None,
+    })
+    monkeypatch.setattr(
+        owlette_service.session_state, 'init_session', lambda **_kw: True)
+    monkeypatch.setattr(owlette_service.psutil, 'boot_time', lambda: boot)
+    return object.__new__(owlette_service.OwletteService)
+
+
+class TestStartupClassifier:
     def test_the_corroboration_window_is_anchored_on_the_last_heartbeat(self, monkeypatch):
         # The other half of a missed stop: when the agent captured no signal,
-        # the Windows event log is asked whether the shutdown was orderly. The
+        # the OS's own record is asked whether the shutdown was orderly. The
         # search window must hug the last heartbeat — anchoring its far edge on
         # boot time would let an unrelated clean reboot hours later vouch for a
         # crash and hide the outage in between.
-        service = object.__new__(owlette_service.OwletteService)
         last_alive = 1_700_000_000
         boot = last_alive + 7200  # the machine came back two hours later
-
-        monkeypatch.setattr(owlette_service.session_state, 'read_state', lambda: {
-            'schema': owlette_service.session_state.SCHEMA_VERSION,
-            'boot_time': last_alive - 3600,
-            'last_alive': last_alive,
-            'version': shared_utils.APP_VERSION,
-            'shutdown_intent': None,
-        })
-        monkeypatch.setattr(
-            owlette_service.session_state, 'init_session', lambda **_kw: True)
-        monkeypatch.setattr(owlette_service.psutil, 'boot_time', lambda: boot)
+        service = _boot_with_no_shutdown_signal(monkeypatch, last_alive, boot)
 
         captured = {}
 
@@ -445,12 +468,75 @@ class TestScmStopWatcher:
         assert captured['end'] < boot
         assert service._pending_anomaly_event[0] == 'unexpected_reboot'
 
-    def test_the_poll_interval_fits_inside_the_hosts_kill_budget(self):
-        # owlette-host terminates the agent CHILD_STOP_GRACE (20s) after the
-        # stop control; NSSM did it at ~4.5s. A poll slower than the budget
-        # would notice the stop only after the process was already gone.
-        assert owlette_service.SCM_STOP_POLL_INTERVAL < owlette_service.SCM_STOP_GRACE_SECONDS
-        assert owlette_service.SCM_STOP_POLL_INTERVAL <= 0.5
+    def test_no_corroboration_source_is_not_an_unexpected_reboot(self, monkeypatch):
+        # Every orderly restart of a POSIX machine reaches this path: there is
+        # no log to consult, so an absent record is the absence of evidence and
+        # not evidence of a crash. Reporting one would alert on every reboot.
+        last_alive = 1_700_000_000
+        service = _boot_with_no_shutdown_signal(
+            monkeypatch, last_alive, last_alive + 60)
+
+        service._clean_shutdown_in_event_log = lambda start, end: None
+        service._classify_startup_session()
+
+        assert service._pending_anomaly_event is None
+
+        # Negative control: the same boot, on a platform that HAS a record and
+        # found none in the window, is still an unexpected reboot.
+        service._clean_shutdown_in_event_log = lambda start, end: False
+        service._classify_startup_session()
+
+        assert service._pending_anomaly_event[0] == 'unexpected_reboot'
+
+    @pytest.mark.skipif(
+        sys.platform == 'win32', reason='Windows is the platform with the record')
+    def test_a_platform_with_no_event_log_answers_neither_yes_nor_no(self):
+        service = object.__new__(owlette_service.OwletteService)
+
+        assert service._clean_shutdown_in_event_log(1_700_000_000, 1_700_000_600) is None
+
+
+# the manual reboot and shutdown verbs
+
+class TestManualCountdown:
+    """What the dashboard is told and what the OS is given are one constant.
+
+    The Linux arm schedules in whole minutes and never below one, so the
+    30-second countdown both verbs used to announce reached zero with the
+    machine still up and answering - which reads as a hung reboot and invites a
+    second command.
+    """
+
+    @pytest.mark.needs_os_arm
+    @pytest.mark.parametrize('handler,operation,flag,copy', [
+        ('_handle_reboot_machine', 'reboot',
+         'rebootScheduledAt', 'Reboot scheduled in'),
+        ('_handle_shutdown_machine', 'shutdown',
+         'shutdownScheduledAt', 'Shutdown scheduled in'),
+    ])
+    def test_the_announced_delay_is_the_one_the_os_is_given(
+            self, handler, operation, flag, copy, monkeypatch):
+        issued = []
+        monkeypatch.setattr(
+            owlette_service.osadapter, operation,
+            lambda delay, message=None: issued.append(delay))
+        monkeypatch.setattr(
+            owlette_service.session_state, 'set_intent', lambda intent: None)
+        client = FakeFirebaseClient()
+        service = make_service(client)
+
+        before = time.time()
+        result = getattr(service, handler)({})
+
+        countdown = owlette_service.REBOOT_OS_COUNTDOWN_SECONDS
+        # A minute is the coarsest grain any of the three platforms schedules
+        # on, so nothing shorter can be both announced and honoured.
+        assert countdown >= 60
+        assert issued == [countdown]
+        assert result == f'{copy} {countdown} seconds'
+        # The pill runs off the flag rather than the copy, so it carries the
+        # same delay; 30 was what both used to announce.
+        assert client.flags[-1][flag] - before == pytest.approx(countdown, abs=2)
 
 
 # the tray's connection badge
@@ -531,11 +617,41 @@ class TestConnectionStatusListener:
     '_shutdown_trigger',
     '_connection_status_manager',
 ])
-def test_mockservice_mirrors_every_new_attribute(attribute):
-    """owlette_runner.MockService must carry everything OwletteService.__init__
-    sets, or the hosted path raises AttributeError in production."""
-    import pathlib
-    source = pathlib.Path(owlette_service.__file__).with_name('owlette_runner.py')
-    assert f'self.{attribute}' in source.read_text(encoding='utf-8'), (
-        f'{attribute} is missing from MockService.__init__'
-    )
+def test_the_hosted_instance_carries_every_shutdown_attribute(attribute, monkeypatch):
+    """owlette_runner builds the service through _init_state(), the only place
+    service state is set, so the state the stop path reads has to come from there.
+
+    Its predecessor scanned owlette_runner.py for the literal `self.<attr>` and
+    kept passing against a second copy of the attribute wall that had drifted;
+    this builds the object the runner actually hands to main().
+    """
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'read_config', lambda *a, **kw: {})
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'get_api_base_url',
+        lambda: 'https://example.invalid/api')
+
+    service = object.__new__(owlette_service.OwletteService)
+    service._init_state()
+
+    assert hasattr(service, attribute)
+
+
+def test_the_auth_manager_comes_from_the_cloud_client(monkeypatch):
+    """The health and reboot-pending alerts read `_auth_manager`, and when it was
+    a second copy the startup sequence had to assign, it stopped being assigned
+    and both alerts went quiet with nothing to fail on. It is derived now.
+    """
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'read_config', lambda *a, **kw: {})
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'get_api_base_url',
+        lambda: 'https://example.invalid/api')
+
+    service = object.__new__(owlette_service.OwletteService)
+    service._init_state()
+    assert service._auth_manager is None
+
+    auth_manager = object()
+    service.firebase_client = SimpleNamespace(auth_manager=auth_manager)
+    assert service._auth_manager is auth_manager

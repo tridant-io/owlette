@@ -323,7 +323,7 @@ New users default to `member`. Superadmins promote members to `admin` or `supera
 
 1. **Firestore Security Rules** — Database-level enforcement (cannot be bypassed). Helpers: `isSuperadmin()`, `isSiteAdmin(siteId)`, `canAccessSite(siteId)`. See [firestore-rules.md](/docs/setup/firestore-rules#key-functions).
 2. **API Route Middleware** — Server-side helpers resolve sessions, Firebase ID tokens, and `owk_*` API keys. Public API routes use resource-scoped helpers such as `requireSiteAuthAndScope`, `requireMachineAuthAndScope`, `requireChatAuthAndScope`, and lower-level `resolveAuth`/`requireScope`; roost-specific routes use the same scoped-auth pattern. `requireAdminOrIdToken` is reserved for legacy or superadmin-gated platform routes.
-3. **React Components** — `RequireSuperadmin` for platform-scoped routes; `useAuth().isSiteAdmin(siteId)` for site-scoped UI gates.
+3. **React Components** — `RequireAdminAccess` gates the admin panel, with `minRole` naming the tier (`superadmin` for platform-scoped routes, `admin` for site-scoped ones); `useAuth().isSiteAdmin(siteId)` for site-scoped UI gates.
 
 ### how role is determined
 

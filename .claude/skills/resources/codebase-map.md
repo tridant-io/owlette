@@ -52,7 +52,6 @@ Quick reference of everything that exists. Check here before creating new files 
 | `/api/admin/tokens/revoke` | POST | Revoke API token | Admin | No |
 | `/api/setup/generate-token` | POST | Generate admin setup token | Admin | No |
 | `/api/agent/alert` | POST | Agent health + process crash email alerts (Resend) | Agent token | Yes: `firebase_client.py` |
-| `/api/agent/screenshot` | POST | Receive screenshot upload (base64 JPEG) → store in Firestore machine doc | Agent token | Yes: `owlette_service.py` |
 | `/api/webhooks/user-created` | POST | Signup notification email (Resend) | Webhook | No |
 | `/api/test-email` | POST | Test email delivery | Admin | No |
 | `/api/admin/keys/create` | POST | Create API key (`owk_` prefix) | Session (admin) | No |
@@ -159,9 +158,8 @@ Quick reference of everything that exists. Check here before creating new files 
 | `firebase.ts` | Client-side Firebase init (singleton), `getLatestOwletteVersion()`, `sendOwletteUpdateCommand()` |
 | `firebase-admin.ts` | Server-side Admin SDK init (token verification, custom tokens) |
 | `sessionManager.server.ts` | HTTPOnly session via iron-session (create/extend/destroy) |
-| `sessionManager.ts` | Client-side session utilities |
 | `errorHandler.ts` | Firebase error code → user-friendly message mapping |
-| `validators.ts` | Form validation: email, password, siteId, processName, executablePath |
+| `validators.ts` | Form validation: email, password, siteId |
 | `logger.ts` | Structured logging with Firestore operation tracking |
 | `mfaSession.ts` | MFA verification state management |
 | `totp.ts` | TOTP generation for 2FA |

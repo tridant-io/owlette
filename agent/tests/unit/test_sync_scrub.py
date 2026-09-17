@@ -12,7 +12,6 @@ import pytest
 from sync_version import Version, VersionChunk, VersionFile, VERSION_MEDIA_TYPE
 from sync_scrub import (
     DEFAULT_ORPHAN_MIN_AGE_SECONDS,
-    DEFAULT_SCRUB_REPORT_DIR,
     FileDrift,
     ReapReport,
     ScrubReport,

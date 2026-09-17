@@ -14,7 +14,7 @@ pipeline lives in `vm/`.
 | `env-manifest.json` | Canonical env-key registry (keys + metadata, never values). Data file — must stay beside `sync-env.mjs`. |
 | `sync-repo-refs.mjs` | Propagate the GitHub owner/repo from root `package.json` into Cargo.toml, the installer, and docs. |
 | `provision-r2.mjs` | Create the roost R2 buckets + CORS (idempotent). Sole source of truth for R2 CORS; bucket policy lives at `infra/r2/r2-bucket-policy.json`. |
-| `upload-cortex-cli.mjs` | Publish the pinned Claude CLI blob + `installer_metadata/cortex_cli`. Re-run on every claude-agent-sdk bump. |
+| `upload-cortex-cli.mjs` | Publish the pinned Claude CLI blobs + one `installer_metadata/cortex_cli_<osFamily>_<arch>` per platform (and the legacy `cortex_cli` that pre-3.4 agents read). One run per environment takes every platform. Re-run on every claude-agent-sdk bump. |
 | `bootstrap-windows.ps1` | Validate the Windows dev toolchain on a new machine. |
 | `bootstrap-gui-automation.ps1` | Validate/apply GUI-automation rig config (capture rig + e2e runner). Also executed inside guests by `vm/05-prep-guest.ps1`. |
 
@@ -26,6 +26,7 @@ pipeline lives in `vm/`.
 | `scan-firestore-writes.mjs` | `web/package.json` → `npm run scan:firestore-writes` — the standing lockdown invariant: browser control-plane writes must stay at 0 |
 | `check-system-invoker-callers.mjs` | `web/eslint.config.mjs` + a jest twin (`web/__tests__/eslint/system-invoker-allowlist.test.ts`) |
 | `check-status-page-ready.mjs` | Deploy runbooks + `infra/cron-jobs.json` (Instatus status-page readiness) |
+| `checks/loc.sh` | `.github/workflows/loc-metric.yml` (non-blocking, every PR and every push to `dev`/`main`): prints the tree total and the PR's delta from its merge base. |
 
 ## checks/ — on-demand verification
 
@@ -34,6 +35,8 @@ pipeline lives in `vm/`.
 | `checks/smoke-r2-roundtrip.mjs` | R2 chunk-pipeline round-trip against a deployed env (used in deploy runbooks). |
 | `checks/security-boundary-probe.mjs` | 60s synthetic privileged-read probe against dev (`docs/runbooks/security-boundary-monitoring.md`). |
 | `checks/sentinel-emulator.mjs` | Prove Admin SDK writes hit the emulator, not prod. |
+| `checks/loc.sh` | Tracked-line metric the tri-platform and swoop plans are budgeted against: bare total, `--per-dir`, `--against <n>`, `--between <baseRef> <headRef>`. |
+| `checks/loc-baseline.txt` | The metric's anchor total at commit `a49ed4cc`, the reference point for the tri-platform and swoop ledgers. No script reads it — pass the number to `checks/loc.sh --against` by hand. |
 | `check-firebase-admin-namespace.mjs` | Fail on the `firebase-admin` root namespace under `scripts/` and `e2e-machine/` (removed in v14). CI: `.github/workflows/admin-sdk-guard.yml`. Self-tests with `--test`. |
 
 ## migrations/ — one-shot, already executed

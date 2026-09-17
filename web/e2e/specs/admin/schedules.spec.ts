@@ -53,7 +53,7 @@ test.beforeEach(async () => {
 
 async function gotoSchedulesForSeededSite(page: Page) {
   await page.goto('/admin/schedules');
-  // 10s: RequireSuperadmin shows a "verifying permissions..." gate while
+  // 10s: RequireAdminAccess shows a "verifying permissions..." gate while
   // AuthContext hydrates, which races the default 5s on cold-emulator runs.
   await expect(
     page.getByRole('heading', { name: 'schedules', exact: true }),

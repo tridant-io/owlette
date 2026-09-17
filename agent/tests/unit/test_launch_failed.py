@@ -39,6 +39,7 @@ double-initialise the cryptography PyO3 bindings.
 
 import datetime
 import json
+import sys
 import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -76,6 +77,12 @@ class FakeProc:
 
     def exe(self):
         return self._exe
+
+    def status(self):
+        # Util.is_pid_running reads this off Windows to tell a live process
+        # from a zombie the daemon has not reaped yet; a double without it
+        # makes every identity check raise there and nowhere else.
+        return psutil.STATUS_RUNNING
 
 
 def install_process_table(monkeypatch, table):
@@ -134,7 +141,8 @@ def dead_row(entry_id='proc-1', status='RUNNING', timestamp=100):
     return {'id': entry_id, 'status': status, 'timestamp': timestamp}
 
 
-def recorded_row(entry_id='proc-1', create_time=CREATE_TIME, exe=EXE.lower(),
+def recorded_row(entry_id='proc-1', create_time=CREATE_TIME,
+                 exe=shared_utils.normalize_exe_path(EXE),
                  timestamp=100, status='RUNNING'):
     return {'id': entry_id, 'status': status, 'timestamp': timestamp,
             'create_time': create_time, 'exe': exe, 'managed': True,
@@ -254,12 +262,16 @@ def make_launch_service():
         firebase_client=None,
         current_time=datetime.datetime.now(),
         _skip_launch_delay=set(),
+        _seat_probe=None,
+        _seat_probe_thread=threading.get_ident(),
+        _seatless_entries=set(),
         reached_max_relaunch_attempts=MagicMock(return_value=False),
         launch_process_as_user=MagicMock(return_value=None),
         _write_cortex_event=MagicMock(),
     )
-    svc._launch_locked = (
-        OwletteService._launch_locked.__get__(svc, OwletteService))
+    for name in ('_launch_locked', '_seat_absent'):
+        setattr(svc, name,
+                getattr(OwletteService, name).__get__(svc, OwletteService))
     return svc
 
 
@@ -304,9 +316,21 @@ def test_blank_exe_never_launched_stays_inactive(state_file):
     assert svc.last_started['proc-1']['failed'] is True
 
 
-def test_no_pid_launch_writes_launch_failed(state_file, config, tmp_path):
+def test_no_pid_launch_writes_launch_failed(state_file, config, tmp_path,
+                                            monkeypatch):
     """launch_process_as_user returned no PID: the third in-memory-marker
-    site now also surfaces."""
+    site now also surfaces.
+
+    The one case here whose exe_path really is on disk, so the only one
+    that reaches the seat check off Windows. The adapter is stubbed rather
+    than asked: this is about the surfacing, and a machine's seat is not
+    something a test of it should depend on.
+    """
+    import owlette_service
+
+    monkeypatch.setattr(
+        owlette_service, 'osadapter',
+        SimpleNamespace(console_user=lambda: 'kiosk'))
     exe = tmp_path / 'demo-runner.exe'
     exe.write_bytes(b'')
     write_states(state_file, {'4242': dead_row()})
@@ -316,6 +340,36 @@ def test_no_pid_launch_writes_launch_failed(state_file, config, tmp_path):
 
     svc.launch_process_as_user.assert_called_once()
     assert read_states(state_file)['4242']['status'] == 'LAUNCH_FAILED'
+    assert svc.last_started['proc-1']['failed'] is True
+
+
+def test_a_launch_never_attempted_for_want_of_a_seat_surfaces_nothing(
+        state_file, config, tmp_path, monkeypatch):
+    """The one non-failure in this file. Off Windows a box with nobody at a
+    graphical seat refuses every managed launch (plan decision 4), so none is
+    attempted — and a launch that never happened has nothing to surface. A
+    machine at its greeter rewrote this file around a LAUNCH_FAILED row once
+    a minute per entry, for as long as nobody was signed in.
+
+    The in-memory cooldown marker is still set: it is what holds the retry to
+    once a minute until somebody signs in.
+    """
+    import owlette_service
+
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(
+        owlette_service, 'osadapter',
+        SimpleNamespace(console_user=lambda: None))
+    exe = tmp_path / 'demo-runner.exe'
+    exe.write_bytes(b'')
+    write_states(state_file, {'4242': dead_row()})
+    svc = make_launch_service()
+
+    assert svc._launch_locked(dict(ENTRY, exe_path=str(exe)), None) is None
+
+    # The negative control: both of these were the no-PID path's before.
+    svc.launch_process_as_user.assert_not_called()
+    assert read_states(state_file)['4242']['status'] == 'RUNNING'
     assert svc.last_started['proc-1']['failed'] is True
 
 
@@ -435,6 +489,7 @@ def make_cleanup_service(results):
         active_installations={},
         manual_overrides={},
         _skip_launch_delay=set(),
+        _seatless_entries=set(),
         results=results,
     )
     svc.cleanup_stale_tracking_data = (

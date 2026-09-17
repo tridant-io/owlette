@@ -888,39 +888,3 @@ class BatchWriter:
         self.client.batch_write(self.operations)
 
         self.operations = []
-
-
-# Example usage
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    from auth_manager import AuthManager
-
-    auth = AuthManager(api_base="https://dev.owlette.app/api")
-    firestore = FirestoreRestClient(project_id="owlette-dev-3838a", auth_manager=auth)
-
-    firestore.set_document('test/doc1', {
-        'name': 'Test',
-        'count': 42,
-        'active': True,
-        'timestamp': SERVER_TIMESTAMP
-    })
-
-    data = firestore.get_document('test/doc1')
-    print(f"Document data: {data}")
-
-    firestore.update_document('test/doc1', {
-        'count': 43,
-        'nested.field': 'value'
-    })
-
-    doc_ref = firestore.collection('sites').document('abc').collection('machines').document('DESKTOP-001')
-    doc_ref.set({'online': True}, merge=True)
-
-    def on_change(data):
-        print(f"Config changed: {data}")
-
-    listener_thread = firestore.listen_to_document('config/abc/machines/DESKTOP-001', on_change)

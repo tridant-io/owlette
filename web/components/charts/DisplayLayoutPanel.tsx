@@ -18,8 +18,6 @@ import {
   useState,
 } from 'react';
 import { toast } from '@/lib/toast';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -33,6 +31,7 @@ import {
   type MonitorInfo,
 } from '@/hooks/useDisplayState';
 import { useDisplayActions } from '@/hooks/useDisplayActions';
+import { useCommandResult } from '@/hooks/useCommandResult';
 import {
   useAckBanner,
   startAckCountdown,
@@ -59,6 +58,9 @@ interface DisplayLayoutPanelProps {
   machineId: string;
   machineName?: string;
   siteId: string;
+  /** The machine's agent-written `capabilities` map, handed down from the
+   * machines subscription; `displayRemoteApply` gates restore. */
+  capabilities?: Record<string, number>;
   onClose: () => void;
 }
 
@@ -200,6 +202,7 @@ export function DisplayLayoutPanel({
   machineId,
   machineName,
   siteId,
+  capabilities,
   onClose,
 }: DisplayLayoutPanelProps) {
   const { isSiteAdmin, user } = useAuth();
@@ -294,24 +297,13 @@ export function DisplayLayoutPanel({
   );
 
   // Capability handshake on `capabilities.displayRemoteApply` (written by the
-  // agent heartbeat): below version 1 disables restore so a pre-Wave-3 agent
-  // never gets a command it can't dispatch. `null` = no snapshot yet, `0` =
-  // agent said unsupported; both gate off, kept distinct for a future loading state.
-  const [capabilityVersion, setCapabilityVersion] = useState<number | null>(null);
-  useEffect(() => {
-    if (!db || !siteId || !machineId) return;
-    const ref = doc(db, 'sites', siteId, 'machines', machineId);
-    const unsubscribe = onSnapshot(ref, (snap) => {
-      if (!snap.exists()) {
-        setCapabilityVersion(null);
-        return;
-      }
-      const raw = snap.data()?.capabilities?.displayRemoteApply;
-      setCapabilityVersion(typeof raw === 'number' ? raw : null);
-    });
-    return () => unsubscribe();
-  }, [siteId, machineId]);
-  const agentSupportsApply = capabilityVersion !== null && capabilityVersion >= 1;
+  // agent heartbeat, delivered by the machines subscription): below version 1
+  // disables restore so a pre-Wave-3 agent never gets a command it can't dispatch.
+  // The map is agent-written and unvalidated, so anything non-numeric — absent
+  // included — gates off the same way rather than coercing into "supported".
+  const remoteApplyVersion = capabilities?.displayRemoteApply;
+  const agentSupportsApply =
+    typeof remoteApplyVersion === 'number' && remoteApplyVersion >= 1;
 
   // Full drift report, keyed by live-id (live tab) or assigned-id (stored tab).
   // `addedHashes`/`removedHashes` cover what per-field maps can't express, e.g.
@@ -600,43 +592,37 @@ export function DisplayLayoutPanel({
     }
   };
 
-  // Apply self-test: dispatch `test_display_apply` and subscribe to its completed
-  // doc for an inline result. Hidden once remote apply is enabled, so a command
-  // that never lands needs no timeout — closing the panel discards pending state.
-  const [testApplyCmdId, setTestApplyCmdId] = useState<string | null>(null);
-  const [testApplyResult, setTestApplyResult] = useState<string | null>(null);
-  const [testApplyInFlight, setTestApplyInFlight] = useState(false);
+  // Apply self-test: dispatch `test_display_apply` and read its result off the
+  // completed-command doc, through a subscription scoped to that command id.
+  // Hidden once remote apply is enabled, so a command that never lands needs no
+  // timeout — closing the panel discards pending state. Clearing the id both
+  // dismisses the banner and drops the listener.
+  const [testApply, setTestApply] = useState<
+    { machineId: string; cmdId: string } | null
+  >(null);
+  const [testApplyDispatching, setTestApplyDispatching] = useState(false);
+  // Stamped with the machine it was dispatched for: switching the panel to
+  // another machine reads as no command, so the listener drops rather than
+  // waiting on a doc this command can never land in.
+  const testApplyCmdId =
+    testApply?.machineId === machineId ? testApply.cmdId : null;
+  const testApplyResult = useCommandResult(siteId, machineId, testApplyCmdId);
+  const testApplyInFlight =
+    testApplyDispatching || (testApplyCmdId !== null && testApplyResult === null);
 
   const handleTestApply = async () => {
-    setTestApplyResult(null);
-    setTestApplyInFlight(true);
+    setTestApply(null);
+    setTestApplyDispatching(true);
     try {
       const cmdId = await actions.testDisplayApply();
-      setTestApplyCmdId(cmdId);
+      setTestApply({ machineId, cmdId });
+      setTestApplyDispatching(false);
     } catch (e) {
       console.error('Failed to dispatch test_display_apply', e);
       toast.error(`test failed: ${formatError(e)}`);
-      setTestApplyInFlight(false);
+      setTestApplyDispatching(false);
     }
   };
-
-  useEffect(() => {
-    if (!testApplyCmdId || !db || !siteId || !machineId) return;
-    const ref = doc(
-      db, 'sites', siteId, 'machines', machineId, 'commands', 'completed',
-    );
-    const unsubscribe = onSnapshot(ref, (snap) => {
-      if (!snap.exists()) return;
-      const data = snap.data();
-      const entry = data?.[testApplyCmdId];
-      if (!entry || entry.status !== 'completed') return;
-      const result = typeof entry.result === 'string' ? entry.result : 'no result';
-      setTestApplyResult(result);
-      setTestApplyInFlight(false);
-      setTestApplyCmdId(null);
-    });
-    return () => unsubscribe();
-  }, [testApplyCmdId, siteId, machineId]);
 
   // Countdown + auto-revert toast live in useAckBanner's shared 250ms tick, so
   // they fire even when this panel is unmounted.
@@ -1463,7 +1449,7 @@ export function DisplayLayoutPanel({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setTestApplyResult(null)}
+                  onClick={() => setTestApply(null)}
                   className="h-7 w-7 p-0 shrink-0 text-amber-200 hover:bg-amber-500/10 hover:text-amber-100"
                   aria-label="dismiss"
                 >

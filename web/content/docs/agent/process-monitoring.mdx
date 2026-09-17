@@ -170,13 +170,13 @@ At each heartbeat interval, the agent collects and reports (5s when the desktop 
 | **CPU** | `psutil.cpu_percent()` | Overall CPU usage percentage |
 | **Memory** | `psutil.virtual_memory()` | RAM usage percentage |
 | **Disk** | `psutil.disk_usage('/')` | Primary disk usage percentage |
-| **GPU** | GPUtil | GPU usage and VRAM percentage (if available) |
+| **GPU** | NVML (`nvidia-ml-py`) | GPU usage and VRAM percentage (if available) |
 | **CPU Model** | Registry/psutil | CPU model name (e.g., "Intel Core i9-9900X") |
 | **Processes** | Per-process | Status, PID, uptime for each configured process |
 
 GPU monitoring uses separate sources for usage and temperature:
 
-- **GPU usage/VRAM**: GPUtil
+- **GPU usage/VRAM**: pynvml/NVML (NVIDIA only)
 - **GPU temperature**: LibreHardwareMonitor (via the PawnIO driver), then pynvml/NVML as an NVIDIA-only fallback
 - **No GPU**: Gracefully returns 0
 

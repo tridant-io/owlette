@@ -52,7 +52,7 @@ Treat [docs/internal/version-management.md](internal/version-management.md) and 
 
 ## machine-bound state — do not copy across machines
 
-> The agent's encrypted token store, `/ProgramData/Owlette/.tokens.enc`, is bound to MachineGuid + hostname; see [agent/src/secure_storage.py](../agent/src/secure_storage.py) for reference. On any machine transfer, the agent must be re-paired via device code, not migrated. The same rule applies to the agent's local Cortex LLM key.
+> The agent's encrypted token store, `/ProgramData/Owlette/.tokens.enc`, is bound to the machine binding alone — MachineGuid on Windows, IOPlatformUUID on macOS, `/etc/machine-id` on Linux; see [agent/src/secure_storage.py](../agent/src/secure_storage.py) for reference. A store written before the hostname term was dropped is re-encrypted on first load, with the original kept as `.tokens.enc.v1` for one minor. On any machine transfer, the agent must be re-paired via device code, not migrated. The same rule applies to the agent's local Cortex LLM key, which rides the same cipher and migrates with it.
 
 ## known portability gaps (open work)
 

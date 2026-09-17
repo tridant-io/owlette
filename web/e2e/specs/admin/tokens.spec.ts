@@ -69,7 +69,7 @@ test.beforeEach(async () => {
 
 async function gotoTokensForSeededSite(page: Page) {
   await page.goto('/admin/tokens');
-  // 10s: RequireSuperadmin shows a "verifying permissions..." gate while
+  // 10s: RequireAdminAccess shows a "verifying permissions..." gate while
   // AuthContext hydrates against the auth emulator, and the default 5s races
   // that on cold-emulator runs.
   await expect(

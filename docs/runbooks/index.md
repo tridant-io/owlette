@@ -83,7 +83,7 @@ For the "why" behind some decisions, see:
 - [/docs/README.md](../README.md) - what lives in each docs tree
 
 Those docs cover context such as the custom Firestore REST client, machine-bound
-encryption, MockService parity, and repository operating rules.
+encryption, service state initialization, and repository operating rules.
 
 ## known gaps
 

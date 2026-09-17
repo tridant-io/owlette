@@ -1,9 +1,9 @@
 """
 destination_allowlist — where roost may write extracted files on this machine.
 
-The agent runs as SYSTEM, so a customer-controlled extract_path could otherwise
-overwrite C:\\Windows\\System32. FAIL-CLOSED: an empty or missing allowlist
-allows nothing.
+The agent runs as SYSTEM (root on POSIX), so a customer-controlled extract_path
+could otherwise overwrite C:\\Windows\\System32 or /usr/bin. FAIL-CLOSED: an empty
+or missing allowlist allows nothing.
 
 - Roots are absolute and realpath-resolved (not startswith on the literal path),
   which defeats symlink/junction reparse-point escapes.
@@ -12,6 +12,10 @@ allows nothing.
   common attacker primitive (cve-2022-21658, cve-2025-4330).
 - Windows: comparison is case-folded; NTFS is case-insensitive and a casing
   mismatch must not false-reject.
+- POSIX: `~` resolves through the console user, never the root daemon's own
+  home, and is refused outright when nobody is at the machine; the per-OS
+  system-path sets are compared after resolve(), so a symlinked `/etc` arrives
+  as `/private/etc` on macOS.
 
 Out of scope: network/auth (upstream), chunk verification and extracted-file ACLs
 (sync_assembler). Consumed by sync_assembler during the atomic rename.
@@ -23,19 +27,48 @@ import logging
 import os
 import stat
 import sys
-from pathlib import Path
-from typing import Any, Iterable, List, Optional
+import time
+from pathlib import Path, PurePosixPath
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _os_family() -> str:
+    """'windows' | 'macos' | 'linux' — this module's one read of the platform.
+
+    Every OS-specific branch below goes through it, so a test can drive the
+    POSIX arms from any host.
+    """
+    if sys.platform == 'win32':
+        return 'windows'
+    if sys.platform == 'darwin':
+        return 'macos'
+    return 'linux'
+
 
 # Applied when config carries no explicit roots. `~` goes through
 # `_safe_expanduser`, never os.path.expanduser: under LocalSystem the stdlib
 # expands to C:\Windows\System32\config\systemprofile, which _is_dangerous_root
-# then rejects, leaving an empty allowlist.
-# `~/Documents`, not `~/Documents/Owlette`, so a relative extract path like
-# "projects/show1" lands directly under Documents; the empty-field fallback still
-# nests under `Owlette` (see the web-side `resolveExtractPath`).
-DEFAULT_ROOTS: List[str] = ['~/Documents']
+# rejects, and under the root daemon to /root (/var/root on macOS), which is
+# refused before it can be resolved at all.
+# Windows: `~/Documents`, not `~/Documents/Owlette`, so a relative extract path
+# like "projects/show1" lands directly under Documents; the empty-field fallback
+# still nests under `Owlette` (see the web-side `resolveExtractPath`).
+# POSIX: a fixed directory the installer creates, outside every TCC-protected
+# folder and outside every home — the daemon's own `~` is somewhere the kiosk
+# user cannot read.
+_DEFAULT_ROOTS_BY_OS: Dict[str, List[str]] = {
+    'windows': ['~/Documents'],
+    'macos': ['/Users/Shared/Owlette'],
+    'linux': ['/var/lib/owlette/projects'],
+}
+
+
+def default_roots(os_family: Optional[str] = None) -> List[str]:
+    """The roots applied when config carries no `allowed_extract_roots`."""
+    return list(_DEFAULT_ROOTS_BY_OS[os_family or _os_family()])
+
 
 # Last resort under SYSTEM with no identifiable interactive profile: writable by
 # SYSTEM, visible to every user, not under System32.
@@ -55,7 +88,7 @@ _cached_interactive_home_state: Any = _cached_interactive_home_sentinel
 
 def _running_as_system() -> bool:
     """True when the current process is the Windows LocalSystem account."""
-    if sys.platform != 'win32':
+    if _os_family() != 'windows':
         return False
     # USERPROFILE, not USERNAME — a real user named 'SYSTEM' would false-positive.
     profile = os.environ.get('USERPROFILE', '')
@@ -73,7 +106,7 @@ def _resolve_interactive_home() -> Optional[str]:
     None when nothing usable is found (caller falls back to C:\\Users\\Public).
     Never raises.
     """
-    if sys.platform != 'win32':
+    if _os_family() != 'windows':
         return None
 
     # 1. auto-login default user
@@ -145,6 +178,24 @@ def get_interactive_username() -> Optional[str]:
     return Path(home).name or None
 
 
+def get_interactive_user_ids() -> Optional[Tuple[int, int]]:
+    """
+    (uid, gid) the assembler gives extracted files on POSIX, so the kiosk user
+    can read what the root daemon wrote.
+
+    None on Windows, where ownership is expressed as a DACL instead
+    (`sync_assembler._harden_acl`), None when this process is not root — it
+    already owns what it writes — and None when the console user cannot be
+    resolved, leaving the files root-owned rather than guessing an account.
+    """
+    if not _running_as_root():
+        return None
+    entry = _console_user_passwd()
+    if entry is None:
+        return None
+    return entry.pw_uid, entry.pw_gid
+
+
 def _get_interactive_home() -> str:
     """Memoised wrapper around `_resolve_interactive_home` + fallback."""
     global _cached_interactive_home_state
@@ -162,24 +213,125 @@ def _get_interactive_home() -> str:
     return _cached_interactive_home_state
 
 
+class UnresolvableHomeError(ValueError):
+    """`~` under a privileged agent with nobody at the machine.
+
+    Expanding it would hand back the daemon's own home — /root, or /var/root on
+    macOS — which is never where the operator meant their files to go and which
+    they cannot even read, so the path is refused instead of quietly redirected.
+    """
+
+
 def _safe_expanduser(path: str) -> str:
     """
-    os.path.expanduser, except that under LocalSystem `~` redirects to the
-    interactive user's profile (or C:\\Users\\Public) instead of
-    C:\\Windows\\System32\\config\\systemprofile. Everything else is stdlib
-    behaviour, including substituting only a leading `~`.
+    os.path.expanduser, except that a privileged agent's `~` means the human at
+    the machine and not the account the agent runs as: the stdlib expands it to
+    C:\\Windows\\System32\\config\\systemprofile under LocalSystem and to /root
+    (/var/root on macOS) under the root daemon, none of which the operator can
+    see. Raises UnresolvableHomeError when the agent is privileged and there is
+    no interactive session for a bare `~` to stand for. Everything else is
+    stdlib behaviour, including substituting only a leading `~`.
     """
     if not path:
         return path
-    if not _running_as_system():
+    # Every target path validated during a sync comes through here, and
+    # `_privileged_home` costs a console-user lookup on POSIX. Anything
+    # without a leading `~` is what the stdlib would hand back unchanged.
+    if not path.startswith('~'):
+        return path
+    # `~user/...` names its own account, which pwd resolves whoever is at the
+    # machine: only the bare form means "the human here". The stdlib leaves it
+    # unchanged when `user` doesn't exist — desired.
+    if not (path == '~' or path.startswith('~/') or path.startswith('~\\')):
         return os.path.expanduser(path)
-    home = _get_interactive_home()
-    if path == '~':
-        return home
-    if path.startswith('~/') or path.startswith('~\\'):
-        return home + path[1:]
-    # `~user/...`: stdlib leaves it unchanged when `user` doesn't exist — desired.
-    return os.path.expanduser(path)
+    home = _privileged_home()
+    if home is None:
+        return os.path.expanduser(path)
+    return home if path == '~' else home + path[1:]
+
+
+def _privileged_home() -> Optional[str]:
+    """
+    The home `~` must mean while the agent runs privileged, or None when the
+    stdlib answer is already right because the process is its own user.
+
+    Raises UnresolvableHomeError under the root daemon with no console user:
+    there is no interactive session, so there is no home `~` could honestly
+    stand for, and the daemon's own is not an answer.
+    """
+    if _os_family() == 'windows':
+        return _get_interactive_home() if _running_as_system() else None
+    if not _running_as_root():
+        return None
+    entry = _console_user_passwd()
+    if entry is None:
+        raise UnresolvableHomeError(
+            "'~' cannot be resolved: the agent is running as root and nobody is "
+            "signed in at this machine"
+        )
+    return entry.pw_dir
+
+
+def _running_as_root() -> bool:
+    """True when this POSIX process is root — the daemon's normal state."""
+    geteuid = getattr(os, 'geteuid', None)
+    return geteuid is not None and geteuid() == 0
+
+
+# Only a successful lookup is cached for good. A daemon that starts before the
+# kiosk autologin completes has no console user yet, and pinning that answer
+# would leave every later sync of the run root-owned and every `~` root refused
+# until the service restarts. A failure is cached for this long instead: the
+# assembler asks once per extracted file, and on POSIX the lookup asks the OS
+# who is at the console, which a 5,000-file sync must not do 5,000 times.
+_CONSOLE_USER_RETRY_SECONDS = 30.0
+_cached_console_user_passwd: Any = None
+_console_user_failed_at: Optional[float] = None
+
+
+def _console_user_passwd() -> Any:
+    """
+    The `pwd` entry of the user at the machine, named by `osadapter`.
+
+    The logged-in user doesn't change across a service run on a kiosk and the
+    assembler asks once per extracted file, so a resolved entry is kept. None on
+    Windows, when nobody is logged in yet, and when the name has no local
+    account — the last two are retried, and warned about, at most once per
+    `_CONSOLE_USER_RETRY_SECONDS`.
+    """
+    global _cached_console_user_passwd, _console_user_failed_at
+    if _cached_console_user_passwd is not None:
+        return _cached_console_user_passwd
+    if _os_family() == 'windows':
+        return None
+    now = time.monotonic()
+    if (_console_user_failed_at is not None
+            and now - _console_user_failed_at < _CONSOLE_USER_RETRY_SECONDS):
+        return None
+    try:
+        import osadapter
+        username = osadapter.console_user()
+    except Exception as e:
+        _console_user_failed_at = now
+        logger.warning(
+            f"destination_allowlist: could not identify the console user: {e}"
+        )
+        return None
+    if not username:
+        _console_user_failed_at = now
+        return None
+    try:
+        import pwd
+        entry = pwd.getpwnam(username)
+    except (ImportError, KeyError) as e:
+        _console_user_failed_at = now
+        logger.warning(
+            f"destination_allowlist: console user {username!r} has no local "
+            f"account: {e}"
+        )
+        return None
+    _cached_console_user_passwd = entry
+    return entry
 
 # Any reparse point: both IO_REPARSE_TAG_SYMLINK and IO_REPARSE_TAG_MOUNT_POINT.
 # is_symlink() only catches the former.
@@ -220,6 +372,12 @@ class DestinationAllowlist:
                     continue
                 try:
                     expanded = Path(_safe_expanduser(r)).resolve(strict=False)
+                except UnresolvableHomeError as e:
+                    logger.error(
+                        f"destination_allowlist: REFUSING root {r!r}: {e} — give "
+                        f"an absolute path instead"
+                    )
+                    continue
                 except (OSError, ValueError) as e:
                     # ValueError = NULL-byte injection; OSError = transient.
                     logger.warning(
@@ -247,17 +405,18 @@ class DestinationAllowlist:
         """
         Build from {'agent_config': {'allowed_extract_roots': [...]}}.
 
-        Field missing → DEFAULT_ROOTS (installer seeded no override; roost must
-        work out of the box). Field present but empty → fail-closed, an explicit
-        admin opt-out. Otherwise use the items verbatim.
+        Field missing → `default_roots()` (installer seeded no override; roost
+        must work out of the box). Field present but empty → fail-closed, an
+        explicit admin opt-out. Otherwise use the items verbatim.
         """
         agent_config = config.get('agent_config') or {}
         if 'allowed_extract_roots' not in agent_config:
+            defaults = default_roots()
             logger.info(
                 f"destination_allowlist: 'allowed_extract_roots' not set in "
-                f"config — applying DEFAULT_ROOTS {DEFAULT_ROOTS}"
+                f"config — applying this OS's default roots {defaults}"
             )
-            return cls(DEFAULT_ROOTS)
+            return cls(defaults)
         roots = agent_config.get('allowed_extract_roots')
         if not roots:
             logger.warning(
@@ -296,6 +455,8 @@ class DestinationAllowlist:
         # ValueError catches NULL-byte injection (`/path/file\x00.evil`).
         try:
             expanded = Path(_safe_expanduser(target))
+        except UnresolvableHomeError as e:
+            raise DestinationNotAllowedError(str(e)) from e
         except (ValueError, TypeError) as e:
             raise DestinationNotAllowedError(
                 f"invalid characters in target path {target!r}: {e}"
@@ -311,10 +472,12 @@ class DestinationAllowlist:
                 f"target path must be absolute: {target!r}"
             )
 
+        is_windows = _os_family() == 'windows'
+
         # Reject alternate data streams (`file.toe:hidden:$DATA` writes hidden
         # bytes into a stream on the parent) and reserved device names, which
         # Windows redirects to the device regardless of extension.
-        if sys.platform == 'win32':
+        if is_windows:
             for i, part in enumerate(expanded.parts):
                 # part 0 is `C:\\` — the only segment allowed a colon.
                 if i == 0:
@@ -351,12 +514,12 @@ class DestinationAllowlist:
 
         # Defence in depth against cve-2022-21658 / cve-2025-4330: resolve()
         # handles most cases, but re-check every parent for reparse points.
-        if sys.platform == 'win32':
+        if is_windows:
             self._check_no_reparse_points(resolved)
 
         # NTFS is case-insensitive: compare case-folded or 'C:\\Users\\Foo'
         # fails to match 'c:\\users\\foo\\file'.
-        case_fold = sys.platform == 'win32'
+        case_fold = is_windows
         resolved_cmp = _case_fold_path(resolved) if case_fold else resolved
         for root in self._roots:
             root_cmp = _case_fold_path(root) if case_fold else root
@@ -426,42 +589,89 @@ def _case_fold_path(p: Path) -> Path:
     return Path(str(p).casefold())
 
 
+# Refused as extract roots on POSIX: a root that is, contains or sits under one
+# of these hands the root daemon the operating system. Compared after resolve(),
+# which on macOS turns `/etc` into `/private/etc` — the bare `/etc`, `/var` and
+# `/tmp` spellings are listed alongside for a path that never touches the disk.
+# `/` is exact-match only; every absolute path sits under it.
+_POSIX_SYSTEM_PATHS: Dict[str, frozenset] = {
+    'linux': frozenset({
+        '/', '/etc', '/usr', '/bin', '/sbin', '/lib', '/lib64', '/boot',
+        '/var', '/sys', '/proc', '/dev', '/run', '/root',
+    }),
+    'macos': frozenset({
+        '/', '/private/etc', '/private/var', '/private/tmp', '/System',
+        '/Library', '/Applications', '/usr', '/bin', '/sbin', '/var/root',
+        '/etc', '/var', '/tmp',
+    }),
+}
+
+# Carved back out of the sets above: the installer creates these for roost and
+# owns them, so the OS default root is not refused as a child of a system path.
+_POSIX_SYSTEM_PATH_EXCEPTIONS: Dict[str, frozenset] = {
+    'linux': frozenset({'/var/lib/owlette'}),
+    'macos': frozenset({'/Users/Shared/Owlette'}),
+}
+
+_POSIX_FS_ROOT = PurePosixPath('/')
+
+
 def _is_dangerous_root(p: Path) -> bool:
     """
     True for drive roots, system directories and anything else unsafe as an
-    extract root — the agent is SYSTEM, so a root of `C:\\` grants write access to
-    System32 and Program Files. Heuristic; real lockdown is OS-level ACLs.
+    extract root — the agent is SYSTEM, root on POSIX, so a root of `C:\\` or `/`
+    grants write access to System32, Program Files or /usr. Heuristic; real
+    lockdown is OS-level ACLs and modes.
     """
     parts = p.parts
     if len(parts) <= 1:  # drive root: `C:\\` and POSIX `/` are both 1 part
         return True
-    if sys.platform == 'win32':
-        path_str = str(p).casefold()
-        # Reject an entry that IS, CONTAINS, or SITS UNDER a system path. The
-        # descendant case catches innocuously-named links that resolve into system
-        # dirs — __init__ already ran resolve() before this check.
-        system_root = (os.environ.get('SystemRoot') or 'C:\\Windows').casefold()
-        program_files = (os.environ.get('ProgramFiles') or 'C:\\Program Files').casefold()
-        program_files_x86 = (
-            os.environ.get('ProgramFiles(x86)') or 'C:\\Program Files (x86)'
-        ).casefold()
-        for sys_path in (system_root, program_files, program_files_x86):
-            if path_str == sys_path:
-                return True
-            try:
-                # p an ancestor of (or equal to) sys_path?
-                Path(sys_path).relative_to(p)
-                return True
-            except ValueError:
-                pass
-            try:
-                # p a descendant of (or equal to) sys_path?
-                Path(path_str).relative_to(sys_path)
-                return True
-            except ValueError:
-                pass
-    else:
-        dangerous = {'/', '/etc', '/usr', '/bin', '/sbin', '/var', '/sys', '/proc'}
-        if str(p) in dangerous:
+    family = _os_family()
+    if family != 'windows':
+        # PurePosixPath so the comparison is separator-exact wherever it runs.
+        return _is_dangerous_posix_root(PurePosixPath(p.as_posix()), family)
+
+    path_str = str(p).casefold()
+    # Reject an entry that IS, CONTAINS, or SITS UNDER a system path. The
+    # descendant case catches innocuously-named links that resolve into system
+    # dirs — __init__ already ran resolve() before this check.
+    system_root = (os.environ.get('SystemRoot') or 'C:\\Windows').casefold()
+    program_files = (os.environ.get('ProgramFiles') or 'C:\\Program Files').casefold()
+    program_files_x86 = (
+        os.environ.get('ProgramFiles(x86)') or 'C:\\Program Files (x86)'
+    ).casefold()
+    for sys_path in (system_root, program_files, program_files_x86):
+        if path_str == sys_path:
+            return True
+        try:
+            # p an ancestor of (or equal to) sys_path?
+            Path(sys_path).relative_to(p)
+            return True
+        except ValueError:
+            pass
+        try:
+            # p a descendant of (or equal to) sys_path?
+            Path(path_str).relative_to(sys_path)
+            return True
+        except ValueError:
+            pass
+    return False
+
+
+def _is_dangerous_posix_root(p: PurePosixPath, family: str) -> bool:
+    """
+    POSIX arm of `_is_dangerous_root`: refuse a root that IS, CONTAINS or SITS
+    UNDER one of this OS's system paths, minus the carve-outs the installer owns.
+    """
+    for carve_out in _POSIX_SYSTEM_PATH_EXCEPTIONS[family]:
+        if p.is_relative_to(carve_out):
+            return False
+    for sys_path in _POSIX_SYSTEM_PATHS[family]:
+        system = PurePosixPath(sys_path)
+        if p == system:
+            return True
+        if system == _POSIX_FS_ROOT:
+            continue  # the parts check above is what refuses `/` itself
+        if p.is_relative_to(system) or system.is_relative_to(p):
             return True
     return False

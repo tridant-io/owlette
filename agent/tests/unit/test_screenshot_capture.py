@@ -2,36 +2,60 @@
 Unit tests for `screenshot_capture` — the agent-side capture →
 signed-URL upload → finalize pipeline.
 
-The runtime depends on:
-  * the host having `mss` available in the active user's session
-    interpreter (real screen capture)
-  * a callable `user_session_executor` injected by the service that
-    runs Python code via CreateProcessAsUser
-
-In test we substitute the executor with a fake that mimics the
-`OwletteService.execute_in_user_session` contract, and we monkey-patch
-`requests.post` / `requests.put` so no real network calls happen.
+Getting the grab to where the user's screen is belongs to
+`osadapter.capture_screen` — the service's CreateProcessAsUser round-trip on
+Windows, the desktop app's job seam on macOS and Linux — and each arm is held
+to that in test_osadapter_contract.py. What this module owns is everything
+after it: the result dict both arms answer with, the compression, and the three
+network round-trips. So the adapter is stubbed here, and `requests.post` /
+`requests.put` are monkey-patched so no real network calls happen.
 """
 
 from __future__ import annotations
 
 import os
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+import osadapter
+
+
+# The service's user-session executor: handed through to the adapter and
+# opaque to this module, which never calls it.
+EXECUTOR = object()
 
 
 # helpers
 
 
-def _make_executor_result(output_dir: str, payload_bytes: bytes, filename: str = 'screenshot.png'):
-    """Stand in for OwletteService.execute_in_user_session — writes
-    `payload_bytes` into <output_dir>/<filename> and returns the dict
-    contract the real executor produces (outputDir + files + stdout).
+@pytest.fixture
+def capture(monkeypatch, os_arm):
+    """Stand in for this platform's `osadapter.capture_screen`.
 
-    The user-session capture now writes only raw PNG (compression moved
-    service-side), so the default filename is screenshot.png."""
+    raising=False because the operations are served by the package's module
+    __getattr__: none of them is an attribute until something sets one.
+    """
+    grabs = SimpleNamespace(calls=[], result=None)
+
+    def capture_screen(monitor, *, executor, timeout_s):
+        grabs.calls.append(
+            {'monitor': monitor, 'executor': executor, 'timeout_s': timeout_s}
+        )
+        return grabs.result
+
+    monkeypatch.setattr(osadapter, 'capture_screen', capture_screen, raising=False)
+    return grabs
+
+
+def _capture_result(output_dir: str, payload_bytes: bytes, filename: str = 'screenshot.png'):
+    """What a successful capture answers with on any platform: `payload_bytes`
+    written into <output_dir>/<filename>, and the dict naming it.
+
+    The capture writes only raw PNG (compression is the daemon's), so the
+    default filename is screenshot.png."""
     os.makedirs(output_dir, exist_ok=True)
     with open(os.path.join(output_dir, filename), 'wb') as f:
         f.write(payload_bytes)
@@ -45,63 +69,104 @@ def _make_executor_result(output_dir: str, payload_bytes: bytes, filename: str =
     }
 
 
-# user-session capture (returns raw PNG; no compression here)
+# reading the capture back (raw PNG; no compression here)
 
 
-def test_capture_in_user_session_reads_png_from_output_dir(tmp_path):
-    from screenshot_capture import capture_in_user_session
+def test_capture_in_user_session_reads_png_from_output_dir(capture, tmp_path):
+    from screenshot_capture import CAPTURE_TIMEOUT_S, capture_in_user_session
 
     output_dir = str(tmp_path / 'capture')
     payload = b'\x89PNG\r\n' + b'\x00' * 8192  # PNG signature + filler
+    capture.result = _capture_result(output_dir, payload, 'screenshot.png')
 
-    def fake_executor(job_type, code, **kwargs):
-        assert job_type == 'python'
-        assert kwargs.get('trusted') is True  # screenshot must be trusted
-        assert 'import mss' in code
-        # capture code must NOT do PIL/JPEG work in the user session —
-        # that's service-side now.
-        assert 'PIL' not in code
-        return _make_executor_result(output_dir, payload, 'screenshot.png')
+    png_bytes, monitors = capture_in_user_session(EXECUTOR, monitor=0)
 
-    png_bytes, monitors = capture_in_user_session(fake_executor, monitor=0)
     assert png_bytes == payload
     assert monitors == 2
+    # Which monitor, and the budget, are the adapter's to honour; the executor
+    # reaches the Windows arm untouched.
+    assert capture.calls == [
+        {'monitor': 0, 'executor': EXECUTOR, 'timeout_s': CAPTURE_TIMEOUT_S}
+    ]
     # Output dir should be cleaned up so successive captures don't accumulate.
     assert not os.path.exists(output_dir)
 
 
-def test_capture_in_user_session_surfaces_executor_error():
+def test_capture_in_user_session_surfaces_executor_error(capture):
     from screenshot_capture import capture_in_user_session, ScreenshotCaptureError
 
-    def fake_executor(*_a, **_kw):
-        return {'error': 'no interactive session available', 'outputDir': '/tmp/x'}
+    capture.result = {'error': 'no interactive session available', 'outputDir': '/tmp/x'}
 
     with pytest.raises(ScreenshotCaptureError, match='capture: user-session'):
-        capture_in_user_session(fake_executor, monitor=0)
+        capture_in_user_session(EXECUTOR, monitor=0)
 
 
-def test_capture_in_user_session_missing_output_dir():
+def test_capture_in_user_session_missing_output_dir(capture):
     from screenshot_capture import capture_in_user_session, ScreenshotCaptureError
 
-    def fake_executor(*_a, **_kw):
-        return {'files': ['screenshot.png']}  # no outputDir
+    capture.result = {'files': ['screenshot.png']}  # no outputDir
 
     with pytest.raises(ScreenshotCaptureError, match="missing 'outputDir'"):
-        capture_in_user_session(fake_executor, monitor=0)
+        capture_in_user_session(EXECUTOR, monitor=0)
 
 
-def test_capture_in_user_session_no_screenshot_file(tmp_path):
+def test_capture_in_user_session_no_screenshot_file(capture, tmp_path):
     from screenshot_capture import capture_in_user_session, ScreenshotCaptureError
 
-    def fake_executor(*_a, **_kw):
-        return {
-            'outputDir': str(tmp_path),
-            'files': ['other.txt'],
-            'stderr': 'mss is not installed',
-        }
+    output_dir = tmp_path / 'capture'
+    output_dir.mkdir()
+    capture.result = {
+        'outputDir': str(output_dir),
+        'files': ['other.txt'],
+        'stderr': 'mss is not installed',
+    }
 
     with pytest.raises(ScreenshotCaptureError, match='no screenshot file'):
-        capture_in_user_session(fake_executor, monitor=0)
+        capture_in_user_session(EXECUTOR, monitor=0)
+
+    # A job that answered without the file it promised still leaves a result
+    # directory in the seam, and nothing else ever removes one.
+    assert not os.path.exists(output_dir)
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='O_NOFOLLOW and fifos are POSIX')
+def test_a_link_planted_in_the_output_directory_is_not_read(tmp_path):
+    """the output directory is written by the session the grab ran in — the
+    desktop app's own account on POSIX — so a link planted in it must not
+    redirect the daemon's read into a file only root can open."""
+    from screenshot_capture import _read_capture_file
+
+    target = tmp_path / 'secret'
+    target.write_bytes(b'root:*:20704:0:99999:7:::')
+    planted = tmp_path / 'screenshot.png'
+    os.symlink(target, planted)
+
+    with pytest.raises(OSError):
+        _read_capture_file(str(planted))
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='O_NOFOLLOW and fifos are POSIX')
+def test_a_fifo_planted_in_the_output_directory_does_not_stall_the_read(tmp_path):
+    """negative control for the flags: a plain open on a fifo with no writer
+    never returns, and the crash screenshot reads inline on the monitor loop."""
+    import signal
+
+    from screenshot_capture import _read_capture_file
+
+    planted = tmp_path / 'screenshot.png'
+    os.mkfifo(planted)
+
+    def _blocked(signum, frame):
+        raise AssertionError('the capture read blocked on the fifo')
+
+    previous = signal.signal(signal.SIGALRM, _blocked)
+    signal.alarm(3)
+    try:
+        with pytest.raises(OSError):
+            _read_capture_file(str(planted))
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 # service-side JPEG compression
@@ -341,16 +406,14 @@ def test_finalize_screenshot_raises_on_missing_url():
 # full pipeline
 
 
-def test_capture_and_upload_full_pipeline_happy_path(tmp_path):
-    """capture raw PNG (user session) → compress to JPEG (service) →
+def test_capture_and_upload_full_pipeline_happy_path(capture, tmp_path):
+    """capture raw PNG (user session) → compress to JPEG (daemon) →
     upload-url → PUT → finalize."""
     from screenshot_capture import capture_and_upload
 
     output_dir = str(tmp_path / 'capture-run')
     raw_png = b'\x89PNG\r\n' + b'\x00' * 4096
-
-    def fake_executor(*_a, **_kw):
-        return _make_executor_result(output_dir, raw_png, 'screenshot.png')
+    capture.result = _capture_result(output_dir, raw_png, 'screenshot.png')
 
     jpeg_bytes = b'\xff\xd8\xff' + b'\x11' * 2048
 
@@ -377,7 +440,7 @@ def test_capture_and_upload_full_pipeline_happy_path(tmp_path):
         },
     ) as mock_finalize:
         result = capture_and_upload(
-            user_session_executor=fake_executor,
+            user_session_executor=EXECUTOR,
             api_base='https://owlette.app/api',
             site_id='site_a',
             machine_id='mach_x',
@@ -404,20 +467,138 @@ def test_capture_and_upload_full_pipeline_happy_path(tmp_path):
     assert mock_finalize.call_args.kwargs['content_type'] == 'image/jpeg'
 
 
-def test_capture_and_upload_propagates_executor_error(tmp_path):
-    """If the user-session capture step fails, capture_and_upload raises
-    ScreenshotCaptureError before any network call is attempted."""
+def test_capture_and_upload_returns_image_bytes_only_when_asked(capture, tmp_path):
+    """The bytes exist for the local Cortex IPC consumer; every other caller
+    json-dumps this envelope, so they must not appear by default."""
+    from screenshot_capture import capture_and_upload
+
+    output_dir = str(tmp_path / 'capture-run')
+    jpeg_bytes = b'\xff\xd8\xff' + b'\x22' * 512
+
+    def run(**kwargs):
+        # Re-made per run: a successful capture removes the directory it read.
+        capture.result = _capture_result(output_dir, b'\x89PNG\r\n', 'screenshot.png')
+        with patch(
+            'screenshot_capture._compress_to_jpeg',
+            return_value=(jpeg_bytes, 'image/jpeg'),
+        ), patch(
+            'screenshot_capture.request_upload_url',
+            return_value={'uploadUrl': 'https://signed.example/write',
+                          'storagePath': 'p.jpg'},
+        ), patch(
+            'screenshot_capture.upload_to_signed_url'
+        ), patch(
+            'screenshot_capture.finalize_screenshot',
+            return_value={'url': 'https://cdn.example/p.jpg'},
+        ):
+            return capture_and_upload(
+                user_session_executor=EXECUTOR,
+                api_base='https://owlette.app/api',
+                site_id='site_a',
+                machine_id='mach_x',
+                bearer_token='tok',
+                **kwargs,
+            )
+
+    assert 'image_bytes' not in run()
+    assert run(include_image_bytes=True)['image_bytes'] == jpeg_bytes
+
+
+def test_capture_and_upload_applies_the_callers_budget(capture, tmp_path):
+    """A caller on the monitor loop bounds its own worst case: the capture
+    timeout, the retry count, the per-request timeout and the image budget all
+    have to reach the steps that spend the time. The three round-trips are what
+    the crash caller's total is made of — miss one and its 38s budget is 53s."""
+    from screenshot_capture import capture_and_upload
+
+    output_dir = str(tmp_path / 'capture-run')
+    capture.result = _capture_result(output_dir, b'\x89PNG\r\n', 'screenshot.png')
+
+    with patch(
+        'screenshot_capture._compress_to_jpeg',
+        return_value=(b'\xff\xd8\xff', 'image/jpeg'),
+    ) as mock_compress, patch(
+        'screenshot_capture.request_upload_url',
+        return_value={'uploadUrl': 'https://signed.example/write',
+                      'storagePath': 'p.jpg'},
+    ) as mock_issue, patch(
+        'screenshot_capture.upload_to_signed_url'
+    ) as mock_upload, patch(
+        'screenshot_capture.finalize_screenshot',
+        return_value={'url': 'https://cdn.example/p.jpg'},
+    ) as mock_finalize:
+        capture_and_upload(
+            user_session_executor=EXECUTOR,
+            api_base='https://owlette.app/api',
+            site_id='site_a',
+            machine_id='mach_x',
+            bearer_token='tok',
+            max_width=1920,
+            quality=60,
+            capture_timeout_s=8,
+            request_timeout_s=10,
+            max_upload_attempts=1,
+        )
+
+    assert capture.calls[0]['timeout_s'] == 8
+    assert mock_compress.call_args.args[1:] == (1920, 60)
+    assert mock_upload.call_args.kwargs['max_attempts'] == 1
+    assert mock_issue.call_args.kwargs['timeout_s'] == 10
+    assert mock_upload.call_args.kwargs['timeout_s'] == 10
+    assert mock_finalize.call_args.kwargs['timeout_s'] == 10
+
+
+def test_capture_and_upload_keeps_the_default_request_timeouts(capture, tmp_path):
+    """Unset, each round-trip keeps its own default — the on-demand path runs on
+    a worker and should not inherit the crash path's tighter budget."""
+    from screenshot_capture import (
+        capture_and_upload, FINALIZE_TIMEOUT_S, UPLOAD_TIMEOUT_S,
+        UPLOAD_URL_TIMEOUT_S,
+    )
+
+    output_dir = str(tmp_path / 'capture-run')
+    capture.result = _capture_result(output_dir, b'\x89PNG\r\n', 'screenshot.png')
+
+    with patch(
+        'screenshot_capture._compress_to_jpeg',
+        return_value=(b'\xff\xd8\xff', 'image/jpeg'),
+    ), patch(
+        'screenshot_capture.request_upload_url',
+        return_value={'uploadUrl': 'https://signed.example/write',
+                      'storagePath': 'p.jpg'},
+    ) as mock_issue, patch(
+        'screenshot_capture.upload_to_signed_url'
+    ) as mock_upload, patch(
+        'screenshot_capture.finalize_screenshot',
+        return_value={'url': 'https://cdn.example/p.jpg'},
+    ) as mock_finalize:
+        capture_and_upload(
+            user_session_executor=EXECUTOR,
+            api_base='https://owlette.app/api',
+            site_id='site_a',
+            machine_id='mach_x',
+            bearer_token='tok',
+        )
+
+    assert mock_issue.call_args.kwargs['timeout_s'] == UPLOAD_URL_TIMEOUT_S
+    assert mock_upload.call_args.kwargs['timeout_s'] == UPLOAD_TIMEOUT_S
+    assert mock_finalize.call_args.kwargs['timeout_s'] == FINALIZE_TIMEOUT_S
+
+
+def test_capture_and_upload_propagates_capture_error(capture, tmp_path):
+    """If the capture step fails — no session, no desktop app, a seat this
+    platform cannot grab — capture_and_upload raises ScreenshotCaptureError
+    before any network call is attempted."""
     from screenshot_capture import capture_and_upload, ScreenshotCaptureError
 
-    def broken_executor(*_a, **_kw):
-        return {'error': 'no interactive session', 'outputDir': str(tmp_path)}
+    capture.result = {'error': 'no interactive session', 'outputDir': str(tmp_path)}
 
     with patch('screenshot_capture.request_upload_url') as mock_request_url, \
          patch('screenshot_capture.upload_to_signed_url') as mock_upload, \
          patch('screenshot_capture.finalize_screenshot') as mock_finalize:
         with pytest.raises(ScreenshotCaptureError, match='no interactive session'):
             capture_and_upload(
-                user_session_executor=broken_executor,
+                user_session_executor=EXECUTOR,
                 api_base='https://owlette.app/api',
                 site_id='site_a',
                 machine_id='mach_x',

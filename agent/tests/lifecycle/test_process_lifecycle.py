@@ -42,10 +42,7 @@ from .conftest import (
     write_config,
 )
 
-pytestmark = [
-    pytest.mark.windows,
-    pytest.mark.skipif(os.name != 'nt', reason='windows-only process semantics'),
-]
+pytestmark = pytest.mark.windows(reason='windows-only process semantics')
 
 
 def reap(pid):
@@ -278,13 +275,19 @@ def test_schedule_window_stop_terminates_out_of_window_process(
                  '_check_update_status', '_migrate_legacy_roost_cache',
                  '_sweep_legacy_launch_tasks', '_classify_startup_session',
                  '_detect_reboot_success_on_startup',
+                 '_revert_stale_display_sentinel',
                  'start_local_config_watcher', '_try_launch_cortex',
-                 '_process_cortex_ipc_commands', '_diff_and_apply_launch_modes',
+                 '_process_cortex_ipc_commands', '_process_privileged_requests',
+                 '_diff_and_apply_launch_modes',
                  '_check_scheduled_reboot', '_check_display_topology',
                  '_maybe_dispatch_roost_scrub', '_relaunch_if_restarting',
                  'cleanup_stale_tracking_data', 'recover_running_processes',
                  '_check_and_alert_reboot_pending'):
         setattr(svc, stub, MagicMock())
+
+    # The loop branches on this one, so it answers rather than merely records:
+    # a truthy MagicMock would exit the loop for a host restart on the first tick.
+    svc._restart_requested = MagicMock(return_value=False)
 
     def _stop_loop():
         svc.is_alive = False

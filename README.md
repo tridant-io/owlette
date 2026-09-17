@@ -89,13 +89,13 @@ For a new maintainer cloning this repo, start with the [maintainer quickstart](d
 
 ### self-host
 
-**agent (Windows service):**
+**agent (Windows):**
 ```bash
 git clone https://github.com/tridant-io/owlette.git
 cd owlette/agent
 pip install -r requirements.txt
 cd src && python configure_site.py       # pair this machine with a site
-python owlette_service.py install && python owlette_service.py start
+python owlette_runner.py --debug         # elevated: run the agent in the foreground
 ```
 
 **desktop app (tray + configuration window):**

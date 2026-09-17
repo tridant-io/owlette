@@ -1,0 +1,49 @@
+name: line-count metric
+
+# The tri-platform and swoop plans are budgeted in tracked source lines
+# (scripts/checks/loc.sh, anchored at 444,248 on a49ed4cc). This job prints
+# the tree total and, on a pull request, what that PR itself costs measured
+# from its merge base — base.sha is the base branch tip, which stops being
+# the merge base as soon as the base advances. It runs on every PR because
+# the budget is repo-wide, and it never blocks: the number is for the ledger,
+# not a gate.
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+concurrency:
+  group: loc-metric-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege default: grant nothing at the top level, widen per job.
+permissions: {}
+
+jobs:
+  count:
+    name: tracked lines and PR delta
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history: the merge base can be arbitrarily far behind HEAD.
+          fetch-depth: 0
+
+      - name: line-count metric
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          printf 'tracked lines: '
+          sh scripts/checks/loc.sh
+          if [ -n "$BASE_SHA" ]; then
+            MERGE_BASE="$(git merge-base "$BASE_SHA" HEAD)" ||
+              { echo "no merge base with $BASE_SHA; no delta"; exit 0; }
+            printf 'delta vs merge base %s: ' "$MERGE_BASE"
+            sh scripts/checks/loc.sh --between "$MERGE_BASE" HEAD
+          fi

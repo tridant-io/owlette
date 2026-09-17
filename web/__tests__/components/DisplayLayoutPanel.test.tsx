@@ -6,12 +6,13 @@
  * disabled branches, the setAutoRestore call, the admin/read-only fork of the breaker banner, and
  * the breaker reset button.
  *
- * Peer hooks (useDisplayDraft, useDisplayModes, useDisplayEventFeed) are mocked inert so the
- * controlled mocks below are the single source of truth — no real Firestore or sessionStorage.
+ * Peer hooks (useDisplayDraft, useDisplayModes, useDisplayEventFeed, useCommandResult) are mocked
+ * inert so the controlled mocks below are the single source of truth — no real Firestore or
+ * sessionStorage.
  */
 
 import React from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type {
   AssignedLayout,
@@ -32,6 +33,10 @@ jest.mock('@/hooks/useDisplayState', () => {
 
 jest.mock('@/hooks/useDisplayActions', () => ({
   useDisplayActions: jest.fn(),
+}));
+
+jest.mock('@/hooks/useCommandResult', () => ({
+  useCommandResult: jest.fn(),
 }));
 
 jest.mock('@/hooks/useDisplayDraft', () => ({
@@ -91,6 +96,7 @@ jest.mock('@/components/ConfirmDialog', () => ({
 import { DisplayLayoutPanel } from '@/components/charts/DisplayLayoutPanel';
 import { useDisplayState } from '@/hooks/useDisplayState';
 import { useDisplayActions } from '@/hooks/useDisplayActions';
+import { useCommandResult } from '@/hooks/useCommandResult';
 import { useDisplayDraft } from '@/hooks/useDisplayDraft';
 import { useDisplayModes } from '@/hooks/useDisplayModes';
 import { useDisplayEventFeed } from '@/hooks/useDisplayEventFeed';
@@ -99,6 +105,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 
 const mockedUseDisplayState = useDisplayState as jest.MockedFunction<typeof useDisplayState>;
 const mockedUseDisplayActions = useDisplayActions as jest.MockedFunction<typeof useDisplayActions>;
+const mockedUseCommandResult = useCommandResult as jest.MockedFunction<typeof useCommandResult>;
 const mockedUseDisplayDraft = useDisplayDraft as jest.MockedFunction<typeof useDisplayDraft>;
 const mockedUseDisplayModes = useDisplayModes as jest.MockedFunction<typeof useDisplayModes>;
 const mockedUseDisplayEventFeed = useDisplayEventFeed as jest.MockedFunction<typeof useDisplayEventFeed>;
@@ -177,7 +184,7 @@ interface SetupResult {
   setRemoteApplyEnabled: jest.Mock;
 }
 
-/** Wire all five mocked hooks to a controlled state; returns the action spies. */
+/** Wire all six mocked hooks to a controlled state; returns the action spies. */
 function setup(options: SetupOptions = {}): SetupResult {
   const {
     canSiteAdmin = true,
@@ -227,6 +234,9 @@ function setup(options: SetupOptions = {}): SetupResult {
     error: null,
   });
 
+  // No self-test dispatched by default: null reads as "nothing pending".
+  mockedUseCommandResult.mockReturnValue(null);
+
   const setAutoRestore = jest.fn().mockResolvedValue(undefined);
   const resetAutoRestoreBreaker = jest.fn().mockResolvedValue(undefined);
   const captureLayout = jest.fn().mockResolvedValue(undefined);
@@ -263,18 +273,23 @@ function setup(options: SetupOptions = {}): SetupResult {
   };
 }
 
-function renderPanel() {
-  // Mirrors layout.tsx: without TooltipProvider every render throws on the panel's Radix tooltips.
-  return render(
+// Mirrors layout.tsx: without TooltipProvider every render throws on the panel's Radix tooltips.
+function panelElement(capabilities?: Record<string, number>, machineId = 'machine-1') {
+  return (
     <TooltipProvider>
       <DisplayLayoutPanel
-        machineId="machine-1"
+        machineId={machineId}
         machineName="Lobby Display"
         siteId="site-a"
+        capabilities={capabilities}
         onClose={jest.fn()}
       />
-    </TooltipProvider>,
+    </TooltipProvider>
   );
+}
+
+function renderPanel(capabilities?: Record<string, number>) {
+  return render(panelElement(capabilities));
 }
 
 describe('DisplayLayoutPanel — auto-restore UI', () => {
@@ -443,6 +458,93 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
     await user.click(screen.getByTestId('display-auto-restore-reset-button'));
 
     expect(resetAutoRestoreBreaker).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DisplayLayoutPanel — restore capability gate', () => {
+  // `capabilities` arrives as a prop off the machines subscription. Anything
+  // below displayRemoteApply 1 means the agent cannot dispatch the command, so
+  // restore must stay disabled even with a stored layout and restore enabled.
+  it('enables restore at displayRemoteApply 1', () => {
+    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: true });
+    renderPanel({ displayRemoteApply: 1 });
+    expect(screen.getByTestId('display-recall-button')).toBeEnabled();
+  });
+
+  it('disables restore when the agent reports the capability unsupported', () => {
+    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: true });
+    renderPanel({ displayRemoteApply: 0 });
+    expect(screen.getByTestId('display-recall-button')).toBeDisabled();
+  });
+
+  it('disables restore on an agent that sends no capabilities at all', () => {
+    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: true });
+    renderPanel();
+    expect(screen.getByTestId('display-recall-button')).toBeDisabled();
+  });
+
+  it('disables restore when the agent writes the capability as a non-number', () => {
+    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: true });
+    // The map is agent-written and unvalidated, so the declared Record<string, number>
+    // is a compile-time claim only — a string must not coerce into "supported".
+    renderPanel({ displayRemoteApply: '1' } as unknown as Record<string, number>);
+    expect(screen.getByTestId('display-recall-button')).toBeDisabled();
+  });
+});
+
+describe('DisplayLayoutPanel — apply self-test', () => {
+  // The result rides `useCommandResult`, scoped to the dispatched command id:
+  // in-flight is "id set, no result yet", and dismiss clears the id (which drops
+  // the subscription with it).
+  it('disables the test button while the dispatched command is unresolved', async () => {
+    const user = userEvent.setup();
+    const { testDisplayApply } = setup({ canSiteAdmin: true, remoteApplyEnabled: false });
+    renderPanel();
+
+    await user.click(screen.getByTestId('display-test-apply-button'));
+
+    expect(testDisplayApply).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.getByTestId('display-test-apply-button')).toBeDisabled(),
+    );
+    expect(screen.queryByTestId('display-test-apply-result')).not.toBeInTheDocument();
+  });
+
+  it('renders the agent result and dismisses it', async () => {
+    const user = userEvent.setup();
+    setup({ canSiteAdmin: true, remoteApplyEnabled: false });
+    // Mirrors the real hook: a result exists only while its command id is set.
+    mockedUseCommandResult.mockImplementation((_siteId, _machineId, commandId) =>
+      commandId ? 'helper reachable' : null,
+    );
+    renderPanel();
+
+    await user.click(screen.getByTestId('display-test-apply-button'));
+
+    const banner = await screen.findByTestId('display-test-apply-result');
+    expect(banner).toHaveTextContent('helper reachable');
+
+    await user.click(within(banner).getByRole('button', { name: 'dismiss' }));
+    expect(screen.queryByTestId('display-test-apply-result')).not.toBeInTheDocument();
+  });
+
+  it('drops the command when the panel switches to another machine', async () => {
+    const user = userEvent.setup();
+    setup({ canSiteAdmin: true, remoteApplyEnabled: false });
+    mockedUseCommandResult.mockImplementation((_siteId, _machineId, commandId) =>
+      commandId ? 'helper reachable' : null,
+    );
+    const { rerender } = renderPanel();
+
+    await user.click(screen.getByTestId('display-test-apply-button'));
+    await screen.findByTestId('display-test-apply-result');
+
+    // The dashboard swaps machineId on the same panel instance (no key), so a
+    // resolved command must not keep a listener open on the new machine's doc.
+    rerender(panelElement(undefined, 'machine-2'));
+
+    expect(mockedUseCommandResult).toHaveBeenLastCalledWith('site-a', 'machine-2', null);
+    expect(screen.queryByTestId('display-test-apply-result')).not.toBeInTheDocument();
   });
 });
 

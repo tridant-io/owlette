@@ -37,9 +37,10 @@ param(
   [switch]$ConnectNic,
   [string]$SwitchName = "Default Switch",
   # Rename the guest's COMPUTERNAME (requires a reboot to take effect). Windows
-  # generates a random name like DESKTOP-EQGJN15 during OOBE, and Owlette's
-  # machine_id IS the hostname (agent/src/shared_utils.py:151 ->
-  # socket.gethostname()), so the name baked into the golden image becomes the
+  # generates a random name like DESKTOP-EQGJN15 during OOBE, and Owlette seeds
+  # its machine_id from the hostname the first time the agent runs, then keeps
+  # it (agent/src/shared_utils.py -> get_machine_id(), persisted at
+  # config/machine_id), so the name baked into the golden image becomes the
   # machine's identity on the dashboard forever. Set it deliberately.
   [string]$RenameGuest = "",
   # Path to a DPAPI-encrypted PSCredential written by Export-Clixml, readable

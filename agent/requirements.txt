@@ -1,7 +1,6 @@
-pywin32==312  # >=311 required by mcp 2.x (see the claude-agent-sdk note below)
+pywin32==312 ; sys_platform == "win32"  # >=311 required by mcp 2.x (see the claude-agent-sdk note below)
 psutil==7.2.2
 email-validator==2.3.0
-GPUtil==1.4.0
 cryptography==50.0.1
 # Pillow is a DIRECT dependency: screenshot_capture + owlette_service compress
 # captures to JPEG with it. It used to arrive transitively through pystray, which
@@ -29,10 +28,10 @@ mss==9.0.2  # Fast cross-platform screenshot library
 # HardwareMonitor wraps LibreHardwareMonitorLib 0.9.6, which uses the signed
 # PawnIO driver the installer deploys — replaced WinTmp, whose bundled LHM
 # still extracted the blocklisted WinRing0 driver at runtime (python.sys).
-HardwareMonitor==1.2.1
-pythonnet==3.1.0  # HardwareMonitor's CLR bridge (was transitive via WinTmp) — pinned like everything else
-wmi==1.5.1  # DIRECT dependency (hardware_profile + shared_utils disk/BIOS probes); used to arrive transitively through WinTmp
-nvidia-ml-py==13.610.43  # NVIDIA GPU fallback (NVML bindings); also used directly by mcp_tools
+HardwareMonitor==1.2.1 ; sys_platform == "win32"
+pythonnet==3.1.0 ; sys_platform == "win32"  # HardwareMonitor's CLR bridge (was transitive via WinTmp) — pinned like everything else
+wmi==1.5.1 ; sys_platform == "win32"  # DIRECT dependency (hardware_profile + shared_utils disk/BIOS probes); used to arrive transitively through WinTmp
+nvidia-ml-py==13.610.43  # NVML bindings — the GPU load/VRAM/temperature source (shared_utils, mcp_tools)
 
 # hoot (cortex on the wire) — the local Claude Code agent behind hoot turns.
 # Unblocked 2026-09-12: pywin32 306 -> 312 lifts the freeze this pin sat under

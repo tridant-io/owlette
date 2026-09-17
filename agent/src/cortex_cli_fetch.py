@@ -1,15 +1,20 @@
 """
 On-demand fetch of the Claude Code CLI binary that Cortex drives.
 
-``claude-agent-sdk`` vendors it at ``_bundled/claude.exe`` — 241.5 MB, ~60% of
-the pre-3.0.0 installer. ``build_installer_full.bat`` strips it, so this module
-is the only path that puts one back, and only once Cortex is enabled.
+``claude-agent-sdk`` vendors it at ``_bundled/claude.exe`` (``_bundled/claude``
+off Windows) — 241.5 MB, ~60% of the pre-3.0.0 installer.
+``build_installer_full.bat`` strips it, so this module is the only path that
+puts one back, and only once Cortex is enabled.
 
-Pinned by sha256 in ``installer_metadata/cortex_cli``: ``version``,
-``downloadUrl`` (signed), ``sha256``, optional ``size`` (disk-space guard). That
+Pinned by sha256, one document per platform:
+``installer_metadata/cortex_cli_<osFamily>_<arch>``, macOS universal2 under
+``cortex_cli_macos_universal``. Each carries ``version``, ``downloadUrl``
+(signed), ``sha256`` and an optional ``size`` (disk-space guard). That
 collection is world-readable and service-account-write-only, so the agent reads
 it with its normal token and only a trusted server can move the pin. Provision
-with ``scripts/upload-cortex-cli.mjs``.
+with ``scripts/upload-cortex-cli.mjs``, which also keeps the unsuffixed
+``installer_metadata/cortex_cli`` — the only id a pre-3.4 agent reads — pointing
+at the Windows x64 payload.
 
 ``ensure_cli`` resolution order:
 1. Sidecar-verified binary (``cache/claude-cli/version.json``) — no hashing, no
@@ -34,6 +39,7 @@ import logging
 import os
 import shutil
 import time
+from collections import namedtuple
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -43,12 +49,29 @@ logger = logging.getLogger(__name__)
 
 
 CACHE_SUBDIR = os.path.join('cache', 'claude-cli')
-CLI_FILENAME = 'claude.exe'
-PARTIAL_FILENAME = CLI_FILENAME + '.part'
+PARTIAL_SUFFIX = '.part'
 SIDECAR_FILENAME = 'version.json'
 FETCH_STATE_FILENAME = 'fetch_state.json'
 
-METADATA_DOC_PATH = 'installer_metadata/cortex_cli'
+METADATA_DOC_PREFIX = 'installer_metadata/cortex_cli'
+
+_PlatformCli = namedtuple('_PlatformCli', 'filename arch_slot executable')
+
+# What the CLI looks like per OS family. Windows ships ``claude.exe`` and has no
+# mode bit; every other family ships ``claude`` and needs 0750 after the
+# download. ``arch_slot`` pins the id of a family whose build is not
+# arch-specific: macOS is one universal2 binary and Windows is one x64 build that
+# Windows-on-ARM runs emulated (plan decision 12), so neither keys its document
+# id on the machine's arch.
+_PLATFORM_CLI = {
+    'windows': _PlatformCli('claude.exe', 'x64', False),
+    'macos': _PlatformCli('claude', 'universal', True),
+    'linux': _PlatformCli('claude', None, True),
+}
+
+# A family we have never published a CLI for: POSIX shape, arch-keyed id. The
+# pin document then does not exist, which is exactly what ensure_cli reports.
+_UNPUBLISHED_PLATFORM_CLI = _PlatformCli('claude', None, True)
 
 # Complete-but-corrupt bytes are worth one more try; transport flakiness is
 # already retried 3x inside download_file().
@@ -65,8 +88,51 @@ FREE_SPACE_HEADROOM = 1.25
 _SHA256_LENGTH = 64
 
 
+def _platform_cli():
+    """``(pin id suffix, spec)`` for the platform this agent runs on."""
+    family, arch = shared_utils.get_os_family_arch()
+    spec = _PLATFORM_CLI.get(family, _UNPUBLISHED_PLATFORM_CLI)
+    return f"{family}_{spec.arch_slot or arch}", spec
+
+
+def get_cli_filename() -> str:
+    """The CLI's filename here: ``claude.exe`` on Windows, ``claude`` elsewhere."""
+    return _platform_cli()[1].filename
+
+
+def get_partial_filename() -> str:
+    """The in-progress download's filename."""
+    return get_cli_filename() + PARTIAL_SUFFIX
+
+
+def get_metadata_doc_path() -> str:
+    """This platform's pin, e.g. ``installer_metadata/cortex_cli_macos_universal``."""
+    return f"{METADATA_DOC_PREFIX}_{_platform_cli()[0]}"
+
+
+def _apply_executable_mode(path: str) -> None:
+    """Give a freshly installed CLI the exec bit POSIX needs to run it. A no-op
+    on Windows, which has no mode bit to set."""
+    if _platform_cli()[1].executable:
+        # Group-executable, not world: the cache directory belongs to the
+        # daemon's group (the data-root mode table), and that group is how
+        # the kiosk user's hoot process runs the binary.
+        os.chmod(path, 0o750)
+
+
+def _ensure_executable(path: str) -> str:
+    """The same exec bit for a binary we did not install ourselves, best effort:
+    an adopted or fallback CLI can sit in a read-only site-packages, and it is
+    usually already runnable."""
+    try:
+        _apply_executable_mode(path)
+    except OSError as e:
+        logger.warning(f"Could not make the Claude CLI at {path} executable: {e}")
+    return path
+
+
 def get_cache_dir() -> str:
-    """Absolute path of the CLI cache directory (``%ProgramData%\\Owlette\\cache\\claude-cli``)."""
+    """Absolute path of the CLI cache directory (``<data root>/cache/claude-cli``)."""
     return shared_utils.get_data_path(CACHE_SUBDIR)
 
 
@@ -94,7 +160,7 @@ def get_bundled_cli_path() -> Optional[str]:
     if not package_file:
         return None
 
-    candidate = os.path.join(os.path.dirname(package_file), '_bundled', CLI_FILENAME)
+    candidate = os.path.join(os.path.dirname(package_file), '_bundled', get_cli_filename())
     return candidate if os.path.isfile(candidate) else None
 
 
@@ -141,7 +207,7 @@ def _redact_url(url: str) -> str:
 
 
 def read_pinned_metadata(db) -> Optional[Dict[str, Any]]:
-    """Read and validate ``installer_metadata/cortex_cli``.
+    """Read and validate this platform's ``installer_metadata/cortex_cli_*``.
 
     Returns a dict with ``version``, ``downloadUrl``, ``sha256`` and optional int
     ``size``, or None when the doc is missing, malformed, or unreadable.
@@ -150,15 +216,17 @@ def read_pinned_metadata(db) -> Optional[Dict[str, Any]]:
         logger.warning("No Firestore client available — cannot read the pinned CLI metadata")
         return None
 
+    doc_path = get_metadata_doc_path()
+
     try:
-        doc = db.get_document(METADATA_DOC_PATH)
+        doc = db.get_document(doc_path)
     except Exception as e:
-        logger.warning(f"Failed to read {METADATA_DOC_PATH}: {e}")
+        logger.warning(f"Failed to read {doc_path}: {e}")
         return None
 
     if not doc:
         logger.error(
-            f"{METADATA_DOC_PATH} is missing — provision it with "
+            f"{doc_path} is missing — provision it with "
             "scripts/upload-cortex-cli.mjs before enabling Cortex"
         )
         return None
@@ -168,18 +236,18 @@ def read_pinned_metadata(db) -> Optional[Dict[str, Any]]:
     sha256 = doc.get('sha256')
 
     if not isinstance(version, str) or not version.strip():
-        logger.error(f"{METADATA_DOC_PATH}: 'version' is missing or not a string")
+        logger.error(f"{doc_path}: 'version' is missing or not a string")
         return None
     if not isinstance(download_url, str) or not download_url.lower().startswith('https://'):
-        logger.error(f"{METADATA_DOC_PATH}: 'downloadUrl' is missing or not an https url")
+        logger.error(f"{doc_path}: 'downloadUrl' is missing or not an https url")
         return None
     if not isinstance(sha256, str) or len(sha256) != _SHA256_LENGTH:
-        logger.error(f"{METADATA_DOC_PATH}: 'sha256' is missing or not a 64-char digest")
+        logger.error(f"{doc_path}: 'sha256' is missing or not a 64-char digest")
         return None
     try:
         int(sha256, 16)
     except ValueError:
-        logger.error(f"{METADATA_DOC_PATH}: 'sha256' is not hexadecimal")
+        logger.error(f"{doc_path}: 'sha256' is not hexadecimal")
         return None
 
     size = doc.get('size')
@@ -345,8 +413,8 @@ def _download_and_verify(pinned: Dict[str, Any], cache_dir: str) -> Optional[str
     if not _has_free_space(cache_dir, pinned.get('size')):
         return None
 
-    final_path = os.path.join(cache_dir, CLI_FILENAME)
-    partial_path = os.path.join(cache_dir, PARTIAL_FILENAME)
+    final_path = os.path.join(cache_dir, get_cli_filename())
+    partial_path = os.path.join(cache_dir, get_partial_filename())
     size_label = (
         f"{pinned['size'] / (1024 * 1024):.1f} MB" if pinned.get('size') else 'unknown size'
     )
@@ -382,6 +450,13 @@ def _download_and_verify(pinned: Dict[str, Any], cache_dir: str) -> Optional[str
             continue
 
         try:
+            # Mode and group first: the rename then publishes a runnable
+            # binary in one step, and a chmod failure discards the download like
+            # any other. 0o750 is only reachable by the kiosk user's hoot
+            # process if the daemon's group owns the file, and the data-root
+            # mode table ran long before this download.
+            _apply_executable_mode(actual_path)
+            shared_utils.grant_data_group(actual_path)
             os.replace(actual_path, final_path)
         except OSError as e:
             logger.error(f"Could not install the Claude CLI to {final_path}: {e}")
@@ -399,7 +474,7 @@ def _download_and_verify(pinned: Dict[str, Any], cache_dir: str) -> Optional[str
 
 
 def ensure_cli(db=None) -> Optional[str]:
-    """Absolute path to a usable ``claude.exe``, or None.
+    """Absolute path to a usable Claude Code CLI, or None.
 
     Resolution order is in the module docstring. NEVER raises — every failure
     returns None so the caller reports a status instead of crash-looping.
@@ -465,7 +540,7 @@ def _adopt_local_candidate(pinned: Dict[str, Any], cache_dir: str) -> Optional[s
     """
     import installer_utils
 
-    cached = os.path.join(cache_dir, CLI_FILENAME)
+    cached = os.path.join(cache_dir, get_cli_filename())
     candidates = []
     if os.path.isfile(cached):
         candidates.append((cached, 'download'))
@@ -476,6 +551,7 @@ def _adopt_local_candidate(pinned: Dict[str, Any], cache_dir: str) -> Optional[s
     for path, source in candidates:
         logger.info(f"Checking an existing Claude CLI against the pin: {path}")
         if installer_utils.verify_checksum(path, pinned['sha256']):
+            _ensure_executable(path)
             _write_sidecar(path, pinned['version'], pinned['sha256'], source=source)
             logger.info(
                 f"Adopted the existing Claude CLI {pinned['version']} ({source}) — "
@@ -499,12 +575,12 @@ def _unverified_fallback(cache_dir: str) -> Optional[str]:
     copy — it WAS verified when written, even if the sidecar is now gone.
     """
     for path, label in (
-        (os.path.join(cache_dir, CLI_FILENAME), 'cached'),
+        (os.path.join(cache_dir, get_cli_filename()), 'cached'),
         (get_bundled_cli_path(), 'SDK-bundled'),
     ):
         if path and os.path.isfile(path):
             logger.warning(f"Using the {label} Claude CLI without verification: {path}")
-            return path
+            return _ensure_executable(path)
 
     logger.error(
         "No Claude CLI available — Cortex cannot start. Check network access to "

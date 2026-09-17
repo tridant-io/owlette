@@ -9,6 +9,8 @@
  * Auth: `machine=<id>:write` (api-key) or site membership; the agent's own Firebase ID token
  * carries uid + site_id and resolves through `requireMachineAuthAndScope` like any caller.
  * Idempotency deliberately not required — every call mints a fresh single-use url and path.
+ * Rate limited: every agent screenshot — on-demand, crash and live view — is minted here, so an
+ * agent stuck in a capture loop, or a leaked machine credential, cannot drive it unbounded.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -21,6 +23,7 @@ import {
   requireMachineAuthAndScope,
 } from '../../../../../../_shared';
 import { issueScreenshotUploadUrl } from '@/lib/screenshotStorage.server';
+import { withRateLimit } from '@/lib/withRateLimit';
 
 interface RouteParams {
   params: Promise<{ siteId: string; machineId: string }>;
@@ -32,7 +35,7 @@ interface UploadUrlBody {
   contentType?: unknown;
 }
 
-export async function POST(request: NextRequest, { params }: RouteParams) {
+async function handlePost(request: NextRequest, { params }: RouteParams) {
   try {
     const { siteId, machineId } = await params;
 
@@ -88,3 +91,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     );
   }
 }
+
+export const POST = withRateLimit(handlePost, {
+  strategy: 'api',
+  identifier: 'ip',
+});

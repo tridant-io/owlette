@@ -119,7 +119,10 @@ def get_cortex_api_key(config: dict) -> Optional[str]:
     """Retrieve the decrypted LLM API key for Cortex.
 
     The key is stored encrypted in config.json under cortex.apiKeyEncrypted,
-    encrypted with the machine-specific Fernet cipher from SecureStorage.
+    encrypted with the machine-specific Fernet cipher from SecureStorage. config
+    survives an upgrade, so a key provisioned before that cipher dropped its
+    hostname term is re-encrypted here — the same first-read migration the token
+    store gets.
 
     Returns:
         Decrypted API key string, or None if not provisioned.
@@ -131,10 +134,31 @@ def get_cortex_api_key(config: dict) -> Optional[str]:
     try:
         from secure_storage import get_storage
         storage = get_storage()
-        return storage._fernet.decrypt(encrypted.encode('utf-8')).decode('utf-8')
+        api_key, stale = storage.decrypt_value(encrypted)
     except Exception as e:
         logger.error(f"Failed to decrypt Cortex API key: {e}")
         return None
+
+    if stale:
+        _re_encrypt_cortex_api_key(storage, api_key)
+
+    return api_key
+
+
+def _re_encrypt_cortex_api_key(storage, api_key: str) -> None:
+    """Rewrite a Cortex key still held under the pre-migration derivation.
+
+    A failure costs nothing this run: the key keeps reading under the old
+    derivation until the machine is renamed, and the rewrite is retried on the
+    next start.
+    """
+    try:
+        cortex = dict((shared_utils.read_config() or {}).get('cortex') or {})
+        cortex['apiKeyEncrypted'] = storage.encrypt_value(api_key)
+        shared_utils.write_config(['cortex'], cortex)
+        logger.info("Cortex API key re-encrypted under the machine-bound key")
+    except Exception as e:
+        logger.error(f"Failed to re-encrypt the Cortex API key: {e}")
 
 
 # ─── Guardrails ───────────────────────────────────────────────────────────────
@@ -503,7 +527,7 @@ async def main():
 
     site_id = config.get('firebase', {}).get('site_id', '')
     project_id = config.get('firebase', {}).get('project_id') or shared_utils.get_project_id()
-    machine_id = socket.gethostname()
+    machine_id = shared_utils.get_machine_id()
 
     if not site_id:
         logger.error("No site_id in config — exiting")

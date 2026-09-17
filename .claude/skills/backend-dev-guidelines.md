@@ -137,7 +137,7 @@ When a process crashes or fails to start, the agent sends an email alert via the
 - Report all errors to ConnectionManager (centralized state + reconnection)
 - Validate PID ownership (`psutil.Process(pid).exe()` vs configured `exe_path`) during recovery
 - Use atomic file writes for config changes
-- Test with `python owlette_service.py debug` (requires admin prompt)
+- Test with `python owlette_runner.py --debug` (requires admin prompt)
 - Preserve `firebase` config section during any config update
 
 ### Don't
@@ -178,7 +178,7 @@ build_installer_quick.bat
 
 # Debug mode (requires admin prompt)
 cd agent/src
-python owlette_service.py debug
+python owlette_runner.py --debug
 ```
 
 > See `skills/resources/installer-build-system.md` for complete build pipeline documentation.
