@@ -223,6 +223,24 @@ describe('default limits', () => {
     expect(USER_LIMITS[Capability.DEPLOYMENT_MANAGE].perMinute).toBe(30);
     expect(SYSTEM_LIMITS[Capability.MACHINE_EXEC_COMMAND].perMinute).toBe(300);
   });
+
+  it('gives both swoop capabilities a user AND a system limit', () => {
+    // checkRateLimit returns { ok: true } for a capability with no entry, so a
+    // missing row here is not a smaller limit — it is no limit at all.
+    expect(USER_LIMITS[Capability.MACHINE_REMOTE_CONTROL].perMinute).toBe(10);
+    expect(USER_LIMITS[Capability.MACHINE_REMOTE_VIEW].perMinute).toBe(20);
+    expect(SYSTEM_LIMITS[Capability.MACHINE_REMOTE_CONTROL].perMinute).toBe(50);
+    expect(SYSTEM_LIMITS[Capability.MACHINE_REMOTE_VIEW].perMinute).toBe(100);
+  });
+
+  it('rate-limits swoop control more tightly than watching, and both below MACHINE_VIEW', () => {
+    expect(USER_LIMITS[Capability.MACHINE_REMOTE_CONTROL].perMinute).toBeLessThan(
+      USER_LIMITS[Capability.MACHINE_REMOTE_VIEW].perMinute
+    );
+    expect(USER_LIMITS[Capability.MACHINE_REMOTE_VIEW].perMinute).toBeLessThan(
+      USER_LIMITS[Capability.MACHINE_VIEW].perMinute
+    );
+  });
 });
 
 describe('bucketForActor', () => {

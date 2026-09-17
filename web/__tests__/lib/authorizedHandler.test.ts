@@ -4,6 +4,7 @@
  * Unit tests for `authorizedSiteHandler` / `authorizedPlatformHandler` in
  * `web/lib/authorizedHandler.server.ts`: happy path, allow-audit failure → 503,
  * capability + rate-limit kill-switch bypass (and their bypass metadata),
+ * the swoop carve-out from the capability one (BYPASS_EXEMPT_CAPABILITIES),
  * api-key scope never bypassed, site-access 404, capability 403, rate-limit 429,
  * the platform handler's superadmin gate, and the `siteIdParam: 'body'` type error.
  */
@@ -202,6 +203,7 @@ import { NextResponse } from 'next/server';
 import {
   authorizedSiteHandler,
   authorizedPlatformHandler,
+  BYPASS_EXEMPT_CAPABILITIES,
   type SiteIdSource,
 } from '@/lib/authorizedHandler.server';
 import {
@@ -405,6 +407,67 @@ describe('authorizedSiteHandler — kill switches', () => {
     const deny = setCalls.find((c) => (c.payload as { outcome?: string }).outcome === 'deny');
     expect(deny).toBeDefined();
     expect((deny!.payload as { denyReason?: string }).denyReason).toBe('scope_insufficient');
+  });
+});
+
+describe('authorizedSiteHandler — swoop capabilities are exempt from the capability kill switch', () => {
+  it('BYPASS_EXEMPT_CAPABILITIES holds exactly the two swoop capabilities', () => {
+    expect([...BYPASS_EXEMPT_CAPABILITIES].sort()).toEqual(
+      ['MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW'].sort()
+    );
+  });
+
+  it('capability kill switch off: a member is STILL refused MACHINE_REMOTE_CONTROL, with a capability_missing deny row', async () => {
+    configResult = { ...configResult, capability_enforcement: false };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: ['site-a'] }) };
+    setMember('member');
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'MACHINE_REMOTE_CONTROL', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+    const deny = setCalls.find((c) => (c.payload as { outcome?: string }).outcome === 'deny');
+    expect(deny).toBeDefined();
+    expect((deny!.payload as { denyReason?: string }).denyReason).toBe('capability_missing');
+    expect(setCalls.find((c) => (c.payload as { outcome?: string }).outcome === 'allow')).toBeUndefined();
+  });
+
+  it('same switch, same member: an unrelated capability is still waved through', async () => {
+    // The control: the kill switch has to keep working for everything else, or
+    // the exemption would be a blanket re-enable rather than a carve-out.
+    configResult = { ...configResult, capability_enforcement: false };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: ['site-a'] }) };
+    setMember('member');
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'MACHINE_EXEC_COMMAND', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+    const allow = setCalls.find((c) => (c.payload as { outcome?: string }).outcome === 'allow');
+    expect((allow!.payload.metadata as Record<string, unknown>).enforcement_bypassed).toBe('capability');
+  });
+
+  it('capability kill switch off: a member DOES hold MACHINE_REMOTE_VIEW, and its allow audit claims no bypass', async () => {
+    // The exemption re-runs the real check rather than denying outright: a
+    // member watches by matrix, and the audit row must not say the capability
+    // gate was skipped when it was not.
+    configResult = { ...configResult, capability_enforcement: false };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: ['site-a'] }) };
+    setMember('member');
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'MACHINE_REMOTE_VIEW', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(200);
+    const allow = setCalls.find((c) => (c.payload as { outcome?: string }).outcome === 'allow');
+    expect(allow).toBeDefined();
+    expect((allow!.payload.metadata as Record<string, unknown>).enforcement_bypassed).toBeUndefined();
+    expect(allow!.payload.enforcementBypassed).toBe(false);
   });
 });
 
