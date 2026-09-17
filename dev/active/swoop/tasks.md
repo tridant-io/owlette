@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 0/80 complete
+**Progress**: 7/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -50,38 +50,38 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `dev/active/swoop/spikes/0.3-system-spawn-secure-desktop.md` records an observed pass/fail plus a number for each of the six, specifically: the pipe handoff round trip in ms, the handle-list check showing exactly two inherited handles, desktop-switch → first recovered frame after `ACCESS_LOST` in ms for lock / UAC / logon screen, the SAS result, and a written statement that no UAC prompt is raisable with the evidence for it. The restored `SoftwareSASGeneration` state is pasted from `reg query`. The temporary scheduled task is deleted. `cargo clippy -- -D warnings` and `cargo test` pass with the working directory set to `agent/swoop/spikes/securedesk`. The memo ends with a recommendation on the spawn-helper shape for Task 2.1.
   - Blocks: Tasks 2.1 (spawn helper + SwoopManager), 4.3 (input injection), 6.1 (secure desktop + Ctrl+Alt+Del), 7.7 (enable/disable side effects), and the "no UAC prompt anywhere" success criterion.
 
-- [ ] **Task 0.4: Signaling Worker + doorbell prototype** `[agent]` (+`[human]` for deployed numbers)
+- [x] **Task 0.4: Signaling Worker + doorbell prototype** `[agent]` (+`[human]` for deployed numbers)
   - Files: `agent/swoop/spikes/signal-worker/**` (create: wrangler project with its own `package.json` and `wrangler.toml`), `agent/swoop/spikes/doorbell-py/**` (create: own venv + `requirements.txt` pinning `websocket-client` with a reason comment; no imports from `agent/src`), `dev/active/swoop/spikes/0.4-signaling-doorbell.md` (create)
   - Do: Stand up a Worker plus one Durable Object per machine on the **WebSocket hibernation API** (`ctx.acceptWebSocket`, `serializeAttachment` ≤ 16,384 B, auto-pong, unbilled protocol pings — `research/04-nat-turn-signaling.md` §4.3). Routes and message names come from the names registry: `GET /health`, `GET /v1/room/{siteId}/{machineId}` (WS), `POST /v1/ring`, `POST /v1/kill`; messages `hello`, `ring`, `viewer-join`, `host-ready`, `offer`, `answer`, `candidate`, `kill`, `bye`, `error`. Verify EdDSA JWTs with `kid` through WebCrypto and record the exact algorithm identifier workerd accepts for Ed25519; accept **two** active public keys so rotation is not a flag day (`review-3-delivery.md` F6.3). Derive the Durable Object name from the token's `machine` claim, **never** from a client-supplied room id (`review-2-security.md`, "sections that held up"), and apply a per-machine ring cap (review-2 M5). Prove room fan-out and `POST /v1/ring` waking an idle doorbell socket. On the python side, a daemon thread dialling the room with a doorbell JWT and printing ring→callback latency. Run it all on local `wrangler dev`. Never log a JWT, a key or a bundle, not even partially; do not touch `agent/requirements.txt`; do not create `infra/swoop-signal/` (Tasks 1.4 / 2.8 own it); generate test keys inside the spike directory and read no `.env*` or `.claude/.env.local`.
   - Human: deploys the spike Worker to the owner's Cloudflare account (a long-lead item in plan.md) and re-runs the hop-latency pass from this box against the real edge, recording the DO home-location effect.
   - Done when: `dev/active/swoop/spikes/0.4-signaling-doorbell.md` reports, with n: hop latency p50/p95 browser→DO→doorbell locally and (if the account exists) deployed; the workerd Ed25519 algorithm name; a demonstrated `POST /v1/ring` → python callback with a ring-flood result against the cap; and an idle-cost model for 1,000 and 10,000 permanently-connected doorbells computed line by line from the pricing figures in `research/04-nat-turn-signaling.md` §4.3 (20:1 incoming-message billing, hibernation duration-free, per-request and GB-s rates). `npx wrangler dev` starts clean and the spike's own tests pass. The memo ends with a recommendation for Task 1.4's Worker shape.
   - Blocks: Tasks 1.4, 2.3, 2.8, 3.4 and 3.9; the "first frame p50 ≤ 1.5 s with a warm doorbell" criterion.
 
-- [ ] **Task 0.5: Threat model + protocol security design** `[agent]`
+- [x] **Task 0.5: Threat model + protocol security design** `[agent]`
   - Files: `dev/active/swoop/spikes/0.5-threat-model.md` (create). No code.
   - Do: Write the threat model for swoop as designed. Enumerate assets (session bundle, `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY`, `K_session` and per-viewer `k`, TURN credentials, the desktop pixels and the input channel themselves), actors (unauthenticated internet, read-only site member, site admin, API-key holder, local standard user on a kiosk, compromised relay, compromised single agent), and trust boundaries: browser↔API, API↔Worker/DO, Worker↔streamer, service↔streamer (the anonymous pipes), streamer↔browser DTLS, and the install tree on disk. For each boundary give the threats and then show precisely how plan.md **D8–D12** answer them. Carry across **every accepted finding** in `research/review-2-security.md` — C1, C2, H1–H5, M1–M8, L1–L5 — each with its disposition (adopted in decision D-x, owned by task y, or accepted risk with a reason), and do not re-file a settled decision as a discovery. Close with residual risks. Every finding cites file:line. Follow the repo's review-discipline rules: a critical claim needs actor, mechanism and outcome written out, and the full severity ladder is used. Do not modify `firestore.rules` — D12's position is that no change is needed and the memo records the evidence (`firestore.rules:940` catch-all, the only recursive wildcard at `:247`).
   - Done when: `dev/active/swoop/spikes/0.5-threat-model.md` exists with the sections above; every review-2 finding id appears exactly once with a disposition; and the **final section is a security block ready to paste verbatim into `agent/swoop/PROTOCOL.md`** at Task 1.1, covering at minimum: `fp` mandatory with the two negative golden vectors (token without `fp` rejected; `fp` not matching the offer's `a=fingerprint:` rejected); `exp` verified against the bundle's time anchor plus monotonic elapsed, never the kiosk clock; `kid` with a two-key overlap and the defined behaviour on an unknown `kid`; the weight statement putting the defence on `fp` + `exp` rather than `jti`; `k = HKDF(K_session, viewerId)` with `K_session = HKDF(SWOOP_SESSION_MASTER_KEY, sid)`, derived and never stored; and the sid-only contract for the doorbell ring and the Firestore command.
   - Blocks: Task 1.1 (PROTOCOL.md + golden vectors), 1.3, 1.4, 3.2, 3.3, 5.4, 5.5 and the Wave 8 negative e2e tests.
 
-- [ ] **Task 0.6: Doorbell supervision design** `[agent]`
+- [x] **Task 0.6: Doorbell supervision design** `[agent]`
   - Files: `dev/active/swoop/spikes/0.6-doorbell-supervision.md` (create). No code.
   - Do: Design the self-supervision that plan.md's owner ruling makes a documented exception to "never spawn reconnection logic outside `ConnectionManager`". Specify: the state machine (idle → dialling → connected → backoff → circuit-open → disabled-slow → shutdown) with every transition; backoff base, cap, full-jitter rule, failure threshold and half-open probe, chosen as numbers and justified; doorbell-token lifecycle against `POST /api/agent/swoop/doorbell-token`, refresh margin before `exp`, and re-dial on 401; the 403 `swoop_disabled` slow-retry path (name the interval) and how the `swoop_refresh` command forces an immediate re-dial; and thread lifecycle — a daemon thread that observes the service's shutdown path (`owlette_service.py:1397 graceful_shutdown`, `_scm_stop_requested` `:907`/`:1934`) and never blocks the 5-second loop (`SLEEP_INTERVAL = 5`, `owlette_service.py:82`). State that it may *read* `connection_manager.state` to avoid dialling while the machine is offline. Cite the lines that make registration forbidden: `connection_manager.py:698` `register_thread`, watchdog `:765-786`, `report_error` `:436-472`, `FAILURE_THRESHOLD` `:210`, `BACKOFF_BASE`/`BACKOFF_MAX` `:205-206`, `WATCHDOG_INTERVAL` `:217` — a dead supervised thread cycles the **Firestore** connection, so a Cloudflare outage would hit the whole fleet (`review-3-delivery.md` F1). Never log tokens. Write no code and create no `agent/src/swoop_doorbell.py` (Task 2.3 owns it).
   - Done when: `dev/active/swoop/spikes/0.6-doorbell-supervision.md` exists with every parameter given as a number and a reason; a state-transition table; a token-refresh timeline; and a **test plan** whose headline case is: with the signalling origin unreachable for 10 minutes, the agent's `ConnectionState` never leaves CONNECTED and no additional Firestore reconnect is logged — expressed as named cases for `agent/tests/unit/test_swoop_doorbell.py`, which Task 2.3 will write. The memo ends with a recommendation and the reasoning behind the chosen backoff numbers.
   - Blocks: Tasks 2.1 and 2.3; the "a 10-minute signalling outage leaves the agent's Firestore connection CONNECTED" success criterion.
 
-- [ ] **Task 0.7: Install-directory + uninstall-cleanup inventory** `[agent]`
+- [x] **Task 0.7: Install-directory + uninstall-cleanup inventory** `[agent]`
   - Files: `dev/active/swoop/spikes/0.7-install-dir-cleanup.md` (create). No code, no repo file modified.
   - Do: First, **read-only**: record the ACLs of this machine's live install with `icacls` for the directories swoop touches (`C:\ProgramData\Owlette` and its `tools`, `agent`, `app`, `python`, `ipc`, `tmp`, `logs`, `config` and `cache` subdirectories), and settle whether ACEs set by the installer's `[Dirs]` section (`agent/owlette_installer.iss:197-203`) are inherited by directories and files created later by `[Files]` and by `os.makedirs`. Then specify, without writing code: the protected DACL for `{app}\swoop` — SYSTEM:F, Administrators:F, Users:RX, inheritance disabled — modelled on the working pattern at `agent/src/display_manager.py:315-372` (`SetNamedSecurityInfo` with `PROTECTED_DACL_SECURITY_INFORMATION`, plus a `_ipc_dir_dacl_matches`-style idempotence check), applied from the installer **and** re-asserted at service start, as a hard gate (spawn refuses, streamer refuses) rather than best effort. Next, the `.iss` kill-pass semantics: kill by name scoped to the install path exactly as the desktop-app block at `:1176-1183` does, never by PID; the silent-mode delay-until-reboot consequence of a miss (`:1155-1160`); and the version handshake that makes a stale binary safe (agent refuses a streamer whose `version` differs — exit code 11). Then `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` + `SetDllDirectory("")` with every vendor DLL loaded by absolute path (`dxgi.dll`, `d3d11.dll`, `nvEncodeAPI64.dll`, `avrt.dll`, `sas.dll`). Finally the uninstall cleanup inventory. Do not edit `agent/owlette_installer.iss` — it is a guardrailed file and Tasks 2.6 / 7.7 carry the owner-acked edits. Change no ACL and write nothing into the installed tree.
   - Done when: `dev/active/swoop/spikes/0.7-install-dir-cleanup.md` exists with the pasted `icacls` evidence and a yes/no answer on ACE inheritance; the exact DACL specification and where it is applied; the kill-pass and version-handshake semantics; the DLL-search hardening; and an uninstall cleanup inventory naming the firewall rule string and its `New-NetFirewallRule` shape, the `SoftwareSASGeneration` prior-value capture and restore (including "absent" as a restorable state), and the directories to sweep (`{app}\swoop`, `logs\swoop`, `ipc\swoop`) with their `[UninstallRun]` / `[UninstallDelete]` placement. The memo ends with a recommendation and states which items are prerequisites of the separate install-directory security release that gates G4.
   - Blocks: Tasks 1.5, 2.6, 7.7 and gate G4.
 
-- [ ] **Task 0.8: Capture probe** `[agent]`
+- [x] **Task 0.8: Capture probe** `[agent]`
   - Files: `agent/swoop/spikes/capture-probe/**` (create: Rust bin, own `Cargo.toml` with an empty `[workspace]` table), `dev/active/swoop/spikes/0.8-capture-probe.md` (create)
   - Do: Measure DXGI Desktop Duplication on this box (two monitors plus the Parsec Virtual Display Adapter), running as the ordinary interactive user — no elevation, no service involvement. Enumerate every `IDXGIAdapter`/`IDXGIOutput` and report exactly what the Parsec virtual adapter does to enumeration and whether it forces a second capture device (DDA requires the capturing device on the same adapter as the output — `research/03-windows-host-stack.md` §1.1). Then per output: `IDXGIOutput1::DuplicateOutput` / `IDXGIOutput5::DuplicateOutput1`; the `AcquireNextFrame` pacing pattern against DWM (inter-frame interval histogram at timeouts 0 / 1 / 8 / 16 ms — is it vsync-locked?); `GetFrameMoveRects` then `GetFrameDirtyRects` (all move rects before all dirty rects) with counts and coverage on a static desktop, a dragged window and a scrolling page; `GetFramePointerShape` plus `PointerPosition` and `LastMouseUpdateTime == 0`, recording shape type, dimensions and hotspot; static-desktop behaviour as the `DXGI_ERROR_WAIT_TIMEOUT` rate over 60 idle seconds; and `DXGI_ERROR_ACCESS_LOST` — force it with a mode change and with a lock, then measure recreate → first frame. Also record surface format, rotation behaviour, per-output DPI and the virtual-desktop origin, including any negative coordinates (`review-3-delivery.md` F12). Do not implement encode, transport or injection; do not copy any spike binary into `C:\ProgramData\Owlette`.
   - Done when: `dev/active/swoop/spikes/0.8-capture-probe.md` reports every item above as a number with n (histograms as tables), names the Windows build and GPU driver version the run was made on, and ends with a recommendation for Task 3.6 covering the pacing pattern to adopt, the ACCESS_LOST recovery sequence, and whether the Parsec virtual adapter must be filtered out of the output list. `cargo clippy -- -D warnings` and `cargo test` pass with the working directory set to `agent/swoop/spikes/capture-probe`.
   - Blocks: Tasks 3.6 (capture), 4.4 (cursor), 5.7 (capture edge-case spike), 6.4 (displays).
 
-- [ ] **Task 0.9: NVENC configuration validation** `[agent]`
+- [x] **Task 0.9: NVENC configuration validation** `[agent]`
   - Files: `agent/swoop/spikes/nvenc-probe/**` (create: Rust bin + a static page and tiny local http server for the WebCodecs check; own `Cargo.toml` with an empty `[workspace]` table), `dev/active/swoop/spikes/0.9-nvenc-config.md` (create)
   - Do: Validate the encoder settings plan.md D5/D7 assert, on this box's RTX 2080 Ti. Configure NVENC as specified: preset P1, ultra-low-latency tuning, CBR, one-frame VBV (`vbvBufferSize = bitrate / fps`, `vbvInitialDelay` equal), infinite GOP, no B-frames, no lookahead, async encode with depth 1, **single slice**, `B8G8R8A8`/ARGB fed straight in with no shader (`research/03-windows-host-stack.md` §2.2). Measure: (1) the H.264 VUI fix — emit with and without `bitstreamRestrictionFlag=1` + `max_num_reorder_frames=0`, feed both Annex-B streams into a Chrome `VideoDecoder` through WebCodecs from the local page, which POSTs chunk-in→frame-out counts and submit→output milliseconds back to the spike's http server; (2) forced-IDR latency, request → IDR emitted; (3) bitrate reconfigure without an IDR (`NvEncReconfigureEncoder` with no reset) — confirm by parsing the NAL stream; (4) single-slice output confirmed by NAL parsing; (5) HEVC VPS/SPS/PPS present in-band on **every** IRAP; (6) encode latency p50/p95 at 1080p60 and 4K60. Do not build reference-frame invalidation or LTR (deferred — `review-1-latency.md` F4) and do not enable intra-refresh (it makes every frame multi-slice, and Chromium now hard-fails a damaged HEVC picture). Do not copy any spike binary into `C:\ProgramData\Owlette`, and list every crate the spike pulls in — the licence and advisory gate is Task 2.5's, not this spike's.
   - Done when: `dev/active/swoop/spikes/0.9-nvenc-config.md` reports all six as numbers with n, states the driver version and SDK version used, and shows the VUI result as a before/after pair (the claim under test is ~208 ms → ~8 ms). `cargo clippy -- -D warnings` and `cargo test` pass with the working directory set to `agent/swoop/spikes/nvenc-probe`. The memo ends with a recommendation: the exact settings struct Task 3.7 should ship, and any setting the measurement contradicts.
@@ -94,7 +94,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `dev/active/swoop/spikes/0.10-web-presentation.md` reports every item as a number with n, per browser and version, with an explicit one-line verdict on the transferable-`RTCDataChannel` disagreement naming which source was right; and ends with a recommendation for the presentation stack Task 3.12 should ship, including the fallback order and what Firefox loses.
   - Blocks: Tasks 3.11, 3.12 and 2.12 (browser matrix spike); informs the interpretation of 0.2's arm C, but 0.2 does not wait on it.
 
-- [ ] **Task 0.11: Record the live-view-webrtc reversal** `[agent]`
+- [x] **Task 0.11: Record the live-view-webrtc reversal** `[agent]`
   - Files (all modify): `cli/src/commands/machine.ts` (the stub at `:427-442` — `reason` and `futurePlan` — plus the header comment at `:14-15`), `cli/__tests__/commands/stubs.test.ts` (fixture `futurePlanSubstr` at `:42`; the assertions at `:108` and `:138` read that fixture and need no edit), `cli/__tests__/commands/readiness-docs.test.ts` (`:60`), `web/content/docs/cli/readiness.mdx` (`:60`), `web/content/docs/cli/overview.mdx` (`:165`, `:234`), `web/content/docs/cli/reference/machine.mdx` (`:3`, `:133`, `:147-149`, `:152`)
   - Do: The deferred CLI stub still points at the abandoned `live-view-webrtc` plan; repoint it at swoop. Replace the `futurePlan` value `public-api deferred: live-view-webrtc` with `public-api deferred: swoop` and reword `reason` so it says remote desktop is shipping as swoop and the verb lands with it. Keep the verb name `live-view`, the exit code 3, the envelope keys and the `stubExit` shape exactly as they are — a `swoop` CLI verb is Task 8.5's, not this one's. Then move every place that pins the old string in lockstep: the test fixture, `readiness-docs.test.ts:60`, and the four doc lines. All copy is lowercase per the repo's UI-copy rule. Note the trap in `readiness-docs.test.ts:38-49`: it forbids `dev/active/live-view-webrtc` appearing in CLI docs, so the replacement must not introduce `dev/active/swoop` either — reference the feature, not the plan directory. Do not touch `docs/internal/public-api-developer-preview-checklist.md`, do not add a new CLI command, and do not change `cli/bin/owlette` (it has uncommitted local changes).
   - Done when: `cd cli && npm test` passes (both `stubs.test.ts` and `readiness-docs.test.ts` green), `cd cli && npm run lint` and `cd cli && npm run build` are clean, `grep -rn "live-view-webrtc" cli/ web/content/` returns only `cli/__tests__/commands/readiness-docs.test.ts:40`, the stale-needle guard, which stays as it is, and `owlette machine live-view m-1 --site s-1 --json` still exits 3 with `ok:false, stub:true` and a `future_plan` naming swoop.
@@ -836,3 +836,75 @@ Not tasks. Each gets its own `/plan` when its trigger fires (copied from `plan.m
   security, delivery) and four drafting passes; evidence in `research/`. Owner rulings recorded at the top of
   plan.md. Ready for execution: start with Wave 0. Prerequisite outside this plan: the install-directory
   security release.
+
+### 2026-09-17 — Wave 0 executed (7 of 11)
+
+Ran the seven agent-completable tasks in parallel, each in a fresh context: **0.4, 0.5, 0.6, 0.7, 0.8,
+0.9, 0.11**. Gates verified independently, not taken from the agents' reports: `web` `npx tsc --noEmit`
+exit 0; `cli` build clean and 278 tests passing; `agent` `py_compile` OK; `capture-probe` clippy clean
+with 18 passed / 4 ignored; `nvenc-probe` clippy clean with 27/27.
+
+Committed and pushed to `feat/swoop` (`e2fd8187`, `dec53290`, `a66866d8`, `0ac2cbf8`, `3e186705`).
+
+**Not started — all four are blocked on the owner's hardware or hands, not on anything in the repo:**
+0.1 (≥240 fps camera or photodiode), 0.2 (elevated impairment tool + camera + G1 sign-off; also the
+largest single item in the wave), 0.3 (elevated console, Win+L, a real UAC prompt, a reboot to the logon
+screen), 0.10 (Safari on macOS and Firefox, neither on this box). **Gate G1 is therefore not reached and
+Wave 1 must not start** — 1.1, 1.2, 2.5, 2.6, 3.8, 3.10, 3.11 are all written against 0.2's winner.
+
+**Two memos are deliberately NOT committed** and must not be pushed until the install-directory
+hardening release has shipped and its hold has elapsed, because this repository is public:
+`spikes/0.5-threat-model.md` and `spikes/0.7-install-dir-cleanup.md`. Same rule, and the same reason,
+that already holds back `research/review-2-security.md`; each file carries its own banner saying so.
+`dev/active/` is gitignored, so only a deliberate `git add -f` can leak them.
+
+**Amendments other tasks need — found by Wave 0, not yet applied to the task text:**
+
+- **Task 3.1 is wrong as written** (from 0.6). It says to set the doorbell shutdown event in `SvcStop`
+  (`owlette_service.py:1952-1956`), but under `owlette-host` the SCM watcher reaches `graceful_shutdown`
+  at `:1653`/`:1660` **without `SvcStop` running at all** — that is the normal production path since
+  3.0.0, and the watcher's own log string at `:1657` says so. Set the event inside `graceful_shutdown`
+  (idempotent, one-shot under `_shutdown_lock`); keep the `SvcStop` line as belt and braces.
+- **Task 2.1 needs an `on_refresh` callback** and **2.3 a `refresh_now()`** (from 0.6) — otherwise
+  `swoop_refresh` has no route to the doorbell at all. No command-contract change.
+- **Task 3.3's `/api/agent/swoop/doorbell-token` must return `expiresIn`** (from 0.6), or the refresh
+  deadline has to be computed from a parsed JWT against the kiosk clock.
+- **Task 2.8 needs a distinguishable auth close reason** (from 0.6) or the free re-mint on a `kid`
+  rotation cannot be triggered and every machine eats a full backoff ladder.
+- **Task 3.2 must never ring an unconnected machine; 2.8 should refuse it** (from 0.4) — whoever touches
+  a room name first permanently homes that Durable Object, so a ring to a machine whose agent has never
+  dialled homes the room near the API's colo, forever.
+- **Tasks 1.4 / 2.8: no alarm, timer or held outbound fetch in the DO** (from 0.4). It breaks hibernation
+  and turns the GB-s line from $0 into roughly $41,500/month at 10,000 rooms. Carry the spike's
+  bare-`ping`→`pong` test into the product suite as the regression guard.
+- **Task 3.7: drop the `max_dec_frame_buffering = 0` assertion** (from 0.9) — NVENC has no field for it
+  and emits 4; only `max_num_reorder_frames = 0` removes the delay. Also re-budget encode at 8–12 ms,
+  not the 1–3 ms in `research/03-windows-host-stack.md` §2.2 — that is 15–20% of the 55 ms p50
+  end-to-end criterion.
+- **Task 7.3's `probe` must not infer NVENC from "an NVIDIA adapter exists"** (from 0.8) — this box
+  reports two, and the Parsec VDD is byte-identical to the real GPU by description, vendor id, subsys
+  and VRAM.
+- **Task 1.2: give the product crate `exclude = ["spikes"]`** (from 0.8) so `cargo package`/`publish`
+  does not trip over the nested spike manifests.
+- **Task 6.1: `sas.dll` is loaded by the python service, not the streamer** (from 0.7) — it needs an
+  absolute path too.
+
+**Cross-plan finding — blocks the install-directory hardening release, not swoop** (from 0.7):
+`install-dir-hardening/plan.md:59`'s `/reset` wording is ambiguous and, read the obvious way, silently
+undoes the protection it was just applied. It needs an explicit wildcard — `icacls "<dir>\*" /reset /T
+/C /Q` — so the reset reaches the children only. That plan's wording must be fixed before its Task 1.2
+writes the command. Measurement and rationale are in the held 0.7 memo; not applied here, it is a
+separate plan.
+
+**Two items awaiting an owner decision** (from 0.7): record the prior `SoftwareSASGeneration` value in
+`HKLM\SOFTWARE\Owlette` rather than in a file under the data root — reasoning is in the held 0.7 memo,
+section 6; and gate the inbound UDP 5353 mDNS firewall rule on mDNS actually landing, since plan.md D4
+records that str0m has no mDNS client and in v1 nothing would listen on it. One more from 0.9: `cudarc`
+arrives transitively through `moq-nvenc` and is never called (the device is D3D11) — adopting
+`moq-nvenc` as the product binding needs a decision on it.
+
+**Unrelated, found in passing:** the CLI lint gate is dead. `cli/package.json:35` is
+`eslint 'src/**/*.ts'`, and npm runs lifecycle scripts through `cmd.exe` on Windows, which does not strip
+the single quotes, so the glob matches nothing and eslint exits 2. Even with that fixed,
+`cli/eslint.config.mjs:6` imports `typescript-eslint`, which is absent from `cli/package.json` and
+installed nowhere resolvable from `cli/`. Fixing it needs a devDependency, so it was left alone.
