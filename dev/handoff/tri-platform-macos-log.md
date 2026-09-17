@@ -67,3 +67,9 @@ Append one dated entry per work session: what landed (task ids), deviations with
 - **Open questions:** Q-M1 (macOS uninstall), Q-M2 (15.0 floor, x86_64), Q-M3 (MDM recommendations), all in §16.6. Q4/Q5/Q6/Q12/Q15/Q16 are unchanged.
 - **Research inputs:** four read-only research agents covered Apple's `system_cmds` shutdown source, spawning into a console session, macOS 15/26 platform changes, and the local signals for a pending restart. Two review agents covered the spawn and seat design and cross-platform CI breakage. Every claim they made that code depends on was re-measured on this Mac before use.
 - **Side effect to know about:** a research agent ran `sfltool dumpbtm` without root. It waits on authd, so an admin password dialog may have appeared briefly on this Mac before the command was killed after about 10 s.
+- **Owner rulings, same day:**
+  - **macOS is Apple silicon only** (Q-M2's first half). Universal2 is superseded for the Mac, and §16.3 carries the arm64 packaging.
+  - **Rust is on this Mac:** rustup stable 1.98.1, `aarch64-apple-darwin`.
+  - **Q-M1 (uninstall):** the recommendation, removing the bundle as root after closing its processes, is recorded in §16.6 and awaits confirmation.
+  - **Q-M3 (MDM docs):** still open.
+- **Task 4.1 baseline, measured:** `cargo check` in `desktop/src-tauri` on this Mac stops inside the dependency graph, as §2 predicted. `windows-future` 0.3.2, pulled in by the unconditional `windows` dependency, fails with 16 errors before any of owlette-desktop's own code compiles. How many errors the crate's own Windows-only modules add is unknown until 4.1 moves `windows`/`windows-service` under `[target.'cfg(windows)'.dependencies]`.
