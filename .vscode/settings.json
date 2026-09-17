@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/agent/.venv/Scripts/python.exe",
+  "python.testing.pytestEnabled": true,
+  "python.testing.cwd": "${workspaceFolder}/agent",
+  "python.testing.pytestArgs": ["tests"]
+}

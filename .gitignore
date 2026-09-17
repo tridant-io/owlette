@@ -68,8 +68,9 @@ dev/whole-app-review-*.md
 test-results/
 web/e2e/.output/
 
-# IDE
-.vscode/
+# IDE (settings.json is shared: it points the Python extension at agent/.venv)
+.vscode/*
+!.vscode/settings.json
 .idea/
 .claude/settings.local.json
 .claude/session-edits.json
