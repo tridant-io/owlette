@@ -8,8 +8,6 @@ import psutil
 import pytest
 import json
 import logging
-import os
-import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -791,15 +789,15 @@ class TestIdentityPathNormalisation:
     @pytest.mark.skipif(
         sys.platform == 'win32',
         reason='the Windows ladder is pinned by test_process_lookup')
-    def test_the_lookup_compares_the_path_the_kernel_reports(self, tmp_path):
+    def test_the_lookup_compares_the_path_the_kernel_reports(
+            self, private_executable):
         """The third comparison of a configured path against a live image, and
         the one that folded on every platform: `/usr/bin/app` became
         `\\usr\\bin\\app`, whose basename is the whole string, so neither the
         full match nor the basename match could ever be true and every tier
         below it — adoption, kill, restart — was unreachable on Linux.
         """
-        exe = shutil.copy('/bin/sleep', tmp_path / 'kiosk-app')
-        os.chmod(exe, 0o755)
+        exe = private_executable('kiosk-app')
         child = subprocess.Popen([str(exe), '30'])
         try:
             found = shared_utils.find_running_process_by_exe(str(exe))

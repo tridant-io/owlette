@@ -27,7 +27,6 @@ import datetime
 import json
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -726,7 +725,7 @@ def test_a_deployment_resolves_its_close_names_against_the_managed_entries(
 
 
 def test_a_live_managed_process_is_adopted_rather_than_launched_again(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, private_executable):
     """Task 3.1's own Done-when: restarting the daemon with a managed process
     running leaves that pid alive and the agent re-adopts it. The lookup every
     adoption tier is fed by folded separators on POSIX, so nothing was ever
@@ -734,8 +733,7 @@ def test_a_live_managed_process_is_adopted_rather_than_launched_again(
     """
     monkeypatch.setattr(
         shared_utils, 'RESULT_FILE_PATH', str(tmp_path / 'app_states.json'))
-    exe = shutil.copy('/bin/sleep', tmp_path / 'kiosk-app')
-    os.chmod(exe, 0o755)
+    exe = private_executable('kiosk-app')
     child = subprocess.Popen([str(exe), '30'])
     svc = SimpleNamespace(last_started={}, firebase_client=None)
     svc._find_running_process_by_exe = _bound(
