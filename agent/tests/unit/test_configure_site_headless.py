@@ -524,7 +524,6 @@ class TestReportIssue:
 
 
 class TestRebootModes:
-    @pytest.mark.needs_os_arm
     def test_the_reboot_intent_is_recorded_before_the_shutdown_is_issued(self, capsys):
         calls = []
         session_state = MagicMock()
@@ -545,7 +544,6 @@ class TestRebootModes:
         reboot.assert_called_once_with(1, configure_site._REBOOT_MESSAGE)
         assert _events(capsys)[-1] == {'event': 'done', 'value': {'rebooting': True}}
 
-    @pytest.mark.needs_os_arm
     def test_a_missing_intent_never_blocks_the_reboot(self):
         session_state = MagicMock()
         session_state.set_intent.side_effect = OSError('tmp is read-only')
@@ -557,7 +555,6 @@ class TestRebootModes:
         assert code == 0
         reboot.assert_called_once()
 
-    @pytest.mark.needs_os_arm
     def test_a_failed_shutdown_is_reported(self, capsys):
         session_state = MagicMock()
         with patch.object(configure_site.osadapter, 'reboot',
@@ -668,7 +665,6 @@ class TestInteractivePathUnchanged:
 # service control
 
 
-@pytest.mark.needs_os_arm
 class TestServiceControl:
     def test_the_verb_and_the_agent_service_go_to_the_adapter(self):
         # `owlette-host.exe` was the Windows spelling of this; the unit name on
@@ -710,7 +706,7 @@ class TestPreseed:
     """
 
     @pytest.fixture
-    def data_root(self, tmp_path, monkeypatch, os_arm):
+    def data_root(self, tmp_path, monkeypatch):
         monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path))
         monkeypatch.setattr(configure_site, 'CONFIG_PATH',
                             tmp_path / 'config' / 'config.json')
@@ -969,7 +965,7 @@ class TestRequestSeam:
     """
 
     @pytest.fixture
-    def seam(self, tmp_path, monkeypatch, os_arm):
+    def seam(self, tmp_path, monkeypatch):
         import pwd
 
         monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path))

@@ -61,38 +61,6 @@ def _macos_tmp_is_an_extract_root(tmp_path_factory):
         destination_allowlist._POSIX_SYSTEM_PATH_EXCEPTIONS['macos'] = original
 
 
-# The reason a test that needs an adapter arm gives when this platform has
-# none. Self-retiring: it stops applying anywhere the day that arm lands.
-_NO_OS_ARM = 'no osadapter arm for this platform yet'
-
-
-def _osadapter_arm_missing():
-    """Whether this platform's osadapter arm is absent from the tree.
-
-    macOS runs this suite while `osadapter/darwin.py` is still on the Mac
-    branch, so every operation read off the package raises NotImplementedError
-    there — including the getattr `monkeypatch.setattr` and `patch.object`
-    perform before they substitute one, which turns a test that only meant to
-    stub an operation into an error at setup rather than a skip. A test that
-    needs an arm to stand in for says so with @pytest.mark.needs_os_arm, or
-    through the `os_arm` fixture where a fixture is what stands in.
-    """
-    import osadapter
-
-    try:
-        osadapter.get()
-    except NotImplementedError:
-        return True
-    return False
-
-
-@pytest.fixture
-def os_arm():
-    """Skip when this platform has no osadapter arm to stub an operation on."""
-    if _osadapter_arm_missing():
-        pytest.skip(_NO_OS_ARM)
-
-
 @pytest.fixture
 def mock_firebase_credentials():
     """Mock Firebase service account credentials"""
@@ -224,10 +192,6 @@ def pytest_configure(config):
         "markers", "windows: mark test as Windows-only"
     )
     config.addinivalue_line(
-        "markers",
-        "needs_os_arm: mark test as needing this platform's osadapter arm"
-    )
-    config.addinivalue_line(
         "markers", "unit: mark test as a unit test"
     )
     config.addinivalue_line(
@@ -236,19 +200,12 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip what this platform cannot run: @pytest.mark.windows off Windows,
-    and @pytest.mark.needs_os_arm where the osadapter arm is not in the tree.
+    """Skip what this platform cannot run: @pytest.mark.windows off Windows.
 
     The windows marker carries its own reason when the test has one to give
     (@pytest.mark.windows(reason='...')); otherwise the skip reads
     'windows-only'.
     """
-    if _osadapter_arm_missing():
-        no_arm = pytest.mark.skip(reason=_NO_OS_ARM)
-        for item in items:
-            if item.get_closest_marker('needs_os_arm') is not None:
-                item.add_marker(no_arm)
-
     if sys.platform == 'win32':
         return
 

@@ -156,22 +156,21 @@ class TestSurface:
             getattr(osadapter, 'reboot_the_planet')
 
 
-@pytest.mark.needs_os_arm
 def test_a_platform_with_an_arm_runs_what_needs_one():
-    """The negative control for conftest's needs_os_arm gate.
+    """Every platform the suite runs on has an arm.
 
-    This platform has an arm, so a test carrying the marker must run rather
-    than skip — reaching the body at all is the assertion. A gate that fired
-    here would take every test the marker covers off this leg silently.
+    conftest skipped the tests that stub an operation while macOS had none;
+    that gate retired with darwin.py. This fails, rather than skips, on a leg
+    whose arm has gone missing — where every test that reads an operation off
+    the package would otherwise error at setup.
     """
     assert osadapter.get() is not None
 
 
 def test_a_platform_with_no_arm_has_nothing_to_stub(monkeypatch):
-    """What that gate reads, and why the marker exists: macOS runs this suite
-    with `darwin.py` still on the Mac branch, and `get()` is what raises there
-    — before `monkeypatch.setattr` or `patch.object` can put a stub in place,
-    since both read the attribute they are replacing first."""
+    """Why the retired gate existed, kept as the record of it: on a platform
+    with no arm `get()` raises — before `monkeypatch.setattr` or `patch.object`
+    can put a stub in place, since both read the attribute they replace first."""
     monkeypatch.setattr(osadapter, '_ARMS', {})
     monkeypatch.setattr(osadapter, '_adapter', None)
 

@@ -49,7 +49,7 @@ def _bound(name, svc):
 
 
 @pytest.fixture
-def console_user(monkeypatch, os_arm):
+def console_user(monkeypatch):
     """Whoever is running the suite, standing in for the user at the machine."""
     import pwd
 
@@ -125,7 +125,6 @@ def test_script_arguments_survive_the_handoff(console_user, monkeypatch):
     assert spawned[0][-1] == '/var/lib/owlette/ipc/jobs/a b.json'
 
 
-@pytest.mark.needs_os_arm
 def test_the_hoot_tick_degrades_when_nobody_is_signed_in(monkeypatch, caplog):
     """The headless case — a rebooted kiosk before anyone logs in, and every
     server-shaped install. It is a skipped launch, not an exception out of the
@@ -153,7 +152,6 @@ def test_the_hoot_tick_degrades_when_nobody_is_signed_in(monkeypatch, caplog):
     assert 'no interactive user session' in caplog.text
 
 
-@pytest.mark.needs_os_arm
 def test_a_managed_launch_goes_to_the_adapter_and_is_recorded(monkeypatch, tmp_path):
     """The POSIX half of `launch_process_as_user`: no token ladder, the adapter
     resolves the console user and spawns as them, and the durable identity
@@ -773,7 +771,6 @@ def _pending_writer(rows, written=True):
     return _set_reboot_pending
 
 
-@pytest.mark.needs_os_arm
 def test_the_hoot_launcher_does_not_resolve_the_seat_on_every_tick(monkeypatch):
     """Resolving the console user off Windows is `loginctl list-sessions` plus
     a `loginctl show-session` per session, each with a five-second budget, and

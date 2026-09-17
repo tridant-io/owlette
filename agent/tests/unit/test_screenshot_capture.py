@@ -32,7 +32,7 @@ EXECUTOR = object()
 
 
 @pytest.fixture
-def capture(monkeypatch, os_arm):
+def capture(monkeypatch):
     """Stand in for this platform's `osadapter.capture_screen`.
 
     raising=False because the operations are served by the package's module
