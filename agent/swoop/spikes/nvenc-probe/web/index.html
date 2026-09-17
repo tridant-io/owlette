@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>swoop spike 0.9 — webcodecs decoder delay</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #121212;
+        color: #e6e6e6;
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+      p { margin: 0 0 16px; color: #9a9a9a; }
+      button {
+        background: #2d5bd7; color: #fff; border: 0; border-radius: 6px;
+        padding: 8px 16px; font: inherit; cursor: pointer;
+      }
+      button[disabled] { background: #3a3a3a; color: #777; cursor: default; }
+      #log { white-space: pre-wrap; margin-top: 16px; }
+      .warn { color: #e0b24a; }
+      .err { color: #e06c75; }
+      .ok { color: #7bc47b; }
+    </style>
+  </head>
+  <body>
+    <h1>swoop spike 0.9 — webcodecs decoder delay</h1>
+    <p>
+      feeds the two nvenc h.264 streams (with and without
+      <code>bitstreamRestrictionFlag</code>) into a chrome
+      <code>VideoDecoder</code> at 60 fps and reports submit-to-output delay.
+      results are posted back to the spike's http server.
+    </p>
+    <button id="run">run all four combinations</button>
+    <div id="log"></div>
+    <script src="probe.js"></script>
+  </body>
+</html>

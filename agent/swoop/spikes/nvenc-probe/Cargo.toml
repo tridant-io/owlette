@@ -1,0 +1,50 @@
+[package]
+name = "nvenc-probe"
+version = "0.1.0"
+description = "swoop spike 0.9 — validate the NVENC low-latency configuration on real hardware"
+edition = "2021"
+publish = false
+
+# Standalone on purpose, exactly like agent/host and desktop/src-tauri. An empty
+# [workspace] table stops a future parent Cargo.toml (agent/swoop's crate, Task
+# 1.2) from absorbing this spike: a nested package inside agent/swoop would
+# break `cargo build` there. Run every cargo command with this directory as the
+# working directory, never --manifest-path (which drops .cargo/config.toml).
+[workspace]
+
+[[bin]]
+name = "nvenc-probe"
+path = "src/main.rs"
+
+[dependencies]
+# NVENC bindings. Chosen because it is the only crate on crates.io that vendors
+# pre-generated nvEncodeAPI bindings AND resolves the entry points with dlopen:
+# no Video Codec SDK zip, no bindgen/libclang, and the binary still links on a
+# machine with no NVIDIA driver. We use its `sys` types and its dlopen'd
+# `ENCODE_API` function table directly; the `safe` wrapper is CUDA-shaped and
+# does not cover D3D11 input, VUI parameters or reconfigure.
+# Vendored header is NVENCAPI 12.1; the driver reports its own max version and
+# the crate asserts driver >= header, which is the SDK's own compatibility rule.
+moq-nvenc = "0.0.5"
+
+# D3D11 device + BGRA input textures, and the Win32 event objects NVENC async
+# mode waits on. Same crate family the desktop app already builds against.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+# Copied from agent/host/Cargo.toml: the Bearfoos quarantine makes a dense,
+# stripped, metadata-free PE a liability on this fleet. A spike binary is never
+# shipped, but keeping one profile means the numbers below were measured with
+# the codegen settings the product will use.
+opt-level = 2
+lto = "thin"
+strip = false
