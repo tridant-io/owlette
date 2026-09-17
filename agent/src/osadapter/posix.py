@@ -807,10 +807,18 @@ def _reap_finished() -> None:
 
 
 def _managed_argv(spec: dict) -> list[str]:
-    """The command line a managed process row asks for."""
+    """The command line a managed process row asks for.
+
+    A macOS application bundle is launched as the binary inside it — the image
+    supervision later finds by path — and never through `open`, which hands the
+    launch to LaunchServices and leaves no pid of ours to supervise.
+    """
+    import shared_utils
+
     exe_path = _validated((spec.get('exe_path') or '').strip(), 'executable path')
     if not exe_path:
         raise ValueError('the process has no exe_path')
+    exe_path = shared_utils.resolve_exec_target(exe_path)
     if not os.path.isfile(exe_path):
         raise FileNotFoundError(f"executable path not found: {exe_path}")
     arguments = (spec.get('file_path') or '').strip()

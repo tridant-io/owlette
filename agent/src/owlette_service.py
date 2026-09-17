@@ -550,12 +550,14 @@ def _discovered_pid_identity_ok(pid, process):
     The image check compares basenames, matching the discovery ladder's own
     tier-1 semantics (a file-association launch of a different build of the
     same exe still resolves); a .bat/.cmd entry's discovered pid is its
-    cmd.exe wrapper, so cmd.exe IS the expected image there.
+    cmd.exe wrapper, so cmd.exe IS the expected image there, and a macOS
+    application bundle's is the binary inside it.
     """
     identity = shared_utils.read_process_identity(pid)
     if identity is None:
         return False
-    exe_path = shared_utils.normalize_exe_path(process.get('exe_path'))
+    exe_path = shared_utils.normalize_exe_path(
+        shared_utils.resolve_exec_target(process.get('exe_path')))
     live_basename = os.path.basename(identity['exe'])
     if exe_path.endswith(('.bat', '.cmd')):
         return live_basename == 'cmd.exe'
@@ -641,7 +643,8 @@ def _schedule_stop_allowed(pid, process):
     identity = shared_utils.read_process_identity(pid)
     if identity is None:
         return False, 'identity unreadable - refusing to stop an unverifiable pid'
-    expected = shared_utils.normalize_exe_path(process.get('exe_path'))
+    expected = shared_utils.normalize_exe_path(
+        shared_utils.resolve_exec_target(process.get('exe_path')))
     if not expected or identity['exe'] != expected:
         return False, (f"recordless tracked pid runs '{identity['exe']}', not "
                        f"the entry's configured executable - not managed by owlette")
@@ -4642,8 +4645,8 @@ class OwletteService:
             wanted = shared_utils.normalize_exe_path(exe_name)
             matching_entries = [
                 p for p in config_processes
-                if os.path.basename(
-                    shared_utils.normalize_exe_path(p.get('exe_path'))) == wanted
+                if os.path.basename(shared_utils.normalize_exe_path(
+                    shared_utils.resolve_exec_target(p.get('exe_path')))) == wanted
             ]
             if not matching_entries:
                 logging.info(
