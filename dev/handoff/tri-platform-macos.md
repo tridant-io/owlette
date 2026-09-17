@@ -553,7 +553,7 @@ Written on the machine this file is for: macOS 26.6 (25G72), Apple Silicon. Ever
 - **Task 5.1 — packaging (arm64 only, per the owner's ruling below).** `distribution.xml` carries `hostArchitectures="arm64"`, so Installer refuses an Intel Mac with its own message. There is one python-build-standalone payload (`aarch64-apple-darwin`), and the Tauri app is built `--target aarch64-apple-darwin`. Library validation already accepts `.so` files signed with the same Team ID, so `com.apple.security.cs.disable-library-validation` is needed only if something is pip-installed on the device; otherwise drop it. The Control-click Gatekeeper bypass is gone since 15. macOS 27 refuses launchd plists carrying the quarantine attribute, so strip extended attributes in `build.sh`. Add `syspolicy_check` / `gktool scan` to the job.
 - **Decision 12 for macOS, ruled by the owner 2026-09-16: Apple silicon only.** This supersedes universal2 for the Mac, including the "two python-build-standalone payloads", `lipo` and `universal-apple-darwin` sentences in decision 12 and Tasks 4.6/5.1.
   - Why: 26 is the last Intel release and only four Intel models run it; 27 is Apple silicon only; Rosetta for apps ends after 27; Sonoma no longer gets updates.
-  - Still open: the macOS floor stays 14.0 unless ruled otherwise (Q-M2's second half).
+  - **The floor is 15.0**, also ruled 2026-09-16. `distribution.xml` carries `<os-version min="15.0"/>`. Task 5.1's Done-when VMs become Sequoia and Tahoe, with the refusal observed on a Sonoma (14) VM. The `macos-15` CI leg sits at the floor.
   - For the orchestrator: the wire ids `latest_macos_universal` and `cortex_cli_macos_universal` (§12) now name arm64 artifacts. Renaming them is a web, CLI and upload-script change, not the Mac's to make.
 - **Task 4.1.** Confirm the Mach-O in `owlette.app/Contents/MacOS/` is named `owlette-desktop`: `desktop_process_name()` and the tray-liveness guard compare against that name, and `productName` is `owlette` — set `mainBinaryName` if Tauri names the binary after the product.
 
@@ -569,6 +569,7 @@ This Mac has no passwordless sudo; each check needs root or a person at the cons
 6. **The self-update:** the run-once job installs once, the agent restarts once, the log is written, and a second update during an install defers.
 7. **`check_pending_reboot` true positives:** a prepared update (this Mac has one now), a staged security response, and the state once an update is applied or purged.
 8. **Modes:** `.tokens.enc` 0600 root, the data-root table under `_owlette`, the audit log 0600.
+   - **Uninstall as root:** the daemon removes an `/Applications` bundle signed by another developer, or reports the App Management refusal.
 9. **Session spawns under load:**
    - A `#!/bin/sh` entry and hoot both settle.
    - The `.pkg` upgrade path boots the agent out and back in, and leaves a managed app running and re-adopted by identity.
@@ -581,10 +582,12 @@ This Mac has no passwordless sudo; each check needs root or a person at the cons
 
 ### 16.6 Owner questions from the Mac
 
-- **Q-M1** Uninstall on macOS: a row carries no `uninstall_command`, so the handler refuses.
-  - Recommended: remove the bundle as root once its processes are closed. That is fleet tooling's equivalent of dragging to the Trash, and what Munki's `remove_app` and common Jamf scripts do.
-  - Not moving it to the kiosk user's Trash: that Trash is rarely emptied, and a bundle there still runs.
-  - Pkg-installed extras (launch agents, helpers, `/Library` support files) are left behind, as a drag to the Trash leaves them. The vendor uninstallers that clean those up are out of scope for v1.
-  - Awaiting the owner's confirmation.
-- **Q-M2** ~~Drop x86_64~~ **Ruled 2026-09-16: Apple silicon only** (§16.3). Still open: raise the floor from 14.0 to 15.0?
-- **Q-M3** Recommend `forceBypassScreenCaptureAlert` and `TeamIdentifier` managed login items in the MDM docs (the Q15/Q16 follow-ups)?
+- **Q-M1** **Ruled 2026-09-16 (owner deferred to the Mac's recommendation):** uninstalling an app quits it and then removes its bundle as root.
+  - It is fleet tooling's equivalent of dragging to the Trash, and what Munki's `remove_app` and common Jamf scripts do.
+  - The bundle is removed outright, not moved to the kiosk user's Trash, which is rarely emptied and from which the app still runs.
+  - Only a bundle the inventory lists can be removed.
+  - Pkg-installed extras are left behind, as a drag to the Trash leaves them.
+- **Q-M2** **Ruled 2026-09-16:** Apple silicon only, and macOS 15.0 is the floor (§16.3).
+- **Q-M3** **Decided on the Mac 2026-09-16:** Task 6.4's install docs get a short optional section for fleets under MDM (Mobile Device Management — Jamf, Kandji, Intune and the like).
+  - It covers the `forceBypassScreenCaptureAlert` restriction and a `TeamIdentifier` managed-login-items rule.
+  - owlette never requires MDM.

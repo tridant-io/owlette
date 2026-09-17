@@ -73,3 +73,18 @@ Append one dated entry per work session: what landed (task ids), deviations with
   - **Q-M1 (uninstall):** the recommendation, removing the bundle as root after closing its processes, is recorded in §16.6 and awaits confirmation.
   - **Q-M3 (MDM docs):** still open.
 - **Task 4.1 baseline, measured:** `cargo check` in `desktop/src-tauri` on this Mac stops inside the dependency graph, as §2 predicted. `windows-future` 0.3.2, pulled in by the unconditional `windows` dependency, fails with 16 errors before any of owlette-desktop's own code compiles. How many errors the crate's own Windows-only modules add is unknown until 4.1 moves `windows`/`windows-service` under `[target.'cfg(windows)'.dependencies]`.
+- **More owner rulings, same day:**
+  - **macOS 15.0 is the floor**, recorded in §16.3.
+  - **Q-M1 uninstall:** the owner deferred to the recommendation, so an app is quit and its bundle removed as root.
+  - **Q-M3:** decided on the Mac as an optional MDM section in Task 6.4's docs.
+- **`c2415865` feat(agent-macos): uninstall an application bundle.** Built by a delegated agent to the spec in §16.6 Q-M1, then checked here: suite 1542 passed / 216 skipped.
+  - Inventory rows now carry the bundle path as `uninstall_command`. The dashboard refuses an uninstall for a row without one (`web/lib/actions/triggerUninstall.server.ts:230`). No web change was made.
+  - The handler's darwin branch runs before the `registry_utils` (winreg) import and accepts only `installer_type == 'app'`.
+  - **The security boundary:** it removes only a bundle `installed_software()` lists at that moment.
+  - It gracefully terminates every process running from inside the bundle and refuses if one survives.
+  - Removal walks the folders above the bundle with `O_NOFOLLOW` and runs `rmtree(dir_fd=…)`, so a parent swapped for a link cannot redirect it. `shutil.rmtree.avoids_symlink_attacks` is True on 3.11.
+  - A permission failure names macOS's App Management protection as a possible cause. **Unverified:** whether a root LaunchDaemon may delete another developer's bundle without an App Management grant needs root on hardware; it is added to the §16.4 checks.
+- **Found in passing, not in the macOS lane — for the orchestrator:**
+  - **Deployment uninstalls fail on every OS today.** `/api/sites/{siteId}/deployments/{id}/uninstall` queues only `installer_name` and `deployment_id`, so the agent answers "Software name and uninstall command required". The machine route also ignores the `deployment_id` that `useUninstall` sends.
+  - **The Linux branch of the same handler still dies** on `import registry_utils`, which imports `winreg`.
+  - **`TestPosix::test_a_capture_the_app_refuses_leaves_nothing_behind` failed once in 16 full-suite runs** and passed 40 times alone. The likely cause is a race in `_FakeJobRunner`, which can pick a job up again before `run_job` withdraws it. It is untouched here, and with `-x` it can redden a CI leg.
