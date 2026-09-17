@@ -2490,10 +2490,17 @@ def normalize_exe_path(path):
 # image the kernel runs: `/Applications/TouchDesigner.app` executes
 # `Contents/MacOS/TouchDesigner`, and that inner path is what psutil reports.
 _APP_BUNDLE_SUFFIX = '.app'
-# Info.plist belongs to whoever can write the bundle, so it is read the way
-# everything owlette opens out of a tree it did not build is: bounded, off a
-# descriptor on the entry itself, never through a link.
-_BUNDLE_INFO_LIMIT = 1 << 20
+# A property list is read the way everything owlette opens out of a tree it did
+# not build is — Info.plist belongs to whoever can write the bundle: bounded,
+# off a descriptor on the entry itself, never through a link.
+_PLIST_LIMIT = 1 << 20
+# Windows has neither O_NOFOLLOW nor O_NONBLOCK, and needs O_BINARY for the
+# bytes to arrive untranslated; the property lists read here are macOS's, but
+# the suite reads them on every leg.
+_PLIST_OPEN_FLAGS = (
+    os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    | getattr(os, 'O_BINARY', 0)
+)
 
 
 def resolve_exec_target(exe_path):
@@ -2525,8 +2532,8 @@ def resolve_exec_target(exe_path):
     return target
 
 
-def read_bundle_info(bundle):
-    """A bundle's Contents/Info.plist as a dict; None when there is none to read.
+def read_plist(path):
+    """The property list at `path`; None when there is none to read.
 
     A regular file of plausible size, opened without following a link and
     without blocking on a fifo planted in its place.
@@ -2534,25 +2541,29 @@ def read_bundle_info(bundle):
     import plistlib
     from xml.parsers.expat import ExpatError
 
-    path = os.path.join(bundle, 'Contents', 'Info.plist')
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(path, _PLIST_OPEN_FLAGS)
     except OSError as e:
-        logging.debug(f"No readable Info.plist in {bundle}: {e}")
+        logging.debug(f"No readable property list at {path}: {e}")
         return None
     try:
         with os.fdopen(fd, 'rb') as f:
             if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
                 logging.debug(f"{path} is not a regular file")
                 return None
-            data = f.read(_BUNDLE_INFO_LIMIT + 1)
-        if len(data) > _BUNDLE_INFO_LIMIT:
+            data = f.read(_PLIST_LIMIT + 1)
+        if len(data) > _PLIST_LIMIT:
             logging.debug(f"{path} is larger than a property list should be")
             return None
-        info = plistlib.loads(data)
+        return plistlib.loads(data)
     except (OSError, ValueError, ExpatError) as e:
         logging.debug(f"Could not read {path}: {e}")
         return None
+
+
+def read_bundle_info(bundle):
+    """A bundle's Contents/Info.plist as a dict; None when there is none to read."""
+    info = read_plist(os.path.join(bundle, 'Contents', 'Info.plist'))
     return info if isinstance(info, dict) else None
 
 
