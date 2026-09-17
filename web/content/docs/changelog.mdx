@@ -5,6 +5,25 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ---
 
+## [3.1.1] - 2026-08-22
+
+### changed
+
+- **starting and stopping owlette no longer asks for administrator rights.** Windows' default permissions on a service let an ordinary session read its state but not start or stop it, so the desktop app had to relaunch the request through an elevated command prompt — the "Windows Command Processor" box that appeared on every quit and every launch. The agent now grants interactive users exactly two extra rights on its own service, start and stop, when it installs and on every agent start. Nothing else is granted: changing the service's configuration, its permissions, or its owner all stay with administrators, which is what keeps this from becoming a way to take over the machine — and is also why quitting cannot outlive a reboot. Fleets that would rather keep the prompt can install with `/NOSERVICECONTROL`, which is recorded in the registry and never cleared by a later update.
+- **the tray's `exit` is now `quit`, and it asks before it takes the machine offline.** it has always stopped the whole of owlette rather than just hiding the window, which is what it should do — a hidden window costs nothing, and it is not what anyone is trying to be rid of. Now that it happens without an administrator prompt in the way, it says so first: nothing will be monitored, and no configured process will be supervised or restarted, until owlette is started again. It also notes that owlette returns by itself when the machine restarts.
+- **quit waits for work in progress.** Quitting while owlette is still finishing something in the background — leaving a site, for instance, which stops the service, deregisters the machine and starts it again — now declines and says so, instead of killing that sequence halfway and leaving the machine both unsupervised and half-removed from its site.
+- **the status bar says which of five things is true, and colours it.** green **connected**, yellow **connecting…** while owlette is coming up, grey **stopped** when you quit it, and red for the faults nobody chose — **stopped unexpectedly**, **not responding**, **not installed**, **disconnected**.
+
+### fixed
+
+- **quitting owlette asked for administrator rights twice.** The window closes to the notification area rather than shutting down, so it was still running when quit stopped the service — saw the service go down, concluded the machine had been left unsupervised, and asked to start it again. Two prompts, and accepting the second one restarted the service that had just been stopped. The app now refuses to start the service once quit has been chosen, whatever asks.
+- **launching owlette asked for administrator rights.** A consequence of the above: the previous quit left the service stopped, so opening owlette from the Start menu found it down and asked to start it.
+- **a service that was starting was reported as one that had stopped.** Opening owlette after a quit found the service down for a beat before the app started it again, and Windows reports a service as running seconds before the agent underneath it has finished booting. The footer announced both moments as **service not running** — red, with a **start service** button for a service already on its way up. The whole bring-up is now one **connecting…** state with no button, and **start service** appears only when the service is genuinely down and nothing is bringing it back.
+- **a service that crashed looked exactly like one you quit on purpose.** Both leave Windows reporting the service as stopped, and the exit code that separates them was being read and discarded. An agent that died — including one that exhausted the three automatic restarts Windows gives it — now reads **stopped unexpectedly** in red rather than the same grey as a deliberate quit.
+- **a machine removed from its site was reported as a local configuration change.** The dashboard removal, a local **leave site**, and a fresh install all write the same thing to `config.json`, so the footer could not tell them apart — and blamed "cloud features are turned off in config.json" for what was usually a remote action. All three now read **not paired**, which is true of each, with **join site** beside it.
+- **a start that was refused sat on "connecting" for 45 seconds.** Declining the administrator prompt left the footer claiming the service was on its way up, with the button that would have fixed it hidden for the whole window. A refused start now ends the bring-up immediately and puts **start service** back.
+- **a failed start had nowhere to appear.** Declining the prompt, or any other failure to start the service, was recorded nowhere the operator could see it. The footer now carries the reason, and both the start and the stop are written to the desktop app's log — neither used to be, which is why this pair of prompts went unexplained for as long as it did.
+
 ## [3.1.0] - 2026-08-22
 
 ### added

@@ -38,9 +38,40 @@ The four rows at the top are read-only status; the four below the separator are 
 | **service: &lt;state&gt;** | Whether `OwletteService` is running (read-only) |
 | **status: &lt;cloud status&gt;** | Whether the service is reaching owlette (read-only). A fifth row appears under it when a health probe has something to report. |
 | **open owlette** | Open the desktop app's window |
-| **restart service** | Restart `OwletteService`. A running service is asked to restart itself through `tmp\restart.flag`, so no elevation prompt appears; only starting a *stopped* service can raise one. |
+| **restart service** | Restart `OwletteService`. A running service is asked to restart itself through `tmp\restart.flag`; a stopped one is started through the SCM. |
 | **start on login** | Toggle whether owlette starts on user login |
-| **exit** | Stop `OwletteService` (triggers a UAC prompt), then quit the app — which closes the window and removes the tray icon. Declining the prompt leaves the service running, and it re-launches the tray within 30 seconds. |
+| **quit** | Quit all of owlette: stop `OwletteService`, then close the window and remove the tray icon. Asks for confirmation first, because the machine is not monitored afterwards. |
+
+<Callout type="warning" title={"quit stops the service, not just the window"}>
+
+Closing the window puts owlette in the notification area — it keeps supervising.
+**quit** is the one that takes the machine offline: no processes are supervised
+or restarted, and the dashboard shows the machine as offline, until owlette is
+started again from the Start menu.
+
+The service is registered to start automatically, so **owlette comes back on its
+own when the machine restarts.** There is no way to switch it off permanently
+from here; that is what uninstalling is for.
+
+</Callout>
+
+### administrator prompts
+
+From 3.1.0 the desktop app starts and stops the service without asking for
+administrator rights. The agent grants interactive users exactly two extra
+rights on its own service — start and stop — when it installs and on every
+agent start. Changing the service's configuration, its permissions or its owner
+is **not** granted, so this is not a route to taking over the machine.
+
+Two cases still prompt, and the footer says **needs admin** when they apply:
+
+- Machines installed before 3.1.0 that have not yet run a 3.1.0 agent.
+- Machines installed with `/NOSERVICECONTROL`, or where the permission has been
+  removed by policy since.
+
+To check a machine, run `sc.exe sdshow OwletteService` and read the `IU` entry:
+`(A;;CCLCSWRPWPLOCRRC;;;IU)` carries the grant, `(A;;CCLCSWLOCRRC;;;IU)` is the
+Windows default without it.
 
 ---
 

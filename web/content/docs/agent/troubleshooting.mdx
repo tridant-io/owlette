@@ -285,9 +285,31 @@ net stop OwletteService && net start OwletteService
 sc qc OwletteService
 ```
 
-All commands require **Administrator** privileges.
+All commands require **Administrator** privileges from a shell.
 
-The desktop app restarts the service without one. `restart service` in the app's menu writes `tmp/restart.flag`; the service picks it up on its next loop and exits 42, and owlette-host relaunches it immediately — no UAC prompt. The tray icon's right-click menu carries the same item, with one difference: a service that is already stopped has no loop to read the flag, so the tray starts it through the SCM instead, which is the one path that can prompt for elevation.
+The desktop app does not. `restart service` in its menu writes `tmp/restart.flag`; the service picks it up on its next loop and exits 42, and owlette-host relaunches it immediately. Starting and stopping go through the SCM directly — from 3.1.0 the agent grants interactive users start and stop rights on its own service, so neither raises a prompt. See [administrator prompts](/docs/agent/system-tray#administrator-prompts) for what is and is not granted.
+
+### the desktop app still asks for administrator rights
+
+**Symptom**: quitting owlette, or starting the service from the footer, raises a "Windows Command Processor" UAC prompt. The footer shows **needs admin** next to **start service**.
+
+**Cause**: this machine does not carry the service permission grant — either it has not run a 3.1.0-or-later agent yet, it was installed with `/NOSERVICECONTROL`, or the permission has been removed by policy.
+
+**Check**:
+
+```powershell
+sc.exe sdshow OwletteService
+```
+
+Read the `IU` entry. `(A;;CCLCSWRPWPLOCRRC;;;IU)` carries the grant; `(A;;CCLCSWLOCRRC;;;IU)` is the Windows default without it — it is missing `RP` (start) and `WP` (stop).
+
+**Fix**: update the agent to 3.1.0 or later and let the service start once; the grant is applied at every agent start. If it is still absent afterwards, check the opt-out:
+
+```powershell
+reg query "HKLM\SOFTWARE\Owlette" /v AllowLocalServiceControl
+```
+
+A value of `0` means the machine was deliberately installed with `/NOSERVICECONTROL`. Deleting the value and restarting the service restores the grant. A Group Policy that manages System Services can also strip it back off on each policy refresh, in which case the prompt is expected and the machine is behaving as configured.
 
 ---
 

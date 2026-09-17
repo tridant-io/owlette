@@ -6,7 +6,11 @@ import {
   isPaired,
   siteIdOf,
   siteNameOf,
+  FOOTER_DOT_CLASS,
+  FOOTER_TONE_CLASS,
+  type FooterInputs,
   type FooterState,
+  type FooterTone,
   type ServiceStatusFile,
 } from './serviceHealth'
 
@@ -15,6 +19,7 @@ const healthy: ServiceStatus = {
   running: true,
   state: 'running',
   startType: 'auto_start',
+  stoppedCleanly: null,
   statusFile: { exists: true, ageSecs: 12, stale: false },
 }
 
@@ -45,7 +50,7 @@ describe('footer state', () => {
 
     expect(
       deriveFooterState({ status: stopped, statusFile: connected, config: joined }),
-    ).toMatchObject({ label: 'service not running', tone: 'error', serviceDown: true })
+    ).toMatchObject({ label: 'stopped', tone: 'muted', serviceDown: true, action: 'start' })
   })
 
   it('treats a two-minute-old status file as the service being gone', () => {
@@ -55,7 +60,8 @@ describe('footer state', () => {
     }
     const state = deriveFooterState({ status: wedged, statusFile: connected, config: joined })
 
-    expect(state.label).toBe('service not running')
+    expect(state.label).toBe('not responding')
+    expect(state.tone).toBe('error')
     expect(state.detail).toMatch(/status file/)
   })
 
@@ -74,17 +80,17 @@ describe('footer state', () => {
         statusFile: connected,
         config: { firebase: { enabled: false, site_id: 'default_site' } },
       }),
-    ).toMatchObject({ label: 'disabled', tone: 'muted' })
+    ).toMatchObject({ label: 'cloud disabled', tone: 'muted' })
   })
 
-  it('says removed from site when the site id has been cleared', () => {
+  it('says not paired when the site id has been cleared', () => {
     expect(
       deriveFooterState({
         status: healthy,
         statusFile: connected,
         config: { firebase: { enabled: true, site_id: '' } },
       }),
-    ).toMatchObject({ label: 'removed from site', tone: 'error' })
+    ).toMatchObject({ label: 'not paired', tone: 'muted' })
   })
 
   it('reads the service’s own auth verdict rather than opening the token store', () => {
@@ -183,7 +189,13 @@ describe('pairing', () => {
 })
 
 describe('footer sentence', () => {
-  const state = (label: string): FooterState => ({ label, tone: 'ok', detail: null, serviceDown: false })
+  const state = (label: string): FooterState => ({
+    label,
+    tone: 'ok',
+    detail: null,
+    serviceDown: false,
+    action: 'none',
+  })
 
   it('reads "<host> is connected to <site>"', () => {
     expect(footerSentence(state('connected'), 'default_site', 'TEC-A4D')).toEqual({
@@ -200,8 +212,11 @@ describe('footer sentence', () => {
   })
 
   it('hangs the host off states that are not connection sentences', () => {
-    expect(footerSentence(state('service not running'), '', 'TEC-A4D').after).toBe(' on TEC-A4D')
-    expect(footerSentence(state('removed from site'), '', 'TEC-A4D').before).toBe('TEC-A4D was ')
+    expect(footerSentence(state('stopped'), '', 'TEC-A4D').after).toBe(' on TEC-A4D')
+    expect(footerSentence(state('not responding'), '', 'TEC-A4D').after).toBe(' on TEC-A4D')
+    expect(footerSentence(state('not installed'), '', 'TEC-A4D').after).toBe(' on TEC-A4D')
+    expect(footerSentence(state('stopping'), '', 'TEC-A4D').after).toBe(' on TEC-A4D')
+    expect(footerSentence(state('not paired'), '', 'TEC-A4D').before).toBe('TEC-A4D is ')
     expect(footerSentence(state('authentication required'), '', 'TEC-A4D').after).toBe(' for TEC-A4D')
   })
 
@@ -214,5 +229,139 @@ describe('footer sentence', () => {
       before: '',
       after: ' · default_site',
     })
+  })
+})
+
+describe('connecting…', () => {
+  const stopped = { ...healthy, running: false, state: 'stopped' as const }
+  const booting = { ...healthy, statusFile: { exists: true, ageSecs: 3_600, stale: true } }
+
+  /**
+   * The reported bug: relaunching after a quit finds the service stopped for a
+   * beat before the auto-start lands, and the footer announced that beat as a
+   * fault with a button to fix it.
+   */
+  it('says connecting, with no button, while a stopped service is being started', () => {
+    expect(
+      deriveFooterState({ status: stopped, statusFile: null, config: joined, bringingUp: true }),
+    ).toMatchObject({ label: 'connecting…', tone: 'warn', serviceDown: false, action: 'none' })
+  })
+
+  it('offers start service only once nobody is bringing it up', () => {
+    expect(
+      deriveFooterState({ status: stopped, statusFile: null, config: joined, bringingUp: false }),
+    ).toMatchObject({ label: 'stopped', tone: 'muted', action: 'start' })
+  })
+
+  it('covers the SCM start_pending phase without being told', () => {
+    const startPending = { ...healthy, running: false, state: 'start_pending' as const }
+    expect(
+      deriveFooterState({ status: startPending, statusFile: null, config: joined }),
+    ).toMatchObject({ label: 'connecting…', action: 'none' })
+  })
+
+  it('covers the agent still booting behind a RUNNING service', () => {
+    expect(
+      deriveFooterState({ status: booting, statusFile: null, config: joined, bringingUp: true }),
+    ).toMatchObject({ label: 'connecting…', action: 'none' })
+  })
+
+  it('still calls a silent service wedged when no start is in progress', () => {
+    expect(
+      deriveFooterState({ status: booting, statusFile: null, config: joined, bringingUp: false }),
+    ).toMatchObject({ label: 'not responding', tone: 'error', action: 'start' })
+  })
+
+  it('does not say connecting when the service is not installed', () => {
+    const absent = { ...healthy, installed: false, running: false, state: 'unknown' as const }
+    expect(
+      deriveFooterState({ status: absent, statusFile: null, config: joined, bringingUp: true }),
+    ).toMatchObject({ label: 'not installed', tone: 'error', action: 'start' })
+  })
+
+  it('reads as a sentence', () => {
+    const state = deriveFooterState({
+      status: stopped, statusFile: null, config: joined, bringingUp: true,
+    })
+    expect(footerSentence(state, 'TEC', 'TEC-A4D')).toEqual({
+      before: 'TEC-A4D is ',
+      after: ' to TEC',
+    })
+  })
+})
+
+/**
+ * The colour scheme, as a contract rather than as whatever the branches happen
+ * to return. Green = working, yellow = in transit or waiting on you, red =
+ * something broke that nobody chose, grey = off on purpose or not known yet.
+ */
+describe('tone', () => {
+  const stopped = { ...healthy, running: false, state: 'stopped' as const }
+  const silent = { ...healthy, statusFile: { exists: true, ageSecs: 3_600, stale: true } }
+  const absent = { ...healthy, installed: false, running: false, state: 'unknown' as const }
+  const connected = { firebase: { enabled: true, connected: true, site_id: 'default_site' } }
+  const offline = { firebase: { enabled: true, connected: false, site_id: 'default_site' } }
+
+  const cases: Array<[string, FooterTone, FooterInputs]> = [
+    ['connected', 'ok', { status: healthy, statusFile: connected, config: joined }],
+    ['connecting…', 'warn', { status: stopped, statusFile: null, config: joined, bringingUp: true }],
+    ['stopping', 'warn', {
+      status: { ...healthy, running: false, state: 'stop_pending' }, statusFile: null, config: joined,
+    }],
+    ['stopped', 'muted', { status: stopped, statusFile: null, config: joined }],
+    ['disconnected', 'error', { status: healthy, statusFile: offline, config: joined }],
+    ['not responding', 'error', { status: silent, statusFile: connected, config: joined }],
+    ['not installed', 'error', { status: absent, statusFile: null, config: joined }],
+    ['checking', 'muted', { status: null, statusFile: null, config: joined }],
+  ]
+
+  it.each(cases)('%s is %s', (label, tone, inputs) => {
+    const state = deriveFooterState(inputs)
+    expect(state.label).toBe(label)
+    expect(state.tone).toBe(tone)
+  })
+
+  it('gives every tone a text and a dot class', () => {
+    for (const tone of ['ok', 'warn', 'error', 'muted'] as FooterTone[]) {
+      expect(FOOTER_TONE_CLASS[tone]).toBeTruthy()
+      expect(FOOTER_DOT_CLASS[tone]).toBeTruthy()
+    }
+  })
+})
+
+describe('why the service is down', () => {
+  const down = (stoppedCleanly: boolean | null) => ({
+    ...healthy, running: false, state: 'stopped' as const, stoppedCleanly,
+  })
+
+  /** A quit is grey; a crash nobody asked for is not. */
+  it('separates a deliberate quit from a crash', () => {
+    expect(
+      deriveFooterState({ status: down(true), statusFile: null, config: joined }),
+    ).toMatchObject({ label: 'stopped', tone: 'muted' })
+
+    expect(
+      deriveFooterState({ status: down(false), statusFile: null, config: joined }),
+    ).toMatchObject({ label: 'stopped unexpectedly', tone: 'error', action: 'start' })
+  })
+
+  it('falls back to grey when the exit code is unknown', () => {
+    expect(
+      deriveFooterState({ status: down(null), statusFile: null, config: joined }),
+    ).toMatchObject({ label: 'stopped', tone: 'muted' })
+  })
+
+  /** "checking" forever is a lie when the query is failing rather than pending. */
+  it('says the service manager is unreachable rather than checking', () => {
+    expect(
+      deriveFooterState({ status: null, statusFile: null, config: joined }),
+    ).toMatchObject({ label: 'checking' })
+
+    expect(
+      deriveFooterState({
+        status: null, statusFile: null, config: joined,
+        scmError: 'could not connect to the service manager',
+      }),
+    ).toMatchObject({ label: 'service manager unreachable', tone: 'muted', action: 'none' })
   })
 })

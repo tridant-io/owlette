@@ -550,6 +550,10 @@ function App() {
           config={config.config}
           hostname={host}
           starting={health.starting}
+          bringingUp={health.bringingUp}
+          elevationRequired={health.elevationRequired}
+          error={health.error}
+          scmError={health.scmError}
           onStart={() => void health.start()}
           onJoin={() => setMenuDialog('join')}
         />

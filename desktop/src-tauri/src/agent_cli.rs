@@ -265,6 +265,20 @@ pub fn cancel(runs: &Runs, run: &str) -> Result<bool, String> {
   }
 }
 
+/// How many children are still running.
+///
+/// The quit path asks before it does anything, precisely because [`cancel_all`]
+/// runs on `RunEvent::Exit`: quitting in the middle of a leave-site teardown
+/// would kill the deregistration between its stop and its restart, and leave the
+/// machine both unsupervised and half-removed from its site.
+pub fn active(runs: &Runs) -> usize {
+  runs
+    .children
+    .lock()
+    .map(|children| children.len())
+    .unwrap_or(0)
+}
+
 /// Kill everything still running. Called when the app exits, so a ten-minute
 /// pairing poll does not outlive the window that started it.
 pub fn cancel_all(runs: &Runs) {

@@ -100,15 +100,21 @@ describe('service commands', () => {
     invoke.mockResolvedValue({ method: 'noop', stateBefore: 'running' })
 
     await serviceStatus()
-    await serviceStart()
-    await serviceStop()
+    await serviceStart(true)
+    await serviceStop(false)
 
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
       'service_status',
       'service_start',
       'service_stop',
     ])
-    expect(invoke.mock.calls.every(([, args]) => args === undefined)).toBe(true)
+    // The status query takes nothing; start/stop carry the caller's decision
+    // about whether a UAC prompt may be raised on its behalf.
+    expect(invoke.mock.calls.map(([, args]) => args)).toEqual([
+      undefined,
+      { allowElevation: true },
+      { allowElevation: false },
+    ])
   })
 
   it('treats a stale status file as the service being down', () => {
@@ -117,6 +123,7 @@ describe('service commands', () => {
       running: true,
       state: 'running',
       startType: 'auto_start',
+      stoppedCleanly: null,
       statusFile: { exists: true, ageSecs: 12, stale: false },
     }
 

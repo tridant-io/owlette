@@ -93,12 +93,28 @@ export interface ServiceStatus {
   running: boolean
   state: ServiceState
   startType: ServiceStartType
+  /**
+   * For a stopped service, whether it exited cleanly; null when it is not
+   * stopped. A quit and a crash both leave the SCM saying STOPPED, and this is
+   * the only thing that tells them apart.
+   */
+  stoppedCleanly: boolean | null
   statusFile: StatusFileInfo
 }
 
+/**
+ * How a start/stop was answered.
+ *
+ * Only `scm` and `elevated` did anything. The other three are successful calls
+ * that deliberately changed nothing: `noop` (already there, or already heading
+ * there), `quitting` (a start refused because the app is on its way out) and
+ * `needs_elevation` (the SCM said no and the caller did not want a UAC prompt
+ * raised on its behalf).
+ */
+export type ServiceCommandMethod = 'scm' | 'elevated' | 'noop' | 'quitting' | 'needs_elevation'
+
 export interface ServiceCommandOutcome {
-  /** `scm` issued directly, `elevated` via a UAC prompt, `noop` already there. */
-  method: 'scm' | 'elevated' | 'noop'
+  method: ServiceCommandMethod
   /**
    * State before the request. An elevated start only confirms the shell
    * accepted it, so callers poll {@link serviceStatus} for the result.
@@ -205,14 +221,32 @@ export function serviceStatus(): Promise<ServiceStatus> {
   return invoke<ServiceStatus>('service_status')
 }
 
-/** Start OwletteService. May raise a UAC prompt; poll {@link serviceStatus}. */
-export function serviceStart(): Promise<ServiceCommandOutcome> {
-  return invoke<ServiceCommandOutcome>('service_start')
+/**
+ * Start OwletteService, then poll {@link serviceStatus} — neither an elevated
+ * launch nor an SCM start means the service is up yet.
+ *
+ * `allowElevation` is the operator's intent, not a capability check: pass `true`
+ * only when they asked for this by hand. On a machine without the interactive
+ * service grant, `false` comes back as `needs_elevation` rather than putting a
+ * UAC prompt in front of someone who clicked nothing.
+ */
+export function serviceStart(allowElevation: boolean): Promise<ServiceCommandOutcome> {
+  return invoke<ServiceCommandOutcome>('service_start', { allowElevation })
 }
 
-/** Stop OwletteService. May raise a UAC prompt; poll {@link serviceStatus}. */
-export function serviceStop(): Promise<ServiceCommandOutcome> {
-  return invoke<ServiceCommandOutcome>('service_stop')
+/**
+ * Whether a start/stop actually reached the SCM. Mirrors `service_ctl::was_issued`
+ * — the other three methods are successful calls that deliberately did nothing,
+ * and a caller that treats them as work done will report progress that is not
+ * happening.
+ */
+export function commandWasIssued(outcome: ServiceCommandOutcome): boolean {
+  return outcome.method === 'scm' || outcome.method === 'elevated'
+}
+
+/** Stop OwletteService, on the same terms as {@link serviceStart}. */
+export function serviceStop(allowElevation: boolean): Promise<ServiceCommandOutcome> {
+  return invoke<ServiceCommandOutcome>('service_stop', { allowElevation })
 }
 
 /**

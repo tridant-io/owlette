@@ -165,6 +165,21 @@ Name: "{commonappdata}\Owlette\logs"; Permissions: users-modify
 Name: "{commonappdata}\Owlette\cache"; Permissions: users-modify
 Name: "{commonappdata}\Owlette\tmp"; Permissions: users-modify
 
+[Registry]
+; Opt-out for locked-down fleets. By default the agent grants INTERACTIVE
+; SERVICE_START|SERVICE_STOP on OwletteService (agent/src/service_acl.py) so the
+; desktop app can start and stop it without a UAC prompt; /NOSERVICECONTROL
+; leaves the Windows default in place, and the prompt with it.
+;
+; HKLM\SOFTWARE is not writable by standard users, unlike config.json's tree —
+; which is the point of putting the switch here rather than in the config.
+;
+; Deliberately only ever WRITTEN, never cleared: an agent self-update re-runs
+; this installer, and silently re-enabling local service control on a machine
+; somebody locked down would be the wrong way to lose that argument. To undo it,
+; delete the value.
+Root: HKLM; Subkey: "SOFTWARE\Owlette"; ValueType: dword; ValueName: "AllowLocalServiceControl"; ValueData: "0"; Flags: uninsdeletevalue; Check: NoServiceControlRequested
+
 [InstallDelete]
 ; Dead log files from the deleted python UI (owlette_gui/owlette_tray/
 ; report_issue were removed in 3.0.0) — the wildcard also catches their
@@ -426,6 +441,25 @@ begin
   if MemoGroupInfo <> '' then Result := Result + MemoGroupInfo + NewLine + NewLine;
   if MemoTasksInfo <> '' then Result := Result + MemoTasksInfo + NewLine + NewLine;
   Result := Result + 'Owlette server:' + NewLine + Space + GetWebHost();
+end;
+
+// True when /NOSERVICECONTROL was passed, which writes the opt-out value in the
+// [Registry] section above and leaves the service DACL at the Windows default.
+//
+// Walked by hand rather than read through {param:...}: that expands `/NAME=value`
+// switches, and this is a bare flag in the style of Inno's own /SILENT. Inno has
+// no CmdLineParamExists.
+function NoServiceControlRequested(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/NOSERVICECONTROL') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
 end;
 
 function GetConfigureArgs(Param: String): String;

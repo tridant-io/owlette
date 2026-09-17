@@ -70,6 +70,16 @@ The installer passes `/ADD=` to `configure_site.py --add`. The agent polls `/api
 | `/DIR="C:\path"` | Custom install directory |
 | `/NORESTART` | Do not restart after installation |
 | `/LOG="C:\path\setup.log"` | Write an Inno Setup log to the chosen path |
+| `/NOSERVICECONTROL` | Keep the administrator prompt for starting and stopping the service. See [administrator prompts](/docs/agent/system-tray#administrator-prompts). |
+
+<Callout type="warning" title={"/NOSERVICECONTROL is sticky"}>
+
+It writes `HKLM\SOFTWARE\Owlette\AllowLocalServiceControl = 0`, which later agent
+updates never clear — re-enabling local service control on a machine somebody
+deliberately locked down is not something a background update should decide. To
+undo it, delete that value and restart the service.
+
+</Callout>
 
 Example for the dev environment:
 

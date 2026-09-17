@@ -37,8 +37,10 @@ use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
 
+use crate::agent_cli;
 use crate::paths::{
   self, AGENT_VERSION_REL, GUI_PID_REL, RESTART_FLAG_REL, SERVICE_STATUS_REL, TRAY_PID_REL,
 };
@@ -82,9 +84,21 @@ const REFUSAL_BACKOFF_AFTER: u32 = 10;
 /// How long the build-time status read may take before the tray is built from a
 /// placeholder instead.
 const SEED_TIMEOUT: Duration = Duration::from_millis(500);
-/// Pause between the elevated stop and quitting, so the operator sees a clean
-/// transition rather than the icon vanishing first.
+/// Pause between the stop and quitting, so the operator sees a clean transition
+/// rather than the icon vanishing first.
 const EXIT_SETTLE: Duration = Duration::from_secs(2);
+
+/// What "exit" costs, said plainly — it is not what exit does in most apps.
+///
+/// The closing line matters as much as the first: the machine is not
+/// permanently unmonitored, and an operator who believes it is will go looking
+/// for a way to undo this. Owlette returns on reboot because the service is
+/// registered `AutoStart`, and making exit outlive a restart would mean granting
+/// interactive users SERVICE_CHANGE_CONFIG — the one right the DACL grant in
+/// `agent/src/service_acl.py` deliberately withholds.
+const EXIT_CONFIRM_BODY: &str = "this stops the owlette service. nothing on this machine will be \
+   monitored, and configured processes will not be supervised or restarted, until owlette is \
+   started again.\n\nowlette comes back automatically when this machine restarts.";
 
 /// Overall health, in the three buckets the icon can show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -946,7 +960,8 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
     view.start_on_login,
     None::<&str>,
   )?;
-  let exit = MenuItem::with_id(app, ID_EXIT, "exit", true, None::<&str>)?;
+  // "quit" on screen; the id stays `exit` because it is wire, not copy.
+  let exit = MenuItem::with_id(app, ID_EXIT, "quit", true, None::<&str>)?;
 
   let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> =
     vec![&version, &hostname, &service, &status];
@@ -1042,13 +1057,27 @@ fn restart_service(app: &AppHandle) {
 
   if !running {
     log::info!("service is stopped — starting it instead of writing the restart flag");
-    match service_ctl::start() {
-      Ok(outcome) => {
+    match service_ctl::start(true) {
+      Ok(outcome) if service_ctl::was_issued(&outcome) => {
         log::info!("service start issued ({})", outcome.method);
         notify(
           app,
           "owlette — starting",
           "starting service — will return momentarily".to_string(),
+        );
+      }
+      // Only reachable when the state moved between the read above and the
+      // request — usually a stop still draining. Saying "restarting" here would
+      // report work that did not happen.
+      Ok(outcome) => {
+        log::info!("service start was a no-op (was {})", outcome.state_before);
+        notify(
+          app,
+          "restart failed",
+          format!(
+            "the service is {} — try again in a moment",
+            outcome.state_before.replace('_', " ")
+          ),
         );
       }
       Err(error) => {
@@ -1104,16 +1133,49 @@ fn toggle_start_on_login(app: &AppHandle) {
   }
 }
 
-/// Quit owlette: stop supervising the machine, then quit the app. owlette-host
-/// relaunches the agent on any unexpected exit, so the only real stop is a
-/// controlled SCM stop, which needs rights this process usually lacks. We quit
-/// either way — if the operator declines the prompt, the service relaunches the
-/// tray.
+/// Quit owlette: stop supervising the machine, then quit the app.
+///
+/// "exit" means all of owlette, not just this window. Closing the window already
+/// puts it in the notification area, and a hidden UI costing nothing is not what
+/// anyone is trying to be rid of — so the service goes down too. That is worth
+/// confirming, because it is the one thing this menu can do that leaves the
+/// machine unattended.
+///
+/// owlette-host relaunches the agent on any unexpected exit, so the only real
+/// stop is a controlled SCM stop. That used to mean a UAC prompt; the service
+/// DACL grant (`agent/src/service_acl.py`) makes it silent on a current install,
+/// which is exactly why [`service_ctl::begin_quit`] has to come first — a start
+/// racing this one used to announce itself with a second prompt, and now would
+/// not announce itself at all.
+///
+/// We quit either way: if the stop fails, the service relaunches the tray.
 fn exit_owlette(app: &AppHandle) {
+  if refuse_if_busy(app) {
+    return;
+  }
+
+  if !confirm_exit(app) {
+    log::info!("exit cancelled at the confirmation");
+    return;
+  }
+
+  // Sampled again, because the check above is not the same instant as this one:
+  // the confirmation blocks on a human, and the window behind it keeps working.
+  // Owning the dialog to the window (see `confirm_exit`) is what makes this rare;
+  // this is what makes it safe.
+  if refuse_if_busy(app) {
+    return;
+  }
+
+  service_ctl::begin_quit();
   hide_main_window(app);
 
-  match service_ctl::stop() {
-    Ok(outcome) => log::info!("service stop issued ({})", outcome.method),
+  match service_ctl::stop(true) {
+    Ok(outcome) => log::info!(
+      "service stop issued ({}, was {})",
+      outcome.method,
+      outcome.state_before
+    ),
     Err(error) => log::error!("could not stop the service on exit: {error}"),
   }
 
@@ -1121,6 +1183,62 @@ fn exit_owlette(app: &AppHandle) {
   app.exit(0);
 }
 
+/// Refuse the quit, and say why, while agent-CLI work is still running.
+///
+/// `RunEvent::Exit` kills those outright, and a leave-site teardown killed
+/// between its stop and its restart leaves the machine stopped *and*
+/// half-deregistered.
+fn refuse_if_busy(app: &AppHandle) -> bool {
+  let in_flight = app
+    .try_state::<agent_cli::Runs>()
+    .map(|runs| agent_cli::active(&runs))
+    .unwrap_or(0);
+  if in_flight == 0 {
+    return false;
+  }
+  log::warn!("exit refused: {in_flight} agent run(s) still in flight");
+  notify(
+    app,
+    "owlette — still working",
+    "owlette is finishing something in the background — try exit again in a moment".to_string(),
+  );
+  true
+}
+
+/// Ask before quitting. `true` means go ahead.
+///
+/// A native dialog rather than a React one on purpose: the tray is the way out
+/// when the window is wedged, and a confirmation that needed a healthy webview
+/// would be missing exactly when it is most needed. Menu actions already run on
+/// their own thread (see [`spawn_action`]), which is what `blocking_show`
+/// requires — calling it on the main thread would deadlock the event loop.
+///
+/// Owned by the main window when there is a visible one. Without an owner the
+/// task dialog is a sibling top-level: it disables nothing, so the operator can
+/// start a leave-site *behind* an open confirmation and then quit into the
+/// middle of it, and it can be lost behind the window entirely. When the window
+/// is hidden or gone there is nothing to own it — and nothing to click behind it
+/// either — so the unowned dialog is correct, and it keeps the tray usable as
+/// the way out of a wedged window.
+fn confirm_exit(app: &AppHandle) -> bool {
+  let dialog = app
+    .dialog()
+    .message(EXIT_CONFIRM_BODY)
+    .title("quit owlette?")
+    .kind(MessageDialogKind::Warning)
+    .buttons(MessageDialogButtons::OkCancelCustom(
+      "quit owlette".to_string(),
+      "cancel".to_string(),
+    ));
+
+  match app
+    .get_webview_window("main")
+    .filter(|window| window.is_visible().unwrap_or(false))
+  {
+    Some(window) => dialog.parent(&window).blocking_show(),
+    None => dialog.blocking_show(),
+  }
+}
 
 /// Drop both pid markers. Called on `RunEvent::Exit`.
 pub fn clear_pid_markers() {

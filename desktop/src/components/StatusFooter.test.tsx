@@ -11,6 +11,7 @@ const healthy: ServiceStatus = {
   running: true,
   state: 'running',
   startType: 'auto_start',
+  stoppedCleanly: null,
   statusFile: { exists: true, ageSecs: 12, stale: false },
 }
 
@@ -51,6 +52,7 @@ const serviceStopped: ServiceStatus = {
   running: false,
   state: 'stopped',
   startType: 'auto_start',
+  stoppedCleanly: null,
   statusFile: { exists: true, ageSecs: 400, stale: true },
 }
 
@@ -107,18 +109,20 @@ describe('StatusFooter join site', () => {
     const props = setup({ config: unpaired, hostname: 'TEC-A4D' })
 
     // The sentence keeps saying what it said; the button is beside it.
-    expect(screen.getByTestId('footer-status').textContent).toBe('disabled')
+    expect(screen.getByTestId('footer-status').textContent).toBe('TEC-A4D is not paired')
     fireEvent.click(joinButton() as HTMLButtonElement)
     expect(props.onJoin).toHaveBeenCalledOnce()
   })
 
-  it('offers it to a machine that was removed from its site', () => {
+  // A machine removed on the dashboard, a `leave site`, and a fresh install are
+  // indistinguishable in config.json, so they all read the same way here.
+  it('offers it to a machine whose site id has been cleared', () => {
     setup({
       config: { firebase: { enabled: true, site_id: '' } } as OwletteConfig,
       hostname: 'TEC-A4D',
     })
 
-    expect(screen.getByTestId('footer-status').textContent).toBe('TEC-A4D was removed from site')
+    expect(screen.getByTestId('footer-status').textContent).toBe('TEC-A4D is not paired')
     expect(joinButton()).toBeTruthy()
   })
 

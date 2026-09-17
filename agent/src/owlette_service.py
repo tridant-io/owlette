@@ -14,6 +14,7 @@ import installer_utils
 import project_utils
 import registry_utils
 import reboot_state
+import service_acl
 import session_state
 import watchdog_state
 import display_manager
@@ -7188,6 +7189,12 @@ with open(out_path, 'wb') as f:
         logging.info(f"  Firebase         : {_fb_status}")
         logging.info(f"  Processes        : {_proc_count} configured")
         logging.info(_sep)
+        # Cheap, idempotent, and non-fatal: without it every start and stop from
+        # the desktop app raises a UAC prompt, because the default service DACL
+        # gives interactive users read rights only. Re-applied on every start
+        # because an upgrade deletes and recreates the service registration.
+        service_acl.ensure_interactive_control()
+
         # Its own thread, not the 5s loop: a desktop-app edit is operator-facing
         # and should reach the dashboard in a second or two, not wait out a tick.
         try:
@@ -7199,9 +7206,16 @@ with open(out_path, 'wb') as f:
 
         try:
             while self.is_alive:
-                # There is deliberately no "shutdown flag": the desktop app's
-                # "quit owlette" is an elevated SCM stop. A flag was tried and
-                # failed — the supervisor relaunches any non-clean exit.
+                # There is deliberately no "shutdown flag", and the reason is not
+                # the one this comment used to give. Under NSSM a flag could not
+                # stop the service — any exit was relaunched — but owlette-host
+                # reads exit 0 as a clean stop (agent/host/src/supervisor.rs), so
+                # a stop flag would work now. It is still the wrong mechanism:
+                # tmp/ is users-modify, so the flag's real grantee would be
+                # BUILTIN\\Users, which is wider than the INTERACTIVE start/stop
+                # grant the desktop app uses instead (agent/src/service_acl.py).
+                # An SCM stop also gets a bounded shutdown and a STOP_PENDING the
+                # dashboard can see; a flag-driven exit gets neither.
 
                 # Exit 42 makes the host relaunch us; exit 0 would stop the
                 # service (agent/host/src/supervisor.rs).

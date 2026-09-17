@@ -2527,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "owlette-desktop"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "log",
  "notify",

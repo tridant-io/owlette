@@ -248,7 +248,7 @@ export function LeaveSiteDialog({
         leaveLog(`service before the stop: ${before.state} (installed=${before.installed})`)
         if (before.installed && (before.running || before.state === 'start_pending')) {
           leaveLog('requesting the service stop')
-          const outcome = await serviceStop()
+          const outcome = await serviceStop(true)
           leaveLog(`stop requested via ${outcome.method}, waiting for the scm`)
           if (!(await waitForService('stopped', STOP_TIMEOUT_MS))) {
             throw new Error('the service was still running after 45 seconds')
@@ -293,7 +293,7 @@ export function LeaveSiteDialog({
       if (stopped) {
         setStatus('starting the owlette service')
         leaveLog('starting the service again')
-        serviceDown = !(await serviceStart()
+        serviceDown = !(await serviceStart(true)
           .then(() => waitForService('running', START_TIMEOUT_MS))
           .catch(() => false))
         leaveLog(
@@ -331,7 +331,7 @@ export function LeaveSiteDialog({
           <DialogTitle>leave site</DialogTitle>
           <DialogDescription>
             {phase === 'confirm'
-              ? `remove this machine from ${site}? the owlette service is stopped while the machine is deregistered, then started again — windows will ask you to approve that. pairing it again needs a new phrase.`
+              ? `remove this machine from ${site}? the owlette service is stopped while the machine is deregistered, then started again — on older installs windows will ask you to approve that. pairing it again needs a new phrase.`
               : phase === 'left'
                 ? leftCopy(site, result)
                 : phase === 'failed'

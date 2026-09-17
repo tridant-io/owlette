@@ -87,16 +87,39 @@ pub fn service_status() -> Result<ServiceStatus, String> {
   service_ctl::status(&paths::data_root().join(SERVICE_STATUS_REL))
 }
 
-/// Start `OwletteService`, elevating only when this process lacks the right.
+/// Start `OwletteService`, elevating only when this process lacks the right and
+/// `allowElevation` says a prompt is wanted. Pass `false` from anything the
+/// operator did not click.
 #[tauri::command(async)]
-pub fn service_start() -> Result<ServiceCommandOutcome, String> {
-  service_ctl::start()
+pub fn service_start(allow_elevation: bool) -> Result<ServiceCommandOutcome, String> {
+  logged("start", service_ctl::start(allow_elevation))
 }
 
-/// Stop `OwletteService`, elevating only when this process lacks the right.
+/// Stop `OwletteService`, on the same terms as [`service_start`].
 #[tauri::command(async)]
-pub fn service_stop() -> Result<ServiceCommandOutcome, String> {
-  service_ctl::stop()
+pub fn service_stop(allow_elevation: bool) -> Result<ServiceCommandOutcome, String> {
+  logged("stop", service_ctl::stop(allow_elevation))
+}
+
+/// Leave a line for every service command.
+///
+/// Both of these used to be silent, so the only evidence a start had been asked
+/// for was the UAC prompt itself — which is exactly how a spurious start during
+/// the quit went unnoticed in the field: `owlette-desktop.log` recorded the
+/// tray's stop and then nothing at all.
+fn logged(
+  verb: &str,
+  result: Result<ServiceCommandOutcome, String>,
+) -> Result<ServiceCommandOutcome, String> {
+  match &result {
+    Ok(outcome) => log::info!(
+      "service {verb} requested — {} (was {})",
+      outcome.method,
+      outcome.state_before
+    ),
+    Err(error) => log::warn!("service {verb} failed: {error}"),
+  }
+  result
 }
 
 /// Close `pid` gracefully, then terminate it — but only if it is still running

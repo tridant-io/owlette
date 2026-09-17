@@ -7,7 +7,7 @@
  * already publishes the verdict as `health_probe.STATUS_AUTH_ERROR`.
  */
 
-import { isServiceDown, type ServiceStatus } from '@/lib/ipc'
+import { type ServiceStatus } from '@/lib/ipc'
 import type { OwletteConfig } from '@/lib/owletteConfig'
 
 /** `tmp/service_status.json`, as written by `owlette_service._write_service_status`. */
@@ -39,7 +39,19 @@ export interface ServiceStatusFile {
   [key: string]: unknown
 }
 
+/**
+ * What the status word and its dot are coloured by. One meaning each:
+ *
+ * - `ok` (green) — owlette is doing its job.
+ * - `warn` (yellow) — in transit, or waiting on the operator. Nothing is broken,
+ *   but it is not finished either, so the eye should land on it.
+ * - `error` (red) — something is wrong that nobody chose.
+ * - `muted` (grey) — off, on purpose, or not known yet. Not an alarm.
+ */
 export type FooterTone = 'ok' | 'warn' | 'error' | 'muted'
+
+/** The one call to action the footer may offer. `none` is the common case. */
+export type FooterAction = 'start' | 'join' | 'none'
 
 export interface FooterState {
   /** Lowercase copy for the status word. */
@@ -49,6 +61,90 @@ export interface FooterState {
   detail: string | null
   /** True while the service is not supervising this machine. */
   serviceDown: boolean
+  /**
+   * Decided here rather than in the footer, so "is there anything to press" is
+   * answered in the same place as "what is going on" and the two cannot drift.
+   */
+  action: FooterAction
+}
+
+/**
+ * Where the service is in its lifecycle.
+ *
+ * This is the distinction the footer used to be missing. `isServiceDown` folds
+ * "not running *yet*" into "not running", so a service coming up perfectly
+ * normally was announced as an unsupervised machine with a button offering to
+ * fix it — for the ten-odd seconds between the SCM reporting RUNNING and the
+ * agent publishing its first status. Anything in transit is `starting` or
+ * `stopping`: states with nothing wrong and nothing for the operator to do.
+ */
+export type ServiceLifecycle =
+  | 'unknown'
+  | 'not_installed'
+  | 'starting'
+  | 'stopping'
+  | 'running'
+  | 'stopped'
+  | 'crashed'
+  | 'wedged'
+
+export function serviceLifecycle(status: ServiceStatus | null): ServiceLifecycle {
+  if (!status) return 'unknown'
+  if (!status.installed) return 'not_installed'
+
+  switch (status.state) {
+    case 'start_pending':
+    case 'continue_pending':
+      return 'starting'
+    case 'stop_pending':
+      return 'stopping'
+    case 'running':
+      // The SCM says RUNNING as soon as owlette-host is up, which is well before
+      // the agent it supervises has finished booting and written its first
+      // status file. Until that lands the file on disk is the *previous* run's,
+      // and therefore stale — which is wedged, unless the caller says a start is
+      // in progress.
+      //
+      // KNOWN, DELIBERATE DIVERGENCE from the tray. `tray.rs::determine_status`
+      // maps a stale file straight to Error/"not responding", locked by
+      // `a_service_that_stopped_publishing_is_not_reported_as_starting` — it has
+      // no memory of transitions, so it cannot tell a watched start from an
+      // agent that went quiet, and for the icon that is the safer default.
+      // Teaching the tray the same rule is the fix; it belongs in its own change,
+      // with its own pass over that test.
+      return status.statusFile.stale ? 'wedged' : 'running'
+    default:
+      // A quit and a crash both land the SCM on STOPPED. `stoppedCleanly` is the
+      // only thing that separates them, and painting a crash-looping agent the
+      // same calm grey as a deliberate quit is exactly the wrong way round.
+      return status.stoppedCleanly === false ? 'crashed' : 'stopped'
+  }
+}
+
+/**
+ * What to call a down service. `not responding` is deliberately the same phrase
+ * the tray already uses for a stale status file (`tray.rs::determine_status`),
+ * so the two surfaces name the same condition the same way.
+ */
+const DOWN_LABEL: Partial<Record<ServiceLifecycle, string>> = {
+  stopped: 'stopped',
+  crashed: 'stopped unexpectedly',
+  wedged: 'not responding',
+  not_installed: 'not installed',
+}
+
+/** Why a down service is down, in the words the footer's tooltip uses. */
+function downServiceDetail(lifecycle: ServiceLifecycle): string {
+  switch (lifecycle) {
+    case 'not_installed':
+      return 'OwletteService is not installed on this machine'
+    case 'crashed':
+      return 'the service exited on its own — check the agent log. windows retries three times before giving up'
+    case 'wedged':
+      return 'the service is running but has not written its status file for over two minutes'
+    default:
+      return 'nothing is supervising this machine right now'
+  }
 }
 
 export const FOOTER_TONE_CLASS: Record<FooterTone, string> = {
@@ -75,6 +171,14 @@ export interface FooterInputs {
   statusFile: ServiceStatusFile | null
   /** Parsed `config.json`, or null before the first read lands. */
   config: OwletteConfig | null
+  /**
+   * True while the app is getting the service up — see
+   * `useServiceHealth`'s `bringingUp`. Defaults to "nobody is doing anything
+   * about it", which is what makes the `start service` button appear.
+   */
+  bringingUp?: boolean
+  /** Last SCM poll failure, so a query that is failing is not read as pending. */
+  scmError?: string | null
 }
 
 /** The `firebase` block of config.json, as far as any surface here reads it. */
@@ -129,46 +233,122 @@ export function isPaired(config: OwletteConfig | null): boolean | null {
  * status file is over two minutes stale, which the tray also treats as stopped —
  * outranks every cloud check, or a green light shows on an unsupervised machine.
  */
-export function deriveFooterState({ status, statusFile, config }: FooterInputs): FooterState {
+export function deriveFooterState({
+  status,
+  statusFile,
+  config,
+  bringingUp = false,
+  scmError = null,
+}: FooterInputs): FooterState {
   // Before the first SCM query, "disconnected" would be a lie that flashes.
   if (!status) {
-    return { label: 'checking', tone: 'muted', detail: null, serviceDown: false }
+    // ...but "checking" forever is its own lie. When the query is failing rather
+    // than pending, say so: grey is right for "we cannot tell", the word was not.
+    if (scmError) {
+      return {
+        label: 'service manager unreachable',
+        tone: 'muted',
+        detail: scmError,
+        serviceDown: false,
+        action: 'none',
+      }
+    }
+    return { label: 'checking', tone: 'muted', detail: null, serviceDown: false, action: 'none' }
   }
 
-  if (isServiceDown(status)) {
+  const lifecycle = serviceLifecycle(status)
+
+  if (lifecycle === 'stopping') {
     return {
-      label: 'service not running',
-      tone: 'error',
-      detail: !status.installed
-        ? 'OwletteService is not installed on this machine'
-        : status.statusFile.stale && status.running
-          ? 'the service is running but has not written its status file for over two minutes'
-          : 'nothing is supervising this machine right now',
-      serviceDown: true,
+      label: 'stopping',
+      tone: 'warn',
+      detail: 'the owlette service is stopping',
+      serviceDown: false,
+      action: 'none',
     }
   }
 
+  // One state for the whole bring-up, and no button anywhere in it.
+  //
+  // The operator does not care which of the four phases it is in — a start about
+  // to be issued, one in flight, the SCM's own StartPending, or the agent behind
+  // it still booting and reaching the cloud. They are all "wait a moment", and
+  // splitting them apart is what produced a red "service not running" and a
+  // `start service` button during an ordinary launch. `not_installed` is
+  // excluded: nothing is coming up on a machine with no service on it.
+  if (lifecycle !== 'not_installed' && (bringingUp || lifecycle === 'starting')) {
+    return {
+      // The ellipsis is doing real work. `connecting` and `connected` differ by
+      // three characters mid-word at 12px, and amber-400 and green-500 collapse
+      // to the same olive under red-green colour deficiency — so for ~8% of male
+      // operators the dot and the word would both be uninformative. An ellipsis
+      // survives every colour filter and independently reads as "in progress".
+      label: 'connecting…',
+      tone: 'warn',
+      detail: 'the owlette service is starting — this takes a few seconds',
+      serviceDown: false,
+      action: 'none',
+    }
+  }
+
+  // Genuinely down, with nobody doing anything about it. This is the one place
+  // the button belongs — but the three ways to get here do not mean the same
+  // thing, and colouring them alike made a machine somebody deliberately quit
+  // look identical to one that had failed.
+  if (lifecycle !== 'running') {
+    return {
+      // `stopped` is a choice someone made, and the button beside it is how it
+      // is undone: grey, not red. `not responding` and `not installed` are
+      // faults nobody asked for.
+      label: DOWN_LABEL[lifecycle] ?? 'stopped',
+      tone: lifecycle === 'stopped' ? 'muted' : 'error',
+      detail: downServiceDetail(lifecycle),
+      serviceDown: true,
+      action: 'start',
+    }
+  }
+
+  // Past here the service is up and publishing, so `join site` is the only
+  // action that can make sense — and only when this machine belongs to nothing.
+  const join: FooterAction = isPaired(config) === false ? 'join' : 'none'
+
   const firebase = firebaseSection(config)
+
+  // No site. A fresh install, a local `leave site`, and an admin removing the
+  // machine on the dashboard all write the SAME thing to config.json — enabled
+  // false and an empty site_id (configure_site.py, firebase_client.py's 403/404
+  // handler) — so nothing here can tell them apart and the copy must not
+  // pretend otherwise.
+  //
+  // This replaces two states. `disabled` claimed "cloud features are turned off
+  // in config.json", which blamed a local setting for what is usually a remote
+  // action. `removed from site` needed enabled=true with an empty site_id — a
+  // pair no writer in the product ever produces, so it was unreachable outside
+  // its own test fixture, and the real removal landed on `disabled`.
+  if (config && !firebase.site_id) {
+    return {
+      label: 'not paired',
+      tone: 'muted',
+      detail: 'this machine does not belong to a site — use join site to pair it',
+      serviceDown: false,
+      action: join,
+    }
+  }
+
+  // Assigned to a site, but the cloud is switched off locally. Reachable only by
+  // hand-editing config.json, and worth saying plainly when it happens.
   if (config && !firebase.enabled) {
     return {
-      label: 'disabled',
+      label: 'cloud disabled',
       tone: 'muted',
       detail: 'cloud features are turned off in config.json',
       serviceDown: false,
-    }
-  }
-
-  if (config && !firebase.site_id) {
-    return {
-      label: 'removed from site',
-      tone: 'error',
-      detail: 'this machine is no longer assigned to a site',
-      serviceDown: false,
+      action: join,
     }
   }
 
   if (statusFile?.firebase?.connected) {
-    return { label: 'connected', tone: 'ok', detail: null, serviceDown: false }
+    return { label: 'connected', tone: 'ok', detail: null, serviceDown: false, action: join }
   }
 
   if (statusFile?.health?.error_code === AUTH_ERROR) {
@@ -177,6 +357,7 @@ export function deriveFooterState({ status, statusFile, config }: FooterInputs):
       tone: 'warn',
       detail: statusFile.health?.error_message ?? 'the service could not authenticate with owlette',
       serviceDown: false,
+      action: join,
     }
   }
 
@@ -185,6 +366,7 @@ export function deriveFooterState({ status, statusFile, config }: FooterInputs):
     tone: 'error',
     detail: statusFile?.health?.error_message ?? 'the service is running but not reaching owlette',
     serviceDown: false,
+    action: join,
   }
 }
 
@@ -207,13 +389,18 @@ export function footerSentence(state: FooterState, site: string, hostname: strin
   }
   switch (state.label) {
     case 'connected':
+    case 'connecting…':
       return { before: `${hostname} is `, after: site ? ` to ${site}` : '' }
     case 'disconnected':
       return { before: `${hostname} is `, after: site ? ` from ${site}` : '' }
-    case 'service not running':
+    case 'stopped':
+    case 'stopped unexpectedly':
+    case 'not responding':
+    case 'not installed':
+    case 'stopping':
       return { before: '', after: ` on ${hostname}` }
-    case 'removed from site':
-      return { before: `${hostname} was `, after: '' }
+    case 'not paired':
+      return { before: `${hostname} is `, after: '' }
     case 'authentication required':
       return { before: '', after: ` for ${hostname}` }
     default:

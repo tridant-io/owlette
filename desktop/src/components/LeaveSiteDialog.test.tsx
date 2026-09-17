@@ -27,6 +27,9 @@ function scmStatus(state: ServiceStatus['state']): ServiceStatus {
     running: state === 'running',
     state,
     startType: 'auto_start',
+    // Leave-site stops the service deliberately, so a clean exit is the case
+    // this fixture stands in for.
+    stoppedCleanly: state === 'stopped' ? true : null,
     statusFile: { exists: true, ageSecs: 3, stale: false },
   }
 }
