@@ -805,6 +805,8 @@ def ensure_data_directories():
         get_data_path('ipc/cortex_commands'),
         get_data_path('ipc/cortex_results'),
         get_data_path('ipc/cortex_events'),
+        get_data_path('logs/swoop'),
+        get_data_path('ipc/swoop'),
     ]
 
     try:
@@ -1073,6 +1075,35 @@ def is_cortex_enabled(config=None):
     if config is None:
         config = read_config()
     return bool(config.get('cortex', {}).get('enabled', False))
+
+# Swoop (remote KVM streamer) paths. The streamer is installed at
+# {app}\swoop\owlette-swoop.exe by the installer and spawned by the service.
+SWOOP_EXE_NAME = 'owlette-swoop.exe'
+# The streamer rotates this directory itself; cleanup_old_logs() is
+# deliberately non-recursive and must stay that way.
+SWOOP_LOG_DIR = get_data_path('logs/swoop')
+SWOOP_IPC_DIR = get_data_path('ipc/swoop')
+
+
+def get_swoop_dir():
+    """Install directory of the swoop streamer — <install root>\\swoop.
+
+    Never creates it, and must not be made to. The installer lays it down as
+    SYSTEM with a protected DACL, and that ownership is what the spawn path
+    trusts; creating it here would hand that trust to whatever already sits at
+    the path. Absent means swoop is not installed.
+    """
+    install_root = os.path.dirname(os.path.dirname(get_path()))
+    return os.path.join(install_root, 'swoop')
+
+
+def get_swoop_exe_path():
+    """Full path to the swoop streamer, or None when not installed. Resolved
+    from the install root like get_desktop_exe_path(), so a relocated install
+    works. None is how "swoop unavailable" reaches the capability heartbeat.
+    """
+    candidate = os.path.join(get_swoop_dir(), SWOOP_EXE_NAME)
+    return candidate if os.path.exists(candidate) else None
 
 # LOGGING
 def get_log_level_from_config():
