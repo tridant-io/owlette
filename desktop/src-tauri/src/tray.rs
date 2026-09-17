@@ -39,12 +39,12 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::paths::{
-  self, AGENT_VERSION_REL, GUI_PID_REL, RESTART_FLAG_REL, SERVICE_STATUS_REL, TRAY_PID_REL,
-};
+#[cfg(windows)]
+use crate::paths::RESTART_FLAG_REL;
+use crate::paths::{self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL};
 use crate::pid_file;
 use crate::service_ctl;
-use crate::startup_link;
+use crate::startup_link::{self, Autostart};
 
 /// Identity of the tray icon, used to fetch it back from an app handle.
 const TRAY_ID: &str = "owlette";
@@ -84,6 +84,7 @@ const REFUSAL_BACKOFF_AFTER: u32 = 10;
 const SEED_TIMEOUT: Duration = Duration::from_millis(500);
 /// Pause between the elevated stop and quitting, so the operator sees a clean
 /// transition rather than the icon vanishing first.
+#[cfg(windows)]
 const EXIT_SETTLE: Duration = Duration::from_secs(2);
 
 /// Overall health, in the three buckets the icon can show.
@@ -118,7 +119,9 @@ struct TrayView {
   status: String,
   /// Health-probe message, when there is one.
   health: Option<String>,
-  start_on_login: bool,
+  /// Three-way: the init system owns autostart off Windows, and the menu says
+  /// so rather than offering a switch that cannot move.
+  start_on_login: Autostart,
 }
 
 /// Live menu, kept so the common case is a text update. Rebuilt only when the
@@ -327,13 +330,13 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     service: seed.service,
     status: seed.status,
     health: seed.health,
-    start_on_login: startup_link::is_enabled(),
+    start_on_login: startup_link::state(),
   };
 
   let menu = build_menu(app, &view)?;
   let tray = TrayIconBuilder::with_id(TRAY_ID)
     .icon(icon_for(view.code))
-    .tooltip(tooltip(&root, &view))
+    .tooltip(tooltip(&view))
     .menu(&menu.menu)
     // Windows defaults to the menu on either button; left click must open the
     // window or there is no one-click way back to it.
@@ -510,7 +513,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
         service: text.service,
         status: text.status,
         health: text.health,
-        start_on_login: startup_link::is_enabled(),
+        start_on_login: startup_link::state(),
       };
 
       if current.as_ref() != Some(&view) {
@@ -522,7 +525,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
           last_flash = now;
         }
         apply_menu(&app, &view);
-        wanted_tooltip = Some(tooltip(&root, &view));
+        wanted_tooltip = Some(tooltip(&view));
       }
 
       // Only the Error tier toasts (narrowed 2026-08-14): a Warning is what
@@ -618,7 +621,9 @@ fn apply_menu(app: &AppHandle, view: &TrayView) {
         if let (Some(item), Some(text)) = (&menu.health, &view.health) {
           let _ = item.set_text(text);
         }
-        let _ = menu.start_on_login.set_checked(view.start_on_login);
+        let _ = menu
+          .start_on_login
+          .set_checked(start_on_login_checked(view.start_on_login));
       }
     }
     Err(error) => log::error!("tray menu lock poisoned: {error}"),
@@ -913,11 +918,10 @@ fn notify(app: &AppHandle, title: &str, body: String) {
 
 
 fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
-  let root = paths::data_root();
   let version = MenuItem::with_id(
     app,
     "version",
-    format!("owlette v{}", agent_version(&root)),
+    format!("owlette v{}", agent_version(&paths::install_root())),
     false,
     None::<&str>,
   )?;
@@ -941,9 +945,9 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   let start_on_login = CheckMenuItem::with_id(
     app,
     ID_START_ON_LOGIN,
-    "start on login",
-    true,
-    view.start_on_login,
+    start_on_login_label(view.start_on_login),
+    start_on_login_clickable(view.start_on_login),
+    start_on_login_checked(view.start_on_login),
     None::<&str>,
   )?;
   let exit = MenuItem::with_id(app, ID_EXIT, "exit", true, None::<&str>)?;
@@ -972,10 +976,32 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   })
 }
 
-fn tooltip(root: &Path, view: &TrayView) -> String {
+/// The autostart row's text. Where the init system owns it the row says so
+/// rather than offering a switch that cannot move.
+fn start_on_login_label(state: Autostart) -> &'static str {
+  match state {
+    Autostart::Managed => "start on login (managed by the system)",
+    Autostart::Enabled | Autostart::Disabled => "start on login",
+  }
+}
+
+/// Whether the row does anything when clicked. Only where this app owns the
+/// setting.
+fn start_on_login_clickable(state: Autostart) -> bool {
+  state != Autostart::Managed
+}
+
+/// Whether the row shows a tick. A managed machine does start owlette at login,
+/// but the box is not the thing that decides it, so it stays clear: a tick the
+/// operator cannot clear reads as a setting they own.
+fn start_on_login_checked(state: Autostart) -> bool {
+  state == Autostart::Enabled
+}
+
+fn tooltip(view: &TrayView) -> String {
   format!(
     "owlette v{}\nhostname: {}\n{}\n{}",
-    agent_version(root),
+    agent_version(&paths::install_root()),
     hostname(),
     view.service,
     view.status
@@ -993,8 +1019,59 @@ fn agent_version(root: &Path) -> String {
     .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
+/// The name the fleet records this machine under — `socket.gethostname()` on
+/// the python side, the same name each arm here asks the OS for.
 pub(crate) fn hostname() -> String {
-  std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string())
+  named(os_hostname())
+}
+
+/// What the tray shows when the OS will not give a name: blank would read as a
+/// machine with no identity rather than one we could not ask.
+fn named(reported: Option<String>) -> String {
+  reported
+    .map(|name| name.trim().to_string())
+    .filter(|name| !name.is_empty())
+    .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[cfg(windows)]
+fn os_hostname() -> Option<String> {
+  use windows::core::PWSTR;
+  use windows::Win32::System::SystemInformation::{
+    ComputerNamePhysicalDnsHostname, GetComputerNameExW,
+  };
+
+  // The DNS host name winsock would answer with, not `%COMPUTERNAME%`'s
+  // NetBIOS form: the agent registers the machine under the former.
+  let mut buffer = [0u16; 256];
+  let mut length = buffer.len() as u32;
+  // SAFETY: the buffer outlives the call and `length` is its size in wide
+  // characters, which is what the API reads and then overwrites with the
+  // length it wrote.
+  unsafe {
+    GetComputerNameExW(
+      ComputerNamePhysicalDnsHostname,
+      Some(PWSTR(buffer.as_mut_ptr())),
+      &mut length,
+    )
+    .ok()?;
+  }
+  Some(String::from_utf16_lossy(&buffer[..length as usize]))
+}
+
+#[cfg(unix)]
+fn os_hostname() -> Option<String> {
+  let mut buffer = [0 as libc::c_char; 256];
+  // SAFETY: the pointer is this buffer's, and the length is one short of it so
+  // a truncated name keeps the terminator POSIX does not promise to write.
+  let result = unsafe { libc::gethostname(buffer.as_mut_ptr(), buffer.len() - 1) };
+  if result != 0 {
+    return None;
+  }
+  // SAFETY: the call above terminated the name inside the buffer, which is
+  // still borrowed here.
+  let name = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) };
+  Some(name.to_string_lossy().into_owned())
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -1034,6 +1111,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 /// 42 via `tmp/restart.flag`, which owlette-host turns into a relaunch. A
 /// stopped service has no loop to read the flag, so it is started directly —
 /// the one path here that can raise an elevation prompt.
+#[cfg(windows)]
 fn restart_service(app: &AppHandle) {
   let root = paths::data_root();
   let running = service_ctl::status(&root.join(SERVICE_STATUS_REL))
@@ -1083,12 +1161,67 @@ fn restart_service(app: &AppHandle) {
   }
 }
 
+/// Restart the service, with no elevation prompt anywhere.
+///
+/// Same shape as the Windows arm — a stopped service is started rather than
+/// asked to restart itself — but the ask is different. `tmp/restart.flag` is
+/// honoured off Windows only when root wrote it
+/// (`owlette_service._restart_requested`), because `tmp/` is group-writable
+/// there, so the request goes into the `ipc/` seam and the daemon restarts its
+/// own unit under the seam's nonce, rate limit and audit row.
+#[cfg(unix)]
+fn restart_service(app: &AppHandle) {
+  let root = paths::data_root();
+  let running = service_ctl::status(&root.join(SERVICE_STATUS_REL))
+    .map(|status| status.running)
+    .unwrap_or(false);
+
+  if !running {
+    log::info!("service is stopped — starting it instead of asking for a restart");
+    // The flag the Windows arm passes for its UAC fallback; there is no
+    // elevation off Windows, and polkit has already decided.
+    match service_ctl::start(true) {
+      Ok(outcome) => {
+        log::info!("service start issued ({})", outcome.method);
+        notify(
+          app,
+          "owlette — starting",
+          "starting service — will return momentarily".to_string(),
+        );
+      }
+      Err(error) => {
+        log::error!("could not start the service: {error}");
+        notify(app, "restart failed", error);
+      }
+    }
+    return;
+  }
+
+  match service_ctl::restart(&root) {
+    Ok(()) => {
+      log::info!("the owlette daemon took the restart request");
+      notify(
+        app,
+        "owlette — restarting",
+        "restarting service — will return momentarily".to_string(),
+      );
+    }
+    Err(error) => {
+      log::error!("could not restart the service: {error}");
+      notify(app, "restart failed", error);
+    }
+  }
+}
+
 fn toggle_start_on_login(app: &AppHandle) {
-  let enabled = startup_link::is_enabled();
-  let result = if enabled {
-    startup_link::disable()
-  } else {
-    startup_link::enable().map(|path| log::info!("wrote {}", path.display()))
+  let result = match startup_link::state() {
+    Autostart::Enabled => startup_link::disable(),
+    Autostart::Disabled => {
+      startup_link::enable().map(|path| log::info!("wrote {}", path.display()))
+    }
+    // The row is built disabled where the system owns autostart, so this is
+    // reachable only if a menu ever fires one anyway.
+    Autostart::Managed => Ok(()),
   };
 
   if let Err(error) = result {
@@ -1100,7 +1233,9 @@ fn toggle_start_on_login(app: &AppHandle) {
   // write leaves the menu lying.
   if let Some(state) = app.try_state::<TrayState>() {
     if let Ok(menu) = state.menu.lock() {
-      let _ = menu.start_on_login.set_checked(startup_link::is_enabled());
+      let _ = menu
+        .start_on_login
+        .set_checked(start_on_login_checked(startup_link::state()));
     }
   }
 }
@@ -1110,6 +1245,7 @@ fn toggle_start_on_login(app: &AppHandle) {
 /// controlled SCM stop, which needs rights this process usually lacks. We quit
 /// either way — if the operator declines the prompt, the service relaunches the
 /// tray.
+#[cfg(windows)]
 fn exit_owlette(app: &AppHandle) {
   hide_main_window(app);
 
@@ -1119,6 +1255,19 @@ fn exit_owlette(app: &AppHandle) {
   }
 
   thread::sleep(EXIT_SETTLE);
+  app.exit(0);
+}
+
+/// Quit the app, and only the app.
+///
+/// Off Windows the init system starts the desktop app and the daemon never does
+/// (decision 2), so nothing relaunches this process behind the operator's back
+/// and there is no reason to stop the agent to make "exit" stick. Stopping the
+/// machine's supervision because somebody closed a tray icon is the opposite of
+/// what a kiosk needs.
+#[cfg(unix)]
+fn exit_owlette(app: &AppHandle) {
+  hide_main_window(app);
   app.exit(0);
 }
 
@@ -1722,6 +1871,27 @@ mod tests {
   }
 
   #[test]
+  fn the_autostart_row_hands_back_to_the_system_where_it_belongs() {
+    assert_eq!(
+      start_on_login_label(Autostart::Managed),
+      "start on login (managed by the system)"
+    );
+    // Unchecked AND disabled: the row explains itself instead of offering a
+    // switch that cannot move.
+    assert!(!start_on_login_clickable(Autostart::Managed));
+    assert!(!start_on_login_checked(Autostart::Managed));
+
+    // Negative control: where the app owns the shortcut the row is an ordinary
+    // checkbox.
+    for state in [Autostart::Enabled, Autostart::Disabled] {
+      assert_eq!(start_on_login_label(state), "start on login");
+      assert!(start_on_login_clickable(state));
+    }
+    assert!(start_on_login_checked(Autostart::Enabled));
+    assert!(!start_on_login_checked(Autostart::Disabled));
+  }
+
+  #[test]
   fn a_reconnecting_toast_survives_the_site_being_named() {
     // Toast text is chosen from the status row; appending must not break it.
     let view = TrayView {
@@ -1729,7 +1899,7 @@ mod tests {
       service: "service: running".to_string(),
       status: "status: disconnected from TEC".to_string(),
       health: None,
-      start_on_login: false,
+      start_on_login: Autostart::Disabled,
     };
     let (title, _) = degraded_notification(&view);
     assert_eq!(title, "owlette — reconnecting");
@@ -1782,7 +1952,7 @@ mod tests {
       service: "service: error".to_string(),
       status: status.to_string(),
       health: None,
-      start_on_login: false,
+      start_on_login: Autostart::Disabled,
     };
 
     let (title, _) = degraded_notification(&view("status: auth_error", StatusCode::Error));
@@ -1841,5 +2011,25 @@ mod tests {
     assert_eq!(agent_version(&dir), "2.12.21");
 
     let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn the_os_answers_with_a_hostname_on_this_platform() {
+    let name = hostname();
+    assert_ne!(name, "unknown", "the platform hostname call failed");
+    // A name carrying the terminator or the padding of the buffer it was read
+    // into is a name the dashboard would never match against the agent's.
+    assert!(!name.chars().any(char::is_control), "{name:?}");
+    assert!(!name.chars().any(char::is_whitespace), "{name:?}");
+  }
+
+  /// Negative control for the test above: "unknown" is reachable, from the one
+  /// path that should reach it, so a failing platform call cannot pass as a
+  /// hostname.
+  #[test]
+  fn a_name_the_os_will_not_give_reads_as_unknown() {
+    assert_eq!(named(None), "unknown");
+    assert_eq!(named(Some("  \n".to_string())), "unknown");
+    assert_eq!(named(Some("  kiosk-01\n".to_string())), "kiosk-01");
   }
 }

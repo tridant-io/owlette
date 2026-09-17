@@ -97,16 +97,24 @@ export interface ServiceStatus {
 }
 
 export interface ServiceCommandOutcome {
-  /** `scm` issued directly, `elevated` via a UAC prompt, `noop` already there. */
-  method: 'scm' | 'elevated' | 'noop'
   /**
-   * State before the request. An elevated start only confirms the shell
-   * accepted it, so callers poll {@link serviceStatus} for the result.
+   * `scm` issued directly, `elevated` via a UAC prompt, `systemd` through
+   * systemctl (authorised by the owlette polkit rule), `noop` already there.
+   */
+  method: 'scm' | 'elevated' | 'systemd' | 'noop'
+  /**
+   * State before the request. Neither an elevated launch nor a queued systemd
+   * job confirms the service moved, so callers poll {@link serviceStatus} for
+   * the result.
    */
   stateBefore: ServiceState
 }
 
-export type TerminateMethod = 'not_found' | 'wm_close' | 'terminated'
+/**
+ * How a stop ended. `wm_close` is Windows asking a GUI to close itself;
+ * `signaled` is its POSIX counterpart, a process that shut down on SIGTERM.
+ */
+export type TerminateMethod = 'not_found' | 'wm_close' | 'signaled' | 'terminated'
 
 export interface TerminateOutcome {
   method: TerminateMethod
@@ -116,7 +124,7 @@ export interface TerminateOutcome {
   imagePath: string | null
 }
 
-/** Absolute path of the owlette data root (`%PROGRAMDATA%\Owlette`). */
+/** Absolute path of the owlette data root, per OS. */
 export function owletteDataRoot(): Promise<string> {
   return invoke<string>('owlette_data_root')
 }
@@ -165,12 +173,16 @@ export function launchArgs(): Promise<string[]> {
   return invoke<string[]>('launch_args')
 }
 
-/** This machine's name, as the fleet knows it (`COMPUTERNAME`). */
+/** This machine's name, as the fleet knows it (`gethostname`). */
 export function hostname(): Promise<string> {
   return invoke<string>('hostname')
 }
 
-/** Whether the run-on-login startup shortcut exists. */
+/**
+ * Whether owlette starts with this session. Rejects where the init system owns
+ * autostart (macOS, linux), which is the window's cue to leave the row out — the
+ * tray renders it disabled instead.
+ */
 export function startupLinkEnabled(): Promise<boolean> {
   return invoke<boolean>('startup_link_enabled')
 }
