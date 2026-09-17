@@ -3836,6 +3836,25 @@ class OwletteService:
                             )
                     elif was_manually_killed:
                         logging.debug(f"Process {last_pid} was manually killed - skipping crash log")
+                    elif self._seat_absent():
+                        # An operator logging out takes every managed GUI app
+                        # with the session, and the daemon already waits for the
+                        # seat to come back rather than launching into the
+                        # greeter (plan decision 4) - so a death with nobody at
+                        # the seat is that logout, not a crash: no event, no
+                        # alert, and no screenshot of a desktop that is gone.
+                        # The seat here is the tick's memoised answer, so this
+                        # costs no round-trip, and the episode is the launch
+                        # door's: this line opens it in place of the door's
+                        # seatless WARNING - an entry already down when the
+                        # seat went still opens with that one - and the door's
+                        # own line closes it when somebody signs back in.
+                        if process_list_id not in self._seatless_entries:
+                            self._seatless_entries.add(process_list_id)
+                            logging.info(
+                                f"'{Util.get_process_name(process)}' ended with the "
+                                f"graphical session (PID {last_pid}) - not a crash, "
+                                f"launching when somebody signs in")
                     else:
                         process_name = Util.get_process_name(process)
 

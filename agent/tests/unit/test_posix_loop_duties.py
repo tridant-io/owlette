@@ -59,6 +59,27 @@ def console_user(monkeypatch, os_arm):
     return account
 
 
+@pytest.fixture
+def a_reaped_pid():
+    """A pid the daemon will find gone, the way the tick after a logout does."""
+    child = subprocess.Popen(['/bin/sleep', '30'])
+    child.terminate()
+    child.wait(10)
+    return child.pid
+
+
+@pytest.fixture
+def an_always_on_kiosk_entry(monkeypatch, tmp_path):
+    """One managed entry the daemon relaunches, and an app_states file of its
+    own: the dead-pid branch re-reads both."""
+    monkeypatch.setattr(
+        shared_utils, 'RESULT_FILE_PATH', str(tmp_path / 'app_states.json'))
+    monkeypatch.setattr(shared_utils, 'read_config', lambda *args, **kwargs: {
+        'processes': [
+            {'id': 'kiosk', 'name': 'Kiosk', 'launch_mode': 'always'}]})
+    return {'id': 'kiosk', 'name': 'Kiosk'}
+
+
 def test_a_script_is_launched_as_the_user_at_the_machine(
         console_user, monkeypatch):
     """hoot is a kiosk-user process on every platform — that is what makes
@@ -548,6 +569,122 @@ def test_a_crash_loop_at_a_healthy_seat_still_books_and_escalates(monkeypatch):
         'Terminated Kiosk 3 times. System reboot imminent',
     ]
     assert [row['process_name'] for row in pending] == ['Kiosk']
+
+
+_CRASH_SHOT_URL = 'https://example.invalid/crash.png'
+
+
+def _a_dead_generation(dead_pid):
+    """last_started as the tick reads it for a process that has since died."""
+    return {
+        'pid': dead_pid,
+        'time': datetime.datetime.now() - datetime.timedelta(hours=1),
+    }
+
+
+def _daemon_that_finds_a_dead_entry(dead_pid, seat_absent):
+    """The tick that finds a managed process gone, with everything the crash
+    path would send recorded rather than sent. handle_process_launch stands in
+    for the launch door, whose own seat rule decides whether anything starts.
+    """
+    recorded = SimpleNamespace(
+        events=[], alerts=[], cortex=[], screenshots=[], launched=[])
+    svc = SimpleNamespace(
+        install_locks={},
+        first_start=False,
+        _shutting_down=False,
+        current_time=datetime.datetime.now(),
+        last_started={'kiosk': _a_dead_generation(dead_pid)},
+        _seat_absent=lambda: seat_absent,
+        _seatless_entries=set(),
+        firebase_client=SimpleNamespace(
+            is_connected=lambda: True,
+            log_event=lambda **row: recorded.events.append(row),
+            send_process_alert=lambda name, details, kind: recorded.alerts.append(kind),
+        ),
+        _capture_crash_screenshot=lambda: (
+            recorded.screenshots.append('captured') or _CRASH_SHOT_URL),
+        _write_cortex_event=lambda name, details, kind: recorded.cortex.append(kind),
+        handle_process_launch=lambda process: recorded.launched.append(process['id']),
+    )
+    svc.handle_process = _bound('handle_process', svc)
+    return svc, recorded
+
+
+def test_an_app_that_ended_with_the_operators_session_is_not_a_crash(
+        an_always_on_kiosk_entry, a_reaped_pid, caplog):
+    """Owner decision 2026-09-16. Logging out of the kiosk takes every managed
+    GUI app with the session, and the tick that noticed filed each one as a
+    process_crash: an error event, an alert to whoever is on call, and a crash
+    screenshot of a desktop that no longer exists — while the daemon was
+    already doing the right thing underneath and waiting for the seat to come
+    back. Those deaths are the logout. Said once per entry per episode, INFO.
+    """
+    svc, recorded = _daemon_that_finds_a_dead_entry(
+        a_reaped_pid, seat_absent=True)
+
+    with caplog.at_level(logging.INFO):
+        svc.handle_process(an_always_on_kiosk_entry)
+        # The door's own refusal never comes back through here: it records
+        # a pid-less `failed` generation, which no later tick reads as a
+        # death. What does is an entry adopted by exe match while the
+        # seatless mark stands - both adoption paths return without
+        # clearing it - and then killed by the same logout. Staged here,
+        # because the stub door records rather than refuses.
+        svc.last_started['kiosk'] = _a_dead_generation(a_reaped_pid)
+        svc.handle_process(an_always_on_kiosk_entry)
+
+    # The negative control: ungated, each tick sends all four of these.
+    assert recorded.events == []
+    assert recorded.alerts == []
+    assert recorded.cortex == []
+    assert recorded.screenshots == []
+    # What does not change: the entry still reaches the launch door, which is
+    # where the seatless rule holds it until somebody signs back in. Marking
+    # it there is also what stands the door's own seatless WARNING down: this
+    # entry's episode opens with the INFO above instead.
+    assert recorded.launched == ['kiosk', 'kiosk']
+    assert svc._seatless_entries == {'kiosk'}
+    assert caplog.text.count('ended with the graphical session') == 1
+
+
+def test_a_death_at_a_healthy_seat_is_still_a_crash(
+        an_always_on_kiosk_entry, a_reaped_pid, caplog):
+    """The control the gate is judged by: it reads the seat, not the death.
+    With somebody signed in, a managed process gone by the next tick is the
+    crash it always was — event, alert, screenshot and cortex event, exactly
+    as before — and nothing about it is filed as a logout.
+    """
+    svc, recorded = _daemon_that_finds_a_dead_entry(
+        a_reaped_pid, seat_absent=False)
+
+    with caplog.at_level(logging.INFO):
+        svc.handle_process(an_always_on_kiosk_entry)
+
+    assert [event['action'] for event in recorded.events] == ['process_crash']
+    assert recorded.events[0]['screenshot_url'] == _CRASH_SHOT_URL
+    assert recorded.alerts == ['process_crash']
+    assert recorded.cortex == ['process_crash']
+    assert recorded.screenshots == ['captured']
+    assert recorded.launched == ['kiosk']
+    assert svc._seatless_entries == set()
+    assert 'ended with the graphical session' not in caplog.text
+
+
+def test_a_death_one_tick_after_the_seat_returned_is_a_crash(
+        an_always_on_kiosk_entry, a_reaped_pid):
+    """The edge between the two: an entry still carrying the last episode's
+    mark, dying with the seat back. That mark is bookkeeping for the launch
+    door, not a licence to swallow an alert — only the seat answers this.
+    """
+    svc, recorded = _daemon_that_finds_a_dead_entry(
+        a_reaped_pid, seat_absent=False)
+    svc._seatless_entries.add('kiosk')
+
+    svc.handle_process(an_always_on_kiosk_entry)
+
+    assert [event['action'] for event in recorded.events] == ['process_crash']
+    assert recorded.alerts == ['process_crash']
 
 
 def test_a_deployment_resolves_its_close_names_against_the_managed_entries(

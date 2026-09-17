@@ -153,6 +153,10 @@ def make_service(results, *, shutting_down=False):
         current_time=datetime.datetime(2026, 9, 12, 1, 36),
         firebase_client=None,
         results=results,
+        # Somebody is at the machine, so every death here is the crash it
+        # looks like: off Windows the seat is what tells a crash apart from
+        # an operator's logout taking the session's apps with it.
+        _seat_absent=lambda: False,
         _write_cortex_event=lambda *a, **k: None,
         _capture_crash_screenshot=lambda: None,
     )
