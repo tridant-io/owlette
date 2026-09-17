@@ -82,6 +82,9 @@ This bumps:
 - `/VERSION`
 - `/agent/VERSION`
 - `/web/package.json`
+- `/desktop/package.json` and `/desktop/src-tauri/tauri.conf.json`
+- `/desktop/src-tauri/Cargo.toml` and `/agent/host/Cargo.toml` (the lockfiles follow on the next build)
+- the version strings in `README.md`, `.claude/CLAUDE.md`, and `docs/internal/version-management.md`
 
 4. Commit and push.
 
@@ -89,10 +92,13 @@ Commit the changelog and version changes, then push to `dev` or the appropriate 
 
 5. Build the installer.
 
-```bash
-cd agent
-powershell -Command "& './build_installer_full.bat'"
+`build_installer_full.bat` ends with `pause` and pauses on every error branch, so run it with stdin redirected from `NUL` and invoke it by full path, or it hangs a non-interactive shell:
+
+```powershell
+cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
 ```
+
+Exit code 0 means the `.exe` was built; read the log on failure. Do not use `powershell -Command "& './build_installer_full.bat'"`, which hangs on the trailing `pause`.
 
 Expected runtime is about 5 minutes.
 
@@ -102,10 +108,11 @@ Expected output:
 agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe
 ```
 
-Wave 1 made tool discovery more forgiving:
+Tool discovery:
 
 - Inno Setup respects `%ISCC%`, checks `PATH`, then falls back to the default install path.
-- Python 3.11 respects `%PYTHON311_ROOT%`, checks discoverable paths, then falls back to expected install paths.
+- No system Python is used: the build downloads the Python 3.11.8 embeddable zip into `agent/downloads/` and verifies its SHA-256 before extracting it.
+- Cargo is found through `%USERPROFILE%\.cargo\bin`, which the build prepends to `PATH`.
 
 6. Compute sha256.
 
@@ -189,7 +196,7 @@ Triggers:
 
 Jobs:
 
-- `build`: Windows runner; installs Inno Setup 6.2.2 with Chocolatey; pins Python 3.11; runs `build_installer_full.bat`; computes sha256 in hex and base64; uploads artifact `owlette-installer`; retains it for 7 days.
+- `build`: Windows runner; uses the runner's preinstalled Inno Setup 6 (installing it with Chocolatey only if absent); pins Python 3.11 with `setup-python`; runs `build_installer_full.bat`; computes sha256 in hex and base64; uploads artifact `owlette-installer`; retains it for 7 days.
 - `provenance`: uses `slsa-framework/slsa-github-generator`; creates an in-toto attestation; signs with Sigstore keyless signing; uploads the attestation as a GitHub Release asset on tag pushes.
 - `release`, tag-only: uses `softprops/action-gh-release@v2` and attaches the `.exe` to the GitHub Release.
 - `verify`, tag-only: downloads the installer and provenance, then runs `slsa-verifier verify-artifact`.

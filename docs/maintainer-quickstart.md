@@ -120,7 +120,6 @@ Treat [docs/internal/version-management.md](internal/version-management.md) and 
 ## known portability gaps (open work)
 
 - Code signing is deferred as a business decision ([runbooks/index.md](runbooks/index.md))
-- `agent/BUILD.md` still references legacy OAuth tokens, `C:\Owlette` paths, and a missing `docs/oauth-flow.md`
 - See [docs/changelog.md](changelog.md) for completed portability fixes
 
 ## runbooks
