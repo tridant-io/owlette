@@ -490,7 +490,13 @@ def _graphical_session(uid=None) -> _Session | None:
     A headless machine, a container, a box whose kiosk user has not logged in
     yet and one sitting at the login screen all resolve to None here — there is
     a session listed for each, and none of them is a login of a real account.
+    macOS has no logind: WindowServer's own list of console sessions answers
+    there, under the same rules.
     """
+    if sys.platform == 'darwin':
+        from . import darwin
+
+        return darwin._console_session(uid)
     for line in _loginctl('list-sessions', '--no-legend').splitlines():
         columns = line.split()
         if not columns:
@@ -525,7 +531,13 @@ def _session_display_environ(session: _Session) -> dict[str, str]:
     one of those answers: the first process belonging to the session's own
     user, in its scope or in the user units beside it, whose environment
     names a display.
+
+    A macOS session is named by no variable at all: a process reaches
+    WindowServer through the bootstrap namespace it is spawned into, which is
+    the spawn's work, so there is nothing to lift and no walk to make.
     """
+    if sys.platform == 'darwin':
+        return {}
     for pid in _session_pids(session):
         if _process_uid(pid) != session.uid:
             continue
@@ -752,7 +764,12 @@ def _xauthority(lifted: str | None, uid) -> str | None:
     older managers write to, so the home-directory guess names nothing at all
     on a GDM kiosk — and an XAUTHORITY naming nothing is worse than none,
     because X stops there rather than falling back.
+
+    Quartz has no cookie, and one XQuartz left in a home directory is nothing
+    a macOS application should be handed.
     """
+    if sys.platform == 'darwin':
+        return None
     candidates = (
         lifted,
         os.path.join(RUNTIME_DIR_ROOT, str(uid), 'gdm', 'Xauthority'),
@@ -772,7 +789,16 @@ def _spawn(argv, uid, env, cwd=None) -> int:
     group and the account's supplementary groups are handed to Popen itself.
     start_new_session detaches the child from the daemon's process group, which
     is what keeps it running across a service restart.
+
+    On macOS the setuid half is right and the session half is not: a child of
+    the daemon lands in the system bootstrap namespace, where no WindowServer
+    answers. There the process is a launchd job in the user's GUI domain
+    instead (darwin._spawn_in_gui_domain).
     """
+    if sys.platform == 'darwin':
+        from . import darwin
+
+        return darwin._spawn_in_gui_domain(argv, uid, env, cwd)
     account = pwd.getpwuid(uid)
     child = subprocess.Popen(
         argv,

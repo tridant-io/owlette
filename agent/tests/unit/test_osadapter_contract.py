@@ -12,6 +12,7 @@ import inspect
 import json
 import logging
 import os
+import plistlib
 import shutil
 import stat
 import subprocess
@@ -39,10 +40,15 @@ linux_only = pytest.mark.skipif(
     not sys.platform.startswith('linux'),
     reason='a Linux mechanism; macOS answers it in darwin.py',
 )
+darwin_only = pytest.mark.skipif(
+    sys.platform != 'darwin',
+    reason='a macOS mechanism; Linux answers it in linux.py',
+)
 
 ADAPTERS = [
     pytest.param('win', marks=pytest.mark.windows),
     pytest.param('linux', marks=linux_only),
+    pytest.param('darwin', marks=darwin_only),
 ]
 as_root = pytest.mark.skipif(
     sys.platform == 'win32' or os.geteuid() != 0,
@@ -86,6 +92,11 @@ def posix():
 @pytest.fixture
 def linux():
     return importlib.import_module('osadapter.linux')
+
+
+@pytest.fixture
+def darwin():
+    return importlib.import_module('osadapter.darwin')
 
 
 @pytest.fixture
@@ -577,6 +588,7 @@ class TestPosix:
         user = posix.console_user()
         assert user is None or pwd.getpwnam(user)
 
+    @linux_only
     def test_a_tty_session_is_not_a_seat(self, posix, monkeypatch):
         """What a headless box, a container and WSL all look like: a login is
         listed, and none of them has a display to reach."""
@@ -585,6 +597,7 @@ class TestPosix:
         })
         assert posix.console_user() is None
 
+    @linux_only
     def test_the_active_graphical_session_names_the_console_user(self, posix, monkeypatch):
         _stub_sessions(monkeypatch, posix, {
             '2': 'User=0\nName=root\nClass=user\nLeader=291\nType=tty\nActive=yes\n',
@@ -592,6 +605,7 @@ class TestPosix:
         })
         assert posix.console_user() == 'kiosk'
 
+    @linux_only
     @pytest.mark.parametrize('state', ['State=online\n', ''])
     def test_a_switched_away_session_is_not_the_console_user(
         self, posix, monkeypatch, state
@@ -610,6 +624,7 @@ class TestPosix:
         # without the Active check this answers 'kiosk'.
         assert posix.console_user() is None
 
+    @linux_only
     def test_a_session_being_torn_down_is_not_a_seat(self, posix, monkeypatch):
         """Measured on the kiosk VM: `loginctl terminate-user kiosk` killed
         the X server at 18:38:34 and logind went on listing the session as
@@ -636,6 +651,7 @@ class TestPosix:
         assert posix.console_user() is None
         assert 'State' in asked[0]
 
+    @linux_only
     def test_the_state_a_standing_session_reports_is_still_a_seat(
         self, posix, monkeypatch
     ):
@@ -653,6 +669,7 @@ class TestPosix:
             })
             assert posix.console_user() == 'kiosk'
 
+    @linux_only
     def test_a_session_that_is_still_opening_is_not_a_seat_yet(
         self, posix, monkeypatch
     ):
@@ -674,6 +691,7 @@ class TestPosix:
         # 'kiosk' and the launch goes into the half-built session.
         assert posix.console_user() is None
 
+    @linux_only
     def test_the_login_screen_is_not_a_console_user(self, posix, monkeypatch):
         """Proven on the kiosk VM: at the GDM greeter — before the autologin,
         and after any logout, which does not re-fire it — logind lists an
@@ -1112,15 +1130,13 @@ class TestPosix:
         assert result['error'] == 'desktop_not_running'
         assert result['job'] == 'notify'
 
-    @linux_only
-    def test_the_desktop_gate_is_the_tray_marker(self, posix, tmp_path):
+    def test_the_desktop_gate_is_the_tray_marker(self, posix, private_executable):
         """The same marker and image-name check the tray-liveness guard reads,
         which is what desktop_process_name() re-pointed onto this arm. It asks
         the package for the name, so it needs the arm `get()` selects."""
         import shared_utils
 
-        app = tmp_path / posix.desktop_process_name()
-        shutil.copy('/bin/sleep', app)
+        app = private_executable(posix.desktop_process_name())
         marker = Path(shared_utils.TRAY_PID_PATH)
         marker.parent.mkdir(parents=True, exist_ok=True)
         child = subprocess.Popen([str(app), '30'])
@@ -1682,6 +1698,850 @@ class TestLinux:
 
     def test_pending_reboot_carries_the_windows_probe_keys(self, linux):
         assert set(linux.pending_reboot()) == PENDING_REBOOT_KEYS
+
+
+@darwin_only
+class TestDarwin:
+    """The macOS arm: the operations the shared POSIX half leaves to it."""
+
+    def test_the_tree_and_its_group_are_the_macos_ones(self, posix):
+        """posix.py answers both POSIX arms off one platform switch, and the
+        package, the seam and the mode table all read these three."""
+        assert posix.DATA_ROOT == '/Library/Application Support/Owlette'
+        assert posix.GROUP == '_owlette'
+        assert posix.GROUP_ADD == 'dseditgroup -o edit -a USER -t user _owlette'
+
+    def test_the_agents_own_service_name_resolves_to_its_label(self, darwin, monkeypatch):
+        """Every call site spells the agent's service the way the Windows SCM
+        does; this arm is what knows the label it has here."""
+        import shared_utils
+
+        launchctl = _Launchctl(monkeypatch, darwin, {'print': [(0, _launchd_job('running'))]})
+
+        assert darwin.service_control('restart', shared_utils.SERVICE_NAME) is True
+        assert launchctl.calls[0] == [
+            'launchctl', 'kickstart', '-k', 'system/app.owlette.agent',
+        ]
+
+    def test_a_start_is_the_state_the_job_reached(self, darwin, monkeypatch):
+        """kickstart returns once the start is issued, so the state is watched
+        for rather than read once."""
+        launchctl = _Launchctl(monkeypatch, darwin, {'print': [
+            (0, _launchd_job('not running')), (0, _launchd_job('running')),
+        ]})
+
+        assert darwin.service_control('start', 'app.owlette.agent') is True
+        assert launchctl.calls[0] == ['launchctl', 'kickstart', 'system/app.owlette.agent']
+
+    def test_a_start_that_never_reaches_running_is_a_failure(self, darwin, monkeypatch):
+        monkeypatch.setitem(darwin._SERVICE_CONTROLS, 'start', (True, 0.1))
+        _Launchctl(monkeypatch, darwin, {'print': [(0, _launchd_job('not running'))]})
+
+        assert darwin.service_control('start', 'app.owlette.agent') is False
+
+    def test_only_the_jobs_own_state_line_is_read(self, darwin, monkeypatch):
+        """The blocks nested inside a job carry lines of their own; one of them
+        reading `running` says nothing about the job."""
+        monkeypatch.setitem(darwin._SERVICE_CONTROLS, 'start', (True, 0.1))
+        nested = _launchd_job('not running').replace(
+            '\tendpoints = {\n', '\tendpoints = {\n\t\tstate = running\n')
+        _Launchctl(monkeypatch, darwin, {'print': [(0, nested)]})
+
+        assert darwin.service_control('start', 'app.owlette.agent') is False
+
+    def test_a_stop_is_a_bootout_that_answers_once_the_job_is_gone(
+            self, darwin, monkeypatch):
+        """Not a signal: launchd relaunches a KeepAlive job the moment a signal
+        ends it, and the agent's own plist carries KeepAlive."""
+        launchctl = _Launchctl(monkeypatch, darwin, {'print': [(113, '')]})
+
+        assert darwin.service_control('stop', 'app.owlette.agent') is True
+        assert launchctl.calls[0] == ['launchctl', 'bootout', 'system/app.owlette.agent']
+
+    def test_a_stop_that_left_the_job_running_is_a_failure(self, darwin, monkeypatch):
+        monkeypatch.setitem(darwin._SERVICE_CONTROLS, 'stop', (False, 0.1))
+        _Launchctl(monkeypatch, darwin, {'print': [(0, _launchd_job('running'))]})
+
+        assert darwin.service_control('stop', 'app.owlette.agent') is False
+
+    def test_a_job_that_is_installed_but_not_loaded_is_already_stopped(
+            self, darwin, monkeypatch, tmp_path):
+        (tmp_path / 'app.owlette.agent.plist').write_bytes(b'')
+        monkeypatch.setattr(darwin, 'LAUNCH_DAEMONS_DIR', str(tmp_path))
+        _Launchctl(monkeypatch, darwin, {
+            'bootout': [(3, 'Boot-out failed: 3: No such process')],
+            'print': [(113, '')],
+        })
+
+        assert darwin.service_control('stop', 'app.owlette.agent') is True
+
+    def test_a_stop_against_a_label_launchd_does_not_know_is_a_failure(
+            self, darwin, monkeypatch, tmp_path):
+        """Negative control for the stop above: a label nothing answers to reads
+        exactly like a stopped job, which is the state a stop wanted — so a
+        mis-spelled or not-yet-packaged label would otherwise answer that it
+        had been stopped."""
+        monkeypatch.setattr(darwin, 'LAUNCH_DAEMONS_DIR', str(tmp_path))
+        _Launchctl(monkeypatch, darwin, {
+            'bootout': [(3, 'Boot-out failed: 3: No such process')],
+            'print': [(113, '')],
+        })
+
+        assert darwin.service_control('stop', 'app.owlette.kiosk') is False
+
+    def test_a_start_of_a_job_that_is_not_loaded_bootstraps_its_plist(
+            self, darwin, monkeypatch, tmp_path):
+        """A stop is a bootout, and kickstart reaches only a loaded job — so
+        without this a service stopped here could not be started again here."""
+        plist = tmp_path / 'app.owlette.agent.plist'
+        plist.write_bytes(b'')
+        monkeypatch.setattr(darwin, 'LAUNCH_DAEMONS_DIR', str(tmp_path))
+        launchctl = _Launchctl(monkeypatch, darwin, {
+            'kickstart': [(113, ''), (0, '')],
+            'print': [(0, _launchd_job('running'))],
+        })
+
+        assert darwin.service_control('start', 'app.owlette.agent') is True
+        assert launchctl.calls[:3] == [
+            ['launchctl', 'kickstart', 'system/app.owlette.agent'],
+            ['launchctl', 'bootstrap', 'system', str(plist)],
+            ['launchctl', 'kickstart', 'system/app.owlette.agent'],
+        ]
+
+    def test_a_start_with_no_plist_to_bootstrap_is_a_failure(
+            self, darwin, monkeypatch, tmp_path):
+        monkeypatch.setattr(darwin, 'LAUNCH_DAEMONS_DIR', str(tmp_path))
+        launchctl = _Launchctl(monkeypatch, darwin, {'kickstart': [(113, '')]})
+
+        assert darwin.service_control('start', 'app.owlette.kiosk') is False
+        assert [call[1] for call in launchctl.calls] == ['kickstart']
+
+    def test_a_launchctl_that_never_ran_is_a_failure_for_every_verb(
+            self, darwin, monkeypatch):
+        """An unreachable launchctl leaves the job in no known state, and
+        'not running' must not read as a successful stop."""
+        _Launchctl(monkeypatch, darwin, {
+            'bootout': [None], 'kickstart': [None], 'print': [None],
+        })
+
+        for verb in ('stop', 'start', 'restart'):
+            assert darwin.service_control(verb, 'app.owlette.agent') is False
+
+    def test_a_name_that_cannot_be_a_label_reaches_nothing(self, darwin, monkeypatch):
+        """The label names the plist a bootstrap reads, so it is held to what
+        a label is made of before it becomes part of a path."""
+        launchctl = _Launchctl(monkeypatch, darwin, {})
+
+        assert darwin.service_control('start', '../../../tmp/evil') is False
+        assert launchctl.calls == []
+
+    def test_the_machine_id_is_the_platform_uuid(self, darwin, monkeypatch):
+        _registry(monkeypatch, darwin, {
+            (b'IOPlatformExpertDevice', 'IOPlatformUUID'): _PLATFORM_UUID,
+        })
+
+        assert darwin.stable_machine_id() == _PLATFORM_UUID
+        assert darwin.key_material() == _PLATFORM_UUID.encode()
+
+    @pytest.mark.parametrize('published', [None, '', 'not-a-uuid', 7])
+    def test_an_identity_the_registry_does_not_give_is_never_stood_in_for(
+            self, darwin, monkeypatch, published):
+        """The token store is keyed on this value, and a store that fails to
+        decrypt reads as empty and is overwritten under the next key derived —
+        so a stand-in answered for one failed read would unpair the machine
+        for good. The Linux arm's uuid.getnode() fallback is the negative
+        control this refuses to repeat."""
+        _registry(monkeypatch, darwin, {
+            (b'IOPlatformExpertDevice', 'IOPlatformUUID'): published,
+        })
+
+        with pytest.raises(OSError):
+            darwin.key_material()
+        with pytest.raises(OSError):
+            darwin.stable_machine_id()
+
+    def test_the_identity_read_in_process_is_the_one_ioreg_reports(self, darwin):
+        """Decision 8 names `ioreg -rd1 -c IOPlatformExpertDevice`; the arm
+        reads the same property without the spawn, and this holds the two to
+        the same answer on a real Mac."""
+        printed = subprocess.run(
+            ['ioreg', '-rd1', '-c', 'IOPlatformExpertDevice'],
+            capture_output=True, text=True, timeout=30, check=True,
+        ).stdout
+
+        assert f'"IOPlatformUUID" = "{darwin.stable_machine_id()}"' in printed
+
+    def test_a_registry_property_that_is_not_there_is_none(self, darwin):
+        assert darwin._registry_property(None, 'NoSuchPropertyAnywhere') is None
+        assert darwin._registry_property(b'NoSuchClassAnywhere', 'IOPlatformUUID') is None
+
+    def test_the_console_session_names_the_console_user(self, darwin, posix, monkeypatch):
+        account = pwd.getpwuid(os.getuid())
+        _consoles(monkeypatch, darwin, [_console(account.pw_name, account.pw_uid)])
+
+        assert posix.console_user() == account.pw_name
+        assert posix._graphical_session(account.pw_uid) == posix._Session(
+            account.pw_name, 'aqua', '100017', account.pw_uid)
+        assert posix._graphical_session(account.pw_uid + 1) is None
+
+    def test_a_session_switched_away_from_is_not_the_console_user(
+            self, darwin, posix, monkeypatch):
+        """Fast User Switching keeps the other login listed, off the console:
+        nobody is at its screen."""
+        _consoles(monkeypatch, darwin, [
+            _console('kiosk', 501, on_console=False),
+            _console('operator', 502),
+        ])
+        assert posix.console_user() == 'operator'
+
+        # The negative control: without the console flag this answers kiosk.
+        _consoles(monkeypatch, darwin, [_console('kiosk', 501, on_console=False)])
+        assert posix.console_user() is None
+
+    def test_a_login_that_has_not_finished_is_not_a_seat_yet(
+            self, darwin, posix, monkeypatch):
+        """The macOS reading of logind's `opening`: a launch into a login that
+        is still starting is the launch that dies with the session it was
+        handed, so it fails closed and retries on the next tick."""
+        _consoles(monkeypatch, darwin, [_console('kiosk', 501, login_done=False)])
+
+        assert posix.console_user() is None
+
+    @pytest.mark.parametrize('name, uid', [
+        ('loginwindow', 0), ('loginwindow', 89), ('root', 0), ('_mbsetupuser', 248),
+        ('kiosk', 0),
+    ])
+    def test_the_login_window_and_setup_assistant_are_not_a_console_user(
+            self, darwin, posix, monkeypatch, name, uid):
+        """The macOS reading of a greeter: an unattended login window must not
+        become the account a managed process runs as, or the uid the privileged
+        request seam trusts."""
+        _consoles(monkeypatch, darwin, [_console(name, uid)])
+
+        assert posix.console_user() is None
+
+    def test_nobody_logged_in_is_no_seat(self, darwin, posix, monkeypatch):
+        _consoles(monkeypatch, darwin, None)
+        assert posix.console_user() is None
+
+        _consoles(monkeypatch, darwin, [])
+        assert posix.console_user() is None
+
+    def test_the_seat_costs_the_loop_no_process(self, posix, monkeypatch):
+        """The seat is asked about every tick while a managed process is down,
+        so it is read in-process: no loginctl, no stat, no ioreg."""
+        def _no_spawn(*args, **kwargs):
+            raise AssertionError('the seat spawned a process')
+
+        monkeypatch.setattr(subprocess, 'Popen', _no_spawn)
+        monkeypatch.setattr(subprocess, 'run', _no_spawn)
+
+        user = posix.console_user()
+
+        assert user is None or pwd.getpwnam(user)
+
+    def test_a_macos_session_env_is_the_account_and_nothing_x11(
+            self, darwin, posix, monkeypatch, tmp_path):
+        """No DISPLAY to lift and no cookie to hand over: a process reaches
+        WindowServer through the bootstrap namespace its spawn puts it in.
+        XQuartz leaves a ~/.Xauthority behind, which is nothing to pass on."""
+        account = pwd.getpwuid(os.getuid())
+        home = tmp_path / 'home'
+        home.mkdir()
+        (home / '.Xauthority').write_bytes(b'')
+        monkeypatch.setattr(posix, '_account_env', lambda uid: {
+            'HOME': str(home), 'USER': account.pw_name,
+            'LOGNAME': account.pw_name, 'PATH': '/usr/bin:/bin',
+        })
+        _consoles(monkeypatch, darwin, [_console(account.pw_name, account.pw_uid)])
+
+        assert posix.session_env(account.pw_uid) == {
+            'HOME': str(home), 'USER': account.pw_name,
+            'LOGNAME': account.pw_name, 'PATH': '/usr/bin:/bin',
+        }
+
+    def test_a_session_spawn_is_a_job_in_the_users_gui_domain(
+            self, darwin, posix, private_executable, tmp_path):
+        """The shape decision 4 needs, measured rather than assumed: the pid is
+        the program's own — not a wrapper's, which is what `asuser … sudo -u`
+        would have handed back — launchd is its parent, it runs as the user and
+        is its own TCC-responsible process, and its exited job does not stay
+        loaded past the next spawn's sweep."""
+        uid = os.getuid()
+        domain = f'gui/{uid}'
+        if subprocess.run(['launchctl', 'print', domain], capture_output=True).returncode:
+            # The only test that reaches launchd for real: on the CI runner,
+            # whose user is logged in, a missing domain is a broken leg and a
+            # skip there would read as a pass.
+            if os.environ.get('GITHUB_ACTIONS') == 'true':
+                pytest.fail(f'no GUI domain for uid {uid} on the CI runner')
+            pytest.skip(f'no GUI domain for uid {uid} on this machine')
+        program = private_executable('kiosk-app')
+
+        pid = posix.spawn_as_user([str(program), '--fullscreen'], uid)
+        process = psutil.Process(pid)
+        try:
+            assert process.exe() == str(program)
+            assert process.cmdline() == [str(program), '--fullscreen']
+            assert process.uids().real == uid
+            assert process.ppid() == 1
+            assert _responsible_pid(pid) == pid
+            label = process.environ()['XPC_SERVICE_NAME']
+            assert label.startswith(darwin.SESSION_JOB_PREFIX)
+        finally:
+            _kill_quietly(process)
+            psutil.wait_procs([process], timeout=5)
+
+        darwin._sweep_session_jobs(domain, time.monotonic() + 30)
+
+        printed = subprocess.run(['launchctl', 'print', domain], capture_output=True, text=True)
+        assert label not in printed.stdout
+
+    def test_the_job_carries_the_command_its_directory_and_the_account(
+            self, darwin, monkeypatch):
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=os.getpid())
+        env = {'HOME': '/Users/kiosk', 'USER': 'kiosk', 'LOGNAME': 'kiosk', 'PATH': '/usr/bin:/bin'}
+
+        pid = darwin._spawn_in_gui_domain(
+            ['/Applications/Kiosk.app/Contents/MacOS/Kiosk', '--fullscreen'],
+            os.getuid(), env, cwd='/Users/Shared/Owlette')
+
+        assert pid == os.getpid()
+        domain = f'gui/{os.getuid()}'
+        assert [call[:3] for call in launchd.calls] == [
+            ['launchctl', 'print', domain],
+            ['launchctl', 'bootstrap', domain],
+            ['launchctl', 'kickstart', '-p'],
+        ]
+        path, job = launchd.jobs[0]
+        assert launchd.calls[2][3] == f"{domain}/{job['Label']}"
+        assert job == {
+            'Label': job['Label'],
+            'ProgramArguments': ['/Applications/Kiosk.app/Contents/MacOS/Kiosk', '--fullscreen'],
+            'EnvironmentVariables': env,
+            'WorkingDirectory': '/Users/Shared/Owlette',
+            'ProcessType': 'Interactive',
+            'AbandonProcessGroup': True,
+            'RunAtLoad': False,
+            'KeepAlive': False,
+        }
+        # launchd read the plist at bootstrap, and nothing of it stays behind.
+        assert not os.path.exists(path)
+
+    def test_two_spawns_of_one_command_line_never_share_a_job(self, darwin, monkeypatch):
+        """Two managed entries may run the same command line; one label for
+        both would boot the other's running instance out on every relaunch."""
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=os.getpid())
+
+        for _ in range(2):
+            darwin._spawn_in_gui_domain(['/usr/local/bin/player'], os.getuid(), {})
+
+        first, second = (job['Label'] for _, job in launchd.jobs)
+        assert first != second
+        assert 'bootout' not in [call[1] for call in launchd.calls]
+
+    def test_only_the_session_jobs_that_have_exited_are_swept(self, darwin, monkeypatch):
+        """A job stays loaded once its process exits. The sweep takes those of
+        ours and nothing else: a running one of ours is a managed process, and
+        the rest of the domain is the user's own."""
+        prefix = darwin.SESSION_JOB_PREFIX
+        exited, running, failed = (f'{prefix}{uuid.uuid4().hex}' for _ in range(3))
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=os.getpid(), services=(
+            f'\t\t       0      0 \t{exited}\n'
+            f'\t\t    4242      - \t{running}\n'
+            '\t\t       0      - \tcom.apple.SafariHistoryServiceAgent\n'
+            f'\t\t       0   (pe) \t{failed}\n'
+            # The same job with its columns spaced rather than tabbed: the
+            # output is not launchctl's API, and a layout change must not
+            # stop the sweep reading it.
+            f'    0  -  {prefix}{"0" * 32}\n'
+            f'\t"{prefix}{"1" * 32}" => disabled\n'
+        ))
+
+        darwin._spawn_in_gui_domain(['/usr/local/bin/player'], os.getuid(), {})
+
+        domain = f'gui/{os.getuid()}'
+        assert [call for call in launchd.calls if call[1] == 'bootout'] == [
+            ['launchctl', 'bootout', f'{domain}/{exited}'],
+            ['launchctl', 'bootout', f'{domain}/{failed}'],
+            ['launchctl', 'bootout', f'{domain}/{prefix}{"0" * 32}'],
+        ]
+
+    def test_a_job_launchd_refuses_is_a_failed_launch(self, darwin, monkeypatch):
+        _SessionLaunchd(monkeypatch, darwin, pid=os.getpid(), bootstrap=(5, 'Bootstrap failed: 5'))
+
+        with pytest.raises(OSError, match='bootstrap'):
+            darwin._spawn_in_gui_domain(['/usr/local/bin/player'], os.getuid(), {})
+
+    def test_a_kickstart_that_names_no_pid_boots_its_job_back_out(self, darwin, monkeypatch):
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=None)
+
+        with pytest.raises(OSError, match='no pid'):
+            darwin._spawn_in_gui_domain(['/usr/local/bin/player'], os.getuid(), {})
+
+        label = launchd.jobs[0][1]['Label']
+        assert launchd.calls[-1] == ['launchctl', 'bootout', f'gui/{os.getuid()}/{label}']
+
+    def test_the_pid_is_handed_back_once_it_is_the_program(
+            self, darwin, monkeypatch, private_executable):
+        """launchd reports the pid while it can still be xpcproxy — root, and
+        another image — and the supervisor records whatever the pid is on
+        return. Stood in for here by a process that is the trampoline until
+        the bound runs out."""
+        trampoline = private_executable('xpcproxy')
+        child = subprocess.Popen([str(trampoline)])
+        deadline = time.monotonic() + 30
+        try:
+            _wait_for(lambda: _exe(child.pid) == str(trampoline))
+            darwin._await_exec(child.pid, os.getuid(), deadline)
+
+            monkeypatch.setattr(darwin, 'XPCPROXY', str(trampoline))
+            monkeypatch.setattr(darwin, '_EXEC_SETTLE_SECONDS', 0.2)
+            with pytest.raises(OSError, match='did not become its program'):
+                darwin._await_exec(child.pid, os.getuid(), deadline)
+            monkeypatch.setattr(darwin, 'XPCPROXY', '/usr/libexec/xpcproxy')
+            with pytest.raises(OSError):
+                darwin._await_exec(child.pid, os.getuid() + 1, deadline)
+        finally:
+            _stop_child(child)
+
+    def test_a_job_gone_before_it_became_its_program_is_a_failed_launch(
+            self, darwin, private_executable):
+        """launchd could not change to the directory or exec the file: on Linux
+        Popen raises for that, and handing the pid back instead booked a crash
+        — alert, screenshot and relaunch budget — for a launch that never
+        happened."""
+        child = subprocess.Popen([str(private_executable('kiosk-app'))])
+        _stop_child(child)
+
+        with pytest.raises(OSError, match='exited before it became its program'):
+            darwin._await_exec(child.pid, os.getuid(), time.monotonic() + 30)
+
+    def test_one_spawn_at_a_time_reaches_launchd(self, darwin, monkeypatch):
+        """A sweep boots out every session job with no process, and a job a
+        concurrent spawn has bootstrapped but not yet kickstarted is one — so
+        the sweep, the bootstrap and the kickstart are one spawn's alone."""
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=os.getpid())
+        held = []
+        run = launchd._run
+
+        def _run(command, timeout_seconds):
+            held.append(darwin._session_spawn_lock.locked())
+            return run(command, timeout_seconds)
+
+        monkeypatch.setattr(darwin, '_run', _run)
+
+        darwin._spawn_in_gui_domain(['/usr/local/bin/player'], os.getuid(), {})
+
+        assert held == [True, True, True]
+        assert not darwin._session_spawn_lock.locked()
+
+    def test_a_launchd_that_stops_answering_cannot_hold_the_loop(self, darwin, monkeypatch):
+        """The monitor loop launches managed processes itself: however many
+        launchctl calls a spawn makes, a stalled launchd costs it one budget
+        and not each call's own timeout in turn."""
+        monkeypatch.setattr(darwin, '_SPAWN_BUDGET_SECONDS', 0.5)
+        timeouts = []
+
+        def _stalled(command, timeout_seconds):
+            timeouts.append(timeout_seconds)
+            time.sleep(min(timeout_seconds, 0.5))
+            return None
+
+        monkeypatch.setattr(darwin, '_run', _stalled)
+        started = time.monotonic()
+
+        with pytest.raises(OSError):
+            darwin._spawn_in_gui_domain(['/usr/local/bin/player'], os.getuid(), {})
+
+        assert time.monotonic() - started < 3
+        assert max(timeouts) <= 1
+
+    def test_the_inventory_is_the_application_bundles_on_disk(
+            self, darwin, monkeypatch, tmp_path):
+        """Walked directly: the Spotlight answer system_profiler gives listed
+        none of /Applications on the machine this arm was written on."""
+        applications = tmp_path / 'Applications'
+        users = tmp_path / 'Users'
+        _app(applications / 'TouchDesigner.app', CFBundleShortVersionString='2025.31310')
+        _app(applications / 'Derivative' / 'Tools' / 'Palette.app', CFBundleVersion='7')
+        _app(applications / 'TouchDesigner.app' / 'Contents' / 'Helpers' / 'Helper.app')
+        _app(applications / 'a' / 'b' / 'c' / 'TooDeep.app')
+        (applications / 'Alias.app').symlink_to(applications / 'TouchDesigner.app')
+        _app(users / 'kiosk' / 'Applications' / 'Mine.app', CFBundleShortVersionString='1.0')
+        (users / 'Shared').mkdir()
+        monkeypatch.setattr(darwin, 'APPLICATION_DIRS', (str(applications),))
+        monkeypatch.setattr(darwin, 'USERS_DIR', str(users))
+
+        rows = darwin.installed_software()
+
+        # Nothing inside a bundle, nothing through a link, nothing deeper
+        # than a vendor's suite folder.
+        assert [row['name'] for row in rows] == ['Mine', 'Palette', 'TouchDesigner']
+        touchdesigner = rows[2]
+        assert touchdesigner == {
+            'name': 'TouchDesigner',
+            'version': '2025.31310',
+            'publisher': '',
+            'install_location': str(applications / 'TouchDesigner.app'),
+            'uninstall_command': '',
+            'installer_type': 'app',
+        }
+        assert rows[1]['version'] == '7'
+
+    def test_a_bundle_whose_info_plist_cannot_be_read_is_not_listed(
+            self, darwin, monkeypatch, tmp_path):
+        applications = tmp_path / 'Applications'
+        _app(applications / 'Kiosk.app')
+        broken = applications / 'Broken.app' / 'Contents'
+        broken.mkdir(parents=True)
+        (broken / 'Info.plist').symlink_to(applications / 'Kiosk.app' / 'Contents' / 'Info.plist')
+        monkeypatch.setattr(darwin, 'APPLICATION_DIRS', (str(applications),))
+        monkeypatch.setattr(darwin, 'USERS_DIR', str(tmp_path / 'nobody'))
+
+        assert [row['name'] for row in darwin.installed_software()] == ['Kiosk']
+
+    def test_the_inventory_walk_is_bounded(self, darwin, monkeypatch, tmp_path):
+        applications = tmp_path / 'Applications'
+        for index in range(12):
+            _app(applications / f'App{index:02}.app')
+        monkeypatch.setattr(darwin, 'APPLICATION_DIRS', (str(applications),))
+        monkeypatch.setattr(darwin, 'USERS_DIR', str(tmp_path / 'nobody'))
+        monkeypatch.setattr(darwin, '_INVENTORY_SCAN_LIMIT', 5)
+
+        assert len(darwin.installed_software()) < 5
+
+    def test_a_reboot_is_a_countdown_that_can_still_be_cancelled(
+            self, darwin, monkeypatch):
+        """`shutdown +0` reboots in the foreground with nothing left to abort,
+        and the dashboard reports a scheduled reboot as cancellable."""
+        issued = _record_subprocess_run(monkeypatch)
+
+        darwin.reboot(30)
+        darwin.reboot(150, 'owlette is restarting this machine')
+        darwin.shutdown(0)
+
+        assert issued[0][0] == ['/sbin/shutdown', '-r', '+1']
+        assert issued[1][0] == [
+            '/sbin/shutdown', '-r', '+3', 'owlette is restarting this machine',
+        ]
+        assert issued[2][0] == ['/sbin/shutdown', '-h', '+1']
+
+    def test_the_scheduler_is_handed_no_pipe(self, darwin, monkeypatch):
+        """shutdown forks a scheduler that keeps every descriptor it was given
+        until the machine goes down: waiting on a pipe it holds would wait for
+        the reboot, so nothing it is handed can be one."""
+        issued = _record_subprocess_run(monkeypatch)
+
+        darwin.reboot(60)
+
+        kwargs = issued[0][1]
+        assert 'capture_output' not in kwargs
+        assert kwargs['stdin'] is subprocess.DEVNULL
+        assert kwargs['stdout'] is subprocess.DEVNULL
+        assert kwargs['stderr'] not in (subprocess.PIPE, None)
+
+    def test_a_refused_shutdown_raises(self, darwin, monkeypatch):
+        _record_subprocess_run(monkeypatch, returncode=1)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            darwin.reboot(60)
+
+    def test_a_cancel_with_nothing_scheduled_is_a_failure(
+            self, darwin, monkeypatch, tmp_path):
+        """The dashboard clears its pending state off the answer, so aborting
+        nothing is the failure the Windows arm's `shutdown /a` reports."""
+        monkeypatch.setattr(darwin, 'SHUTDOWN_COMMAND', str(tmp_path / 'shutdown'))
+
+        assert darwin.cancel_reboot() is False
+
+    def test_a_cancel_ends_the_scheduler_launchd_adopted(
+            self, darwin, monkeypatch, private_executable):
+        """What a countdown looks like once `shutdown` has returned: the
+        system's own binary in a session of its own, its parent gone and
+        launchd its parent now. The daemon kept no pid for it — one kept
+        across a restart could name another process by then — so it is found
+        by what it is."""
+        scheduler = private_executable('shutdown')
+        monkeypatch.setattr(darwin, 'SHUTDOWN_COMMAND', str(scheduler))
+        pending = _adopted_by_launchd(scheduler)
+        try:
+            assert darwin.cancel_reboot() is True
+            assert not pending.is_running()
+        finally:
+            _kill_quietly(pending)
+
+    def test_a_shutdown_still_attached_to_whoever_ran_it_is_not_pending(
+            self, darwin, monkeypatch, private_executable):
+        """Negative control for the cancel above: `shutdown now` runs in the
+        foreground of whoever ran it, with nothing left to count down — the
+        same binary, but not a scheduler, and never the one to end."""
+        foreground = private_executable('shutdown')
+        monkeypatch.setattr(darwin, 'SHUTDOWN_COMMAND', str(foreground))
+        child = subprocess.Popen([str(foreground)])
+        try:
+            _wait_for(lambda: _exe(child.pid) == str(foreground))
+
+            assert darwin.cancel_reboot() is False
+            assert child.poll() is None
+        finally:
+            _stop_child(child)
+
+    def test_pending_reboot_delegates_to_the_mcp_probe(self, darwin, monkeypatch):
+        """One reader of softwareupdate's answer, whether the hoot tool or the
+        service's own fifteen-minute check is asking."""
+        import mcp_tools
+
+        probed = {'pending': True, 'reasons': ['software_update'],
+                  'last_update_installed': None, 'next_scheduled_update': None}
+        monkeypatch.setattr(mcp_tools, 'check_pending_reboot', lambda params, config: probed)
+
+        assert darwin.pending_reboot() is probed
+
+    def test_a_fresh_report_of_no_grant_refuses_the_capture(
+            self, darwin, posix, monkeypatch, relocated):
+        """A grab without Screen Recording need not fail on macOS — it can come
+        back missing every other application's windows — so an app that has
+        said it holds no grant is never asked for a frame."""
+        _report_grant(darwin, monkeypatch, relocated, screen_recording=False)
+        monkeypatch.setattr(posix, 'capture_screen', _never_called)
+
+        result = darwin.capture_screen(0, executor=_never_called, timeout_s=5)
+
+        assert result['error'] == 'screen_recording_not_granted'
+        assert darwin.streamer_capable() is False
+
+    def test_a_fresh_grant_captures_through_the_shared_job(
+            self, darwin, posix, monkeypatch, relocated):
+        _report_grant(darwin, monkeypatch, relocated, screen_recording=True)
+        captured = {'outputDir': '/tmp/out', 'files': ['screenshot.png']}
+        monkeypatch.setattr(
+            posix, 'capture_screen', lambda monitor, *, executor, timeout_s: captured)
+
+        assert darwin.capture_screen(0, executor=None, timeout_s=5) is captured
+        assert darwin.streamer_capable() is True
+
+    def test_an_app_that_has_not_reported_answers_for_the_grant_itself(
+            self, darwin, posix, monkeypatch, relocated):
+        """No report is not a refusal: the job runner holds the grant or does
+        not at the moment it captures. It is not a capability either."""
+        monkeypatch.setattr(darwin, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        captured = {'outputDir': '/tmp/out', 'files': ['screenshot.png']}
+        monkeypatch.setattr(
+            posix, 'capture_screen', lambda monitor, *, executor, timeout_s: captured)
+
+        assert darwin.capture_screen(0, executor=None, timeout_s=5) is captured
+        assert darwin.streamer_capable() is False
+
+    @pytest.mark.parametrize('screen_recording, checked_at', [
+        (True, lambda now: now - 3600),
+        (True, lambda now: now + 3600),
+        ('yes', lambda now: now),
+        (True, lambda now: 'now'),
+        (True, lambda now: True),
+    ])
+    def test_a_report_that_is_stale_or_malformed_is_no_report(
+            self, darwin, monkeypatch, relocated, screen_recording, checked_at):
+        """The grant can be withdrawn in System Settings at any moment, so an
+        old report says nothing about now — and a report from ahead of this
+        clock or of the wrong shape says nothing at all."""
+        _report_grant(
+            darwin, monkeypatch, relocated,
+            screen_recording=screen_recording, checked_at=checked_at(time.time()))
+
+        assert darwin.streamer_capable() is False
+
+    def test_a_report_the_console_user_did_not_write_is_no_report(
+            self, darwin, monkeypatch, relocated):
+        """`ipc/` is the whole group's to write into, so a report counts only
+        in the console user's own file that nobody else can rewrite."""
+        path = _report_grant(darwin, monkeypatch, relocated, screen_recording=True)
+        assert darwin.streamer_capable() is True
+
+        os.chmod(path, 0o664)
+        assert darwin.streamer_capable() is False
+
+        os.chmod(path, 0o644)
+        monkeypatch.setattr(darwin, 'console_user', lambda: 'root')
+        assert darwin.streamer_capable() is False
+
+        monkeypatch.setattr(darwin, 'console_user', lambda: None)
+        assert darwin.streamer_capable() is False
+
+    def test_a_report_that_is_not_a_file_of_its_own_is_not_read(
+            self, darwin, monkeypatch, relocated):
+        path = _report_grant(darwin, monkeypatch, relocated, screen_recording=True)
+        bait = relocated / 'bait.json'
+        os.replace(path, bait)
+        path.symlink_to(bait)
+
+        assert darwin.streamer_capable() is False
+
+
+def _launchd_job(state):
+    """`launchctl print system/app.owlette.agent`, trimmed to the lines the
+    arm reads and one nested block that has lines of its own."""
+    return (
+        'system/app.owlette.agent = {\n'
+        '\tactive count = 1\n'
+        '\tpath = /Library/LaunchDaemons/app.owlette.agent.plist\n'
+        '\ttype = LaunchDaemon\n'
+        f'\tstate = {state}\n'
+        '\n'
+        '\tendpoints = {\n'
+        '\t\tport = 0x1a03\n'
+        '\t}\n'
+        '\n'
+        '\tdomain = system\n'
+        '}\n'
+    )
+
+
+# A made-up hardware UUID in the shape ioreg prints the real one.
+_PLATFORM_UUID = '5F1C0E54-8E3B-4F6A-9D7C-2B8A1E3F4D5C'
+
+
+def _registry(monkeypatch, darwin, properties):
+    """The IORegistry, answered from {(entry class, property): value}."""
+    monkeypatch.setattr(
+        darwin, '_registry_property',
+        lambda entry_class, name: properties.get((entry_class, name)),
+    )
+
+
+def _consoles(monkeypatch, darwin, sessions):
+    """IOConsoleUsers as WindowServer publishes it: None when nobody has ever
+    logged in since boot."""
+    _registry(monkeypatch, darwin, {(None, 'IOConsoleUsers'): sessions})
+
+
+def _console(name, uid, on_console=True, login_done=True):
+    """One IOConsoleUsers entry, in the shape measured on macOS 26.6."""
+    return {
+        'kCGSSessionUserNameKey': name,
+        'kCGSSessionUserIDKey': uid,
+        'kCGSSessionGroupIDKey': 20,
+        'kCGSSessionOnConsoleKey': on_console,
+        'kCGSessionLoginDoneKey': login_done,
+        'kCGSSessionAuditIDKey': 100017,
+        'kCGSSessionIDKey': 257,
+        'kSCSecuritySessionID': 100017,
+        'kCGSSessionSystemSafeBoot': False,
+        'kCGSSessionLoginwindowSafeLogin': False,
+    }
+
+
+class _SessionLaunchd:
+    """launchctl as a session spawn meets it: the domain's services block the
+    sweep reads, the plist each bootstrap was handed — read while the file
+    still exists — and the pid `kickstart -p` prints, None for none."""
+
+    def __init__(self, monkeypatch, darwin, pid, services='', bootstrap=(0, '')):
+        self.pid = pid
+        self.services = services
+        self.bootstrap = bootstrap
+        self.calls = []
+        self.jobs = []
+        monkeypatch.setattr(darwin, '_run', self._run)
+
+    def _run(self, command, timeout_seconds):
+        self.calls.append(list(command))
+        verb = command[1]
+        if verb == 'print':
+            return _completed(0, f'gui/501 = {{\n\tservices = {{\n{self.services}\t}}\n}}\n')
+        if verb == 'bootstrap':
+            with open(command[3], 'rb') as f:
+                self.jobs.append((command[3], plistlib.load(f)))
+            return _completed(*self.bootstrap)
+        if verb == 'kickstart':
+            return _completed(0, '' if self.pid is None else f'{self.pid}\n')
+        return _completed(0, '')
+
+
+def _completed(returncode, stdout):
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr='')
+
+
+def _responsible_pid(pid):
+    """The pid TCC holds responsible for `pid`'s requests."""
+    import ctypes
+
+    quarantine = ctypes.CDLL('/usr/lib/system/libquarantine.dylib')
+    responsible = quarantine.responsibility_get_pid_responsible_for_pid
+    responsible.argtypes, responsible.restype = [ctypes.c_int], ctypes.c_int
+    return responsible(pid)
+
+
+class _Launchctl:
+    """launchctl, answered per subcommand from a script: each subcommand's
+    replies are handed out in order and the last one repeats, and one with no
+    script succeeds silently. A None reply is a launchctl that could not be run
+    at all."""
+
+    def __init__(self, monkeypatch, darwin, script):
+        self.script = {verb: list(replies) for verb, replies in script.items()}
+        self.calls = []
+        monkeypatch.setattr(darwin, '_run', self._run)
+        monkeypatch.setattr(darwin, '_STATE_POLL_SECONDS', 0.01)
+
+    def _run(self, command, timeout_seconds):
+        self.calls.append(list(command))
+        replies = self.script.get(command[1], [(0, '')])
+        reply = replies.pop(0) if len(replies) > 1 else replies[0]
+        if reply is None:
+            return None
+        return SimpleNamespace(returncode=reply[0], stdout=reply[1], stderr=reply[1])
+
+
+def _app(bundle, **info):
+    """An application bundle whose Info.plist carries `info`."""
+    contents = bundle / 'Contents'
+    contents.mkdir(parents=True)
+    (contents / 'Info.plist').write_bytes(
+        plistlib.dumps({'CFBundleExecutable': bundle.stem, **info}))
+
+
+def _report_grant(darwin, monkeypatch, root, **report):
+    """What the desktop app writes about its grants, as the user running the
+    suite — who stands in for the console user."""
+    monkeypatch.setattr(darwin, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+    report.setdefault('checked_at', time.time())
+    path = root / 'ipc' / 'tcc.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report), encoding='utf-8')
+    os.chmod(path, 0o644)
+    return path
+
+
+def _adopted_by_launchd(executable):
+    """`executable` detached into a session of its own, its parent gone —
+    the shape shutdown(8)'s scheduler takes once `shutdown` has returned."""
+    launched = subprocess.run(
+        [sys.executable, '-c',
+         'import subprocess, sys\n'
+         'print(subprocess.Popen([sys.argv[1]], start_new_session=True,'
+         ' stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,'
+         ' stderr=subprocess.DEVNULL).pid)',
+         str(executable)],
+        capture_output=True, text=True, timeout=30, check=True,
+    )
+    process = psutil.Process(int(launched.stdout))
+    _wait_for(lambda: process.ppid() == 1)
+    return process
+
+
+def _kill_quietly(process):
+    try:
+        process.kill()
+    except psutil.NoSuchProcess:
+        pass
+
+
+def _exe(pid):
+    try:
+        return psutil.Process(pid).exe()
+    except psutil.Error:
+        return None
 
 
 def _seat(monkeypatch, posix, declared):
