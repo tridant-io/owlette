@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 7/80 complete
+**Progress**: 10/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -163,7 +163,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: with the working directory `agent/swoop` (never `--manifest-path`), `cargo clippy -- -D warnings` and `cargo test` both pass, and `cargo build --release --locked` produces `target/release/owlette-swoop.exe`; `owlette-swoop.exe version` prints the version from `agent/VERSION` and `probe` emits JSON; `Cargo.lock` is committed; `node scripts/sync-versions.js` lists the swoop crate at the product version; every pin carries a reason and an exit condition; a unit test asserts `session::features::registry()` returns one stub per named feature.
   - Depends on: 0.2 (G1 memo: transport crate + MSRV floor)
 
-- [ ] **Task 1.3: web foundations** `[agent]`
+- [x] **Task 1.3: web foundations** `[agent]`
   - Files: `web/lib/capabilities.ts`, `web/lib/rateLimit.server.ts`, `web/lib/versionUtils.ts`, `web/lib/authorizedHandler.server.ts`, `web/__tests__/lib/capabilities.test.ts`, `web/__tests__/lib/rateLimit.server.test.ts`, `web/__tests__/lib/authorizedHandler.test.ts`, `web/__tests__/lib/swoopMinVersion.test.ts`
   - Do: Add `MACHINE_REMOTE_CONTROL` and `MACHINE_REMOTE_VIEW` to the `Capability` object
     (`capabilities.ts:1`) with a comment each explaining the split (control = KVM, view = continuous screen +
@@ -183,7 +183,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cd web && npx tsc --noEmit` is clean; `npx eslint web/lib/capabilities.ts web/lib/rateLimit.server.ts web/lib/versionUtils.ts web/lib/authorizedHandler.server.ts` reports nothing new; `cd web && npm test -- capabilities rateLimit.server authorizedHandler swoopMinVersion` passes, including new cases proving a site `member` holds `MACHINE_REMOTE_VIEW` but not `MACHINE_REMOTE_CONTROL`, that both have user and system limits, and that with `capability_enforcement: false` a caller lacking `MACHINE_REMOTE_CONTROL` still gets 403 with a `capability_missing` deny row while an unrelated capability is still waved through.
   - Depends on: none
 
-- [ ] **Task 1.4: env manifest + CSP + protected path** `[agent]`
+- [x] **Task 1.4: env manifest + CSP + protected path** `[agent]`
   - Files: `scripts/env-manifest.json`, `web/proxy.ts`, `web/__tests__/infra/envManifest.test.ts`, `web/__tests__/middleware.test.ts`
   - Do: Register the eight env keys from plan.md's names registry in `scripts/env-manifest.json` under `vars`,
     alphabetically, each with `targets: ["railway-dev","railway-prod","vercel-prod"]`:
@@ -203,7 +203,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `node -e "JSON.parse(require('fs').readFileSync('scripts/env-manifest.json','utf8'))"` succeeds; `cd web && npm test -- envManifest middleware` passes, with new cases asserting the eight keys exist with exactly those classes and targets, that the three sensitive ones are `must-match`, that `/swoop/site/machine` redirects an unauthenticated request to `/login`, and that the CSP contains the `wss://` signaling origin when `SWOOP_SIGNAL_URL` is set and no swoop origin at all when it is unset; `npx eslint web/proxy.ts` is clean; `npx tsc --noEmit` is clean.
   - Depends on: none
 
-- [ ] **Task 1.5: agent paths and directories** `[agent]`
+- [x] **Task 1.5: agent paths and directories** `[agent]`
   - Files: `agent/src/shared_utils.py`, `agent/tests/unit/test_swoop_paths.py`
   - Do: Add the swoop path surface every Wave-2 agent module imports, beside the cortex block at
     `shared_utils.py:1064-1068`: `SWOOP_EXE_NAME = 'owlette-swoop.exe'`, `SWOOP_LOG_DIR =
@@ -908,3 +908,45 @@ arrives transitively through `moq-nvenc` and is never called (the device is D3D1
 the single quotes, so the glob matches nothing and eslint exits 2. Even with that fixed,
 `cli/eslint.config.mjs:6` imports `typescript-eslint`, which is absent from `cli/package.json` and
 installed nowhere resolvable from `cli/`. Fixing it needs a devDependency, so it was left alone.
+
+### 2026-09-17 — Wave 1 partial (3 of 5)
+
+Ran **1.3, 1.4, 1.5** in parallel — the three marked "Depends on: none". Verified after all three had
+settled, not per-agent: `web` `npx tsc --noEmit` exit 0; eslint clean across all eleven touched web files;
+`web` full suite 264 suites / 5234 passed / 1 skipped; `agent` full suite 1196 passed / 6 skipped (the
+pre-existing POSIX-only and win32gui skips, unchanged). Committed to `feat/swoop`.
+
+**1.1 and 1.2 deliberately not started — they are gated on G1, by their own dependency lines.** 1.2 sets
+`rust-version` to *spike 0.2's MSRV* and adds *the G1 transport crate* to `Cargo.toml`; 1.1 writes
+`PROTOCOL.md`'s channel and track layout against *the G1 winner*. Neither value exists, because 0.2 has
+not run. Starting them would mean inventing a transport and an MSRV that every later task then inherits —
+the precise failure the gate exists to prevent. **Wave 2 onward is blocked behind the same gate.**
+
+**Carried into the code from Wave 0:** 1.5 implements 0.7's finding L2 — `get_swoop_dir()` never creates
+the directory and `{app}\swoop` is absent from `ensure_data_directories()`. The installer lays that
+directory down as SYSTEM with a protected DACL; the agent creating it instead would defeat that, for the
+reason recorded in the held 0.7 memo under L2. Absent means swoop is not installed. A short form of the
+reason lives in the docstring so a later tidy-up does not undo it, and a unit case asserts the directory
+is not created.
+
+**Open items this wave produced:**
+
+- **`SWOOP_MIN_AGENT_VERSION` is provisional at `3.4.0`** (`web/lib/versionUtils.ts`). Nothing in the plan
+  pins the swoop release version; the constant is advisory copy only and the real gate is
+  `capabilities.swoop == 1`. Task 10.1 must confirm it against the installer that actually ships.
+- **Vercel edge-runtime env resolution is unverified** (from 1.4). If Next inlines `process.env` at build
+  time on Vercel, `SWOOP_SIGNAL_URL` must be present in the Vercel *build* env, not only the runtime env,
+  or the swoop `connect-src` entry will be missing on the failover origin — a CSP block that appears only
+  during a failover. Confirm when the value is provisioned.
+- **`BYPASS_EXEMPT_CAPABILITIES` was exported rather than module-private** (from 1.3), so a test can pin
+  its contents to exactly the two capabilities and a third added later fails that test. Revert to private
+  if that is not wanted.
+- **`authorizedPlatformHandler` was deliberately left alone** (from 1.3). It repeats the
+  `capability_enforcement` guard but is unreachable for these two capabilities: it hard-denies any actor
+  whose global role is not `superadmin` before the capability check, and superadmin short-circuits
+  `hasCapability`. Only the site handler carries the carve-out.
+- **A docs table is now incomplete** (from 1.3): `web/content/docs/dashboard/admin/index.mdx:63` is a
+  hand-maintained capability x role table that still lists only `MACHINE_VIEW`. Nothing tests it, so
+  nothing is red. Add it to Task 8.5's file list.
+- **`context.md:57` has a stale line number**: it puts `cleanup_old_logs` at `:1110`; it was at `:1097`
+  before 1.5 and is at `:1126` after. Re-locate by symbol.
