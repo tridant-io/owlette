@@ -285,6 +285,118 @@ def get_os_family_arch():
     return family, arch
 
 
+# ProductName still reads 'Windows 10 …' on Windows 11 — Microsoft never
+# updated the registry value — and the build number is what actually separates
+# the two.
+_WINDOWS_11_MIN_BUILD = 22000
+
+# Read rather than imported from `platform` so the unit tests can point it at a
+# fixture: every POSIX distribution publishes PRETTY_NAME here.
+_OS_RELEASE_PATH = '/etc/os-release'
+
+_os_version_string = None
+
+
+def get_os_version_string():
+    """This machine's OS the way an operator names it — 'Windows 11 Pro 24H2',
+    'Ubuntu 24.04.5 LTS', 'macOS 15.6'.
+
+    Published on the machine document as `osVersion`, where it is prose for a
+    dashboard subtitle rather than a parseable version. Computed once for the
+    life of the process: the platform cannot change under a running agent, and
+    the Windows arm reads the registry on the path the heartbeat walks every
+    tick.
+    """
+    global _os_version_string
+    if _os_version_string is None:
+        _os_version_string = _build_os_version_string()
+    return _os_version_string
+
+
+def _build_os_version_string():
+    """One arm per platform, each falling back to `platform`'s own spelling
+    rather than to an empty field."""
+    if _IS_WINDOWS:
+        product, display, _build = _windows_version_parts()
+        if product:
+            return f"{product} {display}".strip()
+        # The edition and the 24H2-style release live in the registry alone;
+        # platform.version() at least carries the build.
+        return f"Windows {platform.version()}".strip()
+
+    if _IS_MACOS:
+        release = platform.mac_ver()[0]
+        if release:
+            return f"macOS {release}"
+        return f"{platform.system()} {platform.release()}".strip()
+
+    return (_read_os_release_pretty_name()
+            or f"{platform.system()} {platform.release()}".strip())
+
+
+def _read_os_release_pretty_name():
+    """PRETTY_NAME from /etc/os-release, '' when the file or the key is absent.
+
+    The format quotes any value with spaces, so Ubuntu arrives as
+    `PRETTY_NAME="Ubuntu 24.04.5 LTS"`.
+    """
+    try:
+        with open(_OS_RELEASE_PATH, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                key, sep, value = line.partition('=')
+                if sep and key.strip() == 'PRETTY_NAME':
+                    return value.strip().strip('"\'')
+    except OSError:
+        return ''
+    return ''
+
+
+def _windows_version_parts():
+    """(edition, release, build) from the registry, e.g. ('Windows 11 Pro',
+    '24H2', '26100'). ('', '', '') when the edition cannot be read.
+
+    Each value is read on its own. Windows 10 1809/LTSC 2019 and Server
+    2016/2019 — machines this fleet still runs — publish no `DisplayVersion`
+    and name the release `ReleaseId` instead, and one absent value must not
+    cost the edition, which is the half an operator actually reads.
+    """
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r'SOFTWARE\Microsoft\Windows NT\CurrentVersion') as key:
+            product = _windows_registry_string(key, 'ProductName')
+            display = (_windows_registry_string(key, 'DisplayVersion')
+                       or _windows_registry_string(key, 'ReleaseId'))
+            build = _windows_registry_string(key, 'CurrentBuildNumber')
+    except Exception:
+        return '', '', ''
+
+    if not product:
+        return '', '', ''
+
+    return _windows_edition_for_build(product, build), display, build
+
+
+def _windows_registry_string(key, name):
+    """One value of an open key as text, '' when that name is absent."""
+    import winreg
+    try:
+        return str(winreg.QueryValueEx(key, name)[0]).strip()
+    except OSError:
+        return ''
+
+
+def _windows_edition_for_build(product, build):
+    """'Windows 10 Pro' on build 22000 or newer is a Windows 11 edition."""
+    try:
+        is_eleven = int(build) >= _WINDOWS_11_MIN_BUILD
+    except (TypeError, ValueError):
+        return product
+    if is_eleven and product.startswith('Windows 10'):
+        return 'Windows 11' + product[len('Windows 10'):]
+    return product
+
+
 MACHINE_ID_FILE = 'config/machine_id'
 MACHINE_ID_READ_ATTEMPTS = 3
 MACHINE_ID_READ_BACKOFF = 0.1
@@ -1641,17 +1753,11 @@ def initialize_logging(log_file_name, level=logging.INFO):
 def _get_windows_version_string():
     """Return friendly Windows version e.g. 'Windows 11 Pro 23H2 (Build 22631)'.
     Falls back to platform.version() if registry read fails."""
-    try:
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                             r'SOFTWARE\Microsoft\Windows NT\CurrentVersion')
-        product = winreg.QueryValueEx(key, 'ProductName')[0]
-        display = winreg.QueryValueEx(key, 'DisplayVersion')[0]
-        build   = winreg.QueryValueEx(key, 'CurrentBuildNumber')[0]
-        winreg.CloseKey(key)
-        return f"{product} {display} (Build {build})"
-    except Exception:
+    product, display, build = _windows_version_parts()
+    if not product:
         return platform.version()
+    edition = f"{product} {display}".strip()
+    return f"{edition} (Build {build})" if build else edition
 
 
 def _log_startup_banner(level, log_file_path):

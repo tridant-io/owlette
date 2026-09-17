@@ -179,6 +179,16 @@ function MachineCard({
         agentVersion: machine.agent_version,
       })
     : null;
+  // The line under the hostname. The OS takes it when the agent reports one —
+  // the clock it replaces is already beside the online pill, whose tooltip
+  // names the timezone so the city is not lost. Whichever string it shows, the
+  // line keeps the clock tooltip: its schedule copy is the only place a card
+  // says which clock launch windows run on.
+  const subtitle = machine.osVersion
+    ? machine.osVersion
+    : showLocalClock && localClock
+      ? `${localTzShort}, ${localClock} local`
+      : null;
 
   // Resolve per-card device selection (user pref → primary → first).
   const primary = machine.metrics?.primary;
@@ -278,11 +288,14 @@ function MachineCard({
                 {machine.machineId}
                 {isMuted && <span title="alerts muted"><BellOff className="h-3.5 w-3.5 text-muted-foreground" /></span>}
               </CardTitle>
-              {showLocalClock && clockTooltip && localClock && (
+              {subtitle && (showLocalClock && clockTooltip ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="text-xs text-muted-foreground mt-0.5 cursor-help select-none">
-                      {localTzShort}, {localClock} local
+                    <span
+                      data-testid={machine.osVersion ? 'machine-os-version' : undefined}
+                      className="text-xs text-muted-foreground mt-0.5 cursor-help select-none"
+                    >
+                      {subtitle}
                     </span>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -295,7 +308,14 @@ function MachineCard({
                     )}
                   </TooltipContent>
                 </Tooltip>
-              )}
+              ) : (
+                <span
+                  data-testid="machine-os-version"
+                  className="text-xs text-muted-foreground mt-0.5"
+                >
+                  {subtitle}
+                </span>
+              ))}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -319,6 +339,11 @@ function MachineCard({
               </TooltipTrigger>
               <TooltipContent>
                 <p>{heartbeat.tooltip}</p>
+                {/* The machine's own zone, still within reach on the cards
+                    whose subtitle now shows the OS instead of the clock. */}
+                {machine.machineTimezone && (
+                  <p className="mt-1">machine timezone: {localTzShort}</p>
+                )}
               </TooltipContent>
             </Tooltip>
             {!isDemo && (

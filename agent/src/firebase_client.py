@@ -125,6 +125,21 @@ def _discard_pending_sync_cancel(registration) -> None:
     discard_pending_sync(site_id, roost_id, version_id, cancel_event)
 
 
+def _os_identity() -> Dict[str, str]:
+    """The machine document's OS fields: osFamily, arch, osVersion.
+
+    `get_os_version_string()` caches the probe behind it — the Windows arm
+    reads the registry — so this builds a dict per heartbeat, never a platform
+    probe. The dashboard reads an absent osFamily as windows.
+    """
+    family, arch = shared_utils.get_os_family_arch()
+    return {
+        'osFamily': family,
+        'arch': arch,
+        'osVersion': shared_utils.get_os_version_string(),
+    }
+
+
 class FirebaseClient:
     """
     Main Firebase client for Owlette agent.
@@ -1051,7 +1066,11 @@ class FirebaseClient:
                 'online': online,
                 'lastHeartbeat': SERVER_TIMESTAMP,
                 'machineId': self.machine_id,
-                'siteId': self.site_id
+                'siteId': self.site_id,
+                # Registration: the first write of this machine's document on a
+                # fresh install carries its OS, so the dashboard can label it
+                # before the first metrics upload lands.
+                **_os_identity(),
             }, merge=True)
 
             if online:
@@ -1546,6 +1565,7 @@ class FirebaseClient:
                 'machine_timezone_iana': shared_utils.get_machine_timezone_iana(),
                 'machineId': self.machine_id,
                 'siteId': self.site_id,
+                **_os_identity(),
                 # Capability handshake: the dashboard disables remote apply when
                 # this is missing or < 1. Bump on helper IPC contract changes only
                 # — unrelated to agent_version.

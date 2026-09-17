@@ -434,6 +434,203 @@ class TestPlatformNormalisation:
         assert len([r for r in caplog.records if 'freebsd14' in r.getMessage()]) == 1
 
 
+class _FakeRegistryKey:
+    """An open HKLM key holding exactly the values a machine publishes."""
+
+    def __init__(self, values):
+        self.values = values
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def _fake_winreg(values):
+    """A stand-in for the `winreg` shared_utils imports inside the function, so
+    the registry arm is exercised from Linux and macOS too. An absent value
+    name raises FileNotFoundError, exactly as the real module does."""
+    module = types.ModuleType('winreg')
+    module.HKEY_LOCAL_MACHINE = object()
+    key = _FakeRegistryKey(values)
+
+    def query_value_ex(open_key, name):
+        if name not in open_key.values:
+            raise FileNotFoundError(2, 'The system cannot find the file specified')
+        return open_key.values[name], 1
+
+    module.OpenKey = lambda root, sub_key: key
+    module.QueryValueEx = query_value_ex
+    return module
+
+
+class TestOsVersionString:
+    """`osVersion` on the machine document — the OS string the dashboard prints
+    under a hostname. Every arm is monkeypatched rather than skipped, so all
+    three are exercised from whichever box runs the suite."""
+
+    @pytest.fixture(autouse=True)
+    def uncached(self, monkeypatch):
+        """The string is computed once per process; each case starts cold."""
+        monkeypatch.setattr(shared_utils, '_os_version_string', None)
+
+    @pytest.fixture
+    def windows(self, monkeypatch):
+        monkeypatch.setattr(shared_utils, '_IS_WINDOWS', True)
+        monkeypatch.setattr(shared_utils, '_IS_MACOS', False)
+
+    @pytest.fixture
+    def linux(self, monkeypatch):
+        monkeypatch.setattr(shared_utils, '_IS_WINDOWS', False)
+        monkeypatch.setattr(shared_utils, '_IS_MACOS', False)
+
+    @pytest.fixture
+    def macos(self, monkeypatch):
+        monkeypatch.setattr(shared_utils, '_IS_WINDOWS', False)
+        monkeypatch.setattr(shared_utils, '_IS_MACOS', True)
+
+    def test_windows_names_the_edition_and_release(self, monkeypatch, windows):
+        monkeypatch.setattr(shared_utils, '_windows_version_parts',
+                            lambda: ('Windows 11 Pro', '24H2', '26100'))
+
+        assert shared_utils.get_os_version_string() == 'Windows 11 Pro 24H2'
+
+    def test_the_build_number_decides_10_versus_11(self):
+        """ProductName still reads 'Windows 10 Pro' on Windows 11, so a card
+        that trusted it would mislabel half the fleet. The second and third
+        assertions are the negative control: a real Windows 10 build, and a
+        registry that already says 11, both travel unchanged."""
+        assert shared_utils._windows_edition_for_build('Windows 10 Pro', '22631') == 'Windows 11 Pro'
+        assert shared_utils._windows_edition_for_build('Windows 10 Pro', '19045') == 'Windows 10 Pro'
+        assert shared_utils._windows_edition_for_build('Windows 11 Pro', '26100') == 'Windows 11 Pro'
+
+    def test_an_unreadable_build_leaves_the_edition_alone(self):
+        assert shared_utils._windows_edition_for_build('Windows 10 Pro', '') == 'Windows 10 Pro'
+
+    def test_windows_falls_back_to_the_platform_version(self, monkeypatch, windows):
+        """A registry read that fails still has to name the OS — the card shows
+        this string verbatim."""
+        monkeypatch.setattr(shared_utils, '_windows_version_parts', lambda: ('', '', ''))
+        monkeypatch.setattr(shared_utils.platform, 'version', lambda: '10.0.22631')
+
+        assert shared_utils.get_os_version_string() == 'Windows 10.0.22631'
+
+    def test_linux_reads_the_pretty_name(self, monkeypatch, linux, tmp_path):
+        os_release = tmp_path / 'os-release'
+        os_release.write_text(
+            'NAME="Ubuntu"\n'
+            'PRETTY_NAME="Ubuntu 24.04.5 LTS"\n'
+            'VERSION_ID="24.04"\n',
+            encoding='utf-8',
+        )
+        monkeypatch.setattr(shared_utils, '_OS_RELEASE_PATH', str(os_release))
+
+        assert shared_utils.get_os_version_string() == 'Ubuntu 24.04.5 LTS'
+
+    def test_an_unquoted_pretty_name_survives(self, monkeypatch, linux, tmp_path):
+        """The format only requires quotes around values that need them."""
+        os_release = tmp_path / 'os-release'
+        os_release.write_text('PRETTY_NAME=Alpine Linux v3.20\n', encoding='utf-8')
+        monkeypatch.setattr(shared_utils, '_OS_RELEASE_PATH', str(os_release))
+
+        assert shared_utils.get_os_version_string() == 'Alpine Linux v3.20'
+
+    def test_a_file_without_a_pretty_name_falls_back(self, monkeypatch, linux, tmp_path):
+        os_release = tmp_path / 'os-release'
+        os_release.write_text('NAME="Buildroot"\n', encoding='utf-8')
+        monkeypatch.setattr(shared_utils, '_OS_RELEASE_PATH', str(os_release))
+        monkeypatch.setattr(shared_utils.platform, 'system', lambda: 'Linux')
+        monkeypatch.setattr(shared_utils.platform, 'release', lambda: '6.8.0-45-generic')
+
+        assert shared_utils.get_os_version_string() == 'Linux 6.8.0-45-generic'
+
+    def test_a_missing_os_release_falls_back(self, monkeypatch, linux, tmp_path):
+        monkeypatch.setattr(shared_utils, '_OS_RELEASE_PATH', str(tmp_path / 'absent'))
+        monkeypatch.setattr(shared_utils.platform, 'system', lambda: 'Linux')
+        monkeypatch.setattr(shared_utils.platform, 'release', lambda: '6.8.0-45-generic')
+
+        assert shared_utils.get_os_version_string() == 'Linux 6.8.0-45-generic'
+
+    def test_macos_names_the_release(self, monkeypatch, macos):
+        monkeypatch.setattr(shared_utils.platform, 'mac_ver',
+                            lambda: ('15.6', ('', '', ''), 'arm64'))
+
+        assert shared_utils.get_os_version_string() == 'macOS 15.6'
+
+    def test_macos_falls_back_when_mac_ver_is_empty(self, monkeypatch, macos):
+        """mac_ver() returns empty strings wherever the version probe fails."""
+        monkeypatch.setattr(shared_utils.platform, 'mac_ver',
+                            lambda: ('', ('', '', ''), ''))
+        monkeypatch.setattr(shared_utils.platform, 'system', lambda: 'Darwin')
+        monkeypatch.setattr(shared_utils.platform, 'release', lambda: '24.6.0')
+
+        assert shared_utils.get_os_version_string() == 'Darwin 24.6.0'
+
+    def test_a_registry_without_displayversion_still_names_the_edition(
+            self, monkeypatch, windows):
+        """Windows 10 1809/LTSC 2019 and Server 2016/2019 publish no
+        `DisplayVersion` — they name the release `ReleaseId`. Reading the three
+        values together used to lose the edition to that one absent name, and
+        the card fell back to a bare build number."""
+        monkeypatch.setitem(sys.modules, 'winreg', _fake_winreg({
+            'ProductName': 'Windows 10 Enterprise LTSC 2019',
+            'ReleaseId': '1809',
+            'CurrentBuildNumber': '17763',
+        }))
+
+        assert shared_utils._windows_version_parts() == (
+            'Windows 10 Enterprise LTSC 2019', '1809', '17763')
+        assert shared_utils.get_os_version_string() == 'Windows 10 Enterprise LTSC 2019 1809'
+
+    def test_displayversion_wins_where_both_names_exist(self, monkeypatch, windows):
+        """The negative control: on 20H2 and newer `ReleaseId` is frozen at
+        '2009', so it may only ever be the fallback."""
+        monkeypatch.setitem(sys.modules, 'winreg', _fake_winreg({
+            'ProductName': 'Windows 10 Pro',
+            'DisplayVersion': '22H2',
+            'ReleaseId': '2009',
+            'CurrentBuildNumber': '19045',
+        }))
+
+        assert shared_utils.get_os_version_string() == 'Windows 10 Pro 22H2'
+
+    def test_a_registry_without_a_product_name_falls_back(self, monkeypatch, windows):
+        """The edition is the load-bearing read: without it there is no string
+        worth publishing, and platform.version() answers instead."""
+        monkeypatch.setitem(sys.modules, 'winreg', _fake_winreg({
+            'CurrentBuildNumber': '19045',
+        }))
+        monkeypatch.setattr(shared_utils.platform, 'version', lambda: '10.0.19045')
+
+        assert shared_utils._windows_version_parts() == ('', '', '')
+        assert shared_utils.get_os_version_string() == 'Windows 10.0.19045'
+
+    def test_the_banner_survives_a_releaseless_registry(self, monkeypatch):
+        """The startup banner reads the same parts, and an absent release must
+        not leave it with a double space."""
+        monkeypatch.setattr(shared_utils, '_windows_version_parts',
+                            lambda: ('Windows Server 2019 Standard', '', '17763'))
+
+        assert shared_utils._get_windows_version_string() == (
+            'Windows Server 2019 Standard (Build 17763)')
+
+    def test_the_string_is_built_once(self, monkeypatch):
+        """The heartbeat asks on every tick and the Windows arm reads the
+        registry, so the answer is cached for the life of the process."""
+        builds = []
+
+        def _build():
+            builds.append(1)
+            return 'Ubuntu 24.04.5 LTS'
+
+        monkeypatch.setattr(shared_utils, '_build_os_version_string', _build)
+
+        assert shared_utils.get_os_version_string() == 'Ubuntu 24.04.5 LTS'
+        assert shared_utils.get_os_version_string() == 'Ubuntu 24.04.5 LTS'
+        assert len(builds) == 1
+
+
 class TestPosixMetricProbes:
     """The heartbeat's three shelling metrics, off Windows. The platform flags
     are monkeypatched rather than skipped, so both POSIX arms are exercised

@@ -103,8 +103,11 @@ function formatDurationShort(seconds: number): string {
 }
 
 /**
- * Which allowlist the extract-path warning is measured against. Machines carry
- * no `osFamily` yet, and an absent one is windows.
+ * Which allowlist the extract-path warning is measured against. Machines do now
+ * report `osFamily` (absent still means windows), but the warning stays
+ * windows-only on purpose: its copy below names windows outright, so measuring
+ * a mixed site against each machine's own family is a copy decision, not a
+ * one-line swap of this set.
  */
 const TARGET_OS_FAMILIES: ReadonlySet<MachineOsFamily> = new Set(['windows']);
 
