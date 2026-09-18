@@ -1,0 +1,391 @@
+{
+  "version": 1,
+  "protocolVersion": 1,
+  "note": "golden vectors for agent/swoop/PROTOCOL.md. tasks 2.9 (web) and 2.10 (rust) both iterate this list, so its shape is contract: every entry has file, kind, format, expect and reason. all key material here is fake — see keys.test-only.json.",
+  "keys": "keys.test-only.json",
+  "timeAnchor": 1789689600,
+  "streamerEpoch": 1789689600000000,
+  "vectors": [
+    {
+      "file": "handshake/handshake-hello-v1.json",
+      "kind": "handshake",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "server hello advertising the protocol version this build speaks"
+    },
+    {
+      "file": "handshake/handshake-hello-v2.json",
+      "kind": "handshake",
+      "format": "json",
+      "expect": "reject",
+      "reason": "version_mismatch",
+      "description": "NEGATIVE: server speaks protocol 2, this build speaks 1 — the client closes with bye/version_mismatch and never negotiates"
+    },
+    {
+      "file": "jwt/jwt-viewer-valid.json",
+      "kind": "jwt",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "viewer token: every check in the order of PROTOCOL.md section 11 passes"
+    },
+    {
+      "file": "jwt/jwt-viewer-no-fp.json",
+      "kind": "jwt",
+      "format": "json",
+      "expect": "reject",
+      "reason": "fp_missing",
+      "description": "NEGATIVE: no fp claim. must never degrade to \"no binding required\" — a 60 s bearer token with no binding defeats the confused-deputy defence"
+    },
+    {
+      "file": "jwt/jwt-viewer-expired.json",
+      "kind": "jwt",
+      "format": "json",
+      "expect": "reject",
+      "reason": "expired",
+      "description": "NEGATIVE: exp precedes the bundle time anchor plus monotonic elapsed. the kiosk wall clock is never consulted"
+    },
+    {
+      "file": "jwt/jwt-viewer-wrong-machine.json",
+      "kind": "jwt",
+      "format": "json",
+      "expect": "reject",
+      "reason": "machine_mismatch",
+      "description": "NEGATIVE: a correctly signed, unexpired token for another machine. refused even if the room or url says otherwise"
+    },
+    {
+      "file": "jwt/jwt-viewer-unknown-kid.json",
+      "kind": "jwt",
+      "format": "json",
+      "expect": "reject",
+      "reason": "unknown_kid",
+      "description": "header kid is not in the bundle keyset: refuse, log the kid only, re-fetch the bundle. never try every key"
+    },
+    {
+      "file": "jwt/jwt-viewer-rotated-kid.json",
+      "kind": "jwt",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "signed with the previous key during a two-key overlap window: both kids in the bundle verify"
+    },
+    {
+      "file": "jwt/jwt-host-valid.json",
+      "kind": "jwt",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "host token for the signaling room"
+    },
+    {
+      "file": "jwt/jwt-doorbell-valid.json",
+      "kind": "jwt",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "doorbell token: no sid — an idle doorbell names no session"
+    },
+    {
+      "file": "signaling/signal-hello.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "server to the socket that just joined"
+    },
+    {
+      "file": "signaling/signal-ring.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "server to doorbell sockets after POST /v1/ring — sid and nothing else"
+    },
+    {
+      "file": "signaling/signal-viewer-join.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "server to host and doorbell when a viewer joins"
+    },
+    {
+      "file": "signaling/signal-host-ready.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "host to a named viewer: the streamer is up and will answer"
+    },
+    {
+      "file": "signaling/signal-offer.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "viewer to the agent side: the browser always offers"
+    },
+    {
+      "file": "signaling/signal-answer.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "host to a named viewer, carrying the host fingerprint MAC"
+    },
+    {
+      "file": "signaling/signal-candidate.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "either peer; a viewer reaches the agent side, the host reaches a named viewer"
+    },
+    {
+      "file": "signaling/signal-kill.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "server to every socket after POST /v1/kill, then close(1000)"
+    },
+    {
+      "file": "signaling/signal-bye.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "viewer leaving cleanly"
+    },
+    {
+      "file": "signaling/signal-error.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "server to the offending socket: a code and nothing else"
+    },
+    {
+      "file": "signaling/signal-viewer-sends-answer.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "reject",
+      "reason": "wrong_role",
+      "description": "NEGATIVE: answer is host-only"
+    },
+    {
+      "file": "signaling/signal-viewer-sends-kill.json",
+      "kind": "signaling",
+      "format": "json",
+      "expect": "reject",
+      "reason": "forbidden_type",
+      "description": "NEGATIVE: kill is server-only — a client cannot forge one over its own socket"
+    },
+    {
+      "file": "frame/frame-key-1080p.bin",
+      "kind": "frame-header",
+      "format": "binary",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "IRAP record: in-band parameter sets, resolution change, single fragment. arm B carries it header-only on swoop-meta",
+      "expected": {
+        "codec": "hevc",
+        "irap": true,
+        "resolutionChanged": true,
+        "parameterSets": true,
+        "fragmentIndex": 0,
+        "fragmentCount": 1,
+        "frameId": 41,
+        "rtpTimestamp90k": 123456789,
+        "width": 1920,
+        "height": 1080,
+        "payloadBytes": 0,
+        "tCaptureUs": 1000000,
+        "tEncodeUs": 1004120,
+        "tSendUs": 1004480,
+        "headerVersion": 1,
+        "kind": 1
+      },
+      "state": {
+        "lastFrameId": 40,
+        "haveIrap": true
+      }
+    },
+    {
+      "file": "frame/frame-delta-fragmented.bin",
+      "kind": "frame-header",
+      "format": "binary",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "delta record, fragment 1 of 3: the fragment fields exist for the side channel and the deferred second video path",
+      "expected": {
+        "codec": "hevc",
+        "irap": false,
+        "resolutionChanged": false,
+        "parameterSets": false,
+        "fragmentIndex": 1,
+        "fragmentCount": 3,
+        "frameId": 42,
+        "rtpTimestamp90k": 123458289,
+        "width": 1920,
+        "height": 1080,
+        "payloadBytes": 0,
+        "tCaptureUs": 1016670,
+        "tEncodeUs": 1020300,
+        "tSendUs": 1020610,
+        "headerVersion": 1,
+        "kind": 1
+      },
+      "state": {
+        "lastFrameId": 41,
+        "haveIrap": true
+      }
+    },
+    {
+      "file": "frame/frame-dangling-reference.bin",
+      "kind": "frame-header",
+      "format": "binary",
+      "expect": "reject",
+      "reason": "dangling_reference",
+      "description": "NEGATIVE: frameId jumps 42 -> 45 with IRAP clear. the receiver must drop to the next recovery point and request an IDR, never submit the chunk — chrome hard-fails HEVC on a missing prior slice",
+      "expected": {
+        "codec": "hevc",
+        "irap": false,
+        "resolutionChanged": false,
+        "parameterSets": false,
+        "fragmentIndex": 0,
+        "fragmentCount": 1,
+        "frameId": 45,
+        "rtpTimestamp90k": 123463789,
+        "width": 1920,
+        "height": 1080,
+        "payloadBytes": 0,
+        "tCaptureUs": 1066670,
+        "tEncodeUs": 1070210,
+        "tSendUs": 1070520,
+        "headerVersion": 1,
+        "kind": 1
+      },
+      "state": {
+        "lastFrameId": 42,
+        "haveIrap": true
+      }
+    },
+    {
+      "file": "bundle/bundle-valid.json",
+      "kind": "bundle",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "the whole bundle. every value here is fake; the real one is never logged, never written to disk and never passed on a command line"
+    },
+    {
+      "file": "bundle/bundle-overrides-no-testhooks.json",
+      "kind": "bundle",
+      "format": "json",
+      "expect": "reject",
+      "reason": "overrides_not_permitted",
+      "description": "overrides is a test-only hook: a streamer built without the testhooks cargo feature exits 10",
+      "exitCode": 10
+    },
+    {
+      "file": "bundle/bundle-missing-anchor.json",
+      "kind": "bundle",
+      "format": "json",
+      "expect": "reject",
+      "reason": "bundle_invalid",
+      "description": "no time anchor: without now there is nothing to check exp against but the kiosk clock, so the streamer refuses to start",
+      "exitCode": 10
+    },
+    {
+      "file": "bundle/bundle-version-mismatch.json",
+      "kind": "bundle",
+      "format": "json",
+      "expect": "reject",
+      "reason": "version_mismatch",
+      "description": "agentVersion differs from the streamer binary version — a stale exe after a delayed-until-reboot upgrade",
+      "exitCode": 11
+    },
+    {
+      "file": "pipe/pipe-stdout-events.ndjson",
+      "kind": "pipe-stdout",
+      "format": "ndjson",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "the six stdout events in the order a clean session emits them, one json object per line"
+    },
+    {
+      "file": "pipe/pipe-stdin-control.ndjson",
+      "kind": "pipe-stdin",
+      "format": "ndjson",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "stdin control lines after the bundle line. the bundle itself is line 1 and is never reproduced in a log or a test fixture"
+    },
+    {
+      "file": "messages/msg-input-batch.json",
+      "kind": "message-input",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "one poll of swoop-input from a viewer whose verified jwt carries ctl"
+    },
+    {
+      "file": "messages/msg-input-no-ctl.json",
+      "kind": "message-input",
+      "format": "json",
+      "expect": "reject",
+      "reason": "not_permitted",
+      "description": "a watcher has no ctl claim: the host drops every input message and reports the attempt"
+    },
+    {
+      "file": "messages/msg-cursor.json",
+      "kind": "message-cursor",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "cursor position and a shape upload, then the same shape by cached id"
+    },
+    {
+      "file": "messages/msg-clipboard-text.json",
+      "kind": "message-clipboard",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "a text clipboard transfer in one chunk, viewer to host"
+    },
+    {
+      "file": "messages/msg-clipboard-oversize.json",
+      "kind": "message-clipboard",
+      "format": "json",
+      "expect": "reject",
+      "reason": "clipboard_too_large",
+      "description": "totalBytes is checked before the first chunk is buffered: text caps at 256 KiB, image at 2 MiB"
+    },
+    {
+      "file": "messages/msg-control.json",
+      "kind": "message-control",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "control traffic in both directions on swoop-control"
+    },
+    {
+      "file": "messages/msg-feedback.json",
+      "kind": "message-feedback",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "per-frame stamps, the one-second rollup and the app-level rtt probe"
+    },
+    {
+      "file": "crypto/hkdf-and-host-mac.json",
+      "kind": "crypto",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "the section 9 / 11 derivation with its exact salt, info and length literals, and the host fingerprint MAC input laid out byte for byte. a drifted literal fails here rather than silently in the field"
+    }
+  ]
+}

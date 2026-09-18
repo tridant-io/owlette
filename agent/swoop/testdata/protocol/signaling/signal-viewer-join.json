@@ -1,0 +1,13 @@
+{
+  "sender": {
+    "role": "server",
+    "id": "server"
+  },
+  "message": {
+    "type": "viewer-join",
+    "viewer": "viewer_0000000001",
+    "sid": "sid_0000000000000001",
+    "ctl": true,
+    "serverTimeMs": 1789689600000
+  }
+}

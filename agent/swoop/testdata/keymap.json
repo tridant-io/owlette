@@ -1,0 +1,701 @@
+{
+  "version": 1,
+  "note": "KeyboardEvent.code -> ps/2 set-1 scancode for SendInput with KEYEVENTF_SCANCODE. scancode is the low byte in decimal; extended:true means the 0xE0 prefix, i.e. add KEYEVENTF_EXTENDEDKEY. scancode:null means the key is not injected — see its note. the numpad and the control/arrow pad share low bytes and are told apart only by extended, which is why the host must key on code and never on the browser key value.",
+  "scancodeEncoding": "ps2-set-1, low byte, decimal",
+  "modifiers": "left and right modifiers are distinct codes and must stay distinct on the wire. a mac client sends MetaLeft/MetaRight for cmd; the viewer maps cmd to ControlLeft before it sends, so the host never guesses (plan.md owner requirement: cmd conversion).",
+  "sequences": {
+    "PrintScreen": {
+      "make": [
+        {
+          "scancode": 42,
+          "extended": true
+        },
+        {
+          "scancode": 55,
+          "extended": true
+        }
+      ],
+      "break": [
+        {
+          "scancode": 55,
+          "extended": true
+        },
+        {
+          "scancode": 42,
+          "extended": true
+        }
+      ],
+      "note": "inject both halves on whichever edge arrives: chrome on windows reports PrintScreen on keyup only, and windows 11 may swallow it for the snipping tool before any app sees it."
+    },
+    "Pause": {
+      "virtualKey": 19,
+      "note": "the e1 prefix cannot be expressed through SendInput scancodes, so Pause is injected by virtual key VK_PAUSE. ctrl+pause is break, VK_CANCEL 0x03."
+    }
+  },
+  "codes": {
+    "Backquote": {
+      "scancode": 41,
+      "extended": false
+    },
+    "Backslash": {
+      "scancode": 43,
+      "extended": false
+    },
+    "BracketLeft": {
+      "scancode": 26,
+      "extended": false
+    },
+    "BracketRight": {
+      "scancode": 27,
+      "extended": false
+    },
+    "Comma": {
+      "scancode": 51,
+      "extended": false
+    },
+    "Digit0": {
+      "scancode": 11,
+      "extended": false
+    },
+    "Digit1": {
+      "scancode": 2,
+      "extended": false
+    },
+    "Digit2": {
+      "scancode": 3,
+      "extended": false
+    },
+    "Digit3": {
+      "scancode": 4,
+      "extended": false
+    },
+    "Digit4": {
+      "scancode": 5,
+      "extended": false
+    },
+    "Digit5": {
+      "scancode": 6,
+      "extended": false
+    },
+    "Digit6": {
+      "scancode": 7,
+      "extended": false
+    },
+    "Digit7": {
+      "scancode": 8,
+      "extended": false
+    },
+    "Digit8": {
+      "scancode": 9,
+      "extended": false
+    },
+    "Digit9": {
+      "scancode": 10,
+      "extended": false
+    },
+    "Equal": {
+      "scancode": 13,
+      "extended": false
+    },
+    "IntlBackslash": {
+      "scancode": 86,
+      "extended": false
+    },
+    "IntlRo": {
+      "scancode": 115,
+      "extended": false
+    },
+    "IntlYen": {
+      "scancode": 125,
+      "extended": false
+    },
+    "KeyA": {
+      "scancode": 30,
+      "extended": false
+    },
+    "KeyB": {
+      "scancode": 48,
+      "extended": false
+    },
+    "KeyC": {
+      "scancode": 46,
+      "extended": false
+    },
+    "KeyD": {
+      "scancode": 32,
+      "extended": false
+    },
+    "KeyE": {
+      "scancode": 18,
+      "extended": false
+    },
+    "KeyF": {
+      "scancode": 33,
+      "extended": false
+    },
+    "KeyG": {
+      "scancode": 34,
+      "extended": false
+    },
+    "KeyH": {
+      "scancode": 35,
+      "extended": false
+    },
+    "KeyI": {
+      "scancode": 23,
+      "extended": false
+    },
+    "KeyJ": {
+      "scancode": 36,
+      "extended": false
+    },
+    "KeyK": {
+      "scancode": 37,
+      "extended": false
+    },
+    "KeyL": {
+      "scancode": 38,
+      "extended": false
+    },
+    "KeyM": {
+      "scancode": 50,
+      "extended": false
+    },
+    "KeyN": {
+      "scancode": 49,
+      "extended": false
+    },
+    "KeyO": {
+      "scancode": 24,
+      "extended": false
+    },
+    "KeyP": {
+      "scancode": 25,
+      "extended": false
+    },
+    "KeyQ": {
+      "scancode": 16,
+      "extended": false
+    },
+    "KeyR": {
+      "scancode": 19,
+      "extended": false
+    },
+    "KeyS": {
+      "scancode": 31,
+      "extended": false
+    },
+    "KeyT": {
+      "scancode": 20,
+      "extended": false
+    },
+    "KeyU": {
+      "scancode": 22,
+      "extended": false
+    },
+    "KeyV": {
+      "scancode": 47,
+      "extended": false
+    },
+    "KeyW": {
+      "scancode": 17,
+      "extended": false
+    },
+    "KeyX": {
+      "scancode": 45,
+      "extended": false
+    },
+    "KeyY": {
+      "scancode": 21,
+      "extended": false
+    },
+    "KeyZ": {
+      "scancode": 44,
+      "extended": false
+    },
+    "Minus": {
+      "scancode": 12,
+      "extended": false
+    },
+    "Period": {
+      "scancode": 52,
+      "extended": false
+    },
+    "Quote": {
+      "scancode": 40,
+      "extended": false
+    },
+    "Semicolon": {
+      "scancode": 39,
+      "extended": false
+    },
+    "Slash": {
+      "scancode": 53,
+      "extended": false
+    },
+    "AltLeft": {
+      "scancode": 56,
+      "extended": false
+    },
+    "AltRight": {
+      "scancode": 56,
+      "extended": true
+    },
+    "Backspace": {
+      "scancode": 14,
+      "extended": false
+    },
+    "CapsLock": {
+      "scancode": 58,
+      "extended": false
+    },
+    "ContextMenu": {
+      "scancode": 93,
+      "extended": true
+    },
+    "ControlLeft": {
+      "scancode": 29,
+      "extended": false
+    },
+    "ControlRight": {
+      "scancode": 29,
+      "extended": true
+    },
+    "Enter": {
+      "scancode": 28,
+      "extended": false
+    },
+    "MetaLeft": {
+      "scancode": 91,
+      "extended": true
+    },
+    "MetaRight": {
+      "scancode": 92,
+      "extended": true
+    },
+    "ShiftLeft": {
+      "scancode": 42,
+      "extended": false
+    },
+    "ShiftRight": {
+      "scancode": 54,
+      "extended": false
+    },
+    "Space": {
+      "scancode": 57,
+      "extended": false
+    },
+    "Tab": {
+      "scancode": 15,
+      "extended": false
+    },
+    "Convert": {
+      "scancode": 121,
+      "extended": false
+    },
+    "KanaMode": {
+      "scancode": 112,
+      "extended": false
+    },
+    "NonConvert": {
+      "scancode": 123,
+      "extended": false
+    },
+    "Lang1": {
+      "scancode": 114,
+      "extended": false
+    },
+    "Lang2": {
+      "scancode": 113,
+      "extended": false
+    },
+    "Lang3": {
+      "scancode": 120,
+      "extended": false
+    },
+    "Lang4": {
+      "scancode": 119,
+      "extended": false
+    },
+    "Delete": {
+      "scancode": 83,
+      "extended": true
+    },
+    "End": {
+      "scancode": 79,
+      "extended": true
+    },
+    "Home": {
+      "scancode": 71,
+      "extended": true
+    },
+    "Insert": {
+      "scancode": 82,
+      "extended": true
+    },
+    "PageDown": {
+      "scancode": 81,
+      "extended": true
+    },
+    "PageUp": {
+      "scancode": 73,
+      "extended": true
+    },
+    "ArrowDown": {
+      "scancode": 80,
+      "extended": true
+    },
+    "ArrowLeft": {
+      "scancode": 75,
+      "extended": true
+    },
+    "ArrowRight": {
+      "scancode": 77,
+      "extended": true
+    },
+    "ArrowUp": {
+      "scancode": 72,
+      "extended": true
+    },
+    "NumLock": {
+      "scancode": 69,
+      "extended": false
+    },
+    "Numpad0": {
+      "scancode": 82,
+      "extended": false
+    },
+    "Numpad1": {
+      "scancode": 79,
+      "extended": false
+    },
+    "Numpad2": {
+      "scancode": 80,
+      "extended": false
+    },
+    "Numpad3": {
+      "scancode": 81,
+      "extended": false
+    },
+    "Numpad4": {
+      "scancode": 75,
+      "extended": false
+    },
+    "Numpad5": {
+      "scancode": 76,
+      "extended": false
+    },
+    "Numpad6": {
+      "scancode": 77,
+      "extended": false
+    },
+    "Numpad7": {
+      "scancode": 71,
+      "extended": false
+    },
+    "Numpad8": {
+      "scancode": 72,
+      "extended": false
+    },
+    "Numpad9": {
+      "scancode": 73,
+      "extended": false
+    },
+    "NumpadAdd": {
+      "scancode": 78,
+      "extended": false
+    },
+    "NumpadComma": {
+      "scancode": 126,
+      "extended": false
+    },
+    "NumpadDecimal": {
+      "scancode": 83,
+      "extended": false
+    },
+    "NumpadDivide": {
+      "scancode": 53,
+      "extended": true
+    },
+    "NumpadEnter": {
+      "scancode": 28,
+      "extended": true
+    },
+    "NumpadEqual": {
+      "scancode": 89,
+      "extended": false
+    },
+    "NumpadMultiply": {
+      "scancode": 55,
+      "extended": false
+    },
+    "NumpadSubtract": {
+      "scancode": 74,
+      "extended": false
+    },
+    "Escape": {
+      "scancode": 1,
+      "extended": false
+    },
+    "F1": {
+      "scancode": 59,
+      "extended": false
+    },
+    "F2": {
+      "scancode": 60,
+      "extended": false
+    },
+    "F3": {
+      "scancode": 61,
+      "extended": false
+    },
+    "F4": {
+      "scancode": 62,
+      "extended": false
+    },
+    "F5": {
+      "scancode": 63,
+      "extended": false
+    },
+    "F6": {
+      "scancode": 64,
+      "extended": false
+    },
+    "F7": {
+      "scancode": 65,
+      "extended": false
+    },
+    "F8": {
+      "scancode": 66,
+      "extended": false
+    },
+    "F9": {
+      "scancode": 67,
+      "extended": false
+    },
+    "F10": {
+      "scancode": 68,
+      "extended": false
+    },
+    "F11": {
+      "scancode": 87,
+      "extended": false
+    },
+    "F12": {
+      "scancode": 88,
+      "extended": false
+    },
+    "F13": {
+      "scancode": 100,
+      "extended": false
+    },
+    "F14": {
+      "scancode": 101,
+      "extended": false
+    },
+    "F15": {
+      "scancode": 102,
+      "extended": false
+    },
+    "F16": {
+      "scancode": 103,
+      "extended": false
+    },
+    "F17": {
+      "scancode": 104,
+      "extended": false
+    },
+    "F18": {
+      "scancode": 105,
+      "extended": false
+    },
+    "F19": {
+      "scancode": 106,
+      "extended": false
+    },
+    "F20": {
+      "scancode": 107,
+      "extended": false
+    },
+    "F21": {
+      "scancode": 108,
+      "extended": false
+    },
+    "F22": {
+      "scancode": 109,
+      "extended": false
+    },
+    "F23": {
+      "scancode": 110,
+      "extended": false
+    },
+    "F24": {
+      "scancode": 118,
+      "extended": false
+    },
+    "ScrollLock": {
+      "scancode": 70,
+      "extended": false
+    },
+    "AudioVolumeDown": {
+      "scancode": 46,
+      "extended": true
+    },
+    "AudioVolumeMute": {
+      "scancode": 32,
+      "extended": true
+    },
+    "AudioVolumeUp": {
+      "scancode": 48,
+      "extended": true
+    },
+    "BrowserBack": {
+      "scancode": 106,
+      "extended": true
+    },
+    "BrowserFavorites": {
+      "scancode": 102,
+      "extended": true
+    },
+    "BrowserForward": {
+      "scancode": 105,
+      "extended": true
+    },
+    "BrowserHome": {
+      "scancode": 50,
+      "extended": true
+    },
+    "BrowserRefresh": {
+      "scancode": 103,
+      "extended": true
+    },
+    "BrowserSearch": {
+      "scancode": 101,
+      "extended": true
+    },
+    "BrowserStop": {
+      "scancode": 104,
+      "extended": true
+    },
+    "Eject": {
+      "scancode": 44,
+      "extended": true
+    },
+    "LaunchApp1": {
+      "scancode": 107,
+      "extended": true
+    },
+    "LaunchApp2": {
+      "scancode": 33,
+      "extended": true
+    },
+    "LaunchMail": {
+      "scancode": 108,
+      "extended": true
+    },
+    "MediaPlayPause": {
+      "scancode": 34,
+      "extended": true
+    },
+    "MediaSelect": {
+      "scancode": 109,
+      "extended": true
+    },
+    "MediaStop": {
+      "scancode": 36,
+      "extended": true
+    },
+    "MediaTrackNext": {
+      "scancode": 25,
+      "extended": true
+    },
+    "MediaTrackPrevious": {
+      "scancode": 16,
+      "extended": true
+    },
+    "Power": {
+      "scancode": 94,
+      "extended": true
+    },
+    "Sleep": {
+      "scancode": 95,
+      "extended": true
+    },
+    "WakeUp": {
+      "scancode": 99,
+      "extended": true
+    },
+    "PrintScreen": {
+      "scancode": null,
+      "extended": false,
+      "sequence": "PrintScreen",
+      "note": "the hardware emits e0 2a e0 37 on make and e0 b7 e0 aa on break; see sequences.PrintScreen"
+    },
+    "Pause": {
+      "scancode": null,
+      "extended": false,
+      "sequence": "Pause",
+      "note": "the hardware emits e1 1d 45 with no break; see sequences.Pause"
+    },
+    "Fn": {
+      "scancode": null,
+      "extended": false,
+      "note": "handled inside the keyboard, never reaches the os as a scancode"
+    },
+    "FnLock": {
+      "scancode": null,
+      "extended": false,
+      "note": "handled inside the keyboard, never reaches the os as a scancode"
+    },
+    "Help": {
+      "scancode": null,
+      "extended": false,
+      "note": "no agreed set-1 code across layouts; do not guess one"
+    },
+    "Again": {
+      "scancode": null,
+      "extended": false,
+      "note": "sun-series editing key, absent from every keyboard swoop targets"
+    },
+    "Props": {
+      "scancode": null,
+      "extended": false,
+      "note": "sun-series editing key, absent from every keyboard swoop targets"
+    },
+    "Select": {
+      "scancode": null,
+      "extended": false,
+      "note": "sun-series editing key, absent from every keyboard swoop targets"
+    },
+    "Open": {
+      "scancode": null,
+      "extended": false,
+      "note": "sun-series editing key, absent from every keyboard swoop targets"
+    },
+    "Find": {
+      "scancode": null,
+      "extended": false,
+      "note": "sun-series editing key, absent from every keyboard swoop targets"
+    },
+    "Undo": {
+      "scancode": null,
+      "extended": false,
+      "note": "sun-series editing key, absent from every keyboard swoop targets"
+    },
+    "Cut": {
+      "scancode": null,
+      "extended": false,
+      "note": "sun-series editing key, absent from every keyboard swoop targets"
+    },
+    "Copy": {
+      "scancode": null,
+      "extended": false,
+      "note": "sun-series editing key, absent from every keyboard swoop targets"
+    },
+    "Paste": {
+      "scancode": null,
+      "extended": false,
+      "note": "sun-series editing key, absent from every keyboard swoop targets"
+    }
+  }
+}

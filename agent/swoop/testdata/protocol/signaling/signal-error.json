@@ -1,0 +1,11 @@
+{
+  "sender": {
+    "role": "server",
+    "id": "server"
+  },
+  "message": {
+    "type": "error",
+    "code": "malformed_message",
+    "serverTimeMs": 1789689600000
+  }
+}

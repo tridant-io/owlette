@@ -1,0 +1,10 @@
+{
+  "sender": {
+    "role": "viewer",
+    "id": "viewer_0000000001"
+  },
+  "message": {
+    "type": "kill",
+    "sid": "sid_0000000000000001"
+  }
+}

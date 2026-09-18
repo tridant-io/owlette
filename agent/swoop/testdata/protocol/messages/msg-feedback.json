@@ -1,0 +1,34 @@
+{
+  "channel": "swoop-feedback",
+  "messages": [
+    {
+      "t": "fb",
+      "frameId": 41,
+      "tArrivalUs": 1010900,
+      "tDecodeUs": 1014300,
+      "tPresentUs": 1027600,
+      "clockOffsetUs": -1200
+    },
+    {
+      "t": "stats",
+      "decodeQueue": 1,
+      "framesDropped": 0,
+      "jitterMs": 2,
+      "rttMs": 7,
+      "widthCss": 1920,
+      "heightCss": 1080
+    },
+    {
+      "t": "ping",
+      "id": 88,
+      "tUs": 1030000
+    },
+    {
+      "dir": "host-to-viewer",
+      "t": "pong",
+      "id": 88,
+      "tUs": 1030000,
+      "hostUs": 1033400
+    }
+  ]
+}

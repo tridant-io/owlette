@@ -1,0 +1,21 @@
+{
+  "WARNING": "FAKE KEY MATERIAL. these ed25519 keypairs exist only to sign the golden vectors in this directory. the private seeds are printable ascii and are published here on purpose. they sign nothing real, they are not SWOOP_JWT_PRIVATE_KEY, and any environment that accepts them is misconfigured.",
+  "alg": "EdDSA",
+  "curve": "Ed25519",
+  "encoding": "base64url, raw 32 bytes",
+  "keys": [
+    {
+      "kid": "test-kid-1",
+      "seedAscii": "swoop-golden-vector-test-key-001",
+      "publicKey": "Xn7YVoJkEjPxnCQeR6DJr15ZUjEoCk7GvHAL_mJ1kyU",
+      "current": true
+    },
+    {
+      "kid": "test-kid-2",
+      "seedAscii": "swoop-golden-vector-test-key-002",
+      "publicKey": "GMOynckD8oXeeP9rykWSjBb0qDoQadetEekhN6Zucnk",
+      "current": false
+    }
+  ],
+  "unknownKid": "test-kid-9"
+}

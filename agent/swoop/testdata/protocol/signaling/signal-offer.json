@@ -1,0 +1,13 @@
+{
+  "sender": {
+    "role": "viewer",
+    "id": "viewer_0000000001"
+  },
+  "message": {
+    "type": "offer",
+    "sdp": "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=fingerprint:sha-256 11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00\r\n",
+    "from": "viewer_0000000001",
+    "fromRole": "viewer",
+    "serverTimeMs": 1789689600000
+  }
+}

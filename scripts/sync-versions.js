@@ -20,15 +20,18 @@ const VERSION_FILES = {
 };
 
 // Own reader/writer: TOML, and only the [package] version may change —
-// dependency `version = "..."` keys must not match. Both Rust crates carry the
-// product version: Tauri stamps the desktop app's into its bundle, and
-// agent/host/build.rs stamps the service host's into owlette-host.exe's
+// dependency `version = "..."` keys must not match. All three Rust crates carry
+// the product version: Tauri stamps the desktop app's into its bundle, and
+// agent/host/build.rs and agent/swoop/build.rs stamp theirs into the exe's
 // VERSIONINFO resource. The host crate was missing from this list until 3.3.2
 // and sat at 3.0.0 for six releases — harmless while the binary carried no
-// version resource, wrong the moment it did.
+// version resource, wrong the moment it did. The swoop streamer also refuses
+// to run when its version differs from the agent's, so a stale number there
+// strands the feature on the machine.
 const CARGO_TOMLS = {
   desktop: path.join(ROOT, 'desktop', 'src-tauri', 'Cargo.toml'),
   host: path.join(ROOT, 'agent', 'host', 'Cargo.toml'),
+  swoop: path.join(ROOT, 'agent', 'swoop', 'Cargo.toml'),
 };
 
 const CARGO_VERSION_PATTERN = /^(version = ")(\d+\.\d+\.\d+)(")/m;
@@ -163,6 +166,7 @@ function showVersions() {
   console.log(`  Web:      ${readVersion(VERSION_FILES.web)}`);
   console.log(`  Desktop:  ${readVersion(VERSION_FILES.desktopPkg)} (package.json) / ${readCargoVersion(CARGO_TOMLS.desktop)} (Cargo.toml)`);
   console.log(`  Host:     ${readCargoVersion(CARGO_TOMLS.host)} (agent/host/Cargo.toml)`);
+  console.log(`  Swoop:    ${readCargoVersion(CARGO_TOMLS.swoop)} (agent/swoop/Cargo.toml)`);
   console.log('\n  Note: Firestore rules version is independent (tracks schema changes)\n');
 }
 
@@ -197,6 +201,9 @@ function syncVersions(newVersion) {
 
   writeCargoVersion(CARGO_TOMLS.host, newVersion);
   console.log(`  ✅ Updated agent/host/Cargo.toml → ${newVersion}`);
+
+  writeCargoVersion(CARGO_TOMLS.swoop, newVersion);
+  console.log(`  ✅ Updated agent/swoop/Cargo.toml → ${newVersion}`);
   console.log('     (Cargo.lock and package-lock.json follow on the next build/install)');
 
   if (updateDocVersion(DOC_FILES.readme, newVersion, oldVersion)) {

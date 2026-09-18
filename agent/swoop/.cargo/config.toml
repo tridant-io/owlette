@@ -1,0 +1,33 @@
+# Link the CRT statically.
+#
+# Copied from agent/host/.cargo/config.toml, with the binary's name changed and
+# nothing else: the reason below is the reason, not a preference.
+#
+# owlette-swoop.exe is spawned by the Windows service and has to start on a
+# machine with nothing else installed on it. Linked dynamically it imports
+# VCRUNTIME140.dll, which ships with the Visual C++ redistributable and NOT with
+# Windows. On a freshly imaged kiosk, signage box or media server the service
+# then fails to start with
+#
+#   "The code execution cannot proceed because VCRUNTIME140.dll was not found"
+#
+# and the dashboard shows the machine as service-not-running even though the
+# install reported success.
+#
+# This was found on a clean Windows 11 VM (scripts/vm). It never showed up in
+# normal testing because every development machine already has the
+# redistributable, installed by Visual Studio or by any number of other apps -
+# which is exactly why the clean-VM harness exists.
+#
+# Static linking removes the dependency outright, rather than adding a
+# redistributable to the installer payload and another step that can itself
+# fail. Cost is ~98 KB (331 KB -> 429 KB), which is noise next to a 43 MB
+# installer. The desktop app is a separate crate and already has no such import,
+# so it needs no equivalent.
+#
+# Scoped to the MSVC target so any future cross-build for another triple is
+# unaffected. build_installer_full.bat runs `cargo build --release` with this
+# directory as the working directory, so this file applies to release builds
+# without the batch script needing to know about it.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
