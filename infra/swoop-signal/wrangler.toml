@@ -29,8 +29,20 @@ class_name = "SignalRoom"
 
 # durable_objects is a non-inheritable key, so every environment repeats it.
 
+# custom domains, one label deep on purpose. the zone's universal certificate is
+# `*.owlette.app` + `owlette.app`, and a wildcard matches exactly one label — so
+# `signal.dev.owlette.app` would not be covered and every wss dial would fail the
+# handshake. a deeper name needs advanced certificate manager; these two do not.
+#
+# a custom domain on a subdomain is independent of the apex load balancer, so this
+# does not touch the railway/vercel failover on owlette.app.
+#
+# these need `zone -> workers routes -> edit` on the deploy token, on top of the
+# account-level workers permissions.
+
 [env.dev]
 name = "swoop-signal-dev"
+routes = [{ pattern = "signal-dev.owlette.app", custom_domain = true }]
 
 [[env.dev.durable_objects.bindings]]
 name = "SIGNAL_ROOM"
@@ -38,6 +50,7 @@ class_name = "SignalRoom"
 
 [env.prod]
 name = "swoop-signal-prod"
+routes = [{ pattern = "signal.owlette.app", custom_domain = true }]
 
 [[env.prod.durable_objects.bindings]]
 name = "SIGNAL_ROOM"

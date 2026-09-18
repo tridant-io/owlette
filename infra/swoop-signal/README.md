@@ -134,7 +134,7 @@ version cloudflare last accepted.
 |---|---|---|
 | repo secret | `CLOUDFLARE_API_TOKEN` | scoped: **workers scripts: edit** + **workers durable objects: edit** (account-level), nothing else. not a global api key |
 | repo secret | `CLOUDFLARE_ACCOUNT_ID` | a secret here purely so it stays out of a public repo's logs; it is an account identifier, not a credential |
-| repo variable | `SWOOP_SIGNAL_DEV_URL` / `SWOOP_SIGNAL_PROD_URL` | the origin `/health` is fetched from, e.g. `https://signal-dev.<domain>`. a **variable**, not a literal in the workflow, because a worker hostname carries either the account's workers.dev subdomain or the zone it is routed on, and this repository is public |
+| repo variable | `SWOOP_SIGNAL_DEV_URL` / `SWOOP_SIGNAL_PROD_URL` | the origin `/health` is fetched from: `https://signal-dev.owlette.app` and `https://signal.owlette.app`. a **variable** rather than a literal in the workflow so the hostname is settable without a code change, and so a rename is one dashboard edit rather than a pull request |
 
 the three worker secrets are **not** repository secrets and must never become them: the workflow has no step
 that reads or writes a worker secret, and `wrangler deploy` preserves the ones already set. a redeploy
@@ -148,9 +148,10 @@ none of this can be done from an agent session: it needs the owner's cloudflare 
 settings. nothing below has been executed, and **the workflow has never run**.
 
 1. **the api token.** cloudflare dashboard → my profile → api tokens → create token → custom token.
-   permissions: `account` → `workers scripts` → `edit`, and `account` → `workers durable objects` → `edit`.
-   account resources: this account only. no zone permission is needed unless a custom domain route is added
-   in `wrangler.toml` later, which also needs `zone` → `workers routes` → `edit`.
+   permissions: `account` → `workers scripts` → `edit`, `account` → `workers durable objects` → `edit`,
+   **and `zone` → `workers routes` → `edit` on the `owlette.app` zone** — `wrangler.toml` declares a custom
+   domain per environment, and without the zone permission the deploy fails at the route, after the script
+   has already uploaded. account resources: this account only; zone resources: `owlette.app` only.
 2. **the repository secrets.** github → settings → secrets and variables → actions → new repository secret,
    twice: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (dashboard → workers & pages → the account id in
    the right-hand pane).
@@ -166,12 +167,19 @@ settings. nothing below has been executed, and **the workflow has never run**.
    match **both** `railway-prod` and `vercel-prod`, which is why it is `must-match` in the manifest.
 4. **the first deploy, by hand.** `npx wrangler deploy -e dev`. do this before the first push so that a
    failure is read at a terminal rather than in a job log.
-5. **give it a url.** `wrangler.toml` sets `workers_dev = false` and declares no route, so a deployed worker
-   is reachable from nowhere and `/health` cannot be smoke-checked. pick one — a custom domain
-   (`routes` with `custom_domain = true`, which is a `wrangler.toml` change and therefore a code change, not
-   a dashboard click) or workers.dev for dev only — then set `SWOOP_SIGNAL_DEV_URL` / `SWOOP_SIGNAL_PROD_URL`
-   and the api's `SWOOP_SIGNAL_URL` to it. **this is an open decision, not an oversight**: the hostname
-   determines the `connect-src` entry in `web/proxy.ts`, so it wants deciding once.
+5. **the url is decided** (owner, 2026-09-18) and is in `wrangler.toml` as a custom domain per environment:
+   **`signal-dev.owlette.app`** and **`signal.owlette.app`**. set `SWOOP_SIGNAL_DEV_URL` /
+   `SWOOP_SIGNAL_PROD_URL` and the api's `SWOOP_SIGNAL_URL` to `https://` those, and add the matching
+   `wss://` origin to `connect-src` in `web/proxy.ts`.
+
+   **one label deep, and that is not a style choice.** the zone's universal certificate is
+   `*.owlette.app` + `owlette.app` — verified with `openssl s_client -connect dev.owlette.app:443` — and a
+   wildcard matches exactly **one** label. `signal.dev.owlette.app` would therefore present a name the cert
+   does not cover, and since every dial is `wss://` and the python doorbell refuses anything that is not,
+   that is a hard handshake failure rather than a warning. a deeper name needs advanced certificate manager.
+
+   a custom domain on a subdomain is independent of the apex load balancer, so this does not touch the
+   railway/vercel failover on `owlette.app`.
 6. **verify.** `curl -sS -o /dev/null -w '%{http_code}\n' https://<dev origin>/health` → `200`, and the body
    is exactly `{"ok":true,"service":"swoop-signal","protocolVersion":1}`.
 7. **then let the pipeline do it.** push a no-op change under `infra/swoop-signal/` to `dev` and confirm the
