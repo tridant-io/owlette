@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Power, RotateCw, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface MachineStatusPillProps {
   online: boolean;
@@ -12,6 +13,8 @@ interface MachineStatusPillProps {
   shutdownScheduledAt?: number;  // Unix seconds — TARGET shutdown time
   onCancel?: () => Promise<void>;
   isSiteAdmin?: boolean;
+  /** hover text for the idle online dot; the heartbeat tooltip, so both read the same */
+  tooltip?: string;
 }
 
 const CANCEL_LOCKOUT_THRESHOLD = 5; // Hide cancel in final 5s — Windows shutdown /a is unreliable
@@ -30,6 +33,7 @@ export function MachineStatusPill({
   shutdownScheduledAt,
   onCancel,
   isSiteAdmin,
+  tooltip,
 }: MachineStatusPillProps) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
@@ -64,12 +68,24 @@ export function MachineStatusPill({
   const [userCancelling, setUserCancelling] = useState(false);
   const cancelling = isActive && userCancelling;
 
-  // Idle: plain online/offline pill.
+  // Idle. Online is the boring case, so it's a dot — only offline gets a labelled pill.
   if (!isActive) {
-    return (
-      <Badge className={`text-xs select-none ${online ? 'bg-green-600' : 'bg-red-600 text-white'}`}>
-        {online ? 'online' : 'offline'}
-      </Badge>
+    return online ? (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            role="img"
+            className="inline-block w-2.5 h-2.5 rounded-full bg-green-500 select-none cursor-help"
+            aria-label="online"
+            data-testid="machine-status-online"
+          />
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>{tooltip ?? 'online'}</p>
+        </TooltipContent>
+      </Tooltip>
+    ) : (
+      <Badge className="text-xs select-none bg-red-600 text-white">offline</Badge>
     );
   }
 
