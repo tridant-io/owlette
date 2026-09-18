@@ -18,7 +18,8 @@
 //! - **capture** — duplication, the cursor observer, the downscaler and the
 //!   encoder. Everything that touches a GPU texture stays here, because a
 //!   `Frame` handle is only valid until the next acquire and `Duplication` is
-//!   not `Send`. Encoded bytes leave over a bounded channel.
+//!   not `Send`. Encoded bytes leave over a bounded channel. It opens the
+//!   duplication per pass rather than once, because the session pauses it.
 //! - **input** — its own `DesktopWatcher` and the `SendInput` injector, plus
 //!   the per-viewer held-key set. Injection is off the capture thread so a key
 //!   press is not queued behind an 8 ms acquire and an 8 ms encode.
@@ -32,6 +33,28 @@
 //! input thread's own watcher and released there, and **viewer switch** cannot
 //! happen in a session that admits one viewer — the second joiner is turned
 //! away rather than swapped in (Task 8.1 owns multi-viewer).
+//!
+//! # Loss recovery, and the floor
+//!
+//! One keyframe per burst of requests ([`IdrPolicy`]): the window starts at
+//! PROTOCOL.md §4's 250 ms, doubles to the 500 ms top of that range while the
+//! keyframes are not fixing it, and resets on a quiet stream. The sticky
+//! "awaiting" flag is what makes a burst *one* keyframe rather than one each —
+//! a receiver that lost a frame asks once per record until an irap arrives.
+//! Reference invalidation stays out of v1.
+//!
+//! The floor is the opposite problem: a still desktop produces no frames at all
+//! (`DXGI_ERROR_WAIT_TIMEOUT`, and a genuinely idle output measured 0.28
+//! frames/s) and a hardware decoder handed nothing stalls, so [`FloorTimer`]
+//! hands the last picture to the encoder again every [`FLOOR_INTERVAL`].
+//!
+//! # Capture and the linger
+//!
+//! §6 keeps the process alive for about a minute after the last viewer leaves,
+//! so a browser that reconnects does not pay for a respawn. The indicator is
+//! down the moment that viewer goes, though, so [`CaptureGate`] closes the
+//! duplication at the **departure** and the next admission opens the next one:
+//! capture stops when the last viewer leaves, not when the process exits.
 //!
 //! # The clock
 //!
@@ -69,6 +92,10 @@
 //! (a second one means the startup rebuild came back), and a cursor stream
 //! that answers the pointer moves the test injects.
 //!
+//! The pause and the floor have their own hardware test, which wants a still
+//! desktop — its invocation and its expected line are on
+//! `pause_closes_the_duplication_and_the_floor_holds_a_still_desktop`.
+//!
 //! # The whole `run` verb (manual, needs a room)
 //!
 //! The other half cannot be a unit test: it needs a bundle minted by the api
@@ -89,22 +116,201 @@ pub mod features;
 pub mod quality;
 pub mod tiers;
 
+use std::time::{Duration, Instant};
+
+use crate::bundle::Indicator;
 use crate::encode::{Codec, CodecCaps};
 use crate::gpu::scale::Limits;
 
 /// A host feature that lives for the length of a session.
 ///
-/// Task 5.1 widens `start` to take the session handle; until there is a session
-/// to hand out, a stub takes nothing. Implementations must not block — every
-/// one of them runs on the session thread.
+/// Implementations must not block — every one of them runs on the session
+/// thread, between two turns of the loop that drives the peer.
 pub trait Feature: Send {
     /// Stable name. It is what the `status` event reports and what the tests
     /// pin, so it is spelled the same as the module.
     fn name(&self) -> &'static str;
 
-    fn start(&mut self) -> anyhow::Result<()>;
+    fn start(&mut self, session: &SessionHandle) -> anyhow::Result<()>;
 
     fn stop(&mut self);
+}
+
+/// What a feature is handed when the session starts it.
+///
+/// The session's facts, not its channels: a feature runs on the session thread
+/// and starts before any viewer has joined, so there is no peer to write to and
+/// nothing it could hold across a turn of the loop.
+#[derive(Debug, Clone)]
+pub struct SessionHandle {
+    pub sid: String,
+    pub indicator: Indicator,
+    /// §5's session floor for control, not a grant — a viewer's own `ctl` comes
+    /// from its jwt.
+    pub ctl: bool,
+    /// The captured texture's size. The encoded size is not known until a
+    /// viewer's offer has named a codec.
+    pub source: (u32, u32),
+}
+
+/// §4: idr requests are coalesced by the host, so a browser may ask as often as
+/// it likes. This is the bottom of PROTOCOL.md §4's 250–500 ms range.
+pub const IDR_COOLDOWN: Duration = Duration::from_millis(250);
+
+/// The top of that range, and where the backoff stops. A receiver in a loss
+/// storm asks for a keyframe on every gap and each one costs about twenty delta
+/// frames: answering every request is how a link that dropped one packet ends
+/// up sending nothing but iraps.
+pub const IDR_COOLDOWN_MAX: Duration = Duration::from_millis(500);
+
+/// Quiet for this long and the window is back at [`IDR_COOLDOWN`]: the stream
+/// recovered, and the next loss is a new event rather than a continuation.
+const IDR_BACKOFF_RESET: Duration = Duration::from_secs(5);
+
+/// How long the sticky "awaiting idr" state holds before the request is
+/// presumed lost. The encoder answers on the next frame it is handed, and the
+/// floor guarantees one every [`FLOOR_INTERVAL`] — so anything past this is a
+/// request that died with the encoder it was sent to.
+const IDR_AWAIT_DEADLINE: Duration = Duration::from_secs(1);
+
+/// The loss-recovery policy: one keyframe per burst of requests, and a widening
+/// window when the keyframes are not fixing it. Reference invalidation stays
+/// out of v1 — this is the whole of it.
+#[derive(Debug)]
+pub struct IdrPolicy {
+    cooldown: Duration,
+    asked_at: Option<Instant>,
+    /// Asked for, not yet seen on the wire. Sticky, because a receiver that
+    /// dropped a frame asks once per record until the keyframe arrives.
+    awaiting: bool,
+}
+
+impl IdrPolicy {
+    pub fn new() -> Self {
+        Self {
+            cooldown: IDR_COOLDOWN,
+            asked_at: None,
+            awaiting: false,
+        }
+    }
+
+    /// Answer one keyframe request. `true` means ask the encoder; `false` means
+    /// the keyframe this request wants is already on its way.
+    pub fn request(&mut self, now: Instant) -> bool {
+        if let Some(asked) = self.asked_at {
+            let since = now.saturating_duration_since(asked);
+            if self.awaiting && since < IDR_AWAIT_DEADLINE {
+                return false;
+            }
+            if since >= IDR_BACKOFF_RESET {
+                self.cooldown = IDR_COOLDOWN;
+            } else if since < self.cooldown {
+                return false;
+            } else {
+                self.cooldown = (self.cooldown * 2).min(IDR_COOLDOWN_MAX);
+            }
+        }
+        self.asked_at = Some(now);
+        self.awaiting = true;
+        true
+    }
+
+    /// An irap reached the wire, so the burst it answers is over.
+    pub fn answered(&mut self) {
+        self.awaiting = false;
+    }
+}
+
+impl Default for IdrPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The floor frame rate. A hardware decoder handed nothing at all stalls
+/// (plan.md D5), and a static desktop produces nothing by design — Desktop
+/// Duplication answers `DXGI_ERROR_WAIT_TIMEOUT` and the 0.8 box measured an
+/// idle output at 0.28 frames/s. A repeat of a still picture is a few hundred
+/// bytes, so 2 Hz costs nothing and is well inside every stall threshold.
+pub const FLOOR_INTERVAL: Duration = Duration::from_millis(500);
+
+/// When the last frame was handed to the encoder, and whether the floor is due.
+#[derive(Debug)]
+pub struct FloorTimer {
+    last: Instant,
+}
+
+impl FloorTimer {
+    pub fn new(now: Instant) -> Self {
+        Self { last: now }
+    }
+
+    pub fn fed(&mut self, now: Instant) {
+        self.last = now;
+    }
+
+    pub fn due(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.last) >= FLOOR_INTERVAL
+    }
+}
+
+/// §5's control gate, host side: a viewer without `ctl` that sends something
+/// gated is dropped and the attempt is reported — once per viewer, because the
+/// attempt is as often a held key repeating at 30 Hz as a deliberate one.
+#[derive(Debug, Default)]
+pub struct Denials {
+    reported: Option<String>,
+    count: u64,
+}
+
+impl Denials {
+    /// `true` the first time this viewer is refused, which is the attempt worth
+    /// reporting.
+    pub fn note(&mut self, viewer: &str) -> bool {
+        self.count += 1;
+        if self.reported.as_deref() == Some(viewer) {
+            return false;
+        }
+        self.reported = Some(viewer.to_owned());
+        true
+    }
+
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+
+    /// A departure clears the report, so the next viewer's first attempt is its
+    /// own event rather than a repeat of somebody else's.
+    pub fn forget(&mut self) {
+        self.reported = None;
+    }
+}
+
+/// Capture runs only while somebody is watching.
+///
+/// §6 keeps the process alive for the linger after the last viewer leaves, but
+/// a capture running behind a cleared indicator is exactly what the indicator
+/// promises never happens — so the departure stops it, not the exit.
+#[derive(Debug)]
+pub struct CaptureGate {
+    running: bool,
+}
+
+impl CaptureGate {
+    /// The state the session starts in: the duplication is already open,
+    /// because `ready` reports the size it found before the room is dialled.
+    pub fn open() -> Self {
+        Self { running: true }
+    }
+
+    /// `true` when the gate moved and the caller owes capture a command.
+    pub fn set(&mut self, running: bool) -> bool {
+        if self.running == running {
+            return false;
+        }
+        self.running = running;
+        true
+    }
 }
 
 /// The wire spelling of a codec, which is **not** `Codec`'s serde spelling:
@@ -167,7 +373,10 @@ mod host {
     use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
     use windows::Win32::System::Performance::QueryPerformanceCounter;
 
-    use super::{codec_wire_name, limits_for, pick_codec};
+    use super::{
+        codec_wire_name, limits_for, pick_codec, CaptureGate, Denials, FloorTimer, IdrPolicy,
+        SessionHandle,
+    };
     use crate::bundle::{Bundle, Indicator, TimeAnchor};
     use crate::capture::{
         self, DesktopWatcher, Duplication, OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS,
@@ -175,6 +384,7 @@ mod host {
     use crate::cursor::{self, CursorTracker, OutputGeometry, PointerReader};
     use crate::encode::{BackendCaps, Codec, CodecCaps, EncodedFrame, Encoder, EncoderConfig};
     use crate::gpu::scale::{self, Downscaler, Plan};
+    use crate::gpu::Frame;
     use crate::input::{Injector, PointerSpace, SendInputInjector, ViewerInput};
     use crate::ipc::{self, Control, Event, Exit, ExitReason, LeftReason, MediaPath};
     use crate::signal::client::{Effect, SignalTransport};
@@ -204,10 +414,6 @@ mod host {
 
     /// How often the `status` event goes to the service.
     const STATUS_INTERVAL: Duration = Duration::from_secs(2);
-
-    /// §4: idr requests are coalesced by the host with a 250–500 ms cooldown, so
-    /// a browser may ask as often as it likes.
-    const IDR_COOLDOWN: Duration = Duration::from_millis(250);
 
     /// The starting CBR target, until the quality menu (Task 6.5) can move it.
     /// 20 Mbps is what the bake-off measured arm B at end to end.
@@ -309,6 +515,11 @@ mod host {
         /// Re-send the pointer whole. A viewer that has just arrived has an
         /// empty shape cache, and the tracker only emits on a change.
         CursorSnapshot,
+        /// The last viewer left: close the duplication until one comes back.
+        /// Not a stop — §6's linger keeps the process alive, and the next
+        /// viewer arrives on the same threads.
+        Pause,
+        Resume,
         Stop,
     }
 
@@ -355,6 +566,12 @@ mod host {
             }
         };
         let clock = HostClock::new(hz, bundle.time_anchor(), bundle.streamer_epoch);
+
+        // The test-only hook, which only a `testhooks` build parses at all.
+        #[cfg(feature = "testhooks")]
+        if let Some(exit) = refuse_unbuilt_overrides(bundle.overrides.as_ref()) {
+            return (exit, ExitReason::Error);
+        }
 
         // Locally before the network: a box that cannot capture or encode
         // should say so with 12 or 13 rather than after a room round trip.
@@ -476,6 +693,26 @@ mod host {
         outcome
     }
 
+    /// The bundle's `overrides` names a test source and a test encoder, and
+    /// both are still stubs — Task 8.7 fills `capture::testpattern` and Task 7.2
+    /// fills `encode::soft`. Until they exist there is nothing to select, and
+    /// quietly streaming the real desktop instead is how a ci run that proved
+    /// nothing looks like one that passed. The names are fixed vocabulary, not
+    /// bundle secrets, so they may be logged.
+    #[cfg(feature = "testhooks")]
+    fn refuse_unbuilt_overrides(overrides: Option<&crate::bundle::Overrides>) -> Option<Exit> {
+        let overrides = overrides?;
+        if let Some(source) = overrides.source.as_deref() {
+            ::log::error!("swoop: override source {source:?} is not built yet (task 8.7)");
+            return Some(Exit::NoCaptureSource);
+        }
+        if let Some(encoder) = overrides.encoder.as_deref() {
+            ::log::error!("swoop: override encoder {encoder:?} is not built yet (task 7.2)");
+            return Some(Exit::NoEncoder);
+        }
+        None
+    }
+
     /// Everything the session loop was handed rather than built.
     struct Wiring {
         clock: HostClock,
@@ -558,7 +795,9 @@ mod host {
             service_rx: w.service_rx,
             bind_addr: local_bind_addr(),
             idle_since: Some(w.started),
-            last_idr: None,
+            idr: IdrPolicy::new(),
+            capture: CaptureGate::open(),
+            denials: Denials::default(),
             last_report: w.started,
             last_status: w.started,
             frames_at_status: 0,
@@ -572,9 +811,15 @@ mod host {
         let ready = live.client.host_ready(None);
         live.send(&ready);
 
+        let handle = SessionHandle {
+            sid: bundle.sid.clone(),
+            indicator: bundle.indicator,
+            ctl: bundle.ctl,
+            source: live.source,
+        };
         let mut registry = super::features::registry();
         for feature in registry.iter_mut() {
-            if let Err(e) = feature.start() {
+            if let Err(e) = feature.start(&handle) {
                 ::log::warn!("swoop: feature {} did not start: {e}", feature.name());
             }
         }
@@ -616,7 +861,9 @@ mod host {
         service_rx: Receiver<FromService>,
         bind_addr: SocketAddr,
         idle_since: Option<Instant>,
-        last_idr: Option<Instant>,
+        idr: IdrPolicy,
+        capture: CaptureGate,
+        denials: Denials,
         last_report: Instant,
         last_status: Instant,
         frames_at_status: u64,
@@ -786,6 +1033,9 @@ mod host {
             }
             ::log::info!("swoop: viewer {viewer} admitted (room ctl {ctl})");
             self.idle_since = None;
+            if self.capture.set(true) {
+                let _ = self.capture_tx.try_send(ToCapture::Resume);
+            }
             self.viewer = Some(Viewer {
                 id: viewer.clone(),
                 // Watch-only until this host has verified the token itself.
@@ -913,12 +1163,24 @@ mod host {
             // Trigger 1 and 2 of `release_all`: a viewer that dropped mid-chord
             // leaves those keys down on the machine forever otherwise.
             let _ = self.input_tx.send(ToInput::ReleaseAll);
+            // At the departure, not at the exit: the linger below keeps the
+            // process alive for another minute and the indicator is already
+            // down. Never a blocking send — a capture thread inside a
+            // re-duplication can take ten seconds to read its channel, and the
+            // peer cannot wait that long for its next turn. A pause that does
+            // not fit is a capture that keeps running until the exit, which is
+            // what 4.1 did; a resume cannot miss, because a paused thread is
+            // draining its channel every 100 ms and nothing else is queuing.
+            if self.capture.set(false) {
+                let _ = self.capture_tx.try_send(ToCapture::Pause);
+            }
             if let Some(peer) = self.peer.as_mut() {
                 peer.disconnect();
             }
             self.peer = None;
             self.viewer = None;
             self.last_size = None;
+            self.denials.forget();
             self.idle_since = Some(Instant::now());
             let event = Event::ViewerLeft {
                 sid: self.sid.clone(),
@@ -1033,6 +1295,11 @@ mod host {
             };
 
             self.last_size = Some(size);
+            if frame.is_irap {
+                // The keyframe a burst of requests was asking for is on the
+                // wire; the next request is a new event.
+                self.idr.answered();
+            }
             let frame_id = frame.frame_id as u32;
             self.governor.on_frame_sent(frame_id, send_us);
 
@@ -1150,9 +1417,7 @@ mod host {
             };
             let ctl = self.client.control_granted(&viewer);
             if message.requires_control() && !ctl {
-                // §5: a viewer without `ctl` that sends something gated is
-                // dropped and the attempt is reported.
-                ::log::warn!("swoop: viewer {viewer} sent a gated control message without ctl");
+                self.deny(&viewer, "a gated control message");
                 return;
             }
             match message {
@@ -1213,9 +1478,10 @@ mod host {
                 return;
             };
             // The host is the enforcement point, and `ctl` comes from the token
-            // this host verified — never from anything the browser says.
+            // this host verified — never from anything the browser says, and
+            // never from the room's claim at join.
             if !self.client.control_granted(&viewer) {
-                ::log::warn!("swoop: input from a viewer without ctl, dropped");
+                self.deny(&viewer, "input");
                 return;
             }
             let Ok(message) = serde_json::from_slice::<InputMessage>(data) else {
@@ -1223,6 +1489,20 @@ mod host {
                 return;
             };
             let _ = self.input_tx.try_send(ToInput::Message(Box::new(message)));
+        }
+
+        /// §5: a viewer without `ctl` that sends something gated is dropped and
+        /// the attempt is reported.
+        ///
+        /// Reported as a log line, because PROTOCOL.md §6's stdout table has no
+        /// event for a denial and the service drops an event type it does not
+        /// know (`swoop_manager.py`'s `KNOWN_EVENTS`). The route that wants
+        /// these — `POST /api/agent/swoop/events` — is Task 5.6's, and it needs
+        /// an `ipc::Event` variant that is nobody's to add yet.
+        fn deny(&mut self, viewer: &str, what: &str) {
+            if self.denials.note(viewer) {
+                ::log::warn!("swoop: viewer {viewer} sent {what} without ctl, dropped");
+            }
         }
 
         fn on_feedback(&mut self, data: &[u8]) {
@@ -1293,16 +1573,11 @@ mod host {
         }
 
         /// §4: a host coalesces idr requests behind a cooldown, so a browser
-        /// may ask as often as it likes.
+        /// may ask as often as it likes. [`IdrPolicy`] holds the whole of it.
         fn request_idr(&mut self) {
-            let now = Instant::now();
-            if self
-                .last_idr
-                .is_some_and(|last| now.duration_since(last) < IDR_COOLDOWN)
-            {
+            if !self.idr.request(Instant::now()) {
                 return;
             }
-            self.last_idr = Some(now);
             let _ = self.capture_tx.try_send(ToCapture::Idr);
         }
 
@@ -1345,12 +1620,19 @@ mod host {
             self.frames_at_status = frames;
             let viewers = self.client.viewer_count();
             let controllers = u32::from(self.viewer.as_ref().is_some_and(|v| v.ctl));
-            // `status` has no field for the input rate limit's drop count, so
-            // it rides the log line instead of being lost.
+            // `status` has no field for the input rate limit's drop count or
+            // for the control gate's refusals, so they ride the log line
+            // instead of being lost.
             if self.input_dropped > 0 {
                 ::log::info!(
                     "swoop: input rate limit has dropped {} messages",
                     self.input_dropped
+                );
+            }
+            if self.denials.count() > 0 {
+                ::log::info!(
+                    "swoop: the control gate has refused {} messages",
+                    self.denials.count()
                 );
             }
             let event = Event::Status {
@@ -1427,6 +1709,10 @@ mod host {
     /// Capture, cursor, scale and encode. Everything that touches a GPU texture
     /// is on this thread, because a `Frame`'s handle is only valid until the
     /// next acquire and `Duplication` is not `Send`.
+    ///
+    /// The duplication is opened per pass rather than once for the process:
+    /// §6's linger outlives the last viewer by a minute, and nothing may be
+    /// captured behind an indicator that has already come down.
     fn capture_thread(
         output: OutputInfo,
         clock: HostClock,
@@ -1442,25 +1728,106 @@ mod host {
         let mut watcher = DesktopWatcher::new();
         watcher.follow();
 
+        let mut ctx = CaptureCtx {
+            output,
+            clock,
+            tx,
+            rx,
+            stop,
+            watcher,
+            bitrate: DEFAULT_BITRATE_BPS,
+            reported: None,
+        };
+        while !ctx.stop.load(Ordering::Relaxed) {
+            match capture_pass(&mut ctx) {
+                Pass::Paused => {
+                    if !wait_for_resume(&mut ctx) {
+                        return;
+                    }
+                }
+                Pass::Done => return,
+            }
+        }
+    }
+
+    /// What the capture thread keeps across a pause.
+    struct CaptureCtx {
+        output: OutputInfo,
+        clock: HostClock,
+        tx: Sender<FromWorker>,
+        rx: Receiver<ToCapture>,
+        stop: Arc<AtomicBool>,
+        /// Not `Send`: a desktop association belongs to the thread that made
+        /// it, so it is created on this thread and never leaves it.
+        watcher: DesktopWatcher,
+        /// The governor's current target, re-applied to every encoder this
+        /// thread opens — a new encoder takes the session's rate, never the
+        /// config's.
+        bitrate: u32,
+        /// The source size the session has been told about. It hears `Opened`
+        /// once; every later open reports a change or says nothing.
+        reported: Option<(u32, u32)>,
+    }
+
+    enum Pass {
+        /// The last viewer left: the duplication is closed and the thread waits
+        /// for the next one.
+        Paused,
+        /// A stop, a dead channel, or a failure already reported to the session.
+        Done,
+    }
+
+    /// Nothing is captured here — the duplication is closed and there is
+    /// nothing to poll for until a viewer comes back.
+    fn wait_for_resume(ctx: &mut CaptureCtx) -> bool {
+        while !ctx.stop.load(Ordering::Relaxed) {
+            match ctx.rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(ToCapture::Resume) => return true,
+                // The governor's last word, kept for the encoder the next
+                // viewer opens.
+                Ok(ToCapture::Bitrate(bps)) => ctx.bitrate = bps,
+                Ok(ToCapture::Stop) | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    return false
+                }
+                // `Encode`, `Idr`, `CursorSnapshot`, a second `Pause`: there is
+                // no duplication to answer them with, and the resume rebuilds
+                // the encoder, the scaler and the cursor cache anyway.
+                Ok(_) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            }
+        }
+        false
+    }
+
+    /// One open duplication, from the first acquire to a pause or an exit.
+    fn capture_pass(ctx: &mut CaptureCtx) -> Pass {
         let signal = RebuildSignal::new();
-        let mut source = match Duplication::open(&output, signal) {
+        let mut source = match Duplication::open(&ctx.output, signal) {
             Ok(source) => source,
             Err(e) => {
-                ::log::error!("swoop: could not duplicate {}: {e}", output.device_name);
-                let _ = tx.try_send(FromWorker::Failed(Exit::NoCaptureSource));
-                return;
+                ::log::error!("swoop: could not duplicate {}: {e}", ctx.output.device_name);
+                let _ = ctx.tx.try_send(FromWorker::Failed(Exit::NoCaptureSource));
+                return Pass::Done;
             }
         };
         let mut size = source.size();
-        if tx
-            .try_send(FromWorker::Opened {
+        let opened = match ctx.reported {
+            None => ctx.tx.try_send(FromWorker::Opened {
                 width: size.0,
                 height: size.1,
-            })
-            .is_err()
-        {
-            return;
+            }),
+            // A mode change while nothing was being captured. The session
+            // re-plans on this and sends the `Encode` that opens the encoder.
+            Some(last) if last != size => ctx.tx.try_send(FromWorker::SourceSize {
+                width: size.0,
+                height: size.1,
+            }),
+            Some(_) => Ok(()),
+        };
+        if opened.is_err() {
+            return Pass::Done;
         }
+        ctx.reported = Some(size);
 
         let mut reader = PointerReader::new();
         let mut tracker = CursorTracker::new();
@@ -1468,12 +1835,18 @@ mod host {
         let mut encoder: Option<Box<dyn Encoder>> = None;
         let mut scaler: Option<Downscaler> = None;
         let mut want: Option<(Codec, u32, u32)> = None;
-        let mut bitrate = DEFAULT_BITRATE_BPS;
         let mut force_irap = false;
+        // The last frame handed to the encoder, for the floor. The surface
+        // behind it belongs to the duplication (or to the scaler), each of
+        // which reuses one texture and overwrites it on the next frame — so the
+        // handle stays readable exactly as long as neither is rebuilt, and
+        // every path that rebuilds one clears this.
+        let mut last_fed: Option<Frame> = None;
+        let mut floor = FloorTimer::new(Instant::now());
 
-        while !stop.load(Ordering::Relaxed) {
+        while !ctx.stop.load(Ordering::Relaxed) {
             loop {
-                match rx.try_recv() {
+                match ctx.rx.try_recv() {
                     Ok(ToCapture::Encode {
                         codec,
                         width,
@@ -1482,38 +1855,36 @@ mod host {
                         want = Some((codec, width, height));
                         encoder = None;
                         scaler = None;
+                        last_fed = None;
                         force_irap = true;
                     }
                     Ok(ToCapture::Idr) => force_irap = true,
                     Ok(ToCapture::CursorSnapshot) => {
                         if let Some(shape) = tracker.current_shape() {
-                            let _ = tx.try_send(FromWorker::Cursor(shape));
+                            let _ = ctx.tx.try_send(FromWorker::Cursor(shape));
                         }
                     }
                     Ok(ToCapture::Bitrate(bps)) => {
-                        bitrate = bps;
+                        ctx.bitrate = bps;
                         if let Some(encoder) = encoder.as_mut() {
                             if let Err(e) = encoder.set_bitrate(bps) {
                                 ::log::warn!("swoop: could not move the bitrate: {e}");
                             }
                         }
                     }
-                    Ok(ToCapture::Stop) | Err(TryRecvError::Disconnected) => return,
+                    Ok(ToCapture::Pause) => return Pass::Paused,
+                    // Already running: the session sends one on every
+                    // admission, and only the first of those is a resume.
+                    Ok(ToCapture::Resume) => {}
+                    Ok(ToCapture::Stop) | Err(TryRecvError::Disconnected) => return Pass::Done,
                     Err(TryRecvError::Empty) => break,
                 }
             }
 
-            if watcher.follow() {
+            if ctx.watcher.follow() {
                 // A desktop switch does the same damage to a duplication as an
                 // ACCESS_LOST, and the new device is a new encoder.
                 source.request_rebuild();
-            }
-            // True once after every rebuild. The device is new, so the encoder
-            // and the scaler that were pinned to the old one are gone with it.
-            if source.take_idr_request() {
-                encoder = None;
-                scaler = None;
-                force_irap = true;
             }
 
             let mut pointer = Vec::new();
@@ -1522,6 +1893,7 @@ mod host {
                 let tracker = &mut tracker;
                 let reader = &mut reader;
                 let pointer = &mut pointer;
+                let clock = ctx.clock;
                 source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |dup, info| {
                     // Most cursor news arrives on frames that carry no picture
                     // at all, and the shape is only legal to read while the
@@ -1549,21 +1921,33 @@ mod host {
                 })
             };
             for message in pointer {
-                let _ = tx.try_send(FromWorker::Cursor(message));
+                let _ = ctx.tx.try_send(FromWorker::Cursor(message));
             }
 
             let frame = match acquired {
                 Ok(frame) => frame,
                 Err(e) => {
                     ::log::error!("swoop: capture failed: {e}");
-                    let _ = tx.try_send(FromWorker::Failed(Exit::NoCaptureSource));
-                    return;
+                    let _ = ctx.tx.try_send(FromWorker::Failed(Exit::NoCaptureSource));
+                    return Pass::Done;
                 }
             };
+            // Taken after the acquire and not before it: `next_frame_with`
+            // rebuilds inside itself on an ACCESS_LOST, and the texture
+            // `last_fed` points at went with the duplication that owned it.
+            // True once after every rebuild — the device is new, so the encoder
+            // and the scaler pinned to the old one are gone with it.
+            if source.take_idr_request() {
+                encoder = None;
+                scaler = None;
+                last_fed = None;
+                force_irap = true;
+            }
             if source.size() != size {
                 size = source.size();
+                ctx.reported = Some(size);
                 geometry = OutputGeometry::for_output(source.output(), size);
-                let _ = tx.try_send(FromWorker::SourceSize {
+                let _ = ctx.tx.try_send(FromWorker::SourceSize {
                     width: size.0,
                     height: size.1,
                 });
@@ -1572,38 +1956,54 @@ mod host {
                 want = None;
                 encoder = None;
                 scaler = None;
+                last_fed = None;
             }
-            let Some(frame) = frame else {
-                continue;
-            };
+
             let Some((codec, width, height)) = want else {
                 continue;
             };
-
-            if scaler.is_none() && (width, height) != (frame.width, frame.height) {
-                match Downscaler::open(&frame, width, height) {
-                    Ok(opened) => scaler = Some(opened),
-                    Err(e) => {
-                        ::log::error!("swoop: could not open the downscaler: {e}");
-                        let _ = tx.try_send(FromWorker::Failed(e.exit()));
-                        return;
+            let now = Instant::now();
+            let feed = match frame {
+                Some(frame) => {
+                    if scaler.is_none() && (width, height) != (frame.width, frame.height) {
+                        match Downscaler::open(&frame, width, height) {
+                            Ok(opened) => scaler = Some(opened),
+                            Err(e) => {
+                                ::log::error!("swoop: could not open the downscaler: {e}");
+                                let _ = ctx.tx.try_send(FromWorker::Failed(e.exit()));
+                                return Pass::Done;
+                            }
+                        }
+                    }
+                    match scaler.as_mut().map(|scaler| scaler.scale(&frame)) {
+                        Some(Ok(scaled)) => scaled,
+                        Some(Err(e)) => {
+                            // A new device under the scaler: rebuild both next turn.
+                            ::log::warn!("swoop: downscale failed: {e}");
+                            encoder = None;
+                            scaler = None;
+                            last_fed = None;
+                            force_irap = true;
+                            continue;
+                        }
+                        None => frame,
                     }
                 }
-            }
-            let scaled = scaler.as_mut().map(|scaler| scaler.scale(&frame));
-            let scaled = match scaled {
-                Some(Ok(scaled)) => Some(scaled),
-                Some(Err(e)) => {
-                    // A new device under the scaler: rebuild both next turn.
-                    ::log::warn!("swoop: downscale failed: {e}");
-                    encoder = None;
-                    scaler = None;
-                    force_irap = true;
-                    continue;
-                }
-                None => None,
+                // The floor. Desktop Duplication answers `WAIT_TIMEOUT` on a
+                // static desktop and a hardware decoder handed nothing stalls,
+                // so the last picture goes out again — stamped now, because the
+                // browser's stage breakdown measures this frame's trip and not
+                // the age of its pixels.
+                None => match last_fed.as_ref() {
+                    Some(last) if floor.due(now) => Frame {
+                        handle: last.handle,
+                        width: last.width,
+                        height: last.height,
+                        captured_qpc: qpc_now(),
+                    },
+                    _ => continue,
+                },
             };
-            let frame = scaled.as_ref().unwrap_or(&frame);
 
             if encoder.is_none() {
                 match create_encoder(&EncoderConfig {
@@ -1613,40 +2013,48 @@ mod host {
                     fps: TARGET_FPS,
                     // A rebuild is a new encoder, so the governor's current
                     // target is re-applied here rather than inherited.
-                    bitrate_bps: bitrate,
+                    bitrate_bps: ctx.bitrate,
                 }) {
                     Ok(created) => encoder = Some(created),
                     Err(e) => {
                         ::log::error!("swoop: could not open the encoder: {e}");
-                        let _ = tx.try_send(FromWorker::Failed(Exit::NoEncoder));
-                        return;
+                        let _ = ctx.tx.try_send(FromWorker::Failed(Exit::NoEncoder));
+                        return Pass::Done;
                     }
                 }
             }
             let Some(session) = encoder.as_mut() else {
                 continue;
             };
-            match session.encode(frame, force_irap) {
-                Ok(Some(encoded)) => {
-                    force_irap = false;
-                    // A full queue means the session thread fell behind. The
-                    // frame is dropped rather than stalling capture, and the
-                    // next one is an IRAP so the gap cannot dangle.
-                    if tx.try_send(FromWorker::Frame(Box::new(encoded))).is_err() {
-                        force_irap = true;
+            match session.encode(&feed, force_irap) {
+                Ok(encoded) => {
+                    // The floor is measured from the last frame the encoder was
+                    // given, not from the last one it answered: an encoder that
+                    // runs a frame behind is not a stalled desktop.
+                    floor.fed(now);
+                    last_fed = Some(feed);
+                    if let Some(encoded) = encoded {
+                        force_irap = false;
+                        // A full queue means the session thread fell behind. The
+                        // frame is dropped rather than stalling capture, and the
+                        // next one is an IRAP so the gap cannot dangle.
+                        if ctx.tx.try_send(FromWorker::Frame(Box::new(encoded))).is_err() {
+                            force_irap = true;
+                        }
                     }
                 }
-                Ok(None) => {}
                 Err(e) => {
                     // DeviceChanged and SizeChanged both mean the surface moved
                     // under the session: drop it and open a new one.
                     ::log::warn!("swoop: encode failed: {e}");
                     encoder = None;
                     scaler = None;
+                    last_fed = None;
                     force_irap = true;
                 }
             }
         }
+        Pass::Done
     }
 
     /// Input injection, on the one thread that follows the input desktop.
@@ -1909,6 +2317,122 @@ mod host {
             assert_eq!(iraps, 1, "a session opens with exactly one irap and no needless rebuild");
             assert!(positions > 0, "the injected pointer moves produced no cpos");
         }
+
+        /// The two things Task 5.1 added to the capture thread, on the real
+        /// duplication: a pause actually closes it, and a resume opens the next
+        /// one — plus the floor, which is the only reason frames keep arriving
+        /// while nothing on this desktop moves.
+        ///
+        /// **Do not touch the mouse or keyboard while it runs**: the floor half
+        /// only proves anything on a still desktop. A busy one delivers 60 fps
+        /// and the assertion passes for the wrong reason, which is why the
+        /// count it wants is small.
+        ///
+        /// ```text
+        /// cd agent/swoop
+        /// cargo test --lib session::host::tests::pause_closes_the_duplication -- --ignored --nocapture
+        /// ```
+        ///
+        /// Expected on the dev box: `swoop pause: N frames still, 0 while
+        /// paused, M after the resume` with N ≥ 2 and M ≥ 1.
+        #[test]
+        #[ignore = "captures this box's real desktop and opens its encoder"]
+        fn pause_closes_the_duplication_and_the_floor_holds_a_still_desktop() {
+            let outputs = capture::enumerate_outputs().expect("dxgi enumerates");
+            assert!(!outputs.is_empty(), "no attached output to duplicate");
+            let output = primary(&outputs).clone();
+
+            let caps: Vec<CodecCaps> = encoder_caps()
+                .into_iter()
+                .flat_map(|backend| backend.codecs)
+                .collect();
+            assert!(!caps.is_empty(), "no encoder backend on this machine");
+            let codec = caps[0].codec;
+            let limits = limits_for(&caps, codec).expect("the codec it just reported");
+
+            let clock = HostClock::new(
+                qpc_hz().expect("a performance counter"),
+                crate::bundle::TimeAnchor::new(0),
+                0,
+            );
+            let stop = Arc::new(AtomicBool::new(false));
+            let (tx, rx) = bounded::<FromWorker>(WORKER_QUEUE);
+            let (capture_tx, capture_rx) = bounded::<ToCapture>(8);
+            let handle = {
+                let stop = Arc::clone(&stop);
+                thread::spawn(move || capture_thread(output, clock, tx, capture_rx, stop))
+            };
+
+            let source = match rx.recv_timeout(CAPTURE_OPEN_TIMEOUT) {
+                Ok(FromWorker::Opened { width, height }) => (width, height),
+                _ => {
+                    stop.store(true, Ordering::Relaxed);
+                    panic!("capture did not open within {CAPTURE_OPEN_TIMEOUT:?}");
+                }
+            };
+            let encoded = match scale::plan(source, limits) {
+                Plan::AsIs => source,
+                Plan::Downscale { width, height } => (width, height),
+                Plan::Refuse => panic!("{source:?} has no legal encode size"),
+            };
+            let open = ToCapture::Encode {
+                codec,
+                width: encoded.0,
+                height: encoded.1,
+            };
+
+            /// Frames in a window, and nothing else — the cursor and the size
+            /// messages are not what this test is about.
+            fn frames(rx: &Receiver<FromWorker>, window: Duration) -> u32 {
+                let deadline = Instant::now() + window;
+                let mut seen = 0;
+                while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+                    match rx.recv_timeout(left) {
+                        Ok(FromWorker::Frame(_)) => seen += 1,
+                        Ok(FromWorker::Failed(exit)) => panic!("capture failed: {}", exit.code()),
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+                seen
+            }
+
+            capture_tx.send(open).expect("the capture thread is running");
+            let still = frames(&rx, Duration::from_millis(1_500));
+
+            capture_tx
+                .send(ToCapture::Pause)
+                .expect("the capture thread is running");
+            // Whatever was already in flight when the pause was read is not a
+            // capture that kept running.
+            let _ = frames(&rx, Duration::from_millis(300));
+            let paused = frames(&rx, Duration::from_secs(1));
+
+            capture_tx
+                .send(ToCapture::Resume)
+                .expect("the capture thread is running");
+            // A new duplication is a new device and a new encoder, which is why
+            // the session re-sends this after every admission.
+            capture_tx
+                .send(ToCapture::Encode {
+                    codec,
+                    width: encoded.0,
+                    height: encoded.1,
+                })
+                .expect("the capture thread is running");
+            let resumed = frames(&rx, Duration::from_secs(5));
+
+            stop.store(true, Ordering::Relaxed);
+            let _ = capture_tx.send(ToCapture::Stop);
+            let _ = handle.join();
+
+            println!(
+                "swoop pause: {still} frames still, {paused} while paused, {resumed} after the resume"
+            );
+            assert!(still >= 2, "the floor did not feed a still desktop");
+            assert_eq!(paused, 0, "capture kept running behind a cleared indicator");
+            assert!(resumed >= 1, "the resume did not re-open the duplication");
+        }
     }
 }
 
@@ -2071,5 +2595,126 @@ mod tests {
             }
         );
         assert_eq!(plan.factor(7680), Some(4096.0 / 7680.0));
+    }
+
+    /// §4's coalescing, which is the whole of v1's loss recovery: a receiver
+    /// that lost a frame asks once per record until the keyframe arrives, and
+    /// answering each of them costs about twenty delta frames.
+    #[test]
+    fn a_burst_of_idr_requests_produces_one_keyframe() {
+        let mut idr = IdrPolicy::new();
+        let start = Instant::now();
+        let asked: usize = (0..10)
+            .filter(|i| idr.request(start + Duration::from_millis(*i * 10)))
+            .count();
+        assert_eq!(asked, 1, "ten requests inside the cooldown are one keyframe");
+
+        // Still one: the sticky state holds past the cooldown until the irap
+        // it was asking for is actually on the wire.
+        assert!(!idr.request(start + IDR_COOLDOWN + Duration::from_millis(1)));
+        idr.answered();
+        assert!(idr.request(start + IDR_COOLDOWN + Duration::from_millis(2)));
+    }
+
+    /// Exponential, capped at the top of PROTOCOL.md §4's range, and reset by a
+    /// quiet stream — a session that recovered should not carry the last loss
+    /// storm's window for the rest of its life.
+    #[test]
+    fn the_idr_window_backs_off_and_a_quiet_stream_resets_it() {
+        let mut idr = IdrPolicy::new();
+        let mut at = Instant::now();
+        assert!(idr.request(at));
+        idr.answered();
+
+        // 250 ms → 500 ms, and no further: the range is 250–500.
+        at += IDR_COOLDOWN;
+        assert!(idr.request(at));
+        idr.answered();
+        at += IDR_COOLDOWN;
+        assert!(!idr.request(at), "the window is 500 ms now");
+        at += IDR_COOLDOWN;
+        assert!(idr.request(at));
+        idr.answered();
+        at += IDR_COOLDOWN_MAX;
+        assert!(idr.request(at), "capped at 500 ms rather than climbing");
+        idr.answered();
+
+        // Quiet, then a new event: back at the bottom of the range.
+        at += Duration::from_secs(6);
+        assert!(idr.request(at));
+        idr.answered();
+        at += IDR_COOLDOWN;
+        assert!(idr.request(at), "the backoff reset with the quiet stream");
+    }
+
+    /// The encoder the request was sent to can be rebuilt out from under it, so
+    /// "awaiting" cannot be a state the session never leaves.
+    #[test]
+    fn an_unanswered_idr_request_does_not_stick_forever() {
+        let mut idr = IdrPolicy::new();
+        let start = Instant::now();
+        assert!(idr.request(start));
+        assert!(!idr.request(start + Duration::from_millis(900)));
+        assert!(idr.request(start + Duration::from_millis(1_100)));
+    }
+
+    /// A hardware decoder handed nothing stalls, and Desktop Duplication
+    /// answers `WAIT_TIMEOUT` for as long as the desktop is still — a real
+    /// output measured 0.28 frames/s. The loop below is that case: every
+    /// acquire times out, and the floor is the only thing that feeds the
+    /// encoder.
+    #[test]
+    fn the_floor_feeds_the_encoder_on_a_timeout_only_capture_loop() {
+        let start = Instant::now();
+        let mut floor = FloorTimer::new(start);
+        let mut fed = 0;
+        // Two and a half seconds of 8 ms acquires, none of which carried a
+        // frame.
+        for tick in 1..=300u32 {
+            let now = start + Duration::from_millis(u64::from(tick) * 8);
+            if floor.due(now) {
+                fed += 1;
+                floor.fed(now);
+            }
+        }
+        assert_eq!(fed, 4, "2.4 s at the 500 ms floor is four repeats");
+
+        // A real frame resets it: the floor is a floor, not a second stream.
+        let now = start + Duration::from_secs(3);
+        floor.fed(now);
+        assert!(!floor.due(now + Duration::from_millis(499)));
+        assert!(floor.due(now + FLOOR_INTERVAL));
+    }
+
+    /// §5: the attempt is reported, not every message behind it — a held key
+    /// repeats at 30 Hz, and a viewer that lost control mid-chord would
+    /// otherwise write a log line for each repeat. The drop itself is
+    /// `Live::on_input`, which cannot be unit tested without a live room.
+    #[test]
+    fn a_viewer_without_ctl_is_reported_once_and_counted_every_time() {
+        let mut denials = Denials::default();
+        assert!(denials.note("viewer_a"));
+        for _ in 0..30 {
+            assert!(!denials.note("viewer_a"));
+        }
+        assert_eq!(denials.count(), 31);
+
+        // The next viewer's first attempt is its own event.
+        denials.forget();
+        assert!(denials.note("viewer_b"));
+    }
+
+    /// §6 keeps the process alive for the linger after the last viewer leaves,
+    /// and the indicator is already down — so the departure stops capture and
+    /// the exit finds nothing left to stop.
+    #[test]
+    fn capture_stops_at_the_last_departure_and_not_at_the_exit() {
+        let mut gate = CaptureGate::open();
+        // The duplication is open before the first viewer: `ready` reports the
+        // size it found.
+        assert!(!gate.set(true), "a joiner does not re-open what is open");
+        assert!(gate.set(false), "the departure pauses capture");
+        assert!(!gate.set(false), "the exit has nothing left to pause");
+        assert!(gate.set(true), "the next viewer resumes it");
     }
 }

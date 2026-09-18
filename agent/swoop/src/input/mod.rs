@@ -433,7 +433,9 @@ impl ViewerInput {
         }
     }
 
-    /// How many messages the rate limit has dropped, for the `status` event.
+    /// How many messages the rate limit has dropped. It rides the session's
+    /// `status` log line, not the `status` event: PROTOCOL.md §6 fixes that
+    /// event's fields and none of them is this.
     pub fn dropped(&self) -> u64 {
         self.dropped
     }

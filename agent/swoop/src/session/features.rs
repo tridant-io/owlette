@@ -1,10 +1,17 @@
 //! The feature registry.
 //!
-//! Wave 6 fills one module per name here and swaps its stub in. The list is the
-//! only place a feature is named, so the session loop, the `status` event and
-//! the tests never drift apart.
+//! The list is the only place a feature is named, so the session loop and the
+//! tests never drift apart.
+//!
+//! Wave 6 fills one module per name — and cannot swap its own stub in without
+//! editing this file, which its tasks forbid: `clipboard`, `audio`, `displays`
+//! and `securedesk` export no constructor for [`registry`] to call, and Task
+//! 5.1 may not add one to a module it does not own. Whoever fills the first of
+//! them settles it, one way or the other: each module exports
+//! `pub fn feature() -> Box<dyn Feature>` and this file calls it, or Wave 6 is
+//! allowed its one line here.
 
-use super::Feature;
+use super::{Feature, SessionHandle};
 
 /// Every feature the host session offers, in start order. Stops run in reverse.
 pub const FEATURE_NAMES: [&str; 5] = ["cursor", "clipboard", "audio", "displays", "securedesk"];
@@ -18,7 +25,7 @@ impl Feature for Stub {
         self.0
     }
 
-    fn start(&mut self) -> anyhow::Result<()> {
+    fn start(&mut self, _session: &SessionHandle) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -52,8 +59,16 @@ mod tests {
 
     #[test]
     fn stubs_start_and_stop_without_error() {
+        let session = SessionHandle {
+            sid: "sid_test".to_owned(),
+            indicator: crate::bundle::Indicator::Banner,
+            ctl: true,
+            source: (1920, 1080),
+        };
         for mut feature in registry() {
-            feature.start().expect("a stub feature never fails to start");
+            feature
+                .start(&session)
+                .expect("a stub feature never fails to start");
             feature.stop();
         }
     }
