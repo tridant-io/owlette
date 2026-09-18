@@ -259,7 +259,7 @@ if not exist "%DESKTOP_EXE%" (
 echo Desktop app built OK
 
 :: ============================================================================
-:: Step 7: Build the service host (Rust)
+:: Step 7: Build the Rust binaries (service host + swoop streamer)
 :: ============================================================================
 :: Replaces "acquire NSSM". 3.0.0 hosts OwletteService in our own supervisor
 :: (agent\host) instead of NSSM 2.24 - a 2014 binary, the last stable release
@@ -269,7 +269,8 @@ echo Desktop app built OK
 :: The host is ~320 KB, has one dependency (windows-service, the same crate the
 :: desktop app already drives the SCM with), and is built from source here, so
 :: the build no longer depends on nssm.cc being up either.
-echo [7/9] Building the service host ^(Rust, release^)...
+:: Both crates are built in this one step so the [n/9] labels stay put.
+echo [7/9] Building the Rust binaries ^(service host + swoop streamer, release^)...
 mkdir build\tools 2>nul
 
 set "HOST_DIR=%~dp0host"
@@ -313,6 +314,37 @@ if errorlevel 1 (
 )
 echo Service host built OK
 
+:: The swoop streamer - owlette-swoop.exe, the remote-session binary the service
+:: spawns. Step 8 copies it straight from the cargo target directory, the same
+:: way it takes the desktop app. cargo runs with agent\swoop as the working
+:: directory and never --manifest-path: that is the only form under which the
+:: crate's .cargo\config.toml applies, and +crt-static lives there.
+echo Building the swoop streamer...
+set "SWOOP_DIR=%~dp0swoop"
+if not exist "%SWOOP_DIR%\Cargo.toml" (
+    echo ERROR: Swoop streamer sources not found at "%SWOOP_DIR%"
+    pause
+    exit /b 1
+)
+
+pushd "%SWOOP_DIR%"
+call cargo build --release
+if errorlevel 1 (
+    echo ERROR: cargo build failed in "%SWOOP_DIR%"
+    popd
+    pause
+    exit /b 1
+)
+popd
+
+set "SWOOP_EXE=%SWOOP_DIR%\target\release\owlette-swoop.exe"
+if not exist "%SWOOP_EXE%" (
+    echo ERROR: cargo reported success but "%SWOOP_EXE%" is missing
+    pause
+    exit /b 1
+)
+echo Swoop streamer built OK
+
 :: ============================================================================
 :: Step 8: Create installer package structure
 :: ============================================================================
@@ -324,6 +356,7 @@ mkdir build\installer_package\agent\src 2>nul
 mkdir build\installer_package\agent\icons 2>nul
 mkdir build\installer_package\app 2>nul
 mkdir build\installer_package\tools 2>nul
+mkdir build\installer_package\swoop 2>nul
 mkdir build\installer_package\scripts 2>nul
 
 :: Note: config, logs, cache, tmp directories are now created in ProgramData by the installer
@@ -381,6 +414,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: Copy the swoop streamer. Lands at {app}\swoop\owlette-swoop.exe on the
+:: target - the exact path shared_utils.get_swoop_exe_path() resolves.
+echo Copying swoop streamer...
+copy /Y "%SWOOP_EXE%" build\installer_package\swoop\ >nul
+if errorlevel 1 (
+    echo ERROR: Failed to copy "%SWOOP_EXE%"
+    pause
+    exit /b 1
+)
+
 :: Copy installation scripts. The launch_gui.bat / launch_tray.bat hops are gone
 :: with the python UI - the Start-menu and startup shortcuts now point straight
 :: at the desktop exe.
@@ -418,10 +461,19 @@ mkdir build\installer_output 2>nul
 :: The host binary is what an AV false positive removes mid-build (2026-09-08:
 :: Defender ML quarantined it between the copy and the compile). Re-check right
 :: before ISCC so a missing payload fails HERE with a reason, not inside Inno.
+:: owlette-swoop.exe is the same shape of binary and carries the same release
+:: profile, so it gets the same check.
 if not exist "build\installer_package\tools\owlette-host.exe" (
     echo ERROR: build\installer_package\tools\owlette-host.exe is missing.
     echo It was copied earlier in this build, so something removed it since.
     echo Check Windows Security protection history for owlette-host.exe.
+    pause
+    exit /b 1
+)
+if not exist "build\installer_package\swoop\owlette-swoop.exe" (
+    echo ERROR: build\installer_package\swoop\owlette-swoop.exe is missing.
+    echo It was copied earlier in this build, so something removed it since.
+    echo Check Windows Security protection history for owlette-swoop.exe.
     pause
     exit /b 1
 )

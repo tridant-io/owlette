@@ -1,0 +1,129 @@
+name: rust build
+
+# The repo ships three Rust crates and no workflow compiled any of them until
+# this one: owlette-host (the Windows service host), owlette-swoop (the remote
+# desktop streamer) and owlette-desktop (the Tauri tray app). A clippy error or
+# a red unit test could reach dev and main and only surface in
+# build_installer_full.bat, minutes into a release build.
+#
+# All three are Windows-only — host and swoop link against Win32 directly and
+# the desktop crate is a Tauri/WebView2 app — so there is one runner, not a
+# matrix of hosts.
+#
+# Every cargo invocation runs with `working-directory:` set to the crate, never
+# `--manifest-path`. --manifest-path resolves .cargo/config.toml against the
+# CALLER's directory, silently dropping `-C target-feature=+crt-static` and
+# reintroducing the VCRUNTIME140.dll import that 3.2.3 shipped to fix.
+#
+# agent/swoop/spikes/* are nested prototype crates with their own [workspace]
+# tables. They are not part of the product build, nothing here compiles them,
+# and the path filter below excludes them so a spike-only edit does not spend a
+# runner.
+#
+# cargo deny and lockfile registration are Task 3.5; the release build is
+# build-installer.yml.
+on:
+  pull_request:
+    paths:
+      - 'agent/host/**'
+      - 'agent/swoop/**'
+      - '!agent/swoop/spikes/**'
+      - 'desktop/src-tauri/**'
+      - '.github/workflows/rust-build.yml'
+  push:
+    branches: [main, dev]
+    paths:
+      - 'agent/host/**'
+      - 'agent/swoop/**'
+      - '!agent/swoop/spikes/**'
+      - 'desktop/src-tauri/**'
+      - '.github/workflows/rust-build.yml'
+
+concurrency:
+  group: rust-build-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege default: this job only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  crates:
+    name: clippy + tests on windows
+    runs-on: windows-latest
+    # Cold-cache local proxy for agent/swoop alone (fresh CARGO_HOME, fresh
+    # target dir, 39 crates) was 80.5 s — spike 0.2 §11. That is a LOCAL
+    # PROXY, not a measured CI run: it excludes GitHub runner hardware,
+    # Defender's on-access scanning of every object file, and the rustup
+    # toolchain install. The desktop crate is by far the long pole here
+    # (~3m20s clippy locally on a warm registry, several hundred
+    # dependencies). 30 minutes is roughly double a pessimistic cold run and
+    # leaves room for a cache miss on all three workspaces at once.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      # dtolnay/rust-toolchain publishes no version tags — the branch name is
+      # the toolchain selector — so this pins the master commit and picks the
+      # toolchain through the input instead.
+      #
+      # 1.98.1 is the toolchain all three crates were validated against. The
+      # floor is 1.91.0, set by moq-nvenc 0.0.5 in agent/swoop (verified both
+      # directions in spike 0.2 §11.1); host and desktop declare 1.77.2. Exact
+      # rather than `stable` so a new clippy lint lands as a deliberate bump
+      # and not as a surprise red on an unrelated PR. Exit condition: the
+      # dependency-currency review each release cycle moves it.
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+        with:
+          toolchain: '1.98.1'
+          components: clippy
+
+      # One restore covering all three crates; they are separate workspaces, so
+      # rust-cache needs each root named.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            agent/host
+            agent/swoop
+            desktop/src-tauri
+          # The action's default only writes the cache on the repo's default
+          # branch (main), and main is where releases land, not where work
+          # does. Without dev the cache would almost never be refreshed and
+          # every PR would pay a cold build. Same reasoning as zizmor.yml.
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+
+      # Cheapest crate first so an ordinary lint slip fails before the runner
+      # spends three minutes on the Tauri dependency graph.
+      - name: clippy owlette-host
+        working-directory: agent/host
+        run: cargo clippy --all-targets -- -D warnings
+
+      # --locked is also the lockfile-drift check: scripts/sync-versions.js
+      # rewrites each Cargo.toml's version but not its Cargo.lock, and both
+      # host and desktop had drifted (3.3.3 / 3.3.4 against a 3.3.5 manifest)
+      # until this workflow was written.
+      - name: test owlette-host
+        working-directory: agent/host
+        run: cargo test --locked
+
+      - name: clippy owlette-swoop
+        working-directory: agent/swoop
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test owlette-swoop
+        working-directory: agent/swoop
+        run: cargo test --locked
+
+      # No `npm ci && npm run build` in desktop/ first: tauri-build only warns
+      # when frontendDist (desktop/dist) is absent, and both commands below
+      # were verified green on a tree with no dist/ at all. Adding the frontend
+      # build would roughly double this job for no lint coverage.
+      - name: clippy owlette-desktop
+        working-directory: desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test owlette-desktop
+        working-directory: desktop/src-tauri
+        run: cargo test --locked
