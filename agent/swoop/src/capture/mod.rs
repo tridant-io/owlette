@@ -343,7 +343,7 @@ const _: () = {
 /// Idempotent, and it fails harmlessly if the process already declared its
 /// awareness in a manifest.
 #[cfg(windows)]
-fn set_dpi_awareness() {
+pub(crate) fn set_dpi_awareness() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -720,7 +720,68 @@ impl Duplication {
         }
     }
 
-    fn step(&mut self, timeout_ms: u32) -> anyhow::Result<Step> {
+    /// [`Source::next_frame`], plus a look at the pointer data every acquired
+    /// frame carries.
+    ///
+    /// The cursor arrives on the same `AcquireNextFrame` as the desktop image,
+    /// and most of it arrives on frames this module drops: a pointer-only frame
+    /// has `LastPresentTime == 0` and no new picture at all. So `observer` runs
+    /// for every frame Desktop Duplication hands back, emitted or not, and it
+    /// runs before `ReleaseFrame` because `GetFramePointerShape` is only legal
+    /// while the frame is held.
+    ///
+    /// The duplication is lent for the call rather than handed out: there is
+    /// one per output per process, and the calls it is wanted for are invalid
+    /// outside this window.
+    ///
+    /// The call site Wave 5's capture thread wants, with `cursor` owning both
+    /// helpers and the tracker:
+    ///
+    /// ```text
+    /// let mut reader = cursor::PointerReader::new();
+    /// let frame = source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |dup, info| {
+    ///     // None when the frame carried no pointer news at all (20.4% of
+    ///     // frames); the position on those is stale, not (0,0).
+    ///     if let Some(at) = cursor::pointer_position(info) {
+    ///         if let Some(msg) = tracker.on_position(at, &geometry, ts_us) {
+    ///             send(msg);
+    ///         }
+    ///     }
+    ///     match reader.shape(dup, info) {
+    ///         Ok(Some((shape, bytes))) => match tracker.on_shape(&shape, bytes, geometry.dpi) {
+    ///             Ok(Some(msg)) => send(msg),
+    ///             Ok(None) => {}          // a shape the viewer already has
+    ///             Err(e) => log_and_continue(e),
+    ///         },
+    ///         Ok(None) => {}              // no shape change on this frame
+    ///         Err(e) => log_and_continue(e),
+    ///     }
+    /// })?;
+    /// ```
+    pub fn next_frame_with(
+        &mut self,
+        timeout_ms: u32,
+        observer: &mut dyn FnMut(&IDXGIOutputDuplication, &DXGI_OUTDUPL_FRAME_INFO),
+    ) -> anyhow::Result<Option<Frame>> {
+        if self.live.is_none() || self.generation != self.signal.generation() {
+            self.rebuild()?;
+        }
+        match self.step(timeout_ms, observer)? {
+            Step::Frame(frame) => Ok(Some(frame)),
+            Step::Nothing => Ok(None),
+            Step::Lost => {
+                self.signal.bump();
+                self.rebuild()?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn step(
+        &mut self,
+        timeout_ms: u32,
+        observer: &mut dyn FnMut(&IDXGIOutputDuplication, &DXGI_OUTDUPL_FRAME_INFO),
+    ) -> anyhow::Result<Step> {
         let Self {
             size,
             live,
@@ -744,6 +805,11 @@ impl Duplication {
                 _ => Err(e.into()),
             };
         }
+        // Before anything else and before `ReleaseFrame`: the pointer news on a
+        // frame with no desktop image is still pointer news, and the shape can
+        // only be read while the frame is held.
+        observer(&live.dup, &info);
+
         let Some(resource) = resource else {
             let _ = unsafe { live.dup.ReleaseFrame() };
             return Ok(Step::Nothing);
@@ -792,19 +858,11 @@ impl Duplication {
 
 #[cfg(windows)]
 impl Source for Duplication {
+    /// Picture only. A session that draws a cursor calls
+    /// [`Duplication::next_frame_with`] instead — the pointer data is on the
+    /// same acquire and cannot be read afterwards.
     fn next_frame(&mut self, timeout_ms: u32) -> anyhow::Result<Option<Frame>> {
-        if self.live.is_none() || self.generation != self.signal.generation() {
-            self.rebuild()?;
-        }
-        match self.step(timeout_ms)? {
-            Step::Frame(frame) => Ok(Some(frame)),
-            Step::Nothing => Ok(None),
-            Step::Lost => {
-                self.signal.bump();
-                self.rebuild()?;
-                Ok(None)
-            }
-        }
+        self.next_frame_with(timeout_ms, &mut |_, _| {})
     }
 
     /// The acquired texture's size, never the mode's: they differ on a rotated
@@ -914,20 +972,23 @@ fn desktop_name(desktop: HDESK) -> Option<String> {
 ///
 /// There is no timer and no sleep — the compositor paces this loop, and the
 /// session's floor frame rate is a separate periodic IDR, not an attempt to
-/// pull frames faster. `on_frame` is called on this thread and the frame's
-/// handle is valid only for the length of that call.
+/// pull frames faster. Both callbacks run on this thread; the frame's handle is
+/// valid only for the length of `on_frame`, and `on_pointer` sees every
+/// acquired frame, including the ones that carry no picture (see
+/// [`Duplication::next_frame_with`]).
 #[cfg(windows)]
 pub fn capture_loop(
     source: &mut Duplication,
     watcher: &mut DesktopWatcher,
     stop: &std::sync::atomic::AtomicBool,
     mut on_frame: impl FnMut(&Frame),
+    mut on_pointer: impl FnMut(&IDXGIOutputDuplication, &DXGI_OUTDUPL_FRAME_INFO),
 ) -> anyhow::Result<()> {
     while !stop.load(Ordering::Relaxed) {
         if watcher.follow() {
             source.request_rebuild();
         }
-        if let Some(frame) = source.next_frame(ACQUIRE_TIMEOUT_MS)? {
+        if let Some(frame) = source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut on_pointer)? {
             on_frame(&frame);
         }
     }
@@ -1115,8 +1176,20 @@ mod tests {
             // p50 gap of 4,983 ms.
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut captured = None;
+            // The pointer observer must see every acquired frame, which is what
+            // makes the cursor reachable at all: its data cannot be read after
+            // `ReleaseFrame`.
+            let (mut observed, mut pointer_news) = (0usize, 0usize);
             while Instant::now() < deadline {
-                if let Some(frame) = source.next_frame(ACQUIRE_TIMEOUT_MS).expect("acquire") {
+                let frame = source
+                    .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |_dup, info| {
+                        observed += 1;
+                        if info.LastMouseUpdateTime != 0 {
+                            pointer_news += 1;
+                        }
+                    })
+                    .expect("acquire");
+                if let Some(frame) = frame {
                     captured = Some((frame.width, frame.height));
                     break;
                 }
@@ -1134,8 +1207,9 @@ mod tests {
                 ),
                 "un-rotated texture does not match the desktop rect"
             );
+            assert!(observed >= 1, "the pointer observer never ran");
             println!(
-                "{} texture {width}x{height} rotation={:?} dirty_rects={}",
+                "{} texture {width}x{height} rotation={:?} dirty_rects={} observed={observed} pointer_news={pointer_news}",
                 info.device_name,
                 info.rotation,
                 source.last_rects().dirty.len()

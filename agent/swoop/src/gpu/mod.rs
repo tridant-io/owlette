@@ -1,5 +1,7 @@
 //! GPU device and frame types. Task 4.5 fills the convert/scale path.
 
+pub mod scale;
+
 /// The graphics device capture and encode share.
 ///
 /// One device per streamer: Desktop Duplication hands out textures owned by the
