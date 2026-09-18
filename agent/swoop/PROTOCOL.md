@@ -219,6 +219,14 @@ streamer refuse control for the whole session regardless of what a viewer token 
 `ctl` that sends anything gated below is dropped and the attempt is reported to
 `POST /api/agent/swoop/events`.
 
+**how a refusal reaches that route.** the streamer holds no long-lived credential (§8), so every row it wants
+in the audit trail leaves as a `host_event` line on stdout (§6) and the **service** posts it with the
+machine's own token. the line's `kind` is that route's closed vocabulary; its `reason` is the finer code the
+refusing module already owns (`unknown_kid`, `join_too_soon`, `fp_missing`), and the route refuses anything
+outside `^[a-z0-9_]{1,48}$`. a refusal is reported **once per viewer**, not once per message — a watcher
+holding a key down repeats at 30 Hz — and the count of everything suppressed behind that one line rides
+`status.denials`.
+
 ### input — `swoop-input`, viewer → host, requires `ctl`
 
 | `t` | fields |
@@ -253,7 +261,8 @@ ignored by browsers, so a shape larger than 32×32 css px is presented as an ove
   is buffered** — a receiver that waits until reassembly to notice the size has already paid for it.
   over cap → drop the whole transfer, reason `clipboard_too_large`.
 - file lists are never carried. there is no file transfer in this protocol.
-- transfers above 64 KiB are reported to `POST /api/agent/swoop/events` for the audit trail.
+- transfers above 64 KiB are reported to `POST /api/agent/swoop/events` for the audit trail, as a
+  `host_event` with `kind: "clipboard_audit"`. the content never is.
 
 ### control — `swoop-control`, both directions
 
@@ -294,7 +303,9 @@ a control line:
 
 - `{"type":"kill"}` — end the session and exit 0.
 - `{"type":"sas_result","ok":true}` — the answer to a `sas_request`; the service, not the streamer, calls
-  `SendSAS`.
+  `SendSAS`. the streamer routes it to whichever feature raised that `sas_request` and to nothing else; an
+  answer to a question nobody put is dropped with a log line. `"ok": false` means the service could not
+  raise the sequence at all.
 
 **eof on stdin means the service is gone.** the streamer tears the session down and exits 0. it does not try
 to carry on, and it does not try to reach the service any other way.
@@ -310,8 +321,28 @@ loop.
 | `viewer_joined` | `sid`, `viewer`, `ctl`, `codec` |
 | `viewer_left` | `sid`, `viewer`, `reason` (`bye` \| `timeout` \| `lease_expired` \| `kill`) |
 | `sas_request` | `sid`, `viewer` |
-| `status` | `sid`, `viewers`, `controllers`, `indicator`, `bitrateKbps`, `fps`, `path` (`direct` \| `relay`), `display`, `uptimeS` |
+| `host_event` | `sid`, `kind`, `viewer` (optional), `reason` (optional) |
+| `status` | `sid`, `viewers`, `controllers`, `indicator`, `bitrateKbps`, `fps`, `path` (`direct` \| `relay`), `display`, `uptimeS`, and the optional fields below |
 | `exiting` | `sid`, `code`, `reason` (`idle` \| `kill` \| `signal_lost` \| `session_cap` \| `error`) |
+
+`host_event` is one row for `POST /api/agent/swoop/events`, which the service posts on the streamer's behalf
+(§5). `kind` is that route's own closed vocabulary — `jwt_rejected`, `fp_mismatch`, `lease_expired`,
+`input_not_permitted`, `join_refused`, `clipboard_audit` — so a name added here has to be added there too, or
+the route answers 400 for the whole batch. `viewer` is absent when the refusal is not attributable to one.
+
+`status` carries six **optional** fields, each omitted when it has nothing to say: a session whose features
+are all quiet emits exactly the nine-field line above, which is what the golden vector holds.
+
+| field | meaning |
+|---|---|
+| `desktop` | the input desktop: `default` \| `winlogon` \| `screensaver` \| `unknown`. an `OpenInputDesktop` that failed is `unknown` and is **never** reported as a lock. |
+| `audio` | the render endpoint: `ok` \| `no_endpoint`. swoop never creates a device and never moves the default. |
+| `displays` | `ok` \| `headless` — headless is no attached output, or a duplication that yields nothing but black. |
+| `inputDropped` | the input rate limiter's cumulative drop count. **absent means zero**, not unknown. |
+| `denials` | the control gate's cumulative refusals, including every one suppressed behind a single `host_event`. absent means zero. |
+| `testOverride` | the bundle's test-only `overrides`, named so an overridden session cannot pass for a real one in `logs/swoop`. absent on every release build, which refuses such a bundle with exit 10. |
+
+`display` names the output being captured, in the same numbering `hello-host`'s `displays[]` uses.
 
 stderr is free text and goes to `logs/swoop/`, which the streamer rotates itself under a size cap. **the
 bundle never appears on stdout, on stderr, in a log, or in an error message — not at debug, not partially.**
@@ -331,7 +362,10 @@ bundle never appears on stdout, on stderr, in a log, or in an error message — 
 one streamer per machine serves every viewer, lingers about 60 s after the last one leaves, then exits 0.
 
 golden vectors: `pipe/pipe-stdout-events.ndjson`, `pipe/pipe-stdin-control.ndjson`. there is deliberately no
-golden vector containing a real bundle line; the bundle vectors in section 7 are all fake.
+golden vector containing a real bundle line; the bundle vectors in section 7 are all fake. the stdout vector
+is a **clean** session, so neither `host_event` nor any of `status`'s optional fields appears in it — a build
+that started emitting one of those unasked would change every line of that file, which is exactly what the
+vector is there to catch.
 
 ---
 

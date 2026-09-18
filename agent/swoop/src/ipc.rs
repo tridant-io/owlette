@@ -93,6 +93,63 @@ pub enum MediaPath {
     Relay,
 }
 
+/// Which desktop the capture and input threads are attached to.
+///
+/// [`Desktop::Unknown`] is an `OpenInputDesktop` that failed, and it is never
+/// reported as a lock: the call fails for reasons that have nothing to do with
+/// the secure desktop, and "locked" is a claim the machine cannot support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Desktop {
+    Default,
+    Winlogon,
+    Screensaver,
+    Unknown,
+}
+
+/// The render endpoint, as the audio feature finds it. `NoEndpoint` is a
+/// machine with no render device at all — swoop never creates one and never
+/// moves the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioState {
+    Ok,
+    NoEndpoint,
+}
+
+/// `Headless` is a machine with no attached output, or one whose duplication
+/// yields nothing but black — the state the page answers with the dummy-plug
+/// message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayState {
+    Ok,
+    Headless,
+}
+
+/// What a [`Event::HostEvent`] records.
+///
+/// This is verbatim the closed `type` vocabulary of
+/// `POST /api/agent/swoop/events`: the service copies it straight into the
+/// request body, so a name added here without being added there is a 400 for
+/// the whole batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostEventKind {
+    /// §11's verification order refused the viewer's token.
+    JwtRejected,
+    /// The offer carried no fingerprint, or not the one the token binds to.
+    FpMismatch,
+    /// A lease lapsed, or the token presented as one had already expired.
+    LeaseExpired,
+    /// §5: a viewer without `ctl` sent something gated.
+    InputNotPermitted,
+    /// An admission limit — viewer count or join rate — turned a join away.
+    JoinRefused,
+    /// §5: a clipboard transfer above 64 KiB, recorded for the audit trail.
+    ClipboardAudit,
+}
+
 /// stdin, service → streamer. Line 1 is the bundle and never reaches here;
 /// every line after it is one of these.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +200,25 @@ pub enum Event {
         sid: String,
         viewer: String,
     },
+    /// One row for `POST /api/agent/swoop/events`. The streamer is the only
+    /// place most of these can be observed at all, and the service is the only
+    /// thing holding a credential to report them with.
+    HostEvent {
+        sid: String,
+        kind: HostEventKind,
+        /// Absent when the refusal is not attributable to one viewer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        viewer: Option<String>,
+        /// The detail code behind `kind`, from the vocabulary the refusing
+        /// module already owns (`DenialReason`, `TokenError`). Never prose and
+        /// never a value: the route accepts `^[a-z0-9_]{1,48}$` and nothing else.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// Every optional field below is absent when it has nothing to say, which
+    /// is what keeps a `status` line from a session with no features running
+    /// byte-identical to the golden vector. Absent is not "unknown" for the two
+    /// counters — it is zero.
     Status {
         sid: String,
         viewers: u32,
@@ -153,6 +229,22 @@ pub enum Event {
         path: MediaPath,
         display: u32,
         uptime_s: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        desktop: Option<Desktop>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audio: Option<AudioState>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        displays: Option<DisplayState>,
+        /// The input rate limiter's cumulative drop count.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_dropped: Option<u64>,
+        /// The control gate's cumulative refusal count.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        denials: Option<u64>,
+        /// The bundle's test-only `overrides`, named so an overridden session
+        /// is visible in `logs/swoop` rather than passing for a real one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        test_override: Option<String>,
     },
     Exiting {
         sid: String,
@@ -217,6 +309,100 @@ mod tests {
     fn an_unknown_control_field_is_refused() {
         assert!(parse_control(r#"{"type":"kill","extra":1}"#).is_err());
         assert!(parse_control(r#"{"type":"reboot"}"#).is_err());
+    }
+
+    /// The golden vector's `status` line carries none of the optional fields,
+    /// and a build that started serialising them would change every existing
+    /// vector without any test naming the change.
+    #[test]
+    fn a_status_with_nothing_optional_to_say_carries_no_optional_fields() {
+        let line = serde_json::to_string(&Event::Status {
+            sid: "sid_1".to_owned(),
+            viewers: 1,
+            controllers: 1,
+            indicator: Indicator::Banner,
+            bitrate_kbps: 18_000,
+            fps: 60,
+            path: MediaPath::Direct,
+            display: 0,
+            uptime_s: 42,
+            desktop: None,
+            audio: None,
+            displays: None,
+            input_dropped: None,
+            denials: None,
+            test_override: None,
+        })
+        .expect("it serialises");
+        assert_eq!(
+            line,
+            "{\"type\":\"status\",\"sid\":\"sid_1\",\"viewers\":1,\"controllers\":1,\
+             \"indicator\":\"banner\",\"bitrateKbps\":18000,\"fps\":60,\"path\":\"direct\",\
+             \"display\":0,\"uptimeS\":42}"
+        );
+    }
+
+    #[test]
+    fn the_optional_status_fields_are_camel_case_on_the_wire() {
+        let line = serde_json::to_string(&Event::Status {
+            sid: "sid_1".to_owned(),
+            viewers: 0,
+            controllers: 0,
+            indicator: Indicator::Banner,
+            bitrate_kbps: 0,
+            fps: 0,
+            path: MediaPath::Direct,
+            display: 1,
+            uptime_s: 1,
+            desktop: Some(Desktop::Winlogon),
+            audio: Some(AudioState::NoEndpoint),
+            displays: Some(DisplayState::Headless),
+            input_dropped: Some(7),
+            denials: Some(3),
+            test_override: Some("source=testpattern".to_owned()),
+        })
+        .expect("it serialises");
+        assert!(line.contains("\"desktop\":\"winlogon\""), "{line}");
+        assert!(line.contains("\"audio\":\"no_endpoint\""), "{line}");
+        assert!(line.contains("\"displays\":\"headless\""), "{line}");
+        assert!(line.contains("\"inputDropped\":7"), "{line}");
+        assert!(line.contains("\"denials\":3"), "{line}");
+        assert!(line.contains("\"testOverride\":\"source=testpattern\""), "{line}");
+    }
+
+    #[test]
+    fn a_host_event_carries_the_routes_own_vocabulary() {
+        let mut out = Vec::new();
+        emit(
+            &mut out,
+            &Event::HostEvent {
+                sid: "sid_1".to_owned(),
+                kind: HostEventKind::InputNotPermitted,
+                viewer: Some("viewer_1".to_owned()),
+                reason: Some("input".to_owned()),
+            },
+        )
+        .expect("writing to a vec never fails");
+        assert_eq!(
+            String::from_utf8(out).expect("utf-8"),
+            "{\"type\":\"host_event\",\"sid\":\"sid_1\",\"kind\":\"input_not_permitted\",\
+             \"viewer\":\"viewer_1\",\"reason\":\"input\"}\n"
+        );
+    }
+
+    #[test]
+    fn a_host_event_nobody_can_attribute_omits_the_viewer_and_the_reason() {
+        let line = serde_json::to_string(&Event::HostEvent {
+            sid: "sid_1".to_owned(),
+            kind: HostEventKind::JoinRefused,
+            viewer: None,
+            reason: None,
+        })
+        .expect("it serialises");
+        assert_eq!(
+            line,
+            "{\"type\":\"host_event\",\"sid\":\"sid_1\",\"kind\":\"join_refused\"}"
+        );
     }
 
     #[test]

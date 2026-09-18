@@ -68,12 +68,16 @@ class FakeProc:
 class FakeSpawn:
     """Injected ``spawn_backend``: the three calls SwoopManager makes."""
 
-    def __init__(self, proc=None, verify_error=None, bundle_error=None, delay=0.0):
+    def __init__(self, proc=None, verify_error=None, bundle_error=None, delay=0.0,
+                 post_error=None):
         self.proc = proc or FakeProc()
         self.verify_error = verify_error
         self.bundle_error = bundle_error
         self.delay = delay
         self.spawned = 0
+        self.post_error = post_error
+        self.posted = []
+        self.post_attempts = 0
 
     def verify_install(self):
         if self.delay:
@@ -90,6 +94,13 @@ class FakeSpawn:
     def spawn(self, exe_path, log_dir=None):
         self.spawned += 1
         return self.proc
+
+    def post_host_events(self, events, site_id, machine_id, auth_manager):
+        self.post_attempts += 1
+        if self.post_error:
+            raise self.post_error
+        self.posted.append((list(events), site_id, machine_id))
+        return True
 
 
 @pytest.fixture
@@ -268,6 +279,7 @@ class TestStdoutEvents:
             '{"type":"viewer_joined","sid":"s","viewer":"v2","ctl":false}',
             '{"type":"status","sid":"s","viewers":2,"fps":60,"path":"direct"}',
             '{"type":"sas_request","sid":"s","viewer":"v1"}',
+            '{"type":"host_event","sid":"s","kind":"input_not_permitted","viewer":"v2"}',
             '{"type":"viewer_left","sid":"s","viewer":"v2","reason":"bye"}',
             '{"type":"exiting","sid":"s","code":0,"reason":"idle"}',
         ]
@@ -277,12 +289,77 @@ class TestStdoutEvents:
         events = manager.drain_events()
         assert [e['type'] for e in events] == [
             'ready', 'viewer_joined', 'viewer_joined', 'status',
-            'sas_request', 'viewer_left', 'exiting',
+            'sas_request', 'host_event', 'viewer_left', 'exiting',
         ]
         status = manager.status()
         assert status['viewers'] == 1
         assert status['controllers'] == 1
         assert status['streamer']['fps'] == 60
+
+    def test_a_host_event_reaches_the_audit_route_in_the_routes_own_shape(self, firebase):
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager._handle_line(json.dumps({
+            'type': 'host_event', 'sid': 'sid_1', 'kind': 'jwt_rejected',
+            'viewer': 'viewer_1', 'reason': 'unknown_kid',
+        }))
+
+        assert wait_for(lambda: backend.posted)
+        events, site_id, machine_id = backend.posted[0]
+        assert site_id == 'site_1'
+        assert machine_id == 'machine_1'
+        # the streamer's `kind` is the route's `type`; `viewer` is its `viewerId`.
+        assert events == [{
+            'type': 'jwt_rejected', 'sid': 'sid_1',
+            'viewerId': 'viewer_1', 'reason': 'unknown_kid',
+        }]
+
+    def test_a_host_event_missing_a_required_field_is_dropped_here(self, firebase):
+        """The route refuses the whole batch on one bad entry."""
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager._handle_line('{"type":"host_event","sid":"sid_1"}')
+        manager._handle_line('{"type":"host_event","kind":"jwt_rejected"}')
+        manager._handle_line(json.dumps({
+            'type': 'host_event', 'sid': 'sid_1', 'kind': 'join_refused',
+        }))
+
+        assert wait_for(lambda: backend.posted)
+        events, _, _ = backend.posted[0]
+        assert events == [{'type': 'join_refused', 'sid': 'sid_1'}]
+
+    def test_a_failed_post_is_not_retried_and_does_not_stop_the_drain(self, firebase):
+        backend = FakeSpawn(post_error=RuntimeError('503'))
+        manager = make_manager(backend, firebase)
+        manager._handle_line(json.dumps({
+            'type': 'host_event', 'sid': 'sid_1', 'kind': 'fp_mismatch',
+        }))
+        assert wait_for(lambda: backend.post_attempts == 1)
+        assert backend.posted == [], 'the batch was lost, not retried'
+
+        # and the thread is still draining, so the next event still goes.
+        backend.post_error = None
+        manager._handle_line(json.dumps({
+            'type': 'host_event', 'sid': 'sid_1', 'kind': 'lease_expired',
+        }))
+        assert wait_for(lambda: any(
+            event['type'] == 'lease_expired'
+            for batch, _, _ in backend.posted for event in batch
+        ))
+
+    def test_the_audit_queue_is_bounded_and_keeps_the_newest(self, firebase):
+        manager = make_manager(FakeSpawn(), firebase)
+        # nothing drains, so the bound is the only thing holding it back.
+        manager._start_auditor = lambda: None
+        overflow = swoop_manager.AUDIT_QUEUE_MAX + 10
+        for i in range(overflow):
+            manager._queue_host_event({
+                'type': 'host_event', 'sid': f'sid_{i}', 'kind': 'join_refused',
+            })
+
+        assert manager._audit.qsize() == swoop_manager.AUDIT_QUEUE_MAX
+        rows = [manager._audit.get_nowait() for _ in range(swoop_manager.AUDIT_QUEUE_MAX)]
+        assert rows[-1]['sid'] == f'sid_{overflow - 1}', 'the newest row survived'
 
     def test_malformed_and_unknown_lines_are_dropped(self):
         manager = make_manager(FakeSpawn())

@@ -351,6 +351,23 @@ describe('POST /api/agent/swoop/events', () => {
     });
   });
 
+  it('records an admission refusal, which only the streamer can witness', async () => {
+    agentToken();
+    const response = await eventsPOST(
+      eventsRequest({
+        siteId: SITE,
+        machineId: MACHINE,
+        events: [{ type: 'join_refused', sid: SID, viewerId: 'viewer-1', reason: 'join_too_soon' }],
+      }),
+    );
+    expect(response.status).toBe(202);
+    const rows = written.filter((w) => w.path.startsWith(`sites/${SITE}/audit_log/`));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].data.outcome).toBe('deny');
+    expect(rows[0].data.denyReason).toBe('join_too_soon');
+    expect(rows[0].data.metadata).toMatchObject({ event: 'join_refused', sid: SID });
+  });
+
   it('records a lifecycle event as an allow', async () => {
     agentToken();
     const response = await eventsPOST(

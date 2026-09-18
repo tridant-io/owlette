@@ -121,7 +121,8 @@ use std::time::{Duration, Instant};
 use crate::bundle::Indicator;
 use crate::encode::{Codec, CodecCaps};
 use crate::gpu::scale::Limits;
-use crate::signal::messages::channel::Channel;
+use crate::ipc::{AudioState, Desktop, DisplayState, HostEventKind};
+use crate::signal::messages::channel::{Channel, DisplayInfo};
 
 /// A host feature that lives for the length of a session.
 ///
@@ -165,7 +166,87 @@ pub trait Feature: Send {
     /// The feature's turn to produce outbound records. Called once per turn of
     /// the session loop while a viewer's peer is connected; the session drains
     /// the outbox and writes it.
+    ///
+    /// The outbox also carries [`FeatureRequest`]s — asking a worker thread to
+    /// do something, or asking the service for a ctrl+alt+del. A feature that
+    /// decides in [`Feature::on_message`] holds the decision itself and queues
+    /// it here, one turn (2 ms) later.
     fn poll(&mut self, _now: Instant, _out: &mut Outbox) {}
+
+    /// The answer to this feature's own [`FeatureRequest::Sas`], off stdin.
+    ///
+    /// Routed, not broadcast: the session remembers which feature asked and
+    /// tells only that one. `ok` is false when the service could not raise the
+    /// secure attention sequence at all.
+    fn on_sas_result(&mut self, _ok: bool) {}
+
+    /// This feature's contribution to §6's `status` event, filled in place.
+    ///
+    /// Pulled rather than pushed, because `status` is a snapshot on the
+    /// session's own two-second cadence and a feature that had to push would
+    /// need a clock of its own. Leave a field alone when there is nothing to
+    /// say about it.
+    ///
+    /// `&mut self` and called **whether or not a viewer is connected**, unlike
+    /// [`Feature::poll`]: a watcher thread's news arrives on the feature's own
+    /// channel, and a headless machine or a locked desktop is exactly what the
+    /// service wants reported while nobody is watching.
+    fn status(&mut self, _out: &mut FeatureStatus) {}
+
+    /// This feature's display list for §5's `hello-host`.
+    ///
+    /// `signal/messages.rs` is frozen, so a display list cannot arrive as a new
+    /// host→viewer message: it rides the field that already exists. The first
+    /// feature to return a non-empty list wins, and an empty one leaves the
+    /// session's own single-display fallback in place.
+    fn hello_displays(&mut self) -> Vec<DisplayInfo> {
+        Vec::new()
+    }
+}
+
+/// What the features contribute to one `status` event (§6).
+///
+/// One struct rather than three trait methods: every field is somebody's and
+/// nobody's twice, and a feature that fills a field it does not own is a bug
+/// the merge cannot see. A field left `None` is absent from the wire.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FeatureStatus {
+    /// `securedesk`: the input desktop by name.
+    pub desktop: Option<Desktop>,
+    /// `audio`: the render endpoint.
+    pub audio: Option<AudioState>,
+    /// `displays`: whether this machine has a usable output at all.
+    pub displays: Option<DisplayState>,
+}
+
+/// What a feature may ask the session to do on its behalf.
+///
+/// A feature owns no IO and holds no channel: the capture and input threads are
+/// reached only from the session thread, which is the one place that knows
+/// whether they are still there. Queued through [`Outbox::request`], drained
+/// once per turn, and every hand-off to a worker is a `try_send` — a capture
+/// thread inside a ten-second re-duplication must never hold the session up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FeatureRequest {
+    /// Ctrl+alt+del: the streamer asks, the **service** calls `SendSAS`, and
+    /// the answer comes back to this feature's [`Feature::on_sas_result`].
+    Sas,
+    /// Capture this output instead, and move the pointer space with it. §5's
+    /// absolute mouse coordinates are normalised to the selected display, so
+    /// the two move together or the pointer lands on the wrong monitor.
+    ///
+    /// `index` is the one §5's `display` message and `hello-host`'s
+    /// `displays[]` use — the feature's own numbering, which it resolves to an
+    /// output itself.
+    SelectOutput {
+        index: u32,
+        output: crate::capture::OutputInfo,
+    },
+    /// One row for `POST /api/agent/swoop/events`, by way of the service.
+    Audit {
+        kind: HostEventKind,
+        reason: Option<String>,
+    },
 }
 
 /// One outbound record from a feature.
@@ -211,19 +292,41 @@ pub const OUTBOX_REFILL_BYTES_PER_SEC: usize = 512 * 1024;
 #[derive(Debug)]
 pub struct Outbox {
     queued: Vec<Outbound>,
+    requests: Vec<FeatureRequest>,
     allowance: usize,
     refilled_at: Instant,
     refused: u64,
 }
 
+/// The most requests one feature may have waiting after a single poll.
+///
+/// Small on purpose: a request is an edge — a desktop moved, a display was
+/// picked, a ctrl+alt+del was asked for — and a feature with eight of them
+/// pending has stopped producing edges and started producing a queue.
+pub const MAX_PENDING_REQUESTS: usize = 8;
+
 impl Outbox {
     pub fn new(now: Instant) -> Self {
         Self {
             queued: Vec::new(),
+            requests: Vec::new(),
             allowance: OUTBOX_BURST_BYTES,
             refilled_at: now,
             refused: 0,
         }
+    }
+
+    /// Ask the session to do something on this feature's behalf. `false` means
+    /// the queue was full and the request was **not** taken — the same contract
+    /// as [`send`](Self::send): nothing is dropped behind the feature's back,
+    /// and it may offer the request again on a later poll.
+    pub fn request(&mut self, request: FeatureRequest) -> bool {
+        if self.requests.len() >= MAX_PENDING_REQUESTS {
+            self.refused += 1;
+            return false;
+        }
+        self.requests.push(request);
+        true
     }
 
     /// Queue one record. `false` means it did not fit in what is left of the
@@ -260,6 +363,13 @@ impl Outbox {
 
     fn take(&mut self) -> Vec<Outbound> {
         std::mem::take(&mut self.queued)
+    }
+
+    /// Drained after **each** feature's poll, not after all of them: the
+    /// session has to know which feature asked, and a `Sas` whose answer went
+    /// to the wrong feature is a handshake that never completes.
+    fn take_requests(&mut self) -> Vec<FeatureRequest> {
+        std::mem::take(&mut self.requests)
     }
 }
 
@@ -502,10 +612,10 @@ mod host {
     use windows::Win32::System::Performance::QueryPerformanceCounter;
 
     use super::{
-        codec_wire_name, limits_for, pick_codec, CaptureGate, Denials, Feature, FloorTimer,
-        IdrPolicy, Outbox, SessionHandle,
+        codec_wire_name, limits_for, pick_codec, CaptureGate, Denials, Feature, FeatureRequest,
+        FeatureStatus, FloorTimer, IdrPolicy, Outbox, SessionHandle,
     };
-    use crate::bundle::{Bundle, Indicator, TimeAnchor};
+    use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
     use crate::capture::{
         self, DesktopWatcher, Duplication, OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS,
     };
@@ -514,13 +624,17 @@ mod host {
     use crate::gpu::scale::{self, Downscaler, Plan};
     use crate::gpu::Frame;
     use crate::input::{Injector, PointerSpace, SendInputInjector, ViewerInput};
-    use crate::ipc::{self, Control, Event, Exit, ExitReason, LeftReason, MediaPath};
+    use crate::ipc::{
+        self, Control, Event, Exit, ExitReason, HostEventKind, LeftReason, MediaPath,
+    };
     use crate::signal::client::{Effect, SignalTransport};
     use crate::signal::messages::channel::{
         self, Channel, Control as ControlMessage, Feedback, Input as InputMessage,
     };
     use crate::signal::messages::Message;
-    use crate::signal::{Handshake, Reaction, RetryPolicy, RoomSocket, SignalClient};
+    use crate::signal::{
+        Denial, DenialReason, Handshake, Reaction, RetryPolicy, RoomSocket, SignalClient,
+    };
     use crate::transport::framing::{flags, FrameCodec, FrameHeader, FrameSequencer, FrameStamps};
     use crate::transport::governor::{Governor, GovernorConfig};
     use crate::transport::rtc::{qpc_hz, PeerConfig, PeerEvent, PeerState, RtcPeer};
@@ -643,6 +757,10 @@ mod host {
         /// Re-send the pointer whole. A viewer that has just arrived has an
         /// empty shape cache, and the tracker only emits on a change.
         CursorSnapshot,
+        /// Duplicate this output instead. The duplication, the encoder and the
+        /// scaler are all pinned to the old one, so this ends the pass rather
+        /// than being applied inside it.
+        Output(OutputInfo),
         /// The last viewer left: close the duplication until one comes back.
         /// Not a stop — §6's linger keeps the process alive, and the next
         /// viewer arrives on the same threads.
@@ -654,6 +772,9 @@ mod host {
     /// Session → input.
     enum ToInput {
         Message(Box<InputMessage>),
+        /// Normalise absolute coordinates against this display instead, after
+        /// a capture retarget.
+        Space(PointerSpace),
         ReleaseAll,
         Stop,
     }
@@ -841,6 +962,52 @@ mod host {
         None
     }
 
+    /// §6's `status.testOverride`, as one short string. The names are fixed
+    /// vocabulary, not bundle secrets, so they may be reported.
+    #[cfg(feature = "testhooks")]
+    fn describe_override(bundle: &Bundle) -> Option<String> {
+        let overrides = bundle.overrides.as_ref()?;
+        let mut parts = Vec::new();
+        if let Some(source) = overrides.source.as_deref() {
+            parts.push(format!("source={source}"));
+        }
+        if let Some(encoder) = overrides.encoder.as_deref() {
+            parts.push(format!("encoder={encoder}"));
+        }
+        (!parts.is_empty()).then(|| parts.join(" "))
+    }
+
+    /// A release build does not parse `overrides` at all — it exits 10 on a
+    /// bundle carrying one — so there is never anything to name.
+    #[cfg(not(feature = "testhooks"))]
+    fn describe_override(_bundle: &Bundle) -> Option<String> {
+        None
+    }
+
+    /// The streamer's refusal vocabulary, narrowed to the audit route's.
+    ///
+    /// `DenialReason` is the finer of the two and stays that way — it is the
+    /// `reason` code on the event. This is the one place the two are joined,
+    /// so a reason added over there cannot quietly become a 400 here.
+    fn host_event_kind(reason: DenialReason) -> HostEventKind {
+        match reason {
+            DenialReason::TooManyViewers
+            | DenialReason::JoinTooSoon
+            | DenialReason::JoinRateExceeded => HostEventKind::JoinRefused,
+            DenialReason::OfferFingerprintMissing => HostEventKind::FpMismatch,
+            DenialReason::UnknownViewer | DenialReason::ViewerMismatch => {
+                HostEventKind::JwtRejected
+            }
+            DenialReason::Token(TokenError::FpMissing | TokenError::FpMismatch) => {
+                HostEventKind::FpMismatch
+            }
+            // §10: the connect token *is* the first lease, so an expired one is
+            // a lease that lapsed and not a token that was forged.
+            DenialReason::Token(TokenError::Expired) => HostEventKind::LeaseExpired,
+            DenialReason::Token(_) => HostEventKind::JwtRejected,
+        }
+    }
+
     /// Everything the session loop was handed rather than built.
     struct Wiring {
         clock: HostClock,
@@ -931,6 +1098,9 @@ mod host {
             frames_at_status: 0,
             input_dropped: 0,
             last_size: None,
+            display: 0,
+            sas_pending: None,
+            test_override: describe_override(bundle),
             features: Vec::new(),
             outbox: Outbox::new(w.started),
         };
@@ -1005,6 +1175,17 @@ mod host {
         /// The last encoded size put on the wire, so a change sets
         /// `RESOLUTION_CHANGED` exactly once.
         last_size: Option<(u16, u16)>,
+        /// Which output is being captured, in the numbering `hello-host`
+        /// advertises. Zero until a feature picks another one.
+        display: u32,
+        /// The feature whose [`FeatureRequest::Sas`] is outstanding, by name.
+        /// `sas_result` goes to it and to nothing else.
+        sas_pending: Option<&'static str>,
+        /// The bundle's test-only `overrides`, named on every `status`. Always
+        /// `None` on a release build, and on a `testhooks` build until the
+        /// override backends exist (Tasks 7.2 and 8.7) — `drive` refuses a
+        /// bundle that names one until then, so the session never starts.
+        test_override: Option<String>,
         features: Vec<Box<dyn Feature>>,
         /// What the features produced this turn, bounded and paced so a
         /// clipboard transfer cannot evict the picture's records.
@@ -1074,10 +1255,8 @@ mod host {
                         }
                         return Some(self.teardown(Exit::Ok, ExitReason::Kill, LeftReason::Kill));
                     }
-                    // Task 6.1 owns ctrl+alt+del; nothing here asks for one, so
-                    // an answer to a question we did not put is only a log line.
                     Ok(FromService::Control(Control::SasResult { ok })) => {
-                        ::log::warn!("swoop: unexpected sas_result ok={ok}");
+                        self.on_sas_result(ok);
                     }
                     Ok(FromService::Eof) | Err(TryRecvError::Disconnected) => {
                         ::log::info!("swoop: stdin closed, the service is gone");
@@ -1137,11 +1316,7 @@ mod host {
                         }
                     }
                     Effect::ViewerGone { viewer, reason } => self.on_viewer_gone(&viewer, reason),
-                    Effect::Denied(denial) => {
-                        // Task 5.6 forwards these to the events route; until
-                        // then the log is the audit trail.
-                        ::log::warn!("swoop: viewer denied: {denial}");
-                    }
+                    Effect::Denied(denial) => self.on_denial(denial),
                     Effect::RoomError { code, reaction } => {
                         ::log::warn!("swoop: room error {code} ({reaction:?})");
                     }
@@ -1496,14 +1671,82 @@ mod host {
             }
             let now = Instant::now();
             self.outbox.refill(now);
+            // Drained per feature rather than once at the end: a request has to
+            // carry who made it, and `sas_result` routed to the wrong feature
+            // is a handshake that never completes.
+            let mut asked: Vec<(&'static str, FeatureRequest)> = Vec::new();
             for feature in self.features.iter_mut() {
                 feature.poll(now, &mut self.outbox);
+                let name = feature.name();
+                asked.extend(
+                    self.outbox
+                        .take_requests()
+                        .into_iter()
+                        .map(|request| (name, request)),
+                );
             }
             let pending = self.outbox.take();
             if let Some(peer) = self.peer.as_mut() {
                 for record in pending {
                     peer.write_channel(record.channel, false, record.payload);
                 }
+            }
+            for (name, request) in asked {
+                self.on_request(name, request);
+            }
+        }
+
+        /// One [`FeatureRequest`], acted on by the only thread that holds the
+        /// worker channels. Every hand-off is a `try_send`: a capture thread
+        /// inside a ten-second re-duplication must never hold the loop up.
+        fn on_request(&mut self, feature: &'static str, request: FeatureRequest) {
+            match request {
+                FeatureRequest::Sas => {
+                    // §6's `sas_request` names a viewer, and there is no
+                    // ctrl+alt+del without one to have asked for it.
+                    let Some(viewer) = self.viewer.as_ref().map(|v| v.id.clone()) else {
+                        return;
+                    };
+                    self.sas_pending = Some(feature);
+                    let event = Event::SasRequest {
+                        sid: self.sid.clone(),
+                        viewer,
+                    };
+                    self.emit(&event);
+                }
+                FeatureRequest::SelectOutput { index, output } => {
+                    let space = PointerSpace::from_output(&output);
+                    if self.capture_tx.try_send(ToCapture::Output(output)).is_err() {
+                        // Eight deep and drained every pass: a full channel is
+                        // a wedged capture thread, not a busy one.
+                        ::log::warn!(
+                            "swoop: capture is not taking commands, display {index} not selected"
+                        );
+                        return;
+                    }
+                    let _ = self.input_tx.try_send(ToInput::Space(space));
+                    self.display = index;
+                    // The retarget ends the capture pass, and a new pass has no
+                    // encoder until it is asked for one again.
+                    self.replan();
+                }
+                FeatureRequest::Audit { kind, reason } => {
+                    let viewer = self.viewer.as_ref().map(|v| v.id.clone());
+                    self.host_event(kind, viewer, reason);
+                }
+            }
+        }
+
+        /// The service's answer to a `sas_request`, routed to the feature that
+        /// asked and to nothing else.
+        fn on_sas_result(&mut self, ok: bool) {
+            let Some(name) = self.sas_pending.take() else {
+                ::log::warn!("swoop: unexpected sas_result ok={ok}");
+                return;
+            };
+            match self.features.iter_mut().find(|f| f.name() == name) {
+                Some(feature) => feature.on_sas_result(ok),
+                None => ::log::warn!("swoop: feature {name} is gone, sas_result dropped"),
             }
         }
 
@@ -1613,7 +1856,7 @@ mod host {
             };
             let ctl = self.client.control_granted(&viewer);
             if message.requires_control() && !ctl {
-                self.deny(&viewer, "a gated control message");
+                self.deny(&viewer, "gated_control");
                 return;
             }
             match message {
@@ -1635,7 +1878,7 @@ mod host {
                             self.write_json(Channel::SwoopControl, &ok);
                         }
                         Err(denial) => {
-                            ::log::warn!("swoop: viewer token refused: {denial}");
+                            self.on_denial(denial);
                             let effects = self.client.end_viewer(&viewer, LeftReason::LeaseExpired);
                             // Never an exit: `end_viewer` produces a bye and a
                             // departure, nothing that ends the process.
@@ -1690,15 +1933,49 @@ mod host {
         /// §5: a viewer without `ctl` that sends something gated is dropped and
         /// the attempt is reported.
         ///
-        /// Reported as a log line, because PROTOCOL.md §6's stdout table has no
-        /// event for a denial and the service drops an event type it does not
-        /// know (`swoop_manager.py`'s `KNOWN_EVENTS`). The route that wants
-        /// these — `POST /api/agent/swoop/events` — is Task 5.6's, and it needs
-        /// an `ipc::Event` variant that is nobody's to add yet.
-        fn deny(&mut self, viewer: &str, what: &str) {
+        /// Once per viewer, not once per message: [`Denials`] is the rate
+        /// limit, and a watcher holding a key down would otherwise write a row
+        /// per poll. The count of everything it suppressed rides `status`.
+        ///
+        /// `what` is a reason code, never prose — the route refuses anything
+        /// outside `^[a-z0-9_]{1,48}$` and refuses the whole batch with it.
+        fn deny(&mut self, viewer: &str, what: &'static str) {
             if self.denials.note(viewer) {
                 ::log::warn!("swoop: viewer {viewer} sent {what} without ctl, dropped");
+                self.host_event(
+                    HostEventKind::InputNotPermitted,
+                    Some(viewer.to_owned()),
+                    Some(what.to_owned()),
+                );
             }
+        }
+
+        /// A refusal the streamer is the only witness to. The log keeps the
+        /// detail; the event is what reaches the audit trail.
+        fn on_denial(&mut self, denial: Denial) {
+            ::log::warn!("swoop: viewer denied: {denial}");
+            let reason = denial.reason.reason().to_owned();
+            self.host_event(
+                host_event_kind(denial.reason),
+                Some(denial.viewer),
+                Some(reason),
+            );
+        }
+
+        /// One row for `POST /api/agent/swoop/events`, out through the service.
+        fn host_event(
+            &mut self,
+            kind: HostEventKind,
+            viewer: Option<String>,
+            reason: Option<String>,
+        ) {
+            let event = Event::HostEvent {
+                sid: self.sid.clone(),
+                kind,
+                viewer,
+                reason,
+            };
+            self.emit(&event);
         }
 
         fn on_feedback(&mut self, data: &[u8]) {
@@ -1744,16 +2021,24 @@ mod host {
             if let Some(v) = self.viewer.as_mut() {
                 v.hello_sent = true;
             }
-            // Only the display being streamed. Advertising the others would put
-            // a switcher in the browser for something this session cannot
-            // honour — Task 6.4 enumerates them properly and makes the switch
-            // real. `ready` still tells the service the true count.
-            let displays = vec![channel::DisplayInfo {
-                index: 0,
-                width: self.encoded.0,
-                height: self.encoded.1,
-                primary: true,
-            }];
+            // The `displays` feature enumerates them properly; until it does,
+            // the fallback advertises only the display being streamed rather
+            // than putting a switcher in the browser for a switch this session
+            // cannot honour. `ready` still tells the service the true count.
+            let encoded = self.encoded;
+            let displays = self
+                .features
+                .iter_mut()
+                .map(|feature| feature.hello_displays())
+                .find(|list| !list.is_empty())
+                .unwrap_or_else(|| {
+                    vec![channel::DisplayInfo {
+                        index: 0,
+                        width: encoded.0,
+                        height: encoded.1,
+                        primary: true,
+                    }]
+                });
             let hello = ControlMessage::HelloHost {
                 codec: codec_wire_name(codec).to_owned(),
                 width: self.encoded.0,
@@ -1816,26 +2101,17 @@ mod host {
             self.frames_at_status = frames;
             let viewers = self.client.viewer_count();
             let controllers = u32::from(self.viewer.as_ref().is_some_and(|v| v.ctl));
-            // `status` has no field for the input rate limit's drop count or
-            // for the control gate's refusals, so they ride the log line
-            // instead of being lost.
-            if self.input_dropped > 0 {
-                ::log::info!(
-                    "swoop: input rate limit has dropped {} messages",
-                    self.input_dropped
-                );
-            }
-            if self.denials.count() > 0 {
-                ::log::info!(
-                    "swoop: the control gate has refused {} messages",
-                    self.denials.count()
-                );
-            }
+            // The outbox's refusals have no `status` field — nothing outside
+            // this process can act on them — so they stay a log line.
             if self.outbox.refused() > 0 {
                 ::log::info!(
                     "swoop: the feature outbox has refused {} records",
                     self.outbox.refused()
                 );
+            }
+            let mut contributed = FeatureStatus::default();
+            for feature in self.features.iter_mut() {
+                feature.status(&mut contributed);
             }
             let event = Event::Status {
                 sid: self.sid.clone(),
@@ -1846,8 +2122,17 @@ mod host {
                 fps,
                 // Relay allocation is Task 7.4/7.5; everything today is direct.
                 path: MediaPath::Direct,
-                display: 0,
+                display: self.display,
                 uptime_s: now.duration_since(self.started).as_secs(),
+                desktop: contributed.desktop,
+                audio: contributed.audio,
+                displays: contributed.displays,
+                // Absent means zero, and a session that refused nothing is the
+                // normal one — carrying a `0` on every line would say nothing
+                // two thousand times a session.
+                input_dropped: (self.input_dropped > 0).then_some(self.input_dropped),
+                denials: (self.denials.count() > 0).then(|| self.denials.count()),
+                test_override: self.test_override.clone(),
             };
             self.emit(&event);
         }
@@ -1947,6 +2232,9 @@ mod host {
                         return;
                     }
                 }
+                // `ctx.output` already names the new one; the next pass opens
+                // it, and its size reaches the session as a `SourceSize`.
+                Pass::Retarget => {}
                 Pass::Done => return,
             }
         }
@@ -1975,6 +2263,10 @@ mod host {
         /// The last viewer left: the duplication is closed and the thread waits
         /// for the next one.
         Paused,
+        /// A feature picked another output: the duplication, the encoder and
+        /// the scaler all belonged to the old one, so the pass ends and the
+        /// next one opens the new one.
+        Retarget,
         /// A stop, a dead channel, or a failure already reported to the session.
         Done,
     }
@@ -1988,6 +2280,9 @@ mod host {
                 // The governor's last word, kept for the encoder the next
                 // viewer opens.
                 Ok(ToCapture::Bitrate(bps)) => ctx.bitrate = bps,
+                // Nothing is open to retarget, so it is only the output the
+                // resume will duplicate.
+                Ok(ToCapture::Output(output)) => ctx.output = output,
                 Ok(ToCapture::Stop) | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                     return false
                 }
@@ -2073,6 +2368,10 @@ mod host {
                                 ::log::warn!("swoop: could not move the bitrate: {e}");
                             }
                         }
+                    }
+                    Ok(ToCapture::Output(output)) => {
+                        ctx.output = output;
+                        return Pass::Retarget;
                     }
                     Ok(ToCapture::Pause) => return Pass::Paused,
                     // Already running: the session sends one on every
@@ -2304,6 +2603,16 @@ mod host {
                         let _ = injector.inject_all(&events);
                     }
                 }
+                // A new display is a new coordinate space. Everything held is
+                // released first: the ups belong on the desktop the keys went
+                // down on, and the injector that knew about them is replaced.
+                Ok(ToInput::Space(space)) => {
+                    let events = viewer.release_all();
+                    if !events.is_empty() {
+                        let _ = injector.inject_all(&events);
+                    }
+                    injector = SendInputInjector::new(space);
+                }
                 Ok(ToInput::Stop) => return,
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
@@ -2400,6 +2709,66 @@ mod host {
     mod tests {
         use super::*;
         use crate::input::InputEvent;
+
+        /// The audit route's `type` field is closed and refuses the whole batch
+        /// on an unrecognised one, so every refusal the streamer can produce
+        /// has to land on a name that route knows.
+        #[test]
+        fn every_denial_reason_maps_onto_the_audit_routes_vocabulary() {
+            assert_eq!(
+                host_event_kind(DenialReason::TooManyViewers),
+                HostEventKind::JoinRefused
+            );
+            assert_eq!(
+                host_event_kind(DenialReason::JoinRateExceeded),
+                HostEventKind::JoinRefused
+            );
+            assert_eq!(
+                host_event_kind(DenialReason::OfferFingerprintMissing),
+                HostEventKind::FpMismatch
+            );
+            assert_eq!(
+                host_event_kind(DenialReason::Token(TokenError::FpMismatch)),
+                HostEventKind::FpMismatch
+            );
+            assert_eq!(
+                host_event_kind(DenialReason::Token(TokenError::Expired)),
+                HostEventKind::LeaseExpired
+            );
+            assert_eq!(
+                host_event_kind(DenialReason::Token(TokenError::BadSignature)),
+                HostEventKind::JwtRejected
+            );
+            assert_eq!(
+                host_event_kind(DenialReason::UnknownViewer),
+                HostEventKind::JwtRejected
+            );
+        }
+
+        /// The route validates `reason` against `^[a-z0-9_]{1,48}$` and refuses
+        /// the batch on a miss, so the finer vocabulary has to survive the trip.
+        #[test]
+        fn every_denial_reason_is_a_code_the_route_will_accept() {
+            let reasons = [
+                DenialReason::TooManyViewers,
+                DenialReason::JoinTooSoon,
+                DenialReason::JoinRateExceeded,
+                DenialReason::UnknownViewer,
+                DenialReason::OfferFingerprintMissing,
+                DenialReason::ViewerMismatch,
+                DenialReason::Token(TokenError::Malformed),
+                DenialReason::Token(TokenError::JtiReplayed),
+            ];
+            for reason in reasons {
+                let code = reason.reason();
+                assert!((1..=48).contains(&code.len()), "{code} is the wrong length");
+                assert!(
+                    code.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                    "{code} is not a reason code"
+                );
+            }
+        }
 
         /// The host half of the session on real hardware: duplication →
         /// downscale-if-needed → encoder, plus injection → the pointer the
@@ -2968,5 +3337,35 @@ mod tests {
             !out.send(Channel::SwoopControl, vec![0u8; 1]),
             "ten idle seconds still leave only one burst"
         );
+    }
+
+    /// A request is an edge. A feature with a queue of them has stopped
+    /// producing edges, and the ceiling refuses rather than letting the session
+    /// act on a backlog — the refused one is still the feature's to offer again.
+    #[test]
+    fn the_outbox_refuses_requests_past_its_ceiling() {
+        let mut out = Outbox::new(Instant::now());
+        for _ in 0..MAX_PENDING_REQUESTS {
+            assert!(out.request(FeatureRequest::Sas));
+        }
+        assert!(!out.request(FeatureRequest::Sas), "the ceiling is the ceiling");
+        assert_eq!(out.refused(), 1);
+
+        let taken = out.take_requests();
+        assert_eq!(taken.len(), MAX_PENDING_REQUESTS);
+        assert!(out.take_requests().is_empty());
+        assert!(out.request(FeatureRequest::Sas), "drained, so there is room");
+    }
+
+    /// The outbox's two queues are independent: a feature that filled its
+    /// record allowance can still ask for a desktop switch, and a request
+    /// cannot eat the allowance a clipboard chunk needs.
+    #[test]
+    fn records_and_requests_do_not_share_a_budget() {
+        let mut out = Outbox::new(Instant::now());
+        assert!(out.send(Channel::SwoopControl, vec![0u8; OUTBOX_BURST_BYTES]));
+        assert!(out.request(FeatureRequest::Sas));
+        assert_eq!(out.take().len(), 1);
+        assert_eq!(out.take_requests().len(), 1);
     }
 }

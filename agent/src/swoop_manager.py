@@ -27,11 +27,12 @@ EVENT_READY = 'ready'
 EVENT_VIEWER_JOINED = 'viewer_joined'
 EVENT_VIEWER_LEFT = 'viewer_left'
 EVENT_SAS_REQUEST = 'sas_request'
+EVENT_HOST_EVENT = 'host_event'
 EVENT_STATUS = 'status'
 EVENT_EXITING = 'exiting'
 KNOWN_EVENTS = frozenset({
     EVENT_READY, EVENT_VIEWER_JOINED, EVENT_VIEWER_LEFT,
-    EVENT_SAS_REQUEST, EVENT_STATUS, EVENT_EXITING,
+    EVENT_SAS_REQUEST, EVENT_HOST_EVENT, EVENT_STATUS, EVENT_EXITING,
 })
 
 STATE_IDLE = 'idle'
@@ -54,6 +55,12 @@ KILL_GRACE_S = 5
 # bounded so a consumer that stops draining cannot grow the agent's memory.
 EVENT_QUEUE_MAX = 256
 WORK_QUEUE_MAX = 32
+
+# host events go to POST /api/agent/swoop/events, which takes 20 per batch. the
+# queue is a few batches deep and drops the oldest when it fills: an audit row is
+# worth less than the agent's memory, and it is never worth blocking the reader.
+AUDIT_QUEUE_MAX = 100
+AUDIT_BATCH_MAX = 20
 
 
 class SwoopManager:
@@ -86,8 +93,13 @@ class SwoopManager:
 
         self._events = queue.Queue(maxsize=EVENT_QUEUE_MAX)
         self._work = queue.Queue(maxsize=WORK_QUEUE_MAX)
+        self._audit = queue.Queue(maxsize=AUDIT_QUEUE_MAX)
         self._worker = None
         self._reader = None
+        # its own thread, not the work queue: a post can sit on the network for
+        # ten seconds, and a kill queued behind one is a session that outlives
+        # its revocation.
+        self._auditor = None
 
     # public surface
 
@@ -351,6 +363,9 @@ class SwoopManager:
             logger.warning('swoop: unknown stdout event %r dropped', event_type)
             return
 
+        if event_type == EVENT_HOST_EVENT:
+            self._queue_host_event(event)
+
         with self._lock:
             if event_type == EVENT_READY:
                 self._state = STATE_RUNNING
@@ -376,6 +391,67 @@ class SwoopManager:
                 self._events.put_nowait(event)
             except queue.Empty:
                 pass
+
+    # host events -> the audit route
+
+    def _queue_host_event(self, event):
+        """Turn one ``host_event`` line into the audit route's row shape.
+
+        The streamer's ``kind`` is that route's closed ``type`` vocabulary
+        (PROTOCOL.md section 6), so it is copied across rather than mapped. A row
+        missing either required field is dropped here: the route refuses the
+        whole batch on one bad entry, and the rest of the batch is evidence.
+        """
+        kind = event.get('kind')
+        sid = event.get('sid')
+        if not isinstance(kind, str) or not isinstance(sid, str):
+            logger.warning('swoop: host_event without a kind or a sid dropped')
+            return
+
+        row = {'type': kind, 'sid': sid}
+        viewer = event.get('viewer')
+        if isinstance(viewer, str):
+            row['viewerId'] = viewer
+        reason = event.get('reason')
+        if isinstance(reason, str):
+            row['reason'] = reason
+
+        self._start_auditor()
+        try:
+            self._audit.put_nowait(row)
+        except queue.Full:
+            try:
+                self._audit.get_nowait()  # drop the oldest, keep the newest
+                self._audit.put_nowait(row)
+            except queue.Empty:
+                pass
+
+    def _start_auditor(self):
+        with self._lock:
+            if self._auditor is not None and self._auditor.is_alive():
+                return
+            self._auditor = threading.Thread(
+                target=self._audit_loop, name='swoop-audit', daemon=True,
+            )
+            self._auditor.start()
+
+    def _audit_loop(self):
+        while True:
+            batch = [self._audit.get()]
+            while len(batch) < AUDIT_BATCH_MAX:
+                try:
+                    batch.append(self._audit.get_nowait())
+                except queue.Empty:
+                    break
+            try:
+                self._spawn.post_host_events(
+                    batch, self._site_id(), self._machine_id(), self._auth_manager(),
+                )
+            except Exception as e:
+                # not retried: an audit row is evidence, not a command, and a
+                # retry loop against a down api is how this thread stops
+                # draining. requests' message carries the status and url only.
+                logger.warning('swoop: %d host events not recorded: %s', len(batch), e)
 
     # firebase plumbing
 

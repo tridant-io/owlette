@@ -61,6 +61,7 @@ STDERR_FILENAME = 'owlette-swoop.err.log'
 
 VERSION_PROBE_TIMEOUT_S = 15
 BUNDLE_TIMEOUT_S = 10
+HOST_EVENTS_TIMEOUT_S = 10
 
 # the three ACEs the installer applies to {app}\swoop, as (mask, sid string).
 # SIDs, never account names: LookupAccountName fails on a non-English Windows.
@@ -230,6 +231,40 @@ def fetch_bundle(sid, site_id, machine_id, auth_manager, timeout=BUNDLE_TIMEOUT_
             REFUSAL_BUNDLE_UNAVAILABLE, 'bundle response was not one json line',
         )
     return buf
+
+
+def post_host_events(events, site_id, machine_id, auth_manager, timeout=HOST_EVENTS_TIMEOUT_S):
+    """POST a batch of streamer host events to the audit route.
+
+    The streamer holds no long-lived credential (PROTOCOL.md section 5), so the
+    service posts on its behalf with the machine token. An event carries a type,
+    a reason code and ids -- never a token, a key, a fingerprint or clipboard
+    content -- so nothing here needs redacting, and nothing here is logged.
+
+    Returns True when the batch was accepted. Raises on a transport or status
+    failure; the caller decides what a lost audit row is worth.
+    """
+    import requests
+
+    if not events:
+        return True
+    token = auth_manager.get_valid_token() if auth_manager is not None else None
+    if not token:
+        return False
+
+    api_base = shared_utils.get_api_base_url()
+    response = requests.post(
+        f'{api_base}/agent/swoop/events',
+        json={
+            'siteId': site_id,
+            'machineId': machine_id,
+            'events': list(events),
+        },
+        headers={'Authorization': f'Bearer {token}'},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return True
 
 
 class SwoopProcess:

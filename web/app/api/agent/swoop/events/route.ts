@@ -32,6 +32,11 @@ const REASON_PATTERN = /^[a-z0-9_]{1,48}$/;
 /**
  * The vocabulary, and what each event means to the audit trail. Anything else
  * is a 400: an open `type` field would let the host write arbitrary rows.
+ *
+ * It is the same closed set as `ipc::HostEventKind` in the streamer and the
+ * `host_event` table in `agent/swoop/PROTOCOL.md` §6 — the agent copies the
+ * streamer's `kind` straight into `type`, so a name in one and not the other
+ * is a 400 for the whole batch.
  */
 const EVENT_KINDS = {
   session_started: { outcome: 'allow', capability: Capability.MACHINE_REMOTE_VIEW },
@@ -42,6 +47,8 @@ const EVENT_KINDS = {
   jwt_rejected: { outcome: 'deny', capability: Capability.MACHINE_REMOTE_VIEW },
   fp_mismatch: { outcome: 'deny', capability: Capability.MACHINE_REMOTE_VIEW },
   lease_expired: { outcome: 'deny', capability: Capability.MACHINE_REMOTE_VIEW },
+  /** An admission limit — viewer count or join rate — turned a join away. */
+  join_refused: { outcome: 'deny', capability: Capability.MACHINE_REMOTE_VIEW },
   input_not_permitted: { outcome: 'deny', capability: Capability.MACHINE_REMOTE_CONTROL },
 } as const satisfies Record<string, { outcome: AuditOutcome; capability: Capability }>;
 

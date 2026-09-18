@@ -26,10 +26,20 @@
 //! - Outbound goes into the [`Outbox`] that [`Feature::poll`] is lent for
 //!   exactly one call. The session drains it and writes it. It is bounded and
 //!   rate-limited; read [`Outbox`] before you queue anything from it.
+//! - The same outbox carries [`FeatureRequest`]s — the only way to reach a
+//!   worker thread, the service or the audit route, all of which belong to the
+//!   session. `Sas` is answered on [`Feature::on_sas_result`], routed back to
+//!   whichever feature asked for it and to nothing else.
+//! - [`Feature::status`] is *pulled* once per §6 `status` event, whether or not
+//!   a viewer is connected, and each feature fills only its own field of
+//!   [`FeatureStatus`].
+//! - [`Feature::hello_displays`] is the one contribution to §5's `hello-host`.
+//!   `signal/messages.rs` is frozen, so a display list cannot be a new message:
+//!   it rides the field that already exists.
 //! - [`Feature::stop`] runs in reverse registration order.
 //!
-//! `on_message` and `poll` both default to nothing, so a feature that needs
-//! neither stays three methods long.
+//! Everything but `name`, `start` and `stop` defaults to nothing, so a feature
+//! that needs none of it stays three methods long.
 //!
 //! The session thread is the **sole writer of stdout** and the only thing that
 //! touches the peer. Anything that has to block — a clipboard listener, a
@@ -94,7 +104,7 @@ pub fn registry() -> Vec<Box<dyn Feature>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::Outbox;
+    use crate::session::{FeatureRequest, FeatureStatus, Outbox};
     use crate::signal::messages::channel::Channel;
     use std::collections::HashSet;
     use std::time::Instant;
@@ -148,5 +158,34 @@ mod tests {
             feature.poll(Instant::now(), &mut out);
             feature.stop();
         }
+    }
+
+    /// The defaulted half of the seam, which is what lets a feature that needs
+    /// none of it stay three methods long: nothing said on `status`, nothing
+    /// contributed to `hello-host`, and an answer to a question it never put
+    /// is not an error.
+    #[test]
+    fn a_feature_that_defines_none_of_the_optional_methods_contributes_nothing() {
+        let mut status = FeatureStatus::default();
+        for mut feature in registry() {
+            feature.on_sas_result(true);
+            feature.status(&mut status);
+            assert!(
+                feature.hello_displays().is_empty(),
+                "feature {} advertised a display list",
+                feature.name()
+            );
+        }
+        assert_eq!(status, FeatureStatus::default());
+    }
+
+    /// The request path is reachable from the same outbox a feature is lent,
+    /// and it is drained per feature — the session has to know who asked.
+    #[test]
+    fn a_feature_asks_through_the_outbox_it_already_holds() {
+        let mut out = Outbox::new(Instant::now());
+        assert!(out.request(FeatureRequest::Sas));
+        assert_eq!(out.take_requests(), vec![FeatureRequest::Sas]);
+        assert!(out.take_requests().is_empty());
     }
 }
