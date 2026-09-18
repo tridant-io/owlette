@@ -60,21 +60,144 @@ set with `wrangler secret put`, never in `wrangler.toml` and never in git:
 | `SWOOP_JWT_KID_PREV` / `SWOOP_JWT_PUBLIC_KEY_PREV` | the previous key **during a rotation overlap only**; unset otherwise |
 | `SWOOP_SIGNAL_RING_SECRET` | shared with the api, compared in constant time. `must-match` across railway-prod and vercel-prod |
 
-locally they come from `.dev.vars`, which is gitignored. the deploy pipeline is task 3.4.
+locally they come from `.dev.vars`, which is gitignored. in an environment they are set with
+`wrangler secret put` — see [deploy](#deploy), which never touches them.
 
 ### key rotation runbook
+
+**this runbook cannot be executed today.** step 3 has nowhere to put the outgoing key: `PROTOCOL.md` §11
+requires every bundle to carry **both** the current and the previous public key with their `kid`s, and
+`scripts/env-manifest.json` has no `SWOOP_JWT_PUBLIC_KEY_PREVIOUS` / `SWOOP_JWT_KID_PREVIOUS` rows for
+`railway-dev`, `railway-prod` or `vercel-prod` — only the singular `SWOOP_JWT_PUBLIC_KEY` / `SWOOP_JWT_KID`
+(`:112-114`). the worker half of the overlap exists (`SWOOP_JWT_KID_PREV` / `SWOOP_JWT_PUBLIC_KEY_PREV`); the
+api half does not. until those two rows are registered and set on all three targets, a rotation is a flag day
+for every streamer holding a bundle minted under the old key, which is exactly what the two-key design is for.
+**PENDING [human]** — register the rows (class `config`, all three targets, same class as the singular pair
+they mirror), then delete this paragraph.
 
 order matters: the worker learns the new key **before** the api starts minting with it, or every token 401s.
 
 1. generate a new ed25519 keypair offline.
 2. **worker first.** put the outgoing pair into `SWOOP_JWT_KID_PREV` / `SWOOP_JWT_PUBLIC_KEY_PREV`, then the
    new pair into `SWOOP_JWT_KID` / `SWOOP_JWT_PUBLIC_KEY`. both now verify.
-3. **api second.** set `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_JWT_KID` and `SWOOP_JWT_PUBLIC_KEY` on every target in
-   `scripts/env-manifest.json` (`node scripts/sync-env.mjs check` must be clean — `SWOOP_JWT_PRIVATE_KEY` is
-   `must-match`, so a half-done rotation breaks the failover origin silently).
+
+   ```
+   cd infra/swoop-signal
+   npx wrangler secret put SWOOP_JWT_KID_PREV        -e dev   # paste the OUTGOING kid
+   npx wrangler secret put SWOOP_JWT_PUBLIC_KEY_PREV -e dev   # paste the OUTGOING public key
+   npx wrangler secret put SWOOP_JWT_KID             -e dev   # paste the NEW kid
+   npx wrangler secret put SWOOP_JWT_PUBLIC_KEY      -e dev   # paste the NEW public key
+   ```
+
+   each one prompts and reads the value from stdin: never pass a key as an argument, and never `echo | `
+   it — both put the key in the shell history. confirm the worker holds both, which is the only way to see
+   this from outside (`kids` are identifiers, not key material):
+
+   ```
+   curl -sS -H "x-swoop-ring-secret: <ring secret>" https://<origin>/health
+   # {"ok":true,"service":"swoop-signal","protocolVersion":1,"kids":["<new>","<outgoing>"],"algorithm":"Ed25519"}
+   ```
+
+3. **api second.** set `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_JWT_KID` and `SWOOP_JWT_PUBLIC_KEY` — plus the
+   `_PREVIOUS` pair above, once it exists — on every target in `scripts/env-manifest.json`
+   (`node scripts/sync-env.mjs check` must be clean — `SWOOP_JWT_PRIVATE_KEY` is `must-match`, so a half-done
+   rotation breaks the failover origin silently; vercel stores secrets write-only, so re-run
+   `node scripts/sync-env.mjs sync vercel-prod --apply` rather than trusting a green `check`).
 4. **fleet: nothing.** agents hold no key. a doorbell holding a token signed with the old key is refused `401`
    and re-mints immediately.
-5. once every outstanding token has expired (host and doorbell ttl is 300 s), unset `_PREV`.
+5. once every outstanding token has expired (host and doorbell ttl is 300 s), unset `_PREV` on the worker
+   (`npx wrangler secret delete SWOOP_JWT_KID_PREV -e dev`, same for the key) and the `_PREVIOUS` pair on the
+   api. `/health` should report a single `kid` again.
+
+rotate dev first and leave it a day: dev and prod are separate workers with separate secrets, so a mistake on
+dev costs nothing and a mistake on prod ends every live session.
+
+## deploy
+
+two environments, one worker script each, and no third: `wrangler.toml` declares `env.dev` and `env.prod`, and
+a bare `wrangler deploy` with no `-e` would publish a *fourth*, unenvironmented script — never run one.
+
+| branch | command | script | serves |
+|---|---|---|---|
+| `dev` | `wrangler deploy -e dev` | `swoop-signal-dev` | dev.owlette.app's `SWOOP_SIGNAL_URL` |
+| `main` | `wrangler deploy -e prod` | `swoop-signal-prod` | owlette.app's `SWOOP_SIGNAL_URL`, both origins |
+
+[`.github/workflows/swoop-signal-deploy.yml`](../../.github/workflows/swoop-signal-deploy.yml) does it: path
+filters on `infra/swoop-signal/**` and the workflow itself, the vitest suite first on every pull request and
+every push, then the deploy on a push to `dev` or `main`, then `GET /health` against the deployed origin with
+a non-200 failing the job. concurrency is `cancel-in-progress: false` — a cancelled deploy leaves whichever
+version cloudflare last accepted.
+
+### what the workflow needs, and what it must never hold
+
+| kind | name | |
+|---|---|---|
+| repo secret | `CLOUDFLARE_API_TOKEN` | scoped: **workers scripts: edit** + **workers durable objects: edit** (account-level), nothing else. not a global api key |
+| repo secret | `CLOUDFLARE_ACCOUNT_ID` | a secret here purely so it stays out of a public repo's logs; it is an account identifier, not a credential |
+| repo variable | `SWOOP_SIGNAL_DEV_URL` / `SWOOP_SIGNAL_PROD_URL` | the origin `/health` is fetched from, e.g. `https://signal-dev.<domain>`. a **variable**, not a literal in the workflow, because a worker hostname carries either the account's workers.dev subdomain or the zone it is routed on, and this repository is public |
+
+the three worker secrets are **not** repository secrets and must never become them: the workflow has no step
+that reads or writes a worker secret, and `wrangler deploy` preserves the ones already set. a redeploy
+therefore cannot lose them — but a *new* environment starts with none, and a worker missing
+`SWOOP_SIGNAL_RING_SECRET` answers every ring `500 ring_secret_unconfigured` while `/health` still returns
+200, so the smoke check will not catch it. set them before the first deploy of an environment, not after.
+
+### first-time setup — **PENDING [human]**. copy-paste protocol
+
+none of this can be done from an agent session: it needs the owner's cloudflare account and the repository's
+settings. nothing below has been executed, and **the workflow has never run**.
+
+1. **the api token.** cloudflare dashboard → my profile → api tokens → create token → custom token.
+   permissions: `account` → `workers scripts` → `edit`, and `account` → `workers durable objects` → `edit`.
+   account resources: this account only. no zone permission is needed unless a custom domain route is added
+   in `wrangler.toml` later, which also needs `zone` → `workers routes` → `edit`.
+2. **the repository secrets.** github → settings → secrets and variables → actions → new repository secret,
+   twice: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (dashboard → workers & pages → the account id in
+   the right-hand pane).
+3. **the worker secrets, dev.** from `infra/swoop-signal`, three prompts, each pasted:
+
+   ```
+   npx wrangler secret put SWOOP_JWT_KID            -e dev
+   npx wrangler secret put SWOOP_JWT_PUBLIC_KEY     -e dev
+   npx wrangler secret put SWOOP_SIGNAL_RING_SECRET -e dev
+   ```
+
+   the ring secret must be byte-identical to `SWOOP_SIGNAL_RING_SECRET` on `railway-dev`; for prod it must
+   match **both** `railway-prod` and `vercel-prod`, which is why it is `must-match` in the manifest.
+4. **the first deploy, by hand.** `npx wrangler deploy -e dev`. do this before the first push so that a
+   failure is read at a terminal rather than in a job log.
+5. **give it a url.** `wrangler.toml` sets `workers_dev = false` and declares no route, so a deployed worker
+   is reachable from nowhere and `/health` cannot be smoke-checked. pick one — a custom domain
+   (`routes` with `custom_domain = true`, which is a `wrangler.toml` change and therefore a code change, not
+   a dashboard click) or workers.dev for dev only — then set `SWOOP_SIGNAL_DEV_URL` / `SWOOP_SIGNAL_PROD_URL`
+   and the api's `SWOOP_SIGNAL_URL` to it. **this is an open decision, not an oversight**: the hostname
+   determines the `connect-src` entry in `web/proxy.ts`, so it wants deciding once.
+6. **verify.** `curl -sS -o /dev/null -w '%{http_code}\n' https://<dev origin>/health` → `200`, and the body
+   is exactly `{"ok":true,"service":"swoop-signal","protocolVersion":1}`.
+7. **then let the pipeline do it.** push a no-op change under `infra/swoop-signal/` to `dev` and confirm the
+   run is green. record the date and the run url here.
+8. repeat 3–6 with `-e prod` when prod is ready.
+
+### rollback
+
+a deploy is a version; rolling back publishes an earlier one. it does **not** touch secrets and it does
+**not** undo a durable-object migration, so a rollback across the `v1` migration is not a rollback — check
+`[[migrations]]` before assuming.
+
+```
+cd infra/swoop-signal
+npx wrangler deployments list -e dev      # newest first; copy the version id to go back to
+npx wrangler rollback <version-id> -e dev # prompts for a reason, then publishes it
+curl -sS -o /dev/null -w '%{http_code}\n' https://<dev origin>/health
+```
+
+`wrangler rollback` with no version id goes back one. the workflow does not roll back on a failed smoke
+check — a human decides between rolling back and rolling forward, because a red `/health` is as often a
+missing secret or a missing route as it is bad code.
+
+**PENDING [human]** — these steps have never been executed on dev. task 3.4's done-when requires one rehearsal
+(roll back to the previous version, `/health` 200, roll forward again); note the date, the two version ids and
+the result here when it is done.
 
 ## limits
 

@@ -275,9 +275,12 @@ export function resolveAlert(alert, { root = REPO_ROOT, readFile = readFileSync,
 
 /** Every manifest in the tree that could pin a package of the given ecosystem. */
 const ECOSYSTEM_MANIFESTS = {
-  npm: ['package-lock.json', 'web/package-lock.json', 'functions/package-lock.json', 'desktop/package-lock.json'],
-  rust: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock'],
-  cargo: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock'],
+  npm: ['package-lock.json', 'web/package-lock.json', 'functions/package-lock.json', 'desktop/package-lock.json',
+    'infra/swoop-signal/package-lock.json'],
+  // Both keys carry the same list: dependabot.yml names the ecosystem `cargo`,
+  // the alert feed reports it as `rust`, and an alert arrives under either.
+  rust: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock', 'agent/swoop/Cargo.lock'],
+  cargo: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock', 'agent/swoop/Cargo.lock'],
   pip: ['agent/requirements.txt', 'agent/requirements-dev.txt', 'sdks/python/pyproject.toml',
     'test/integration/requirements.txt', 'test/infra/agent-runner/requirements.txt'],
 };
