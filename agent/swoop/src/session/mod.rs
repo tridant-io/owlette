@@ -121,26 +121,154 @@ use std::time::{Duration, Instant};
 use crate::bundle::Indicator;
 use crate::encode::{Codec, CodecCaps};
 use crate::gpu::scale::Limits;
+use crate::signal::messages::channel::Channel;
 
 /// A host feature that lives for the length of a session.
 ///
 /// Implementations must not block — every one of them runs on the session
-/// thread, between two turns of the loop that drives the peer.
+/// thread, between two turns of the loop that drives the peer. Whatever has to
+/// block runs on the feature's own thread and reaches this one over a channel
+/// the feature owns.
+///
+/// [`features`] documents the whole contract, including how a module is
+/// registered; this is only the shape.
 pub trait Feature: Send {
-    /// Stable name. It is what the `status` event reports and what the tests
-    /// pin, so it is spelled the same as the module.
+    /// Stable name. It is what the tests pin, so it is spelled the same as the
+    /// module and the same as its entry in [`features::FEATURE_NAMES`].
     fn name(&self) -> &'static str;
 
     fn start(&mut self, session: &SessionHandle) -> anyhow::Result<()>;
 
     fn stop(&mut self);
+
+    /// One inbound data-channel payload, offered to every feature.
+    ///
+    /// `ctl` is this host's own verdict for the viewer that sent it, from the
+    /// token the host verified itself — never the room's claim. A feature that
+    /// acts on a gated message checks it; `swoop-control` also carries
+    /// ungated traffic (`quality`, `mute`), so the session cannot gate the
+    /// whole channel on a feature's behalf.
+    ///
+    /// A payload this feature does not own is not an error — every feature is
+    /// offered every payload, and §5 shares `swoop-control` between control
+    /// and the clipboard. `Err` means the message *was* this feature's and it
+    /// could not be honoured; it is logged and nothing else.
+    fn on_message(
+        &mut self,
+        _channel: Channel,
+        _ctl: bool,
+        _payload: &[u8],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// The feature's turn to produce outbound records. Called once per turn of
+    /// the session loop while a viewer's peer is connected; the session drains
+    /// the outbox and writes it.
+    fn poll(&mut self, _now: Instant, _out: &mut Outbox) {}
+}
+
+/// One outbound record from a feature.
+///
+/// No binary flag: §5's channel traffic is JSON text, and the one binary
+/// channel — `swoop-meta` — carries the session's own frame records, which a
+/// feature has no business interleaving with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outbound {
+    pub channel: Channel,
+    pub payload: Vec<u8>,
+}
+
+/// The most a feature may have waiting for the session at once.
+///
+/// Half the transport's own 64 KiB queue, so a `swoop-meta` record always fits
+/// beside a feature's backlog. It is also the largest single record a feature
+/// can send, and §5's biggest is a 16 KiB clipboard chunk — about 22 KiB once
+/// it is base64 inside JSON, comfortably under this.
+pub const OUTBOX_BURST_BYTES: usize = 32 * 1024;
+
+/// How fast that allowance comes back: ~4 Mbps, a fifth of the default video
+/// target. A 2 MiB clipboard image therefore takes a few seconds and never
+/// competes with the picture for the link.
+pub const OUTBOX_REFILL_BYTES_PER_SEC: usize = 512 * 1024;
+
+/// A feature's whole outbound path: a bounded, paced buffer that the session
+/// thread drains and writes.
+///
+/// Bounded, because the transport keeps at most 64 KiB queued across all five
+/// channels and evicts the **oldest** record when that fills — so a feature
+/// queueing without limit would throw away the `swoop-meta` records the
+/// picture depends on. Paced as well as bounded, because the bound alone is
+/// not enough: the session turns every 2 ms, and a feature handed a fresh
+/// allowance every turn would still push megabytes a second down a link sized
+/// for video.
+///
+/// **On overflow nothing is dropped.** [`send`](Self::send) returns `false`
+/// and the record is not queued; the feature still holds its own data and
+/// offers it again on a later poll. That is what a chunked transfer wants — a
+/// silently dropped middle chunk is a corrupt paste, where a refused one is
+/// just a slower paste.
+#[derive(Debug)]
+pub struct Outbox {
+    queued: Vec<Outbound>,
+    allowance: usize,
+    refilled_at: Instant,
+    refused: u64,
+}
+
+impl Outbox {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            queued: Vec::new(),
+            allowance: OUTBOX_BURST_BYTES,
+            refilled_at: now,
+            refused: 0,
+        }
+    }
+
+    /// Queue one record. `false` means it did not fit in what is left of the
+    /// allowance — try again on a later poll.
+    pub fn send(&mut self, channel: Channel, payload: Vec<u8>) -> bool {
+        if payload.len() > self.allowance {
+            self.refused += 1;
+            return false;
+        }
+        self.allowance -= payload.len();
+        self.queued.push(Outbound { channel, payload });
+        true
+    }
+
+    /// Records refused for want of allowance, cumulative.
+    pub fn refused(&self) -> u64 {
+        self.refused
+    }
+
+    fn refill(&mut self, now: Instant) {
+        let elapsed = now.saturating_duration_since(self.refilled_at);
+        let gained = OUTBOX_REFILL_BYTES_PER_SEC as u128 * elapsed.as_nanos() / 1_000_000_000;
+        // A turn too short to earn a whole byte keeps its remainder rather than
+        // rounding it away: at 500 Hz that rounding would be the whole rate.
+        if gained == 0 {
+            return;
+        }
+        self.refilled_at = now;
+        // Clamped before it is added: a long gap earns more than the burst
+        // anyway, and the unclamped sum is an overflow on a 32-bit `usize`.
+        let gained = gained.min(OUTBOX_BURST_BYTES as u128) as usize;
+        self.allowance = (self.allowance + gained).min(OUTBOX_BURST_BYTES);
+    }
+
+    fn take(&mut self) -> Vec<Outbound> {
+        std::mem::take(&mut self.queued)
+    }
 }
 
 /// What a feature is handed when the session starts it.
 ///
 /// The session's facts, not its channels: a feature runs on the session thread
 /// and starts before any viewer has joined, so there is no peer to write to and
-/// nothing it could hold across a turn of the loop.
+/// nothing it could hold across a turn of the loop. Channel traffic reaches a
+/// feature later, through [`Feature::on_message`] and [`Feature::poll`].
 #[derive(Debug, Clone)]
 pub struct SessionHandle {
     pub sid: String,
@@ -374,8 +502,8 @@ mod host {
     use windows::Win32::System::Performance::QueryPerformanceCounter;
 
     use super::{
-        codec_wire_name, limits_for, pick_codec, CaptureGate, Denials, FloorTimer, IdrPolicy,
-        SessionHandle,
+        codec_wire_name, limits_for, pick_codec, CaptureGate, Denials, Feature, FloorTimer,
+        IdrPolicy, Outbox, SessionHandle,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor};
     use crate::capture::{
@@ -803,6 +931,8 @@ mod host {
             frames_at_status: 0,
             input_dropped: 0,
             last_size: None,
+            features: Vec::new(),
+            outbox: Outbox::new(w.started),
         };
 
         // The browser offers as soon as it is in the room, and the relay drops
@@ -817,14 +947,18 @@ mod host {
             ctl: bundle.ctl,
             source: live.source,
         };
-        let mut registry = super::features::registry();
-        for feature in registry.iter_mut() {
+        // They live on `Live` because the loop hands them the channel traffic
+        // and drains what they produce; a feature that fails to start stays
+        // registered, so its name still appears and its `stop` still runs.
+        let mut features = super::features::registry();
+        for feature in features.iter_mut() {
             if let Err(e) = feature.start(&handle) {
                 ::log::warn!("swoop: feature {} did not start: {e}", feature.name());
             }
         }
+        live.features = features;
         let outcome = live.serve();
-        for feature in registry.iter_mut().rev() {
+        for feature in live.features.iter_mut().rev() {
             feature.stop();
         }
         outcome
@@ -871,6 +1005,10 @@ mod host {
         /// The last encoded size put on the wire, so a change sets
         /// `RESOLUTION_CHANGED` exactly once.
         last_size: Option<(u16, u16)>,
+        features: Vec<Box<dyn Feature>>,
+        /// What the features produced this turn, bounded and paced so a
+        /// clipboard transfer cannot evict the picture's records.
+        outbox: Outbox,
     }
 
     /// One viewer, as the session knows it.
@@ -918,6 +1056,7 @@ mod host {
                 if let Some(end) = self.pump_peer() {
                     return end;
                 }
+                self.pump_features();
                 self.tick();
                 if let Some(end) = self.deadlines() {
                     return end;
@@ -1342,6 +1481,55 @@ mod host {
             None
         }
 
+        /// Every feature's turn to produce, then the one write.
+        ///
+        /// Only while the peer is connected: a feature's outbound is for the
+        /// viewer, and there is nothing to hold it in before one arrives.
+        /// Whatever a feature must keep across that gap, it keeps itself.
+        fn pump_features(&mut self) {
+            let connected = self
+                .peer
+                .as_ref()
+                .is_some_and(|peer| peer.state() == PeerState::Connected);
+            if !connected {
+                return;
+            }
+            let now = Instant::now();
+            self.outbox.refill(now);
+            for feature in self.features.iter_mut() {
+                feature.poll(now, &mut self.outbox);
+            }
+            let pending = self.outbox.take();
+            if let Some(peer) = self.peer.as_mut() {
+                for record in pending {
+                    peer.write_channel(record.channel, false, record.payload);
+                }
+            }
+        }
+
+        /// Offer one inbound payload to every feature.
+        ///
+        /// Every feature sees every payload on a channel it may read, because
+        /// §5 shares `swoop-control` between the control messages and the
+        /// clipboard — the session cannot tell whose a payload is without
+        /// parsing it, and that parse belongs to the feature.
+        fn offer_to_features(&mut self, channel: Channel, data: &[u8]) {
+            let Some(viewer) = self.viewer.as_ref().map(|v| v.id.clone()) else {
+                return;
+            };
+            // The host's own verdict from the token it verified, never the
+            // room's claim — the same source `on_input` gates on.
+            let ctl = self.client.control_granted(&viewer);
+            for feature in self.features.iter_mut() {
+                if let Err(e) = feature.on_message(channel, ctl, data) {
+                    ::log::warn!(
+                        "swoop: feature {} could not handle a {channel:?} message: {e}",
+                        feature.name()
+                    );
+                }
+            }
+        }
+
         fn on_peer_event(&mut self, event: PeerEvent) {
             match event {
                 PeerEvent::Connected => ::log::info!("swoop: peer connected"),
@@ -1403,13 +1591,21 @@ mod host {
                 Channel::SwoopInput if !binary => self.on_input(data),
                 Channel::SwoopFeedback if !binary => self.on_feedback(data),
                 // Host → viewer channels, and §3's channels are text.
-                _ => ::log::warn!("swoop: unexpected data on {ch:?} (binary {binary})"),
+                _ => {
+                    ::log::warn!("swoop: unexpected data on {ch:?} (binary {binary})");
+                    return;
+                }
             }
+            self.offer_to_features(ch, data);
         }
 
         fn on_control(&mut self, data: &[u8]) {
             let Ok(message) = serde_json::from_slice::<ControlMessage>(data) else {
-                ::log::warn!("swoop: malformed control message");
+                // Not a malformation: §5 shares this channel with the
+                // clipboard, so a payload the control codec refuses is the
+                // expected shape of a clip frame. `offer_to_features` still
+                // gets it.
+                ::log::debug!("swoop: a swoop-control payload is not a control message");
                 return;
             };
             let Some(viewer) = self.viewer.as_ref().map(|v| v.id.clone()) else {
@@ -1633,6 +1829,12 @@ mod host {
                 ::log::info!(
                     "swoop: the control gate has refused {} messages",
                     self.denials.count()
+                );
+            }
+            if self.outbox.refused() > 0 {
+                ::log::info!(
+                    "swoop: the feature outbox has refused {} records",
+                    self.outbox.refused()
                 );
             }
             let event = Event::Status {
@@ -2716,5 +2918,55 @@ mod tests {
         assert!(gate.set(false), "the departure pauses capture");
         assert!(!gate.set(false), "the exit has nothing left to pause");
         assert!(gate.set(true), "the next viewer resumes it");
+    }
+
+    #[test]
+    fn the_outbox_refuses_past_its_allowance_and_keeps_what_it_took() {
+        let now = Instant::now();
+        let mut out = Outbox::new(now);
+        assert!(out.send(Channel::SwoopControl, vec![0u8; OUTBOX_BURST_BYTES]));
+        assert!(
+            !out.send(Channel::SwoopControl, vec![0u8; 1]),
+            "the allowance is spent"
+        );
+        assert_eq!(out.refused(), 1);
+        let taken = out.take();
+        assert_eq!(taken.len(), 1, "nothing queued was dropped for the refusal");
+        assert_eq!(taken[0].channel, Channel::SwoopControl);
+        assert!(out.take().is_empty());
+    }
+
+    /// A record bigger than the burst could never be sent, so §5's largest —
+    /// a 16 KiB clipboard chunk, about 22 KiB base64 in json — has to fit.
+    #[test]
+    fn a_clipboard_chunk_fits_the_burst() {
+        let chunk = crate::signal::messages::channel::CLIPBOARD_CHUNK_MAX_BYTES as usize;
+        // base64 is 4 bytes per 3, plus json envelope.
+        assert!(chunk.div_ceil(3) * 4 + 512 < OUTBOX_BURST_BYTES);
+    }
+
+    #[test]
+    fn the_outbox_refills_at_its_rate_and_stops_at_the_burst() {
+        let start = Instant::now();
+        let mut out = Outbox::new(start);
+        assert!(out.send(Channel::SwoopControl, vec![0u8; OUTBOX_BURST_BYTES]));
+        let _ = out.take();
+
+        // A turn too short to earn a byte must not throw its remainder away:
+        // a hundred of them still add up to the rate.
+        for i in 1..=100u32 {
+            out.refill(start + Duration::from_micros(i as u64));
+        }
+        assert!(
+            out.send(Channel::SwoopControl, vec![0u8; 50]),
+            "100 us at the refill rate is about 52 bytes"
+        );
+
+        out.refill(start + Duration::from_secs(10));
+        assert!(out.send(Channel::SwoopControl, vec![0u8; OUTBOX_BURST_BYTES]));
+        assert!(
+            !out.send(Channel::SwoopControl, vec![0u8; 1]),
+            "ten idle seconds still leave only one burst"
+        );
     }
 }
