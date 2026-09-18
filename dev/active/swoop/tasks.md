@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 12/80 complete
+**Progress**: 14/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -102,7 +102,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 1: contracts and scaffolds
 
-- [ ] **Task 1.1: PROTOCOL.md + golden vectors** `[agent]`
+- [x] **Task 1.1: PROTOCOL.md + golden vectors** `[agent]`
   - Files: `agent/swoop/PROTOCOL.md`, `agent/swoop/testdata/protocol/index.json`, `agent/swoop/testdata/protocol/**` (JSON + binary vectors, including the five negative ones: a viewer JWT with no `fp`, a JWT expired against the time anchor, a JWT for the wrong machine, a frame chunk with a dangling reference, a version-mismatch handshake), `agent/swoop/testdata/keymap.json`
   - Do: Write the wire contract every later task is built against. Sources: `plan.md` (D2, D5, D8, D9, names
     registry), the G1 and threat-model memos in `dev/active/swoop/spikes/`,
@@ -125,7 +125,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `PROTOCOL.md` covers all eleven sections above; `node -e "JSON.parse(require('fs').readFileSync('agent/swoop/testdata/protocol/index.json','utf8'))"` succeeds and every file it names exists; every vector has an `expect` and a `reason`; the five negative vectors are present and marked `reject`; `keymap.json` parses and contains no duplicate `code` keys; no secret, token or key material appears in any committed vector (use obviously fake key material and say so in the file).
   - Depends on: 0.2 (G1 memo signed off), 0.5 (threat model memo)
 
-- [ ] **Task 1.2: Rust crate scaffold + core types** `[agent]`
+- [x] **Task 1.2: Rust crate scaffold + core types** `[agent]`
   - Files: `agent/swoop/Cargo.toml`, `agent/swoop/Cargo.lock`, `agent/swoop/.cargo/config.toml`, `agent/swoop/build.rs`, `agent/swoop/src/**`, `scripts/sync-versions.js`
   - Do: Create the standalone crate (`[workspace]` stanza) producing `owlette-swoop.exe`. Copy
     `[profile.release]` **and its comment** from `agent/host/Cargo.toml:40-58`, `.cargo/config.toml` verbatim
@@ -1056,3 +1056,49 @@ with that cell unproduced. every photon number. the ≥120 Hz row (the macOS cli
 configured (BWE on → 1015.6 ms p50 of pacer queue, GoogCC settling at 8.9 Mbps, with zero loss/PLI/NACK in
 getStats so nothing standard reveals it). arm B uses str0m too, so this lands on tasks 1.2, 3.8 and 4.7
 regardless. memo §13.4 carries the rest.
+
+### 2026-09-18 — **wave 1 complete.** 14/80.
+
+1.1 and 1.2 ran in parallel once G1 closed. gates verified here, not taken from the reports: `cargo clippy
+-- -D warnings` clean, `cargo test` 5 passed, `cargo build --release --locked` clean — all with cwd
+`agent/swoop`, which also proves the nested spike manifests do not break the product build. `version` prints
+3.3.5 matching `agent/VERSION`, `probe` emits json, `sync-versions.js` lists the crate, and the manifest has
+exactly one `^version = ` line so its first-match rewrite is safe. 39 golden vectors, 13 reject, 0 missing,
+0 lacking expect/reason. no real key material in `testdata/`; the two ed25519 seeds are the printable strings
+`swoop-golden-vector-test-key-001/-002`, real keypairs on purpose so signature verification can be exercised.
+`PROTOCOL.md` greps clean of install-tree material — 0.5's held content did not travel into the public spec.
+
+**decisions taken where the plan was silent** (1.1): lease renewal rides `swoop-control` as a fresh viewer
+jwt, verified with the §11 order plus "`fp` must equal the live dtls fingerprint" — no new route, one
+verification path; a missed renewal drops that viewer at exp+30s, not the session. bundle `ctl` is a session
+floor, not a grant. **five data channels, not six** — clipboard rides control, because str0m caps buffering
+at 128 KiB *across all channels*, so fewer channels is one pacing budget rather than five competing ones
+(same constant that made the 2 MB patch backfire in 0.2 §6). `K_session` **is** in the bundle: the streamer
+holds no long-lived credential and cannot derive it, so it arrives per-session over the agent's
+authenticated channel and is zeroized — 0.5's "never stored" is scoped to viewers, and §7 says so explicitly
+so nobody reads it as a violation. `streamerEpoch` is unix microseconds and the three frame timestamps are µs
+relative to it, so the browser never needs the host's QPC frequency.
+
+**corrections to the plan's own text**:
+- the jwt verification order in 1.1's brief ("signature → `kid` → …") **is not implementable** — the key
+  cannot be selected before `kid` is read. 0.5's order is used and §8 says why.
+- `fp_mismatch` cannot be a static golden vector; it is a comparison against a live offer's
+  `a=fingerprint:`. reassigned to task 2.10's unit test rather than dropped.
+- under arm B the binary frame header carries **no video** — it is a header-only record
+  (`payloadBytes = 0`) on a `swoop-meta` channel, joined to the rtp track by `rtpTimestamp90k`. fragment
+  index/count are retained for the deferred second video path and labelled as such.
+- **"only 1.2 and 10.1 edit the manifest" cannot fully hold.** no crate is pinned behind `encode-ffmpeg`,
+  `encode-vpl`, `encode-amf`, `encode-openh264` or `audio-opus`, because spike 6.7 and task 7.2 pick those
+  backends by hardware measurement and none is chosen yet — pinning one now would pin a dependency nothing
+  has established is used, which the global prefs forbid. the feature *names* exist; the task that picks a
+  backend adds its optional dep to the matching line. **amend 6.7 / 7.1 / 7.2's standing rules.**
+- the crate has a `[lib]` as well as the `[[bin]]`: task 2.10's `tests/protocol_vectors.rs` is an
+  integration test and cannot reach a bin-only crate.
+- `#[cfg(windows)]` gating is **by backend, not by module name** — traits and wire types stay portable so
+  wave 9 fills them in place. verified: the graph resolves for `x86_64-unknown-linux-gnu`.
+
+msrv 1.91.0, verified both directions (`+1.91.0` checks, `+1.90.0` refused by `moq-nvenc`). release binary
+320,512 bytes, versioninfo stamped, no `VCRUNTIME140` reference so `+crt-static` took. str0m's unusable
+pacer is noted beside its pin and is why `transport/pacer.rs` exists; it lands on 3.8 and 4.7.
+
+**next**: wave 2 (agent integration, server libraries, CI). no gate in the way.
