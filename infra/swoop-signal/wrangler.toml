@@ -1,0 +1,44 @@
+# swoop signaling worker. one durable object per machine, on the websocket
+# hibernation api, so an idle doorbell costs nothing.
+#
+# NO SECRETS IN THIS FILE, EVER — this repository is public. SWOOP_JWT_PUBLIC_KEY,
+# SWOOP_JWT_KID, SWOOP_JWT_PUBLIC_KEY_PREV, SWOOP_JWT_KID_PREV and
+# SWOOP_SIGNAL_RING_SECRET arrive through `wrangler secret put` (task 3.4 owns the
+# deploy workflow); locally they come from .dev.vars, which is gitignored.
+
+name = "swoop-signal"
+main = "src/index.ts"
+# ed25519 needs no compatibility flag at this date: workerd accepts the algorithm
+# identifier "Ed25519" outright (spike 0.4 §3.1, measured on workerd 1.20260917.1).
+compatibility_date = "2026-09-01"
+workers_dev = false
+
+# sqlite-backed durable objects: the only kind the free plan will create and the
+# default cloudflare recommends for new classes. the room stores a few bytes of
+# replay state and nothing else.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SignalRoom"]
+
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "SIGNAL_ROOM"
+class_name = "SignalRoom"
+
+# durable_objects is a non-inheritable key, so every environment repeats it.
+
+[env.dev]
+name = "swoop-signal-dev"
+
+[[env.dev.durable_objects.bindings]]
+name = "SIGNAL_ROOM"
+class_name = "SignalRoom"
+
+[env.prod]
+name = "swoop-signal-prod"
+
+[[env.prod.durable_objects.bindings]]
+name = "SIGNAL_ROOM"
+class_name = "SignalRoom"
