@@ -39,12 +39,18 @@
 //!   zero PLIs**, the stream falling a second further behind every three
 //!   seconds. `enable_bwe` seeds only the initial estimate; without
 //!   `Bwe::set_desired_bitrate` the probe controller has nothing to aim at.
-//! - **BWE on, desired bitrate set to 3x the encoder target** - 57 fps of 60,
-//!   still short, so the queue grew ~60 ms per second and the end-to-end
-//!   figure was ~1.2 s of pacer queue rather than anything about the video
-//!   path.
+//! - **BWE on, desired bitrate set to 3x the encoder target** - the
+//!   configuration this file ships. Stage 3 read the queue straight out of
+//!   `StreamTx::queue_info()` rather than inferring it: **pacer queue delay
+//!   p50 1015.6 ms, p95 1437.3 ms, max 1521.0 ms** over n = 4 803 snapshots,
+//!   with the queue holding 916 788 bytes / 861 packets at p50 and peaking at
+//!   1 633 528 bytes / 1 498 packets. End to end that run was 1165.9 ms p50
+//!   (n = 150), so the pacer is 87 % of it. GoogCC settled at **8.9 Mbps on
+//!   loopback** against a 20 Mbps encoder, 46 fps of 60 delivered - with zero
+//!   loss, zero PLIs, zero NACKs and zero freezes.
 //! - **BWE off (null pacer)** - the configuration every latency row here is
-//!   measured in.
+//!   measured in. Same instrument, same run length: **pacer queue delay 0.0 ms
+//!   at every percentile** (n = 3 666).
 //!
 //! This is a finding about str0m, not a workaround hiding one: a bake-off row
 //! that is 95 % pacer queue measures the pacer. Congestion control is what the
@@ -73,7 +79,8 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig}
 
 use crate::json::J;
 use crate::nal::Codec;
-use crate::sink::{Arm, EncodedAu, Result, SinkEvent, SinkState, VideoSink};
+use crate::sink::{ice_ufrag, Arm, EncodedAu, Reoffer, Result, SinkEvent, SinkState, VideoSink};
+use crate::stats::summarize;
 
 /// Chrome's low-latency render path needs `min = 0` and `max ≤ 500 ms`; the
 /// wire granularity is 10 ms. 100 ms is the middle of the safe range and is
@@ -112,7 +119,48 @@ pub struct RtpTrackSink {
     meta_dropped: u64,
     state: SinkState,
     buf: Vec<u8>,
+    /// str0m's own view of its send queue, sampled from
+    /// [`str0m::media::StreamTxQueueInfo`] once per recomputation.
+    ///
+    /// Stage 1 and 2 inferred the pacer's cost from the browser's
+    /// `pushed → arrival` figure, which is the queue plus the network. This is
+    /// the queue itself, straight out of the library, so "the pacer, not the
+    /// video path, dominated every figure" is a reported number rather than a
+    /// subtraction. `first_unsent` is the age of the oldest packet still
+    /// waiting, which is the queue expressed as the latency it adds.
+    pacer_queue_bytes: Vec<f64>,
+    pacer_queue_packets: Vec<f64>,
+    pacer_queue_delay_ms: Vec<f64>,
+    /// `created_at` of the last snapshot taken. str0m recomputes the state on
+    /// its own schedule and `poll` runs far more often than that, so without
+    /// this the same snapshot is counted hundreds of times and the
+    /// distribution is the poll loop's, not the queue's.
+    last_queue_sample: Option<Instant>,
+    /// Samples past [`MAX_PACER_SAMPLES`]. A bake-off run is a minute; an
+    /// unbounded vector on a host process that may be left running is not.
+    pacer_samples_skipped: u64,
+    /// Where the HTTP thread leaves an ICE restart for this thread to answer.
+    reoffer: Reoffer,
+    /// Every remote ufrag this sink has been offered, and every local ufrag it
+    /// has answered with, in order. plan.md D13 promotes a relayed session to
+    /// a direct one by ICE restart, so "str0m accepts a remote-initiated
+    /// restart and mints new local credentials" is a D4 fact the memo has to
+    /// carry a measurement for, not an assertion.
+    offer_ufrags: Vec<String>,
+    answer_ufrags: Vec<String>,
+    reoffers_failed: u64,
 }
+
+/// A poisoned mailbox is not a reason to stop measuring: the panic that
+/// poisoned it is already reported, and the slot holds one SDP string.
+fn lock(slot: &Reoffer) -> std::sync::MutexGuard<'_, crate::sink::ReofferSlot> {
+    slot.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// How many pacer-queue snapshots to keep. str0m recomputes the queue state
+/// once per `poll_output` cycle, so a 60 s run produces a few tens of
+/// thousands; this is the bound past which the run is measuring nothing new.
+const MAX_PACER_SAMPLES: usize = 200_000;
 
 impl RtpTrackSink {
     /// Bind to `bind_addr` and prepare an `Rtc` for `codec`.
@@ -126,6 +174,7 @@ impl RtpTrackSink {
         codec: Codec,
         encoder_bps: u64,
         bwe: bool,
+        reoffer: Reoffer,
     ) -> Result<Self> {
         let socket =
             UdpSocket::bind(bind_addr).map_err(|e| format!("bind {bind_addr} for UDP: {e}"))?;
@@ -173,6 +222,15 @@ impl RtpTrackSink {
             meta_dropped: 0,
             state: SinkState::Negotiating,
             buf: vec![0u8; 2048],
+            pacer_queue_bytes: Vec::new(),
+            pacer_queue_packets: Vec::new(),
+            pacer_queue_delay_ms: Vec::new(),
+            last_queue_sample: None,
+            pacer_samples_skipped: 0,
+            reoffer,
+            offer_ufrags: Vec::new(),
+            answer_ufrags: Vec::new(),
+            reoffers_failed: 0,
         })
     }
 
@@ -223,6 +281,87 @@ impl RtpTrackSink {
                 }
             }
         }
+    }
+
+    /// Answer one browser offer, first or subsequent, recording both ufrags.
+    ///
+    /// The local host candidate is added once. On a re-offer str0m keeps its
+    /// local candidates through the restart (`change/sdp.rs:745` takes
+    /// `keep_local_candidates = true` for a remote-initiated one), and
+    /// `add_local_candidate` would reject the duplicate.
+    fn negotiate(&mut self, offer: &str, first: bool) -> Result<String> {
+        let parsed = SdpOffer::from_sdp_string(offer).map_err(|e| format!("parse offer: {e}"))?;
+        if first {
+            let candidate = Candidate::host(self.local_addr, "udp")
+                .map_err(|e| format!("host candidate for {}: {e}", self.local_addr))?;
+            if self.rtc.add_local_candidate(candidate).is_none() {
+                return Err(format!(
+                    "str0m rejected the host candidate for {}",
+                    self.local_addr
+                ));
+            }
+        }
+        let answer = self
+            .rtc
+            .sdp_api()
+            .accept_offer(parsed)
+            .map_err(|e| format!("accept_offer: {e}"))?
+            .to_sdp_string();
+        if let Some(u) = ice_ufrag(offer) {
+            self.offer_ufrags.push(u);
+        }
+        if let Some(u) = ice_ufrag(&answer) {
+            self.answer_ufrags.push(u);
+        }
+        Ok(answer)
+    }
+
+    /// Drain an ICE restart parked by the HTTP thread, on the thread that owns
+    /// the `Rtc`. See [`crate::sink::Reoffer`].
+    fn handle_reoffer(&mut self) {
+        let request = lock(&self.reoffer).request.take();
+        let Some(offer) = request else { return };
+        let result = self.negotiate(&offer, false);
+        if result.is_err() {
+            self.reoffers_failed += 1;
+        }
+        lock(&self.reoffer).answer = Some(result);
+    }
+
+    /// Take one snapshot of str0m's send queue, if it has computed a new one.
+    ///
+    /// This is the pacer measured directly rather than inferred. With the null
+    /// pacer (BWE off) the queue is expected to be empty every time; with the
+    /// leaky-bucket pacer (BWE on) whatever stands here is exactly the latency
+    /// the pacer is adding, and it is the number the congestion-control row of
+    /// the memo is written from.
+    fn sample_pacer_queue(&mut self) {
+        let Some(mid) = self.mid else { return };
+        // `direct_api()` returns a guard by value; bound to a local so the
+        // `StreamTx` borrowed out of it outlives the statement.
+        let mut api = self.rtc.direct_api();
+        let Some(stream) = api.stream_tx_by_mid(mid, None) else {
+            return;
+        };
+        let Some(info) = stream.queue_info() else { return };
+        let created = info.created_at();
+        if self.last_queue_sample == Some(created) {
+            return;
+        }
+        let bytes = info.byte_size() as f64;
+        let packets = info.packet_count() as f64;
+        let delay_ms = info
+            .first_unsent()
+            .map(|t| created.saturating_duration_since(t).as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+        self.last_queue_sample = Some(created);
+        if self.pacer_queue_bytes.len() >= MAX_PACER_SAMPLES {
+            self.pacer_samples_skipped += 1;
+            return;
+        }
+        self.pacer_queue_bytes.push(bytes);
+        self.pacer_queue_packets.push(packets);
+        self.pacer_queue_delay_ms.push(delay_ms);
     }
 
     fn handle_event(&mut self, event: Event, out: &mut Vec<SinkEvent>) {
@@ -311,21 +450,7 @@ impl VideoSink for RtpTrackSink {
     }
 
     fn accept_offer(&mut self, offer: &str) -> Result<String> {
-        let offer = SdpOffer::from_sdp_string(offer).map_err(|e| format!("parse offer: {e}"))?;
-        let candidate = Candidate::host(self.local_addr, "udp")
-            .map_err(|e| format!("host candidate for {}: {e}", self.local_addr))?;
-        if self.rtc.add_local_candidate(candidate).is_none() {
-            return Err(format!(
-                "str0m rejected the host candidate for {}",
-                self.local_addr
-            ));
-        }
-        let answer = self
-            .rtc
-            .sdp_api()
-            .accept_offer(offer)
-            .map_err(|e| format!("accept_offer: {e}"))?;
-        Ok(answer.to_sdp_string())
+        self.negotiate(offer, true)
     }
 
     fn push_au(&mut self, au: &EncodedAu<'_>) -> Result<()> {
@@ -381,6 +506,8 @@ impl VideoSink for RtpTrackSink {
 
     fn poll(&mut self, now: Instant, budget: Duration, events: &mut Vec<SinkEvent>) -> Result<()> {
         self.drain_meta();
+        self.handle_reoffer();
+        self.sample_pacer_queue();
 
         let deadline = loop {
             match self.rtc.poll_output().map_err(|e| format!("poll_output: {e}"))? {
@@ -457,6 +584,35 @@ impl VideoSink for RtpTrackSink {
             ("metaDroppedQueueFull", J::Uint(self.meta_dropped)),
             ("metaPending", J::Uint(self.pending_meta.len() as u64)),
             ("metaChannelOpen", J::Bool(self.meta_channel.is_some())),
+            ("pacer", J::s(if self.bwe { "leaky-bucket" } else { "null" })),
+            (
+                "pacerQueueBytes",
+                summarize(&self.pacer_queue_bytes).to_json(),
+            ),
+            (
+                "pacerQueuePackets",
+                summarize(&self.pacer_queue_packets).to_json(),
+            ),
+            (
+                "pacerQueueDelayMs",
+                summarize(&self.pacer_queue_delay_ms).to_json(),
+            ),
+            ("pacerSamplesSkipped", J::Uint(self.pacer_samples_skipped)),
+            (
+                "iceOfferUfrags",
+                J::Arr(self.offer_ufrags.iter().map(|u| J::s(u.as_str())).collect()),
+            ),
+            (
+                "iceAnswerUfrags",
+                J::Arr(self.answer_ufrags.iter().map(|u| J::s(u.as_str())).collect()),
+            ),
+            // One negotiation is the initial offer; everything after it is a
+            // restart this sink answered.
+            (
+                "iceRestartsAccepted",
+                J::Uint(self.answer_ufrags.len().saturating_sub(1) as u64),
+            ),
+            ("iceRestartsFailed", J::Uint(self.reoffers_failed)),
         ])
     }
 }
@@ -503,14 +659,34 @@ mod tests {
     #[test]
     #[ignore]
     fn binds_and_reports_a_concrete_local_address() {
-        let sink =
-            RtpTrackSink::bind("127.0.0.1:0".parse().unwrap(), Codec::H264, 20_000_000, false)
-                .expect("bind");
+        let sink = RtpTrackSink::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            Codec::H264,
+            20_000_000,
+            false,
+            Reoffer::default(),
+        )
+        .expect("bind");
         assert!(sink.local_addr().port() > 0);
         assert_eq!(sink.state(), SinkState::Negotiating);
         assert_eq!(sink.arm(), Arm::RtpTrack);
         let cfg = sink.client_config().render();
         assert!(cfg.contains("\"arm\": \"b\""), "{cfg}");
         assert!(cfg.contains("\"max\": 100"), "{cfg}");
+        // The pacer row exists before a peer does, and says which pacer this
+        // run is measuring. A missing row would read as "not measured" in the
+        // memo; an empty one reads as "measured, and the queue stayed empty".
+        let diag = sink.diagnostics().render();
+        assert!(diag.contains("\"pacer\": \"null\""), "{diag}");
+        assert!(diag.contains("\"pacerQueueDelayMs\""), "{diag}");
+    }
+
+    #[test]
+    fn the_pacer_sample_bound_is_larger_than_a_bake_off_run() {
+        // str0m recomputes the queue state about once per `poll_output` cycle
+        // and `pipeline.rs` polls on a 1 ms budget, so a 60 s run is on the
+        // order of 60 000 snapshots. The bound only exists so a host left
+        // running overnight cannot grow three unbounded vectors.
+        const { assert!(MAX_PACER_SAMPLES > 60_000) };
     }
 }

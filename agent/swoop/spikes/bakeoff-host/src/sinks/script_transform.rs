@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use crate::json::J;
 use crate::nal::Codec;
-use crate::sink::{Arm, EncodedAu, Result, SinkEvent, SinkState, VideoSink};
+use crate::sink::{Arm, EncodedAu, Reoffer, Result, SinkEvent, SinkState, VideoSink};
 use crate::sinks::rtp_track::{
     RtpTrackSink, META_CHANNEL_LABEL, PLAYOUT_DELAY_MAX_MS, PLAYOUT_DELAY_MIN_MS,
 };
@@ -57,9 +57,10 @@ impl ScriptTransformSink {
         codec: Codec,
         encoder_bps: u64,
         bwe: bool,
+        reoffer: Reoffer,
     ) -> Result<Self> {
         Ok(Self {
-            inner: RtpTrackSink::bind(bind_addr, codec, encoder_bps, bwe)?,
+            inner: RtpTrackSink::bind(bind_addr, codec, encoder_bps, bwe, reoffer)?,
             codec,
             bwe,
         })
@@ -131,8 +132,10 @@ mod tests {
     #[ignore]
     fn it_is_arm_b_with_two_methods_overridden() {
         let addr = "127.0.0.1:0".parse().unwrap();
-        let b = RtpTrackSink::bind(addr, Codec::H264, 20_000_000, false).expect("arm b");
-        let c = ScriptTransformSink::bind(addr, Codec::H264, 20_000_000, false).expect("arm c");
+        let b = RtpTrackSink::bind(addr, Codec::H264, 20_000_000, false, Reoffer::default())
+            .expect("arm b");
+        let c = ScriptTransformSink::bind(addr, Codec::H264, 20_000_000, false, Reoffer::default())
+            .expect("arm c");
 
         assert_eq!(c.arm(), Arm::RtpScriptTransform);
         assert_eq!(b.arm(), Arm::RtpTrack);

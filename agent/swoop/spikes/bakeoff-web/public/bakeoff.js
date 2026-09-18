@@ -45,6 +45,12 @@ const CLOCK_N = Number(params.get('clockn') ?? 400);
 const AUTORUN = params.get('autorun') !== '0';
 const POST = params.get('post') !== '0';
 const LABEL = params.get('label') ?? '';
+// After the series is complete, perform an ICE restart on the live peer and
+// measure how long the stream takes to come back. plan.md D13 promotes a
+// relayed session to a direct one this way, and task 0.2's done-when asks for
+// "ICE restart works" as a measurement rather than as an assertion. Off by
+// default so it can never perturb a latency row.
+const ICE_RESTART = params.get('icerestart') === '1';
 
 const out = document.getElementById('out');
 const stateEl = document.getElementById('state');
@@ -262,6 +268,88 @@ function extmapLines(sdp) {
   return (sdp ?? '').split(/\r?\n/).filter((l) => l.startsWith('a=extmap:'));
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Poll rather than listen: after an ICE restart `iceGatheringState` has to
+// leave `complete` before it can re-enter it, and an event listener attached at
+// the wrong moment either fires for the previous gather or never fires at all.
+// Bounded, because a gather that never completes is a result too.
+async function waitForGathering(pc, timeoutMs = 3000) {
+  const deadline = performance.now() + timeoutMs;
+  while (pc.iceGatheringState !== 'complete' && performance.now() < deadline) {
+    await sleep(10);
+  }
+  return pc.iceGatheringState === 'complete';
+}
+
+function ufragOf(sdp) {
+  const m = /^a=ice-ufrag:(.+)$/m.exec(sdp ?? '');
+  return m ? m[1].trim() : null;
+}
+
+// ------------------------------------------------------------- ICE restart
+
+// An ICE restart is *defined* by new ICE credentials on both sides, so the four
+// ufrags either side of it are the evidence that one happened rather than a
+// no-op renegotiation. The recovery figure is measured from `restartIce()` to
+// the first frame that arrives after it, which is what a viewer would feel.
+async function iceRestart(pc, frames, collect) {
+  const before = await collect(pc);
+  const framesBefore = frames.length;
+  const record = {
+    performed: true,
+    localUfragBefore: ufragOf(pc.localDescription?.sdp),
+    remoteUfragBefore: ufragOf(pc.remoteDescription?.sdp),
+    selectedPairIdBefore: before.transport?.selectedCandidatePairId ?? null,
+    localCandidateBefore: before.localCandidate ?? null,
+    iceStateBefore: pc.iceConnectionState,
+    framesBefore,
+  };
+  const t0 = performance.now();
+  pc.restartIce();
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  // Leaving `complete` first: see waitForGathering.
+  const leaveBy = performance.now() + 500;
+  while (pc.iceGatheringState === 'complete' && performance.now() < leaveBy) await sleep(5);
+  record.gatheringCompleted = await waitForGathering(pc);
+  record.offerSentMs = +(performance.now() - t0).toFixed(2);
+
+  const res = await fetch(`${HOST}/reoffer`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/sdp' },
+    body: pc.localDescription.sdp,
+  });
+  const body = await res.json();
+  if (body.error) throw new Error(`host refused the re-offer: ${body.error}`);
+  await pc.setRemoteDescription({ type: 'answer', sdp: body.answer });
+  record.answerAppliedMs = +(performance.now() - t0).toFixed(2);
+  record.localUfragAfter = ufragOf(pc.localDescription?.sdp);
+  record.remoteUfragAfter = ufragOf(body.answer);
+  record.credentialsChanged =
+    record.localUfragAfter !== record.localUfragBefore &&
+    record.remoteUfragAfter !== record.remoteUfragBefore;
+
+  // The number that matters: video back on the screen.
+  const deadline = performance.now() + 10000;
+  while (frames.length === framesBefore && performance.now() < deadline) await sleep(2);
+  record.recoveredFrames = frames.length > framesBefore;
+  record.firstFrameAfterMs = record.recoveredFrames
+    ? +(performance.now() - t0).toFixed(2)
+    : null;
+
+  // Let ICE settle before reading the pair back, or the sample lands mid-check.
+  await sleep(500);
+  const after = await collect(pc);
+  record.iceStateAfter = pc.iceConnectionState;
+  record.selectedPairIdAfter = after.transport?.selectedCandidatePairId ?? null;
+  record.localCandidateAfter = after.localCandidate ?? null;
+  record.framesAfter = frames.length;
+  record.pliCountAfter = after.inboundVideo?.pliCount ?? null;
+  record.freezeCountAfter = after.inboundVideo?.freezeCount ?? null;
+  return record;
+}
+
 async function connect(receiver, clientConfig) {
   const pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle' });
   receiver.prepare(pc, clientConfig);
@@ -270,17 +358,7 @@ async function connect(receiver, clientConfig) {
   await pc.setLocalDescription(offer);
   // Non-trickle: wait for gathering to finish, then post one SDP. The host
   // answers with every candidate it has, for the same reason.
-  await new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') return resolve();
-    const check = () => {
-      if (pc.iceGatheringState === 'complete') {
-        pc.removeEventListener('icegatheringstatechange', check);
-        resolve();
-      }
-    };
-    pc.addEventListener('icegatheringstatechange', check);
-    setTimeout(resolve, 3000);
-  });
+  await waitForGathering(pc);
 
   const res = await fetch(`${HOST}/offer`, {
     method: 'POST',
@@ -391,6 +469,22 @@ async function run() {
     stillNothing.forEach(clearTimeout);
   }
 
+  let iceRestartResult = { performed: false };
+  if (ICE_RESTART) {
+    say('series complete — performing an ICE restart on the live peer');
+    try {
+      iceRestartResult = await iceRestart(pc, frames, collectStats);
+      say(
+        `ICE restart: credentials changed ${iceRestartResult.credentialsChanged}, ` +
+          `first frame back ${iceRestartResult.firstFrameAfterMs} ms, ` +
+          `state ${iceRestartResult.iceStateAfter}`,
+      );
+    } catch (err) {
+      iceRestartResult = { performed: true, error: String(err.message ?? err) };
+      say(`ICE restart FAILED: ${iceRestartResult.error}`);
+    }
+  }
+
   const stats = await collectStats(pc);
   const rafResult = raf.stop();
   receiver.stop();
@@ -412,6 +506,7 @@ async function run() {
     stats,
     hostReport,
     hostReply,
+    iceRestartResult,
     negotiated,
     playoutDelayNegotiated,
     receiverDiagnostics: receiver.diagnostics(),
@@ -594,6 +689,7 @@ function build(ctx) {
         ' one period per refresh; these frames are excluded from every series above',
     },
     getStats: ctx.stats,
+    iceRestart: ctx.iceRestartResult,
     receiver: ctx.receiverDiagnostics,
     host: ctx.hostReport,
     frames: measured.map((f) => ({

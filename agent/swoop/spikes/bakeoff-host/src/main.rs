@@ -369,6 +369,10 @@ fn serve(args: Args) -> Result<(), String> {
         encoder_bps: args.bitrate_bps as u64,
         bwe: args.bwe,
         dc_load_bps: args.dc_load_bps,
+        // One slot shared by the HTTP thread and whichever sink is live, so a
+        // browser ICE restart reaches the `Rtc` without `pipeline.rs` knowing
+        // it happened.
+        reoffer: crate::sink::Reoffer::default(),
         sink_tx,
         report: Arc::clone(&published),
     });

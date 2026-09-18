@@ -68,7 +68,7 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig}
 
 use crate::json::J;
 use crate::nal::{self, Codec};
-use crate::sink::{Arm, EncodedAu, Result, SinkEvent, SinkState, VideoSink};
+use crate::sink::{ice_ufrag, Arm, EncodedAu, Reoffer, Result, SinkEvent, SinkState, VideoSink};
 
 /// Label of the channel the browser opens for the video. The browser also
 /// chooses its reliability mode; this arm only writes to it.
@@ -163,10 +163,21 @@ pub struct DataChannelSink {
     write_errors: u64,
     max_buffered_bytes: usize,
     idr_requests: u64,
+    /// Where the HTTP thread leaves an ICE restart for this thread to answer.
+    /// See [`crate::sink::Reoffer`]; the mechanism is arm B's, verbatim.
+    reoffer: Reoffer,
+    offer_ufrags: Vec<String>,
+    answer_ufrags: Vec<String>,
+    reoffers_failed: u64,
 }
 
 impl DataChannelSink {
-    pub fn bind(bind_addr: SocketAddr, codec: Codec, load_bps: u64) -> Result<Self> {
+    pub fn bind(
+        bind_addr: SocketAddr,
+        codec: Codec,
+        load_bps: u64,
+        reoffer: Reoffer,
+    ) -> Result<Self> {
         let socket =
             UdpSocket::bind(bind_addr).map_err(|e| format!("bind {bind_addr} for UDP: {e}"))?;
         let local_addr = socket.local_addr().map_err(|e| format!("local_addr: {e}"))?;
@@ -204,6 +215,10 @@ impl DataChannelSink {
             write_errors: 0,
             max_buffered_bytes: 0,
             idr_requests: 0,
+            reoffer,
+            offer_ufrags: Vec::new(),
+            answer_ufrags: Vec::new(),
+            reoffers_failed: 0,
         })
     }
 
@@ -214,6 +229,55 @@ impl DataChannelSink {
     /// Everything the browser needs before the first fragment: which codec, and
     /// the exact `VideoDecoder` codec string read out of the bitstream. Sent
     /// once, immediately ahead of the first IRAP's fragments.
+    /// Answer one browser offer, first or subsequent, recording both ufrags.
+    /// Arm B's [`crate::sinks::rtp_track::RtpTrackSink::negotiate`] with the
+    /// same reasoning: the local candidate is added once, and str0m keeps it
+    /// across a remote-initiated ICE restart.
+    fn negotiate(&mut self, offer: &str, first: bool) -> Result<String> {
+        let parsed = SdpOffer::from_sdp_string(offer).map_err(|e| format!("parse offer: {e}"))?;
+        if first {
+            let candidate = Candidate::host(self.local_addr, "udp")
+                .map_err(|e| format!("host candidate for {}: {e}", self.local_addr))?;
+            if self.rtc.add_local_candidate(candidate).is_none() {
+                return Err(format!(
+                    "str0m rejected the host candidate for {}",
+                    self.local_addr
+                ));
+            }
+        }
+        let answer = self
+            .rtc
+            .sdp_api()
+            .accept_offer(parsed)
+            .map_err(|e| format!("accept_offer: {e}"))?
+            .to_sdp_string();
+        if let Some(u) = ice_ufrag(offer) {
+            self.offer_ufrags.push(u);
+        }
+        if let Some(u) = ice_ufrag(&answer) {
+            self.answer_ufrags.push(u);
+        }
+        Ok(answer)
+    }
+
+    /// Drain an ICE restart parked by the HTTP thread, on the thread that owns
+    /// the `Rtc`.
+    fn handle_reoffer(&mut self) {
+        let request = {
+            let mut slot = self.reoffer.lock().unwrap_or_else(|e| e.into_inner());
+            slot.request.take()
+        };
+        let Some(offer) = request else { return };
+        let result = self.negotiate(&offer, false);
+        if result.is_err() {
+            self.reoffers_failed += 1;
+        }
+        self.reoffer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .answer = Some(result);
+    }
+
     fn control_record(&self) -> String {
         format!(
             "{{\"type\":\"config\",\"codec\":\"{}\",\"codecString\":{},\"fragmentBytes\":{},\
@@ -544,21 +608,7 @@ impl VideoSink for DataChannelSink {
     }
 
     fn accept_offer(&mut self, offer: &str) -> Result<String> {
-        let offer = SdpOffer::from_sdp_string(offer).map_err(|e| format!("parse offer: {e}"))?;
-        let candidate = Candidate::host(self.local_addr, "udp")
-            .map_err(|e| format!("host candidate for {}: {e}", self.local_addr))?;
-        if self.rtc.add_local_candidate(candidate).is_none() {
-            return Err(format!(
-                "str0m rejected the host candidate for {}",
-                self.local_addr
-            ));
-        }
-        let answer = self
-            .rtc
-            .sdp_api()
-            .accept_offer(offer)
-            .map_err(|e| format!("accept_offer: {e}"))?;
-        Ok(answer.to_sdp_string())
+        self.negotiate(offer, true)
     }
 
     fn push_au(&mut self, au: &EncodedAu<'_>) -> Result<()> {
@@ -586,6 +636,7 @@ impl VideoSink for DataChannelSink {
 
     fn poll(&mut self, now: Instant, budget: Duration, events: &mut Vec<SinkEvent>) -> Result<()> {
         self.drain(now);
+        self.handle_reoffer();
 
         let deadline = loop {
             match self
@@ -672,6 +723,19 @@ impl VideoSink for DataChannelSink {
             ("syntheticLoadBps", J::Uint(self.load_bps)),
             ("paddingMessagesWritten", J::Uint(self.padding_messages)),
             ("paddingBytesWritten", J::Uint(self.padding_bytes)),
+            (
+                "iceOfferUfrags",
+                J::Arr(self.offer_ufrags.iter().map(|u| J::s(u.as_str())).collect()),
+            ),
+            (
+                "iceAnswerUfrags",
+                J::Arr(self.answer_ufrags.iter().map(|u| J::s(u.as_str())).collect()),
+            ),
+            (
+                "iceRestartsAccepted",
+                J::Uint(self.answer_ufrags.len().saturating_sub(1) as u64),
+            ),
+            ("iceRestartsFailed", J::Uint(self.reoffers_failed)),
             // review-1 F1's criterion. Zero in a 60 s 50 Mbps run is the pass.
             ("writeRefusalsOkFalse", J::Uint(self.write_refusals)),
             ("pollsWithRefusal", J::Uint(self.polls_with_refusal)),
@@ -860,8 +924,13 @@ mod tests {
     #[test]
     #[ignore]
     fn binds_and_describes_itself_as_arm_a() {
-        let sink =
-            DataChannelSink::bind("127.0.0.1:0".parse().unwrap(), Codec::H264, 0).expect("bind");
+        let sink = DataChannelSink::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            Codec::H264,
+            0,
+            crate::sink::Reoffer::default(),
+        )
+        .expect("bind");
         assert!(sink.local_addr().port() > 0);
         assert_eq!(sink.arm(), Arm::DataChannel);
         assert_eq!(sink.state(), SinkState::Negotiating);

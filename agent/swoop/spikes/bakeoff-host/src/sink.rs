@@ -47,12 +47,45 @@
 //! duplication handle, which is what lets stage 2 add two arms without touching
 //! `capture.rs`, `nvenc.rs` or `pipeline.rs`.
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::json::J;
 use crate::nal::Codec;
 
 pub type Result<T> = std::result::Result<T, String>;
+
+/// The one-slot mailbox an **ICE restart** travels through.
+///
+/// `pipeline.rs` owns the sink and drives it from one thread, and the HTTP
+/// thread is a different one, so a browser re-offer cannot be handed to a live
+/// sink by calling it. Both ends hold this instead: `httpd` parks the offer in
+/// `request` and waits for `answer`; the sink drains it inside its own
+/// `poll`, on the thread that owns the `Rtc`. Nothing in `pipeline.rs` changes,
+/// which is the same constraint that shaped the rest of this seam.
+///
+/// One slot, not a queue: an ICE restart is a renegotiation, and a second one
+/// before the first is answered is a bug in the page, not a backlog to absorb.
+pub type Reoffer = Arc<Mutex<ReofferSlot>>;
+
+#[derive(Default)]
+pub struct ReofferSlot {
+    /// An SDP offer from the browser on an already-negotiated peer.
+    pub request: Option<String>,
+    /// The SDP answer, or why there is not one.
+    pub answer: Option<std::result::Result<String, String>>,
+}
+
+/// The `a=ice-ufrag:` value of an SDP.
+///
+/// An ICE restart is *defined* by new ICE credentials, so the pair of ufrags
+/// either side of one is the evidence that it happened. Reading it out of the
+/// SDP keeps that evidence in the run's JSON instead of in a log line.
+pub fn ice_ufrag(sdp: &str) -> Option<String> {
+    sdp.lines()
+        .find_map(|l| l.trim().strip_prefix("a=ice-ufrag:"))
+        .map(|v| v.trim().to_string())
+}
 
 /// The three video paths of plan.md D3. The spelling here is the spelling in
 /// every run's JSON, in the page's `?arm=` parameter and in the G1 memo.
@@ -249,6 +282,13 @@ mod tests {
             assert_eq!(Arm::parse(s), Some(arm));
         }
         assert_eq!(Arm::parse("d"), None);
+    }
+
+    #[test]
+    fn the_ufrag_is_read_out_of_the_session_level_line() {
+        let sdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\na=ice-ufrag:AbC9\r\na=ice-pwd:xyz\r\n";
+        assert_eq!(ice_ufrag(sdp).as_deref(), Some("AbC9"));
+        assert_eq!(ice_ufrag("v=0\r\n"), None);
     }
 
     #[test]

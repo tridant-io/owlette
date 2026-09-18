@@ -20,7 +20,14 @@
 //! | `GET /health` | liveness plus the QPC frequency |
 //! | `GET /qpc` | the four-timestamp clock exchange |
 //! | `POST /offer` | body is the browser's SDP offer; answers with JSON |
+//! | `POST /reoffer` | an **ICE restart**: a second offer on a live peer |
 //! | `GET /hostreport` | the host half of the run's JSON |
+//!
+//! `/reoffer` is the one route that cannot answer on this thread. The sink
+//! lives on `pipeline.rs`'s thread and is not `Sync`, so the offer is parked in
+//! a [`Reoffer`] slot, the sink drains it inside its own `poll`, and this
+//! thread waits for the answer to appear. That keeps `pipeline.rs` untouched,
+//! which is the constraint the whole seam was built under.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -29,7 +36,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::clock::{qpc, qpf, ticks_to_ms};
 use crate::json::J;
-use crate::sink::{Arm, VideoSink};
+use crate::sink::{Arm, Reoffer, VideoSink};
 
 /// Everything the HTTP thread needs from the rest of the process.
 pub struct Signaling {
@@ -51,10 +58,18 @@ pub struct Signaling {
     /// [`crate::sinks::data_channel::DataChannelSink::bind`].
     pub dc_load_bps: u64,
     pub sink_tx: SyncSender<Box<dyn VideoSink + Send>>,
+    /// Shared with whichever sink is live: see the module doc and
+    /// [`crate::sink::Reoffer`].
+    pub reoffer: Reoffer,
     /// The host half of the run report, refreshed by the capture and pipeline
     /// threads. `GET /hostreport` renders whatever is in it at the time.
     pub report: Arc<Mutex<J>>,
 }
+
+/// How long `/reoffer` waits for the sink thread. Two seconds is plan.md D11's
+/// kill-switch budget and is two thousand poll cycles: past it there is no live
+/// peer to answer.
+const REOFFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Bind and serve until the process exits. Returns the bound port so `:0` can
 /// be used.
@@ -148,6 +163,13 @@ fn serve_connection(stream: TcpStream, signaling: Arc<Signaling>) {
                     ticks_to_ms(t2, freq)
                 ))
             }
+            ("POST", "/reoffer") => match handle_reoffer(&signaling, &body) {
+                Ok(json) => ok_json(json),
+                Err(e) => {
+                    eprintln!("re-offer rejected: {e}");
+                    ok_json(format!("{{\"error\":{}}}", J::s(e).render()))
+                }
+            },
             ("POST", "/offer") => match handle_offer(&signaling, &body) {
                 Ok(json) => ok_json(json),
                 Err(e) => {
@@ -189,6 +211,7 @@ fn handle_offer(signaling: &Signaling, offer: &str) -> Result<String, String> {
                     signaling.udp_bind,
                     signaling.codec,
                     signaling.dc_load_bps,
+                    Arc::clone(&signaling.reoffer),
                 )?;
                 let answer = sink.accept_offer(offer)?;
                 let client = sink.client_config().render();
@@ -201,6 +224,7 @@ fn handle_offer(signaling: &Signaling, offer: &str) -> Result<String, String> {
                     signaling.codec,
                     signaling.encoder_bps,
                     signaling.bwe,
+                    Arc::clone(&signaling.reoffer),
                 )?;
                 let answer = sink.accept_offer(offer)?;
                 let client = sink.client_config().render();
@@ -213,6 +237,7 @@ fn handle_offer(signaling: &Signaling, offer: &str) -> Result<String, String> {
                     signaling.codec,
                     signaling.encoder_bps,
                     signaling.bwe,
+                    Arc::clone(&signaling.reoffer),
                 )?;
                 let answer = sink.accept_offer(offer)?;
                 let client = sink.client_config().render();
@@ -230,6 +255,47 @@ fn handle_offer(signaling: &Signaling, offer: &str) -> Result<String, String> {
         J::s(udp.to_string()).render(),
         qpf()
     ))
+}
+
+/// Hand an ICE restart to the live sink and wait for its answer.
+///
+/// The wait is bounded: `pipeline.rs` polls the sink on a 1 ms budget, so an
+/// answer that has not appeared in [`REOFFER_TIMEOUT`] means there is no live
+/// sink, not a slow one. A timeout clears the request so a stale offer cannot
+/// be answered minutes later by the next peer.
+fn handle_reoffer(signaling: &Signaling, offer: &str) -> Result<String, String> {
+    if offer.trim().is_empty() {
+        return Err("empty re-offer body".into());
+    }
+    {
+        let mut slot = signaling
+            .reoffer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if slot.request.is_some() {
+            return Err("a re-offer is already in flight".into());
+        }
+        slot.answer = None;
+        slot.request = Some(offer.to_string());
+    }
+    let deadline = std::time::Instant::now() + REOFFER_TIMEOUT;
+    loop {
+        {
+            let mut slot = signaling
+                .reoffer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(answer) = slot.answer.take() {
+                let answer = answer?;
+                return Ok(format!("{{\"answer\":{}}}", J::s(answer).render()));
+            }
+            if std::time::Instant::now() >= deadline {
+                slot.request = None;
+                return Err("no live peer answered the re-offer".into());
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 fn ok_json(body: String) -> String {
