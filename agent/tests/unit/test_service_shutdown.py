@@ -143,6 +143,11 @@ def make_service(firebase_client=None):
     service._last_status_write_time = 0.0
     service._status_writes = []
     service._write_service_status = lambda running=True: service._status_writes.append(running)
+    # graceful_shutdown ends swoop on its way out; these are the three
+    # attributes __init__ gives _stop_swoop.
+    service.swoop_manager = None
+    service.swoop_doorbell = None
+    service._swoop_shutdown = threading.Event()
     return service
 
 

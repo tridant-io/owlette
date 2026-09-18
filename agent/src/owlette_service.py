@@ -949,6 +949,14 @@ class OwletteService(win32serviceutil.ServiceFramework):
         self._shutting_down = False  # Suppresses crash alerts during reboot/shutdown
         self._live_view_active = False
         self._live_view_stop_time = 0
+        # swoop: built in main() after the Firebase client starts. The shutdown
+        # event exists from here so graceful_shutdown can set it whether or not
+        # swoop ever came up.
+        self.swoop_manager = None
+        self.swoop_doorbell = None
+        self._swoop_shutdown = threading.Event()
+        self._last_console_session_id = None
+        self._swoop_session_thread = None
 
         # Checked BEFORE handle_firebase_command's legacy if/elif chain, falling
         # through when a type isn't registered. Register new handlers here.
@@ -977,6 +985,14 @@ class OwletteService(win32serviceutil.ServiceFramework):
             _register_process_handlers(self._command_router)
         except Exception as e:
             logging.warning(f"Failed to register process-control handlers: {e}")
+
+        # swoop handlers validate and hand off to swoop_manager; the manager and
+        # doorbell themselves are built in main() once Firebase is up.
+        try:
+            from swoop_commands import register_handlers as _register_swoop_handlers
+            _register_swoop_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register swoop handlers: {e}")
 
         self.firebase_client = None
         logging.debug(f"Firebase check - Available: {FIREBASE_AVAILABLE}")
@@ -1433,6 +1449,12 @@ class OwletteService(win32serviceutil.ServiceFramework):
             session_state.set_intent_if_none("external_clean")
         except Exception as e:
             logging.debug(f"[SHUTDOWN] set_intent_if_none failed: {e}")
+
+        # Here and not only in SvcStop: under owlette-host the SCM watcher
+        # reaches this funnel without SvcStop ever running, which is the normal
+        # stop path since 3.0.0. Early, so the streamer's teardown runs
+        # alongside the presence flush rather than after it.
+        self._stop_swoop()
 
         # Every Firestore call below now has 3s to land instead of 30.
         if self.firebase_client:
@@ -1952,6 +1974,10 @@ class OwletteService(win32serviceutil.ServiceFramework):
         self.graceful_shutdown('svc_stop')
 
         self.terminate_cortex()
+
+        # Belt and braces: graceful_shutdown already did this, unless another
+        # trigger got there first and is still mid-flush.
+        self._stop_swoop()
 
         win32event.SetEvent(self.hWaitStop)
 
@@ -2507,6 +2533,96 @@ class OwletteService(win32serviceutil.ServiceFramework):
             logging.error(f"Failed to write Cortex event: {e}")
 
     # ─── End Cortex ───────────────────────────────────────────────────────
+
+    # ─── swoop ────────────────────────────────────────────────────────────
+
+    def _start_swoop(self):
+        """Build the swoop manager and doorbell, and start the doorbell.
+
+        Called once from main() after the Firebase client is up, because the
+        doorbell mints its token with the agent's credentials and only dials
+        while the machine is connected to Firestore. Everything swoop owns runs
+        on its own daemon threads — nothing here is ever on the 5s tick.
+
+        The doorbell is self-supervised by design and is deliberately NOT
+        registered with ConnectionManager: a Cloudflare outage must not be
+        reported as a Firestore failure.
+        """
+        if self.swoop_manager is not None or not self.firebase_client:
+            return
+        try:
+            from swoop_doorbell import SwoopDoorbell
+            from swoop_manager import SwoopManager
+
+            # The two reference each other, so the ring goes through the
+            # attribute rather than the local: by the time a ring can arrive
+            # (doorbell.start()) swoop_manager is assigned.
+            doorbell = SwoopDoorbell(
+                on_ring=lambda sid: self.swoop_manager.ensure_streamer(sid),
+                get_agent_token=self.firebase_client.auth_manager.get_valid_token,
+                shutdown_event=self._swoop_shutdown,
+                is_connected=self.firebase_client.is_connected,
+            )
+            self.swoop_manager = SwoopManager(
+                firebase_client=self.firebase_client,
+                on_refresh=doorbell.refresh_now,
+            )
+            self.swoop_doorbell = doorbell
+            doorbell.start()
+            logging.info("swoop doorbell started")
+        except Exception as e:
+            # Non-fatal: the agent runs without swoop, and swoop_commands
+            # returns "Error: swoop_manager unavailable" until a restart.
+            logging.warning(f"Failed to start swoop: {e}")
+
+    def _stop_swoop(self):
+        """End the streamer and stop the doorbell. Idempotent.
+
+        The event is set rather than doorbell.stop() called: stop() joins its
+        threads, and this runs on the shutdown path that has ~5s in total. The
+        doorbell's waits are sliced so it notices within 250ms on its own.
+        """
+        if self.swoop_manager is not None:
+            try:
+                self.swoop_manager.kill('service_stop')
+            except Exception as e:
+                logging.debug(f"[SHUTDOWN] swoop kill failed: {e}")
+        self._swoop_shutdown.set()
+
+    def _check_console_session(self):
+        """Tell swoop when the active console session changes. Runs on the 5s tick.
+
+        The id read is cheap and stays on the tick; the notification does not,
+        because the loop must not own anything swoop grows here. Single-flight
+        on a daemon thread, mirroring _process_cortex_ipc_commands. Fast user
+        switching and the login/lock transitions are what land here, and the
+        streamer's session bundle is tied to the session it was spawned into.
+        """
+        if self.swoop_manager is None:
+            return
+        try:
+            session_id = win32ts.WTSGetActiveConsoleSessionId()
+        except Exception as e:
+            logging.debug(f"WTSGetActiveConsoleSessionId failed on the swoop check: {e}")
+            return
+        if session_id == self._last_console_session_id:
+            return
+        first_read = self._last_console_session_id is None
+        self._last_console_session_id = session_id
+        if first_read:
+            # The first read is the baseline, not a change.
+            return
+        if self._swoop_session_thread is not None and self._swoop_session_thread.is_alive():
+            return
+
+        t = threading.Thread(
+            target=self.swoop_manager.on_session_change, daemon=True,
+            name='swoop-session-change',
+        )
+        t.start()
+        self._swoop_session_thread = t
+
+    # ─── End swoop ────────────────────────────────────────────────────────
 
     def _find_running_process_by_exe(self, exe_path, file_path=None, strict=False):
         """Find a running process by its executable path.
@@ -4569,8 +4685,15 @@ class OwletteService(win32serviceutil.ServiceFramework):
 
             # Per-type throttle. mcp_tool_call is exempt: hoot fires parallel
             # tool calls by design and is gated server-side. ack_display_topology
-            # is exempt because a dropped ack forces an auto-revert.
-            if cmd_type not in ('mcp_tool_call', 'ack_display_topology'):
+            # is exempt because a dropped ack forces an auto-revert. The swoop
+            # types are exempt because they carry no process id, so their rate
+            # key collapses to the type alone: a second viewer's session
+            # request, a revocation kill behind an operator kill, or a second
+            # enablement toggle inside five seconds would be refused and
+            # recorded as a failed command.
+            if cmd_type not in ('mcp_tool_call', 'ack_display_topology',
+                                'swoop_session_requested', 'swoop_kill',
+                                'swoop_refresh'):
                 now = time.time()
                 rate_key = f"{cmd_type}:{cmd_data.get('process_id') or cmd_data.get('processId') or cmd_data.get('process_name') or ''}"
                 last_time = self._command_rate_limits.get(rate_key, 0)
@@ -7802,6 +7925,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
                 self.firebase_client.start()
                 logging.info(f"Firebase client started successfully  ({round(time.time() - _t0, 3)}s)")
 
+                self._start_swoop()
+
                 # Cache site timezone for schedule evaluation
                 self._cached_site_timezone = self.firebase_client.site_timezone
 
@@ -7999,6 +8124,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
                 self._try_launch_cortex()
 
                 self._process_cortex_ipc_commands()
+
+                self._check_console_session()
 
                 # A plain attribute read — the client refreshes it every 900s on
                 # the metrics thread, so nothing here blocks the 5s tick. Without
