@@ -45,8 +45,8 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'agent/swoop/bundle',
   // agent mints its own doorbell token (agent bearer token); token issuance, no operator actor.
   'agent/swoop/doorbell-token',
-  // swoop host lifecycle/denial reports: writes its own blocking `sites/{siteId}/audit_log` rows inline
-  // as the `swoop_host` system actor (see the route header), which the marker scan cannot see.
+  // swoop host lifecycle/denial reports: writes its own blocking `sites/{siteId}/audit_log` rows as the
+  // `swoop_host` system actor through `lib/swoop/audit.server.ts`, which the marker scan cannot see.
   'agent/swoop/events',
   // internal-secret endpoint called by the alert cloud function; sends notifications only.
   'alerts/trigger',

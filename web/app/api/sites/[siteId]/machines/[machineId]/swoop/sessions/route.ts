@@ -46,6 +46,7 @@ import { mintTurnCredentials, type SwoopIceServer } from '@/lib/swoop/turn.serve
 import { ringDoorbell } from '@/lib/swoop/signal.server';
 import { createSwoopSession, upsertSwoopViewer } from '@/lib/swoop/sessionStore.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
+import { recordSwoopDenied, recordSwoopSessionStarted } from '@/lib/swoop/audit.server';
 import {
   apiKeyRefusal,
   decisionProblem,
@@ -70,7 +71,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-type StepUpResult = { ok: true } | { ok: false; response: NextResponse };
+/** `reason` is the audit code for the refusal, never the ceremony's detail. */
+type StepUpResult =
+  | { ok: true }
+  | { ok: false; response: NextResponse; reason: string };
 
 /**
  * Run a live second-factor ceremony and open the 10-minute window.
@@ -87,6 +91,7 @@ async function openStepUpFromProof(args: {
   if (!args.binding) {
     return {
       ok: false,
+      reason: 'no_session_binding',
       response: decisionProblem({
         ok: false,
         status: 401,
@@ -97,7 +102,9 @@ async function openStepUpFromProof(args: {
   }
 
   const parsed = parseMfaProof(args.proof);
-  if (!parsed.ok) return { ok: false, response: mfaProofErrorResponse(parsed) };
+  if (!parsed.ok) {
+    return { ok: false, reason: 'proof_malformed', response: mfaProofErrorResponse(parsed) };
+  }
 
   // An account with no enrolled factor cannot have produced a live proof, so a
   // proof that "verifies" for one means the ceremony was bypassed. Refused
@@ -105,6 +112,7 @@ async function openStepUpFromProof(args: {
   if (!(await hasEnrolledFactor(args.userId))) {
     return {
       ok: false,
+      reason: 'no_enrolled_factor',
       response: problem({
         type: ProblemType.Unauthorized,
         title: 'step-up required',
@@ -117,7 +125,9 @@ async function openStepUpFromProof(args: {
 
   const userData = await assertActiveUser(args.userId);
   const outcome = await verifyMfaProof(args.userId, parsed.proof, userData);
-  if (!outcome.ok) return { ok: false, response: mfaProofErrorResponse(outcome) };
+  if (!outcome.ok) {
+    return { ok: false, reason: 'proof_rejected', response: mfaProofErrorResponse(outcome) };
+  }
 
   await openStepUpWindow({ userId: args.userId, binding: args.binding, proof: outcome });
   return { ok: true };
@@ -125,12 +135,25 @@ async function openStepUpFromProof(args: {
 
 const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { params }) => {
   try {
-    const keyRefusal = apiKeyRefusal(ctx);
-    if (keyRefusal) return keyRefusal;
-
     const { machineId } = await params;
     const siteId = ctx.siteId;
     const userId = ctx.actor.userId;
+    // Every swoop refusal below is recorded on the session's own trail as well
+    // as the wrapper's decision row, because `sites/{siteId}/logs` — which a
+    // site admin can bulk-delete — must never be where a session is evidenced.
+    const auditBase = { siteId, machineId, actor: ctx.actor, correlationId: ctx.correlationId };
+
+    const keyRefusal = apiKeyRefusal(ctx);
+    if (keyRefusal) {
+      // The watch bar: the body is still unparsed here, and a key clears neither.
+      recordSwoopDenied({
+        ...auditBase,
+        event: 'session_denied',
+        denyReason: 'api_key_not_permitted',
+        ctl: false,
+      });
+      return keyRefusal;
+    }
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
@@ -161,10 +184,26 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     // ceremony opens the window and the decision is taken again.
     if (!decision.ok && decision.code === 'step_up_required' && body.mfaProof !== undefined) {
       const opened = await openStepUpFromProof({ userId, binding: gate.binding, proof: body.mfaProof });
-      if (!opened.ok) return opened.response;
+      if (!opened.ok) {
+        recordSwoopDenied({
+          ...auditBase,
+          event: 'step_up_failed',
+          denyReason: opened.reason,
+          ctl: true,
+        });
+        return opened.response;
+      }
       decision = evaluateSwoopAccess({ ...gate.input, stepUpOpen: true });
     }
-    if (!decision.ok) return decisionProblem(decision);
+    if (!decision.ok) {
+      recordSwoopDenied({
+        ...auditBase,
+        event: 'session_denied',
+        denyReason: decision.code,
+        ctl: intent === 'control',
+      });
+      return decisionProblem(decision);
+    }
 
     const signalUrl = viewerSignalUrl(siteId, machineId);
     if (!signalUrl) return swoopNotConfigured();
@@ -193,6 +232,29 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     const viewerId = mintSwoopId();
     const startedAt = Date.now();
     const leaseExpiresAt = startedAt + SWOOP_LEASE_SECONDS * 1000;
+
+    // Blocking and BEFORE the session exists: a control session that starts
+    // unrecorded is the failure this trail exists to prevent, so an audit that
+    // cannot be written refuses the session instead.
+    try {
+      await recordSwoopSessionStarted({ ...auditBase, sid, viewerId, ctl: decision.ctl });
+    } catch (err) {
+      logger.error('[swoop/sessions] session audit write failed; refusing to start', {
+        context: 'swoop/sessions',
+        data: {
+          siteId,
+          machineId,
+          err: err instanceof Error ? err.message : String(err),
+        },
+      });
+      return problem({
+        type: ProblemType.ServiceUnavailable,
+        title: 'service unavailable',
+        status: 503,
+        detail: 'audit log unavailable; refusing to start a swoop session.',
+        code: 'audit_unavailable',
+      });
+    }
 
     await createSwoopSession({
       siteId,

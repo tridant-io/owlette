@@ -28,6 +28,8 @@ import type { SwoopChannel } from '@/lib/swoop/protocol';
 import type { SwoopPresenter } from '@/lib/swoop/video/presenter';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';
 
+import { attachInputCapture, type InputCapture } from '@/lib/swoop/input';
+import { createSwoopFeedback, type SwoopFeedback } from '@/lib/swoop/feedback';
 import { attach as attachLease } from '@/lib/swoop/lease';
 import { attach as attachClipboard } from '@/lib/swoop/clipboard';
 import { attach as attachAudio } from '@/lib/swoop/audio';
@@ -105,14 +107,90 @@ export interface SwoopFeature {
 }
 
 /**
- * attached in this order, detached in reverse. the lease renewer leads because
- * everything after it depends on the session still being authorised.
+ * two features are adapted rather than imported as an `attach`.
  *
- * `input` (task 4.6/5.2) and `feedback` (task 4.7) join this list when they
- * land; neither exists yet and neither needs anything added to the seam.
+ * `input.ts` and `feedback.ts` predate this seam and export their own
+ * constructors — `attachInputCapture(options)` and `createSwoopFeedback(options)`
+ * — because both are used directly by their own tests and neither should know
+ * what a `SwoopSession` is. the adapters below are the whole of the coupling.
+ *
+ * the handles they produce are kept here, keyed weakly by session, because the
+ * toolbar and the overlay need them and the `attach` contract only hands back a
+ * detach. each entry is deleted before its handle is torn down, so a session
+ * being unwound can never hand anyone a dead capture.
+ */
+const inputCaptures = new WeakMap<SwoopSession, InputCapture>();
+const feedbacks = new WeakMap<SwoopSession, SwoopFeedback>();
+
+/** the live input capture, or null for a view-only session or before attach. */
+export const swoopInputCapture = (session: SwoopSession | null): InputCapture | null =>
+  session ? (inputCaptures.get(session) ?? null) : null;
+
+/** the live feedback reporter, whose diagnostics carry the measured rtt. */
+export const swoopFeedback = (session: SwoopSession | null): SwoopFeedback | null =>
+  session ? (feedbacks.get(session) ?? null) : null;
+
+const inputFeature: SwoopFeature = {
+  name: 'input',
+  attach(session) {
+    // the host re-derives `ctl` from the verified jwt and refuses input from a
+    // viewer without it, reporting the attempt. so a view-only viewer captures
+    // nothing at all rather than generating denials the operator cannot act on.
+    if (!session.ctl) return () => {};
+    const capture = attachInputCapture({
+      target: session.stage,
+      send: (payload) => {
+        session.send('swoop-input', payload);
+      },
+      // the PICTURE's box, never the element's — see `contentRect` above. the
+      // normalisation, including its `size - 1` convention, stays in input.ts.
+      rect: () => session.contentRect(),
+    });
+    inputCaptures.set(session, capture);
+    return () => {
+      inputCaptures.delete(session);
+      capture.detach();
+    };
+  },
+};
+
+const feedbackFeature: SwoopFeature = {
+  name: 'feedback',
+  attach(session) {
+    const feedback = createSwoopFeedback({
+      send: (payload) => {
+        session.send('swoop-feedback', payload);
+      },
+      viewport: () => {
+        const box = session.contentRect();
+        return { widthCss: box.width, heightCss: box.height };
+      },
+    });
+    const offFrame = session.onFrame((observation) => feedback.observeFrame(observation));
+    const offMessage = session.onChannelMessage('swoop-feedback', (data) =>
+      feedback.handleMessage(data),
+    );
+    feedback.start();
+    feedbacks.set(session, feedback);
+    return () => {
+      feedbacks.delete(session);
+      feedback.stop();
+      offMessage();
+      offFrame();
+    };
+  },
+};
+
+/**
+ * attached in this order, detached in reverse. the lease renewer leads because
+ * everything after it depends on the session still being authorised, and
+ * feedback follows it because the host's rate governor should start adapting
+ * before any of the optional features add traffic of their own.
  */
 export const SWOOP_FEATURES: readonly SwoopFeature[] = [
   { name: 'lease', attach: attachLease },
+  feedbackFeature,
+  inputFeature,
   { name: 'clipboard', attach: attachClipboard },
   { name: 'audio', attach: attachAudio },
   { name: 'displays', attach: attachDisplays },

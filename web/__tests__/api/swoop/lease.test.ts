@@ -42,9 +42,10 @@ jest.mock('@/lib/auditLogClient', () => ({
   scopeFingerprint: jest.fn(() => 'fp'),
 }));
 
+const writeAuditEntry = jest.fn();
 jest.mock('@/lib/auditLog.server', () => ({
   generateCorrelationId: jest.fn(() => 'corr-test'),
-  writeAuditEntry: jest.fn(),
+  writeAuditEntry: (...a: unknown[]) => writeAuditEntry(...a),
   writeAuditEntryBlocking: jest.fn(async () => undefined),
 }));
 
@@ -270,5 +271,24 @@ describe('POST swoop/sessions/{sid}/lease', () => {
 
     const res = await POST(request(), routeContext);
     expect(res.status).toBe(404);
+  });
+
+  // A lapsed lease is how a removed member loses a live session, so the refusal
+  // is evidence — it lands in `sites/{siteId}/audit_log`, never in the site feed.
+  it('records a lease refusal as a deny naming the session', async () => {
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: false });
+
+    await POST(request(), routeContext);
+
+    const rows = (writeAuditEntry.mock.calls as [string, Record<string, unknown>][])
+      .filter(([, entry]) => (entry.metadata as { event?: string } | undefined)?.event === 'lease_denied')
+      .map(([, entry]) => entry);
+    expect(rows).toEqual([
+      expect.objectContaining({
+        outcome: 'deny',
+        denyReason: 'swoop_disabled',
+        target: { kind: 'swoop_session', id: SID, machineId: MACHINE },
+      }),
+    ]);
   });
 });

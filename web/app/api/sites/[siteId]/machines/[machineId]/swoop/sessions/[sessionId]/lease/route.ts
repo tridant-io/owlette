@@ -22,6 +22,7 @@ import { Capability } from '@/lib/capabilities';
 import { evaluateLeaseRenewal, SWOOP_LEASE_SECONDS } from '@/lib/swoop/policy.server';
 import { getSwoopSession, renewSwoopViewerLease } from '@/lib/swoop/sessionStore.server';
 import { canonicalizeFingerprint, mintViewerToken } from '@/lib/swoop/tokens.server';
+import { recordSwoopDenied } from '@/lib/swoop/audit.server';
 import {
   apiKeyRefusal,
   decisionProblem,
@@ -37,12 +38,30 @@ interface LeaseBody {
 
 const leaseHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { params }) => {
   try {
-    const keyRefusal = apiKeyRefusal(ctx);
-    if (keyRefusal) return keyRefusal;
-
     const { machineId, sessionId } = await params;
     const siteId = ctx.siteId;
     const userId = ctx.actor.userId;
+    // Only refusals are audited here: a renewal grants nothing the session was
+    // not started with, and a row every few minutes would bury the grants.
+    const auditBase = {
+      siteId,
+      machineId,
+      ...(isValidSid(sessionId) ? { sid: sessionId } : {}),
+      actor: ctx.actor,
+      correlationId: ctx.correlationId,
+    };
+
+    const keyRefusal = apiKeyRefusal(ctx);
+    if (keyRefusal) {
+      recordSwoopDenied({
+        ...auditBase,
+        event: 'lease_denied',
+        denyReason: 'api_key_not_permitted',
+        ctl: false,
+      });
+      return keyRefusal;
+    }
+
     if (!isValidSid(sessionId)) return problemValidation('invalid session id');
 
     const parsed = await readAndParseJsonBody(request);
@@ -79,7 +98,15 @@ const leaseHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { 
       intent: viewer.ctl ? 'control' : 'view',
     });
     const decision = evaluateLeaseRenewal({ ...gate.input, startedAt: session.startedAt });
-    if (!decision.ok) return decisionProblem(decision);
+    if (!decision.ok) {
+      recordSwoopDenied({
+        ...auditBase,
+        event: 'lease_denied',
+        denyReason: decision.code,
+        ctl: viewer.ctl,
+      });
+      return decisionProblem(decision);
+    }
 
     const leaseExpiresAt = Date.now() + SWOOP_LEASE_SECONDS * 1000;
     const renewed = await renewSwoopViewerLease({

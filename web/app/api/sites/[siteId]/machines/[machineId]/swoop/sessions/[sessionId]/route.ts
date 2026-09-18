@@ -30,6 +30,7 @@ import {
 } from '@/lib/swoop/sessionStore.server';
 import { killSession } from '@/lib/swoop/signal.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
+import { recordSwoopDenied, recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
 import {
   apiKeyRefusal,
   decisionProblem,
@@ -87,11 +88,27 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
 
 const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { params }) => {
   try {
-    const keyRefusal = apiKeyRefusal(ctx);
-    if (keyRefusal) return keyRefusal;
-
     const { machineId, sessionId } = await params;
     const siteId = ctx.siteId;
+    const auditBase = {
+      siteId,
+      machineId,
+      ...(isValidSid(sessionId) ? { sid: sessionId } : {}),
+      actor: ctx.actor,
+      correlationId: ctx.correlationId,
+    };
+
+    const keyRefusal = apiKeyRefusal(ctx);
+    if (keyRefusal) {
+      recordSwoopDenied({
+        ...auditBase,
+        event: 'session_denied',
+        denyReason: 'api_key_not_permitted',
+        ctl: false,
+      });
+      return keyRefusal;
+    }
+
     if (!isValidSid(sessionId)) return problemValidation('invalid session id');
 
     const parsed = await readAndParseJsonBody(request);
@@ -106,7 +123,15 @@ const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, {
 
     const gate = await swoopGate({ request, ctx, machineId, intent: 'view' });
     const decision = evaluateSwoopAccess({ ...gate.input, stepUpOpen: false });
-    if (!decision.ok) return decisionProblem(decision);
+    if (!decision.ok) {
+      recordSwoopDenied({
+        ...auditBase,
+        event: 'session_denied',
+        denyReason: decision.code,
+        ctl: false,
+      });
+      return decisionProblem(decision);
+    }
 
     const session = await getSwoopSession(siteId, machineId, sessionId);
     if (!session) return problemNotFound('session not found');
@@ -141,6 +166,15 @@ const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, {
         },
       });
     }
+
+    // After the streamer has been stopped, not before: an audit write that
+    // throws must not leave a live session behind an error response.
+    await recordSwoopSessionEnded({
+      ...auditBase,
+      sid: sessionId,
+      endReason,
+      durationMs: Date.now() - session.startedAt,
+    });
 
     return applyAuthDeprecations(
       NextResponse.json({ ok: true, data: { sid: sessionId, state: 'ended', endReason } }),

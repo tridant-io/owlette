@@ -46,10 +46,11 @@ jest.mock('@/lib/auditLogClient', () => ({
 }));
 
 const writeAuditEntry = jest.fn();
+const writeAuditEntryBlocking = jest.fn(async (..._args: unknown[]) => undefined);
 jest.mock('@/lib/auditLog.server', () => ({
   generateCorrelationId: jest.fn(() => 'corr-test'),
   writeAuditEntry: (...a: unknown[]) => writeAuditEntry(...a),
-  writeAuditEntryBlocking: jest.fn(async () => undefined),
+  writeAuditEntryBlocking: (...a: unknown[]) => writeAuditEntryBlocking(...a),
 }));
 
 jest.mock('@/lib/rateLimit.server', () => ({
@@ -165,6 +166,7 @@ beforeEach(() => {
   mockRing.mockResolvedValue({ ok: true });
   mockKill.mockResolvedValue({ ok: true });
   mockVerifyMfaProof.mockResolvedValue({ ok: true, factorUsed: 'totp' });
+  writeAuditEntryBlocking.mockResolvedValue(undefined);
 
   staged.clear();
   staged.set(`sites/${SITE}/settings/swoop`, { enabled: true });
@@ -397,5 +399,162 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
     );
 
     expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * The swoop audit trail (task 5.6). These rows live in
+ * `sites/{siteId}/audit_log` — the feed at `sites/{siteId}/logs`, which a site
+ * admin can bulk-delete, never carries a swoop security event.
+ */
+describe('swoop audit trail', () => {
+  interface AuditRow {
+    outcome: string;
+    denyReason?: string;
+    capability?: string;
+    target?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }
+
+  /** Swoop's own rows, told apart from the wrapper's by `metadata.event`. */
+  const rowsFrom = (mock: jest.Mock): AuditRow[] =>
+    (mock.mock.calls as [string, AuditRow][])
+      .filter(([site, entry]) => site === SITE && typeof entry.metadata?.event === 'string')
+      .map(([, entry]) => entry);
+
+  const denyRows = () => rowsFrom(writeAuditEntry);
+  const allowRows = () => rowsFrom(writeAuditEntryBlocking);
+
+  it('records the api-key refusal', async () => {
+    mockResolveAuth.mockResolvedValue(apiKeyAuth(SITE_OWNER));
+
+    await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+
+    expect(denyRows()).toEqual([
+      expect.objectContaining({ outcome: 'deny', denyReason: 'api_key_not_permitted' }),
+    ]);
+  });
+
+  it('records a proof-less control request', async () => {
+    await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+
+    expect(denyRows()).toEqual([
+      expect.objectContaining({ outcome: 'deny', denyReason: 'step_up_required' }),
+    ]);
+  });
+
+  it('records a failed step-up ceremony', async () => {
+    mfaFactors.totp = false;
+    mfaFactors.passkeys = 0;
+
+    await POST(
+      createMockRequest(url(), {
+        method: 'POST',
+        body: { control: true, fp: FP, mfaProof: { code: '123456' } },
+      }),
+      routeContext(),
+    );
+
+    expect(denyRows()).toEqual([
+      expect.objectContaining({
+        outcome: 'deny',
+        denyReason: 'no_enrolled_factor',
+        metadata: expect.objectContaining({ event: 'step_up_failed' }),
+      }),
+    ]);
+  });
+
+  it('records a refusal from a site with swoop off', async () => {
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: false });
+
+    await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: false, fp: FP } }),
+      routeContext(),
+    );
+
+    expect(denyRows()).toEqual([
+      expect.objectContaining({ outcome: 'deny', denyReason: 'swoop_disabled' }),
+    ]);
+  });
+
+  it('records the grant against the session, naming the control bar it cleared', async () => {
+    openWindow(ADMIN);
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { body } = await parseResponse(res);
+    const sid = (body.data as Record<string, unknown>).sid as string;
+
+    expect(allowRows()).toEqual([
+      expect.objectContaining({
+        outcome: 'allow',
+        capability: 'MACHINE_REMOTE_CONTROL',
+        target: { kind: 'swoop_session', id: sid, machineId: MACHINE },
+        metadata: expect.objectContaining({ event: 'session_started', ctl: true }),
+      }),
+    ]);
+    // Nothing a row carries may be the material itself.
+    const serialized = JSON.stringify(allowRows());
+    expect(serialized).not.toContain(String((body.data as Record<string, unknown>).viewerJwt));
+    expect(serialized).not.toContain(String((body.data as Record<string, unknown>).k));
+    expect(serialized).not.toContain(FP);
+  });
+
+  it('refuses to start a session it cannot record', async () => {
+    openWindow(ADMIN);
+    // Only swoop's own row fails — the wrapper's allow row has already been
+    // written by then, so this is the handler's fail-closed path, not its.
+    writeAuditEntryBlocking.mockImplementation(async (...args: unknown[]) => {
+      const entry = args[1] as { metadata?: { event?: string } } | undefined;
+      if (entry?.metadata?.event === 'session_started') throw new Error('firestore down');
+      return undefined;
+    });
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(503);
+    expect(body.code).toBe('audit_unavailable');
+    expect(mockRing).not.toHaveBeenCalled();
+  });
+
+  it('records the end of a session with its reason and duration', async () => {
+    const startedAt = Date.now() - 5_000;
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`, {
+      sid: SID,
+      state: 'live',
+      createdBy: `user:${ADMIN}`,
+      startedAt,
+      absoluteExpiresAt: startedAt + 3_600_000,
+      viewers: [],
+    });
+
+    await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'killed' } }),
+      routeContext(SID),
+    );
+
+    expect(allowRows()).toEqual([
+      expect.objectContaining({
+        outcome: 'allow',
+        target: { kind: 'swoop_session', id: SID, machineId: MACHINE },
+        metadata: expect.objectContaining({
+          event: 'session_ended',
+          endReason: 'killed',
+          durationMs: expect.any(Number),
+        }),
+      }),
+    ]);
   });
 });

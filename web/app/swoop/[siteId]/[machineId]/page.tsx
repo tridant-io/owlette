@@ -14,7 +14,7 @@
  * session-create request; the page never inspects, stores or logs a proof.
  */
 
-import { use } from 'react';
+import { use, useState } from 'react';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
@@ -36,10 +36,20 @@ export default function SwoopPage({
     siteId,
     machineId,
   );
+  // the overlay covers the picture, so it is off until asked for — and the
+  // toolbar is out of reach once fullscreen holds, so the choice is made here.
+  const [statsOpen, setStatsOpen] = useState(false);
 
   return (
     <main className="flex h-full w-full flex-col">
-      <SwoopToolbar session={session} state={state} error={error} onEnd={end}>
+      <SwoopToolbar
+        session={session}
+        state={state}
+        error={error}
+        onEnd={end}
+        statsOpen={statsOpen}
+        onToggleStats={() => setStatsOpen((open) => !open)}
+      >
         <SwoopDisplayPicker session={session} />
         <SwoopQualityMenu session={session} />
         <SwoopAudioToggle session={session} />
@@ -49,7 +59,7 @@ export default function SwoopPage({
       <div className="min-h-0 flex-1">
         <SwoopStage session={session} state={state} stageRef={stageRef} videoRef={videoRef}>
           <SwoopPresence session={session} />
-          <SwoopStatsOverlay session={session} stats={stats} />
+          <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
         </SwoopStage>
       </div>
 

@@ -58,6 +58,9 @@ export type AuditTargetKind =
   | 'process'
   | 'preset'
   | 'installer'
+  // one swoop session, named by its opaque sid — the row's `machineId` says
+  // which machine it ran against.
+  | 'swoop_session'
   | 'talon';
 
 export interface AuditTarget {

@@ -35,10 +35,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { useAuth } from '@/contexts/AuthContext';
 import {
   SWOOP_FEATURES,
+  swoopFeedback,
   type SwoopDetach,
   type SwoopLease,
   type SwoopSession,
 } from '@/lib/swoop/features';
+import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
 import { createSwoopIdentity, createSwoopPeer, type SwoopPeer } from '@/lib/swoop/peer';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import {
@@ -78,6 +80,14 @@ export interface SwoopStats {
   signal: SwoopSignalStatus;
   presenter: PresenterStats;
   receiver: SwoopReceiverDiagnostics;
+  /**
+   * the most recently presented frame with its host stamps — the overlay's
+   * per-stage breakdown, sampled on this hook's timer rather than re-rendering
+   * the page sixty times a second.
+   */
+  frame: FrameObservation | null;
+  /** the feedback loop's numbers, including the measured app-level rtt. */
+  feedback: SwoopFeedbackDiagnostics | null;
   /** when the lease currently held lapses; 0 before one exists. */
   leaseExpiresAt: number;
 }
@@ -146,6 +156,8 @@ const EMPTY_STATS: SwoopStats = {
     jitterBufferTargetApplied: null,
     requestVideoFrameCallback: false,
   },
+  frame: null,
+  feedback: null,
   leaseExpiresAt: 0,
 };
 
@@ -247,6 +259,9 @@ export function useSwoopSession(
     let pendingJwt: string | null = null;
 
     const detachers: SwoopDetach[] = [];
+    // the overlay's per-stage numbers come off one frame, resampled on the
+    // stats timer; holding the newest here is cheaper than a second subscriber.
+    let latestFrame: FrameObservation | null = null;
     const frameHandlers = new Set<(observation: FrameObservation) => void>();
     const channelHandlers = new Map<SwoopChannel, Set<(data: unknown) => void>>();
 
@@ -394,6 +409,7 @@ export function useSwoopSession(
       receiver = new SwoopReceiver({
         video,
         onFrame: (observation) => {
+          latestFrame = observation;
           presenter?.observe(observation);
           for (const handler of frameHandlers) handler(observation);
         },
@@ -532,6 +548,8 @@ export function useSwoopSession(
           signal: prev.signal,
           presenter: presenter?.stats() ?? prev.presenter,
           receiver: receiver?.diagnostics() ?? prev.receiver,
+          frame: latestFrame,
+          feedback: swoopFeedback(live)?.diagnostics() ?? null,
           leaseExpiresAt,
         }));
       }, STATS_INTERVAL_MS);

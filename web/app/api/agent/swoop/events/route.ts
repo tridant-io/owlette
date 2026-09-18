@@ -17,12 +17,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { problemValidation } from '@/lib/apiErrors';
-import {
-  generateCorrelationId,
-  writeAuditEntryBlocking,
-  type AuditOutcome,
-} from '@/lib/auditLog.server';
+import type { AuditOutcome } from '@/lib/auditLog.server';
 import { Capability } from '@/lib/capabilities';
+import { recordSwoopHostEvent } from '@/lib/swoop/audit.server';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { NO_STORE, SWOOP_ID_PATTERN, requireSwoopAgent } from '../_shared';
 
@@ -142,22 +139,20 @@ async function recordEvents(
 ): Promise<void> {
   for (const event of events) {
     const kind = EVENT_KINDS[event.type];
-    await writeAuditEntryBlocking(siteId, {
-      correlationId: generateCorrelationId(),
-      // The reporter, not the offender: a refused viewer is named in the
-      // metadata, because the host cannot vouch for a uid it just rejected.
-      actor: { type: 'system', name: 'swoop_host' },
-      capability: kind.capability,
-      target: { kind: 'machine', id: machineId, machineId },
+    // The row shape — the `swoop_host` actor, the session target and the
+    // reason-code guard — belongs to `lib/swoop/audit.server.ts`; this route
+    // owns only the vocabulary it will accept off the wire.
+    await recordSwoopHostEvent({
+      siteId,
+      machineId,
+      sid: event.sid,
+      event: event.type,
       outcome: kind.outcome,
-      metadata: {
-        event: event.type,
-        sid: event.sid,
-        ...(event.viewerId ? { viewerId: event.viewerId } : {}),
-        ...(event.uid ? { uid: event.uid } : {}),
-        ...(event.atMs !== undefined ? { hostAtMs: event.atMs } : {}),
-      },
-      ...(kind.outcome === 'deny' ? { denyReason: event.reason ?? event.type } : {}),
+      capability: kind.capability,
+      ...(event.reason !== undefined ? { reason: event.reason } : {}),
+      ...(event.viewerId ? { viewerId: event.viewerId } : {}),
+      ...(event.uid ? { uid: event.uid } : {}),
+      ...(event.atMs !== undefined ? { atMs: event.atMs } : {}),
     });
   }
 }
