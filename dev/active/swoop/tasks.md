@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 45/80 complete
+**Progress**: 51/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -601,37 +601,37 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 5: first interactive session → internal pilot (gate G3)
 
-- [ ] **Task 5.1: Host session v2** `[agent]`
+- [x] **Task 5.1: Host session v2** `[agent]`
   - Files: `agent/swoop/src/session/mod.rs`, `agent/swoop/src/session/features.rs`, `agent/swoop/src/main.rs`
   - Do: Grow Task 4.1's thin session into the real one without regressing it. Wire input injection (4.3) behind the `ctl` claim from the verified viewer JWT — the host is the enforcement point, and a view-only viewer sending input is refused and reported as a host event, never trusted from anything the viewer says. Wire the cursor stream (4.4) and the governor (4.7) so client feedback moves the encoder's target rate. Implement the loss-recovery policy: IDR with a 250–500 ms coalesced cooldown and exponential backoff, sticky "awaiting IDR" state so a burst of requests produces one keyframe, for every encoder — reference invalidation stays out of v1. Hold a floor frame rate on a static desktop (Desktop Duplication reports `DXGI_ERROR_WAIT_TIMEOUT` and hardware decoders stall without it). Keep the process alive for the documented linger after the last viewer leaves, then exit 0 — but stop capture immediately at the last departure so no capture runs behind a cleared indicator. When the bundle carries the test-only `overrides` object — which only a `testhooks` build parses at all (Task 2.10) — select the named test source and encoder and emit a `status` stdout event naming the override, so an overridden session is visible in `logs/swoop` and through the host events route. Register each capability as a `session::Feature` in `features.rs` so Wave 6 adds clipboard, audio and displays without editing `mod.rs`.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`. Unit tests cover: a viewer without `ctl` has every input event dropped and one denial event emitted; ten IDR requests inside the cooldown produce one keyframe; the floor frame rate emits on a timeout-only capture loop; linger expiry exits 0 and capture stops at the last `viewer_left`, not at exit. The live interactive run is `#[ignore]`d with its dev-box command documented.
   - Depends on: 4.1, 4.3, 4.4, 4.7
 
-- [ ] **Task 5.2: swoop page v2** `[agent]`
+- [x] **Task 5.2: swoop page v2** `[agent]`
   - Files: `web/app/swoop/[siteId]/[machineId]/page.tsx`, `web/hooks/useSwoopSession.ts`, `web/components/swoop/SwoopStage.tsx`, `web/components/swoop/SwoopToolbar.tsx`, `web/components/swoop/SwoopStatsOverlay.tsx`, `web/lib/swoop/features.ts`
   - Do: Fill the slots Task 4.2 created. `SwoopStage` renders the canvas the presenter draws into and attaches the input capture from `web/lib/swoop/input.ts` (4.6) — do not re-implement it. Take fullscreen, `navigator.keyboard.lock()` and pointer lock on **one** user gesture, because JS-initiated fullscreen is a precondition of keyboard lock and all three need the same activation; when keyboard lock is unavailable (Firefox, Safari) say so in the toolbar rather than failing silently, and note that Escape held for two seconds always exits. `SwoopToolbar` carries the connection state and the lock/fullscreen controls. `SwoopStatsOverlay` shows the per-stage latency breakdown (capture, encode, send, arrive, decode, present) plus app-level RTT from `feedback.ts`. Register the input feature in `web/lib/swoop/features.ts` so the hook attaches it. Keep the step-up dialog's frozen props from 4.2 — `open` / `enrolled` / `onProof` / `onCancel`, where `onProof` receives the body `parseMfaProof` accepts and the hook forwards it verbatim into the session-create POST. All copy lowercase, lucide icons only, theme tokens only, accessible names on every control.
   - Done when: `cd web && npx tsc --noEmit`, `npx eslint app/swoop hooks/useSwoopSession.ts components/swoop lib/swoop/features.ts` and `npm test` are all clean. Manually on the dev box: one click enters fullscreen with keyboard and pointer lock together and the overlay renders. The end-to-end check — typing and mouse movement reach the machine, six non-zero stage timings, a non-zero RTT — belongs to gate G3, because it also needs Task 5.1.
   - Depends on: 4.2, 4.6, 4.7
 
-- [ ] **Task 5.3: Dashboard entry** `[agent]`
+- [x] **Task 5.3: Dashboard entry** `[agent]`
   - Files: `web/components/MachineContextMenu.tsx`, `web/hooks/useFirestore.ts`, `web/app/dashboard/page.tsx`, `web/app/dashboard/components/MachineCardView.tsx`, `web/app/dashboard/components/MachineListView.tsx`
   - Do: Add `capabilities?: { swoop?: number; displayRemoteApply?: number }` to the `Machine` interface (`useFirestore.ts:251`) and map it from the machine snapshot. Thread an `onSwoop?: (machineId: string) => void` prop and a `swoopCapable: boolean` flag through the same chain `onLiveView` already uses (`MachineCardView.tsx:65-66,99-100,1100-1101`, `MachineListView.tsx:256-257,674-675`, dashboard handlers at `:1091-1098` and `:1145-1151`). In `MachineContextMenu.tsx` the online block at `:311-331` shows **swoop** instead of live view when `capabilities.swoop === 1`, and the existing live-view item otherwise — exactly one of the two renders, so no machine ever has neither, and "screenshot" is untouched. The label is "swoop into this machine" (lowercase), with a lucide icon and the theme colour tokens the neighbouring items use. Opening calls `window.open('/swoop/<siteId>/<machineId>', '_blank', 'noopener')` — a separate window, never an iframe, and never a token in the URL. Gate only on the capability: site enablement and authorization are enforced server-side by the session-create route, so do not read swoop settings here.
   - Done when: `cd web && npx tsc --noEmit`, `npx eslint components/MachineContextMenu.tsx hooks/useFirestore.ts app/dashboard` and `npm test` are clean. A jest or e2e case asserts that a machine with `capabilities.swoop === 1` shows the swoop item and no live-view item, and a machine without it shows live view and no swoop item. Clicking swoop opens `/swoop/<siteId>/<machineId>` in a new window.
   - Depends on: 4.2
 
-- [ ] **Task 5.4: Site enablement + kill switch** `[agent]`
+- [x] **Task 5.4: Site enablement + kill switch** `[agent]`
   - Files: `web/app/api/sites/[siteId]/swoop-settings/route.ts`, `web/lib/actions/setSwoopSettings.server.ts`, `web/hooks/useSwoopSettings.ts`, `web/components/ManageSitesDialog.tsx`, `web/app/api/sites/[siteId]/machines/[machineId]/swoop/kill/route.ts`, `web/__tests__/api/swoop/settings-and-kill.test.ts`
   - Do: Copy the hoot-settings precedent end to end: `app/api/sites/[siteId]/hoot-settings/route.ts` → `lib/actions/setHootRequireTier3Approval.server.ts` → `sites/{siteId}/settings/cortex`, read by `hooks/useHootApprovalSetting.ts`. Here the document is `sites/{siteId}/settings/swoop` holding `{ enabled, excludedMachineIds[], membersMayWatch, indicator }`, GET and PATCH are wrapped in `authorizedSiteHandler` with a site-admin capability, and `useSwoopSettings.ts` subscribes with `onSnapshot` and defaults to the safe state (disabled) when the document or field is missing. Toggling enablement sends a `swoop_refresh` command to the site's online machines through the dedicated Wave 2 action module — never through `ALLOWED_COMMAND_TYPES`, and per Task 2.11's per-type rule that document carries **no** `sid` (there is no session to name on an enablement toggle) and nothing else identifying. The kill route calls `killSession` from `web/lib/swoop/signal.server.ts` (Task 2.4) first — never a hand-rolled fetch — because the Worker path is authoritative and lands in ≤ 2 s while the streamer holds a live socket, and falls back to a `swoop_kill` command (its `sid` optional: absent means "kill whatever is running") for a machine with no live session. Add the settings toggle to `ManageSitesDialog.tsx` in the site's expanded panel, lowercase copy, theme tokens. The `authorizedSiteHandler` wrapper writes the audit row for both routes — do not create or import `web/lib/swoop/audit.server.ts`, which Task 5.6 owns.
   - Done when: `cd web && npx jest __tests__/api/swoop/settings-and-kill.test.ts` is green with named cases: a member cannot PATCH settings; enabling sends `swoop_refresh` only to online machines; an excluded machine is refused a session; the kill route calls `killSession` and only falls back when the Worker reports no session; the enqueued command document's key set is exactly Task 2.11's contract — `type`, `sid` where the type carries one, the envelope (`siteId`, `machineId`, `timestamp`, `status`, `queuedBy`) and `stampCommand`'s lifecycle fields (`createdAt`, `expiresAt`, `auditCorrelationId`) — and carries no bundle, JWT, key, TURN credential or viewer id. `npx eslint` clean on all five source files; `npx tsc --noEmit` clean.
   - Depends on: 2.11, 3.2, 3.4
 
-- [ ] **Task 5.5: Step-up ceremony UI** `[agent]`
+- [x] **Task 5.5: Step-up ceremony UI** `[agent]`
   - Files: `web/lib/swoop/stepUp.ts`, `web/components/swoop/SwoopStepUpDialog.tsx`, `web/__tests__/lib/swoop/stepUp.test.ts`
   - Do: Fill the two slots Task 4.2 created; do not touch the page or the hook. The dialog's props are frozen: `{ open: boolean; enrolled: boolean; onProof: (proof) => Promise<void>; onCancel: () => void }`, where `proof` is the body `parseMfaProof` accepts (`web/lib/mfaProof.server.ts:79`) and the caller forwards it verbatim to the session-create route. `stepUp.ts` runs the ceremony: for a passkey, fetch a challenge from `/api/passkeys/step-up/options` and produce an assertion; for TOTP or a backup code, package the entered code. The dialog calls `onProof` with the result and reports the retry's outcome; a 401 `step_up_required` from the session-create route is what opens it, and a successful ceremony is followed by exactly one retry, not a loop. An account with zero enrolled factors cannot control a machine — render an enrol hint pointing at the security settings instead of a code field, since `/api/passkeys/step-up/options` returns `no_passkeys` for such an account. All copy lowercase, lucide icons only, theme tokens only, accessible labels on every input, and never log or store the proof.
   - Done when: `cd web && npx jest __tests__/lib/swoop/stepUp.test.ts` is green with named cases: a passkey ceremony produces a proof and one retry; a TOTP code produces a proof and one retry; a failed proof shows an error and does not retry; a zero-factor account renders the enrol hint and no code field. `npx eslint web/lib/swoop/stepUp.ts web/components/swoop/SwoopStepUpDialog.tsx` clean; `npx tsc --noEmit` clean.
   - Depends on: 3.2, 4.2
 
-- [ ] **Task 5.6: Audit + logs registry** `[agent]`
+- [x] **Task 5.6: Audit + logs registry** `[agent]`
   - Files: `web/lib/swoop/audit.server.ts`, `web/app/logs/page.tsx`, and the audit call sites inside the Task 3.2 and Task 3.3 route files (this is the only Wave 5 task that edits those routes)
   - Do: `audit.server.ts` wraps `writeAuditEntryBlocking` (`web/lib/auditLog.server.ts:123`) with the swoop event shapes and adds `'swoop_session'` to `AuditTargetKind` (`:48-57`). Security-relevant events go to `sites/{siteId}/audit_log`, not `sites/{siteId}/logs`, because a site admin can bulk-delete site logs and is also the tier that can start a control session. Cover: session start, session end with `endReason`, duration and relayed-or-direct, control grant, a denied request (with `denyReason`), a step-up failure, kill, and the host-side denials that arrive through `/api/agent/swoop/events`. Then call it from the Wave 3 routes — session create (allow and every deny branch), session delete, lease refusal, and the agent events route. Separately, add a `swoop` group to `ACTION_TYPE_GROUPS` in `app/logs/page.tsx:137` for the operational feed; before writing the option list, grep `agent/src/swoop_*.py` for the exact strings passed to `log_event(...)` and list only those — an option nothing emits is a dead filter, which is the documented reason `scheduled_reboot` was removed. Labels are lowercase and match the action they name.
   - Done when: `cd web && npx jest __tests__/lib/swoop __tests__/api/swoop` is green, including a test that every deny branch of the session-create route writes an `audit_log` row with a `denyReason`, and that no swoop security event is written to `sites/{siteId}/logs`. `npx eslint lib/swoop/audit.server.ts app/logs/page.tsx` clean; `npx tsc --noEmit` clean; the logs page renders the new group and filtering by one of its values returns rows.
@@ -1408,3 +1408,96 @@ centred `object-position` is load-bearing.
 G2), the two `SWOOP_JWT_*_PREVIOUS` manifest rows, **spike 0.3** (the SYSTEM spawn path and the whole
 secure-desktop family — 4.3 stopped at the desktop boundary because of it, and 6.1 cannot start), spike
 0.10, and **SAST has still never run on this branch.**
+
+### 2026-09-18 — **wave 5: 6 of 7. 51/80.** 5.7 is a human spike.
+
+verified after the tree settled: agent **1344 passed / 6 skipped**; `agent/swoop` clippy `--all-targets`
+clean, **154 + 1 + 5 passed / 13 ignored**; web `tsc` exit 0, **5774 passed / 287 suites**; firestore rules
+**139 passed**; `npm run build` compiled. `dev`'s "machine card legibility pass" (`18db25dc`) was merged in
+at `c300459c` first — the same edits were sitting duplicated and uncommitted here, and all of them were
+content-identical apart from line endings.
+
+**the signalling worker went live today**, which is what 3.4 and G2 were waiting on:
+`https://signal-dev.owlette.app`, custom domain, three secrets set **before** the first deploy (the
+runbook's trap: a worker missing `SWOOP_SIGNAL_RING_SECRET` answers every ring 500 while `/health` still
+returns 200). the ring-secret-authenticated `/health` reports `kids: ["swoop-dev-202609-9f1e"]`,
+`algorithm: "Ed25519"` — which proves the generated public key imported through the worker's raw-32
+base64url path and the ring secret matches byte for byte. **hostnames are one label deep on purpose**: the
+zone certificate is `*.owlette.app` and a wildcard matches exactly one label, so `signal.dev.owlette.app`
+would fail every wss handshake.
+
+**one correctness fix in 5.1, a use-after-free class bug.** `source.take_idr_request()` ran **before** the
+frame acquire, but `next_frame_with` rebuilds internally on `ACCESS_LOST`, freeing the duplication's copy
+texture — so for one iteration after a display change the floor timer handed the encoder a dangling
+handle. moved after the acquire.
+
+**decisions worth keeping:**
+- **the audit grant row is written and awaited BEFORE the session is created**, and a failed write returns
+  503 `audit_unavailable` — no session, no doorbell ring. an unauditable remote-desktop session is worse
+  than no session.
+- **the step-up ceremony deliberately does not call `/api/passkeys/step-up/verify`.** that sibling flips the
+  *login* session's mfa gate; calling it would look identical in the ui and be worth nothing. the
+  session-create route verifies the assertion in-process, which is what makes the proof live.
+- **the kill route falls back to the polled command on EVERY non-ok result**, not only when the worker
+  reports no session — the fast path being down is itself a reason to be killing. its task text said
+  otherwise and was wrong.
+- **disable and kill are separate controls with separate budgets**, per plan.md:324 — kill ends a session
+  in ≤2 s, disable cuts it at the next lease (≤5 min). 5.4 implemented it that way and I checked the plan
+  rather than "fixing" it. **the settings ui should make that distinction obvious**, or an operator who
+  toggles swoop off expecting an immediate cut will be surprised.
+- **input does not attach at all for a view-only viewer**, rather than attaching and letting the host
+  reject everything. the host is the enforcement point either way; this way a watcher generates no denial
+  traffic.
+- **an override with no testpattern or soft encoder behind it refuses with exit 12/13** rather than
+  silently streaming the real desktop — a ci run that proved nothing must not look like one that passed.
+
+**two interaction bugs 5.2 caught that only show up in use:** `input.ts` calls `preventDefault()` on
+pointerdown, which also suppresses the browser's default focus — so the stage must focus itself or the
+mouse works and **no keystroke ever arrives**, which is indistinguishable from 4.3's sandboxed-shell
+failure. and **escape drops pointer lock but leaves fullscreen**, at which point the toolbar is off screen
+and there is no way back; the stage re-requests the lock on pointerdown.
+
+**the cross-clock discipline held in three places independently:** 4.7 withholds `rttMs` until a real
+`pong` returns rather than reporting 0, 5.2's overlay shows `—` for the two cross-clock stages until the
+first offset arrives, and neither shows a zero. a zero reads as "perfect", which is the most misleading
+value available.
+
+**blocking wave 6 — needs a decision.** tasks 6.1–6.4 each say their feature is "already registered as a
+no-op in `session/features.rs`; do not edit that file", but `clipboard`, `audio`, `displays` and
+`securedesk` export **no constructor** for `registry()` to call, and 5.1 may not add one to modules it does
+not own. either each module exports `pub fn feature() -> Box<dyn Feature>` and the registry calls it
+(preferred — keeps wave 6 tasks off a shared file), or each wave 6 task edits `features.rs` directly.
+related: `SessionHandle` carries facts only, so a clipboard or audio feature still has **no way to write to
+a channel** — that plumbing needs designing when the seam is settled.
+
+**gaps recorded, not papered over:**
+- **a host-side denial has nowhere to go.** PROTOCOL §6's stdout table has no denial event and
+  `swoop_manager.py` drops an unknown type, so §5's "reported to `/api/agent/swoop/events`" cannot complete.
+  it is a log line today. needs `ipc::Event` + §6 + `KNOWN_EVENTS` — three files across two waves.
+- **relay-vs-direct is not auditable.** 3.3 froze the agent event contract without a transport field and
+  `sessionStore` has no `relayed`. 5.6 refused to add a dead optional parameter. needs a wave-3 contract
+  change if it matters — and for cost and diagnosis it probably does.
+- `Event::Status` still has no field for `dropped()`, the denial count, or the active override. 5.1 fixed
+  the misleading comment instead. if fields are wanted, all three should land together as one optional-field
+  change (golden vectors stay green; the agent's `_last_status` picks new fields up automatically).
+- `qpc_now()` is still in three private copies.
+- **`end_to_end_picture` fails on this box with 0 cursor events** — verified identical on stashed-clean
+  HEAD, so pre-existing, not a regression. it is `SendInput` being swallowed in a sandboxed shell (4.3's
+  documented caveat). the picture half is healthy and still exactly 1 IRAP. **re-run from an ordinary shell
+  before G3.**
+- 5.6 could not run the logs-page e2e (four agents were mutating `web/`), and 5.2's one-gesture
+  fullscreen + keyboard lock + pointer lock check needs a live session. both unverified by choice, not
+  overlooked.
+
+**G2 is still not reached, and the remaining blocker is no longer software.** `capabilities.swoop` is 0 on
+every machine because no streamer binary is installed anywhere — so none of this wave's ui can be seen in a
+browser yet. the installer build is now the prerequisite for *looking at* any of it, not just for the gate.
+also: **`websocket-client` is pinned in `requirements.txt` but is not in the bundled python that shipped
+with 3.3.5**, so the doorbell cannot start on a fielded machine until a new installer ships. that makes the
+full installer build the honest route rather than copying an exe into place.
+
+**still open for the owner:** railway dev's six env values (they are in `web/.env.local`; the ring secret
+and kid must match the worker byte for byte), moving `CLOUDFLARE_API_TOKEN` out of `web/.env.local` into
+`.claude/.env.local` so next does not load a workers-admin credential, **spike 0.3** (the SYSTEM spawn path
+is still unverified on hardware and 6.1 cannot start without it), spike 0.10, 5.7, and **SAST has still
+never run on this branch.**
