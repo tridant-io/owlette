@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 10/80 complete
+**Progress**: 12/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -29,14 +29,14 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 0: spikes and design memos
 
-- [ ] **Task 0.1: Latency harness + measurement contract** `[agent+human]`
+- [x] **Task 0.1: Latency harness + measurement contract** `[agent+human]`
   - Files: `agent/swoop/spikes/latency-target/**` (create: Rust bin + own `Cargo.toml` carrying an empty `[workspace]` table so a future parent workspace cannot absorb it), `agent/swoop/spikes/latency-probe-web/**` (create: static page + a tiny node http server that receives the page's JSON and writes it to disk), `dev/active/swoop/spikes/0.1-latency-harness.md` (create)
   - Do: Build the instrument and write the contract; build no pipeline. `latency-target`: a Win32 exe with a `WH_MOUSE_LL` hook (`SetWindowsHookExW` + message pump) that on button-down flips a borderless fullscreen window between two high-contrast colours and appends the `QueryPerformanceCounter` tick to a CSV. `latency-probe-web`: a page that samples presented pixels, computes p50/p95 over the run, and POSTs its JSON to the local server so the agent can read numbers without a human reading a screen. Then write the measurement contract `research/review-1-latency.md` F3 demands, and calibrate it on this box: host-local input→flip→photon, and the QPC↔`performance.now()` offset (NTP-style exchange, `research/review-3-delivery.md` F12). Publish the term the harness cannot see (compositor + scanout) as a fixed additive constant so every later number is comparable. Do not read a `desynchronized` canvas through `drawImage` — it reads back empty (review-1 F7); read the renderer's own pixels or use the camera. Do not create any product file under `agent/swoop/`.
   - Human: films the host and client monitors in one frame with a ≥ 240 fps slow-motion camera (a phone's slow-mo is acceptable if its frame rate is recorded) or wires a photodiode; supplies the ≥ 120 Hz monitor row or records that the hardware is not here yet.
   - Done when: `dev/active/swoop/spikes/0.1-latency-harness.md` exists and (a) defines, in writing, renderer-visible number vs photon number, real LAN hop vs same-machine (same-machine is ranking only, never an absolute product latency), the QPC↔`performance.now()` offset method, n ≥ 100 per series, p50 and p95, and separate rows for a 60 Hz and a ≥ 120 Hz client; (b) reports the calibration numbers with n and the fixed compositor+scanout term; (c) ends with a recommendation on which rows the G1 memo must report; (d) `cargo clippy -- -D warnings` and `cargo test` pass with the working directory set to `agent/swoop/spikes/latency-target`.
   - Blocks: 0.2 reports its G1 numbers in these terms; plan.md's success-criteria latency rows; D16 instrumentation; Tasks 3.12, 4.7 and gate G3.
 
-- [ ] **Task 0.2: Video-path + transport bake-off → gate G1** `[agent+human]`
+- [x] **Task 0.2: Video-path + transport bake-off → gate G1** `[agent+human]`
   - Files: `agent/swoop/spikes/bakeoff-host/**` (create: Rust, own `Cargo.toml` with an empty `[workspace]` table and its own `Cargo.lock`), `agent/swoop/spikes/bakeoff-web/**` (create: page + local http server that receives per-run JSON), `dev/active/swoop/spikes/0.2-video-path-bakeoff.md` (create)
   - Do: One harness, three arms behind one trait (shape it like `transport::VideoSink` / `web/lib/swoop/video/receiver.ts` but create neither product file). Shared front half: DXGI Desktop Duplication → NVENC **H.264 with the VUI fix** (`bitstreamRestrictionFlag=1`, `max_num_reorder_frames=0`) **and HEVC**. Arms per plan.md D3: **A** encoded frames over an `RTCDataChannel` → WebCodecs → canvas, fragmented at ~1200 B, running the reliability-mode matrix `{ordered + maxPacketLifeTime 33–50 ms}` vs `{unordered, maxRetransmits: 0}` vs `{unordered + lifetime}` (`review-1-latency.md` F2), on str0m with the `sctp-proto` patches documented in the memo (review-1 F1 lists the hostile constants — 128 KiB shared buffer cap, 4380 B cwnd, `RTO_MIN` 1000 ms, no `max_burst` — with file:line); **B** RTP track → `<video>` with playout-delay `min=0, max ∈ (0, 500] ms` — never `max=0`; **C** the same sender with a receive-side `RTCRtpScriptTransform` → WebCodecs → canvas. Networks: LAN and impaired (2% loss, 40 ms RTT, 10 ms jitter); name the impairment tool, version and parameters in the memo. `research/05-transport-bakeoff.md` §7 has the spike design and getStats list; §5 has Chrome's receive-side requirements. Copy 0.1's harness if it exists but do not wait on it: carry per-frame host QPC stamps plus client arrival/decode/present stamps, and use the on-screen-clock + camera method for the photon row. Run the LiveKit `libwebrtc` arm only if str0m fails outright. Build no TURN, FEC, simulcast or reference invalidation.
   - Human: launches the impairment tool from an elevated console (explicit click — no agent path may elevate), runs the camera pass, and signs off the G1 recommendation.
@@ -1018,3 +1018,41 @@ across 53 runs, so a port-scoped rule is impossible) and the impaired matrix (§
 still pending: every photon number, the ≥120 Hz row (present and empty — no such display on this box),
 goodput at 1/2% loss, single-frame-loss recovery, congestion-control step response, arm A's ICE restart,
 and HEVC on arms A and C.
+
+### 2026-09-18 — **gate G1 CLOSED. the video path is arm B.**
+
+owner signed off on the LAN rows. 0.1 and 0.2 marked complete; progress 12/80. **wave 1's 1.1 and 1.2 are
+unblocked**, as are 2.5, 2.6, 3.8, 3.10 and 3.11 when their waves come. write them against arm B: an RTP
+track rendered into a `<video>` element, playout-delay `min=0, max ∈ (0, 500]`.
+
+the LAN row (host here, client a macOS box on the same switch, n=150 each):
+
+| arm | `_rv` p50 | `_rv` p95 |
+| --- | --- | --- |
+| **B** rtp track → `<video>` | **31.17** | **32.18** (sd 0.58) |
+| A datachannel → webcodecs | 20.15 | **1067.58** |
+
+arm A fails both clauses of the amended rule and the original p50-only rule too. arm C was already out. the
+§2 amendment turned out not to change the outcome — it changed which arm *looked* like winning on
+same-machine data, and the LAN row corrected that on its own.
+
+**two same-machine conclusions were wrong, in opposite directions** (memo §14.3). arm B's 30–82 ms p95 was
+host and client contending for one CPU, not chrome's render scheduling — on the LAN it is 32.18 ms p95 with
+sd 0.58, so the p95 follow-up work scheduled against arm B is not needed. and arm A's "predicted blocker did
+not materialise" was an artifact of loopback having no loss: review-1 F1 was right about the mechanism and
+wrong only about the symptom. measured `net+jitter` p95 1023 ms sits within noise of `sctp-proto`'s
+`RTO_MIN = 1000 ms`. stated as a hypothesis with its evidence — not confirmed by re-running arm A patched,
+and it would not change the decision since patch 3 floors RTO at 400 ms.
+
+the lesson worth keeping: **same-machine rows misled in both directions and the single LAN run caught both.**
+0.1 §2.2's "ranking only" label was not pedantry.
+
+**still open, none of it blocking:** the impaired matrix (§10) is now product validation against arm B alone,
+not a gate — clumsy 0.3 cannot express the 10 ms jitter term at all, so it will run as 2% loss + 40 ms RTT
+with that cell unproduced. every photon number. the ≥120 Hz row (the macOS client is 60 Hz too). goodput at
+1/2% loss, single-frame-loss recovery, HEVC on the LAN.
+
+**the largest open risk is now in the transport layer, not the video path**: str0m's pacer is unusable as
+configured (BWE on → 1015.6 ms p50 of pacer queue, GoogCC settling at 8.9 Mbps, with zero loss/PLI/NACK in
+getStats so nothing standard reveals it). arm B uses str0m too, so this lands on tasks 1.2, 3.8 and 4.7
+regardless. memo §13.4 carries the rest.
