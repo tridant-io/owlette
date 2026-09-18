@@ -24,6 +24,13 @@ const BASENAME: &str = "swoop.log";
 /// `%PROGRAMDATA%\Owlette\logs\swoop`, the directory `shared_utils.SWOOP_LOG_DIR`
 /// names on the agent side. Off Windows there is no ProgramData and no service
 /// yet, so a temp directory keeps the crate runnable for Wave 9's port.
+///
+/// Public because the crash dump lands beside the log and there must not be a
+/// second spelling of where that is.
+pub fn dir() -> PathBuf {
+    log_dir()
+}
+
 fn log_dir() -> PathBuf {
     match std::env::var_os("PROGRAMDATA") {
         Some(root) => PathBuf::from(root).join("Owlette").join("logs").join("swoop"),
