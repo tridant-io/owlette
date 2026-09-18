@@ -1,9 +1,10 @@
 /**
  * the viewer's signaling socket to the swoop worker.
  *
- * one job: keep a websocket to `/v1/room/{site}/{machine}` open, decode every
- * frame through `protocol.ts` and hand it up. it owns no peer connection, no
- * media and no react state — `peer.ts` and the page do.
+ * one job: keep a websocket to the room url the api handed us open, decode
+ * every frame through `protocol.ts` and hand it up. it owns no peer connection,
+ * no media and no react state — `peer.ts` and the page do. it does not build
+ * the url either: that shape belongs to the deployment, not to the bundle.
  *
  * three things here are not obvious:
  *
@@ -86,10 +87,15 @@ export interface SwoopSocket {
 export type SwoopSocketFactory = (url: string, protocols: string[]) => SwoopSocket;
 
 export interface SwoopSignalingOptions {
-  /** the worker's origin, `https://…` or `wss://…`; the room path is ours. */
-  url: string;
-  siteId: string;
-  machineId: string;
+  /**
+   * the full room url to dial, `wss://…/v1/room/{site}/{machine}`, exactly as
+   * the session-create route returned it. it is used as given: the server is
+   * the only party that knows its own deployment, so a path prefix or a moved
+   * room route must not need a browser release. `/api/agent/swoop/doorbell-token`
+   * already hands the agent a full url, and two meanings of `signalUrl` would
+   * be worse than either.
+   */
+  roomUrl: string;
   /** mints a fresh viewer jwt. called once per dial — never cached here. */
   mintToken: () => Promise<string>;
   onMessage: (message: SignalingMessage) => void;
@@ -107,14 +113,38 @@ function defaultSocketFactory(url: string, protocols: string[]): SwoopSocket {
   return new WebSocket(url, protocols) as unknown as SwoopSocket;
 }
 
-/** `https://host` → `wss://host/v1/room/site/machine`. the token is not here. */
+/**
+ * `https://host` → `wss://host/v1/room/site/machine`. the shape the api builds,
+ * kept here because it documents the route and is what the server-side tests
+ * assert against. **this module does not call it** — it dials what it is given.
+ */
 export function roomUrl(base: string, siteId: string, machineId: string): string {
   const origin = base.replace(/\/+$/, '').replace(/^http/, 'ws');
   return `${origin}/v1/room/${encodeURIComponent(siteId)}/${encodeURIComponent(machineId)}`;
 }
 
+/**
+ * a room url is validated, never trusted. `ws:` is the specific failure worth
+ * naming: `SWOOP_SIGNAL_URL` pointed at a local wrangler yields one, and the
+ * viewer token would then cross the wire in plaintext. the python doorbell
+ * refuses the same thing.
+ */
+function assertRoomUrl(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new RangeError('swoop signaling: room url does not parse');
+  }
+  if (parsed.protocol !== 'wss:') {
+    throw new RangeError(`swoop signaling: room url must be wss:, got ${parsed.protocol}`);
+  }
+  return value;
+}
+
 export class SwoopSignaling {
   private readonly options: SwoopSignalingOptions;
+  private readonly url: string;
   private readonly socketFactory: SwoopSocketFactory;
   private readonly now: () => number;
 
@@ -132,6 +162,7 @@ export class SwoopSignaling {
 
   constructor(options: SwoopSignalingOptions) {
     this.options = options;
+    this.url = assertRoomUrl(options.roomUrl);
     this.socketFactory = options.socketFactory ?? defaultSocketFactory;
     this.now = options.now ?? (() => Date.now());
   }
@@ -293,10 +324,7 @@ export class SwoopSignaling {
     const decoded = decodeJwt(token);
     this.tokenExpiresAtMs = decoded.ok ? decoded.value.claims.exp * 1000 : 0;
 
-    const socket = this.socketFactory(
-      roomUrl(this.options.url, this.options.siteId, this.options.machineId),
-      [SWOOP_SUBPROTOCOL, `${TOKEN_SUBPROTOCOL_PREFIX}${token}`],
-    );
+    const socket = this.socketFactory(this.url, [SWOOP_SUBPROTOCOL, `${TOKEN_SUBPROTOCOL_PREFIX}${token}`]);
     this.socket = socket;
 
     socket.onopen = () => {

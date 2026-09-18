@@ -13,6 +13,9 @@ import {
 /** the module's ladder ceiling: one advance past it always fires a retry. */
 const BACKOFF_CEILING_MS = 15_000;
 
+/** what `POST .../swoop/sessions` returns: the full room url, path included. */
+const ROOM_URL = 'wss://swoop-signal.example.com/edge/v1/room/site_1/machine_1';
+
 // ---------------------------------------------------------------------------
 // fakes
 // ---------------------------------------------------------------------------
@@ -122,9 +125,7 @@ function harness(tokenLifetimeMs = 60_000): Harness {
   let minted = 0;
 
   const signaling = new SwoopSignaling({
-    url: 'https://swoop-signal.example.com/',
-    siteId: 'site_1',
-    machineId: 'machine_1',
+    roomUrl: ROOM_URL,
     mintToken: async () => {
       minted += 1;
       return mintFake(Math.floor((clock.ms + tokenLifetimeMs) / 1000), minted);
@@ -153,16 +154,40 @@ async function settle(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 describe('swoop signaling', () => {
-  it('builds the room url from the ids and never puts the token in it', async () => {
+  it('dials the room url the api handed it, deployment path and all', async () => {
     const h = harness();
     await h.signaling.connect();
 
+    // the server owns this shape: a path prefix must not need a browser release,
+    // and rebuilding the url here is what doubled the path for task 4.2.
+    expect(h.sockets).toHaveLength(1);
+    expect(h.sockets[0].url).toBe(ROOM_URL);
+    expect(h.sockets[0].url).not.toMatch(/jwt|token|eyJ/);
+  });
+
+  it('refuses a room url that is not wss, rather than dialling plaintext', () => {
+    const options = {
+      mintToken: async () => 'unused',
+      onMessage: () => undefined,
+      socketFactory: () => {
+        throw new Error('must not dial');
+      },
+    };
+
+    // a local wrangler behind SWOOP_SIGNAL_URL yields exactly this.
+    expect(() => new SwoopSignaling({ ...options, roomUrl: 'ws://localhost:8787/v1/room/s/m' })).toThrow(
+      /must be wss:, got ws:/,
+    );
+    expect(() => new SwoopSignaling({ ...options, roomUrl: 'https://worker/v1/room/s/m' })).toThrow(
+      /must be wss:, got https:/,
+    );
+    expect(() => new SwoopSignaling({ ...options, roomUrl: 'not a url' })).toThrow(/does not parse/);
+  });
+
+  it('still exports the room-url shape the api builds', () => {
     expect(roomUrl('https://worker.example.com/', 'site_1', 'machine_1')).toBe(
       'wss://worker.example.com/v1/room/site_1/machine_1',
     );
-    expect(h.sockets).toHaveLength(1);
-    expect(h.sockets[0].url).toBe('wss://swoop-signal.example.com/v1/room/site_1/machine_1');
-    expect(h.sockets[0].url).not.toMatch(/jwt|token|eyJ/);
   });
 
   it('presents the token as a second subprotocol beside the version subprotocol', async () => {
@@ -365,9 +390,7 @@ describe('swoop signaling', () => {
     const fatals: SwoopSignalFatal[] = [];
     const sockets: FakeSocket[] = [];
     const signaling = new SwoopSignaling({
-      url: 'https://swoop-signal.example.com',
-      siteId: 'site_1',
-      machineId: 'machine_1',
+      roomUrl: ROOM_URL,
       mintToken: async () => {
         throw new Error('403');
       },

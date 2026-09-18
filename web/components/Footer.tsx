@@ -43,7 +43,15 @@ export function Footer() {
 
   // Hide footer on admin pages (admin panel has its own footer)
   // Hide footer on landing page (has its own LandingFooter)
-  if (pathname?.startsWith('/admin') || pathname === '/' || pathname?.startsWith('/hoot')) {
+  // Hide footer on /swoop — a live remote session is full-window, and the root
+  // layout renders this as a sibling of the page, so its own layout cannot
+  // remove it.
+  if (
+    pathname?.startsWith('/admin') ||
+    pathname === '/' ||
+    pathname?.startsWith('/hoot') ||
+    pathname?.startsWith('/swoop')
+  ) {
     return null;
   }
 
