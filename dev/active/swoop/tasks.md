@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 14/80 complete
+**Progress**: 26/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -222,7 +222,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 2: agent integration, server libraries, CI
 
-- [ ] **Task 2.1: spawn helper + SwoopManager** `[agent]`
+- [x] **Task 2.1: spawn helper + SwoopManager** `[agent]`
   - Files: `agent/src/swoop_spawn.py`, `agent/src/swoop_manager.py`, `agent/tests/unit/test_swoop_spawn.py`, `agent/tests/unit/test_swoop_manager.py`
   - Do: `swoop_spawn.py` owns the launch. Duplicate the service's SYSTEM token and retarget `TokenSessionId` to
     the console session exactly as `owlette_service.py:2777-2827` does — never `runas`, never `ShellExecute`,
@@ -246,7 +246,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `agent/.venv/Scripts/python -m pytest agent/tests/unit/test_swoop_spawn.py agent/tests/unit/test_swoop_manager.py -q` passes with cases for: a DACL mismatch refusing the spawn; a version mismatch refusing the spawn; the bundle string never appearing in captured log records; `kill()` writing the kill line before terminating the job; crash backoff growing and capping; the spawn-rate ceiling refusing and logging; every stdout event type parsed; and every manager method returning without blocking. `agent/.venv/Scripts/python -m pytest agent/tests/ -q` stays green and `python -m py_compile agent/src/swoop_spawn.py agent/src/swoop_manager.py` passes.
   - Depends on: 1.1, 1.5
 
-- [ ] **Task 2.2: capability heartbeat + fast command types** `[agent]`
+- [x] **Task 2.2: capability heartbeat + fast command types** `[agent]`
   - Files: `agent/src/firebase_client.py`, `agent/src/swoop_capability.py`, `agent/tests/unit/test_swoop_capability.py`, `agent/tests/unit/test_firebase_client_heartbeat.py`
   - Do: In the heartbeat write at `firebase_client.py:1527-1538`, add three **dotted** keys beside the existing
     `'capabilities.displayRemoteApply': 1` — `'capabilities.swoop'`, `'osFamily'`, `'arch'`. Dotted keys only:
@@ -263,7 +263,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `agent/.venv/Scripts/python -m pytest agent/tests/unit/test_swoop_capability.py agent/tests/unit/test_firebase_client_heartbeat.py -q` passes with: a table test pinning every C3 mapping (`win32→windows`, `darwin→macos`, `linux→linux`; `AMD64→x64`, `x86_64→x64`, `arm64→arm64`, `aarch64→arm64`); a test that a reader treating an **absent** `osFamily` as `windows` is the documented contract; a test that the heartbeat payload contains the three dotted keys and still contains `capabilities.displayRemoteApply`; a test that `capabilities.swoop` is 0 when the exe is absent; and a test that all three swoop types are in `_FAST_COMMAND_TYPES`. Full suite `agent/.venv/Scripts/python -m pytest agent/tests/ -q` stays green.
   - Depends on: 1.5
 
-- [ ] **Task 2.3: doorbell client** `[agent]`
+- [x] **Task 2.3: doorbell client** `[agent]`
   - Files: `agent/src/swoop_doorbell.py`, `agent/requirements.txt`, `agent/tests/unit/test_swoop_doorbell.py`
   - Do: Build the self-supervised doorbell socket, the documented exception to the ConnectionManager rule
     (plan.md owner ruling; `research/review-3-delivery.md` F1). Interface:
@@ -284,7 +284,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `agent/.venv/Scripts/python -m pytest agent/tests/unit/test_swoop_doorbell.py -q` passes with cases for: reconnect backoff growing and capping across repeated failures; a simulated 10-minute outage producing zero calls into any ConnectionManager method (assert with a strict mock); a well-formed ring invoking `on_ring` with the sid; a ring carrying any extra field being rejected; the token never appearing in captured log records; and `stop()`/`shutdown_event` ending the thread within its timeout. `pip install -r agent/requirements.txt` resolves, and the full suite `agent/.venv/Scripts/python -m pytest agent/tests/ -q` stays green.
   - Depends on: 1.1, 1.5
 
-- [ ] **Task 2.4: web server libraries** `[agent]`
+- [x] **Task 2.4: web server libraries** `[agent]`
   - Files: `web/lib/swoop/tokens.server.ts`, `web/lib/swoop/keys.server.ts`, `web/lib/swoop/turn.server.ts`, `web/lib/swoop/sessionStore.server.ts`, `web/lib/swoop/policy.server.ts`, `web/lib/swoop/signal.server.ts`, `web/__tests__/lib/swoop/tokens.server.test.ts`, `web/__tests__/lib/swoop/keys.server.test.ts`, `web/__tests__/lib/swoop/turn.server.test.ts`, `web/__tests__/lib/swoop/sessionStore.server.test.ts`, `web/__tests__/lib/swoop/policy.server.test.ts`, `web/__tests__/lib/swoop/signal.server.test.ts`, `web/__tests__/rules/swoopSessions.test.ts`
   - Do: Six server-only libraries; Wave 3 wires the routes. `tokens.server.ts`: EdDSA mint/verify
     with `node:crypto` Ed25519 — header carries `alg: 'EdDSA'` and `kid` from `SWOOP_JWT_KID`; claims per
@@ -316,7 +316,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cd web && npx tsc --noEmit` is clean, `npx eslint web/lib/swoop/*.ts` reports nothing new, and `npm test -- swoop` passes with cases for: a minted viewer token round-tripping and a tampered one failing; a token missing `fp` refused at mint; `exp` capped at 60 s; two viewers deriving different `k` from one `K_session` and neither recovering `K_session`; TURN mint sending `customIdentifier` and revoke hitting the documented path; a session document write rejected in test if it contains any key-shaped field; an api-key caller refused with `api_key_not_permitted`; a step-up window that cannot be opened from a timestamp; and a member refused when `membersMayWatch` is false. `cd web && npm run test:rules` passes including the new spec proving member, site admin, owner and agent contexts are all denied read and write on `swoop_sessions`.
   - Depends on: 1.1, 1.3, 1.4
 
-- [ ] **Task 2.5: rust-build.yml** `[agent]`
+- [x] **Task 2.5: rust-build.yml** `[agent]`
   - Files: `.github/workflows/rust-build.yml`
   - Do: There is no Rust CI today. Create one workflow templated on `.github/workflows/agent-tests.yml`:
     `permissions: contents: read` only, a `concurrency` group keyed on the ref with
@@ -336,7 +336,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: the workflow file parses as YAML; running each job's commands locally passes — with the working directory `agent/swoop`, `cargo clippy -- -D warnings` and `cargo test`; likewise in `agent/host` and `desktop/src-tauri`; every `uses:` is a 40-character SHA with a version comment; `permissions`, `concurrency`, `timeout-minutes` and path filters are all present; `pipx run zizmor .github/workflows/rust-build.yml` (if available) reports nothing above informational; and the first push touching a Rust path shows the run green.
   - Depends on: 1.2
 
-- [ ] **Task 2.6: build + installer** `[agent+human]`
+- [x] **Task 2.6: build + installer** `[agent+human]`
   - Files: `agent/build_installer_full.bat`, `agent/build_installer_quick.bat`, `agent/owlette_installer.iss`, `.github/workflows/build-installer.yml`
   - Do: Read `.claude/skills/build-system.md` first. In `build_installer_full.bat`, extend the `[7/9]` Rust
     step (`:262-304`) to build `agent\swoop` too — `pushd`, `cargo build --release`, `popd`, plus the host's
@@ -358,7 +358,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `build_installer_full.bat` (run non-interactively with stdin from NUL per the build skill) produces both `owlette-swoop.exe` in the package and `Owlette-Installer-vX.Y.Z.exe`; `build_installer_quick.bat` re-packages without rebuilding; `iscc` compiles the .iss with no warnings; on a clean install `icacls "C:\ProgramData\Owlette\swoop"` shows SYSTEM:F, Administrators:F, Users:RX and no inherited ACEs; the Defender scan step reports no detection; and a **human upgrade test from the oldest fielded version** (not from dev) leaves a running service, a swoop directory with the protected DACL, no stranded `owlette-swoop.exe`, and no UAC prompt at any point.
   - Depends on: 1.2
 
-- [ ] **Task 2.7: agent command handlers** `[agent]`
+- [x] **Task 2.7: agent command handlers** `[agent]`
   - Files: `agent/src/swoop_commands.py`, `agent/tests/unit/test_swoop_commands.py`
   - Do: Create the command-router module, shaped exactly like `machine_commands.py:45-53`: a module-level
     `register_handlers(router: CommandRouter) -> None` that calls `router.register("<type>")(handler)` for
@@ -379,7 +379,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `agent/.venv/Scripts/python -m pytest agent/tests/unit/test_swoop_commands.py -q` passes with cases for: all three types registered on a fake router; each handler calling exactly one manager method — `ensure_streamer(sid)`, `kill(reason)` built from the command type and the optional sid, `on_session_change()`; a payload with an extra field refused; a `swoop_session_requested` with no sid refused; a missing `service.swoop_manager` returning an `Error:` string rather than raising; and every handler returning without any network, sleep or filesystem call (assert with strict mocks). The full suite `agent/.venv/Scripts/python -m pytest agent/tests/ -q` stays green.
   - Depends on: 1.1
 
-- [ ] **Task 2.8: signaling Worker** `[agent]`
+- [x] **Task 2.8: signaling Worker** `[agent]`
   - Files: `infra/swoop-signal/package.json`, `infra/swoop-signal/package-lock.json`, `infra/swoop-signal/wrangler.toml`, `infra/swoop-signal/tsconfig.json`, `infra/swoop-signal/src/index.ts`, `infra/swoop-signal/src/room.ts`, `infra/swoop-signal/src/jwt.ts`, `infra/swoop-signal/src/messages.ts`, `infra/swoop-signal/test/**`
   - Do: Create the Cloudflare Worker project (its own dev dependencies are approved; this is **not** part of
     `web/`, so nothing is added to `web/package.json`). `wrangler.toml` declares `env.dev` and `env.prod`, the
@@ -399,7 +399,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cd infra/swoop-signal && npm ci && npx vitest run` passes with cases for: a valid host, viewer and doorbell token accepted and an unknown `kid` refused; a token for machine B unable to reach machine A's room even when the URL names A; a ring without the shared secret refused; a ring with an extra field refused; flood limits closing a socket that exceeds them; `/health` answering 200 without auth; and every signaling message type round-tripping against Task 1.1's golden vectors. `npx wrangler deploy --dry-run --outdir dist -e dev` and `-e prod` both succeed; `package-lock.json` is committed; `npx tsc --noEmit` is clean.
   - Depends on: 1.1, 1.4
 
-- [ ] **Task 2.9: web protocol library** `[agent]`
+- [x] **Task 2.9: web protocol library** `[agent]`
   - Files: `web/lib/swoop/protocol.ts`, `web/__tests__/lib/swoop/protocol.test.ts`
   - Do: Implement the browser half of `agent/swoop/PROTOCOL.md` as one dependency-free module: TypeScript
     types plus encode/decode functions for the signaling messages, the binary frame header (`DataView`, exact
@@ -417,7 +417,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cd web && npm test -- swoop/protocol` passes with every vector in `index.json` exercised (the test fails if the manifest gains an entry the spec does not cover); `npx eslint web/lib/swoop/protocol.ts web/__tests__/lib/swoop/protocol.test.ts` reports nothing new; `npx tsc --noEmit` is clean; and the module imports nothing outside `web/lib/swoop/`.
   - Depends on: 1.1
 
-- [ ] **Task 2.10: Rust protocol core** `[agent]`
+- [x] **Task 2.10: Rust protocol core** `[agent]`
   - Files: `agent/swoop/src/bundle.rs`, `agent/swoop/src/ipc.rs`, `agent/swoop/src/transport/framing.rs`, `agent/swoop/src/signal/messages.rs`, `agent/swoop/tests/protocol_vectors.rs`
   - Do: Fill the four stubs Task 1.2 created, against `agent/swoop/PROTOCOL.md`. `bundle.rs`: parse and
     validate the stdin bundle line — reject unknown or missing fields, hold the JWT public key(s) and `kid`,
@@ -438,7 +438,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: with the working directory `agent/swoop` (never `--manifest-path`), `cargo clippy -- -D warnings` and `cargo test` both pass; `tests/protocol_vectors.rs` iterates every entry in `index.json`, round-trips each accept vector byte-identically and rejects each reject vector with the manifest's reason code; a test asserts an expired-against-anchor token is refused while the same token passes with a later anchor; a test asserts no bundle field appears in any `Display`/`Debug` output of the error types; and `Cargo.toml` and `Cargo.lock` are unchanged by this task.
   - Depends on: 1.1, 1.2
 
-- [ ] **Task 2.11: sid-only command action module** `[agent]`
+- [x] **Task 2.11: sid-only command action module** `[agent]`
   - Files: `web/lib/actions/requestSwoopSession.server.ts`, `web/__tests__/lib/actions/requestSwoopSession.server.test.ts`
   - Do: Write the only code in the product that may enqueue a swoop command. Signature mirrors
     `executeMachineCommand.server.ts` without reusing it: `requestSwoopSession({ type, sid, siteId, machineId,
@@ -460,7 +460,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cd web && npm test -- requestSwoopSession` passes with cases asserting: the written document's key set is exactly the envelope plus `type`, plus `sid` for the types that carry one and **no** `sid` key at all for `swoop_refresh` (a deep key comparison per type, so a future field addition fails the test); each of the three types writing successfully; a non-swoop type rejected; the offline 409 for session-request and the write-anyway behaviour for kill; every `swoop_*` type absent from `ALLOWED_COMMAND_TYPES`; and the generic commands action rejecting a swoop type with `unsupported_command_type`. `npx eslint web/lib/actions/requestSwoopSession.server.ts` reports nothing new and `npx tsc --noEmit` is clean.
   - Depends on: 1.1
 
-- [ ] **Task 2.12: browser matrix spike** `[agent+human]`
+- [x] **Task 2.12: browser matrix spike** `[agent+human]` — agent half done; Safari/Firefox/macOS are PENDING [human], protocol in the memo §9
   - Files: `agent/swoop/spikes/browser-matrix/**`, `dev/active/swoop/spikes/2.12-browser-matrix.md`
   - Do: Build a static harness (HTML + a small TS/JS module + canned encoded chunks; **no `Cargo.toml`
     anywhere under `spikes/`**, which would break the crate build) that a human runs on each target browser and
@@ -1102,3 +1102,119 @@ msrv 1.91.0, verified both directions (`+1.91.0` checks, `+1.90.0` refused by `m
 pacer is noted beside its pin and is why `transport/pacer.rs` exists; it lands on 3.8 and 4.7.
 
 **next**: wave 2 (agent integration, server libraries, CI). no gate in the way.
+
+### 2026-09-18 — Task 2.12 (browser matrix), agent half
+
+Harness at `agent/swoop/spikes/browser-matrix/` — static page, node server, canned 1080p60 annex-b chunks for
+h.264 and hevc, no `Cargo.toml`, no `package.json`, no build step. Memo:
+`dev/active/swoop/spikes/2.12-browser-matrix.md`. Gates re-run from `agent/swoop`: `cargo clippy -- -D warnings`
+clean, `cargo test` 28 + 5 passed / 0 failed.
+
+**Measured here (Chrome 153 and Edge 153 on Windows, plus Playwright's bundled browser):**
+- **Edge offers no `video/H265` in WebRTC at all** while decoding hevc happily through WebCodecs — arm B on
+  Edge is h.264. `research/02-browser-client.md` listed this as unverified; it is now measured.
+- HEVC has **no software decoder** on either Chromium browser; `prefer-software` is refused and forcing it
+  closes the codec. A viewer that negotiates hevc without hardware decode gets a black stream.
+- `RTCCertificate.getFingerprints()` returns **lowercase** hex, the sdp line is **uppercase**, PROTOCOL.md §9's
+  canonical form is uppercase — the browser must uppercase before minting, and `fp` comparisons must be
+  case-insensitive.
+- **No static-desktop stall on Windows**, and a 2 Hz host floor did not help (it split one freeze into six of
+  the same total duration). The stall claim in D5 is a macOS claim and is untested.
+- **No decoder ceiling at 8 × 1080p60**, h.264 or hevc, 0 errors, 0 black frames.
+- **Playwright's bundled Chrome for Testing decodes h.264 for real, headless included** — Task 8.7 does not
+  need a stubbed decoder. HEVC works headed only (no GPU in headless), so an e2e spec must use h.264.
+- review-1 F7 did not reproduce on Edge either: 24/24 readback configurations correct, same cost ordering as
+  spike 0.1 §6.
+
+**PENDING [human] — five browser columns, protocol in memo §9 with copy-paste commands per browser:**
+Safari/macOS, Chrome/macOS, Firefox (either OS — not installed on this box), Edge without the HEVC Video
+Extension (this box has `Microsoft.HEVCVideoExtension 2.4.109.0` installed), and prompt behaviour for keyboard
+lock / pointer lock / clipboard on every browser including the two measured here (automation sets the
+permission state, which is exactly the observable a prompt is). The macOS rows are the ones that matter most:
+they decide whether the host needs a floor frame rate at all.
+
+Task 2.12 is ticked as the agent half; the `[human]` half is outstanding. `**Progress**` at the top of this
+file was left alone because other Wave 2 tasks were running in parallel contexts.
+
+### 2026-09-18 — **wave 2 complete.** 26/80.
+
+all twelve ran in parallel. verified here after they settled, not taken from the reports: agent suite
+**1334 passed / 6 skipped**; `agent/swoop` clippy clean, **28 unit + 5 vector tests**; web `tsc` exit 0,
+**5412 passed / 272 suites**; firestore rules **139 passed**; signalling worker **66 passed**, both
+`wrangler deploy --dry-run` clean. `firestore.rules` untouched.
+
+**the two protocol halves agree.** 2.9 (typescript) and 2.10 (rust) implemented the same contract
+independently and both landed on **39 vectors, 26 accept / 13 reject, every reason code matching**. that is
+the strongest evidence the spec is implementable. 2.9's eleven ambiguity findings were relayed to 2.10
+mid-task; it matched six independently, disagreed on three, and found nine more.
+
+**three cross-task conflicts were caught and reconciled before commit, not after:**
+1. **ring/kill addressing.** 2.8 built path-addressed, 2.4 built body-addressed. adopted **2.4's**
+   `{site, machine, sid}` body — it is the shape spike 0.4 measured and the addressing argument is weak
+   because the ring secret already authenticates the caller as the api. failure mode had it shipped: a 404
+   that the client degrades to the polled command, so remote sessions would silently take ~35 s instead of
+   ~1.5 s with nothing in the logs.
+2. **auth close code.** 2.8 emitted 4001, 2.3 expected 4401, and the error frame put the category in
+   `reason` where 2.3 reads `code`. adopted **4401** plus a three-word vocabulary
+   (`auth | token_expired | unknown_kid`) on all three surfaces. without it a `kid` rotation costs every
+   machine a full backoff ladder instead of a sub-second re-mint.
+3. **bundle refusal precedence.** 2.10 chose version→shape, 2.9 chose shape→version. **version-first is
+   correct and PROTOCOL.md §7 needs the sentence**: a stale exe after a delayed-until-reboot upgrade gets a
+   v2 bundle it cannot parse; under shape-first the machine reports "bundle invalid" and the service
+   replaces the *bundle* instead of the *exe*, forever. no vector discriminates, which is why both readings
+   passed.
+
+**spec gaps to close in PROTOCOL.md** (recorded, not yet applied): §7 bundle precedence as above; §2's role
+refusal must be decided from the `type` string **before** the body is parsed (one vector is an `answer`
+missing its required `mac`, and a schema-first decoder returns `malformed_message` where the manifest wants
+`wrong_role` — it is also the right security behaviour, a forged frame should not learn which fields the
+room wanted); ndjson comparison is byte-exact (2.10's reading, strictly stronger); `hello.sid` is optional
+(a doorbell names no session); `index.json` should carry `agentVersion` so both halves stop hardcoding
+"read it from bundle-valid.json", which is circular for the accept case.
+
+**design memos that would have broken against the real protocol.** 0.6 specified the ring frame as exactly
+`{"type":"ring","sid":…}`, but §2 and the golden vector show the room stamping `sentAtMs`/`serverTimeMs` —
+implementing 0.6 literally would have rejected every real ring. 0.6 also said to send `bye` on close, which
+earns `wrong_role` for a doorbell.
+
+**a pre-existing repo bug, unrelated to swoop:** `agent/host/Cargo.lock` and `desktop/src-tauri/Cargo.lock`
+recorded 3.3.3 and 3.3.4 against 3.3.5 manifests, so `cargo test --locked` failed on a clean checkout.
+fixed in `323afb5f`. root cause: `sync-versions.js` rewrites each `Cargo.toml` but never the lockfile — it
+should, or every future version bump re-breaks this.
+
+**the installer and the agent agree on the dacl**, proven rather than assumed: 2.6 ran the literal `icacls`
+argument string the `.iss` builds, read back the descriptor, and compared it to 2.1's `_expected_aces()` —
+the function the agent uses to decide whether to refuse a spawn. exact match, no missing or extra aces.
+that is the seam most likely to fail silently in the field.
+
+**open items carried forward:**
+- **task 0.3 never ran and the plan is internally inconsistent about it.** 0.3's "blocks" line names 2.1;
+  2.1's "depends on" line does not name 0.3. 2.1 was executed on the depends-on line. consequence:
+  `swoop_spawn.py` — the SYSTEM-privileged launch — is unit-tested against mocks and **has never been
+  executed against real hardware**. the token retarget, handle-list restriction, job kill-on-close, desktop
+  switching, SAS and the "no UAC prompt" guarantee are all unverified. **0.3 must run before wave 3 wires
+  this into the service.** fix the depends-on line too.
+- **two-key rotation has no env home.** §11 requires two active signing keys; `scripts/env-manifest.json`
+  registers one. needs `SWOOP_JWT_PUBLIC_KEY_PREVIOUS` + `SWOOP_JWT_KID_PREVIOUS` for railway-dev,
+  railway-prod and vercel-prod. assign to task 3.4.
+- **task 3.3 must return `signalUrl`** from `POST /api/agent/swoop/doorbell-token`: the agent has no
+  `SWOOP_SIGNAL_URL` and the room is addressed from the token's claims, so the server is the only source.
+  a response missing it is treated as a mint failure.
+- **task 3.9's browser client must re-mint before renegotiating.** a viewer that renegotiates after its
+  60 s token expires now gets `token_expired` + 4401. new behaviour, deliberate — §11 rests the session on
+  `fp` + `exp` and an expired token must not buy an open socket.
+- **`SwoopManager.kill()` takes no sid**, so a late `swoop_kill` naming a stale session kills whichever is
+  live. make the sid a parameter and no-op on mismatch — one line in each of two files, cheaper now than
+  after wave 3 builds on it.
+- **whatever mints a sid must satisfy `^[A-Za-z0-9_-]{1,128}$`** (2.11's narrowing, so a jwt or url cannot
+  ride in the one field the command document permits). nothing mints one yet; this constrains wave 3.
+- **`build-installer.yml` installs no rust toolchain**, using whatever `windows-latest` ships, while swoop
+  declares `rust-version = 1.91.0`. if the runner image trails, the release build fails outright.
+- **`agent/swoop/Cargo.lock` is not registered** in `dependabot.yml` or `check-security-alerts.mjs`, so any
+  advisory against it resolves UNRESOLVED and blocks a release. task 3.5.
+- `rust-build.yml` has never run; actionlint/zizmor are not installed here.
+- **edge exposes no `video/H265` in rtcrtpreceiver capabilities** though it decodes hevc through
+  webcodecs — **arm b on edge is h264**. and playwright's bundled chrome is not codec-stripped, so task 8.7
+  needs no stubbed decoder but must never assert on hevc.
+- browser matrix: 3 of 8 columns measured. safari, firefox (not installed here), chrome-on-macos and
+  edge-without-the-hevc-extension are pending with a protocol in the memo §9.
