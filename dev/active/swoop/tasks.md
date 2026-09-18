@@ -950,3 +950,71 @@ is not created.
   nothing is red. Add it to Task 8.5's file list.
 - **`context.md:57` has a stale line number**: it puts `cleanup_old_logs` at `:1110`; it was at `:1097`
   before 1.5 and is at `:1126` after. Re-locate by symbol.
+
+### 2026-09-18 — Tasks 0.1 and 0.2, agent halves complete. **G1 NOT reached.**
+
+Both tasks stay **unchecked**: each has a human half outstanding and 0.2's done-when includes owner
+sign-off. Progress stays 10/80. Commits `3f133ab7` (0.1), `4d20f1b6` / `ef616528` / `90c1370c` (0.2
+stages 1–3).
+
+**0.1** built the harness and the measurement contract every later latency number is quoted in. Key
+measured results: hook→vblank 10.22 ms p50 (n=190); the compositor wait is **10.07 ms, not the 8.33 ms**
+a half-frame assumption gives, so any budget carrying 8.3 ms under-counts. QPC↔`performance.now()` offset
+±0.199 ms at n=400, drifting 1.31 ppm — measure once per session, and **±0.2 ms is the floor on how finely
+any cross-clock stage may be quoted.** `C_photon(60 Hz) = 10.1 ms + S`, S PENDING. Two contradictions of
+the research: review-1 **F7 does not reproduce** on Chrome 153 (24 readback configurations all returned
+correct pixels; the rule stands but the reason is cost, 0.6–2.3 ms, not emptiness), and rAF's `timestamp`
+ran 16.1 ms negative relative to a preceding draw, supporting D17.
+
+**0.2** measured all three arms, same-machine only.
+
+| arm | `_rv` p50 | `_rv` p95 |
+| --- | --- | --- |
+| A — DataChannel + WebCodecs | 13.15 | 14.5–15.6 (4 modes, tight) |
+| B — RTP → `<video>` | 15.48 | 30.7–82.1 (9 runs, scattered) |
+| C — RTCRtpScriptTransform | 22.53 | 30.7 |
+
+**D3 was amended by owner ruling (2026-09-18)** and the amendment is recorded in the memo §2 *before* the
+deciding rows existed, so it cannot be tuned to them. Original: winner beats B by ≥15 ms **p50** on LAN.
+Amended: ≥15 ms p50 **or** betters B's p95 by ≥15 ms, and does not lose at 2% loss / 40 ms RTT; ties still
+go to the simpler path. Reason: the p50 rule was blind to a tail 2–4× worse on arm B, which is visible
+stutter in an interactive product. **The amendment changes the winner** — under the original rule arm A's
+5.7 ms margin lost to the tie-break and B survived; under the amended rule A clears the p95 clause against
+every B figure measured here. **Arm C is out** either way: it fails the clause and loses on p50.
+
+**G1 cannot be closed.** The two rows the rule is decided on do not exist: the **real LAN hop** (needs a
+browser on a second physical machine) and the **impaired matrix**. §13 is provisional and says so in the
+memo's first line. Sign-off, when it happens, means agreeing to the amended rule and to arm C's exclusion —
+**not** to a transport. The transport decision waits for those rows.
+
+**clumsy 0.3 cannot express the specified impairment.** It has lag, drop, throttle, duplicate,
+out-of-order, tamper, TCP RST and bandwidth — and **no jitter module**. 2% loss and 40 ms RTT are
+producible; the **10 ms jitter term is not**, and `throttle` / `out-of-order` are not jitter. The matrix
+will run with that cell explicitly unproduced rather than approximated and labelled as if it were the
+specified condition. `tc netem delay 20ms 5ms distribution normal` on a box in the path is what would
+express it — a hardware request, not a software one. Also: the clumsy filter must be **`udp` only**, because
+the QPC clock exchange runs over TCP 17441 and impairing it would take the offset from ±0.25 ms to ~±20 ms
+and invalidate every cross-clock figure in the impaired row.
+
+**Findings that bear on D4, not D3** (memo §13.4): str0m's pacer is **not usable as configured** — BWE on
+gives pacer queue delay p50 1015.6 / p95 1437.3 ms, 87% of the end-to-end figure, GoogCC settling at
+8.9 Mbps on loopback against a 20 Mbps encoder, with **zero loss, zero PLI and zero NACK in `getStats`**, so
+nothing standard reveals it. The measured SCTP ceiling is ~163–166 Mbps. review-1 **F1's predicted failure
+does not occur** — 0 `Channel::write()` refusals at 50 Mbps on stock str0m, because the 1200 B fragment is
+one SCTP chunk and F1's arithmetic assumed whole-frame messages. Of the four proposed patches, **one is
+measured harmful**: raising `MAX_BUFFERED_ACROSS_STREAMS` from 128 KiB to 2 MB dropped carried throughput
+from 100 to 42.3 Mbps with the buffer pegged — `sctp-proto` has no pacer, so the room becomes standing
+queue and the 128 KiB cap is doing useful work as an accidental latency bound. Left opt-in. `wincrypto`
+does **not** interoperate with Chrome 153; `wincrypto-dimpl` does. MSRV floor is **1.91.0**, set by
+`moq-nvenc`, not str0m.
+
+**A research question is closed**: the receive-side `RTCRtpScriptTransform` sits **after** Chrome's frame
+buffer — 1.39 ms vs 10.67 ms push-to-hand-off on the same sender. research/01 §1(e) was right, research/02
+§4.6's open question is answered, and it is why arm C cannot reclaim the jitter buffer.
+
+**Outstanding for the owner**, both with copy-paste protocols in the memo: the LAN row (§9, host
+192.168.88.10, port 17440, program-scoped firewall rule — str0m binds ephemeral ports, 51 distinct values
+across 53 runs, so a port-scoped rule is impossible) and the impaired matrix (§10, clumsy elevated). Also
+still pending: every photon number, the ≥120 Hz row (present and empty — no such display on this box),
+goodput at 1/2% loss, single-frame-loss recovery, congestion-control step response, arm A's ICE restart,
+and HEVC on arms A and C.
