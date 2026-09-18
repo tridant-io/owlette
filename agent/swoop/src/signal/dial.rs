@@ -5,11 +5,9 @@
 //! [`SUBPROTOCOL`]. A worker that does not recognise the subprotocol refuses
 //! the upgrade, so it is offered on every dial.
 //!
-//! No socket lives here, and none lives anywhere else in this crate yet: the
-//! pinned dependency set carries neither a websocket nor a tls client, and
-//! `Cargo.toml` belongs to Task 10.1. The seam a socket plugs into is
-//! [`super::client::SignalTransport`]; this module decides *what* to dial, how
-//! to read a refusal, and when to give up with exit 14.
+//! No socket lives here: [`super::socket`] owns the one in this crate. This
+//! module decides *what* to dial, how to read a refusal, and when to give up
+//! with exit 14 — all of it without opening anything.
 
 use std::fmt;
 use std::time::Duration;

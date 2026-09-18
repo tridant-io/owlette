@@ -145,6 +145,47 @@ log = { version = "=0.4.34", features = ["std"] }
 # startable on a machine with no GPU vendor runtime at all.
 libloading = "=0.9.0"
 
+# The signaling socket — `src/signal/socket.rs`, the one place in this crate
+# that opens one. The rest of `signal/` is sans-IO behind `SignalTransport`.
+#
+# Sync tungstenite, NOT tokio-tungstenite: the streamer is a threaded process
+# with no async runtime, the session loop drives capture, str0m and this socket
+# on one thread, and a runtime dragged in for a single socket is weight nothing
+# else here would use. default-features = false leaves the server half out; we
+# only ever dial. Exit condition: the standing dependency-currency review.
+tungstenite = { version = "=0.30.0", default-features = false, features = [
+    "handshake",
+    "rustls-tls-native-roots",
+] }
+
+# TLS for that socket, and it is a direct dependency for a reason that is not
+# pinning alone: tungstenite enables only `rustls/std`, and rustls with no
+# crypto provider compiled in PANICS the first time a `ClientConfig` is built.
+# This line is what chooses the provider.
+#
+# `ring` and not the default `aws_lc_rs`, which wants NASM on Windows — the
+# same constraint that keeps str0m on default-features = false. `tls12` because
+# a kiosk behind a tls-inspecting corporate proxy is a fielded case and those
+# proxies are not all on 1.3. Exit condition: rustls 0.24, which moves the
+# provider out of the crate's features and is a deliberate re-pin rather than a
+# version bump.
+rustls = { version = "=0.23.45", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+    "logging",
+] }
+
+# The trust anchors, from the machine's own store rather than a Mozilla set
+# compiled into the exe (webpki-roots). Pinned explicitly although it arrives
+# through a tungstenite feature, because which roots the streamer trusts is a
+# decision and not a resolver outcome. Signage boxes and kiosks sit behind
+# tls-inspecting proxies, and a root an administrator added to the machine is
+# exactly what a compiled-in list cannot see; it also makes a root rotation an
+# os update rather than an agent release. Exit condition: the standing
+# dependency-currency review.
+rustls-native-certs = "=0.8.4"
+
 # Windows-only, declared here so `cargo check` still resolves on a macOS or
 # Linux host (Wave 9 adds the siblings, and until then the modules that use
 # these bindings are behind #[cfg(windows)]).

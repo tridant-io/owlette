@@ -3,10 +3,9 @@
 //!
 //! Sans-IO, like the rest of the crate's wire code: a frame arrives as a
 //! string, effects come back, and the caller owns the socket through
-//! [`SignalTransport`]. That is not only a testing convenience — the socket
-//! itself cannot be written yet (see [`super::dial`]) — and it is the same
-//! shape str0m gives the peer connection, so Task 4.1 drives both from one
-//! loop.
+//! [`SignalTransport`] — implemented once, in [`super::socket`]. That is not
+//! only a testing convenience: it is the same shape str0m gives the peer
+//! connection, so Task 4.1 drives both from one loop.
 //!
 //! Two rules this file exists to hold:
 //!
