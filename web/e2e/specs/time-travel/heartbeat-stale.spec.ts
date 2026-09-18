@@ -24,19 +24,19 @@ test('heartbeat age exceeding 300s flips the machine pill to offline', async ({ 
   await page.clock.install({ time: realNow });
 
   // heartbeatOffsetSec 0 => lastHeartbeat at real "now", which the fake-clock
-  // anchor matches, so the baseline pill is "online".
+  // anchor matches, so the baseline is the green "online" dot.
   await seedMachine(SITE_ID, MACHINE_ID);
 
   await page.goto('/dashboard');
 
   const card = page.getByTestId('machine-card').filter({ hasText: MACHINE_ID });
   await expect(card).toBeVisible();
-  await expect(card.getByText('online', { exact: true })).toBeVisible();
+  await expect(card.getByRole('img', { name: 'online' })).toBeVisible();
 
   // 330s clears the 300s threshold and fires the interval ~11 times, so at
   // least one tick sees heartbeatAge >= 300.
   await page.clock.fastForward(330_000);
 
   await expect(card.getByText('offline', { exact: true })).toBeVisible();
-  await expect(card.getByText('online', { exact: true })).toHaveCount(0);
+  await expect(card.getByRole('img', { name: 'online' })).toHaveCount(0);
 });

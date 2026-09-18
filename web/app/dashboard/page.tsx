@@ -1065,7 +1065,6 @@ export default function DashboardPage() {
               <div className="animate-in fade-in duration-300">
                 <MachineCardView
                   machines={machines}
-                  schedulesFollowSiteTime={currentSite?.schedulesFollowSiteTime}
                   statsExpanded={userPreferences.statsExpanded}
                   processesExpanded={userPreferences.processesExpanded}
                   displaysExpanded={userPreferences.displaysExpanded ?? false}

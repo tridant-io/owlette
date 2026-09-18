@@ -467,6 +467,7 @@ export function MachineRow({
             shutdownScheduledAt={machine.shutdownScheduledAt}
             isSiteAdmin={isSiteAdmin}
             onCancel={onCancelRestart}
+            tooltip={heartbeat.tooltip}
           />
         </TableCell>
         {/* CPU with Sparkline */}

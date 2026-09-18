@@ -1,5 +1,5 @@
 /**
- * Time-travel — fresh heartbeat renders the online pill. Baseline for E3.x's
+ * Time-travel — fresh heartbeat renders the online dot. Baseline for E3.x's
  * staleness transitions.
  *
  * useMachines' 30s setInterval (`useFirestore.ts:854-880`) re-evaluates `online`
@@ -20,7 +20,7 @@ test.use(roleState('admin'));
 const SITE_ID = 'site-A';
 const MACHINE_ID = 'e2e-heartbeat-fresh';
 
-test('fresh heartbeat renders the green online pill', async ({ page }) => {
+test('fresh heartbeat renders the green online dot', async ({ page }) => {
   // heartbeatOffsetSec=0 (default) → lastHeartbeat = nowSec, so heartbeatAge=0
   // passes the <300s check; seedMachine also sets online=true, satisfying the
   // dual-condition gate at useFirestore.ts:869.
@@ -31,9 +31,9 @@ test('fresh heartbeat renders the green online pill', async ({ page }) => {
   const card = page.getByTestId('machine-card').filter({ hasText: MACHINE_ID });
   await expect(card).toBeVisible();
 
-  // MachineStatusPill's idle branch (MachineStatusPill.tsx:64-70) renders a
-  // Badge reading exactly "online"/"offline". Scope to the card so the header's
-  // "N/M online" stats copy doesn't match.
-  await expect(card.getByText('online', { exact: true })).toBeVisible();
+  // MachineStatusPill's idle branch renders a green dot labelled "online", or a
+  // Badge reading exactly "offline". Scope to the card so the header's "N/M
+  // online" stats copy doesn't match.
+  await expect(card.getByRole('img', { name: 'online' })).toBeVisible();
   await expect(card.getByText('offline', { exact: true })).toHaveCount(0);
 });
