@@ -121,6 +121,7 @@ function MachineCard({
   onDismissRestartPending,
   onScreenshot,
   onLiveView,
+  onSwoop,
 }: MachineCardProps) {
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
@@ -290,6 +291,8 @@ function MachineCard({
                 onCancelRestart={onCancelRestart}
                 onScreenshot={onScreenshot}
                 onLiveView={onLiveView}
+                swoopCapable={machine.capabilities?.swoop === 1}
+                onSwoop={onSwoop}
                 onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}
                 rebootSchedule={machine.rebootSchedule}
               />
@@ -998,6 +1001,7 @@ export function MachineCardView({
   onDismissRestartPending,
   onScreenshot,
   onLiveView,
+  onSwoop,
 }: MachineCardViewProps) {
   const { userPreferences, isSiteAdmin } = useAuth();
   const canSiteAdmin = isSiteAdmin(currentSiteId);
@@ -1046,6 +1050,7 @@ export function MachineCardView({
           onDismissRestartPending={onDismissRestartPending ? (processName) => onDismissRestartPending(machine.machineId, processName) : undefined}
           onScreenshot={onScreenshot ? () => onScreenshot(machine.machineId) : undefined}
           onLiveView={onLiveView ? () => onLiveView(machine.machineId) : undefined}
+          onSwoop={onSwoop ? () => onSwoop(machine.machineId) : undefined}
         />
       ))}
     </div>
