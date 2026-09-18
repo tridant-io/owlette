@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 37/80 complete
+**Progress**: 45/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -555,43 +555,43 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 4: first picture (gate G2)
 
-- [ ] **Task 4.1: Host thin session** `[agent]`
+- [x] **Task 4.1: Host thin session** `[agent]`
   - Files: `agent/swoop/src/session/mod.rs`, `agent/swoop/src/main.rs`
   - Do: Implement the `run` verb end to end for exactly one viewer: read one bundle line from stdin (never a file, never a command line), validate it, then capture (3.6) → encode (3.7) → `transport::VideoSink` (3.8) with signaling from 3.9. As the process's first action call `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` and `SetDllDirectory("")`, and load every vendor DLL by absolute path. Emit newline-delimited JSON events on stdout — `ready`, `viewer_joined`, `viewer_left`, `status`, `exiting` — and accept `{"type":"kill"}` on stdin for a clean exit. Use the fixed exit codes: 0 normal, 10 bundle invalid, 11 version mismatch (the bundle's expected version differs from this binary's), 12 no capture source, 13 no encoder, 14 signaling unreachable, 20 internal. Write stderr to a size-capped rotating log under `logs/swoop/` (name the cap in the code), and write a minidump there on an unhandled panic — this process will crash on somebody's iGPU and nothing else collects diagnostics. Keep `version` working. Never log the bundle, a token or a key, not even partially. No UAC path anywhere.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`. Unit tests cover bundle parsing (valid, malformed → 10, version mismatch → 11) and the stdout event encoding against the golden vectors from Task 1.1. An end-to-end run on the dev box is `#[ignore]`d with the documented command and expected result; `owlette-swoop.exe run` fed a hand-built bundle prints `ready` and then `viewer_joined`.
   - Depends on: 3.6, 3.7, 3.8, 3.9
 
-- [ ] **Task 4.2: Stage page + UI slots** `[agent]`
+- [x] **Task 4.2: Stage page + UI slots** `[agent]`
   - Files: `web/app/swoop/[siteId]/[machineId]/page.tsx`, `web/app/swoop/[siteId]/[machineId]/layout.tsx`, `web/hooks/useSwoopSession.ts`, `web/components/Footer.tsx`, `web/components/swoop/{SwoopStage,SwoopToolbar,SwoopStatsOverlay,SwoopStepUpDialog,SwoopQualityMenu,SwoopDisplayPicker,SwoopSpecialKeys,SwoopAudioToggle,SwoopPresence}.tsx`, `web/lib/swoop/{clipboard,audio,displays,presence,lease,stepUp,features}.ts`
   - Do: Create every slot later waves fill, so no Wave 6+ task ever edits the page or the hook. The layout is full-window with no global chrome; add `/swoop` to the early-return list in `components/Footer.tsx:46` beside `/admin`, `/` and `/hoot` (the root layout renders the Footer, so a nested layout cannot remove it). `useSwoopSession.ts` POSTs the session-create route (3.2), builds the peer (3.10), receiver/decoder (3.11) and presenter (3.12), and returns `{ state, error, stats, canvasRef, stepUp }`. It calls `attach(session)` on every module exported by the `web/lib/swoop/features.ts` registry — each lib stub exports `export function attach(_session: SwoopSession) {}` and returns a no-op detach. Every component stub renders `null` today. Mount `<SwoopStepUpDialog open={stepUp.required} enrolled={stepUp.enrolled} onProof={stepUp.submitProof} onCancel={stepUp.cancel} />` in the page now; that prop contract is frozen, and `onProof` takes the body `parseMfaProof` accepts (`web/lib/mfaProof.server.ts:79`) and forwards it verbatim. All copy lowercase, lucide icons only, theme tokens only, no new npm packages, Firestore only through hooks.
   - Done when: `cd web && npx tsc --noEmit` and `npx eslint app/swoop hooks/useSwoopSession.ts components/swoop lib/swoop components/Footer.tsx` are both clean. `npm test` stays green. Navigating to `/swoop/<site>/<machine>` in `npm run dev` renders a full-window stage with no footer and no page scrollbar, and the browser console shows the session-create request being made.
   - Depends on: 3.2, 3.10, 3.11, 3.12
 
-- [ ] **Task 4.3: Input injection** `[agent]`
+- [x] **Task 4.3: Input injection** `[agent]`
   - Files: `agent/swoop/src/input/` (fill the scaffold's stub files only)
   - Do: Implement the `input::Injector` trait with `SendInput`. Absolute mouse moves use `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE` normalised to 0..65535 against `SM_XVIRTUALSCREEN` / `SM_YVIRTUALSCREEN` / `SM_CXVIRTUALSCREEN` / `SM_CYVIRTUALSCREEN` — never the primary monitor, and correct for negative origins when a monitor sits left of or above the primary. Support a relative mode (`MOUSEEVENTF_MOVE` alone) for pointer lock, relaying raw deltas. Keys go as `KEYEVENTF_SCANCODE` with `wVk = 0`, taking scancodes from `agent/swoop/testdata/keymap.json`, and set `KEYEVENTF_EXTENDEDKEY` for right Ctrl/Alt, the arrows, Insert/Delete/Home/End/PageUp/PageDown, numpad Enter, numpad `/` and PrintScreen. Wheel uses `MOUSEEVENTF_WHEEL`/`HWHEEL` with signed `mouseData` in `WHEEL_DELTA` units. Make the process per-monitor DPI aware so the injection coordinate equals the capture coordinate. Track every pressed scancode and button per viewer and synthesise releases on disconnect, timeout, viewer switch and desktop switch — stuck keys are the top user-visible bug, and `SendInput` does not reset keyboard state. Rate-limit injected events per viewer. Batch a frame's coalesced moves into one `SendInput` call. Note in a comment that a UIPI-blocked `SendInput` returns 0 with no useful `GetLastError`.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`. Pure unit tests cover the 0..65535 normalisation over a negative-origin, mixed-DPI, two-monitor layout (a case invisible on a single-monitor box), the extended-key table against `testdata/keymap.json`, wheel sign, and that a simulated disconnect emits exactly one key-up per held key. Live injection tests are `#[ignore]`d with the documented dev-box command.
   - Depends on: 1.1, 1.2
 
-- [ ] **Task 4.4: Cursor** `[agent]`
+- [x] **Task 4.4: Cursor** `[agent]`
   - Files: `agent/swoop/src/cursor/` (fill the scaffold's stub files only)
   - Do: Track the pointer from Desktop Duplication's frame metadata: position and visibility come from `DXGI_OUTDUPL_FRAME_INFO.PointerPosition`, and the shape from `GetFramePointerShape`, which only needs re-reading when the shape actually changes (`LastMouseUpdateTime == 0` means no pointer update this frame). Decode all three shape encodings (monochrome, colour, masked colour) into a single RGBA image plus a hotspot, and convert the hotspot from host pixels through the same virtual-desktop and per-monitor-DPI transform Task 4.3 uses for injection — a wrong hotspot is the classic "the I-beam selects from its corner" bug. Emit shape updates and a position stream as the message types defined in `signal/messages.rs` and `agent/swoop/PROTOCOL.md` (do not edit either). When the adapter draws the pointer in hardware the desktop image does not contain it, so the viewer must composite — say so in the emitted metadata. Downscale shapes above 32×32 CSS pixels, because browsers silently ignore large CSS cursors and Safari accepts only a handful of sizes.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`. Unit tests decode one fixture of each of the three shape encodings to expected RGBA bytes, assert hotspot translation on a negative-origin mixed-DPI layout, and assert that an unchanged shape produces no shape message. A live capture test is `#[ignore]`d with the documented dev-box command.
   - Depends on: 1.1, 1.2, 3.6
 
-- [ ] **Task 4.5: GPU convert/scale** `[agent]`
+- [x] **Task 4.5: GPU convert/scale** `[agent]`
   - Files: `agent/swoop/src/gpu/convert.rs`, `agent/swoop/src/gpu/scale.rs` (never touch `gpu/mod.rs`, which owns `Device` and `Frame`)
   - Do: Provide BGRA→NV12 conversion and downscale entirely on the GPU — a captured frame must never round-trip through system memory. Implement conversion as a compute shader over the D3D11 device from `gpu::Device`, with `ID3D11VideoProcessor`/`VideoProcessorBlt` as the documented alternative, and state the colour matrix and range you emit (BT.709) in the module doc so the encoder and the browser agree. NVENC takes BGRA directly and converts on chip, so the fast path must be a no-op passthrough — the conversion exists for the Intel/AMD and software backends that arrive in Wave 7, where it is mandatory rather than optional. `scale.rs` downscales before encode and implements the giant-canvas policy: refuse or tile above a backend's axis cap (AMF is capped at 4096 on each axis; NVENC allows 4096×4096 for H.264 and 8192×8192 for HEVC), and pick a downscale factor that brings a Mosaic-sized canvas under the cap while keeping the aspect ratio. Never change display configuration to make a canvas fit.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`. Pure unit tests cover the cap/tiling decision table (1080p, 4K, 8K-wide Mosaic, a 4096-capped backend) and the aspect-preserving scale factor. GPU tests that run the shader over a known BGRA pattern and check the NV12 output against expected luma/chroma are `#[ignore]`d with the documented dev-box command and expected values.
   - Depends on: 1.2
 
-- [ ] **Task 4.6: Web input capture + keymap** `[agent]`
+- [x] **Task 4.6: Web input capture + keymap** `[agent]`
   - Files: `web/lib/swoop/input.ts`, `web/lib/swoop/keymap.ts`, `web/__tests__/lib/swoop/keymap.test.ts`, `web/__tests__/lib/swoop/input.test.ts`
   - Do: `keymap.ts` maps `KeyboardEvent.code` (the physical key — never `.key`, which is layout- and IME-dependent) to the scancodes in `agent/swoop/testdata/keymap.json`, including the extended-key flag. It offers a Cmd mapping option for macOS clients: `MetaLeft`/`MetaRight` → Ctrl for editing shortcuts, or → Win, selectable. `input.ts` attaches keyboard, pointer and wheel listeners to the stage element, `preventDefault`s everything except a small allow-list, uses `getCoalescedEvents()` and accumulates `movementX/movementY` into one delta per tick rather than one message per raw event, and supports pointer-lock relative mode alongside absolute mode. On `blur`, `visibilitychange` and pointer-lock exit it emits a release for every key it believes is held. Intercept the Escape the browser swallows on pointer-lock release and forward a synthetic one. Document the two input modes — scancode by default, a Unicode/text path when an IME composition is active — and leave the text mode a named, unimplemented seam for Wave 6 rather than a half-built path.
   - Done when: `cd web && npx jest __tests__/lib/swoop/keymap.test.ts __tests__/lib/swoop/input.test.ts` is green, with the keymap test driven directly from `agent/swoop/testdata/keymap.json` (every entry round-trips, and the extended-key set matches exactly), plus cases: coalesced moves collapse to one message; blur releases every held key exactly once; Cmd→Ctrl and Cmd→Win both map as configured. `npx eslint web/lib/swoop/input.ts web/lib/swoop/keymap.ts` clean.
   - Depends on: 1.1
 
-- [ ] **Task 4.7: Governor + feedback** `[agent]`
+- [x] **Task 4.7: Governor + feedback** `[agent]`
   - Files: `agent/swoop/src/transport/governor.rs`, `web/lib/swoop/feedback.ts`, `web/__tests__/lib/swoop/feedback.test.ts`
   - Do: Implement the one-way-delay-rise governor moonlight-web ships, since path A has no GoogCC of its own. Every frame carries the host's send time; the client measures how much later a frame arrives than the best of the session, against a 30-second rolling reference, so the two clocks' offset cancels in the subtraction and no clock sync is needed. `feedback.ts` sends a report twice a second over the control channel carrying that delay rise, any `frameId` gaps, arrival/decode/present times and an app-level RTT measured by an explicit ping/pong — do not repeat Parsec's web client, which hardcodes `networkLatency = 0`. It also estimates and reports the QPC↔`performance.now()` offset with an NTP-style exchange, so every per-stage number in the stats overlay is real. `governor.rs` cuts the encoder's target bitrate 20% the moment delay rises (or on a frame gap, or on one of its own send-buffer refusals), holds for 2 seconds, then climbs 5% per quiet report, never above the configured setting. If G1 chose path B or C, the governor becomes an arbiter over str0m's GoogCC estimate rather than the primary controller; `feedback.ts` is unchanged either way.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`, with unit tests driving a synthetic report sequence and asserting exactly −20% on a rise, no further cut inside the 2 s hold, +5% per quiet report, and a hard ceiling at the configured rate. `cd web && npx jest __tests__/lib/swoop/feedback.test.ts` is green (report cadence 2 Hz, offset estimation converges on a synthetic clock skew, RTT is measured and non-zero). `npx eslint web/lib/swoop/feedback.ts` clean.
@@ -1320,3 +1320,91 @@ run on this branch** — no code-scanning analysis exists for `refs/heads/feat/s
 
 **not verified anywhere yet: a real browser against the real streamer.** everything above is loopback,
 unit tests and golden vectors. the first chrome interop for the product path is wave 4's G2.
+
+### 2026-09-18 — **wave 4 complete, 7 of 7. 45/80. the streamer runs. G2 is NOT reached.**
+
+verified after the tree settled: agent **1346 passed / 6 skipped**; `agent/swoop` clippy `--all-targets`
+clean, **148 + 1 + 5 passed / 12 ignored**; web `tsc` exit 0, **5726 passed / 283 suites**,
+`npm run build` compiled. plus a websocket dependency task the plan did not contain, which unblocked 4.1.
+
+**what is proven on this box:** capture → encode → cursor → injection, 180 frames with exactly **1 IRAP**;
+and the real exe against a real socket — `ready` at **212 ms** (debug build), correct subprotocol and
+`Authorization` on the dial, `viewer-join` admitted, `status` every 2 s, room `kill` → `exiting` 0. with no
+room it exits **14**. the minidump writes a real `MDMP` header.
+
+**why G2 is not reached, and it is not a wave-4 failure:** no frame has touched a browser. that needs a
+real Chrome offer, a viewer JWT and a **deployed room** — and the worker still has **no hostname**
+(`workers_dev = false`, no route), so no bundle with a reachable `signalUrl` can exist. **task 3.4 and the
+owner's cloudflare account are the gate**, not any code here.
+
+**the websocket dependency (owner-approved, multiplatform ruling).** sync `tungstenite` + `rustls` +
+`rustls-native-certs`, pinned exact with reasons and exit conditions. **the rustls pin is functional, not a
+freeze: with no crypto provider compiled in, rustls panics on the first `ClientConfig`** — so that line
+chooses `ring` over `aws_lc_rs`, which wants NASM on windows. `rustls-native-certs` over `webpki-roots`
+because kiosks sit behind TLS-inspecting proxies and an enterprise root an administrator installed is
+exactly what a compiled-in list cannot see. **34 new lockfile entries**; `ring` compiles C and asm, so the
+build host now needs a C compiler (`windows-latest` has MSVC). `Cargo.toml` is otherwise reserved to 1.2
+and 10.1 — **that rule is amended for this one edit and the amendment is on record.**
+
+**two bugs the integration test caught that unit tests could not:**
+1. `SignalClient::drive` already closes the socket on `Effect::Exit`, so a teardown that then sent `bye`
+   got a tungstenite protocol error — **the kill switch, the normal path, logged an error every time.**
+   anything tearing down after an `Effect::Exit` needs the same `is_open()` gate.
+2. **`DesktopWatcher::follow()` returns `true` on the initial attach.** acting on it bumped the rebuild
+   signal, re-duplicated a duplication created milliseconds earlier and forced a **second IDR on the exact
+   startup path G2 is measured on.** the `iraps == 1` assertion is what caught it.
+
+**the `jitterBufferTarget` bug (recorded in full in the wave-3 entry) was the wave's most important
+catch** and belongs in any post-mortem: two agents, each correct alone, set one property to opposite
+values; chrome maps it to `SetJitterBufferMinimumDelay` so it can only **raise** the floor, and 250 on a
+31 ms path is a 3x regression that no test would have failed.
+
+**the letterbox trap, same species.** a `<video>` letterboxes, so normalising absolute coordinates against
+the **element** box spreads 0..1 across the black bars. perfect at a matching aspect ratio, wrong
+everywhere else by a different amount at each edge. `session.contentRect()` returns the picture's box,
+computed from the presenter's existing resize tracking. `SwoopStage`'s doc says `object-contain` plus
+centred `object-position` is load-bearing.
+
+**two tasks that refused part of their own brief, correctly:**
+- **4.5 did not write `gpu/convert.rs`.** NVENC takes the BGRA texture straight in (0.9 proved it), every
+  other backend is a wave-7 stub, and the done-when's "expected luma/chroma values" would have been
+  invented. *"an unvalidated colour matrix that someone later trusts is worse than none."* it built
+  `scale` instead, because two 4K panels are 7680 wide and over NVENC H.264's 4096 cap — without it a
+  mosaic box cannot stream at all.
+- **3.6 refused this file's own pacing instruction.** task 3.6's block still says a 0 ms `AcquireNextFrame`
+  poll; spike 0.8 measured that as 2.7M calls in 15 s for five duplicate frames. **still needs correcting
+  here before 4.4 / 5.7 / 6.4 re-derive it.**
+
+**contracts and gaps for wave 5+:**
+- **`set_viewer_dtls_fingerprint` is never called and cannot be** — `RtcPeer` exposes no remote
+  fingerprint, so §10 lease renewals bind to the **offer's** fingerprint, not the established DTLS
+  session. that weakens the very argument that made the lease path the right home for the token. **task
+  6.6 needs a str0m accessor or an amended §10.**
+- **`pong` is written on `swoop-feedback`**, which §3's direction table calls viewer→host only. the client
+  listens there, so **the table is what is wrong.**
+- **`ready` goes out before the dial**, not after: a machine whose relay is down should still report its
+  codecs and display count, then fail 14 with nothing else.
+- **codec is chosen by sniffing the offer SDP** — nothing else states decoder support before
+  `PeerConfig::codec` must name exactly one. `clientCaps` still has no consumer.
+- **`Event::Status` has no field for `ViewerInput::dropped()`** though `input/mod.rs` says it is "for the
+  status event". add the field or fix the comment.
+- **`qpc_now()` exists in three private copies** (capture, nvenc, session). make it one.
+- re-mint: **confirmed working.** `Reaction::Remint` exits 14; `swoop_manager.ensure_streamer` refetches
+  the bundle on every spawn (`swoop_manager.py:195`) and `_apply_backoff` climbs a ladder on any non-zero
+  exit. the streamer holds no credential, so the manager owning re-mint is the right split.
+- **`feedback.ts` and `input.ts` do not export `attach(session)`** — they are `createSwoopFeedback` and
+  `attachInputCapture`, so they are **not** in `SWOOP_FEATURES`. **task 5.2 must adapt them; put it in
+  5.2's text or it will be found late.**
+- `receiver.attachTrack()` takes an `RTCTrackEvent` while `peer.onTrack` hands out `(stream, receiver)`,
+  so the hook re-wraps with a cast. a cast at a module boundary is a smell worth removing.
+- **wheel unit conversions (100 px/notch, 3 lines, 24 lines/page) and the input rate limits are chosen,
+  not measured.** nothing has validated them against a real scroll.
+- 4.3 found a **partial-failure shape**: injecting from a sandboxed shell silently swallows the keyboard
+  half while the mouse half keeps working, and `SendInput` still returns the full count. **never infer
+  "input is working" from the pointer moving.**
+- `CursorMetadata` on `swoop-meta` has no defined home in PROTOCOL.md — a spec gap, left where 4.4 put it.
+
+**still open for the owner, unchanged and now more blocking:** **3.4's worker hostname** (it is what gates
+G2), the two `SWOOP_JWT_*_PREVIOUS` manifest rows, **spike 0.3** (the SYSTEM spawn path and the whole
+secure-desktop family — 4.3 stopped at the desktop boundary because of it, and 6.1 cannot start), spike
+0.10, and **SAST has still never run on this branch.**
