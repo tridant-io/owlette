@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 26/80 complete
+**Progress**: 37/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -481,19 +481,19 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 3: picture-path modules and APIs
 
-- [ ] **Task 3.1: Agent wiring** `[agent]`
+- [x] **Task 3.1: Agent wiring** `[agent]`
   - Files: `agent/src/owlette_service.py`, `agent/tests/integration/__init__.py`, `agent/tests/integration/fake_streamer.py`, `agent/tests/integration/test_swoop_wiring.py`
   - Do: Register the swoop command handlers in the `__init__` block at `owlette_service.py:955-979`, copying the shape of the roost/machine/process registrations exactly — `from swoop_commands import register_handlers as _register_swoop_handlers` inside a `try/except` that logs a warning and continues. Construct `SwoopManager` and `SwoopDoorbell` in `main()` right after `self.firebase_client.start()` (`:7802-7806`), on a daemon thread, never on the tick; the doorbell takes `on_ring=manager.ensure_streamer`, `get_agent_token=self.firebase_client.auth_manager.get_valid_token` and a `threading.Event` shutdown flag. Per the owner's ruling it must never call `connection_manager.register_thread` (`:698`) or `report_error` (`:436`). For session changes, read `win32ts.WTSGetActiveConsoleSessionId()` on the loop beside `self._process_cortex_ipc_commands()` (`:8001`), compare with the last-seen id and call `manager.on_session_change()` only on a change — imitate the single-flight off-loop pattern at `:2254-2286`. In `SvcStop` (`:1931-1956`) call `manager.kill('service_stop')` and set the doorbell's shutdown event beside `terminate_cortex()`. Also add the three swoop types to the per-type command-throttle exemption at `:4570-4580` — the `if cmd_type not in ('mcp_tool_call', 'ack_display_topology')` guard at `:4573`, with `COMMAND_RATE_LIMIT_SECONDS = 5` at `:4553` — keeping the existing comment style: the rate key is the command type plus a process id, which for swoop collapses to `swoop_session_requested:` / `swoop_kill:` / `swoop_refresh:`, so a second viewer's session request, a revocation kill following an operator kill, or a second enablement toggle inside five seconds returns `Error: rate limited …` and is recorded as a **failed** command. This is the only task that edits this guard. No UAC path, nothing blocking on the 5 s loop.
   - Done when: `agent/.venv/Scripts/python -m pytest agent/tests/` is green, including new tests that (a) a ring drives `ensure_streamer` and spawns `fake_streamer.py`, (b) `SvcStop` kills it, (c) `swoop_commands` handlers are reachable through `CommandRouter`, (d) no `register_thread`/`report_error` call reaches `ConnectionManager` (assert with a spy), (e) a signal endpoint unreachable for a simulated 10 minutes leaves `connection_manager.state` CONNECTED, (f) two `swoop_session_requested` commands handled inside 5 s are both dispatched, neither returning `Error: rate limited …`. `agent/.venv/Scripts/python -m py_compile agent/src/owlette_service.py` exits 0.
   - Depends on: 2.1, 2.3, 2.7
 
-- [ ] **Task 3.2: User API routes** `[agent]`
+- [x] **Task 3.2: User API routes** `[agent]`
   - Files: `web/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/route.ts`, `web/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route.ts`, `web/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/lease/route.ts`, `web/__tests__/api/swoop/sessions.test.ts`, `web/__tests__/api/swoop/lease.test.ts`
   - Do: Wrap each route in `authorizedSiteHandler` + `withRateLimit`, copying the shape of `…/machines/[machineId]/commands/route.ts:415-440`. POST `sessions` takes `{ control: boolean, fp: string, clientCaps, mfaProof }` and uses `Capability.MACHINE_REMOTE_CONTROL` when `control` is true, else `MACHINE_REMOTE_VIEW`. Order of refusals: `ctx.auth.keyContext !== null` → 403 `api_key_not_permitted` (the `capability_enforcement=false` bypass is closed centrally by Task 1.3's `BYPASS_EXEMPT_CAPABILITIES` in `authorizedHandler.server.ts` — do not re-implement it here); missing/invalid `fp` → 400; no live proof → 401 `step_up_required`; then `parseMfaProof` → `verifyMfaProof` / `verifyPasskeyStepUpAssertion` in-process (`web/lib/mfaProof.server.ts:79,196,264`, precedent `api/mfa/backup-codes/route.ts:51-60`) — never a timestamp; an account with zero enrolled factors is refused, not waved through. Delegate the work to `web/lib/actions/requestSwoopSession.server.ts` and the Wave 2 libs (`tokens`, `keys`, `turn`, `sessionStore`, `policy`, `signal`). After the session document is written, ring the doorbell with `signal.server.ts`'s `ringDoorbell` (sid only) **and** enqueue the sid-only fallback command; neither failure blocks the response. The response carries `{ sid, viewerJwt, k, iceServers, signalUrl, expiresAt }` — never `K_session`, never in a URL. GET returns session state; DELETE ends it with an `endReason`. `lease` renews for 5 minutes, re-checking membership, site enablement and capability, with a 12 h absolute cap.
   - Done when: `cd web && npx jest __tests__/api/swoop/sessions.test.ts __tests__/api/swoop/lease.test.ts` is green with named cases: api-key caller 403 `api_key_not_permitted`; proof-less request 401 `step_up_required`; zero-factor account refused; with `capability_enforcement: false`, a member without `MACHINE_REMOTE_CONTROL` still gets 403 `capability_missing`; missing `fp` 400; non-member 404; lease after membership removal 403; lease past the 12 h cap 403. `npx eslint` clean on all three routes; `npx tsc --noEmit` clean.
   - Depends on: 1.3, 2.4, 2.9, 2.11
 
-- [ ] **Task 3.3: Agent API routes** `[agent]`
+- [x] **Task 3.3: Agent API routes** `[agent]`
   - Files: `web/app/api/agent/swoop/doorbell-token/route.ts`, `web/app/api/agent/swoop/bundle/route.ts`, `web/app/api/agent/swoop/events/route.ts`, `web/__tests__/api/swoop/agent-routes.test.ts`
   - Do: Every route authenticates with `requireMachineAuthAndScope` from `web/app/api/_shared.ts:504-570`, which binds both `site_id` and `machine_id`. Do **not** use `requireAgentOrSiteScope` (`:61-95`) or `requireAgentOrSiteAuthAndScope` (`:709-756`) — they check `site_id` only — and do not copy the `if (decodedToken.site_id && …)` pattern from `app/api/agent/screenshot/route.ts:47`, which skips the check when the claim is absent. `requireMachineAuthAndScope` admits any site member holding a session cookie (`_shared.ts:553-560`: non-key auth skips the scope check), so it is necessary but **not sufficient** on an agent-only route. Each of the three routes must additionally establish an agent principal and refuse anything else: call `resolveAgentPrincipal(req, siteId, machineId)` (`web/lib/sitePolicy.server.ts:190-218`) and return 404 on `null` or `'mismatch'`, or re-verify the bearer and refuse `decoded.role !== 'agent'` with 403, the `app/api/agent/screenshot/route.ts:33-35` pattern. A session or API-key caller must never reach the bundle. `doorbell-token` mints a `role=doorbell` EdDSA JWT (`aud=swoop-signal`, `kid`) whose `machine` claim is what the Worker derives its Durable Object name from; it refuses with 403 `swoop_disabled` when `sites/{siteId}/settings/swoop.enabled` is false or this machine is in `excludedMachineIds` (read through `web/lib/swoop/policy.server.ts`), so a machine with swoop off holds no signaling socket — the agent's slow-retry path (spike 0.6) is written against that code. `bundle` takes `{ sid }`, verifies that `sid` was minted for *this* machineId (else 404) and returns the session bundle: host JWT, `K_session`, the current and previous `SWOOP_JWT_PUBLIC_KEY` + `kid`, an authoritative `now` time anchor taken from the API's own clock, ICE/TURN config, signal URL, the site's `indicator` policy beside its enablement, and the expected streamer version. `events` records host-side lifecycle and denial events (rejected JWT, `fp` mismatch, view-only viewer sending input) into `sites/{siteId}/audit_log`. Never log a token, key or bundle — not at debug.
   - Done when: `cd web && npx jest __tests__/api/swoop/agent-routes.test.ts` is green with named cases: machine A's token requesting machine B's bundle → 404; a `sid` minted for another machine → 404; a session-cookie (non-agent) caller → 404/403; a doorbell-token request for a site with swoop disabled → 403 `swoop_disabled`; a host denial event writes an `audit_log` row with `outcome: 'deny'`. A test greps the three route sources and asserts neither `requireAgentOrSiteScope` nor `requireAgentOrSiteAuthAndScope` appears. `npx eslint` clean on all three routes.
@@ -505,49 +505,49 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `zizmor .github/workflows/swoop-signal-deploy.yml` reports no findings; a push to `dev` touching `infra/swoop-signal/**` runs the workflow green and `curl https://<dev worker>/health` returns 200; the README's rollback steps have been executed once on dev and the result noted in the file.
   - Depends on: 2.8
 
-- [ ] **Task 3.5: Security-gate + dependabot lockfile registration** `[agent]`
+- [x] **Task 3.5: Security-gate + dependabot lockfile registration** `[agent]`
   - Files: `scripts/check-security-alerts.mjs`, `.github/dependabot.yml`
   - Do: An advisory against a lockfile this script does not know about resolves as UNRESOLVED, and per `.claude/skills/build-system.md` an UNRESOLVED alert is blocking — so a new lockfile that is not registered blocks every installer release. In `ECOSYSTEM_MANIFESTS` (`scripts/check-security-alerts.mjs:277-284`) add `'agent/swoop/Cargo.lock'` to **both** the `rust` and the `cargo` arrays, and add `'infra/swoop-signal/package-lock.json'` to the `npm` array. In `.github/dependabot.yml` add `/agent/swoop` to the cargo ecosystem's `directories` (`:65-71`) and `/infra/swoop-signal` to the npm ecosystem's `directories` (`:29-33`) — do not create a second npm block. Keep the surrounding comment style: each block carries a sentence saying what the directory is. Do not change any other manifest entry, and do not add an ack.
   - Done when: `node scripts/check-security-alerts.mjs` exits 0 with both new lockfiles present in the checkout; `node -e "const s=require('fs').readFileSync('scripts/check-security-alerts.mjs','utf8'); if(!/agent\/swoop\/Cargo\.lock/.test(s)) process.exit(1)"` exits 0; `npx js-yaml .github/dependabot.yml` (or any YAML parse) succeeds and the cargo block lists three directories.
   - Depends on: 1.2, 2.8
 
-- [ ] **Task 3.6: Capture (Desktop Duplication)** `[agent]`
+- [x] **Task 3.6: Capture (Desktop Duplication)** `[agent]`
   - Files: `agent/swoop/src/capture/` (fill the stub files the Task 1.2 scaffold created; do not add or rename modules — if a stub you need is missing, stop and log it)
   - Do: Implement the `capture::Source` trait over DXGI Desktop Duplication, yielding `gpu::Frame` values. Prefer `IDXGIOutput5::DuplicateOutput1` with an explicit format list and fall back to `IDXGIOutput1::DuplicateOutput` (always `DXGI_FORMAT_B8G8R8A8_UNORM`). Call `SetMaximumFrameLatency(1)`. Run a paced acquisition group anchored on the frame timestamp: `AcquireNextFrame` with a 0 ms timeout inside the group and 200 ms to re-anchor after a miss, and `ReleaseFrame` as early as possible — holding a frame starves the encoder through Desktop Duplication's global critical section. Treat `DXGI_ERROR_WAIT_TIMEOUT` as "nothing changed" (not an error) and expose it so the session can hold a floor frame rate; on `DXGI_ERROR_ACCESS_LOST` rebuild the D3D11 device and the duplication object. Process all `GetFrameMoveRects` before all `GetFrameDirtyRects`. One duplication per `IDXGIOutput`; enumerate outputs with their `DesktopCoordinates` (which may be negative) and expose rotation un-applied, as DDA returns it. Capture runs on its own dedicated thread that loops `OpenInputDesktop`/`SetThreadDesktop` and rebuilds on a desktop switch; an `OpenInputDesktop` failure is not proof the machine is locked. The capture device must be on the same adapter as the output.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` both pass with the working directory `agent/swoop` (never `--manifest-path`). Pure unit tests cover virtual-desktop rect math with a negative origin, rotation mapping and move-before-dirty ordering. GPU tests are `#[ignore]`d with a doc comment giving the dev-box command `cargo test -- --ignored capture` and the expected result (a frame from each of the two attached monitors).
   - Depends on: 1.2, 2.10
 
-- [ ] **Task 3.7: NVENC encoder** `[agent]`
+- [x] **Task 3.7: NVENC encoder** `[agent]`
   - Files: `agent/swoop/src/encode/nvenc/` (fill the scaffold's stub files only)
   - Do: Implement the `encode::Encoder` trait over the NVENC SDK behind the crate's existing `encode-nvenc` cargo feature, producing `encode::EncodedFrame`. Use the configuration two independent projects converged on (plan D5/D7, spike memo 0.9): preset `P1`, `NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY`, `enablePTD = 1`, `gopLength = idrPeriod = NVENC_INFINITE_GOPLENGTH`, `frameIntervalP = 1` (no B-frames), `NV_ENC_PARAMS_RC_CBR` with `averageBitRate == maxBitRate`, `zeroReorderDelay = 1`, `enableLookahead = 0`, `lowDelayKeyFrameScale = 1`, `multiPass = NV_ENC_TWO_PASS_QUARTER_RESOLUTION`, `vbvBufferSize = bitrate/fps` with `vbvInitialDelay` equal and a 1/60 s floor, `repeatSPSPPS = 1`, single slice, DPB 4 with `numRefL0 = NV_ENC_NUM_REF_FRAMES_1`. Mandatory H.264 fix: `h264VUIParameters.bitstreamRestrictionFlag = 1` with `max_num_reorder_frames = 0` and `max_dec_frame_buffering = 0` — without it Chrome's decoder holds a full DPB (208 ms → 8.3 ms measured). Feed the BGRA DDA texture straight in (NVENC converts on chip). Expose a force-IDR entry point for the Wave 5 cooldown policy. Refuse resolutions above the codec's cap (H.264 4096×4096, HEVC 8192×8192) with a typed error, and map a session-mutex failure (`0x887A0001`) to exit code 13. Expose at the `encode::nvenc` module root, with exactly these names, `pub fn probe() -> BackendCaps` and `pub fn create(cfg: &EncoderConfig) -> Result<Box<dyn Encoder>>`, `#[cfg(feature = "encode-nvenc")]`-gated — the same two symbols Tasks 7.1/7.2 expose and Task 7.3 calls, against the types Task 1.2 defines in `encode/mod.rs`.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`. A pure-Rust SPS parser unit test runs over the golden vectors in `agent/swoop/testdata/` and asserts `bitstream_restriction_flag == 1` and `max_num_reorder_frames == 0`. A GPU test that encodes 120 frames and re-parses the emitted SPS is `#[ignore]`d with the documented dev-box command `cargo test -- --ignored nvenc` and its expected output recorded in the module doc comment.
   - Depends on: 1.2, 2.10
 
-- [ ] **Task 3.8: Transport wiring** `[agent]`
+- [x] **Task 3.8: Transport wiring** `[agent]`
   - Files: `agent/swoop/src/transport/rtc.rs`, `agent/swoop/src/transport/pacer.rs` (never edit `transport/framing.rs`, which Wave 2 owns)
   - Do: Drive str0m's sans-IO `Rtc` from a UDP socket plus a timer (poll output → transmit / re-arm / handle event), gather and trickle ICE candidates, complete DTLS, and expose the local DTLS certificate fingerprint so Task 3.9 can MAC it. Default (G1 path A) is one ordered data channel for video with `maxPacketLifeTime` set to 2–3 frame intervals (33–50 ms at 60 fps) — not `maxRetransmits: 0`, which at 1% loss delivers ~18% of a 200 KB access unit. Implement `transport::VideoSink` over the fragments `framing.rs` produces (~1200 B, matching str0m's `max_payload_size`). str0m's `Channel::write` returns `Ok(false)` when the frame exceeds `sctp.available()` — the 128 KiB `MAX_BUFFERED_ACROSS_STREAMS` ceiling shared with every other channel — so count every refusal, surface it as a governor signal, and never drop a frame silently. Keep a send-side high watermark with keyframes exempt. `pacer.rs` spreads a frame's fragments across the frame interval instead of bursting them, and accounts bytes actually written per viewer. If G1 chose path B or C instead, `rtc.rs` writes an RTP media track through str0m's `Writer::write` (str0m packetizes, RFC 7798 for H.265) and the pacer becomes a thin wrapper over str0m's `LeakyBucketPacer` and GoogCC estimate — the `VideoSink` seam and both filenames stay the same.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`. Unit tests cover fragment pacing spread, the write-refusal counter, and the keyframe watermark exemption against a fake channel. A loopback test against a local peer is `#[ignore]`d with the dev-box command and expected result documented (`Ok(false)` count zero over 60 s at the configured bitrate).
   - Depends on: 1.2, 2.10, G1
 
-- [ ] **Task 3.9: Signaling client + admission** `[agent]`
+- [x] **Task 3.9: Signaling client + admission** `[agent]`
   - Files: `agent/swoop/src/signal/` (every stub except `messages.rs`, which Wave 2 owns)
   - Do: Connect over WSS to `GET /v1/room/{siteId}/{machineId}` with the host JWT from the bundle, speak the `hello` / `ring` / `viewer-join` / `host-ready` / `offer` / `answer` / `candidate` / `kill` / `bye` / `error` messages from `messages.rs`, and exit 14 when the room is unreachable after the configured retries. Verify every viewer JWT in-process against the public key selected by the token's `kid` from the bundle (the bundle carries two during a rotation; an unknown `kid` is a refusal, logged, not a fallback). Check `exp` against the bundle's authoritative time anchor plus monotonic elapsed time — never `SystemTime::now()`, because these are drifting kiosk clocks. `fp` is mandatory: a token without it is rejected, and a token whose `fp` does not equal the viewer offer's `a=fingerprint:` is rejected. Derive `k = HKDF(K_session, viewerId)` and send a MAC over the host's own DTLS fingerprint and `sid` in `host-ready`. A `kill` frame exits the process cleanly (code 0). Enforce admission limits: maximum concurrent viewers, a minimum inter-join interval, and refusal after N joins in M minutes — every refusal emitted as a host event so it reaches `audit_log`.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`. Unit tests run the golden vectors in `agent/swoop/testdata/`, including the negative vectors: a token with no `fp` is rejected, a token whose `fp` mismatches the offer is rejected, an expired token measured against the anchor is rejected, an unknown `kid` is rejected, and a clock 6 hours off does not change any of those outcomes.
   - Depends on: 1.1, 1.2, 2.10
 
-- [ ] **Task 3.10: Web signaling + peer** `[agent]`
+- [x] **Task 3.10: Web signaling + peer** `[agent]`
   - Files: `web/lib/swoop/signaling.ts`, `web/lib/swoop/peer.ts`, `web/__tests__/lib/swoop/signaling.test.ts`, `web/__tests__/lib/swoop/peer.test.ts`
   - Do: `peer.ts` generates an `RTCCertificate` **first** and reads its fingerprint via `getFingerprints()`, falling back to parsing `a=fingerprint:` out of its own `createOffer()` SDP, so the caller can put `fp` in the session-create request body before any peer traffic. Then build `new RTCPeerConnection({ certificates: [cert], iceServers, iceCandidatePoolSize: 1, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' })`. The browser always offers and the host answers; re-negotiation is always a fresh browser offer. Before `setRemoteDescription`, verify the host's `host-ready` MAC over (host fingerprint ‖ sid) using WebCrypto HMAC with the per-viewer key `k` returned by the session-create route — a mismatch aborts the connection and reports an error, it never proceeds. `signaling.ts` owns the WSS to the Worker (viewer JWT), trickles candidates both ways, and reconnects with bounded backoff. If `getStats()` still shows a `relay` selected pair at T+3 s, call `restartIce()` exactly once. Never put the viewer JWT or `k` in a URL. If G1 chose path B or C, `peer.ts` additionally adds a recvonly video transceiver and sets the playout-delay hint `min=0, max ∈ (0,500] ms` (never `max=0`); nothing else in either file changes.
   - Done when: `cd web && npx jest __tests__/lib/swoop` is green with named cases: the fingerprint is available before any offer is created; a wrong MAC aborts and `setRemoteDescription` is never called; the correct MAC proceeds; one and only one `restartIce()` fires for a persistent relay pair. `npx eslint web/lib/swoop/signaling.ts web/lib/swoop/peer.ts` clean.
   - Depends on: 2.9, G1
 
-- [ ] **Task 3.11: Web receive + decode** `[agent]`
+- [x] **Task 3.11: Web receive + decode** `[agent]`
   - Files: `web/lib/swoop/video/receiver.ts`, `web/lib/swoop/video/decoder.ts`, `web/__tests__/lib/swoop/receiver.test.ts`, `web/__tests__/lib/swoop/decoder.test.ts`
   - Do: `receiver.ts` reassembles access units from the fragment header defined in `agent/swoop/PROTOCOL.md` (Task 1.1) and validated by the golden vectors in `agent/swoop/testdata/`. On a `frameId` gap it drops to the next recovery point and asks for an IDR — it never reorders and never submits a chunk whose references it did not receive (Chrome hard-fails a damaged H.265 picture). `decoder.ts` configures `VideoDecoder` for Annex-B (no `description`), `optimizeForLatency: true`, `hardwareAcceleration: 'prefer-hardware'`, and submits `EncodedVideoChunk`s with microsecond timestamps. A resolution or SPS change is always a new `configure()` plus a key chunk — Chromium rejects a non-IRAP H.265 config change outright. Apply `decodeQueueSize` backpressure before every `decode()`, track a submit→output EWMA and raise a diagnostic above 1.5 frame intervals, and hand each `VideoFrame` to the presenter callback, which owns `close()`. A decoder error triggers reconfigure plus an IDR request, never a silent stall. If G1 chose path B, `receiver.ts` becomes a thin adapter over the `<video>` element's own buffering and `decoder.ts` is unused; under C it receives frames from an `RTCRtpScriptTransform` instead of a data channel — the exported interface stays identical.
   - Done when: `cd web && npx jest __tests__/lib/swoop/receiver.test.ts __tests__/lib/swoop/decoder.test.ts` is green against a stubbed `VideoDecoder` global, with named cases: golden-vector reassembly byte-exact; a dropped fragment yields no chunk and one IDR request; a dangling-reference chunk is never submitted; a resolution change reconfigures before the next chunk; `decode()` is not called while `decodeQueueSize` is over the limit. `npx eslint` clean on both files.
   - Depends on: 1.1, 2.9, G1
 
-- [ ] **Task 3.12: Web presentation + client capability probe** `[agent]`
+- [x] **Task 3.12: Web presentation + client capability probe** `[agent]`
   - Files: `web/lib/swoop/video/presenter.ts`, `web/lib/swoop/clientCaps.ts`, `web/__tests__/lib/swoop/presenter.test.ts`, `web/__tests__/lib/swoop/clientCaps.test.ts`
   - Do: `presenter.ts` implements plan D17. Present from the decoder's output callback, never from `requestAnimationFrame` (rAF costs up to 16.7 ms and does not fire in a hidden tab). Use a `desynchronized: true` 2D canvas, feature-detected with `ctx.getContextAttributes().desynchronized`, falling back to `ImageBitmapRenderingContext` + `transferFromImageBitmap`. Call `frame.close()` immediately after upload. Use `requestVideoFrameCallback` only to measure (`presentedFrames` for drop/duplicate counting, `expectedDisplayTime` for display phase) — never to schedule. No dejitter buffer: present on decode and drop to the freshest frame. Document in a comment that a `desynchronized` canvas reads back empty through `drawImage`, so the latency harness must sample the renderer instead. `clientCaps.ts` probes `VideoDecoder.isConfigSupported()` for each candidate codec string (`hev1.1.6.L93.B0`, `avc1.640033`, …) with `hardwareAcceleration: 'prefer-hardware'`, wrapped in try/catch because Chromium has thrown instead of resolving `{supported:false}`, cross-checks `navigator.mediaCapabilities.decodingInfo`, and returns the ladder H.264-floor → HEVC-where-hardware-says-yes. Note in comments that Edge falls back to H.264 (paid HEVC extension) and Firefox is the structurally degraded client — expected, not bugs.
   - Done when: `cd web && npx jest __tests__/lib/swoop/presenter.test.ts __tests__/lib/swoop/clientCaps.test.ts` is green with named cases: presentation happens on the decoder callback and no rAF is scheduled; the ImageBitmap fallback is used when `desynchronized` is unsupported; every frame is closed exactly once; a throwing `isConfigSupported` yields "unsupported" and not a rejection; the ladder degrades to H.264 when HEVC probes false. `npx eslint` clean on both files.
@@ -1218,3 +1218,105 @@ that is the seam most likely to fail silently in the field.
   needs no stubbed decoder but must never assert on hevc.
 - browser matrix: 3 of 8 columns measured. safari, firefox (not installed here), chrome-on-macos and
   edge-without-the-hevc-extension are pending with a protocol in the memo §9.
+
+### 2026-09-18 — **wave 3: 11 of 12.** 37/80. 3.4 stays open on the owner's cloudflare deploy.
+
+verified after the tree settled: agent **1346 passed / 6 skipped**; `agent/swoop` clippy `--all-targets`
+clean, **92 + 5 passed**; web `tsc` exit 0, **5520 passed / 280 suites**; rules **139 passed**; worker
+**66 passed**. `firestore.rules` untouched.
+
+**the bug worth remembering.** 3.12 set `receiver.jitterBufferTarget = 250` while 3.11 set `0` — two
+writers on one knob. despite the name, chrome maps it to `SetJitterBufferMinimumDelay` →
+`base_minimum_playout_delay_`, and `VCMTiming::TargetDelay() = max(min_playout_delay, jitter_delay +
+decode_time + render_delay)` (chromium source quoted in `research/06` §1.2). **it is a minimum, not a
+target: it can only raise the floor.** on a path the LAN row measured at 31.17 ms p50 that is a 3x
+regression in the one number G1 existed to establish, and nothing would have failed — tests pass either
+way. resolved: `receiver.ts` is the sole writer at 0 and owns the element and the rVFC chain (its
+frame-stamp join needs `presentedFrames`, `rtpTimestamp` and the meta record in one place);
+`presenter.ts` consumes observations and carries the do-not-re-add comment. both sides have regression
+guards. **the spec says "target"; chrome does not — that is why `research/06` went to the source.**
+
+**blocked, needs a dependency: the streamer cannot reach a room.** the crate pins no websocket client and
+no TLS stack — no tungstenite, no rustls, no tokio, no `Win32_Networking_WinHttp`; str0m's
+`wincrypto-dimpl` is DTLS/SRTP only. 3.9 built the module **sans-io behind one trait**
+(`client::SignalTransport`: `send_text`, `close`) so the socket is the only thing left to write. **owner
+ruled it must be multiplatform**, so winhttp is out: pin sync `tungstenite` + `rustls` (+
+`rustls-native-certs`), sync because the agent is a threaded service with no async runtime. **this is a
+`Cargo.toml` edit, which the plan reserves to 1.2 and 10.1 — amend that rule.** task 4.1 cannot reach a
+room until it lands.
+
+**spec gaps to close in PROTOCOL.md** (both ends independently reached the same answer, so this is
+recording, not redesign):
+- **§8's viewer token has no delivery path.** it says "presented … inside the offer exchange", but
+  `Message::Offer` carries only `sdp` and is `deny_unknown_fields`. both 3.9 and 3.10 implemented §10's
+  `{"t":"lease","token":…}` on `swoop-control` as the first frame. 3.10's argument for making it
+  permanent is the stronger one: an offer field would put a bearer token in a message the relay stores
+  and forwards verbatim, it would need re-sending on every renegotiation, and §10 already binds the lease
+  token's `fp` to the **established** DTLS session — strictly stronger than comparing against the offer.
+  **change §8's wording and add a line to §10 saying the first lease is the connect token.**
+- §9 puts the host fingerprint `mac` on `answer`; tasks 3.9 and 3.10's texts both said `host-ready`,
+  which has no field for it. both followed the contract. **fix the task texts.**
+- **the capture pacing in this file is wrong and 3.6 refused to follow it.** task 3.6's block still says
+  "`AcquireNextFrame` with a 0 ms timeout … 200 ms to re-anchor" — spike 0.8 measured that as the worst
+  option (2.7M calls in 15 s, 99.94% timeouts, a burnt core, five duplicate frames). implemented as one
+  blocking 8 ms call per output thread. **correct the text before 4.4 / 5.7 / 6.4 re-derive the old rule.**
+- 0.8's own recovery line "copy the current surface and emit an IDR anyway" is not implementable: on a
+  static desktop `AcquireNextFrame` returns `WAIT_TIMEOUT` and hands back **no surface**. what the 250 ms
+  timer can do — and now does — is relax the `LastPresentTime != 0` gate so the next real frame is emitted.
+- `DXGI_ERROR_UNAVAILABLE` does not exist; 0.8 means `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE`. naming only,
+  but a literal implementation would not compile.
+
+**wire disagreements with the worker, found by 3.9 and 3.10, none fixed:**
+- the worker stamps a numeric `code` on a synthesised `bye`; `Message::Bye` is `deny_unknown_fields` and
+  has none, and **a refused `bye` leaks the viewer's admission slot for the rest of the session.** 3.9
+  reads `bye` off the envelope to survive it. note `bye.code` is a **number** while `error.code` is a
+  **string** — nothing may type them together.
+- the worker's `error` codes (`auth`, `token_expired`, `unknown_kid`, `rate_limited`) are wider than the
+  `Refusal` enum. both ends carry the code as a string; a strict decode later breaks on all four.
+- **a refused websocket upgrade is invisible to the browser.** the worker's whole refusal vocabulary rides
+  an http response; a browser sees close 1006 and nothing else. so `room_full` and `room_mismatch` are
+  indistinguishable, and a fifth viewer retries eight times then reports `exhausted` with no way to tell
+  the user the room was simply full. **needs its own task** — a pre-flight fetch, or the session-create
+  route returning the refusal.
+- the worker caps viewers at **4** (`LIMITS.viewersPerRoom`) independently of the bundle's
+  `enablement.maxViewers`, so a site configured higher is silently capped by the relay and the host never
+  sees the join. neither end can explain it to the user.
+- unverified: whether str0m echoes the playout-delay `extmap` in its answer. 3.10 **aborts** on an answer
+  that lacks it, so a host that does not echo fails G2 with a named error rather than silently running at
+  a raised floor — deliberate, but it is the one abort that could be a false positive.
+
+**contracts established for later waves:**
+- a capture rebuild after `ACCESS_LOST` yields a **new device**, so it is a **new encoder, not a
+  reconfigure** — the nvenc backend refuses to encode against a foreign texture (`DeviceChanged`).
+- `BackendCaps.max_fps` reports **15**, which is fps at the *largest* supported size (4096x4096), per the
+  field's own definition. **redefine it as fps at a streaming size before anything tiers on it** (7.3/8.2).
+- `moq-nvenc`'s api handle **panics** when `nvEncodeAPI64.dll` is absent — it would have aborted the whole
+  `probe` verb on a non-nvidia box. guarded by an absolute-path load first. **tasks 7.1/7.2 need the same
+  discipline for their vendor dlls.**
+- **there is no congestion control** and `pacer.rs`'s module doc says so. what exists: an enforced ceiling,
+  a measured egress rate, a keyframe exemption that cannot starve the stream, counters on every refusal.
+  what 4.7 must not assume: there is no GoogCC estimate to lean on, and **loss counters stay at zero while
+  the path fails**, so a loss-based health check is not a design option.
+- task 3.3 defined the `events` contract from scratch (nothing specified it): closed type vocabulary,
+  `reason` constrained to `^[a-z0-9_]{1,48}$` so no prose or captured value reaches an audit row, actor is
+  the **reporter** not the offender. **the agent-side reporter in waves 4–5 must match it.**
+- `clientCaps` reaches the session-create route and **has no consumer** — nothing stores or forwards it and
+  the host learns the ladder from the viewer's `hello`. give it a home in `sessionStore` or drop it.
+- `SWOOP_MAX_VIEWERS = 4` and the bundle's `ctl = true` are both local constants in `bundle/route.ts`;
+  promote them if 3.2 or a later wave needs them.
+- **sid patterns disagree**: `requestSwoopSession` allows 128 chars, `tokens.server.ts`'s `assertId` allows
+  64. a sid between them is queueable but unmintable. 3.2 chose 32 hex to satisfy both; **reconcile the
+  two patterns.**
+- local dev gotcha: `signalUrl` upgrades `https:`→`wss:`, so a local wrangler on `http://localhost:8787`
+  yields `ws://`, which the doorbell rejects outright.
+- a worker missing `SWOOP_SIGNAL_RING_SECRET` answers every ring **500** while `/health` still returns
+  **200** — the smoke check will not catch it. set secrets before an environment's first deploy.
+
+**still open for the owner:** 3.4's deploy (and **the worker has no hostname** — `workers_dev = false`,
+no route, so it is reachable from nowhere and `/health` cannot be smoke-checked); the
+`SWOOP_JWT_PUBLIC_KEY_PREVIOUS` / `SWOOP_JWT_KID_PREVIOUS` manifest rows, without which a key rotation is
+a flag day; **task 0.3**, so the SYSTEM spawn path is still unverified on hardware; and **SAST has never
+run on this branch** — no code-scanning analysis exists for `refs/heads/feat/swoop`.
+
+**not verified anywhere yet: a real browser against the real streamer.** everything above is loopback,
+unit tests and golden vectors. the first chrome interop for the product path is wave 4's G2.
