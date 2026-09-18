@@ -15,8 +15,10 @@ polls for. These assertions still hold the agent side of that contract: they sto
 a future change from going back to relying on a signal that may never arrive.
 """
 
+import ast
 import json
 import os
+import pathlib
 import threading
 import time
 
@@ -531,16 +533,33 @@ class TestConnectionStatusListener:
         assert service._status_writes == []
 
 
-@pytest.mark.parametrize('attribute', [
-    '_shutdown_lock',
-    '_shutdown_trigger',
-    '_connection_status_manager',
-])
-def test_mockservice_mirrors_every_new_attribute(attribute):
+def _self_attrs_assigned_in(path, class_name):
+    tree = ast.parse(pathlib.Path(path).read_text(encoding='utf-8'))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            init = next(f for f in node.body
+                        if isinstance(f, ast.FunctionDef) and f.name == '__init__')
+            return {
+                t.attr for stmt in ast.walk(init)
+                if isinstance(stmt, ast.Assign)
+                for t in stmt.targets
+                if isinstance(t, ast.Attribute)
+                and isinstance(t.value, ast.Name) and t.value.id == 'self'
+            }
+    raise AssertionError(f'{class_name} not found in {path}')
+
+
+def test_mockservice_mirrors_every_new_attribute():
     """owlette_runner.MockService must carry everything OwletteService.__init__
-    sets, or the hosted path raises AttributeError in production."""
-    import pathlib
-    source = pathlib.Path(owlette_service.__file__).with_name('owlette_runner.py')
-    assert f'self.{attribute}' in source.read_text(encoding='utf-8'), (
-        f'{attribute} is missing from MockService.__init__'
-    )
+    sets, or the hosted path raises AttributeError in production. Derived from
+    the source, not a hand-kept list: the swoop wiring added five attributes
+    the old three-name list never saw, and the fleet-facing agent crash-looped."""
+    service_src = pathlib.Path(owlette_service.__file__)
+    runner_src = service_src.with_name('owlette_runner.py')
+    # the SCM stop event only exists under win32serviceutil; the hosted path
+    # never touches it
+    win32_only = {'hWaitStop'}
+    missing = (_self_attrs_assigned_in(service_src, 'OwletteService')
+               - _self_attrs_assigned_in(runner_src, 'MockService')
+               - win32_only)
+    assert not missing, f'missing from MockService.__init__: {sorted(missing)}'

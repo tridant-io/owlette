@@ -149,6 +149,9 @@ if __name__ == '__main__':
             self._cached_display_profile = None
             # auto-restore drift-persistence gate
             self._drift_pending_tick_count = 0
+            self._drift_pending_key = None
+            self._last_auto_restore_success_key = None
+            self._scm_stop_requested = False
             self._shutting_down = False
             self._live_view_active = False
             self._live_view_stop_time = 0
@@ -159,6 +162,12 @@ if __name__ == '__main__':
             # Mirrors the service attr; the IPC pump dispatcher reads it on
             # the first tick, so debug mode AttributeErrors without it.
             self._cortex_ipc_thread = None
+            # swoop: built by main() once Firebase is up; the tick reads these first
+            self.swoop_manager = None
+            self.swoop_doorbell = None
+            self._swoop_shutdown = threading.Event()
+            self._last_console_session_id = None
+            self._swoop_session_thread = None
 
             # handle_firebase_command checks has_handler() before falling through
             from command_router import CommandRouter
@@ -178,6 +187,11 @@ if __name__ == '__main__':
                 _register_process_handlers(self._command_router)
             except Exception as e:
                 logging.warning(f"Failed to register process-control handlers: {e}")
+            try:
+                from swoop_commands import register_handlers as _register_swoop_handlers
+                _register_swoop_handlers(self._command_router)
+            except Exception as e:
+                logging.warning(f"Failed to register swoop handlers: {e}")
             # _write_service_status() throttle (OwletteService's hasattr guard is a backstop)
             self._last_status_signature = None
             self._last_status_write_time = 0.0
