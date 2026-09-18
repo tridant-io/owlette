@@ -1,0 +1,19 @@
+{
+  "generatedAt": "2026-09-18T04:37:37.609Z",
+  "streams": [
+    {
+      "name": "h264-1080p",
+      "file": "h264-1080p.h264",
+      "codec": "avc1.64002a",
+      "frames": 60,
+      "bytes": 411921
+    },
+    {
+      "name": "hevc-1080p",
+      "file": "hevc-1080p.h265",
+      "codec": "hev1.1.6.L123.B0",
+      "frames": 60,
+      "bytes": 854760
+    }
+  ]
+}
