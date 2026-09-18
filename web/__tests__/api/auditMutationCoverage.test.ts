@@ -41,6 +41,13 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'agent/auth/refresh',
   // agent screenshot ingest (agent bearer token); telemetry upload, not an operator mutation.
   'agent/screenshot',
+  // agent fetches its own session bundle (agent bearer token); mints short-lived credentials, persists nothing.
+  'agent/swoop/bundle',
+  // agent mints its own doorbell token (agent bearer token); token issuance, no operator actor.
+  'agent/swoop/doorbell-token',
+  // swoop host lifecycle/denial reports: writes its own blocking `sites/{siteId}/audit_log` rows inline
+  // as the `swoop_host` system actor (see the route header), which the marker scan cannot see.
+  'agent/swoop/events',
   // internal-secret endpoint called by the alert cloud function; sends notifications only.
   'alerts/trigger',
   // public unauthenticated password-reset email send; no actor to attribute, enumeration-safe by design.
