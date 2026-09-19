@@ -655,14 +655,6 @@ pub fn limits_for(caps: &[CodecCaps], codec: Codec) -> Option<Limits> {
     })
 }
 
-/// What the audit route is told when [`tiers::admit`] turns a join away.
-///
-/// [`tiers::BudgetRefusal::reason`] is the arithmetic in prose, which is what
-/// the log line wants; `POST /api/agent/swoop/events` accepts `^[a-z0-9_]{1,48}$`
-/// and refuses the **whole batch** on anything else. So the prose is logged and
-/// this code is reported.
-pub const ENCODER_BUDGET_REASON: &str = "encoder_budget";
-
 /// The one estimate of this machine's uplink, split across every viewer by
 /// [`UplinkBudget`](crate::transport::governor::UplinkBudget).
 ///
@@ -788,7 +780,7 @@ mod host {
     use super::{
         codec_wire_name, limits_for, pick_codec, tier_encodes, tiers, CaptureGate, Denials,
         Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining, Outbox, SessionHandle,
-        TierEncode, ViewerRate, ENCODER_BUDGET_REASON, HOST_UPLINK_ESTIMATE_BPS,
+        TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
     use crate::capture::{
@@ -1690,14 +1682,11 @@ mod host {
                 // and is not a second viewer.
                 Joining::Known => return,
                 Joining::Refuse(refusal) => {
-                    // The arithmetic in the log, a reason code on the wire: the
-                    // audit route accepts `^[a-z0-9_]{1,48}$` and refuses the
-                    // whole batch on anything else.
-                    ::log::warn!("swoop: viewer {viewer} refused, {}", refusal.reason);
+                    ::log::warn!("swoop: viewer {viewer} refused, {refusal}");
                     self.host_event(
                         refusal.kind(),
                         Some(viewer.clone()),
-                        Some(ENCODER_BUDGET_REASON.to_owned()),
+                        Some(refusal.reason().to_owned()),
                     );
                     let effects = self.client.end_viewer(&viewer, LeftReason::Bye);
                     let _ = self.apply(effects);
@@ -4604,20 +4593,9 @@ mod tests {
             assert_eq!(refusal.kind(), HostEventKind::JoinRefused);
             assert_eq!(refusal.budget, BUDGET);
             assert_eq!(refusal.viewers, BUDGET);
-
-            // The module's own reason is the arithmetic in prose, which the
-            // audit route refuses — and it refuses the *whole batch* with it. So
-            // the prose is logged and this code goes on the wire.
-            assert!(
-                !refusal.reason.bytes().all(is_reason_code),
-                "the prose reason would now pass the route, so the split is stale"
-            );
-            assert!(ENCODER_BUDGET_REASON.bytes().all(is_reason_code));
-            assert!((1..=48).contains(&ENCODER_BUDGET_REASON.len()));
-        }
-
-        fn is_reason_code(b: u8) -> bool {
-            b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'
+            // `tiers` owns both spellings now; that the code is one the route
+            // accepts is asserted there, against the route's own pattern.
+            assert_eq!(refusal.reason(), "encoder_budget");
         }
 
         /// D14's case, through the session's own seam: the plan, then the
