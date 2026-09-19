@@ -22,6 +22,7 @@ const SITE_SCOPED: Capability[] = [
   Capability.MACHINE_VIEW,
   Capability.MACHINE_REMOTE_CONTROL,
   Capability.MACHINE_REMOTE_VIEW,
+  Capability.SWOOP_SETTINGS_MANAGE,
   Capability.MACHINE_CONFIG_WRITE,
   Capability.MACHINE_REMOVE,
   Capability.DEPLOYMENT_MANAGE,
@@ -69,6 +70,7 @@ describe('Capability enum', () => {
         'MACHINE_VIEW',
         'MACHINE_REMOTE_CONTROL',
         'MACHINE_REMOTE_VIEW',
+        'SWOOP_SETTINGS_MANAGE',
         'MACHINE_CONFIG_WRITE',
         'MACHINE_REMOVE',
         'DEPLOYMENT_MANAGE',
@@ -112,6 +114,7 @@ describe('SiteRoleCapabilityMatrix', () => {
         'MACHINE_REMOTE_VIEW',
         'MACHINE_REMOTE_CONTROL',
         'MACHINE_EXEC_COMMAND',
+        'SWOOP_SETTINGS_MANAGE',
         'MACHINE_CONFIG_WRITE',
         'MACHINE_REMOVE',
         'DEPLOYMENT_MANAGE',
@@ -490,6 +493,19 @@ describe('swoop — MACHINE_REMOTE_VIEW vs MACHINE_REMOTE_CONTROL', () => {
     // capability's much wider reach.
     expect(Capability.MACHINE_REMOTE_VIEW).not.toBe(Capability.MACHINE_VIEW);
     expect(Capability.MACHINE_REMOTE_CONTROL).not.toBe(Capability.MACHINE_VIEW);
+  });
+
+  it('SWOOP_SETTINGS_MANAGE is site admin/owner, never a member', () => {
+    // The site's own switch for the feature. A member holds the watch
+    // capability on merit, so granting them the switch would let them enable
+    // what they may then watch.
+    expect(hasCapability(member, Capability.SWOOP_SETTINGS_MANAGE, 's1')).toBe(false);
+    for (const actor of [admin, owner]) {
+      expect(hasCapability(actor, Capability.SWOOP_SETTINGS_MANAGE, 's1')).toBe(true);
+    }
+    expect(isSiteScopedCapability(Capability.SWOOP_SETTINGS_MANAGE)).toBe(true);
+    expect(hasCapability(admin, Capability.SWOOP_SETTINGS_MANAGE, 's2')).toBe(false);
+    expect(hasCapability(admin, Capability.SWOOP_SETTINGS_MANAGE)).toBe(false);
   });
 });
 

@@ -46,6 +46,8 @@ export const USER_LIMITS: Readonly<Record<Capability, CapabilityLimit>> = {
   // below, so these two entries are the ceiling, not a formality.
   [CapabilityEnum.MACHINE_REMOTE_CONTROL]: { perMinute: 10 },
   [CapabilityEnum.MACHINE_REMOTE_VIEW]: { perMinute: 20 },
+  // Keeps the ceiling the route carried while it was MACHINE_CONFIG_WRITE.
+  [CapabilityEnum.SWOOP_SETTINGS_MANAGE]: { perMinute: 30 },
   [CapabilityEnum.MACHINE_CONFIG_WRITE]: { perMinute: 30 },
   [CapabilityEnum.MACHINE_REMOVE]: { perMinute: 5 },
   [CapabilityEnum.DEPLOYMENT_MANAGE]: { perMinute: 30 },
@@ -79,6 +81,7 @@ export const SYSTEM_LIMITS: Readonly<Record<Capability, CapabilityLimit>> = {
   [CapabilityEnum.MACHINE_VIEW]: { perMinute: 300 },
   [CapabilityEnum.MACHINE_REMOTE_CONTROL]: { perMinute: 50 },
   [CapabilityEnum.MACHINE_REMOTE_VIEW]: { perMinute: 100 },
+  [CapabilityEnum.SWOOP_SETTINGS_MANAGE]: { perMinute: 150 },
   [CapabilityEnum.MACHINE_CONFIG_WRITE]: { perMinute: 150 },
   [CapabilityEnum.MACHINE_REMOVE]: { perMinute: 25 },
   [CapabilityEnum.DEPLOYMENT_MANAGE]: { perMinute: 150 },

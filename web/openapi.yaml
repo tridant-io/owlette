@@ -6335,7 +6335,7 @@ paths:
       summary: read a site's swoop policy
       description: |
         swoop is off until a site turns it on. Site-admin surface: requires
-        `site=<siteId>:read` and the machine-config capability. Unlike the
+        `site=<siteId>:read` and the swoop-settings capability. Unlike the
         session routes, this one does admit a scoped api key.
       security:
         - apiKey: []
@@ -6362,7 +6362,7 @@ paths:
       summary: change a site's swoop policy
       description: |
         Changes any subset of the policy. Requires `site=<siteId>:write` and
-        the machine-config capability.
+        the swoop-settings capability.
 
         Turning swoop off also reaches machines that are already connected:
         `refreshed` counts the machines the change was fanned out to.

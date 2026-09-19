@@ -86,13 +86,25 @@ export type SiteIdSource = 'path' | 'query';
  * That switch exists so an authorization misfire cannot lock operators out of
  * their own fleet — it fails towards availability. Handing every site member
  * live control of a machine's keyboard, or its screen and system audio, is the
- * wrong direction to fail in, so swoop's two capabilities keep running
+ * wrong direction to fail in, so swoop's capabilities keep running
  * `hasCapability` while the switch is off. Everything else still bypasses and
  * still records `enforcement_bypassed` in its allow audit.
+ *
+ * SWOOP_SETTINGS_MANAGE is in here for the same reason as the two it guards,
+ * not as an afterthought: a member holds MACHINE_REMOTE_VIEW on merit, so if
+ * the switch that turns swoop ON for a site were bypassable they could enable
+ * it themselves — members may watch, no machine excluded, indicator off — and
+ * then be granted the stream by the very check that was exempted. An exemption
+ * on the watch capability is worth nothing while its own enabling route is
+ * weaker than it is. That is also why swoop settings do not ride on
+ * MACHINE_CONFIG_WRITE, which cannot join this set: it gates process,
+ * schedule, display and reboot config across the fleet, which is exactly what
+ * the kill switch exists to keep reachable.
  */
 export const BYPASS_EXEMPT_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   Capability.MACHINE_REMOTE_CONTROL,
   Capability.MACHINE_REMOTE_VIEW,
+  Capability.SWOOP_SETTINGS_MANAGE,
 ]);
 
 export interface SiteHandlerContext {

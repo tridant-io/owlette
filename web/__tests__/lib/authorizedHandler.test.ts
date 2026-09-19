@@ -411,10 +411,36 @@ describe('authorizedSiteHandler — kill switches', () => {
 });
 
 describe('authorizedSiteHandler — swoop capabilities are exempt from the capability kill switch', () => {
-  it('BYPASS_EXEMPT_CAPABILITIES holds exactly the two swoop capabilities', () => {
+  it('BYPASS_EXEMPT_CAPABILITIES holds exactly the three swoop capabilities', () => {
+    // SWOOP_SETTINGS_MANAGE belongs here because it is the switch in front of
+    // the other two: a bypassable enablement route lets a member turn swoop on
+    // and then pass the exempt watch check on merit.
     expect([...BYPASS_EXEMPT_CAPABILITIES].sort()).toEqual(
-      ['MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW'].sort()
+      ['MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW', 'SWOOP_SETTINGS_MANAGE'].sort()
     );
+  });
+
+  it('MACHINE_CONFIG_WRITE is NOT exempt — the kill switch has to keep the fleet reachable', () => {
+    // The reason swoop settings got their own capability instead of joining
+    // this set through MACHINE_CONFIG_WRITE: that one also gates process,
+    // schedule, display and reboot config, and locking an operator out of those
+    // during a matrix misfire is the failure the switch exists to prevent.
+    expect(BYPASS_EXEMPT_CAPABILITIES.has('MACHINE_CONFIG_WRITE')).toBe(false);
+  });
+
+  it('capability kill switch off: a member is STILL refused SWOOP_SETTINGS_MANAGE', async () => {
+    configResult = { ...configResult, capability_enforcement: false };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: ['site-a'] }) };
+    setMember('member');
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'SWOOP_SETTINGS_MANAGE', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+    const deny = setCalls.find((c) => (c.payload as { outcome?: string }).outcome === 'deny');
+    expect((deny!.payload as { denyReason?: string }).denyReason).toBe('capability_missing');
   });
 
   it('capability kill switch off: a member is STILL refused MACHINE_REMOTE_CONTROL, with a capability_missing deny row', async () => {
