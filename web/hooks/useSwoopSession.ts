@@ -41,6 +41,7 @@ import {
   type SwoopSession,
 } from '@/lib/swoop/features';
 import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
+import { SwoopLeaseRefused } from '@/lib/swoop/lease';
 import { createSwoopIdentity, createSwoopPeer, type SwoopPeer } from '@/lib/swoop/peer';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import {
@@ -325,7 +326,15 @@ export function useSwoopSession(
           body: JSON.stringify({ viewerId: grant.viewerId, fp }),
         },
       );
-      if (!res.ok) throw new Error(await problemDetail(res, 'the session lease could not be renewed.'));
+      if (!res.ok) {
+        const detail = await problemDetail(res, 'the session lease could not be renewed.');
+        // 401/403 is the authorisation going away — what the lease exists to
+        // catch. everything else is a failure the renewer may retry.
+        if (res.status === 401 || res.status === 403) {
+          throw new SwoopLeaseRefused(res.status, detail);
+        }
+        throw new Error(detail);
+      }
       const body = (await res.json()) as { data: SwoopLease };
       leaseExpiresAt = body.data.expiresAt;
       return body.data;

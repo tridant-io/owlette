@@ -153,14 +153,12 @@ export async function createSwoopSession(args: {
   });
 }
 
-export async function getSwoopSession(
+function parseSession(
+  data: Record<string, unknown>,
   siteId: string,
   machineId: string,
   sid: string,
-): Promise<SwoopSession | null> {
-  const snap = await sessionRef(siteId, machineId, sid).get();
-  if (!snap.exists) return null;
-  const data = snap.data() ?? {};
+): SwoopSession {
   return {
     sid,
     siteId,
@@ -174,6 +172,50 @@ export async function getSwoopSession(
     ...(data.endReason ? { endReason: data.endReason as SwoopSessionEndReason } : {}),
     ...(typeof data.endedAt === 'number' ? { endedAt: data.endedAt } : {}),
   };
+}
+
+export async function getSwoopSession(
+  siteId: string,
+  machineId: string,
+  sid: string,
+): Promise<SwoopSession | null> {
+  const snap = await sessionRef(siteId, machineId, sid).get();
+  if (!snap.exists) return null;
+  return parseSession(snap.data() ?? {}, siteId, machineId, sid);
+}
+
+/** A session that has not ended yet, whichever of the two live states it is in. */
+const UNENDED_STATES: SwoopSessionState[] = ['pending', 'live'];
+
+/**
+ * Every unended session in this site that `uid` is in — as a viewer, or as the
+ * user who started it. Revocation is the only caller (PROTOCOL.md §10).
+ *
+ * Collection-group scoped because a site's sessions are scattered one machine
+ * at a time and a revocation cannot know which machine; the alternative is a
+ * query per machine in the site. `viewers` is an array of objects, so the uid
+ * cannot be a filter — it is matched here, over the site's unended sessions
+ * only, which is a handful of documents.
+ */
+export async function listUnendedSwoopSessionsForUser(args: {
+  siteId: string;
+  uid: string;
+}): Promise<SwoopSession[]> {
+  const snap = await getAdminDb()
+    .collectionGroup('swoop_sessions')
+    .where('siteId', '==', args.siteId)
+    .where('state', 'in', UNENDED_STATES)
+    .get();
+  return snap.docs
+    .map((doc) => {
+      const data = (doc.data() ?? {}) as Record<string, unknown>;
+      return parseSession(data, args.siteId, String(data.machineId ?? ''), doc.id);
+    })
+    .filter(
+      (session) =>
+        session.machineId !== '' &&
+        (session.createdBy === args.uid || session.viewers.some((v) => v.uid === args.uid)),
+    );
 }
 
 export async function setSwoopSessionState(

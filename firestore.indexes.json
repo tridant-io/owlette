@@ -285,6 +285,14 @@
         { "fieldPath": "userId", "order": "ASCENDING" },
         { "fieldPath": "runAt", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "swoop_sessions",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "siteId", "order": "ASCENDING" },
+        { "fieldPath": "state", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

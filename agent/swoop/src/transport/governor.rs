@@ -1,5 +1,4 @@
-//! Rate governor: viewer feedback in, one bitrate target out. Task 6.5 extends
-//! it with the fps and resolution ladders.
+//! Rate governor: viewer feedback in, a bitrate target and a quality rung out.
 //!
 //! # What this is, and what it is not
 //!
@@ -18,6 +17,45 @@
 //! cannot tell a congested uplink from a busy encoder or a browser tab the
 //! compositor has throttled: all three present as a delay rise, and all three
 //! get the same 20%.
+//!
+//! Task 6.5 added the frame-rate and resolution ladders under that rule. It did
+//! not make any of the paragraph above less true, and the ladder in particular
+//! is not a second controller — see the next section for what it actually
+//! changes, which is less than its name suggests.
+//!
+//! # The ladder does not reduce the rate, and saying so matters
+//!
+//! The encoder is CBR with a one-frame VBV (plan.md D7). Hand a CBR encoder
+//! half the frames and it spends the same budget on bigger ones; hand it a
+//! quarter of the pixels and it spends the same budget on fewer, better ones.
+//! **[`Governor::target_bps`] is the only output of this module that changes
+//! how many bits go on the wire.** The rung is a *quality allocation*: once the
+//! rate is pinned at the floor and the path is still degrading, spending that
+//! floor on 15 fps at 720p is watchable where spending it on 60 fps at 4K is
+//! not. That is the whole claim, and it is worth less than a capacity estimate.
+//!
+//! So the ladder is deliberately one sequence and not two counters
+//! ([`Ceiling::rungs`]): frame rate first, then resolution, one index walked
+//! down and back up. Two independent axes with two independent triggers is how
+//! a ladder ends up trading fps for pixels and back at 2 Hz forever; a single
+//! monotone index cannot. On top of that a rung moves only after
+//! [`LADDER_DWELL`], and only ever one step per evaluation.
+//!
+//! # A rung change is a new encoder, and its first frame is an IDR
+//!
+//! There is no `reconfigure` control message and there is no `VideoDecoder`.
+//! Gate G1 chose the RTP media track: the browser renders into a `<video>`,
+//! which follows a resolution change by itself, `web/lib/swoop/video/decoder.ts`
+//! is an empty stub for exactly that reason, and `signal::messages` is frozen
+//! and `deny_unknown_fields` besides, so no such message could be added anyway.
+//!
+//! What survives from the arm-A design is the only part of it that was ever
+//! about correctness: **never emit a chunk whose references the client cannot
+//! have.** A width or height change is a *new encoder* and not a reconfigure
+//! (`EncoderConfig`, spike 3.7), the capture loop's rebuild path forces an IRAP
+//! out of the new one, and nothing from the old encoder may follow it. The
+//! discipline is the IDR, not a handshake. [`LadderChange::needs_new_encoder`]
+//! is how a caller tells the two cases apart.
 //!
 //! # Why the trigger is timing and never loss
 //!
@@ -50,6 +88,14 @@
 //!    frame the admission gate refused is congestion the host caused itself,
 //!    and it counts the same as the viewer reporting one missing.
 //!
+//! Two fields `stats` also carries are read by nothing here, on purpose.
+//! `rttMs` is a real measurement (`feedback.ts` refuses to send one before a
+//! `pong` has come back) but a rise in it and a rise in one-way delay are the
+//! same event seen twice, and actuating on both would double every cut.
+//! `decodeQueue` is **always zero** on this path: arm B has no WebCodecs queue
+//! to report and `feedback.ts` sends a literal `0`. A trigger on it would look
+//! like a viewer-side backpressure signal and would be a constant.
+//!
 //! # What it cannot detect, stated plainly
 //!
 //! - **A viewer that goes quiet.** Silence is not a signal here: no reports
@@ -63,21 +109,46 @@
 //!   invisible by design; the trigger is set above the 30.7 ms p95 the
 //!   bake-off measured end to end so ordinary scheduling noise is not a cut.
 //! - **Loss.** NACK/RTX hides it and the measured counters were zero anyway.
+//! - **Whether a rung it gave up helped.** The ladder has no feedback of its
+//!   own: nothing measures the picture after a rung change, so a descent that
+//!   made no difference is indistinguishable from one that saved the session.
+//!   It walks back up on quiet reports either way.
+//! - **A viewer whose own decoder is behind.** That is what `decodeQueue` would
+//!   say, and on arm B it says nothing (above).
 //!
 //! # What remains before this is congestion control
 //!
 //! The step-response runs research/05 §7 asks for and spike 0.2 did not do
 //! (50 → 5 → 50 Mbps: time to first cut, overshoot, recovery time), a capacity
-//! estimate of some kind, and a decision about a viewer gone silent.
+//! estimate of some kind, and a decision about a viewer gone silent. The ladder
+//! adds one more: a measurement that a rung change is worth its cost, since
+//! today it is reasoned about rather than measured.
 //!
-//! # Applying the target
+//! # Applying the target, and the rung
 //!
-//! [`Governor::on_report`] returns a new target only when it moved. The caller
-//! applies it to **both** [`RtcPeer::set_bitrate_ceiling`] and
+//! [`Governor::on_report`] returns a new bitrate target only when it moved. The
+//! caller applies it to **both** [`RtcPeer::set_bitrate_ceiling`] and
 //! [`Encoder::set_bitrate`] — the gate and the source have to agree or the gate
-//! just drops the difference. A reconfigure is cheap (spike 0.9: the VBV moves
-//! in the same call, no IDR), but a capture rebuild is a *new* encoder (Task
-//! 3.7), so whoever rebuilds re-applies [`Governor::target_bps`] to it.
+//! just drops the difference. A bitrate reconfigure is cheap (spike 0.9: the
+//! VBV moves in the same call, no IDR), but a capture rebuild is a *new*
+//! encoder (Task 3.7), so whoever rebuilds re-applies [`Governor::target_bps`]
+//! to it.
+//!
+//! [`Governor::take_ladder`] is read straight after `on_report` and answers at
+//! most one change per evaluation. The caller owes it two different things:
+//!
+//! - **Resolution moved** ([`LadderChange::needs_new_encoder`]): re-plan the
+//!   encode size with `scale::plan(source, ceiling.narrow(backend_limits))` and
+//!   open a new encoder at it. Its first frame is an IRAP and no frame from the
+//!   old one may follow it.
+//! - **Frame rate moved**: feed the encoder at most [`QualityRung::fps`] frames
+//!   a second. It is a capture-side decision, not an `EncoderConfig` one —
+//!   `fps` there sizes rate control and drops nothing.
+//!
+//! **Neither actuator is wired yet.** The session loop applies the bitrate and
+//! ignores the rung, so as shipped this module still governs exactly one axis.
+//! The rung is built, tested and reported; acting on it is a change to
+//! `session/mod.rs`, which Wave 6 has three other tasks inside.
 //!
 //! [`RtcPeer::set_bitrate_ceiling`]: crate::transport::rtc::RtcPeer::set_bitrate_ceiling
 //! [`Encoder::set_bitrate`]: crate::encode::Encoder::set_bitrate
@@ -85,6 +156,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use crate::session::quality::{Ceiling, QualityRung};
 use crate::signal::messages::channel::Feedback;
 use crate::transport::pacer::PacerStats;
 
@@ -125,10 +197,28 @@ const MIN_FLOOR_BPS: u32 = 500_000;
 /// been rescued by cutting further.
 const DEFAULT_FLOOR_FRACTION: u32 = 8;
 
+/// No rung moves inside this, in either direction. Longer than [`HOLD`] on
+/// purpose: the bitrate ladder gets several attempts at a degraded window
+/// before the rung ladder is allowed to conclude the rate was never the
+/// problem.
+pub const LADDER_DWELL: Duration = Duration::from_secs(5);
+
+/// Consecutive quiet evaluations before a rung is given back — 3 s at the 2 Hz
+/// report cadence, against the single degraded report that spends one. That
+/// asymmetry is the hysteresis, and it is why a flapping path settles at the
+/// lower rung instead of between two.
+const LADDER_RECOVER_QUIET: u32 = 6;
+
+/// And the rate has to be back at this share of the ceiling first. Giving a
+/// rung back while the bitrate is still climbing out of a cut is how one
+/// congested window gets paid for twice.
+const LADDER_RECOVER_SHARE: f64 = 0.9;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GovernorConfig {
-    /// The quality preset's bitrate. The target never goes above it.
-    pub configured_bps: u32,
+    /// The quality preset. The target never goes above `ceiling.bitrate_bps`,
+    /// and the ladder starts at the preset's own frame rate and resolution.
+    pub ceiling: Ceiling,
     /// The target never goes below it.
     pub floor_bps: u32,
     pub rise_trigger: Duration,
@@ -138,15 +228,53 @@ pub struct GovernorConfig {
 
 impl GovernorConfig {
     pub fn new(configured_bps: u32) -> Self {
+        Self::for_ceiling(Ceiling {
+            bitrate_bps: configured_bps,
+            ..Ceiling::default()
+        })
+    }
+
+    pub fn for_ceiling(ceiling: Ceiling) -> Self {
         Self {
-            configured_bps,
-            floor_bps: (configured_bps / DEFAULT_FLOOR_FRACTION)
+            ceiling,
+            floor_bps: (ceiling.bitrate_bps / DEFAULT_FLOOR_FRACTION)
                 .max(MIN_FLOOR_BPS)
-                .min(configured_bps),
+                .min(ceiling.bitrate_bps),
             rise_trigger: RISE_TRIGGER,
             reference_window: REFERENCE_WINDOW,
             hold: HOLD,
         }
+    }
+}
+
+/// One word for the stats line: what the governor is doing right now.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GovernorState {
+    /// At the preset's ceiling with nothing to answer.
+    #[default]
+    Ceiling,
+    /// Inside the hold after a cut, where no report can move anything.
+    Holding,
+    /// Below the ceiling and walking back up.
+    Climbing,
+    /// At the floor. Every further degraded window is answered by the ladder,
+    /// or — once that is spent too — by nothing at all.
+    Pinned,
+}
+
+/// A rung the governor has just moved to, and the one it came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LadderChange {
+    pub rung: QualityRung,
+    pub previous: QualityRung,
+}
+
+impl LadderChange {
+    /// A resolution move is a new encoder and a fresh IRAP out of it; a frame
+    /// rate move is a capture-side decision the running encoder never hears
+    /// about. The caller owes a different thing for each.
+    pub fn needs_new_encoder(&self) -> bool {
+        self.rung.resolution != self.previous.resolution
     }
 }
 
@@ -172,6 +300,14 @@ pub struct GovernorStats {
     pub reference_resets: u64,
     pub last_owd_us: i64,
     pub last_rise_us: i64,
+    /// Rungs given up, and rungs given back. Both, because a session that spent
+    /// its whole life walking one rung up and down is a tuning bug and looks
+    /// identical to a settled one if only the current rung is reported.
+    pub ladder_down: u64,
+    pub ladder_up: u64,
+    /// Where the ladder stands, and how far down the preset it is.
+    pub rung: QualityRung,
+    pub rung_index: u32,
 }
 
 /// The rolling minimum, as a monotonic deque: the front is the smallest sample
@@ -228,18 +364,32 @@ pub struct Governor {
     /// Set by anything degrading between reports, cleared by each evaluation.
     degraded: bool,
     hold_until: Option<Instant>,
+    /// The preset's ladder, richest first, rebuilt whenever the preset moves.
+    rungs: Vec<QualityRung>,
+    rung: usize,
+    rung_moved_at: Option<Instant>,
+    /// Consecutive evaluations with nothing to answer. Reset by a degraded one
+    /// and by a rung move.
+    quiet_reports: u32,
+    /// A rung move the caller has not collected yet.
+    pending: Option<LadderChange>,
     stats: GovernorStats,
 }
 
 impl Governor {
     pub fn new(cfg: GovernorConfig) -> Self {
         let cfg = GovernorConfig {
-            floor_bps: cfg.floor_bps.min(cfg.configured_bps),
+            floor_bps: cfg.floor_bps.min(cfg.ceiling.bitrate_bps),
             ..cfg
+        };
+        let rungs = cfg.ceiling.rungs();
+        let stats = GovernorStats {
+            rung: *rungs.first().expect("a ceiling always has its own rung"),
+            ..GovernorStats::default()
         };
         Self {
             cfg,
-            target_bps: cfg.configured_bps,
+            target_bps: cfg.ceiling.bitrate_bps,
             sent: VecDeque::with_capacity(SEND_RING),
             reference: MinWindow::new(cfg.reference_window),
             last_offset_us: None,
@@ -247,7 +397,12 @@ impl Governor {
             last_dropped_over_budget: 0,
             degraded: false,
             hold_until: None,
-            stats: GovernorStats::default(),
+            rungs,
+            rung: 0,
+            rung_moved_at: None,
+            quiet_reports: 0,
+            pending: None,
+            stats,
         }
     }
 
@@ -259,6 +414,35 @@ impl Governor {
         self.stats
     }
 
+    pub fn ceiling(&self) -> Ceiling {
+        self.cfg.ceiling
+    }
+
+    /// The frame rate and resolution the ladder currently allows.
+    pub fn rung(&self) -> QualityRung {
+        *self.rungs.get(self.rung).expect("the index is only ever moved inside the ladder")
+    }
+
+    /// The rung move the last [`Governor::on_report`] produced, if any. Read it
+    /// straight after that call; at most one move per evaluation.
+    pub fn take_ladder(&mut self) -> Option<LadderChange> {
+        self.pending.take()
+    }
+
+    /// One word for the stats line.
+    pub fn state(&self, now: Instant) -> GovernorState {
+        if self.hold_until.is_some_and(|until| now < until) {
+            return GovernorState::Holding;
+        }
+        if self.target_bps >= self.cfg.ceiling.bitrate_bps {
+            return GovernorState::Ceiling;
+        }
+        if self.target_bps <= self.cfg.floor_bps {
+            return GovernorState::Pinned;
+        }
+        GovernorState::Climbing
+    }
+
     /// The best one-way delay still inside the reference window, in µs. It
     /// carries whatever constant offset the two clocks have — only differences
     /// against it mean anything.
@@ -266,13 +450,40 @@ impl Governor {
         self.reference.min()
     }
 
-    /// Move the configured ceiling — a viewer's §5 `quality` message, or Task
-    /// 6.5's preset change. A target already above the new ceiling comes down
-    /// at once rather than waiting for a report.
+    /// Move the bitrate ceiling alone, leaving the other two axes where the
+    /// preset put them. A target already above the new ceiling comes down at
+    /// once rather than waiting for a report.
     pub fn set_configured_bps(&mut self, configured_bps: u32) {
-        self.cfg.configured_bps = configured_bps;
-        self.cfg.floor_bps = self.cfg.floor_bps.min(configured_bps);
-        self.target_bps = self.target_bps.clamp(self.cfg.floor_bps, configured_bps);
+        self.set_ceiling(Ceiling {
+            bitrate_bps: configured_bps,
+            ..self.cfg.ceiling
+        });
+    }
+
+    /// A viewer's §5 `quality` message, whole.
+    ///
+    /// A new preset is a new ladder and it is descended from the top: the old
+    /// index counted rungs that no longer exist, and a person who has just
+    /// stated what they want should get it before the governor starts taking it
+    /// away again.
+    pub fn set_ceiling(&mut self, ceiling: Ceiling) {
+        if self.cfg.ceiling == ceiling {
+            return;
+        }
+        let previous = self.rung();
+        self.cfg.ceiling = ceiling;
+        self.cfg.floor_bps = self.cfg.floor_bps.min(ceiling.bitrate_bps);
+        self.target_bps = self.target_bps.clamp(self.cfg.floor_bps, ceiling.bitrate_bps);
+        self.rungs = ceiling.rungs();
+        self.rung = 0;
+        self.rung_moved_at = None;
+        self.quiet_reports = 0;
+        let rung = self.rung();
+        self.stats.rung = rung;
+        self.stats.rung_index = 0;
+        if rung != previous {
+            self.pending = Some(LadderChange { rung, previous });
+        }
     }
 
     /// Record a frame's send stamp so its feedback can be joined later. Called
@@ -319,6 +530,14 @@ impl Governor {
         self.last_dropped_over_budget = pacer.dropped_over_budget;
 
         let degraded = std::mem::take(&mut self.degraded);
+        // Counted on every report, the held ones included: the quiet run the
+        // ladder recovers on is a statement about the path, and the path does
+        // not stop being quiet because the encoder is still complying.
+        self.quiet_reports = if degraded {
+            0
+        } else {
+            self.quiet_reports.saturating_add(1)
+        };
         // The hold covers the climb as well as the cut: the reports right after
         // a cut still carry the delay it was answering, and climbing back
         // through it would make the cut a no-op.
@@ -338,13 +557,57 @@ impl Governor {
                 self.stats.climbs += 1;
             }
         }
+        self.evaluate_ladder(now, degraded);
         (self.target_bps != previous).then_some(self.target_bps)
+    }
+
+    /// At most one rung, in one direction, and never inside [`LADDER_DWELL`].
+    ///
+    /// Down only once the bitrate is pinned at the floor: until then the rate
+    /// itself is still the answer, and giving up frames or pixels while there
+    /// are bits left to give up costs picture for nothing.
+    fn evaluate_ladder(&mut self, now: Instant, degraded: bool) {
+        if self
+            .rung_moved_at
+            .is_some_and(|at| now.saturating_duration_since(at) < LADDER_DWELL)
+        {
+            return;
+        }
+        let pinned = self.target_bps <= self.cfg.floor_bps;
+        let recovered = f64::from(self.target_bps)
+            >= f64::from(self.cfg.ceiling.bitrate_bps) * LADDER_RECOVER_SHARE;
+        let down = if degraded && pinned && self.rung + 1 < self.rungs.len() {
+            true
+        } else if !degraded
+            && self.rung > 0
+            && recovered
+            && self.quiet_reports >= LADDER_RECOVER_QUIET
+        {
+            false
+        } else {
+            return;
+        };
+
+        let previous = self.rung();
+        if down {
+            self.rung += 1;
+            self.stats.ladder_down += 1;
+        } else {
+            self.rung -= 1;
+            self.stats.ladder_up += 1;
+        }
+        self.rung_moved_at = Some(now);
+        self.quiet_reports = 0;
+        let rung = self.rung();
+        self.stats.rung = rung;
+        self.stats.rung_index = self.rung as u32;
+        self.pending = Some(LadderChange { rung, previous });
     }
 
     fn scale(&self, factor: f64) -> u32 {
         let scaled = (f64::from(self.target_bps) * factor).round();
         let scaled = scaled.clamp(0.0, f64::from(u32::MAX)) as u32;
-        scaled.clamp(self.cfg.floor_bps, self.cfg.configured_bps)
+        scaled.clamp(self.cfg.floor_bps, self.cfg.ceiling.bitrate_bps)
     }
 
     fn on_delay_sample(
@@ -446,6 +709,29 @@ mod tests {
             }
             self.now += REPORT;
             self.governor.on_report(self.now, self.pacer)
+        }
+
+        /// One degraded window, then the whole hold, so the next one is free to
+        /// act. The good frame keeps the reference window's minimum where it
+        /// is — without it the raised delay ages into the baseline and reads as
+        /// health long before the target reaches the floor.
+        fn degraded_window(&mut self) -> Option<LadderChange> {
+            self.frame(GOOD);
+            self.report(RISEN);
+            self.now += HOLD;
+            self.governor.take_ladder()
+        }
+
+        /// Cut until the rate has nowhere left to go.
+        fn drive_to_the_floor(&mut self) -> Vec<LadderChange> {
+            self.report(GOOD);
+            let mut changes = Vec::new();
+            while self.governor.target_bps() > self.governor.cfg.floor_bps {
+                if let Some(change) = self.degraded_window() {
+                    changes.push(change);
+                }
+            }
+            changes
         }
     }
 
@@ -629,5 +915,232 @@ mod tests {
         assert_eq!(window.min(), Some(5_000));
         window.push(t0 + Duration::from_secs(31), 9_500);
         assert_eq!(window.min(), Some(9_000));
+    }
+
+    // ------------------------------------------------------- the ladder ---
+
+    use crate::session::quality::ResolutionCap;
+
+    const TOP: QualityRung = QualityRung {
+        fps: 60,
+        resolution: ResolutionCap::Native,
+    };
+
+    #[test]
+    fn the_ladder_does_not_move_until_the_rate_has_run_out() {
+        let mut f = Fixture::new();
+        let changes = f.drive_to_the_floor();
+        // Ten cuts to reach the floor, every one of them a degraded window, and
+        // exactly one rung given up: the one on the window where 20% off the
+        // target stopped being an answer.
+        assert!(f.governor.stats().cuts >= 10);
+        assert_eq!(changes.len(), 1, "frames are spent only after bits are");
+        assert_eq!(changes[0].previous, TOP);
+        assert_eq!(
+            changes[0].rung,
+            QualityRung {
+                fps: 30,
+                resolution: ResolutionCap::Native
+            }
+        );
+        assert!(!changes[0].needs_new_encoder());
+    }
+
+    /// The scripted trace: sixty seconds of a path that will not recover, then
+    /// the ladder has nothing left to give and says so by staying still.
+    #[test]
+    fn a_path_that_never_recovers_walks_the_ladder_down_once_and_stops() {
+        let mut f = Fixture::new();
+        let mut changes = f.drive_to_the_floor();
+        for _ in 0..40 {
+            if let Some(change) = f.degraded_window() {
+                changes.push(change);
+            }
+        }
+        let rungs: Vec<QualityRung> = changes.iter().map(|change| change.rung).collect();
+        assert_eq!(
+            rungs,
+            vec![
+                QualityRung {
+                    fps: 30,
+                    resolution: ResolutionCap::Native
+                },
+                QualityRung {
+                    fps: 15,
+                    resolution: ResolutionCap::Native
+                },
+                QualityRung {
+                    fps: 15,
+                    resolution: ResolutionCap::P1440
+                },
+                QualityRung {
+                    fps: 15,
+                    resolution: ResolutionCap::P1080
+                },
+                QualityRung {
+                    fps: 15,
+                    resolution: ResolutionCap::P720
+                },
+            ],
+            "frame rate first, then pixels, one rung at a time"
+        );
+        assert_eq!(f.governor.stats().ladder_down, 5);
+        assert_eq!(f.governor.stats().ladder_up, 0);
+        assert_eq!(f.governor.stats().rung_index, 5);
+    }
+
+    /// Which changes are a new encoder, which are not. This is the whole of
+    /// what survived arm A's "reconfigure then IDR": a resolution move is a new
+    /// encoder whose first frame is an IRAP, and a frame-rate move is not a
+    /// move the running encoder ever hears about.
+    #[test]
+    fn a_resolution_rung_is_a_new_encoder_and_a_frame_rate_rung_is_not() {
+        let mut f = Fixture::new();
+        let mut changes = f.drive_to_the_floor();
+        for _ in 0..40 {
+            if let Some(change) = f.degraded_window() {
+                changes.push(change);
+            }
+        }
+        let rebuilds: Vec<bool> = changes
+            .iter()
+            .map(LadderChange::needs_new_encoder)
+            .collect();
+        assert_eq!(rebuilds, vec![false, false, true, true, true]);
+    }
+
+    #[test]
+    fn no_rung_moves_twice_inside_the_dwell() {
+        let mut f = Fixture::new();
+        f.drive_to_the_floor();
+        let at = f.now;
+        // Two more degraded windows land 2.5 s apart, inside the 5 s dwell.
+        assert_eq!(f.degraded_window(), None);
+        assert!(f.now.duration_since(at) < LADDER_DWELL);
+        assert!(f.degraded_window().is_some(), "and the next one is free");
+    }
+
+    /// The other half: a path that recovers gets its rungs back in the order it
+    /// lost them, and never faster than the dwell — which is what makes the
+    /// ladder a ladder rather than a thing that flaps.
+    #[test]
+    fn a_recovered_path_gives_the_rungs_back_in_the_order_it_took_them() {
+        let mut f = Fixture::new();
+        f.drive_to_the_floor();
+        for _ in 0..40 {
+            f.degraded_window();
+        }
+        let down = f.governor.stats().ladder_down;
+        assert_eq!(down, 5);
+
+        let mut back = Vec::new();
+        for _ in 0..400 {
+            f.report(GOOD);
+            if let Some(change) = f.governor.take_ladder() {
+                back.push(change);
+            }
+        }
+        let rungs: Vec<QualityRung> = back.iter().map(|change| change.rung).collect();
+        assert_eq!(
+            rungs,
+            vec![
+                QualityRung {
+                    fps: 15,
+                    resolution: ResolutionCap::P1080
+                },
+                QualityRung {
+                    fps: 15,
+                    resolution: ResolutionCap::P1440
+                },
+                QualityRung {
+                    fps: 15,
+                    resolution: ResolutionCap::Native
+                },
+                QualityRung {
+                    fps: 30,
+                    resolution: ResolutionCap::Native
+                },
+                TOP,
+            ],
+            "exactly the descent, retraced"
+        );
+        assert_eq!(f.governor.stats().ladder_up, down);
+        assert_eq!(f.governor.rung(), TOP);
+        assert_eq!(f.governor.target_bps(), CONFIGURED);
+    }
+
+    /// No rung is given back while the rate is still climbing out of the cut
+    /// that cost it. A quiet report at the floor is not a recovered path.
+    #[test]
+    fn a_rung_is_not_given_back_on_a_quiet_report_alone() {
+        let mut f = Fixture::new();
+        f.drive_to_the_floor();
+        assert_eq!(f.governor.stats().ladder_down, 1);
+        // Well past the dwell, and far more than the six quiet reports the
+        // hysteresis asks for — but the target is still down at the floor.
+        for _ in 0..30 {
+            f.report(GOOD);
+            assert_eq!(f.governor.take_ladder(), None);
+        }
+        assert!(f.governor.target_bps() < CONFIGURED);
+        assert_eq!(f.governor.stats().ladder_up, 0);
+    }
+
+    #[test]
+    fn a_new_preset_restarts_the_ladder_at_its_own_top() {
+        let mut f = Fixture::new();
+        f.drive_to_the_floor();
+        assert_eq!(f.governor.rung().fps, 30);
+
+        let ceiling = Ceiling {
+            bitrate_bps: 10_000_000,
+            fps: 30,
+            resolution: ResolutionCap::P1080,
+        };
+        f.governor.set_ceiling(ceiling);
+        let change = f.governor.take_ladder().expect("the rung moved");
+        assert_eq!(
+            change.rung,
+            QualityRung {
+                fps: 30,
+                resolution: ResolutionCap::P1080
+            }
+        );
+        assert!(change.needs_new_encoder(), "1080p is a new encode size");
+        assert_eq!(f.governor.ceiling(), ceiling);
+        assert_eq!(f.governor.stats().rung_index, 0);
+    }
+
+    #[test]
+    fn a_preset_with_nothing_left_to_trade_simply_stays_where_it_is() {
+        let mut f = Fixture::new();
+        f.governor.set_ceiling(Ceiling {
+            bitrate_bps: 5_000_000,
+            fps: 15,
+            resolution: ResolutionCap::P720,
+        });
+        f.governor.take_ladder();
+        f.drive_to_the_floor();
+        for _ in 0..20 {
+            assert_eq!(f.degraded_window(), None);
+        }
+        assert_eq!(f.governor.stats().ladder_down, 0);
+        assert!(f.governor.stats().cuts > 0, "the rate still answered");
+    }
+
+    #[test]
+    fn the_state_word_says_which_of_the_four_things_it_is_doing() {
+        let mut f = Fixture::new();
+        // The first window is the reference: a delay is only raised against
+        // something, so the rise the cut answers needs a quiet window first.
+        f.report(GOOD);
+        assert_eq!(f.governor.state(f.now), GovernorState::Ceiling);
+        f.report(RISEN);
+        assert_eq!(f.governor.state(f.now), GovernorState::Holding);
+        f.now += HOLD;
+        assert_eq!(f.governor.state(f.now), GovernorState::Climbing);
+        f.drive_to_the_floor();
+        f.now += HOLD;
+        assert_eq!(f.governor.state(f.now), GovernorState::Pinned);
     }
 }

@@ -19,6 +19,23 @@
 //! 3. **One codec in the answer**, so the negotiated payload type cannot drift
 //!    from what the encoder is producing.
 //!
+//! # Audio is a second RTP track, and it is deliberately not on the video one
+//!
+//! Behind the `audio-opus` feature the peer also negotiates Opus and carries
+//! [`crate::audio`]'s frames on the `audio` m-line §3 describes. Two things
+//! about it are load-bearing:
+//!
+//! - **Its own `MediaStream`.** str0m gives media built from a remote offer
+//!   `Msid::random()` when the offerer named none, and a browser's `recvonly`
+//!   transceivers name none — so the two tracks arrive under different stream
+//!   ids and the browser cannot A/V-sync them. Sharing the video stream would
+//!   hold the picture back to the audio clock, which is the whole of arm B's
+//!   measured latency.
+//! - **It does not go through [`SendPacer`].** The pacer is the video budget:
+//!   it exists to drop a delta frame rather than queue it. Opus at 128 kbps is
+//!   0.6% of a 20 Mbps video target and a dropped packet is an audible gap, so
+//!   audio is written straight to str0m.
+//!
 //! # BWE is off, and that is a disclosure rather than a default
 //!
 //! [`PeerConfig::enable_bwe`] defaults to false because str0m installs its
@@ -65,7 +82,7 @@ use anyhow::{anyhow, Context, Result};
 use str0m::change::SdpOffer;
 use str0m::channel::ChannelId;
 use str0m::format::Codec as Str0mCodec;
-use str0m::media::{MediaTime, Mid, Pt};
+use str0m::media::{MediaAdded, MediaKind, MediaTime, Mid, Pt};
 use str0m::net::{Protocol, Receive};
 use str0m::rtp::{Extension, ExtensionMap};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
@@ -87,6 +104,12 @@ pub const PLAYOUT_DELAY_MAX_MS: u64 = 100;
 /// latency lever on this arm.
 const EXT_ID_PLAYOUT_DELAY: u8 = 2;
 const EXT_ID_TWCC: u8 = 3;
+
+/// The Opus payload type, which is also str0m's own default for it — so a
+/// hand-built payload params entry and anything that falls back to the library
+/// default name the same number.
+#[cfg(feature = "audio-opus")]
+const OPUS_PT: u8 = 111;
 
 /// str0m caps SCTP buffering at 128 KiB across *every* channel on the
 /// association (`sctp/mod.rs:30`), and spike 0.2 §13.4 measured that cap doing
@@ -202,6 +225,10 @@ pub struct PeerStats {
     /// One for the initial offer, one more per accepted ICE restart.
     pub negotiations: u64,
     pub keyframe_requests: u64,
+    /// Opus frames written to the audio track. Stays 0 without the
+    /// `audio-opus` feature, and 0 with it on a machine that has no render
+    /// endpoint — the two are told apart by `status`, not by this.
+    pub audio_packets_written: u64,
 }
 
 // ------------------------------------------------------------ out queue ---
@@ -289,6 +316,21 @@ impl OutQueue {
     }
 }
 
+// ---------------------------------------------------------------- audio ---
+
+/// The audio track's half of one peer: what the `audio` m-line negotiated, and
+/// where its frames come from.
+///
+/// One struct rather than three fields so the feature gate is a single `#[cfg]`
+/// on [`RtcPeer`] instead of one per field.
+#[cfg(feature = "audio-opus")]
+#[derive(Debug, Default)]
+struct AudioLeg {
+    mid: Option<Mid>,
+    pt: Option<Pt>,
+    track: Option<crate::audio::AudioTrack>,
+}
+
 // ----------------------------------------------------------------- peer ---
 
 /// One viewer's peer connection.
@@ -305,6 +347,8 @@ pub struct RtcPeer {
     state: PeerState,
     mid: Option<Mid>,
     pt: Option<Pt>,
+    #[cfg(feature = "audio-opus")]
+    audio: AudioLeg,
     buf: Vec<u8>,
     pacer: SendPacer,
     out: OutQueue,
@@ -340,6 +384,29 @@ impl RtcPeer {
             .enable_h264(cfg.codec == Codec::H264)
             .enable_h265(cfg.codec == Codec::H265)
             .set_extension_map(exts);
+        // str0m's own `enable_opus` sets `minptime` and `useinbandfec` but
+        // leaves stereo and DTX to the defaults — mono, and DTX the receiver's
+        // choice. §3's fmtp names all four, so the payload type is configured
+        // outright rather than enabled and then hoped about.
+        #[cfg(feature = "audio-opus")]
+        builder.codec_config().add_config(
+            OPUS_PT.into(),
+            None,
+            Str0mCodec::Opus,
+            str0m::media::Frequency::FORTY_EIGHT_KHZ,
+            Some(crate::audio::opus::CHANNELS as u8),
+            str0m::format::FormatParams {
+                min_p_time: Some(crate::audio::opus::FRAME_MS as u8),
+                stereo: Some(true),
+                sprop_stereo: Some(true),
+                use_inband_fec: Some(true),
+                // Off: a desktop's silence is information, and a receiver whose
+                // clock stops during it drifts. `audio::opus::Timeline` sends
+                // comfort silence instead.
+                use_dtx: Some(false),
+                ..Default::default()
+            },
+        );
         // `enable_bwe` seeds only the *initial* estimate; without a desired
         // bitrate the probe controller has nothing to aim at and the estimate
         // never climbs. 3× the encoder target is the headroom the bake-off
@@ -362,6 +429,8 @@ impl RtcPeer {
             state: PeerState::Negotiating,
             mid: None,
             pt: None,
+            #[cfg(feature = "audio-opus")]
+            audio: AudioLeg::default(),
             buf: vec![0u8; RECV_BUF_BYTES],
             pacer: SendPacer::new(Instant::now(), u64::from(cfg.bitrate_bps), cfg.fps),
             out: OutQueue::default(),
@@ -484,6 +553,10 @@ impl RtcPeer {
     ) -> Result<()> {
         events.extend(self.pending_events.drain(..));
         self.drain_out(events);
+        // Before `poll_output`, so a frame queued this turn leaves on this
+        // turn rather than waiting for the next one.
+        #[cfg(feature = "audio-opus")]
+        self.drain_audio(now);
 
         let deadline = loop {
             match self.rtc.poll_output().context("poll_output")? {
@@ -582,17 +655,7 @@ impl RtcPeer {
                 self.state = PeerState::Closed;
                 events.push(PeerEvent::Disconnected);
             }
-            Event::MediaAdded(m) => {
-                self.mid = Some(m.mid);
-                self.pt = self.resolve_pt(m.mid);
-                if self.pt.is_none() {
-                    ::log::error!(
-                        "no payload type on mid {} matched the negotiated codec {:?}",
-                        m.mid,
-                        self.codec
-                    );
-                }
-            }
+            Event::MediaAdded(m) => self.on_media_added(&m),
             Event::ChannelOpen(id, label) => match channel_from_label(&label) {
                 Some(channel) => {
                     self.channels.push((id, channel));
@@ -638,24 +701,87 @@ impl RtcPeer {
         }
     }
 
-    /// Resolve the payload type for this viewer's codec on the negotiated
-    /// m-line.
+    /// One negotiated m-line. §3 has two: the picture, and — behind
+    /// `audio-opus` — the audio track, which keeps its own mid and payload
+    /// type so neither can overwrite the other's.
+    fn on_media_added(&mut self, m: &MediaAdded) {
+        if m.kind == MediaKind::Audio {
+            #[cfg(feature = "audio-opus")]
+            {
+                self.audio.mid = Some(m.mid);
+                self.audio.pt = self.resolve_pt(m.mid, Str0mCodec::Opus);
+                if self.audio.pt.is_none() {
+                    ::log::error!("no opus payload type on the audio mid {}", m.mid);
+                }
+            }
+            // Without the feature there is no Opus in the answer, so an audio
+            // m-line the browser offered was rejected and carries nothing.
+            return;
+        }
+        self.mid = Some(m.mid);
+        let want = match self.codec {
+            Codec::H264 => Str0mCodec::H264,
+            Codec::H265 => Str0mCodec::H265,
+        };
+        self.pt = self.resolve_pt(m.mid, want);
+        if self.pt.is_none() {
+            ::log::error!(
+                "no payload type on mid {} matched the negotiated codec {:?}",
+                m.mid,
+                self.codec
+            );
+        }
+    }
+
+    /// Resolve the payload type for one codec on a negotiated m-line.
     ///
     /// Matching is on the codec alone. `PayloadParams::resend()` is *not* an
     /// "is this an RTX parameter" test despite how it reads — str0m stores the
     /// repairing RTX payload type there, so it is `Some` for every real video
     /// codec that has RTX. An RTX entry identifies itself by its own
     /// `spec().codec`.
-    fn resolve_pt(&mut self, mid: Mid) -> Option<Pt> {
-        let want = match self.codec {
-            Codec::H264 => Str0mCodec::H264,
-            Codec::H265 => Str0mCodec::H265,
-        };
+    fn resolve_pt(&mut self, mid: Mid, want: Str0mCodec) -> Option<Pt> {
         self.rtc
             .writer(mid)?
             .payload_params()
             .find(|p| p.spec().codec == want)
             .map(|p| p.pt())
+    }
+
+    /// Hand this peer the viewer's audio. Each viewer gets its own track, so
+    /// one viewer draining slowly cannot take another's audio with it.
+    #[cfg(feature = "audio-opus")]
+    pub fn set_audio_source(&mut self, track: crate::audio::AudioTrack) {
+        self.audio.track = Some(track);
+    }
+
+    /// Write whatever audio is waiting. Straight to str0m, never through the
+    /// pacer — see the module doc.
+    #[cfg(feature = "audio-opus")]
+    fn drain_audio(&mut self, now: Instant) {
+        if self.state != PeerState::Connected {
+            return;
+        }
+        let (Some(mid), Some(pt), Some(track)) =
+            (self.audio.mid, self.audio.pt, self.audio.track.clone())
+        else {
+            return;
+        };
+        while let Some(packet) = track.try_recv() {
+            let Some(writer) = self.rtc.writer(mid) else {
+                return;
+            };
+            // The capture clock's own timestamp, contiguous across every
+            // device gap because `audio::opus::Timeline` filled the holes.
+            let time = MediaTime::new(packet.rtp_48k, str0m::media::Frequency::FORTY_EIGHT_KHZ);
+            if let Err(e) = writer.write(pt, now, time, packet.payload.as_slice()) {
+                // One bad write is not a dead session: the next frame is 10 ms
+                // away and the timeline does not depend on this one landing.
+                ::log::warn!("swoop: audio frame at {} not written: {e}", packet.rtp_48k);
+                return;
+            }
+            self.stats.audio_packets_written += 1;
+        }
     }
 
     /// 90 kHz media time for one frame, from the capture clock the front half
@@ -808,6 +934,44 @@ mod tests {
             exts.id_of(Extension::TransportSequenceNumber),
             Some(EXT_ID_TWCC)
         );
+    }
+
+    /// The fmtp §3 promises and the payload params `bind` builds are two
+    /// spellings of one decision, and a receiver believes the second.
+    #[cfg(feature = "audio-opus")]
+    #[test]
+    fn the_opus_payload_params_say_what_the_fmtp_says() {
+        use crate::audio::opus;
+
+        let mut config = RtcConfig::new().clear_codecs();
+        config.codec_config().add_config(
+            OPUS_PT.into(),
+            None,
+            Str0mCodec::Opus,
+            str0m::media::Frequency::FORTY_EIGHT_KHZ,
+            Some(opus::CHANNELS as u8),
+            str0m::format::FormatParams {
+                min_p_time: Some(opus::FRAME_MS as u8),
+                stereo: Some(true),
+                sprop_stereo: Some(true),
+                use_inband_fec: Some(true),
+                use_dtx: Some(false),
+                ..Default::default()
+            },
+        );
+        let params = config.codec_config().params();
+        assert_eq!(params.len(), 1, "one audio payload type, and nothing else");
+        let spec = params[0].spec();
+        assert_eq!(spec.codec, Str0mCodec::Opus);
+        assert_eq!(spec.clock_rate.get(), opus::SAMPLE_RATE_HZ);
+        assert_eq!(spec.channels, Some(opus::CHANNELS as u8));
+
+        // str0m formats fmtp from these fields; comparing the rendered form is
+        // what catches a field going missing rather than going wrong.
+        let rendered = spec.format.to_string();
+        for pair in opus::FMTP.split("; ") {
+            assert!(rendered.contains(pair), "fmtp is missing {pair}: {rendered}");
+        }
     }
 
     #[test]
