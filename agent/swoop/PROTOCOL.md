@@ -330,8 +330,9 @@ loop.
 `input_not_permitted`, `join_refused`, `clipboard_audit` — so a name added here has to be added there too, or
 the route answers 400 for the whole batch. `viewer` is absent when the refusal is not attributable to one.
 
-`status` carries six **optional** fields, each omitted when it has nothing to say: a session whose features
-are all quiet emits exactly the nine-field line above, which is what the golden vector holds.
+`status` carries thirteen **optional** fields, each omitted when it has nothing to say: a session whose
+features are all quiet and whose peer is down emits exactly the nine-field line above, which is what the
+golden vector holds.
 
 | field | meaning |
 |---|---|
@@ -341,6 +342,20 @@ are all quiet emits exactly the nine-field line above, which is what the golden 
 | `inputDropped` | the input rate limiter's cumulative drop count. **absent means zero**, not unknown. |
 | `denials` | the control gate's cumulative refusals, including every one suppressed behind a single `host_event`. absent means zero. |
 | `testOverride` | the bundle's test-only `overrides`, named so an overridden session cannot pass for a real one in `logs/swoop`. absent on every release build, which refuses such a bundle with exit 10. |
+| `idrs` | keyframes the host actually forced since `ready`, **after** section 4's coalescing — not the number of requests, which a receiver in a loss storm raises on every record. absent means zero. |
+
+the five below are the rate governor's, and they ride a `status` **only while a viewer's peer is connected**:
+with nobody watching there is no rate being governed, `bitrateKbps` and `fps` are already zero, and the
+nine-field line is what a quiet session promises.
+
+| field | meaning |
+|---|---|
+| `preset` | the quality ceiling in force, as one word: `auto`, or `<n>mbps/<resolution>/<n>fps`. it is *rendered* from the ceiling's three numbers and never parsed back — section 5's `quality` is the only thing that sets them. |
+| `targetKbps` | what the governor is aiming at, against `bitrateKbps`, which is what actually went out. the pair is the point: a target the link never delivered is invisible from either number alone. |
+| `rungFps` | the quality ladder's current frame-rate rung. it is a **capture-side** cap — the encoder is never told — so it is not the same number as `fps`, which is measured. |
+| `rungResolution` | that rung's resolution cap, in `quality.preset`'s own spelling (`native` \| `1440p` \| `1080p` \| `720p`). |
+| `rungIndex` | how far down the preset's ladder that rung is. absent means zero, the preset's own rung, which is where a healthy session sits. |
+| `governor` | `ceiling` (at the preset with nothing to answer) \| `holding` (inside the 2 s hold after a cut) \| `climbing` \| `pinned` (at the floor — every further degraded window is answered by the ladder, or by nothing). |
 
 `display` names the output being captured, in the same numbering `hello-host`'s `displays[]` uses.
 

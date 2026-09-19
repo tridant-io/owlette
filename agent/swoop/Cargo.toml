@@ -61,7 +61,7 @@ encode-openh264 = []
 # Host-side TURN (plan.md D13, Task 7.4) is written on std UDP — str0m has no
 # TURN client and we are not adding a second stack for one.
 turn = []
-audio-opus = []
+audio-opus = ["dep:audiopus", "dep:audiopus_sys"]
 # Non-default, and it must stay that way: it gates the bundle's test-only
 # `overrides` object (Task 8.7). A streamer built without it rejects a bundle
 # carrying `overrides` with exit 10.
@@ -84,8 +84,11 @@ testhooks = []
 # against Chrome 153. Exit condition: 0.24, re-measured on the LAN row.
 #
 # default-features = false drops aws-lc-rs (needs NASM on Windows) and the
-# `examples` feature (rouille + rustls). No OpenSSL, no C toolchain, nothing new
-# in the installer.
+# `examples` feature (rouille + rustls). No OpenSSL and nothing new in the
+# installer — but a C toolchain IS required to build this crate and has been
+# since the rustls pin below: it brings `ring 0.17.14`, which compiles C and
+# assembly through `cc 1.4.6`. `audio-opus` adds cmake on top of that; see
+# `audiopus_sys`.
 #
 # `wincrypto-dimpl`, NOT `wincrypto`: the plain feature does DTLS through
 # SChannel, and against Chrome 153 every handshake fails with "crypto error:
@@ -186,6 +189,40 @@ rustls = { version = "=0.23.45", default-features = false, features = [
 # dependency-currency review.
 rustls-native-certs = "=0.8.4"
 
+# Opus, behind the non-default `audio-opus` feature. 0.3.0-rc.0 rather than
+# 0.2.0 (the "max stable") because 0.2.0 is a 2019 release against audiopus_sys
+# 0.1, and the rc is both newer and the last thing this author published — an rc
+# in name only, five years old and the version the rest of the ecosystem
+# encodes Opus with. It holds nothing back: there is nothing later. Exit
+# condition: a 0.3.0 final or any 0.3.x, at the dependency-currency review.
+#
+# `features = ["encoder"]` and no more. audiopus declares a feature literally
+# named `default_features`, which is NOT cargo's `default` — the crate has no
+# `default`, so nothing is on unless it is named, and naming only `encoder`
+# keeps the decoder, repacketizer and multistream halves out of the binary.
+audiopus = { version = "=0.3.0-rc.0", optional = true, features = ["encoder"] }
+
+# libopus itself. Pinned explicitly although it arrives through `audiopus`,
+# because `static` is the decision and a resolver would never make it: without
+# that feature audiopus_sys links a system libopus or a DLL nothing ships, and
+# the streamer is one exe spawned on a machine with nothing installed on it.
+# `static` compiles the opus source vendored in the crate and links it in — so
+# `audio-opus` also puts **cmake** on the build machine, on top of the C
+# toolchain `ring` already needs. 0.2.2 is the newest and the last release
+# (2021), so this pin holds nothing back; it does mean the vendored libopus
+# moves only when this line does.
+#
+# Known, and not a surprise to be discovered at a release: **RUSTSEC-2026-0150,
+# `audiopus_sys` is unmaintained** (informational, no vulnerability). It matters
+# for one concrete reason — the vendored opus says `cmake_minimum_required(3.1)`
+# and **CMake 4.0 refuses anything below 3.5**, so a build machine on CMake 4
+# fails this crate until it is built with `CMAKE_POLICY_VERSION_MINIMUM=3.5`.
+# Builds today are on the CMake that ships inside Visual Studio (3.29).
+# Exit condition: a 0.2.3+, a maintained fork, or an opus binding that does not
+# need cmake — whichever arrives first, at the dependency-currency review. Any
+# libopus CVE moves this line on its own, because this pin is the vendored copy.
+audiopus_sys = { version = "=0.2.2", optional = true, features = ["static"] }
+
 # Windows-only, declared here so `cargo check` still resolves on a macOS or
 # Linux host (Wave 9 adds the siblings, and until then the modules that use
 # these bindings are behind #[cfg(windows)]).
@@ -196,7 +233,15 @@ rustls-native-certs = "=0.8.4"
 # injection, StationsAndDesktops for the secure desktop, DataExchange + Memory
 # for the clipboard, Media_Audio for the WASAPI loopback capture, Devices_Display
 # for the display topology, LibraryLoader for the DLL search path, Performance
-# for QPC timestamps. 0.62 is the version all three spikes measured against.
+# for QPC timestamps.
+#
+# Com_StructuredStorage and Variant are not subsystems this crate calls: both
+# `IMMDevice::Activate` and `ActivateAudioInterfaceAsync` are generated behind
+# the pair, for the `PROPVARIANT` activation-params pointer they are always
+# handed as null. Without them the vtable slot is a private `usize` and there is
+# no way to activate an `IAudioClient` at all.
+#
+# 0.62 is the version all three spikes measured against.
 windows = { version = "=0.62.2", features = [
     "Win32_Devices_Display",
     "Win32_Foundation",
@@ -209,12 +254,14 @@ windows = { version = "=0.62.2", features = [
     "Win32_Media_Audio",
     "Win32_Security",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Performance",
     "Win32_System_StationsAndDesktops",
     "Win32_System_Threading",
+    "Win32_System_Variant",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",

@@ -483,6 +483,22 @@ impl RtcPeer {
         self.rtc.direct_api().local_dtls_fingerprint().to_string()
     }
 
+    /// The peer's own fingerprint on the **established** DTLS session, computed
+    /// from the certificate it presented as the handshake completed.
+    ///
+    /// PROTOCOL §10 binds a lease renewal to this rather than to the offer's
+    /// `a=fingerprint:` line: the offer is a claim made before any handshake,
+    /// this is the certificate that actually authenticated. `None` until
+    /// `PeerEvent::Connected` — before that there is no session to bind to.
+    /// `tests/dtls_fingerprint.rs` is the proof that str0m reports the peer's
+    /// and not our own.
+    pub fn remote_dtls_fingerprint(&mut self) -> Option<String> {
+        self.rtc
+            .direct_api()
+            .remote_dtls_fingerprint()
+            .map(|f| f.to_string())
+    }
+
     /// The RTP timestamp of the last access unit written — the join key the
     /// `swoop-meta` record carries. `None` before the first frame.
     pub fn last_rtp_timestamp_90k(&self) -> Option<u32> {

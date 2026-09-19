@@ -138,17 +138,21 @@
 //! most one change per evaluation. The caller owes it two different things:
 //!
 //! - **Resolution moved** ([`LadderChange::needs_new_encoder`]): re-plan the
-//!   encode size with `scale::plan(source, ceiling.narrow(backend_limits))` and
+//!   encode size with `scale::plan(source, rung.resolution.narrow(limits))` and
 //!   open a new encoder at it. Its first frame is an IRAP and no frame from the
-//!   old one may follow it.
+//!   old one may follow it. Narrow by the **rung's** cap, not the ceiling's: the
+//!   ceiling is the top rung, so narrowing by it makes a resolution move a
+//!   re-plan that changes nothing. At the top rung the two are the same cap.
 //! - **Frame rate moved**: feed the encoder at most [`QualityRung::fps`] frames
 //!   a second. It is a capture-side decision, not an `EncoderConfig` one —
 //!   `fps` there sizes rate control and drops nothing.
 //!
-//! **Neither actuator is wired yet.** The session loop applies the bitrate and
-//! ignores the rung, so as shipped this module still governs exactly one axis.
-//! The rung is built, tested and reported; acting on it is a change to
-//! `session/mod.rs`, which Wave 6 has three other tasks inside.
+//! **Both actuators are wired.** `session/mod.rs`'s `apply_ladder` drains
+//! [`Governor::take_ladder`] after every report and after a `quality` message,
+//! re-plans on a resolution move and sends `ToCapture::Fps` on a frame-rate one.
+//! The frame-rate gate is deliberately skipped at `TARGET_FPS`: duplication is
+//! vsync-locked at 16.67 ms and a 16.666 ms gate drops every other frame on
+//! jitter.
 //!
 //! [`RtcPeer::set_bitrate_ceiling`]: crate::transport::rtc::RtcPeer::set_bitrate_ceiling
 //! [`Encoder::set_bitrate`]: crate::encode::Encoder::set_bitrate

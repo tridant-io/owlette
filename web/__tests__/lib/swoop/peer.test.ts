@@ -275,12 +275,17 @@ describe('swoop peer — offer', () => {
     expect(h.state.channels.find((c) => c.label === 'swoop-meta')?.binaryType).toBe('arraybuffer');
   });
 
-  it('adds one recvonly video transceiver and offers first', async () => {
+  it('adds a recvonly video and a recvonly audio transceiver and offers first', async () => {
     const h = peerHarness();
     await h.peer.start();
 
     const pc = (h.peer.connection as unknown as FakePeerConnection);
-    expect(pc.transceivers).toEqual([{ kind: 'video', init: { direction: 'recvonly' } }]);
+    // the audio m-line is the whole of the host's opus path on this side: the
+    // host answers what the browser offered and can add nothing of its own.
+    expect(pc.transceivers).toEqual([
+      { kind: 'video', init: { direction: 'recvonly' } },
+      { kind: 'audio', init: { direction: 'recvonly' } },
+    ]);
     expect(pc.configuration.bundlePolicy).toBe('max-bundle');
     expect(pc.configuration.rtcpMuxPolicy).toBe('require');
     expect(pc.configuration.iceCandidatePoolSize).toBe(1);

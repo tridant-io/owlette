@@ -25,15 +25,17 @@
 //! retransmit that would arrive after playout), DTX off, and `minptime=10` so
 //! the receiver does not ask for longer packets than the frame size.
 //!
-//! # The encoder itself is not here, and that is a live decision
+//! # The encoder is `audiopus`, and only behind `audio-opus`
 //!
-//! [`encoder`] has no implementation: **no Opus encoder is pinned in
-//! `Cargo.toml`**, every candidate binding (`audiopus`, `opus`, `magnum-opus`)
-//! links libopus through a C toolchain, and this crate's manifest is explicit
-//! that it ships with no C toolchain and `+crt-static`. Adding one is an owner
-//! decision, not this module's, so the seam is a trait and the constructor
-//! returns the reason. Everything either side of it — capture, the clock, the
-//! RTP track — is written and works the moment an implementation lands.
+//! [`encoder`] builds an `audiopus` encoder over a libopus compiled into this
+//! binary (`audiopus_sys`'s `static` feature — the manifest carries the reason
+//! and the exit condition). It is behind the non-default `audio-opus` feature,
+//! so a default build still has this module's wire parameters and frame clock
+//! and gets [`NO_ENCODER`] from the constructor.
+//!
+//! The four facts [`FMTP`] promises are set on the encoder as well as said in
+//! the SDP. A receiver told `useinbandfec=1` and then handed frames carrying no
+//! redundancy conceals nothing, which is worse than never having claimed it.
 
 use std::time::Duration;
 
@@ -49,6 +51,10 @@ pub const CHANNELS: usize = 2;
 /// the one place latency is bought outright: 20 ms frames would halve the
 /// packet rate and add 10 ms to every sound.
 pub const FRAME_MS: u32 = 10;
+
+/// The same frame length as a [`Duration`], which is what the capture loop
+/// ticks on.
+pub const FRAME: Duration = Duration::from_millis(FRAME_MS as u64);
 
 /// Samples per channel in one frame: 480.
 pub const FRAME_SAMPLES_PER_CHANNEL: usize = (SAMPLE_RATE_HZ / 1_000 * FRAME_MS) as usize;
@@ -69,10 +75,17 @@ pub const BITRATE_BPS: u32 = 128_000;
 /// the string and the negotiated format cannot drift.
 pub const FMTP: &str = "stereo=1; sprop-stereo=1; minptime=10; useinbandfec=1; usedtx=0";
 
-/// Why there is no encoder yet. Surfaced verbatim so a machine's log says what
-/// is missing rather than "audio unavailable".
+/// Why a build without `audio-opus` has no encoder. Surfaced verbatim so a
+/// machine's log says what is missing rather than "audio unavailable".
 pub const NO_ENCODER: &str =
-    "no opus encoder is compiled in: this crate pins no opus binding, and adding one is an owner decision";
+    "no opus encoder is compiled in: this streamer was built without the audio-opus feature";
+
+/// The most one 10 ms frame may encode to. Opus's own ceiling for a single
+/// frame; at [`BITRATE_BPS`] a frame is ~160 bytes, and the buffer is sized for
+/// the ceiling rather than the average because an encoder handed a short one
+/// fails the frame instead of truncating it.
+#[cfg(feature = "audio-opus")]
+const MAX_PACKET_BYTES: usize = 1275;
 
 /// One encoded 10 ms frame, ready for the RTP track.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,9 +105,59 @@ pub trait Encoder: Send {
     fn encode(&mut self, pcm: &[i16], out: &mut Vec<u8>) -> Result<()>;
 }
 
-/// Build the encoder — see the module doc for why this is the one open piece.
+/// Build the encoder configured for [`FMTP`]'s terms.
+#[cfg(feature = "audio-opus")]
+pub fn encoder() -> Result<Box<dyn Encoder>> {
+    Ok(Box::new(Opus::new()?))
+}
+
+/// Without the feature there is no libopus in the binary at all.
+#[cfg(not(feature = "audio-opus"))]
 pub fn encoder() -> Result<Box<dyn Encoder>> {
     Err(anyhow::anyhow!(NO_ENCODER))
+}
+
+#[cfg(feature = "audio-opus")]
+struct Opus {
+    inner: audiopus::coder::Encoder,
+    /// Reused across frames so encoding allocates nothing.
+    scratch: Vec<u8>,
+}
+
+#[cfg(feature = "audio-opus")]
+impl Opus {
+    fn new() -> Result<Self> {
+        use audiopus::coder::Encoder as OpusEncoder;
+        use audiopus::{Application, Bitrate, Channels, SampleRate};
+
+        // `Audio`, not `Voip`: a desktop plays music and video, and Voip's
+        // speech model mangles both. `LowDelay` disables the layer FEC needs.
+        let mut inner = OpusEncoder::new(SampleRate::Hz48000, Channels::Stereo, Application::Audio)?;
+        inner.set_bitrate(Bitrate::BitsPerSecond(BITRATE_BPS as i32))?;
+        inner.set_inband_fec(true)?;
+        inner.set_dtx(false)?;
+        // FEC is only emitted for loss the encoder believes is happening: with
+        // the default 0% it produces none at all and `useinbandfec=1` becomes a
+        // promise the stream does not keep. 5% is a standing assumption rather
+        // than a measurement — the receiver's real loss is not on this side of
+        // the wire, and Task 4.7's feedback loop drives the video rate, not
+        // this.
+        inner.set_packet_loss_perc(5)?;
+        Ok(Self {
+            inner,
+            scratch: vec![0u8; MAX_PACKET_BYTES],
+        })
+    }
+}
+
+#[cfg(feature = "audio-opus")]
+impl Encoder for Opus {
+    fn encode(&mut self, pcm: &[i16], out: &mut Vec<u8>) -> Result<()> {
+        let written = self.inner.encode(pcm, self.scratch.as_mut_slice())?;
+        out.clear();
+        out.extend_from_slice(&self.scratch[..written]);
+        Ok(())
+    }
 }
 
 /// The 10 ms frame clock: interleaved i16 in, whole frames with contiguous
@@ -260,11 +323,34 @@ mod tests {
         assert_eq!(timeline.silence_frames(), 0);
     }
 
+    #[cfg(not(feature = "audio-opus"))]
     #[test]
-    fn there_is_no_encoder_and_the_reason_says_so() {
+    fn a_build_without_the_feature_says_which_feature_is_missing() {
         let Err(err) = encoder() else {
-            panic!("an opus binding landed without this test being updated");
+            panic!("an encoder was built without libopus being compiled in");
         };
-        assert!(err.to_string().contains("owner decision"), "{err}");
+        assert!(err.to_string().contains("audio-opus"), "{err}");
+    }
+
+    /// Not a hardware test: libopus is compiled into this binary, so this runs
+    /// anywhere the feature builds. A frame of silence still encodes to
+    /// something — DTX is off — and a loud frame has to be bigger than it.
+    #[cfg(feature = "audio-opus")]
+    #[test]
+    fn a_frame_encodes_and_silence_is_still_sent() {
+        let mut encoder = encoder().expect("libopus is compiled in");
+        let mut out = Vec::new();
+
+        encoder.encode(&vec![0i16; FRAME_SAMPLES], &mut out).expect("silence");
+        assert!(!out.is_empty(), "dtx is off; silence is still a packet");
+        let silence = out.len();
+
+        // A square wave: something the encoder cannot spend two bytes on.
+        let tone: Vec<i16> = (0..FRAME_SAMPLES)
+            .map(|i| if (i / 48) % 2 == 0 { 12_000 } else { -12_000 })
+            .collect();
+        encoder.encode(&tone, &mut out).expect("tone");
+        assert!(out.len() > silence, "{} bytes is not a tone", out.len());
+        assert!(out.len() <= MAX_PACKET_BYTES);
     }
 }

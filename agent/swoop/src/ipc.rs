@@ -127,6 +127,25 @@ pub enum DisplayState {
     Headless,
 }
 
+/// What the rate governor is doing, for §6's `status`.
+///
+/// `transport::governor::GovernorState` is the same four words and is the
+/// truth; this is their wire spelling, in the one module that owns what goes on
+/// stdout. The two are joined by `session`'s `governor_phase`, which is the only
+/// place the mapping exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernorPhase {
+    /// At the preset's ceiling with nothing to answer.
+    Ceiling,
+    /// Inside the hold after a cut.
+    Holding,
+    /// Below the ceiling and walking back up.
+    Climbing,
+    /// At the floor: the rate has nothing left to give.
+    Pinned,
+}
+
 /// What a [`Event::HostEvent`] records.
 ///
 /// This is verbatim the closed `type` vocabulary of
@@ -245,6 +264,33 @@ pub enum Event {
         /// is visible in `logs/swoop` rather than passing for a real one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         test_override: Option<String>,
+        /// The quality ceiling in force, as `Ceiling::label` renders it. The
+        /// five below are the governor's, and they ride a `status` only while a
+        /// viewer's peer is connected: with nobody watching there is no rate
+        /// being governed and nothing to say about one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preset: Option<String>,
+        /// What the governor is aiming at, against `bitrateKbps` — which is
+        /// what actually went out. The pair is the whole point: a target the
+        /// link never delivered is invisible from either number alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_kbps: Option<u32>,
+        /// The ladder's current frame-rate rung.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rung_fps: Option<u32>,
+        /// Its resolution cap, in `quality.preset`'s own spelling.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rung_resolution: Option<String>,
+        /// How far down the preset's ladder that rung is. Absent is zero — the
+        /// preset's own rung, which is where a healthy session sits.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rung_index: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        governor: Option<GovernorPhase>,
+        /// Keyframes the host forced since `ready`, after §4's coalescing.
+        /// Absent means zero.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        idrs: Option<u64>,
     },
     Exiting {
         sid: String,
@@ -332,6 +378,13 @@ mod tests {
             input_dropped: None,
             denials: None,
             test_override: None,
+            preset: None,
+            target_kbps: None,
+            rung_fps: None,
+            rung_resolution: None,
+            rung_index: None,
+            governor: None,
+            idrs: None,
         })
         .expect("it serialises");
         assert_eq!(
@@ -360,6 +413,13 @@ mod tests {
             input_dropped: Some(7),
             denials: Some(3),
             test_override: Some("source=testpattern".to_owned()),
+            preset: Some("auto".to_owned()),
+            target_kbps: Some(16_000),
+            rung_fps: Some(30),
+            rung_resolution: Some("1080p".to_owned()),
+            rung_index: Some(2),
+            governor: Some(GovernorPhase::Pinned),
+            idrs: Some(4),
         })
         .expect("it serialises");
         assert!(line.contains("\"desktop\":\"winlogon\""), "{line}");
@@ -368,6 +428,13 @@ mod tests {
         assert!(line.contains("\"inputDropped\":7"), "{line}");
         assert!(line.contains("\"denials\":3"), "{line}");
         assert!(line.contains("\"testOverride\":\"source=testpattern\""), "{line}");
+        assert!(line.contains("\"preset\":\"auto\""), "{line}");
+        assert!(line.contains("\"targetKbps\":16000"), "{line}");
+        assert!(line.contains("\"rungFps\":30"), "{line}");
+        assert!(line.contains("\"rungResolution\":\"1080p\""), "{line}");
+        assert!(line.contains("\"rungIndex\":2"), "{line}");
+        assert!(line.contains("\"governor\":\"pinned\""), "{line}");
+        assert!(line.contains("\"idrs\":4"), "{line}");
     }
 
     #[test]

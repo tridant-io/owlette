@@ -421,6 +421,10 @@ pub struct IdrPolicy {
     /// Asked for, not yet seen on the wire. Sticky, because a receiver that
     /// dropped a frame asks once per record until the keyframe arrives.
     awaiting: bool,
+    /// Keyframes actually forced, after the coalescing above. Reported on
+    /// `status`: a session spending its link on iraps and one recovering from a
+    /// single loss look identical from the bitrate alone.
+    forced: u64,
 }
 
 impl IdrPolicy {
@@ -429,6 +433,7 @@ impl IdrPolicy {
             cooldown: IDR_COOLDOWN,
             asked_at: None,
             awaiting: false,
+            forced: 0,
         }
     }
 
@@ -450,12 +455,18 @@ impl IdrPolicy {
         }
         self.asked_at = Some(now);
         self.awaiting = true;
+        self.forced += 1;
         true
     }
 
     /// An irap reached the wire, so the burst it answers is over.
     pub fn answered(&mut self) {
         self.awaiting = false;
+    }
+
+    /// Keyframes forced since the session started, cumulative.
+    pub fn forced(&self) -> u64 {
+        self.forced
     }
 }
 
@@ -625,7 +636,7 @@ mod host {
     use crate::gpu::Frame;
     use crate::input::{Injector, PointerSpace, SendInputInjector, ViewerInput};
     use crate::ipc::{
-        self, Control, Event, Exit, ExitReason, HostEventKind, LeftReason, MediaPath,
+        self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, LeftReason, MediaPath,
     };
     use crate::signal::client::{Effect, SignalTransport};
     use crate::signal::messages::channel::{
@@ -636,9 +647,12 @@ mod host {
         Denial, DenialReason, Handshake, Reaction, RetryPolicy, RoomSocket, SignalClient,
     };
     use crate::transport::framing::{flags, FrameCodec, FrameHeader, FrameSequencer, FrameStamps};
-    use crate::transport::governor::{Governor, GovernorConfig};
+    use crate::transport::governor::{Governor, GovernorConfig, GovernorState};
     use crate::transport::rtc::{qpc_hz, PeerConfig, PeerEvent, PeerState, RtcPeer};
     use crate::transport::VideoSink;
+    use crate::viewers::lease::LeaseLedger;
+
+    use super::quality::Ceiling;
 
     /// §6: the streamer lingers about a minute after the last viewer leaves,
     /// then exits 0. The same timer covers a session nobody ever joins.
@@ -754,6 +768,10 @@ mod host {
         },
         Idr,
         Bitrate(u32),
+        /// Feed the encoder at most this many frames a second — the ladder's
+        /// frame-rate half. `EncoderConfig::fps` sizes rate control and drops
+        /// nothing, so the drop has to happen where the frames are.
+        Fps(u32),
         /// Re-send the pointer whole. A viewer that has just arrived has an
         /// empty shape cache, and the tracker only emits on a change.
         CursorSnapshot,
@@ -1008,6 +1026,18 @@ mod host {
         }
     }
 
+    /// The governor's state word, in the spelling §6's `status` uses. The two
+    /// vocabularies are joined here and nowhere else, so a state added over
+    /// there cannot quietly go unreported.
+    fn governor_phase(state: GovernorState) -> GovernorPhase {
+        match state {
+            GovernorState::Ceiling => GovernorPhase::Ceiling,
+            GovernorState::Holding => GovernorPhase::Holding,
+            GovernorState::Climbing => GovernorPhase::Climbing,
+            GovernorState::Pinned => GovernorPhase::Pinned,
+        }
+    }
+
     /// Everything the session loop was handed rather than built.
     struct Wiring {
         clock: HostClock,
@@ -1083,6 +1113,7 @@ mod host {
             codecs: w.codecs,
             codec_caps: w.codec_caps,
             governor: Governor::new(GovernorConfig::new(DEFAULT_BITRATE_BPS)),
+            leases: LeaseLedger::from_bundle(bundle),
             sequencer: FrameSequencer::new(),
             capture_tx: w.capture_tx,
             input_tx: w.input_tx,
@@ -1158,6 +1189,10 @@ mod host {
         codecs: Vec<Codec>,
         codec_caps: Vec<CodecCaps>,
         governor: Governor,
+        /// §10's lease per viewer: when it lapses, in the bundle's own time
+        /// base. `viewers/lease.rs` does the bookkeeping; `sweep_leases` is
+        /// what this session owes a lease that did.
+        leases: LeaseLedger,
         sequencer: FrameSequencer,
         capture_tx: Sender<ToCapture>,
         input_tx: Sender<ToInput>,
@@ -1373,7 +1408,7 @@ mod host {
                     let _ = self.apply(effects);
                     return;
                 };
-                let Some(limits) = limits_for(&self.codec_caps, codec) else {
+                let Some(limits) = self.encode_limits(codec) else {
                     ::log::error!("swoop: no limits for {codec:?}");
                     return;
                 };
@@ -1413,6 +1448,15 @@ mod host {
                     }
                 };
                 self.peer = Some(peer);
+                // §3's audio is a second RTP track, so it cannot ride the
+                // feature outbox: the track is subscribed here, once per peer,
+                // and written by the peer itself. A machine with no endpoint
+                // simply never puts a packet on it.
+                #[cfg(feature = "audio-opus")]
+                self.peer
+                    .as_mut()
+                    .expect("just bound")
+                    .set_audio_source(crate::audio::subscribe());
                 if let Some(v) = self.viewer.as_mut() {
                     v.codec = codec;
                 }
@@ -1495,6 +1539,9 @@ mod host {
             self.viewer = None;
             self.last_size = None;
             self.denials.forget();
+            // A viewer that left by any other road than a lapse: a stale entry
+            // would be swept as an expiry long after it went.
+            self.leases.forget(viewer);
             self.idle_since = Some(Instant::now());
             let event = Event::ViewerLeft {
                 sid: self.sid.clone(),
@@ -1532,13 +1579,26 @@ mod host {
             }
         }
 
-        /// Re-plan the encode size against the current source and codec, after
-        /// a mode change moved the texture under the encoder.
+        /// This backend's limits for one codec, narrowed by the ladder's
+        /// current resolution cap.
+        ///
+        /// The **rung** and not the ceiling: the rung is where the ladder
+        /// stands, and at the top of the ladder the two name the same cap
+        /// anyway. Narrowing by the ceiling would make a resolution rung a
+        /// re-plan that changes nothing.
+        fn encode_limits(&self, codec: Codec) -> Option<scale::Limits> {
+            limits_for(&self.codec_caps, codec)
+                .map(|limits| self.governor.rung().resolution.narrow(limits))
+        }
+
+        /// Re-plan the encode size against the current source, codec and rung —
+        /// after a mode change moved the texture under the encoder, or after
+        /// the ladder gave up a resolution rung.
         fn replan(&mut self) {
             let Some(codec) = self.viewer.as_ref().map(|v| v.codec) else {
                 return;
             };
-            let Some(limits) = limits_for(&self.codec_caps, codec) else {
+            let Some(limits) = self.encode_limits(codec) else {
                 return;
             };
             let encoded = match scale::plan(self.source, limits) {
@@ -1775,7 +1835,10 @@ mod host {
 
         fn on_peer_event(&mut self, event: PeerEvent) {
             match event {
-                PeerEvent::Connected => ::log::info!("swoop: peer connected"),
+                PeerEvent::Connected => {
+                    ::log::info!("swoop: peer connected");
+                    self.bind_dtls_session();
+                }
                 PeerEvent::Disconnected => {
                     // No `bye` came, so the viewer did not leave — it stopped
                     // answering. That is a timeout, and the release matters.
@@ -1828,6 +1891,33 @@ mod host {
             }
         }
 
+        /// §10: every token this viewer presents from here is checked against
+        /// the fingerprint of the **established** dtls session rather than the
+        /// offer's claim, which is the whole argument for carrying the token on
+        /// `swoop-control` instead of putting a field on the offer.
+        ///
+        /// `Connected` fires before any channel opens, so the connect token —
+        /// which §10 makes the first lease — is bound to it too.
+        fn bind_dtls_session(&mut self) {
+            let Some(viewer) = self.viewer.as_ref().map(|v| v.id.clone()) else {
+                return;
+            };
+            let Some(fingerprint) = self
+                .peer
+                .as_mut()
+                .and_then(RtcPeer::remote_dtls_fingerprint)
+            else {
+                // Nothing to bind to, so `Viewer::fingerprint` keeps preferring
+                // the offer's — weaker, and never silently treated as absent.
+                ::log::warn!("swoop: the peer connected with no remote certificate to bind to");
+                return;
+            };
+            // The fingerprint itself is never logged.
+            if let Err(e) = self.client.set_viewer_dtls_fingerprint(&viewer, &fingerprint) {
+                ::log::warn!("swoop: viewer {viewer} not bound to its dtls session: {e}");
+            }
+        }
+
         fn on_channel_data(&mut self, ch: Channel, binary: bool, data: &[u8]) {
             match ch {
                 Channel::SwoopControl if !binary => self.on_control(data),
@@ -1866,19 +1956,24 @@ mod host {
                 ControlMessage::Lease { token } => {
                     let verdict = self.client.verify_viewer_token(&viewer, &token);
                     match verdict {
-                        Ok(claims) => {
+                        Ok(_) => {
                             let granted = self.client.control_granted(&viewer);
                             if let Some(v) = self.viewer.as_mut() {
                                 v.ctl = granted;
                             }
                             ::log::info!("swoop: viewer {viewer} verified, ctl {granted}");
+                            // §10's 5-minute lease, not the token's 60-second
+                            // `exp`: the browser renews at 60% of whatever it is
+                            // answered with, and the token's life would make
+                            // that a full membership re-check every 36 seconds.
                             let ok = ControlMessage::LeaseOk {
-                                expires_at: claims.exp.unwrap_or(0),
+                                expires_at: self.leases.renew(&viewer),
                             };
                             self.write_json(Channel::SwoopControl, &ok);
                         }
                         Err(denial) => {
                             self.on_denial(denial);
+                            self.leases.forget(&viewer);
                             let effects = self.client.end_viewer(&viewer, LeftReason::LeaseExpired);
                             // Never an exit: `end_viewer` produces a bye and a
                             // departure, nothing that ends the process.
@@ -1887,13 +1982,21 @@ mod host {
                     }
                 }
                 ControlMessage::Idr => self.request_idr(),
+                // All three axes, not just the bitrate: `preset` carries the
+                // resolution cap, which is the one axis §5 gives no field of
+                // its own.
                 ControlMessage::Quality {
-                    max_bitrate_kbps, ..
+                    preset,
+                    max_bitrate_kbps,
+                    max_fps,
                 } => {
-                    let bps = max_bitrate_kbps.saturating_mul(1000).max(1);
-                    self.governor.set_configured_bps(bps);
+                    let ceiling = Ceiling::from_quality(&preset, max_bitrate_kbps, max_fps);
+                    self.governor.set_ceiling(ceiling);
                     let target = self.governor.target_bps();
                     self.apply_bitrate(target);
+                    // A new preset restarts the ladder at its own top, which is
+                    // a rung move like any other.
+                    self.apply_ladder();
                 }
                 // Task 6.1 owns the secure desktop and `SendSAS`; spike 0.3 was
                 // never run, so nothing here crosses that boundary.
@@ -2071,6 +2174,27 @@ mod host {
             let _ = self.capture_tx.try_send(ToCapture::Bitrate(bps));
         }
 
+        /// The governor's other output, which is two different things to act
+        /// on and is why `LadderChange::needs_new_encoder` exists.
+        ///
+        /// A resolution move is a **new encoder**: a rebuild yields a new
+        /// device and the backend refuses a foreign texture (spike 3.7), so it
+        /// goes through `replan`, whose `Encode` drops the old encoder and the
+        /// scaler and forces the irap that §4 requires of a resolution change.
+        /// A frame-rate move is a capture-side decision the running encoder
+        /// never hears about.
+        fn apply_ladder(&mut self) {
+            let Some(change) = self.governor.take_ladder() else {
+                return;
+            };
+            if change.needs_new_encoder() {
+                self.replan();
+            }
+            if change.rung.fps != change.previous.fps {
+                let _ = self.capture_tx.try_send(ToCapture::Fps(change.rung.fps));
+            }
+        }
+
         fn tick(&mut self) {
             let now = Instant::now();
             if now.duration_since(self.last_report) >= REPORT_INTERVAL {
@@ -2080,6 +2204,9 @@ mod host {
                     if let Some(bps) = self.governor.on_report(now, pacer) {
                         self.apply_bitrate(bps);
                     }
+                    // Read straight after the evaluation that produced it: at
+                    // most one move per report.
+                    self.apply_ladder();
                 }
             }
             if now.duration_since(self.last_status) >= STATUS_INTERVAL {
@@ -2113,6 +2240,11 @@ mod host {
             for feature in self.features.iter_mut() {
                 feature.status(&mut contributed);
             }
+            // The governor's own view, and only while somebody is watching:
+            // with no peer there is no rate being governed, and §6 promises a
+            // quiet session the nine-field line.
+            let governed = self.peer.is_some();
+            let stats = self.governor.stats();
             let event = Event::Status {
                 sid: self.sid.clone(),
                 viewers,
@@ -2133,6 +2265,16 @@ mod host {
                 input_dropped: (self.input_dropped > 0).then_some(self.input_dropped),
                 denials: (self.denials.count() > 0).then(|| self.denials.count()),
                 test_override: self.test_override.clone(),
+                preset: governed.then(|| self.governor.ceiling().label()),
+                target_kbps: governed.then(|| self.governor.target_bps() / 1000),
+                rung_fps: governed.then_some(stats.rung.fps),
+                rung_resolution: governed
+                    .then(|| stats.rung.resolution.wire_name().to_owned()),
+                // Absent is the preset's own rung, which is where a healthy
+                // session sits — the same "absent means zero" as the counters.
+                rung_index: (governed && stats.rung_index > 0).then_some(stats.rung_index),
+                governor: governed.then(|| governor_phase(self.governor.state(now))),
+                idrs: (self.idr.forced() > 0).then(|| self.idr.forced()),
             };
             self.emit(&event);
         }
@@ -2142,6 +2284,7 @@ mod host {
             if now.duration_since(self.started) >= self.session_cap {
                 return Some(self.teardown(Exit::Ok, ExitReason::SessionCap, LeftReason::Timeout));
             }
+            self.sweep_leases();
             if self
                 .idle_since
                 .is_some_and(|since| now.duration_since(since) >= LINGER)
@@ -2149,6 +2292,33 @@ mod host {
                 return Some(self.teardown(Exit::Ok, ExitReason::Idle, LeftReason::Timeout));
             }
             None
+        }
+
+        /// §10: a lease that lapsed past its grace costs that viewer its
+        /// session, and nobody else theirs.
+        ///
+        /// A `bye` would have taken this viewer through `on_viewer_gone`
+        /// already; a lapse is the case where none came, so this is the only
+        /// thing that drops it. `end_viewer`'s `ViewerGone` is what closes the
+        /// peer and sends `ToInput::ReleaseAll` — a viewer dropped mid-chord
+        /// leaves those keys down on the machine otherwise.
+        fn sweep_leases(&mut self) {
+            for viewer in self.leases.lapsed() {
+                ::log::warn!("swoop: viewer {viewer} lease lapsed past the grace, dropping it");
+                // Before the drop and not after it: `end_viewer` answers a
+                // viewer the client has already released with no effects at
+                // all, so an entry left here would be swept again on every turn
+                // of the loop and written to the audit trail each time.
+                self.leases.forget(&viewer);
+                self.host_event(
+                    HostEventKind::LeaseExpired,
+                    Some(viewer.clone()),
+                    Some("lease_expired".to_owned()),
+                );
+                let effects = self.client.end_viewer(&viewer, LeftReason::LeaseExpired);
+                // Never an exit: `end_viewer` produces a bye and a departure.
+                let _ = self.apply(effects);
+            }
         }
 
         /// End the session: the viewer is told, everything it held is released,
@@ -2223,6 +2393,7 @@ mod host {
             stop,
             watcher,
             bitrate: DEFAULT_BITRATE_BPS,
+            fps: TARGET_FPS,
             reported: None,
         };
         while !ctx.stop.load(Ordering::Relaxed) {
@@ -2254,6 +2425,9 @@ mod host {
         /// thread opens — a new encoder takes the session's rate, never the
         /// config's.
         bitrate: u32,
+        /// The ladder's frame-rate rung, likewise kept across a pause. At
+        /// [`TARGET_FPS`] there is nothing to enforce.
+        fps: u32,
         /// The source size the session has been told about. It hears `Opened`
         /// once; every later open reports a change or says nothing.
         reported: Option<(u32, u32)>,
@@ -2277,9 +2451,10 @@ mod host {
         while !ctx.stop.load(Ordering::Relaxed) {
             match ctx.rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(ToCapture::Resume) => return true,
-                // The governor's last word, kept for the encoder the next
-                // viewer opens.
+                // The governor's last word on either axis, kept for the pass
+                // the next viewer opens.
                 Ok(ToCapture::Bitrate(bps)) => ctx.bitrate = bps,
+                Ok(ToCapture::Fps(fps)) => ctx.fps = fps,
                 // Nothing is open to retarget, so it is only the output the
                 // resume will duplicate.
                 Ok(ToCapture::Output(output)) => ctx.output = output,
@@ -2340,6 +2515,8 @@ mod host {
         // every path that rebuilds one clears this.
         let mut last_fed: Option<Frame> = None;
         let mut floor = FloorTimer::new(Instant::now());
+        // When the encoder was last handed anything, for the frame-rate rung.
+        let mut last_encode: Option<Instant> = None;
 
         while !ctx.stop.load(Ordering::Relaxed) {
             loop {
@@ -2369,6 +2546,9 @@ mod host {
                             }
                         }
                     }
+                    // Nothing to reconfigure: the encoder is told nothing about
+                    // this, because what changes is how often it is fed.
+                    Ok(ToCapture::Fps(fps)) => ctx.fps = fps,
                     Ok(ToCapture::Output(output)) => {
                         ctx.output = output;
                         return Pass::Retarget;
@@ -2464,6 +2644,17 @@ mod host {
                 continue;
             };
             let now = Instant::now();
+            // The ladder's frame-rate rung, and the only place it can be
+            // enforced: a CBR encoder handed every frame just spends the same
+            // budget on all of them. Not applied at the top rung — duplication
+            // is vsync-locked at the panel's rate, so a gate there would drop
+            // every other frame on the jitter of a 16.67 ms interval.
+            if ctx.fps < TARGET_FPS
+                && last_encode
+                    .is_some_and(|at| now.saturating_duration_since(at) < frame_interval(ctx.fps))
+            {
+                continue;
+            }
             let feed = match frame {
                 Some(frame) => {
                     if scaler.is_none() && (width, height) != (frame.width, frame.height) {
@@ -2533,6 +2724,7 @@ mod host {
                     // given, not from the last one it answered: an encoder that
                     // runs a frame behind is not a stalled desktop.
                     floor.fed(now);
+                    last_encode = Some(now);
                     last_fed = Some(feed);
                     if let Some(encoded) = encoded {
                         force_irap = false;
@@ -2676,6 +2868,14 @@ mod host {
         )
     }
 
+    /// One frame interval at `fps`, for the capture loop's rate gate. A rung of
+    /// zero is not a rung — `quality::MIN_LADDER_FPS` is the bottom — but the
+    /// clamp is here rather than trusted, because the divisor is the one thing
+    /// that cannot be wrong.
+    fn frame_interval(fps: u32) -> Duration {
+        Duration::from_micros(1_000_000 / u64::from(fps.max(1)))
+    }
+
     fn frame_codec(codec: Codec) -> FrameCodec {
         match codec {
             Codec::H265 => FrameCodec::Hevc,
@@ -2743,6 +2943,41 @@ mod host {
                 host_event_kind(DenialReason::UnknownViewer),
                 HostEventKind::JwtRejected
             );
+        }
+
+        /// The two vocabularies are joined in one place, so every state the
+        /// governor can be in has a word on the wire rather than going
+        /// unreported.
+        #[test]
+        fn every_governor_state_has_a_word_on_the_status_line() {
+            assert_eq!(governor_phase(GovernorState::Ceiling), GovernorPhase::Ceiling);
+            assert_eq!(governor_phase(GovernorState::Holding), GovernorPhase::Holding);
+            assert_eq!(
+                governor_phase(GovernorState::Climbing),
+                GovernorPhase::Climbing
+            );
+            assert_eq!(governor_phase(GovernorState::Pinned), GovernorPhase::Pinned);
+        }
+
+        /// The frame-rate rung is enforced by feeding the encoder less often,
+        /// and the gate is deliberately not applied at [`TARGET_FPS`]: at 60 the
+        /// interval is under the 16.67 ms a vsync-locked duplication delivers
+        /// at, so a gate there would drop every other frame on jitter alone.
+        #[test]
+        fn a_frame_rate_rung_is_one_interval_and_the_top_rung_is_never_gated() {
+            use crate::session::quality::{FPS_CAPS, MIN_LADDER_FPS};
+
+            assert_eq!(frame_interval(30), Duration::from_micros(33_333));
+            assert_eq!(frame_interval(MIN_LADDER_FPS), Duration::from_micros(66_666));
+            // Every rung below the top is at least a whole 60 fps frame apart,
+            // so the gate actually drops something.
+            for fps in FPS_CAPS.into_iter().chain([MIN_LADDER_FPS]) {
+                if fps < TARGET_FPS {
+                    assert!(frame_interval(fps) > frame_interval(TARGET_FPS));
+                }
+            }
+            // A divisor that cannot be zero, whatever it is handed.
+            assert_eq!(frame_interval(0), Duration::from_micros(1_000_000));
         }
 
         /// The route validates `reason` against `^[a-z0-9_]{1,48}$` and refuses
@@ -3216,6 +3451,24 @@ mod tests {
         idr.answered();
         at += IDR_COOLDOWN;
         assert!(idr.request(at), "the backoff reset with the quiet stream");
+    }
+
+    /// `status.idrs` is the count of keyframes actually forced, not of requests
+    /// arriving — a receiver in a loss storm asks on every record, and a count
+    /// of the asking would say nothing about what the link paid for.
+    #[test]
+    fn the_idr_count_is_the_keyframes_forced_and_not_the_requests_made() {
+        let mut idr = IdrPolicy::new();
+        let start = Instant::now();
+        assert_eq!(idr.forced(), 0, "a session that lost nothing forced nothing");
+        for i in 0..10 {
+            idr.request(start + Duration::from_millis(i * 10));
+        }
+        assert_eq!(idr.forced(), 1, "ten requests inside the cooldown are one keyframe");
+
+        idr.answered();
+        assert!(idr.request(start + IDR_COOLDOWN + Duration::from_millis(1)));
+        assert_eq!(idr.forced(), 2);
     }
 
     /// The encoder the request was sent to can be rebuilt out from under it, so

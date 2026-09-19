@@ -470,6 +470,11 @@ export function useSwoopSession(
         refreshToken: () => signaling?.refresh() ?? Promise.resolve(),
         leaseToken: () => mintViewerToken(identity.fingerprint),
         onTrack: (stream, rtpReceiver) => {
+          // two tracks arrive now, and only one of them is a picture: audio is
+          // its own m-line and `lib/swoop/audio.ts` takes it off the connection
+          // itself. handed to the receiver it would point the `<video>` at a
+          // stream with no frames in it.
+          if (rtpReceiver.track.kind !== 'video') return;
           // `attachTrack` reads exactly these two fields off the track event,
           // and the peer has already split them apart for us.
           receiver?.attachTrack({

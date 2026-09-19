@@ -1,6 +1,7 @@
 /**
- * the viewer's `RTCPeerConnection`: certificate, offer, five data channels, one
- * recvonly video track, and the one check that makes the relay untrusted.
+ * the viewer's `RTCPeerConnection`: certificate, offer, five data channels, a
+ * recvonly video track and a recvonly audio track, and the one check that makes
+ * the relay untrusted.
  *
  * the shape follows PROTOCOL.md sections 3 and 9 and the order matters:
  *
@@ -244,9 +245,15 @@ export class SwoopPeer {
     return this.channels.get(label) ?? null;
   }
 
-  /** build the transceiver and the five channels, then offer. */
+  /** build the two transceivers and the five channels, then offer. */
   async start(): Promise<void> {
     this.pc.addTransceiver('video', { direction: 'recvonly' });
+    // the browser offers and the host answers, so an m-line the offer does not
+    // carry is one the host can never add: without this, a streamer with a
+    // working opus encoder has nowhere to put it. the track is taken off the
+    // connection by `lib/swoop/audio.ts`, which listens for it separately —
+    // `onTrack` below is the video receiver's path and only the video's.
+    this.pc.addTransceiver('audio', { direction: 'recvonly' });
 
     for (const config of SWOOP_CHANNELS) {
       const init: RTCDataChannelInit = { ordered: config.ordered, protocol: SWOOP_SUBPROTOCOL };
