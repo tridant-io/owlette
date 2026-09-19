@@ -957,6 +957,9 @@ class OwletteService(win32serviceutil.ServiceFramework):
         self._swoop_shutdown = threading.Event()
         self._last_console_session_id = None
         self._swoop_session_thread = None
+        # When capture started, for the tray's swoop row. Stamped by
+        # _swoop_section, because the status writers are the only readers.
+        self._swoop_active_since = 0
 
         # Checked BEFORE handle_firebase_command's legacy if/elif chain, falling
         # through when a type isn't registered. Register new handlers here.
@@ -1151,10 +1154,49 @@ class OwletteService(win32serviceutil.ServiceFramework):
             return {'status': 'unknown', 'checked_at': 0, 'error_code': None, 'error_message': None, 'probe_results': {}}
         return h.to_dict()
 
+    def _swoop_section(self) -> dict:
+        """Build the swoop section for service_status.json from SwoopManager.status().
+
+        `active` is capture running, not a process being alive: the streamer
+        lingers for a minute after the last viewer leaves, and the tray badge
+        must go out at the departure, not at the exit. A viewer attached is
+        exactly when capture runs — the streamer's capture gate pauses on the
+        last departure and resumes on the next join — so the viewer count is
+        the badge.
+        """
+        section = {'active': False, 'viewers': 0, 'controllers': 0,
+                   'since': 0, 'indicator': 'none'}
+
+        manager = getattr(self, 'swoop_manager', None)
+        if manager is not None:
+            try:
+                snapshot = manager.status()
+                section['viewers'] = int(snapshot.get('viewers') or 0)
+                section['controllers'] = int(snapshot.get('controllers') or 0)
+                section['active'] = section['viewers'] > 0
+                # The site's policy as the streamer echoed it back from its
+                # bundle; the agent reads no site settings document.
+                indicator = (snapshot.get('streamer') or {}).get('indicator')
+                if indicator in ('banner', 'tray', 'none'):
+                    section['indicator'] = indicator
+            except Exception as e:
+                # A manager that cannot answer is not a reason to skip the write.
+                logging.debug(f"swoop status unavailable for the tray: {e}")
+
+        since = getattr(self, '_swoop_active_since', 0)
+        if not section['active']:
+            since = 0
+        elif not since:
+            since = int(time.time())
+        self._swoop_active_since = since
+        section['since'] = since
+        return section
+
     def _write_service_status_early(self, running=True):
         """
-        Write service + health sections to service_status.json immediately after
-        the startup health probe, before Firebase is initialized.
+        Write service, health and swoop sections to service_status.json
+        immediately after the startup health probe, before Firebase is
+        initialized.
         This lets the tray icon show health alerts right away.
         """
         try:
@@ -1177,7 +1219,10 @@ class OwletteService(win32serviceutil.ServiceFramework):
                     'schedule_timezone': '',
                     'last_heartbeat': 0
                 },
-                'health': self._health_section()
+                'health': self._health_section(),
+                # Same builder as the steady-state write, so the zero shape is
+                # the shape: no reader ever tells "key absent" from "off".
+                'swoop': self._swoop_section()
             }
 
             temp_path = status_path + '.tmp'
@@ -1201,6 +1246,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
         - Last heartbeat timestamp
         - Service version
         - Health probe results
+        - Live swoop state, for the tray's session row
 
         This provides real-time IPC from service → tray icon without log parsing.
 
@@ -1254,6 +1300,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
                     pass  # Ignore errors getting Firebase state
 
             health_section = self._health_section()
+            swoop_section = self._swoop_section()
 
             status = {
                 'service': {
@@ -1269,7 +1316,8 @@ class OwletteService(win32serviceutil.ServiceFramework):
                     'schedule_timezone': schedule_timezone,
                     'last_heartbeat': last_heartbeat
                 },
-                'health': health_section
+                'health': health_section,
+                'swoop': swoop_section
             }
 
             # Excludes timestamps and free-form strings so it only flips on real
@@ -1287,6 +1335,13 @@ class OwletteService(win32serviceutil.ServiceFramework):
                 schedule_timezone,
                 health_section.get('status'),
                 health_section.get('error_code'),
+                # Everything the tray's swoop row renders, and the policy its
+                # toast is gated on: a session start or end must reach the
+                # desktop app on the next tick, not on the 30s refresh floor.
+                swoop_section['active'],
+                swoop_section['viewers'],
+                swoop_section['controllers'],
+                swoop_section['indicator'],
             )
 
             now_mono = time.monotonic()

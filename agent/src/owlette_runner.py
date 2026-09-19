@@ -168,6 +168,7 @@ if __name__ == '__main__':
             self._swoop_shutdown = threading.Event()
             self._last_console_session_id = None
             self._swoop_session_thread = None
+            self._swoop_active_since = 0
 
             # handle_firebase_command checks has_handler() before falling through
             from command_router import CommandRouter

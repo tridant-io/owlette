@@ -249,9 +249,17 @@ a mac client maps cmd → `ControlLeft` **in the browser**, before it sends, so 
 |---|---|
 | `cpos` | `x`, `y` normalised, `visible`, `tsUs` |
 | `cshape` | `id`, and on first use `hotX`, `hotY`, `w`, `h`, `png` (base64) |
+| `vpos` | `viewer`, `x`, `y` normalised, `tsUs` — where **another** controller's pointer is |
 
 shapes are cached by `id`; a repeat is `{"t":"cshape","id":n}` alone. css cursors above 128×128 are silently
 ignored by browsers, so a shape larger than 32×32 css px is presented as an overlay instead.
+
+`cpos` is the **machine's own** pointer, which is one thing however many people are watching. `vpos` is where
+each *other* controller is pointing, so a session with more than one controller can draw them — the host
+publishes one per absolute `m` it accepts, from the viewer it accepted it from, and never for the viewer it
+is being sent to. a viewer in pointer lock sends `mr` deltas and has no position of its own, so it publishes
+no `vpos` at all; `cpos` is where that pointer went. a viewer draws `vpos` as an overlay element and leaves
+its own cursor a css cursor.
 
 ### clipboard — `swoop-control`, both directions, host→viewer ungated, viewer→host requires `ctl`
 
@@ -271,7 +279,14 @@ viewer → host: `quality` (`preset`, `maxBitrateKbps`, `maxFps` — per viewer,
 `mute` (`on`), `lease` (`token`, section 10).
 
 host → viewer: `hello-host` (`codec`, `width`, `height`, `displays[]`, `streamerEpoch`, `protocolVersion`),
-`sas-result` (`ok`), `lease-ok` (`expiresAt`), `ended` (`reason`).
+`sas-result` (`ok`), `lease-ok` (`expiresAt`), `ended` (`reason`), `roster` (`viewers[]` of
+`{id, name, ctl}`, `tsUs`).
+
+`roster` is who is connected and who holds control, sent **whole on every change** rather than as a delta —
+this channel is ordered and reliable, but a viewer that joined late has no earlier state to apply a delta to.
+it carries no token, no fingerprint and no lease: a line is an id, a name and a boolean. `ctl` on it is the
+host's own verdict from each viewer's verified jwt, which is what makes it worth showing; `name` is that
+token's `uid` where it carries one and the viewer id otherwise, because §8's claim set has no name in it.
 
 ### feedback — `swoop-feedback`, viewer → host
 

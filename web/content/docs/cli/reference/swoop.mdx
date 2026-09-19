@@ -1,0 +1,93 @@
+---
+title: "swoop"
+description: "swoop opens the remote-desktop viewer for one machine in your browser. it reads the machine record, prints the viewer url and opens it — nothing else. the session itself, and the second factor control asks for, happen in the browser. tier: [ready]."
+---
+
+`owlette swoop <machineId> --site <siteId>` hands you the viewer page for a machine and opens it in your browser.
+
+the command is a launcher, not a client. it makes exactly one API call — the machine read — to prove the machine exists and that you can reach it, so a typo does not open a dead page. it never starts a session, never mints a viewer token and never touches the media path. that all happens in the browser, where a second factor can actually be presented.
+
+---
+
+## swoop
+
+```bash
+owlette swoop <machineId> --site <siteId> [--no-open] [--json]
+```
+
+| argument / flag | type | required | description |
+|---|---|---|---|
+| `<machineId>` | string | yes | machine to open the viewer for |
+| `--site <siteId>` | string | yes | site id that owns the machine |
+| `--no-open` | flag | no | print the url and do not open a browser |
+| `--json` | flag | no | emit the url as JSON instead of a bare line |
+
+the url is `<apiUrl>/swoop/<siteId>/<machineId>`, where `<apiUrl>` is the host the active profile points at.
+
+### examples
+
+```bash
+# open the viewer
+owlette swoop m-1 --site site-1
+# https://owlette.app/swoop/site-1/m-1
+```
+
+```bash
+# print it for a remote shell or a ticket, and open nothing
+owlette swoop m-1 --site site-1 --no-open
+```
+
+```bash
+# hand the url to something else
+owlette --json swoop m-1 --site site-1 | jq -r '.url'
+```
+
+the `--json` envelope is:
+
+```json
+{
+  "siteId": "site-1",
+  "machineId": "m-1",
+  "url": "https://owlette.app/swoop/site-1/m-1",
+  "opened": true
+}
+```
+
+human mode prints the url alone on stdout — everything else goes to stderr, so `owlette swoop … | …` stays clean.
+
+backing: `GET /api/sites/{siteId}/machines/{machineId}`.
+
+---
+
+## what the browser does, and this command does not
+
+| step | where it happens |
+|---|---|
+| resolve the machine, check it reports the swoop capability | cli |
+| start the session (`POST …/swoop/sessions`) | browser |
+| second-factor step-up, if you asked for control | browser |
+| viewer token, key exchange, ICE, the video itself | browser |
+| renew the 5-minute lease | browser |
+| end the session | browser |
+
+an API key cannot start a swoop session at all — every session route refuses one with `403` and `code: api_key_not_permitted`. that is why this command stops at the url: there is nothing a key could be handed.
+
+---
+
+## exit codes
+
+- `0` — url printed (and opened, unless `--no-open`)
+- `1` — the machine read failed (network error or non-2xx, e.g. `404` for an unknown machine or `403` for a site you cannot reach), or the machine reports that it cannot stream
+- `2` — no token configured for the active profile, or a missing `--site` (a commander usage error)
+
+---
+
+## notes
+
+- **scope**: site-scoped — `--site <siteId>` is required
+- **tier**: `[ready]`
+- **capability**: the viewer needs an agent that reports `capabilities.swoop`. when the machine record does not carry the field at all, the cli says so on stderr and still hands over the url — the viewer refuses on its own if the agent is too old to stream
+- **offline machines**: the url is still printed, with a note. swoop cannot reach a machine until it reconnects
+- **opening the browser is best effort**: on a headless box nothing opens and nothing fails — the url is already on stdout. `--no-open` makes that the explicit behaviour
+- **replaces `machine live-view`**: the old screenshot-slideshow verb stays a stub and points here
+- **related**: [machine](/docs/cli/reference/machine) (find machine ids, screenshots, reboot), [swoop in the dashboard](/docs/dashboard/swoop) (what the viewer can do, and who may use it), [overview](/docs/cli/overview) (json envelope)

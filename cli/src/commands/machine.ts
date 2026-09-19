@@ -11,8 +11,8 @@
  * `Idempotency-Key`. Screenshot is queue → poll → download the signed-url bytes
  * to `--output <path>` (default `screenshot-<machineId>-<timestamp>.png`).
  *
- * `live-view` is the only remaining c-tier `stubExit()` shim — remote desktop is
- * shipping as swoop, and this verb lands with it.
+ * `live-view` is the only remaining c-tier `stubExit()` shim — remote desktop
+ * ships as swoop, so the stub points at `owlette swoop`.
  */
 
 import { Command } from 'commander';
@@ -433,7 +433,7 @@ export function registerMachineCommands(program: Command): void {
       stubExit({
         noun: 'machine',
         verb: 'live-view',
-        reason: 'remote desktop is shipping as swoop; this verb lands with it',
+        reason: 'remote desktop ships as swoop — run `owlette swoop <machineId> --site <siteId>`',
         dashboardUrl: `${apiUrl}/dashboard`,
         futurePlan: 'public-api deferred: swoop',
         cmd,

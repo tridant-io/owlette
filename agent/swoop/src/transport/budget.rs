@@ -41,17 +41,32 @@
 //! invented constant quietly outliving it. The per-profile allowances subtracted
 //! from it are protocol headers (below), which are known and not measured.
 //!
-//! # Nothing applies this yet
+//! # Half of this is wired, and the half that is not is the half 6.8 owes
 //!
-//! [`crate::transport::governor`] and [`crate::transport::pacer`] do not read
-//! this module — neither mentions it, and the governor's ceiling comes straight
-//! from the viewer's `quality` message through
-//! [`Ceiling::from_quality`]. [`PathBudget::clamp`] is the seam that wiring
-//! calls when it lands (Task 8.2 owns `governor.rs`): the **lower** of the two
-//! wins on each axis, and it must be applied *after* `Ceiling::from_quality`,
-//! never before — that constructor floors a viewer's request at
-//! `BITRATE_CAPS_BPS[0]`, and re-running it over a degraded budget would floor
-//! the degradation away.
+//! Only [`PathBudget::max_fragment_size`] needs the MTU. The bitrate and
+//! frame-rate caps do not, so they are their own constructor — [`RateBudget`],
+//! from [`PathProfile::rate_budget`] — and **that half is live**:
+//! [`crate::transport::governor::Governor::set_path_profile`] narrows every
+//! viewer ceiling through it. [`PathProfile::budget`] still needs a measured
+//! [`PathMtu`] and still has no fallback, so the fragment half waits for 6.8
+//! exactly as it did. `pacer.rs` and `framing.rs` are the fragment half's
+//! callers and read nothing here yet.
+//!
+//! # The clamp ordering, which is the trap
+//!
+//! [`RateBudget::clamp`] takes the **lower** of the two on each axis, so it only
+//! narrows when applied *after* [`Ceiling::from_quality`] — that constructor
+//! floors a viewer's request at `BITRATE_CAPS_BPS[0]`, and re-running it over a
+//! budgeted ceiling would floor a degraded cap straight back up and make the
+//! degradation silently do nothing. The governor is built so the ordering
+//! cannot be got wrong: it stores the viewer's raw ceiling and applies this
+//! clamp over it on every read, so no later `from_quality` can undo it, and a
+//! path that changes mid-session re-derives rather than accumulates. The TLS
+//! profile's 6 Mbps is mid-band of research/04 §3.2's 4–8 precisely so the two
+//! floors cannot disagree today; a 6.8 that comes back at 4–5 Mbps would make
+//! that ordering load-bearing rather than cosmetic, and
+//! `the_governor_applies_the_path_clamp_after_the_menus_own_floor` is the test
+//! that pins it.
 
 use crate::ipc::MediaPath;
 use crate::session::quality::{Ceiling, BITRATE_CAPS_BPS, FPS_CAPS};
@@ -114,26 +129,59 @@ impl PathProfile {
         }
     }
 
-    /// The budget this path is allowed to spend, given the measured path MTU.
-    pub fn budget(self, mtu: PathMtu) -> PathBudget {
-        let (max_bitrate_bps, max_fps, fec, overhead) = match self {
+    /// What the transport reports about a live pair, reduced to the one bit
+    /// [`crate::transport::ice_policy::IceEvent`] carries.
+    ///
+    /// A relayed pair whose client leg this end cannot name is
+    /// [`PathProfile::RelayUdp`], the same looser answer [`classify`] gives an
+    /// unnamed `relayProtocol` and for the same reason. Naming the TLS leg is
+    /// the TURN client's (Task 7.4): it is the end that chose 443.
+    ///
+    /// [`classify`]: PathProfile::classify
+    pub fn from_relayed(relayed: bool) -> Self {
+        if relayed {
+            PathProfile::RelayUdp
+        } else {
+            PathProfile::Direct
+        }
+    }
+
+    /// The two axes that do not need a path MTU, which is why they are their
+    /// own constructor and are wired while the fragment half waits for 6.8.
+    pub fn rate_budget(self) -> RateBudget {
+        let (max_bitrate_bps, max_fps, fec) = match self {
             // The top menu rung, so a direct path's budget never tightens
             // anything a viewer is allowed to ask for.
             PathProfile::Direct => (
                 BITRATE_CAPS_BPS[BITRATE_CAPS_BPS.len() - 1],
                 FPS_CAPS[0],
                 true,
-                UDP_OVERHEAD,
             ),
-            PathProfile::RelayUdp => (RELAY_UDP_BPS, FPS_CAPS[0], true, RELAY_OVERHEAD),
-            PathProfile::RelayTls => (RELAY_TLS_BPS, FPS_CAPS[1], false, RELAY_OVERHEAD),
+            PathProfile::RelayUdp => (RELAY_UDP_BPS, FPS_CAPS[0], true),
+            PathProfile::RelayTls => (RELAY_TLS_BPS, FPS_CAPS[1], false),
         };
-        PathBudget {
+        RateBudget {
             profile: self,
             max_bitrate_bps,
             max_fps,
-            max_fragment_size: usize::from(mtu.bytes().max(IPV4_MIN_MTU) - overhead),
             fec,
+        }
+    }
+
+    /// The whole budget, which needs the measured path MTU for its fragment
+    /// size and nothing else.
+    pub fn budget(self, mtu: PathMtu) -> PathBudget {
+        let overhead = match self {
+            PathProfile::Direct => UDP_OVERHEAD,
+            PathProfile::RelayUdp | PathProfile::RelayTls => RELAY_OVERHEAD,
+        };
+        let rate = self.rate_budget();
+        PathBudget {
+            profile: rate.profile,
+            max_bitrate_bps: rate.max_bitrate_bps,
+            max_fps: rate.max_fps,
+            max_fragment_size: usize::from(mtu.bytes().max(IPV4_MIN_MTU) - overhead),
+            fec: rate.fec,
         }
     }
 
@@ -184,6 +232,33 @@ impl PathMtu {
     }
 }
 
+/// What one path may spend on the two axes that need no MTU.
+///
+/// The half of [`PathBudget`] a caller can have before spike 6.8 lands, and the
+/// only half [`crate::transport::governor`] reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateBudget {
+    pub profile: PathProfile,
+    pub max_bitrate_bps: u32,
+    pub max_fps: u32,
+    /// False on the TCP/TLS leg only, where repair is duplicated work.
+    pub fec: bool,
+}
+
+impl RateBudget {
+    /// Narrow a viewer's ceiling by this budget: the lower number wins on each
+    /// axis, and the resolution cap is untouched because a budget has no
+    /// opinion about pixels. Apply it *after* [`Ceiling::from_quality`], not
+    /// before — see the module head.
+    pub fn clamp(&self, ceiling: Ceiling) -> Ceiling {
+        Ceiling {
+            bitrate_bps: ceiling.bitrate_bps.min(self.max_bitrate_bps),
+            fps: ceiling.fps.min(self.max_fps),
+            resolution: ceiling.resolution,
+        }
+    }
+}
+
 /// What one path may spend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PathBudget {
@@ -197,16 +272,20 @@ pub struct PathBudget {
 }
 
 impl PathBudget {
-    /// Narrow a viewer's ceiling by this budget: the lower number wins on each
-    /// axis, and the resolution cap is untouched because a budget has no
-    /// opinion about pixels. Apply it *after* [`Ceiling::from_quality`], not
-    /// before — see the module head.
-    pub fn clamp(&self, ceiling: Ceiling) -> Ceiling {
-        Ceiling {
-            bitrate_bps: ceiling.bitrate_bps.min(self.max_bitrate_bps),
-            fps: ceiling.fps.min(self.max_fps),
-            resolution: ceiling.resolution,
+    /// The rate half of this budget, which is the half that clamps a ceiling.
+    pub fn rate(&self) -> RateBudget {
+        RateBudget {
+            profile: self.profile,
+            max_bitrate_bps: self.max_bitrate_bps,
+            max_fps: self.max_fps,
+            fec: self.fec,
         }
+    }
+
+    /// Narrow a viewer's ceiling by this budget — [`RateBudget::clamp`], since
+    /// a fragment size has no opinion about a ceiling.
+    pub fn clamp(&self, ceiling: Ceiling) -> Ceiling {
+        self.rate().clamp(ceiling)
     }
 }
 
@@ -303,6 +382,31 @@ mod tests {
         assert_eq!(PathProfile::Direct.media_path(), MediaPath::Direct);
         assert_eq!(PathProfile::RelayUdp.media_path(), MediaPath::Relay);
         assert_eq!(PathProfile::RelayTls.media_path(), MediaPath::Relay);
+    }
+
+    /// The rate half is answerable without an MTU, and it is the same two
+    /// numbers the whole budget carries — so wiring it now cannot drift from
+    /// what 6.8's measurement will complete.
+    #[test]
+    fn the_rate_half_needs_no_mtu_and_agrees_with_the_whole() {
+        for profile in [
+            PathProfile::Direct,
+            PathProfile::RelayUdp,
+            PathProfile::RelayTls,
+        ] {
+            let rate = profile.rate_budget();
+            for mtu in MTUS {
+                let whole = profile.budget(PathMtu::measured(mtu));
+                assert_eq!(whole.rate(), rate, "{profile:?} at mtu {mtu}");
+                assert_eq!(whole.clamp(Ceiling::default()), rate.clamp(Ceiling::default()));
+            }
+        }
+    }
+
+    #[test]
+    fn the_one_bit_an_ice_event_carries_is_read_as_the_looser_answer() {
+        assert_eq!(PathProfile::from_relayed(false), PathProfile::Direct);
+        assert_eq!(PathProfile::from_relayed(true), PathProfile::RelayUdp);
     }
 
     #[test]

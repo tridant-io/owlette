@@ -17,6 +17,7 @@ import { registerSiteCommands } from './commands/site';
 import { registerKeyCommand } from './commands/key';
 import { registerQuotaCommands } from './commands/quota';
 import { registerMachineCommands } from './commands/machine';
+import { registerSwoopCommand } from './commands/swoop';
 import { registerAuditLogCommands } from './commands/audit-log';
 import { registerWhoamiCommand } from './commands/whoami';
 import { registerVersionCommand } from './commands/version';
@@ -61,6 +62,7 @@ export function buildProgram(): Command {
   registerKeyCommand(program);
   registerQuotaCommands(program);
   registerMachineCommands(program);
+  registerSwoopCommand(program);
   registerAuditLogCommands(program);
 
   // top-level `deploy` is the classic-installer group; the content-addressed

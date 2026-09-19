@@ -154,14 +154,58 @@
 //! vsync-locked at 16.67 ms and a 16.666 ms gate drops every other frame on
 //! jitter.
 //!
+//! # Three caps, one of them the viewer's, and the order they compose in
+//!
+//! [`Governor`] holds the viewer's own ceiling exactly as
+//! [`Ceiling::from_quality`] produced it, and narrows it on every read by two
+//! caps the viewer has no say in:
+//!
+//! - **the path budget** ([`Governor::set_path_profile`]), which is
+//!   [`crate::transport::budget`]'s relay and TLS caps. It moves mid-session:
+//!   an ICE restart or a relay→direct promotion changes the profile and this
+//!   re-derives, in both directions, without a `quality` message.
+//! - **the shared uplink share** ([`Governor::set_uplink_share`]), this
+//!   viewer's slice of the one host budget below.
+//!
+//! Narrowing on read rather than on write is the whole of the ordering
+//! discipline `budget.rs` asks for. `Ceiling::from_quality` floors a request at
+//! `BITRATE_CAPS_BPS[0]`, so a degraded cap written *into* the stored ceiling
+//! would be floored straight back up the next time a viewer touched the quality
+//! menu, and the degradation would silently do nothing. Stored raw and clamped
+//! on read, it cannot be: there is no order of calls that loses the cap.
+//!
+//! # One uplink, N controllers probing it
+//!
+//! [`Governor`] is per viewer, and N of them on one machine are N independent
+//! controllers descending from N independent ceilings — each with no model of
+//! the path and no idea the other N-1 exist. On a kiosk's DSL line that is N
+//! times the same bottleneck being probed at once, which is how bufferbloat
+//! gets built by the very thing meant to avoid it.
+//!
+//! [`UplinkBudget`] is the one estimate of the machine's uplink, and
+//! [`UplinkBudget::allocate`] splits it: a floor for every viewer it can pay
+//! for, then the remainder proportional-fair over what each one still wants,
+//! **controllers before watchers**. Strict priority and not a weight: a
+//! controller is the person driving the machine, and a watcher taking a share
+//! of the rate that makes the pointer lag is not a trade worth tuning. A
+//! watcher the estimate cannot even floor is [`UplinkShare::starved`] and says
+//! so; a controller never is while there is a floor left to give.
+//!
+//! The estimate itself is still owed — nothing here measures an uplink, and
+//! this module never will (see the first section). What it does guarantee is
+//! that the sum of what it hands out is never more than what it was told, so a
+//! real estimate arriving later changes one number and nothing else.
+//!
 //! [`RtcPeer::set_bitrate_ceiling`]: crate::transport::rtc::RtcPeer::set_bitrate_ceiling
 //! [`Encoder::set_bitrate`]: crate::encode::Encoder::set_bitrate
+//! [`Ceiling::from_quality`]: crate::session::quality::Ceiling::from_quality
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::session::quality::{Ceiling, QualityRung};
 use crate::signal::messages::channel::Feedback;
+use crate::transport::budget::PathProfile;
 use crate::transport::pacer::PacerStats;
 
 /// How far back the best-of-session reference looks. Long enough that a
@@ -356,7 +400,14 @@ impl MinWindow {
 /// One viewer's rate governor. Driven from the thread that owns the peer.
 #[derive(Debug)]
 pub struct Governor {
+    /// The viewer's own ceiling, stored exactly as `Ceiling::from_quality`
+    /// produced it. The two caps below narrow it on read and never write to
+    /// it — see the module head on why that order is the whole discipline.
     cfg: GovernorConfig,
+    /// The live path's own cap, once ICE has selected a pair.
+    path: Option<PathProfile>,
+    /// This viewer's slice of the host's shared uplink.
+    share_bps: Option<u32>,
     target_bps: u32,
     /// `(frame_id, send_us)`, oldest first. `send_us` is §4's stamp:
     /// microseconds since `streamerEpoch`.
@@ -393,6 +444,8 @@ impl Governor {
         };
         Self {
             cfg,
+            path: None,
+            share_bps: None,
             target_bps: cfg.ceiling.bitrate_bps,
             sent: VecDeque::with_capacity(SEND_RING),
             reference: MinWindow::new(cfg.reference_window),
@@ -418,8 +471,71 @@ impl Governor {
         self.stats
     }
 
+    /// The ceiling actually in force: the viewer's, narrowed by the path budget
+    /// and by this viewer's share of the host uplink. This is the number the
+    /// stats line shows, because a cap the session is holding and nobody can
+    /// see is the failure this module exists to avoid.
     pub fn ceiling(&self) -> Ceiling {
+        let ceiling = match self.path {
+            Some(profile) => profile.rate_budget().clamp(self.cfg.ceiling),
+            None => self.cfg.ceiling,
+        };
+        match self.share_bps {
+            Some(share) => Ceiling {
+                bitrate_bps: ceiling.bitrate_bps.min(share),
+                ..ceiling
+            },
+            None => ceiling,
+        }
+    }
+
+    /// The ceiling the viewer asked for, before either cap. For a stats line
+    /// that wants to show both, and for nothing that actuates.
+    pub fn requested_ceiling(&self) -> Ceiling {
         self.cfg.ceiling
+    }
+
+    /// The live path changed — ICE selected a pair, an ICE restart moved it, or
+    /// the one relay→direct promotion landed — so the budget it carries is
+    /// re-derived over the viewer's own ceiling.
+    ///
+    /// The clamp is applied here over the *raw* ceiling every time rather than
+    /// written into it, so a later `quality` message cannot floor a degraded
+    /// cap back up and a promotion off the relay gives the rate back.
+    pub fn set_path_profile(&mut self, profile: PathProfile) {
+        if self.path == Some(profile) {
+            return;
+        }
+        let previous = self.rung();
+        self.path = Some(profile);
+        self.restart_ladder(previous);
+    }
+
+    /// The live path, once ICE has selected a pair.
+    pub fn path_profile(&self) -> Option<PathProfile> {
+        self.path
+    }
+
+    /// This viewer's slice of the host's shared uplink
+    /// ([`UplinkBudget::allocate`]). Bitrate only: a share says how many bits
+    /// this viewer may have, never how they are spent, so it moves no rung.
+    ///
+    /// A target already above the new share comes down at once rather than
+    /// waiting for a report — the point of the shared budget is that N viewers
+    /// do not each probe for the whole of one bottleneck, and a share that only
+    /// took effect on the next evaluation would let them.
+    pub fn set_uplink_share(&mut self, bps: u32) {
+        if self.share_bps == Some(bps) {
+            return;
+        }
+        self.share_bps = Some(bps);
+        let ceiling = self.ceiling().bitrate_bps;
+        self.target_bps = self.target_bps.clamp(self.cfg.floor_bps.min(ceiling), ceiling);
+    }
+
+    /// This viewer's share of the host uplink, if one has been allocated.
+    pub fn uplink_share_bps(&self) -> Option<u32> {
+        self.share_bps
     }
 
     /// The frame rate and resolution the ladder currently allows.
@@ -438,7 +554,7 @@ impl Governor {
         if self.hold_until.is_some_and(|until| now < until) {
             return GovernorState::Holding;
         }
-        if self.target_bps >= self.cfg.ceiling.bitrate_bps {
+        if self.target_bps >= self.ceiling().bitrate_bps {
             return GovernorState::Ceiling;
         }
         if self.target_bps <= self.cfg.floor_bps {
@@ -477,7 +593,17 @@ impl Governor {
         let previous = self.rung();
         self.cfg.ceiling = ceiling;
         self.cfg.floor_bps = self.cfg.floor_bps.min(ceiling.bitrate_bps);
-        self.target_bps = self.target_bps.clamp(self.cfg.floor_bps, ceiling.bitrate_bps);
+        self.restart_ladder(previous);
+    }
+
+    /// A cap moved, on any of the three axes and from any of the three sources:
+    /// rebuild the ladder under the ceiling now in force and descend it from
+    /// the top. The old index counted rungs that may no longer exist.
+    fn restart_ladder(&mut self, previous: QualityRung) {
+        let ceiling = self.ceiling();
+        self.target_bps = self
+            .target_bps
+            .clamp(self.cfg.floor_bps.min(ceiling.bitrate_bps), ceiling.bitrate_bps);
         self.rungs = ceiling.rungs();
         self.rung = 0;
         self.rung_moved_at = None;
@@ -577,9 +703,10 @@ impl Governor {
         {
             return;
         }
-        let pinned = self.target_bps <= self.cfg.floor_bps;
-        let recovered = f64::from(self.target_bps)
-            >= f64::from(self.cfg.ceiling.bitrate_bps) * LADDER_RECOVER_SHARE;
+        let ceiling_bps = self.ceiling().bitrate_bps;
+        let pinned = self.target_bps <= self.cfg.floor_bps.min(ceiling_bps);
+        let recovered =
+            f64::from(self.target_bps) >= f64::from(ceiling_bps) * LADDER_RECOVER_SHARE;
         let down = if degraded && pinned && self.rung + 1 < self.rungs.len() {
             true
         } else if !degraded
@@ -611,7 +738,11 @@ impl Governor {
     fn scale(&self, factor: f64) -> u32 {
         let scaled = (f64::from(self.target_bps) * factor).round();
         let scaled = scaled.clamp(0.0, f64::from(u32::MAX)) as u32;
-        scaled.clamp(self.cfg.floor_bps, self.cfg.ceiling.bitrate_bps)
+        // The ceiling in force can sit below the configured floor — a relayed
+        // path or a thin uplink share does that — and the cap wins, or the
+        // degradation would be floored away.
+        let ceiling_bps = self.ceiling().bitrate_bps;
+        scaled.clamp(self.cfg.floor_bps.min(ceiling_bps), ceiling_bps)
     }
 
     fn on_delay_sample(
@@ -655,6 +786,137 @@ impl Governor {
             .rev()
             .find(|&&(id, _)| id == frame_id)
             .map(|&(_, send_us)| send_us)
+    }
+}
+
+/// The least a viewer is worth serving at, and the same number a single
+/// governor will not descend below: below it the picture is not a degraded
+/// session, it is a disconnect the viewer cannot see.
+pub const UPLINK_VIEWER_FLOOR_BPS: u32 = MIN_FLOOR_BPS;
+
+/// One viewer's claim on the shared uplink.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UplinkClaim {
+    pub viewer_id: String,
+    /// True for a controller. From the verified JWT, never from the viewer.
+    pub ctl: bool,
+    /// What this viewer would spend alone — its ceiling in force,
+    /// [`Governor::ceiling`]. Never its current target: a target that has
+    /// already been cut is a viewer asking for its own cut back.
+    pub demand_bps: u32,
+}
+
+/// What one viewer was given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UplinkShare {
+    pub viewer_id: String,
+    pub bps: u32,
+    /// The estimate could not even pay this viewer's floor. Never a controller
+    /// while a floor is left, and an honest `0` rather than a share too small
+    /// to carry a picture.
+    pub starved: bool,
+}
+
+/// One estimate of the machine's uplink, split across every viewer on it.
+///
+/// Not a measurement and not a controller — see the module head. It is the
+/// arithmetic that stops N per-viewer governors from each treating one
+/// bottleneck as their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UplinkBudget {
+    estimate_bps: u32,
+    floor_bps: u32,
+}
+
+impl UplinkBudget {
+    pub fn new(estimate_bps: u32) -> Self {
+        Self {
+            estimate_bps,
+            floor_bps: UPLINK_VIEWER_FLOOR_BPS,
+        }
+    }
+
+    /// Split the estimate: a floor for every viewer it can pay for, then the
+    /// remainder proportional to what each still wants — **controllers first,
+    /// to their whole demand, before a watcher sees any of it.**
+    ///
+    /// The sum of the shares is never more than the estimate. That is the one
+    /// property the whole module turns on: a budget that over-allocates is N
+    /// controllers probing one bottleneck again, with an extra step.
+    pub fn allocate(&self, claims: &[UplinkClaim]) -> Vec<UplinkShare> {
+        let mut given: Vec<u32> = vec![0; claims.len()];
+        let mut starved: Vec<bool> = vec![false; claims.len()];
+        let mut left = self.estimate_bps;
+
+        // Controllers floor first, so a roomful of watchers cannot spend the
+        // estimate before the person driving the machine is served.
+        let order: Vec<usize> = Self::by_role(claims);
+        for at in order.iter().copied() {
+            if left >= self.floor_bps {
+                given[at] = self.floor_bps;
+                left -= self.floor_bps;
+            } else {
+                starved[at] = true;
+            }
+        }
+
+        // Then the remainder, controllers to exhaustion before watchers.
+        for ctl in [true, false] {
+            let group: Vec<usize> = order
+                .iter()
+                .copied()
+                .filter(|at| claims[*at].ctl == ctl && !starved[*at])
+                .collect();
+            Self::spread(&mut left, &group, claims, &mut given);
+        }
+
+        claims
+            .iter()
+            .enumerate()
+            .map(|(at, claim)| UplinkShare {
+                viewer_id: claim.viewer_id.clone(),
+                bps: given[at],
+                starved: starved[at],
+            })
+            .collect()
+    }
+
+    /// Claim indices, controllers first and each group in the roster's own
+    /// order, so the same roster always splits the same way.
+    fn by_role(claims: &[UplinkClaim]) -> Vec<usize> {
+        let controllers = claims.iter().enumerate().filter(|(_, c)| c.ctl);
+        let watchers = claims.iter().enumerate().filter(|(_, c)| !c.ctl);
+        controllers.chain(watchers).map(|(at, _)| at).collect()
+    }
+
+    /// Proportional-fair over what this group still wants above its floor. A
+    /// group that wants less than is left takes only what it wants and hands
+    /// the rest on; one that wants more splits what there is by share of want,
+    /// which is the fair part.
+    fn spread(left: &mut u32, group: &[usize], claims: &[UplinkClaim], given: &mut [u32]) {
+        let want: Vec<u64> = group
+            .iter()
+            .map(|at| u64::from(claims[*at].demand_bps.saturating_sub(given[*at])))
+            .collect();
+        let total: u64 = want.iter().sum();
+        if total == 0 || *left == 0 {
+            return;
+        }
+        if u64::from(*left) >= total {
+            for (at, want) in group.iter().zip(&want) {
+                given[*at] += *want as u32;
+            }
+            *left -= total as u32;
+            return;
+        }
+        // Integer division only ever rounds down, so the shares cannot sum past
+        // what was left — the few bps of rounding stay unallocated on purpose.
+        let pot = u64::from(*left);
+        for (at, want) in group.iter().zip(&want) {
+            let share = (pot * *want / total) as u32;
+            given[*at] += share;
+            *left -= share;
+        }
     }
 }
 
@@ -1130,6 +1392,202 @@ mod tests {
         }
         assert_eq!(f.governor.stats().ladder_down, 0);
         assert!(f.governor.stats().cuts > 0, "the rate still answered");
+    }
+
+    // -------------------------------------------------- the path budget ---
+
+    /// The trap `budget.rs` names: `Ceiling::from_quality` floors at 5 Mbps, so
+    /// a degraded cap written *into* the stored ceiling would be floored back
+    /// up the next time the viewer touched the quality menu. Stored raw and
+    /// clamped on read, no order of calls can lose it.
+    #[test]
+    fn the_governor_applies_the_path_clamp_after_the_menus_own_floor() {
+        let asked = Ceiling::from_quality("native", 50_000, 60);
+        let mut governor = Governor::new(GovernorConfig::for_ceiling(asked));
+        governor.set_path_profile(PathProfile::RelayTls);
+        assert_eq!(governor.ceiling().bitrate_bps, 6_000_000);
+        assert_eq!(governor.ceiling().fps, 30, "and the fps cap with it");
+        assert_eq!(governor.target_bps(), 6_000_000, "the target came down at once");
+
+        // The viewer works the quality menu again, twice, in both directions.
+        for kbps in [30_000, 5_000, 50_000] {
+            governor.set_ceiling(Ceiling::from_quality("native", kbps, 60));
+            assert!(
+                governor.ceiling().bitrate_bps <= 6_000_000,
+                "{kbps} kbps asked, and the tls cap still holds"
+            );
+            assert!(governor.ceiling().fps <= 30);
+            assert!(governor.target_bps() <= 6_000_000);
+        }
+        assert_eq!(
+            governor.requested_ceiling().bitrate_bps,
+            50_000_000,
+            "what the viewer asked for is kept whole underneath"
+        );
+        // The configured floor (50 Mbps / 8) sits *above* the degraded cap, and
+        // the cap is the one that wins.
+        assert!(GovernorConfig::for_ceiling(asked).floor_bps > 6_000_000);
+        assert!(governor.target_bps() <= governor.ceiling().bitrate_bps);
+    }
+
+    #[test]
+    fn a_relayed_path_caps_the_ladder_as_well_as_the_rate() {
+        let mut f = Fixture::new();
+        assert_eq!(f.governor.rung(), TOP);
+        f.governor.set_path_profile(PathProfile::RelayTls);
+        let change = f.governor.take_ladder().expect("the top rung moved");
+        assert_eq!(change.previous, TOP);
+        assert_eq!(
+            change.rung,
+            QualityRung {
+                fps: 30,
+                resolution: ResolutionCap::Native
+            },
+            "a 30 fps cap has no 60 fps rung to descend from"
+        );
+        assert_eq!(f.governor.stats().rung_index, 0);
+    }
+
+    /// An ICE restart or the one relay→direct promotion moves the profile under
+    /// a live session, and the rate has to move with it — in both directions,
+    /// with no `quality` message to prompt it.
+    #[test]
+    fn a_path_that_changes_mid_session_re_derives_rather_than_accumulates() {
+        let mut f = Fixture::new();
+        f.governor.set_path_profile(PathProfile::RelayTls);
+        assert_eq!(f.governor.target_bps(), 6_000_000);
+        f.governor.set_path_profile(PathProfile::RelayUdp);
+        assert_eq!(f.governor.ceiling().bitrate_bps, 20_000_000, "20 is under the 25 cap");
+        f.governor.set_path_profile(PathProfile::Direct);
+        assert_eq!(f.governor.ceiling(), Ceiling::default());
+        assert_eq!(f.governor.path_profile(), Some(PathProfile::Direct));
+        // and re-reporting the same pair is not a ladder restart.
+        f.governor.take_ladder();
+        f.governor.set_path_profile(PathProfile::Direct);
+        assert_eq!(f.governor.take_ladder(), None);
+    }
+
+    // ------------------------------------------- the shared host uplink ---
+
+    fn claim(viewer_id: &str, ctl: bool, demand_bps: u32) -> UplinkClaim {
+        UplinkClaim {
+            viewer_id: viewer_id.to_owned(),
+            ctl,
+            demand_bps,
+        }
+    }
+
+    #[test]
+    fn the_shared_budget_never_allocates_more_than_the_estimate() {
+        let rosters: [Vec<UplinkClaim>; 4] = [
+            vec![claim("a", true, 50_000_000)],
+            vec![claim("a", true, 50_000_000), claim("b", false, 50_000_000)],
+            vec![
+                claim("a", true, 20_000_000),
+                claim("b", false, 5_000_000),
+                claim("c", false, 20_000_000),
+            ],
+            // Eight viewers on a 2 Mbps uplink: most of them cannot be floored.
+            (0..8)
+                .map(|i| claim(&format!("v{i}"), i == 0, 20_000_000))
+                .collect(),
+        ];
+        for estimate in [0, 500_000, 2_000_000, 10_000_000, 200_000_000] {
+            let budget = UplinkBudget::new(estimate);
+            for roster in &rosters {
+                let shares = budget.allocate(roster);
+                let total: u64 = shares.iter().map(|s| u64::from(s.bps)).sum();
+                assert!(
+                    total <= u64::from(estimate),
+                    "{} viewers allocated {total} of {estimate}",
+                    roster.len()
+                );
+                assert_eq!(shares.len(), roster.len(), "everyone gets an answer");
+                for (share, claim) in shares.iter().zip(roster) {
+                    assert_eq!(share.viewer_id, claim.viewer_id, "in the roster's order");
+                    assert!(share.bps <= claim.demand_bps, "nobody is given more than it wants");
+                    assert_eq!(share.starved, share.bps == 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_watcher_never_starves_a_controller() {
+        // A DSL uplink and four viewers: the floors alone are most of it.
+        let budget = UplinkBudget::new(1_200_000);
+        let roster = [
+            claim("w1", false, 20_000_000),
+            claim("w2", false, 20_000_000),
+            claim("w3", false, 20_000_000),
+            claim("ctl", true, 20_000_000),
+        ];
+        let shares = budget.allocate(&roster);
+        let controller = shares.iter().find(|s| s.viewer_id == "ctl").expect("served");
+        assert!(!controller.starved, "the person driving is floored first");
+        assert_eq!(controller.bps, 700_000, "its floor plus the whole remainder");
+        for watcher in shares.iter().filter(|s| s.viewer_id != "ctl") {
+            assert!(
+                watcher.bps < controller.bps,
+                "{} took a share of the controller's rate",
+                watcher.viewer_id
+            );
+        }
+        assert_eq!(
+            shares.iter().filter(|s| s.starved).count(),
+            2,
+            "the estimate floors two of the four, and says so about the rest"
+        );
+        // The roster's order cannot change who is served: the controller is
+        // last here and still first.
+        assert_eq!(shares.iter().map(|s| s.bps).collect::<Vec<_>>(), vec![
+            500_000, 0, 0, 700_000
+        ]);
+    }
+
+    #[test]
+    fn the_remainder_is_proportional_to_what_each_viewer_still_wants() {
+        let budget = UplinkBudget::new(20_000_000);
+        // Two controllers, so the split inside the group is the fair part.
+        let shares = budget.allocate(&[
+            claim("a", true, 30_000_000),
+            claim("b", true, 10_000_000),
+            claim("c", false, 20_000_000),
+        ]);
+        // 1.5 Mbps of floors, 18.5 left; a wants 29.5 and b 9.5 of it, so the
+        // controllers take it all in a 29.5:9.5 ratio and the watcher keeps its
+        // floor alone.
+        assert_eq!(shares[0].bps, 500_000 + 13_993_589);
+        assert_eq!(shares[1].bps, 500_000 + 4_506_410);
+        assert_eq!(
+            shares[2].bps, 500_001,
+            "its floor, and the one bps the controllers' rounding left behind"
+        );
+        let total: u64 = shares.iter().map(|s| u64::from(s.bps)).sum();
+        assert!(total <= 20_000_000);
+    }
+
+    #[test]
+    fn a_share_smaller_than_the_viewers_own_ceiling_is_the_one_that_binds() {
+        let mut f = Fixture::new();
+        f.governor.set_uplink_share(4_000_000);
+        assert_eq!(f.governor.ceiling().bitrate_bps, 4_000_000);
+        assert_eq!(f.governor.target_bps(), 4_000_000, "at once, not next report");
+        assert_eq!(f.governor.uplink_share_bps(), Some(4_000_000));
+        // It never raises: a viewer allocated more than its ceiling still has
+        // its ceiling.
+        f.governor.set_uplink_share(200_000_000);
+        assert_eq!(f.governor.ceiling(), Ceiling::default());
+        // And a share below the configured floor wins over the floor, or the
+        // shared budget would be allocating bits the viewer then ignores.
+        f.governor.set_uplink_share(600_000);
+        assert_eq!(f.governor.target_bps(), 600_000);
+        assert!(f.governor.cfg.floor_bps > 600_000);
+        f.now += HOLD;
+        for _ in 0..20 {
+            f.report(GOOD);
+        }
+        assert_eq!(f.governor.target_bps(), 600_000, "and the climb stops there");
     }
 
     #[test]

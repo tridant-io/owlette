@@ -1,7 +1,7 @@
 /**
- * Stub-command coverage. `machine live-view` is the CLI's last deferred stub
- * (out of MVP until remote desktop ships as swoop); every other verb is
- * now a real http handler covered by its own `*-http.test.ts`.
+ * Stub-command coverage. `machine live-view` is the CLI's last deferred stub;
+ * remote desktop ships as `owlette swoop`, which the stub points at. Every
+ * other verb is a real http handler covered by its own `*-http.test.ts`.
  *
  * Asserts exit code 3, human-mode stderr carrying the dashboard url +
  * future-plan path + verb name, and the `--json` envelope
@@ -31,6 +31,8 @@ interface StubFixture {
   dashboardPath: string;
   /** Substring that the future-plan field must contain. */
   futurePlanSubstr: string;
+  /** Substring that the reason must contain — the verb that replaced the stub. */
+  reasonSubstr: string;
 }
 
 const FIXTURES: StubFixture[] = [
@@ -40,6 +42,7 @@ const FIXTURES: StubFixture[] = [
     argv: ['machine', 'live-view', 'm-1', '--site', 'site-1'],
     dashboardPath: '/dashboard',
     futurePlanSubstr: 'public-api deferred: swoop',
+    reasonSubstr: 'owlette swoop <machineId> --site <siteId>',
   },
 ];
 
@@ -106,6 +109,7 @@ describe.each(FIXTURES)('owlette $noun $verb (stub)', (fix) => {
     expect(err).toContain(`\`${fix.noun} ${fix.verb}\``);
     expect(err).toContain(`${API_URL}${fix.dashboardPath}`);
     expect(err).toContain(fix.futurePlanSubstr);
+    expect(err).toContain(fix.reasonSubstr);
     expect(err).toContain('is a stub');
   });
 
@@ -137,6 +141,7 @@ describe.each(FIXTURES)('owlette $noun $verb (stub)', (fix) => {
     expect(typeof parsed.future_plan).toBe('string');
     expect(parsed.future_plan as string).toContain(fix.futurePlanSubstr);
     expect(typeof parsed.reason).toBe('string');
+    expect(parsed.reason as string).toContain(fix.reasonSubstr);
     // snake_case is load-bearing per command-surface.md; guard the flip to camelCase
     expect(parsed.dashboardUrl).toBeUndefined();
     expect(parsed.futurePlan).toBeUndefined();
