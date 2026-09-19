@@ -43,6 +43,12 @@
 //! a receiver that lost a frame asks once per record until an irap arrives.
 //! Reference invalidation stays out of v1.
 //!
+//! The browser's pli is not the only trigger. A frame the send pacer refuses
+//! ([`crate::transport::pacer`]) never reaches the decoder either, and the hole
+//! it leaves in the reference chain is the same hole a lost packet leaves — so
+//! a refusal asks for a keyframe through the same [`IdrPolicy`], which is what
+//! keeps a storm of refusals to one keyframe per window.
+//!
 //! The floor is the opposite problem: a still desktop produces no frames at all
 //! (`DXGI_ERROR_WAIT_TIMEOUT`, and a genuinely idle output measured 0.28
 //! frames/s) and a hardware decoder handed nothing stalls, so [`FloorTimer`]
@@ -2048,7 +2054,14 @@ mod host {
                     ::log::warn!("swoop: refused a channel labelled {label}")
                 }
                 PeerEvent::FrameDropped { frame_id, bytes } => {
-                    ::log::debug!("swoop: pacer refused frame {frame_id} ({bytes} bytes)")
+                    // A delta the pacer refused is a hole in the reference
+                    // chain, not one missing picture: every frame after it
+                    // decodes against something the viewer never had, and
+                    // nothing else in the loop notices. Same coalescing as a
+                    // browser's pli, so a drop storm costs one keyframe per
+                    // window rather than one per drop.
+                    ::log::debug!("swoop: pacer refused frame {frame_id} ({bytes} bytes)");
+                    self.request_idr();
                 }
                 PeerEvent::ChannelWriteRefused {
                     channel,
@@ -3623,6 +3636,29 @@ mod tests {
         assert!(!idr.request(start + IDR_COOLDOWN + Duration::from_millis(1)));
         idr.answered();
         assert!(idr.request(start + IDR_COOLDOWN + Duration::from_millis(2)));
+    }
+
+    /// The pacer's own refusals go through the same policy, and it refuses at
+    /// the frame rate — so this is the case that decides whether a congested
+    /// link recovers or spends itself on keyframes. The keyframe is exempt from
+    /// the pacer, so each one does reach the wire and clears the sticky wait.
+    #[test]
+    fn a_storm_of_dropped_frames_costs_one_keyframe_per_window() {
+        let mut idr = IdrPolicy::new();
+        let start = Instant::now();
+        let forced_at: Vec<u32> = (0..60u32)
+            .filter(|i| {
+                let asked = idr.request(start + Duration::from_micros(u64::from(*i) * 16_667));
+                if asked {
+                    idr.answered();
+                }
+                asked
+            })
+            .collect();
+        // One second of 60 fps with every frame refused: the first drop, then
+        // the 250 ms window, then the 500 ms one it backs off to.
+        assert_eq!(forced_at, vec![0, 15, 45]);
+        assert_eq!(idr.forced(), 3);
     }
 
     /// Exponential, capped at the top of PROTOCOL.md §4's range, and reset by a

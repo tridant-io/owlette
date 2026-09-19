@@ -73,6 +73,23 @@
 //! bitrate means the 128 KiB `MAX_BUFFERED_ACROSS_STREAMS` ceiling is being
 //! reached by the metadata channel alone, which is a protocol-side problem
 //! rather than a tuning one.
+//!
+//! # Answering a real browser (manual, `#[ignore]`d)
+//!
+//! ```text
+//! cd agent/swoop
+//! SWOOP_OFFER_SDP=offer.sdp SWOOP_ANSWER_SDP=answer.sdp \
+//!   cargo test --lib transport::rtc::tests::answers_an_offer_from_a_file -- --ignored
+//! ```
+//!
+//! Answers one offer captured from a browser, writes the SDP back out for the
+//! same browser to apply, and then runs ICE, DTLS and SCTP against it until the
+//! five channels of §3 are open. It is the only check that puts our answer in
+//! front of a real SDP parser, and it is what [`restore_rejected_formats`] was
+//! written against: str0m's own parser accepts an m-line Chrome throws the
+//! whole description away for. Vanilla ICE, so the offer has to carry its
+//! candidates inline and Chrome's mDNS obfuscation has to be off
+//! (`--disable-features=WebRtcHideLocalIpsWithMdns`).
 
 use std::collections::VecDeque;
 use std::net::{SocketAddr, UdpSocket};
@@ -541,7 +558,7 @@ impl RtcPeer {
             .map_err(|e| anyhow!("accept_offer: {e}"))?
             .to_sdp_string();
         self.stats.negotiations += 1;
-        Ok(answer)
+        Ok(restore_rejected_formats(&answer, offer))
     }
 
     /// Add one local candidate and queue it for trickling. The host candidate
@@ -936,6 +953,72 @@ impl VideoSink for RtcPeer {
     }
 }
 
+/// What a rejected m-line carries when the offer itself named no format —
+/// itself invalid SDP, so this only keeps the answer parseable rather than
+/// passing the offerer's mistake back to it. Payload type 0 is static and
+/// always defined.
+const REJECTED_FORMAT_FALLBACK: &str = "0";
+
+/// The format list of one `m=` line: everything after
+/// `m=<media> <port> <proto>`.
+fn media_formats(m_line: &str) -> &str {
+    m_line.splitn(4, ' ').nth(3).unwrap_or("").trim()
+}
+
+/// Put the offer's format list back on any answer m-line that has none.
+///
+/// **This is a workaround for str0m 0.23.1, not a decision of ours.** RFC 4566's
+/// `media-field` is `m=<media> <port> <proto> 1*(SP fmt)` — at least one format,
+/// on a rejected `port 0` m-line exactly as on a live one. str0m's writer
+/// (`impl fmt::Display for MediaLine`, `src/sdp/data.rs`) writes
+/// `m=<typ> <port> <proto> ` and then one token per payload type that survived
+/// negotiation; those come from
+/// `Media::as_media_line` (`src/change/sdp.rs`), which intersects the local
+/// codec config with the offer's payload types. When the intersection is empty
+/// the loop writes nothing and the line ends at that trailing space. str0m
+/// knows the rule — the `stopped` field on `Media` carries the comment "the SDP
+/// grammar requires at least one fmt on a port=0 m-line" — but only honours it
+/// for an explicitly stopped m-line, not for the "no codecs matched" one.
+///
+/// A default-feature build has no Opus, the browser offers `audio` recvonly
+/// unconditionally, so **every** default build emitted
+/// `m=audio 0 UDP/TLS/RTP/SAVPF ` and Chrome discarded the whole answer with
+/// "Failed to parse SessionDescription … Invalid value: .".
+///
+/// RFC 3264 §6 makes the repair free: a rejected m-line's formats are ignored,
+/// and the answer has the same m-lines in the same order as the offer, so the
+/// offer's own list goes straight back on.
+fn restore_rejected_formats(answer: &str, offer: &str) -> String {
+    let mut offered = offer
+        .lines()
+        .filter(|l| l.starts_with("m="))
+        .map(media_formats);
+    let mut out = String::with_capacity(answer.len());
+    for line in answer.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\r', '\n']);
+        if !body.starts_with("m=") {
+            out.push_str(line);
+            continue;
+        }
+        // Advanced for every m-line and not only the broken ones: it is the
+        // offer's line at the same index that this one answers.
+        let formats = offered.next().unwrap_or("");
+        if !media_formats(body).is_empty() {
+            out.push_str(line);
+            continue;
+        }
+        out.push_str(body.trim_end());
+        out.push(' ');
+        out.push_str(if formats.is_empty() {
+            REJECTED_FORMAT_FALLBACK
+        } else {
+            formats
+        });
+        out.push_str(&line[body.len()..]);
+    }
+    out
+}
+
 /// The five labels of PROTOCOL §3. Spelled here rather than derived from
 /// serde so the transport does not have to serialize an enum to write a
 /// header; the test below pins the two spellings together.
@@ -1072,6 +1155,118 @@ mod tests {
         }
     }
 
+    /// The regression that cost a live session: a default build answered the
+    /// browser's `audio` m-line with `m=audio 0 UDP/TLS/RTP/SAVPF ` and nothing
+    /// after it, and Chrome threw the whole answer away.
+    ///
+    /// The offer is built with str0m rather than pasted from a browser because
+    /// what makes the m-line rejectable is the *host* having no Opus, not
+    /// anything Chrome spells unusually — and a synthetic offer is one the
+    /// assertions can name payload types from.
+    #[test]
+    fn the_answer_never_carries_an_m_line_with_no_format() {
+        use str0m::media::{Direction, MediaKind};
+
+        let mut host = RtcPeer::bind(PeerConfig {
+            bind_addr: "127.0.0.1:0".parse().expect("a literal address"),
+            codec: Codec::H264,
+            fps: 60,
+            bitrate_bps: 20_000_000,
+            qpc_hz: 10_000_000,
+            enable_bwe: false,
+        })
+        .expect("bind host");
+
+        // The viewer's shape from `web/lib/swoop/peer.ts` `start()`: both
+        // tracks recvonly, audio offered unconditionally.
+        let mut viewer = RtcConfig::new()
+            .clear_codecs()
+            .enable_h264(true)
+            .enable_opus(true)
+            .build(Instant::now());
+        let mut api = viewer.sdp_api();
+        api.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
+        api.add_media(MediaKind::Audio, Direction::RecvOnly, None, None, None);
+        api.add_channel("swoop-meta".to_string());
+        let (offer, _pending) = api.apply().expect("the offer has changes");
+        let offer = offer.to_sdp_string();
+
+        let answer = host.accept_offer(&offer).expect("the host answers");
+
+        for line in answer.lines().filter(|l| l.starts_with("m=")) {
+            assert!(
+                !media_formats(line).is_empty(),
+                "rfc 4566 media-field is 1*(SP fmt), rejected or not: {line:?}"
+            );
+        }
+
+        let audio = answer
+            .lines()
+            .find(|l| l.starts_with("m=audio"))
+            .expect("the answer mirrors the offer's m-lines");
+        #[cfg(not(feature = "audio-opus"))]
+        {
+            let offered = offer
+                .lines()
+                .find(|l| l.starts_with("m=audio"))
+                .map(media_formats)
+                .expect("the offer has an audio m-line");
+            assert!(
+                audio.starts_with("m=audio 0 "),
+                "no opus to answer with, so the m-line is rejected: {audio:?}"
+            );
+            assert_eq!(
+                media_formats(audio),
+                offered,
+                "rfc 3264: the offer's format list comes back on the rejected line"
+            );
+        }
+        #[cfg(feature = "audio-opus")]
+        assert!(
+            audio.starts_with("m=audio 9 "),
+            "with opus the m-line is live and untouched: {audio:?}"
+        );
+    }
+
+    #[test]
+    fn only_a_formatless_m_line_is_repaired_and_the_lines_stay_in_step() {
+        // The first line is the literal str0m 0.23.1 writes — trailing space,
+        // no payload type. When an upgrade stops writing it this repair goes
+        // quiet on its own; it never starts rewriting a well-formed line.
+        let offer = "v=0\r\n\
+                     m=video 9 UDP/TLS/RTP/SAVPF 96 97\r\n\
+                     a=mid:0\r\n\
+                     m=audio 9 UDP/TLS/RTP/SAVPF 111 63\r\n\
+                     m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+        let answer = "v=0\r\n\
+                      m=video 9 UDP/TLS/RTP/SAVPF 96\r\n\
+                      a=mid:0\r\n\
+                      m=audio 0 UDP/TLS/RTP/SAVPF \r\n\
+                      m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+        assert_eq!(
+            restore_rejected_formats(answer, offer),
+            "v=0\r\n\
+             m=video 9 UDP/TLS/RTP/SAVPF 96\r\n\
+             a=mid:0\r\n\
+             m=audio 0 UDP/TLS/RTP/SAVPF 111 63\r\n\
+             m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n"
+        );
+
+        // Nothing to repair is the same bytes back, crlf and all.
+        let good = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n";
+        assert_eq!(restore_rejected_formats(good, offer), good);
+
+        // An offer that named no format either is itself invalid sdp; the
+        // answer still leaves here parseable.
+        assert_eq!(
+            restore_rejected_formats(
+                "m=audio 0 UDP/TLS/RTP/SAVPF \r\n",
+                "m=audio 9 UDP/TLS/RTP/SAVPF \r\n"
+            ),
+            format!("m=audio 0 UDP/TLS/RTP/SAVPF {REJECTED_FORMAT_FALLBACK}\r\n")
+        );
+    }
+
     #[test]
     fn a_refused_write_is_counted_retried_and_never_lost() {
         let mut queue = OutQueue::default();
@@ -1149,6 +1344,59 @@ mod tests {
             queue.queued.back().map(|i| i.channel),
             Some(Channel::SwoopMeta)
         );
+    }
+
+    /// Answer one offer captured from a real browser and then connect to it,
+    /// for the round-trip the module doc describes. Both paths come from the
+    /// environment so the harness driving the browser owns the files.
+    #[test]
+    #[ignore]
+    fn answers_an_offer_from_a_file() {
+        let offer_path = std::env::var("SWOOP_OFFER_SDP").expect("SWOOP_OFFER_SDP");
+        let answer_path = std::env::var("SWOOP_ANSWER_SDP").expect("SWOOP_ANSWER_SDP");
+        let offer = std::fs::read_to_string(&offer_path).expect("read the offer");
+        // The address the product binds (`session::local_bind_addr`): the
+        // interface that would reach the internet. A loopback socket cannot
+        // answer a browser candidate gathered on a real one.
+        let route = UdpSocket::bind("0.0.0.0:0")
+            .and_then(|s| {
+                s.connect("1.1.1.1:53")?;
+                s.local_addr()
+            })
+            .expect("a route to the internet");
+        let mut peer = RtcPeer::bind(PeerConfig {
+            bind_addr: SocketAddr::new(route.ip(), 0),
+            codec: Codec::H264,
+            fps: 60,
+            bitrate_bps: 20_000_000,
+            qpc_hz: 10_000_000,
+            enable_bwe: false,
+        })
+        .expect("bind");
+        let answer = peer.accept_offer(&offer).expect("the host answers");
+        std::fs::write(&answer_path, &answer).expect("write the answer");
+
+        // The browser applies it, ICE and DTLS run, and the five channels of §3
+        // open — which is the whole of "a session connected", and what a
+        // discarded answer stopped at `connecting`.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut ev = events();
+        let mut opened = Vec::new();
+        while Instant::now() < deadline && opened.len() < 5 {
+            peer.poll(Instant::now(), Duration::from_millis(5), &mut ev)
+                .expect("poll");
+            for event in ev.drain(..) {
+                if let PeerEvent::ChannelOpen(channel) = event {
+                    opened.push(channel);
+                }
+            }
+        }
+        assert_eq!(
+            peer.state(),
+            PeerState::Connected,
+            "the browser never completed ice + dtls"
+        );
+        assert_eq!(opened.len(), 5, "channels opened: {opened:?}");
     }
 
     /// Binds a udp socket on loopback.

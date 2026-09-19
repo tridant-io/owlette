@@ -9,7 +9,7 @@
 //!
 //! Every setting below was validated on real hardware by spike 0.9 (RTX 2080
 //! Ti, driver 591.86, NVENC header 12.1, Chrome 153) — see
-//! `dev/active/swoop/spikes/0.9-nvenc-config.md`. The four that are easy to get
+//! `dev/active/swoop/spikes/0.9-nvenc-config.md`. The five that are easy to get
 //! wrong:
 //!
 //! * `h264VUIParameters.bitstreamRestrictionFlag = 1` is **mandatory**. Without
@@ -29,6 +29,22 @@
 //! * `enableEncodeAsync = 1` is a threading property, not a latency one (async
 //!   8.43/8.46/8.25 ms vs sync 8.33/8.29/8.33 ms, n=600 each). It is kept so
 //!   the encode thread waits on a handle instead of blocking inside the API.
+//! * `lowDelayKeyFrameScale = KEYFRAME_VBV_SCALE`, **not** the 1 the spike
+//!   recommended, which is the one setting here that shipped wrong. The
+//!   one-frame VBV is a *delta-frame* decision and it stays one frame; at scale
+//!   1 it capped the IDR too, so at 20 Mbps a 1080p keyframe got the same 41 KB
+//!   a P frame gets, came back crushed, and — a desktop being mostly still —
+//!   nothing ever redrew the regions that carried it. Measured on the spike 0.9
+//!   box at 1080p on screen-like content, scale 1 → 4: the session's first
+//!   keyframe 40.9 KB → 312.3 KB (H.264) and 40.5 KB → 285.1 KB (HEVC), a
+//!   recovery keyframe 41.1 KB → 234.7 KB and 40.0 KB → 205.4 KB. The deltas
+//!   pay 1.6–3.3 % of their bits for it and the keyframe pays +1.1 ms (H.264) /
+//!   +0.2 ms (HEVC) of its own encode; the delta p50 does not move, and neither
+//!   does the VBV, so the steady-state latency D7 bought is untouched. Two
+//!   limits worth knowing: keyframes closer together than about a second are
+//!   back to one frame's budget (the rate controller will not spend 1.5 Mbps on
+//!   keyframes alone), and below ~6 Mbps the scale buys progressively less
+//!   until, at 800 kbps, it changes nothing at all.
 //!
 //! Budget **8–12 ms p50** for encode (8.3 ms at 1080p60, 12.1 ms at 4K60 HEVC,
 //! ±2 ms with whatever else holds the GPU) — not the 1–3 ms in
@@ -60,14 +76,17 @@
 //!   accepts_bgra_texture: true, max_fps: 15, concurrent_sessions: 8 }
 //! nvenc gpu test: 120 frames, 1 irap, max 1 vcl nal per access unit, sps avc1.64002a
 //!   bitstream_restriction_flag=true max_num_reorder_frames=Some(0) max_dec_frame_buffering=Some(4)
+//!   keyframe 312314 B, mean delta 36399 B at 20 mbps
 //! ```
 //!
 //! `max_dec_frame_buffering` is 4 on purpose (see above), and `max_fps` is 15
 //! because it is the rate at that codec's *largest* size (4096×4096), not at a
 //! streaming size. The one IRAP is the first picture: the bitrate moves at
-//! frame 60 and costs no keyframe. On a machine with no NVIDIA driver both
-//! tests fail at `probe_device`, which is the honest result — they are not
-//! skipped.
+//! frame 60 and costs no keyframe. The keyframe line is the guard on
+//! `KEYFRAME_VBV_SCALE`: at the 1 that shipped it reads `keyframe 40903 B,
+//! mean delta 38204 B` and the test fails, which is the whole defect in one
+//! line. On a machine with no NVIDIA driver both tests fail at `probe_device`,
+//! which is the honest result — they are not skipped.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -128,6 +147,19 @@ const MAX_PROBE_SESSIONS: u32 = 8;
 /// Wait for one picture. Reached only if the GPU has stopped answering, in
 /// which case a hung encode thread is worse than a failed session.
 const ENCODE_WAIT_MS: u32 = 20_000;
+
+/// How many frames' worth of bits an IDR may spend, against the one-frame VBV
+/// every other picture is held to. `lowDelayKeyFrameScale` is NVENC's field for
+/// exactly this case — the SDK defines it as the ratio of I-frame to P-frame
+/// bits under a single-frame VBV and CBR — so the delta pacing D7 chose is
+/// untouched and only the keyframe is let out of it.
+///
+/// 4 because it is the largest value that behaves on **both** codecs at every
+/// keyframe spacing the session's idr policy can produce. Measured: 8 alternates
+/// a full keyframe with a starved one once requests come a second apart, and
+/// anything from 16 up is ignored by the driver, which silently encodes as if
+/// this were 1 — the defect this constant exists to fix.
+const KEYFRAME_VBV_SCALE: u8 = 4;
 
 /// DXGI's `DXGI_ERROR_INVALID_CALL`, which is how a machine that already has an
 /// encode session open reports it through the D3D11 device (plan.md Task 3.7).
@@ -837,8 +869,9 @@ impl Drop for Session {
     }
 }
 
-/// CBR with a one-frame VBV, no lookahead, no adaptive quantisation, and
-/// `zeroReorderDelay` so the encoder never holds output back.
+/// CBR with a one-frame VBV for deltas and [`KEYFRAME_VBV_SCALE`] frames for an
+/// IDR, no lookahead, no adaptive quantisation, and `zeroReorderDelay` so the
+/// encoder never holds output back.
 fn apply_rate_control(config: &mut NV_ENC_CONFIG, cfg: &EncoderConfig) {
     let rc = &mut config.rcParams;
     rc.rateControlMode = NV_ENC_PARAMS_RC_MODE::NV_ENC_PARAMS_RC_CBR;
@@ -852,7 +885,9 @@ fn apply_rate_control(config: &mut NV_ENC_CONFIG, cfg: &EncoderConfig) {
     // 1.7 ms p50, and the only setting that hits the requested bitrate:
     // single-pass undershoots by 30 % (spike 0.9 §6b).
     rc.multiPass = NV_ENC_MULTI_PASS::NV_ENC_TWO_PASS_QUARTER_RESOLUTION;
-    rc.lowDelayKeyFrameScale = 1;
+    // The line above paces deltas; this one is what stops it starving the
+    // keyframe they all reference. See the module doc.
+    rc.lowDelayKeyFrameScale = KEYFRAME_VBV_SCALE;
     rc.lookaheadDepth = 0;
     rc.set_enableLookahead(0);
     rc.set_zeroReorderDelay(1);
@@ -1254,14 +1289,20 @@ mod tests {
     }
 
     #[test]
-    fn one_frame_vbv_tracks_the_bitrate() {
+    fn one_frame_of_vbv_paces_the_deltas_and_the_keyframe_is_let_out_of_it() {
         let mut config = blank_config();
         apply_rate_control(&mut config, &base());
+        // The delta budget, which is D7's decision and does not move: one
+        // frame, 41.7 KB at the default 20 Mbps.
         assert_eq!(config.rcParams.vbvBufferSize, 20_000_000 / 60);
         assert_eq!(
             config.rcParams.vbvInitialDelay,
             config.rcParams.vbvBufferSize
         );
+        // And the one picture that is not held to it. At 1 — what shipped — a
+        // keyframe got a P frame's bits and a still desktop kept the crushed
+        // result for as long as nothing redrew it.
+        assert_eq!(config.rcParams.lowDelayKeyFrameScale, 4);
         assert_eq!(config.rcParams.averageBitRate, config.rcParams.maxBitRate);
     }
 
@@ -1306,7 +1347,6 @@ mod tests {
         assert_eq!(config.rcParams.lookaheadDepth, 0);
         assert_eq!(config.rcParams.enableLookahead(), 0);
         assert_eq!(config.rcParams.zeroReorderDelay(), 1);
-        assert_eq!(config.rcParams.lowDelayKeyFrameScale, 1);
     }
 
     #[test]
@@ -1505,21 +1545,48 @@ mod tests {
 
     // ---------------------------------------------------- hardware tests ---
 
-    /// Fill a BGRA frame with a moving block, so the encoder is never handed a
-    /// perfectly static picture.
+    /// Fill a BGRA frame with screen-like content: a noisy wallpaper half an
+    /// intra picture cannot cheat on, rows of text-sized detail, and a block
+    /// that moves with `phase` so the encoder is never handed a still picture.
+    /// The detail is load-bearing — a keyframe's budget cannot be measured on a
+    /// flat grey, which is what this pattern used to be.
     fn pattern(width: u32, height: u32, phase: u32) -> Vec<u8> {
         let (w, h) = (width as usize, height as usize);
-        let mut px = vec![0x20u8; w * h * 4];
+        let mut px = vec![0u8; w * h * 4];
+        // A fixed lcg rather than `rand`: every run has to encode the same
+        // picture or the byte counts below mean nothing.
+        let mut seed = 0x1234_5678u32;
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) * 4;
+                let (b, g, r) = if x < w * 55 / 100 {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let n = (seed >> 24) as u8;
+                    (
+                        n / 3 + (x * 200 / w) as u8,
+                        n / 3 + (y * 160 / h) as u8,
+                        n / 2,
+                    )
+                } else if y % 19 < 2 && (x / 7) % 11 != 0 {
+                    (0x20, 0x20, 0x20)
+                } else {
+                    (0xf0, 0xf0, 0xf0)
+                };
+                px[i] = b;
+                px[i + 1] = g;
+                px[i + 2] = r;
+                px[i + 3] = 0xff;
+            }
+        }
         let bw = w / 6;
         let bh = h / 6;
-        let bx = (phase as usize * 97) % w.saturating_sub(bw).max(1);
+        let bx = (phase as usize * 137) % w.saturating_sub(bw).max(1);
         for y in (h / 3)..(h / 3 + bh).min(h) {
             for x in bx..(bx + bw).min(w) {
                 let i = (y * w + x) * 4;
-                px[i] = 0x90;
-                px[i + 1] = (x % 255) as u8;
-                px[i + 2] = (y % 255) as u8;
-                px[i + 3] = 0xff;
+                px[i] = 0x10;
+                px[i + 1] = 0x60;
+                px[i + 2] = 0xc0;
             }
         }
         px
@@ -1577,6 +1644,10 @@ mod tests {
         let mut irap_count = 0usize;
         let mut max_vcl = 0usize;
         let mut sps = None;
+        // The keyframe budget, which is only readable before the rate moves at
+        // frame 60: the first picture against the deltas that follow it.
+        let mut keyframe_bytes = 0usize;
+        let mut delta_bytes = 0usize;
         for i in 0..120u32 {
             // Halfway through, move the bitrate: a reconfigure must not cost a
             // keyframe (spike 0.9 §3).
@@ -1598,6 +1669,11 @@ mod tests {
             if encoded.is_irap {
                 irap_count += 1;
             }
+            if i == 0 {
+                keyframe_bytes = encoded.data.len();
+            } else if i < 60 {
+                delta_bytes += encoded.data.len();
+            }
             let nals = parse_annexb(&encoded.data, cfg.codec);
             max_vcl = max_vcl.max(nals.iter().filter(|n| is_vcl(cfg.codec, n.ty)).count());
             if sps.is_none() {
@@ -1617,8 +1693,17 @@ mod tests {
             "  bitstream_restriction_flag={} max_num_reorder_frames={:?} max_dec_frame_buffering={:?}",
             sps.bitstream_restriction_flag, sps.max_num_reorder_frames, sps.max_dec_frame_buffering
         );
+        let delta_mean = delta_bytes / 59;
+        println!("  keyframe {keyframe_bytes} B, mean delta {delta_mean} B at 20 mbps");
         assert_eq!(irap_count, 1, "only the first picture is an idr");
         assert_eq!(max_vcl, 1, "every access unit is a single slice");
+        // The defect KEYFRAME_VBV_SCALE fixes: with the scale at 1 the keyframe
+        // is held to the deltas' one-frame VBV and comes back the same size as
+        // one, which on a still desktop is a picture that never gets better.
+        assert!(
+            keyframe_bytes > delta_mean * 4,
+            "the keyframe is capped at a delta's budget: {keyframe_bytes} B vs {delta_mean} B"
+        );
         assert!(sps.bitstream_restriction_flag);
         assert_eq!(sps.max_num_reorder_frames, Some(0));
         assert_eq!(sps.max_dec_frame_buffering, Some(4));

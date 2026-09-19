@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { classifyClientMessage, fansToAgentSide, LIMITS, type Role } from '../src/messages';
+import { classifyClientMessage, classifyFrame, fansToAgentSide, LIMITS, type Role } from '../src/messages';
 import { readVector, vectorsOfKind } from './vectors';
 
 interface SignalingVector {
@@ -72,11 +72,71 @@ describe('send rights', () => {
 describe('flood limits', () => {
   it('pins the numbers the room enforces', () => {
     expect(LIMITS.messageBytes).toBe(65536);
-    expect(LIMITS.messagesPerWindow).toBe(120);
+    expect(LIMITS.messageWindowMs).toBe(10000);
+    expect(LIMITS.trickleFramesPerWindow).toBe(600);
+    expect(LIMITS.trickleFrameBytes).toBe(4096);
+    expect(LIMITS.controlFramesPerWindow).toBe(40);
     expect(LIMITS.viewersPerRoom).toBe(4);
     expect(LIMITS.ringsPerWindow).toBe(10);
     expect(LIMITS.ringWindowMs).toBe(60000);
     // serializeAttachment()'s documented hard limit.
     expect(LIMITS.attachmentBytes).toBe(16384);
+  });
+
+  it('keeps the byte ceiling of a full window below the single budget it replaced', () => {
+    // the trickle budget is five times the old one in frames, so the guarantee
+    // that matters is bytes: a socket that spends both budgets to the last frame
+    // still costs the room less than 120 frames of 64 KiB did.
+    const worst =
+      LIMITS.trickleFramesPerWindow * LIMITS.trickleFrameBytes +
+      LIMITS.controlFramesPerWindow * LIMITS.messageBytes;
+    expect(worst).toBeLessThan(120 * LIMITS.messageBytes);
+  });
+});
+
+describe('which budget a frame pays from', () => {
+  const candidate = (extra = '') =>
+    JSON.stringify({ type: 'candidate', candidate: `candidate:1${extra}`, sdpMid: '0', sdpMLineIndex: 0 });
+
+  it('puts a real trickle candidate on the trickle budget, from either peer', () => {
+    for (const role of ['viewer', 'host'] as Role[]) {
+      expect(classifyFrame(candidate(), role)).toMatchObject({ ok: true, trickle: true });
+    }
+  });
+
+  it('leaves every other accepted type on the control budget', () => {
+    expect(classifyFrame(JSON.stringify({ type: 'offer', sdp: 'v=0' }), 'viewer')).toMatchObject({
+      ok: true,
+      trickle: false,
+    });
+    expect(classifyFrame(JSON.stringify({ type: 'answer', sdp: 'v=0' }), 'host')).toMatchObject({
+      ok: true,
+      trickle: false,
+    });
+    expect(classifyFrame(JSON.stringify({ type: 'bye' }), 'viewer')).toMatchObject({ ok: true, trickle: false });
+  });
+
+  it('refuses a frame the way section 2 says, and never calls a refusal trickle', () => {
+    // a refusal on the trickle budget would let garbage buy 600 frames a window.
+    expect(classifyFrame(new ArrayBuffer(4), 'viewer')).toEqual({ ok: false, refusal: 'binary_unsupported' });
+    expect(classifyFrame('x'.repeat(LIMITS.messageBytes + 1), 'viewer')).toEqual({
+      ok: false,
+      refusal: 'message_too_large',
+    });
+    expect(classifyFrame('{', 'viewer')).toEqual({ ok: false, refusal: 'malformed_message' });
+    expect(classifyFrame('[]', 'viewer')).toEqual({ ok: false, refusal: 'malformed_message' });
+    expect(classifyFrame('null', 'viewer')).toEqual({ ok: false, refusal: 'malformed_message' });
+    expect(classifyFrame(JSON.stringify({ type: 'kill' }), 'viewer')).toEqual({
+      ok: false,
+      refusal: 'forbidden_type',
+    });
+    expect(classifyFrame(candidate(), 'doorbell')).toEqual({ ok: false, refusal: 'wrong_role' });
+  });
+
+  it('keeps an oversized candidate off the trickle budget while still forwarding it', () => {
+    // otherwise the trickle budget would be 600 x 64 KiB rather than 600 x 4 KiB.
+    const fat = candidate('x'.repeat(LIMITS.trickleFrameBytes));
+    expect(fat.length).toBeGreaterThan(LIMITS.trickleFrameBytes);
+    expect(classifyFrame(fat, 'host')).toMatchObject({ ok: true, trickle: false });
   });
 });

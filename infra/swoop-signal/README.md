@@ -45,8 +45,12 @@ every verifier refusal collapses into those three. the detail stays inside the w
 caller only whether a fresh token could fix it, which is all a client can act on and all an attacker should
 learn.
 
-**close codes.** `4401` (4000 + http 401) is the auth close, always preceded by that error frame. `4008` is a
-flood limit, and a client should walk its ladder on it. a token that expires while its socket is open is
+**close codes.** `4401` (4000 + http 401) is the auth close, always preceded by that error frame. `4008` is
+the control flood limit — see [limits](#the-two-budgets-a-socket-spends) — and a client should walk its ladder
+on it. excess *trickle* never closes a socket: the host is the session, ice survives a lost candidate and a
+user does not survive a lost host, so those frames are dropped and the socket carries on. a client that reads
+a `rate_limited` error frame with no close behind it has been trickling faster than the room will carry and
+should slow down, not redial. a token that expires while its socket is open is
 checked **lazily, only when that socket sends** — an idle doorbell is never kicked, so the fleet never
 re-dials on a timer, but a 60-second viewer token cannot buy an unbounded socket either.
 
@@ -209,9 +213,31 @@ the result here when it is done.
 
 ## limits
 
-all in `src/messages.ts`, each with its number: 4 KiB token, 64 KiB frame, 120 frames per 10 s per
-connection, 4 viewers per room, 10 rings per 60 s per machine. `jti` is single use, enforced in the room
-because it is the only verifier here with durable state.
+all in `src/messages.ts`, each with its number: 4 KiB token, 64 KiB frame, 4 viewers per room, 10 rings per
+60 s per machine. `jti` is single use, enforced in the room because it is the only verifier here with durable
+state.
+
+### the two budgets a socket spends
+
+**a burst of `candidate` is what trickle ice is for; a burst of anything else is not.** one counter over
+every type could not tell them apart, so a host on a nine-address machine — one lan, a vpn, a wsl bridge and
+six link-local — was cut for gathering, which is not misbehaviour and which no number of interfaces should
+ever cause. per connection, per 10 s window:
+
+| budget | what pays from it | cap | over it |
+|---|---|---|---|
+| trickle | a `candidate` of 4 KiB or less that this role may send | 600 | the **frame** is dropped, the socket lives, and one `rate_limited` error frame goes out per window |
+| control | everything else — `offer`, `answer`, `host-ready`, `bye`, a larger `candidate`, and every frame refused for being binary, oversize, unparseable or wrongly-roled | 40 | `rate_limited`, then close `4008` |
+
+a gather on that machine is ~30 frames and the host re-trickles all of them on its **one long-lived socket**
+every time a viewer redials — the viewer gets a fresh socket and a fresh window, the host does not. so the
+trickle budget cannot be a small multiple of one gather, and because exceeding it drops a frame rather than
+the session, the number bounds cost and never correctness.
+
+both halves of "small `candidate` this role may send" are load-bearing: a refusal on the trickle budget would
+let garbage buy 600 frames a window, and a 64 KiB frame calling itself a candidate would make the large
+budget a large flood ceiling. spending both budgets to the last frame costs the room **less** than the single
+120-frame budget did (600 × 4 KiB + 40 × 64 KiB < 120 × 64 KiB), which `messages.test.ts` pins.
 
 ## hibernation, and the one mistake that costs real money
 

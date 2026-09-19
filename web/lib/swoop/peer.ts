@@ -109,6 +109,7 @@ export type SwoopPeerError =
   | 'host_mac_mismatch'
   | 'host_fingerprint_missing'
   | 'playout_delay_not_negotiated'
+  | 'answer_not_applied'
   | 'ice_failed';
 
 export interface SwoopIdentity {
@@ -372,6 +373,16 @@ export class SwoopPeer {
     // working opus encoder has nowhere to put it. the track is taken off the
     // connection by `lib/swoop/audio.ts`, which listens for it separately —
     // `onTrack` below is the video receiver's path and only the video's.
+    //
+    // **unconditional, deliberately.** this side cannot know before offering
+    // whether the host has opus — `audio-opus` is not a default cargo feature —
+    // and the only alternative, a host signal saying so, would add a message to
+    // a frozen vocabulary to pre-empt a case the host must get right anyway. so
+    // the guarantee lives there instead: a host with no opus rejects the m-line
+    // and `agent/swoop/src/transport/rtc.rs` keeps that rejection well formed
+    // (rfc 4566 wants a format list even on `port 0`; str0m 0.23.1 writes none,
+    // which chrome refuses outright and which killed a real session). `audio.ts`
+    // then simply never sees a track and reports `unavailable`.
     this.pc.addTransceiver('audio', { direction: 'recvonly' });
 
     for (const config of SWOOP_CHANNELS) {
@@ -538,7 +549,15 @@ export class SwoopPeer {
       return;
     }
 
-    await this.pc.setRemoteDescription({ type: 'answer', sdp });
+    try {
+      await this.pc.setRemoteDescription({ type: 'answer', sdp });
+    } catch {
+      // `handleSignal`'s caller drops what it rejects with, so an answer the
+      // browser refuses outright used to leave the session sitting at
+      // `connecting` with nothing said — that is how a malformed m-line from
+      // the host presented. named, so it ends the session instead.
+      return this.abort('answer_not_applied');
+    }
     this.awaitingAnswer = false;
     this.answered = true;
     this.iceUfrag = ufrag;

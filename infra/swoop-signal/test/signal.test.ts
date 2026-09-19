@@ -4,6 +4,7 @@
 
 import { describe, expect, inject, it } from 'vitest';
 
+import { LIMITS } from '../src/messages';
 import { connect, serverCall, upgradeStatus, type Frame, type RoomClient } from './client';
 import { claimsFor, currentKey, machineId, previousKey, readVector, signToken, unknownKid } from './vectors';
 
@@ -343,17 +344,132 @@ describe('ring and kill', () => {
   });
 });
 
+// an ordinary signage box: one lan address, a vpn, a wsl bridge and the link-local
+// address windows gives every other adapter. nine of them, and none of that is
+// misbehaviour.
+const HOST_ADDRESSES = [
+  '192.168.1.40',
+  '10.8.0.2',
+  '172.28.112.1',
+  '169.254.14.201',
+  '169.254.83.12',
+  '169.254.117.44',
+  '169.254.160.7',
+  '169.254.201.88',
+  '169.254.244.19',
+];
+
+/** one gather from that machine: udp host, tcp host and srflx per address, plus the relay set. */
+function gather(generation: number): Array<Record<string, unknown>> {
+  const lines: string[] = [];
+  for (const [index, address] of HOST_ADDRESSES.entries()) {
+    const port = 50000 + index * 100;
+    lines.push(
+      `candidate:${index}1 1 udp 2130706431 ${address} ${port} typ host generation ${generation} ufrag Xy4Z network-id ${index} network-cost 10`,
+      `candidate:${index}2 1 tcp 1518280447 ${address} 9 typ host tcptype active generation ${generation} ufrag Xy4Z network-id ${index}`,
+      `candidate:${index}3 1 udp 1677729535 203.0.113.9 ${port + 1} typ srflx raddr ${address} rport ${port} generation ${generation} ufrag Xy4Z network-id ${index}`
+    );
+  }
+  for (const port of [3478, 80, 5349, 443]) {
+    lines.push(
+      `candidate:9${port} 1 udp 41885439 198.51.100.4 ${port} typ relay raddr 203.0.113.9 rport 60000 generation ${generation} ufrag Xy4Z`
+    );
+  }
+  return lines.map((candidate) => ({ type: 'candidate', candidate, sdpMid: '0', sdpMLineIndex: 0 }));
+}
+
 describe('flood limits', () => {
-  it('closes a socket that exceeds the per-connection message rate', async () => {
+  it('does not cut a multi-homed host whose trickle re-runs on every viewer redial', async () => {
+    const machine = machineId('trickle');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const viewer = await dialBrowser(viewerToken(machine), machine);
+    const viewerId = (await viewer.waitFor('hello')).id as string;
+    await host.waitFor('viewer-join');
+
+    // six redials inside one window. the viewer gets a fresh socket and a fresh
+    // budget each time; the host keeps the one socket it was spawned with and
+    // re-trickles its whole candidate set into it, every time.
+    let candidates = 0;
+    let control = 0;
+    for (let generation = 0; generation < 6; generation += 1) {
+      host.send({ type: 'answer', sdp: `v=0\r\na=generation:${generation}`, mac: 'a'.repeat(64), to: viewerId });
+      control += 1;
+      for (const frame of gather(generation)) {
+        host.send(frame);
+        candidates += 1;
+      }
+      host.send({ type: 'host-ready', sid: 'sid_0000000000000001', to: viewerId });
+      control += 1;
+    }
+
+    // the burst this fix exists for: well past the single 120-frame budget that
+    // used to cover every type at once, and every frame of it legitimate.
+    expect(candidates + control).toBeGreaterThan(120);
+    expect(candidates).toBeLessThanOrEqual(LIMITS.trickleFramesPerWindow);
+    expect(control).toBeLessThanOrEqual(LIMITS.controlFramesPerWindow);
+
+    // the last host-ready is the sentinel: the room forwards in order, so once it
+    // lands every candidate ahead of it has.
+    await viewer.waitFor('host-ready');
+    await settle();
+    expect(host.closed).toBe(null);
+    expect(host.frames.some((frame) => frame.type === 'error')).toBe(false);
+    expect(viewer.frames.filter((frame) => frame.type === 'candidate')).toHaveLength(candidates);
+    viewer.close();
+    host.close();
+  });
+
+  it('drops trickle past the budget instead of closing the socket it arrived on', async () => {
+    const machine = machineId('trickleover');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const viewer = await dialBrowser(viewerToken(machine), machine);
+    await viewer.waitFor('hello');
+    await host.waitFor('viewer-join');
+
+    const over = LIMITS.trickleFramesPerWindow + 100;
+    for (let i = 0; i < over; i += 1) {
+      host.send({ type: 'candidate', candidate: `candidate:${i} 1 udp 2130706431 192.168.1.40 5000 typ host`, sdpMid: '0', sdpMLineIndex: 0 });
+    }
+    host.send({ type: 'host-ready', sid: 'sid_0000000000000001' });
+    await viewer.waitFor('host-ready');
+    await settle();
+
+    // the host is the session: the excess candidates go, the socket does not, and
+    // the warning is sent once rather than once per dropped frame.
+    expect(host.closed).toBe(null);
+    expect(host.frames.filter((frame) => frame.code === 'rate_limited')).toHaveLength(1);
+    expect(viewer.frames.filter((frame) => frame.type === 'candidate')).toHaveLength(
+      LIMITS.trickleFramesPerWindow
+    );
+    viewer.close();
+    host.close();
+  });
+
+  it('still closes a socket that floods control frames', async () => {
     const machine = machineId('flood');
     const viewer = await dialBrowser(viewerToken(machine), machine);
     await viewer.waitFor('hello');
-    for (let i = 0; i < 130; i += 1) {
-      viewer.send({ type: 'candidate', candidate: `candidate:${i}`, sdpMid: '0', sdpMLineIndex: 0 });
+    for (let i = 0; i < LIMITS.controlFramesPerWindow + 10; i += 1) {
+      viewer.send({ type: 'offer', sdp: `v=0\r\na=attempt:${i}` });
     }
     const closed = await viewer.whenClosed;
     expect(closed.code).toBe(4008);
     expect(viewer.frames.some((frame) => frame.code === 'rate_limited')).toBe(true);
+  });
+
+  it('charges garbage to the control budget so it cannot ride the trickle one', async () => {
+    const machine = machineId('garbage');
+    const viewer = await dialBrowser(viewerToken(machine), machine);
+    await viewer.waitFor('hello');
+    // a frame that never parses has no type, so it can never be trickle. under one
+    // shared counter this took 120 frames to cut; it now takes 40.
+    for (let i = 0; i < LIMITS.controlFramesPerWindow + 10; i += 1) {
+      viewer.sendRaw(`{"type":"candidate",${i}`);
+    }
+    const closed = await viewer.whenClosed;
+    expect(closed.code).toBe(4008);
   });
 
   it('refuses a frame over 64 KiB', async () => {
@@ -402,6 +518,32 @@ describe('golden signaling vectors, on the wire', () => {
     host.close();
     viewer.close();
     doorbell.close();
+  });
+
+  it('keeps the host attached when it byes one viewer', async () => {
+    const machine = machineId('hostbye');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const first = await dialBrowser(viewerToken(machine, 'viewer_0000000001'), machine);
+    const second = await dialBrowser(viewerToken(machine, 'viewer_0000000002'), machine);
+    const firstId = (await first.waitFor('hello')).id as string;
+    const secondId = (await second.waitFor('hello')).id as string;
+
+    // a host's bye carries a `to` because it means "this viewer is done", not "i
+    // am leaving" -- the streamer sends one whenever it turns a viewer away. the
+    // room closing the host on it took the whole session down with that viewer.
+    host.send({ type: 'bye', reason: 'bye', to: firstId });
+    expect((await first.waitFor('bye')).fromRole).toBe('host');
+
+    host.send({ type: 'host-ready', sid: 'sid_0000000000000001', to: secondId });
+    expect((await second.waitFor('host-ready')).from).toBe((await host.waitFor('hello')).id);
+    await settle();
+    expect(host.closed).toBe(null);
+    expect(second.frames.some((frame) => frame.type === 'bye')).toBe(false);
+
+    host.close();
+    first.close();
+    second.close();
   });
 
   it('round-trips every message type through a real room', async () => {

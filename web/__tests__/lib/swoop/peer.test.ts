@@ -472,6 +472,28 @@ describe('swoop peer — the host fingerprint mac', () => {
     expect(h.peer.diagnostics().answered).toBe(true);
   });
 
+  it('ends the session when the browser refuses the answer outright', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+    // word for word what chrome threw at a streamer built without opus: its
+    // answer rejected the audio m-line with no format list at all, which is
+    // not valid sdp, so the whole description was discarded.
+    pc.setRemoteDescription = async () => {
+      throw new Error('Failed to parse SessionDescription. m=audio 0 UDP/TLS/RTP/SAVPF  Invalid value: .');
+    };
+
+    // the caller drops what this rejects with, so it must not reject.
+    await expect(
+      h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC }),
+    ).resolves.toBeUndefined();
+
+    expect(h.errors).toEqual(['answer_not_applied']);
+    expect(h.peer.diagnostics().answered).toBe(false);
+    expect(h.state.closed).toBe(1);
+  });
+
   it('compares the fingerprint case-insensitively', async () => {
     const h = peerHarness();
     await h.peer.start();

@@ -124,7 +124,7 @@ is always "the browser re-offers". the host never initiates an offer.
 | m-line | direction | notes |
 |---|---|---|
 | `video` | host → browser, `sendonly` / `recvonly` | h.265 main 8-bit 4:2:0 where both ends can, h.264 otherwise; chosen per viewer from the client capability probe ∩ host encoder availability |
-| `audio` | host → browser, `sendonly` / `recvonly` | opus. the m-line is absent until the audio feature ships |
+| `audio` | host → browser, `sendonly` / `recvonly` | opus. **the browser always offers it** — it cannot know beforehand whether the host has an opus encoder. a host that does not answers the m-line with `port 0`, and that rejected line still carries the offer's format list, because rfc 4566's `media-field` is `1*(SP fmt)` and a browser discards the whole answer over an empty one |
 
 the **playout-delay** header extension
 (`http://www.webrtc.org/experiments/rtp-hdrext/playout-delay`) MUST be negotiated and MUST be set to

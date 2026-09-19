@@ -11,7 +11,7 @@
 import {
   type AuthSignal,
   CLOSE_CODES,
-  classifyClientMessage,
+  classifyFrame,
   fansToAgentSide,
   isRole,
   LIMITS,
@@ -31,7 +31,11 @@ interface Identity {
   joinedAtMs: number;
   /** per-connection flood window, carried in the attachment so no timer is needed. */
   rateStartMs: number;
-  rateCount: number;
+  /** the window's two budgets: small `candidate` frames, and everything else. */
+  trickleCount: number;
+  controlCount: number;
+  /** so a window that is dropping trickle says `rate_limited` once, not 600 times. */
+  trickleWarned?: boolean;
   /** set when the peer said bye, so webSocketClose does not announce it twice. */
   departed?: boolean;
 }
@@ -116,7 +120,8 @@ export class SignalRoom implements DurableObject {
       expMs,
       joinedAtMs: nowMs,
       rateStartMs: nowMs,
-      rateCount: 0,
+      trickleCount: 0,
+      controlCount: 0,
     };
     if (JSON.stringify(identity).length > LIMITS.attachmentBytes) {
       return SignalRoom.refuse('attachment_too_large', 400, 'protocol');
@@ -252,9 +257,6 @@ export class SignalRoom implements DurableObject {
   }
 
   webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
-    if (typeof message !== 'string') return this.sendError(socket, 'binary_unsupported');
-    if (message.length > LIMITS.messageBytes) return this.sendError(socket, 'message_too_large');
-
     const self = socket.deserializeAttachment() as Identity | null;
     if (!self) return this.closeForAuth(socket, 'auth');
 
@@ -267,35 +269,53 @@ export class SignalRoom implements DurableObject {
     // join tolerates the api's minting clock, but by now the worker is measuring
     // elapsed time against its own.
     if (self.expMs <= nowMs) return this.closeForAuth(socket, 'token_expired');
+
+    // what a frame is decides what it costs, so the frame is read before it is
+    // charged. a burst of `candidate` is the whole point of trickle ice and its
+    // size belongs to the machine's interface count; a burst of anything else is
+    // not, so the two get separate budgets over the one window.
+    const frame = classifyFrame(message, self.role);
     if (nowMs - self.rateStartMs >= LIMITS.messageWindowMs) {
       self.rateStartMs = nowMs;
-      self.rateCount = 0;
+      self.trickleCount = 0;
+      self.controlCount = 0;
+      self.trickleWarned = false;
     }
-    self.rateCount += 1;
+    const trickle = frame.ok && frame.trickle;
+    if (trickle) self.trickleCount += 1;
+    else self.controlCount += 1;
+    const dropping = trickle && self.trickleCount > LIMITS.trickleFramesPerWindow;
+    const warn = dropping && !self.trickleWarned;
+    if (warn) self.trickleWarned = true;
     socket.serializeAttachment(self);
-    if (self.rateCount > LIMITS.messagesPerWindow) {
+
+    if (self.controlCount > LIMITS.controlFramesPerWindow) {
       this.sendError(socket, 'rate_limited');
       return socket.close(CLOSE_CODES.flood, 'rate limited');
     }
-
-    let msg: Record<string, unknown>;
-    try {
-      msg = JSON.parse(message) as Record<string, unknown>;
-    } catch {
-      return this.sendError(socket, 'malformed_message');
+    if (dropping) {
+      // over the trickle budget the frame goes, not the socket: ice survives a
+      // lost candidate and the session does not survive a lost host. the peer is
+      // told once per window, so saying so cannot itself become the flood.
+      if (warn) this.sendError(socket, 'rate_limited');
+      return;
     }
-    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return this.sendError(socket, 'malformed_message');
+    if (!frame.ok) return this.sendError(socket, frame.refusal);
 
-    const verdict = classifyClientMessage(msg.type, self.role);
-    if (!verdict.ok) return this.sendError(socket, verdict.code);
-
+    const msg = frame.msg;
     const to = typeof msg.to === 'string' ? msg.to : undefined;
     const forwarded = JSON.stringify({ ...msg, from: self.id, fromRole: self.role, serverTimeMs: nowMs });
 
     if (msg.type === 'bye') {
       this.fanOut(self.role, forwarded, to);
-      socket.serializeAttachment({ ...self, departed: true });
-      socket.close(1000, 'bye');
+      // a viewer's bye is its own departure, so its socket goes with it. a host's
+      // is "this viewer is done" — PROTOCOL.md section 2 gives `bye` a `to` for
+      // exactly that — and closing the host on one ends every other viewer's
+      // session with it.
+      if (self.role === 'viewer') {
+        socket.serializeAttachment({ ...self, departed: true });
+        socket.close(1000, 'bye');
+      }
       return;
     }
     this.fanOut(self.role, forwarded, to);
