@@ -116,6 +116,18 @@ jobs:
         working-directory: agent/swoop
         run: cargo test --locked
 
+      # audio-opus is what build_installer_full.bat ships, and it is not a
+      # default feature -- without this the ~20 #[cfg(feature = "audio-opus")]
+      # sites across audio/, session/ and transport/ compile nowhere in CI.
+      # audiopus_sys vendors libopus and needs cmake; windows-latest has it.
+      - name: clippy owlette-swoop (audio-opus)
+        working-directory: agent/swoop
+        run: cargo clippy --all-targets --features audio-opus -- -D warnings
+
+      - name: test owlette-swoop (audio-opus)
+        working-directory: agent/swoop
+        run: cargo test --locked --features audio-opus
+
       # No `npm ci && npm run build` in desktop/ first: tauri-build only warns
       # when frontendDist (desktop/dist) is absent, and both commands below
       # were verified green on a tree with no dist/ at all. Adding the frontend

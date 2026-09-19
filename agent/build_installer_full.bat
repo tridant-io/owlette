@@ -327,8 +327,27 @@ if not exist "%SWOOP_DIR%\Cargo.toml" (
     exit /b 1
 )
 
+:: audio-opus is NOT a default feature, so a bare `cargo build --release`
+:: ships a streamer with no audio -- which is not the binary anything was
+:: validated against. audiopus_sys vendors libopus and builds it with cmake:
+:: present on github windows runners, but usually only inside visual studio
+:: locally, so find it before cargo does and fails less clearly.
+where cmake >nul 2>&1
+if errorlevel 1 (
+    set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+    call :locate_cmake
+)
+where cmake >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: cmake not found on PATH and not found in the Visual Studio install.
+    echo        The swoop streamer builds libopus from source ^(audio-opus feature^).
+    echo        Install CMake, or add the one under Visual Studio to PATH.
+    pause
+    exit /b 1
+)
+
 pushd "%SWOOP_DIR%"
-call cargo build --release
+call cargo build --release --features audio-opus
 if errorlevel 1 (
     echo ERROR: cargo build failed in "%SWOOP_DIR%"
     popd
@@ -519,3 +538,19 @@ echo already installed, which is how the docs went three versions stale.
 echo.
 
 pause
+
+:: the script ends here. batch falls through a label, so the subroutine
+:: below must never be reached by the normal path.
+exit /b 0
+
+:locate_cmake
+:: vswhere knows where visual studio put cmake. via a temp file rather than a
+:: for/f backquote command: nested quotes inside one, inside an if block, is
+:: what cmd gets wrong.
+if not exist "%VSWHERE%" goto :eof
+"%VSWHERE%" -latest -products * -find "**\CMake\bin\cmake.exe" > "%TEMP%\owlette_cmake_path.txt" 2>nul
+for /f "usebackq delims=" %%I in ("%TEMP%\owlette_cmake_path.txt") do (
+    if exist "%%I" set "PATH=%%~dpI;%PATH%"
+)
+del "%TEMP%\owlette_cmake_path.txt" >nul 2>&1
+goto :eof
