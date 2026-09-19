@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 56/80 complete
+**Progress**: 59/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -711,7 +711,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cargo clippy --features encode-openh264 -- -D warnings` and `cargo test --features encode-openh264` pass from `agent/swoop`; a golden test parses the emitted SPS and asserts `bitstreamRestrictionFlag = 1` and `max_num_reorder_frames = 0`; a 60 s 720p30 run on this box holds the target bitrate within ±10% with no frame-queue growth, and the numbers are recorded in the module doc.
   - Depends on: 3.7, 6.7
 
-- [ ] **Task 7.3: Encoder selection + probe** `[agent]`
+- [x] **Task 7.3: Encoder selection + probe** `[agent]`
   - Files: `agent/swoop/src/encode/select.rs`, `agent/swoop/src/probe.rs`
   - Do: `select.rs` builds the fallback chain **NVENC → the Task 7.1 hardware backend → soft**, per codec, and picks the highest tier that satisfies the session's requested codec set and resolution. Reach every backend only through its two root symbols — `probe() -> BackendCaps` and `create(&EncoderConfig)` — each `#[cfg(feature = …)]`-gated, so the file compiles with every optional feature off. Selection must be table-driven and unit-testable over injected `BackendCaps`: no hardware required to test it. `probe.rs` implements the `probe` verb: enumerate DXGI adapters and their vendor ids (0x10DE NVIDIA, 0x8086 Intel, 0x1002 AMD), per-codec availability, max resolution per codec, capture availability, the resolved fallback chain, the measured **encoder budget** (concurrent sessions this machine can sustain — Task 8.2 consumes it) and the crate version. Print one JSON object on stdout and exit 0; exit **13** when no encoder exists at all. The key names are a contract for the memos and for Task 8.2's encoder budget, not for the heartbeat: `agent/src/swoop_capability.py` deliberately computes `capabilities.swoop` from binary presence alone (Task 2.2) and must not run `probe` on the heartbeat path — read that file, do not modify it. Never print bundle contents or credentials from `probe`.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop` with no features and with each encoder feature; table-driven tests cover NVIDIA-only, Intel-only, no-GPU, and "HEVC requested but only H.264 available"; `owlette-swoop.exe probe` on this box prints JSON whose top-level keys match the names listed above, asserted by a unit test in this task; exit 13 when every backend is unavailable.
@@ -723,13 +723,13 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cargo clippy --features turn -- -D warnings` and `cargo test --features turn` pass from `agent/swoop`; unit tests drive the Allocate/Refresh/CreatePermission/ChannelBind state machine over a mocked socket, including the re-allocate-once-then-degrade path; a test asserts no credential string appears in any log record at any level. Human: supply a Cloudflare TURN credential and run the `#[ignore]`d live test to confirm a forced-relay session connects over UDP 3478 and over TLS 443, and paste the RTT delta into 6.8's memo.
   - Depends on: 3.8, 3.9, 6.8
 
-- [ ] **Task 7.5: ICE policy** `[agent]`
+- [x] **Task 7.5: ICE policy** `[agent]`
   - Files: `agent/swoop/src/transport/ice_policy.rs`, `web/lib/swoop/peer.ts`
   - Do: Host policy in `ice_policy.rs`: trickle every candidate, one bundled transport with rtcp-mux, and **never gather ICE-TCP host candidates** — browsers only produce `tcptype active` candidates toward TURN-TCP, so a passive listener is unreachable. Resolve `.local` mDNS candidates through the Windows resolver (`GetAddrInfoExW`/`DnsQueryEx`): without it a same-LAN browser cannot give a direct path, and a same-LAN session behind a non-hairpinning NAT falls all the way to relay. Promotion: exactly **one** deliberate attempt — if the selected pair is still `relay` at T+3 s, restart ICE with refreshed candidates; cap at one, no thrash. React to `disconnected` within ~2 s rather than waiting for `failed` (consent freshness kills media in 30 s), and restart on a Windows interface change (`NotifyIpInterfaceChange`). Browser half in `peer.ts`: `iceCandidatePoolSize: 1`, `iceTransportPolicy: "all"`, `bundlePolicy: "max-bundle"`, `restartIce()` on `disconnected` and `failed`, one restart for the relay→direct promotion, and **stage-2 browser-side TURN** — add browser relay servers only when the host reports it holds no allocation. The browser always offers; the host always answers.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`, covering the one-attempt promotion state machine, the `disconnected` timer and `.local` candidate parsing; `npm test` in `web/` covers the restart triggers and that browser TURN is added only when the host reports no allocation; `npx eslint web/lib/swoop/peer.ts` clean; observed: a same-LAN session selects a host or srflx pair, not relay.
   - Depends on: 3.8, 3.10
 
-- [ ] **Task 7.6: Relay caps + degraded mode** `[agent]`
+- [x] **Task 7.6: Relay caps + degraded mode** `[agent]`
   - Files: `agent/swoop/src/transport/budget.rs`, `web/components/swoop/SwoopStatsOverlay.tsx`
   - Do: `budget.rs` classifies the live path **itself**, from the transport's selected-candidate-pair stats — `PathProfile::{Direct, RelayUdp, RelayTls}` — and returns `PathBudget { max_bitrate_bps, max_fps, max_fragment_size }`. Do not read anything from `ice_policy.rs`; Task 7.5 owns it this wave. Relayed sessions cap at 25–30 Mbps and prefer larger packets: Cloudflare shapes above ~50–100 Mbps and 5–10 kpps per allocation. The TLS/TCP degraded profile caps 4–8 Mbps at 30 fps and turns FEC off — TCP already retransmits, and head-of-line blocking turns one lost segment into a multi-frame stall. `max_fragment_size` comes from the relay path MTU measured in 6.8/7.4, not a constant. Do **not** edit `governor.rs` (Task 8.2 owns it this wave) or `pacer.rs`: read them to confirm whether they already consult `budget`, and if they do not, record that in the task log rather than editing them. `SwoopStatsOverlay.tsx` gains a lowercase indicator showing direct / relayed (udp) / relayed (tls), the active cap and the reason.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`; table-driven tests map each `PathProfile` plus MTU to the expected budget, including the TLS degraded profile and the fragment size; `npx eslint web/components/swoop/SwoopStatsOverlay.tsx` clean; a forced-relay session shows "relayed" within 2 s of connecting and never exceeds the cap.
@@ -1591,3 +1591,92 @@ never run on this branch**.
 **done meanwhile:** `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` moved out of `web/.env.local` into
 `.claude/.env.local`, where `.env.example` always documented them — next was loading a workers-admin
 credential into every dev server, and neither is a web runtime var.
+
+### 2026-09-18 — **wave 7: 3 of 8, plus half of 7.7. 59/80.** most of the wave is blocked on two spikes that never ran.
+
+verified on the merged tree: `agent/swoop` clippy `--all-targets` clean on **default and `--no-default-features`**;
+`cargo test` **288 passed / 17 ignored** default and **274 / 15** no-default, 0 failed; `probe` exits **0** here and
+**13** with no backend compiled in; agent **1373 passed / 6 skipped**; web `tsc` and eslint clean, **291 suites /
+5842 passed**. commit `5c414ac8`.
+
+**what is blocked, and it is most of the wave.** 7.1, 7.2 and 7.4 could not start. spikes **6.7** (encoder breadth)
+and **6.8** (turn) are long-lead owner actions that have never run, and the wave is written against their output:
+6.7 picks which intel/amd backend and which software floor exist at all, 6.8 supplies the relay mtu and confirms the
+cap band. on top of that **7.4's crate is absent** — `turn = []` is an empty feature with nothing behind it, and
+7.4's own text says to stop and log that rather than add one. 7.8 is owner-only and long-lead; it blocks 8.6, so it
+is worth starting before the rest of wave 8.
+
+**the browser's ice restart was dead, with 36 passing tests over it.** `acceptAnswer` returned early on
+`answered`, which is set once and never cleared, so the host's answer to a restart re-offer was dropped **before**
+`setRemoteDescription` and the old ice credentials stayed in force. every restart class terminated there: the 2 s
+disconnected timer, the immediate failed restart, the t+3 s promotion and the stage-2 turn add. the tests asserted
+`restartIce()` had been **called**, which was true and meaningless. **this is the wave's real lesson and it is
+sharper than wave 6's**: wave 6 shipped features that were complete-but-unconnected; this one was complete,
+connected, tested *and inert*. the fix was proved by restoring the old behaviour and watching **8 tests fail** —
+two of which had themselves been asserting the broken semantics.
+
+**three more instances of the same class, found only because the wiring was checked separately:**
+- 7.3's selection chain was unreachable — `session/mod.rs` still called `nvenc::probe()/create()` directly.
+- 7.5's host policy was called by nothing.
+- 7.7's `set_enabled()` is still called by nothing, and the web half is missing too: **`swoop_refresh` reaches
+  `on_session_change()` carrying no enable/disable bit**, so the manager cannot infer the state even once someone
+  adds the call.
+**a wave that ends at the last hand-back ships dead code.** the wiring pass is now a standing step, not a favour.
+
+**7.7's first cut would have mutated the machine from the unit suite.** it applied the side effects from the spawn
+path; `test_swoop_manager.py` drives `ensure_streamer` fourteen times, so `pytest agent/tests/` would have created
+a real `Owlette swoop` firewall rule and set `SoftwareSASGeneration=3` on whatever box ran it. this box escaped only
+because a directory does not exist yet — **on a box with the streamer installed it would have fired.** `set_enabled()`
+is now the only entry point, and a test asserts the spawn path applies nothing. confirmed after the run: policy still
+absent, no rules in the group.
+
+**decisions recorded, not relitigated:**
+- **a stub encoder feature now fails to compile**, naming the two symbols 7.1/7.2 owe. kept deliberately: before this
+  those features built into **nothing**, which is exactly the shape of a flag that claims a backend and delivers
+  silence. default and `--no-default-features` are clean and `rust-build.yml` only builds default, so ci and the
+  release build are unaffected.
+- **`budget.rs` ships unwired on purpose.** `PathMtu` has no `Default`, no constant and no fallback, so the real
+  relay mtu from 6.8 has exactly one place to land. nothing consults the budget yet; the wiring is one call and
+  belongs to 8.2, which owns `governor.rs`.
+- **the tls degraded cap is 6 mbps**, mid-band of the documented 4–8 rather than the bottom, chosen so it sits above
+  `BITRATE_CAPS_BPS[0]`. below 5 mbps `Ceiling::from_quality`'s floor would raise it straight back and the
+  degradation would silently do nothing. **if 6.8 returns 4–5 mbps, the clamp ordering stops being cosmetic** and
+  8.2's wiring has to get it right.
+- **relayed-or-not is read from the wire, not from a stats api.** str0m 0.23 exposes no selected pair, so `rtc.rs`
+  notes the destination of every **non-stun** outgoing datagram (rfc 7983 demux: dtls/srtp/sctp only ever go to the
+  nominated pair). an unknown address reads as **direct** — that costs at most one wasted promotion attempt and can
+  never produce a false relay.
+- **every remote candidate resolves off-thread**, not just the `.local` ones. `SystemResolver` blocks and the
+  session turn may not; routing the easy ones past `admit_remote` would have been a second copy of the admission
+  rules.
+
+**a regression worth knowing during the pilot:** browser-side turn is stage 2 by design (d13 — a host-side
+allocation makes the video direction unbilled), added only when the host reports no allocation. **7.4 does not
+exist, so the host never holds one and stage 2 always runs** — a session that genuinely needs relay now connects
+~3 s slower. the seam flips by itself when the host starts trickling a `typ relay` candidate; the fix is 7.4, not
+anything in 7.5.
+
+**gaps recorded, not papered over:**
+- **`rtc.rs` treats ice `Disconnected` as terminal**, so the 2 s grace can never run even with the restart fixed.
+  str0m's own docs call that state intermittent and recoverable, and `rtc.rs`'s existing comment about a restart
+  arriving "while the peer is still live" is unreachable while it stands. changing it moves the viewer lifecycle and
+  needs a new give-up deadline — **its own task, flagged to the owner.**
+- **`BackendCaps::max_fps` is unusable as defined** — on this box it reports **15**, because it is fps at 8192×8192.
+  selection ignores it; tiering on it would refuse a 1080p60 session. moving it is an `encode/mod.rs` contract change.
+- the ice wiring has **no unit test**: every new path lives on `Live` or on a socket-bound `RtcPeer`, neither of
+  which the crate unit-tests today. the policy's own semantics are covered in `ice_policy.rs`.
+- the overlay's three cap strings **hand-mirror `budget.rs`**. unavoidable inside the file ownership — the
+  browser-facing wire types are frozen and `deny_unknown_fields`. one source of truth needs a host→viewer status
+  field, i.e. a protocol change and its own task.
+- 7.7's two open owner rulings: where the prior sas value is recorded (task text vs the memo's amendment), and the
+  inert-in-v1 mdns rule. **the `.iss` ack is still outstanding**, so uninstall currently leaves the rule and the
+  policy behind. the proposed `[UninstallRun]` entries are written up for review — note the memo's own draft has
+  undoubled braces and would not compile.
+- on `logs\swoop`: the task text says sweep it, the memo rules against it, and **the memo is right** — the sweep
+  would destroy the only local diagnostics at the moment someone uninstalls *because* swoop misbehaved. recommended
+  to the owner as a deliberate deviation.
+
+**still open for the owner:** spikes **6.7**, **6.8**, **0.3** (6.1 cannot start), **7.8** (long lead, blocks 8.6),
+0.10, 5.7; the `.iss` ack; railway dev's six env values; and **sast has still never run on this branch**. the
+installer build remains the one thing standing between all of this and anyone seeing it in a browser —
+`capabilities.swoop` is still 0 everywhere.
