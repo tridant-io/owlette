@@ -36,6 +36,20 @@ async function settle(ms = 250) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * wait until `count()` reaches `want`, or throw. a fixed sleep encodes the
+ * speed of the machine that wrote it; this encodes the thing being waited on.
+ */
+async function waitForCount(count: () => number, want: number, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (count() < want) {
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${want}; saw ${count()}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 function stripTime(frame: Frame): Record<string, unknown> {
   const { serverTimeMs, ...rest } = frame;
   expect(typeof serverTimeMs).toBe('number');
@@ -409,9 +423,13 @@ describe('flood limits', () => {
     expect(candidates).toBeLessThanOrEqual(LIMITS.trickleFramesPerWindow);
     expect(control).toBeLessThanOrEqual(LIMITS.controlFramesPerWindow);
 
-    // the last host-ready is the sentinel: the room forwards in order, so once it
-    // lands every candidate ahead of it has.
-    await viewer.waitFor('host-ready');
+    // wait on the candidates themselves. the loop sends one host-ready per
+    // gather and `waitFor` resolves on the first, so it was never the sentinel
+    // the comment claimed -- later gathers were still in flight behind it.
+    await waitForCount(
+      () => viewer.frames.filter((frame) => frame.type === 'candidate').length,
+      candidates,
+    );
     await settle();
     expect(host.closed).toBe(null);
     expect(host.frames.some((frame) => frame.type === 'error')).toBe(false);
