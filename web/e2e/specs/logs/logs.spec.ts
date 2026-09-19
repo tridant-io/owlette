@@ -43,7 +43,7 @@ test('filters by action, machine, level, and custom date; reset restores rows', 
 
   await page.getByRole('button', { name: /reset filters/i }).click();
   await page.getByTestId('logs-filter-action').click();
-  // 47 actions deep: the search field is how you reach one of them.
+  // 50 actions deep: the search field is how you reach one of them.
   await page.getByTestId('logs-filter-action-search').fill('scheduled restart completed');
   await page.getByRole('checkbox', { name: 'scheduled restart completed' }).click();
   await page.keyboard.press('Escape');

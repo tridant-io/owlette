@@ -1,0 +1,27 @@
+{
+  "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3Qta2lkLTEifQ.eyJpc3MiOiJvd2xldHRlLWFwaSIsImF1ZCI6InN3b29wLXNpZ25hbCIsInJvbGUiOiJob3N0Iiwic2l0ZSI6InNpdGVfZ29sZGVudmVjdG9yIiwibWFjaGluZSI6Im1hY2hpbmVfZ29sZGVudmVjdG9yIiwic2lkIjoic2lkXzAwMDAwMDAwMDAwMDAwMDEiLCJpYXQiOjE3ODk2ODk2MDAsImV4cCI6MTc4OTY4OTkwMCwianRpIjoianRpXzAwMDAwMDAwMDAwMDAwMDYifQ.fpZTEw3HHvacI7dIUeruIe0vdQVOTYFZfQtaYMgFZIPLEuVbnNg-413b9qnD9Gaii46_TYU73cjncTyZ3eJtCg",
+  "verifier": {
+    "aud": "swoop-signal",
+    "site": "site_goldenvector",
+    "machine": "machine_goldenvector",
+    "sid": "sid_0000000000000001",
+    "anchorNow": 1789689600,
+    "elapsedSeconds": 2,
+    "offerFingerprint": null,
+    "keys": [
+      "test-kid-1",
+      "test-kid-2"
+    ]
+  },
+  "claims": {
+    "iss": "owlette-api",
+    "aud": "swoop-signal",
+    "role": "host",
+    "site": "site_goldenvector",
+    "machine": "machine_goldenvector",
+    "sid": "sid_0000000000000001",
+    "iat": 1789689600,
+    "exp": 1789689900,
+    "jti": "jti_0000000000000006"
+  }
+}

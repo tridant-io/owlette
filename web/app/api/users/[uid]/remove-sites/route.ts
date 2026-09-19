@@ -81,6 +81,7 @@ export const POST = authorizedPlatformHandler<RouteParams>({
         const result = await removeSiteFromUser(
           {
             auditActor: auditActor(ctx),
+            actor: ctx.actor,
             endpoint: `/api/users/${uid}/remove-sites`,
             method: 'POST',
           },

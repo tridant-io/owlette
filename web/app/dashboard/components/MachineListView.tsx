@@ -255,6 +255,7 @@ interface MachineRowProps {
   onCancelRestart?: () => Promise<void>;
   onScreenshot?: () => void;
   onLiveView?: () => void;
+  onSwoop?: () => void;
   showLocalClock?: boolean;
   /** Column-dropdown selection (cpu/disk/gpu/nic). Unset kinds fall back to the machine's
    * reported primary device, which is also what "auto (most active)" selects. */
@@ -285,6 +286,7 @@ export function MachineRow({
   onCancelRestart,
   onScreenshot,
   onLiveView,
+  onSwoop,
   showLocalClock,
   listPref,
 }: MachineRowProps) {
@@ -467,6 +469,7 @@ export function MachineRow({
             shutdownScheduledAt={machine.shutdownScheduledAt}
             isSiteAdmin={isSiteAdmin}
             onCancel={onCancelRestart}
+            tooltip={heartbeat.tooltip}
           />
         </TableCell>
         {/* CPU with Sparkline */}
@@ -673,6 +676,8 @@ export function MachineRow({
               onCancelRestart={onCancelRestart}
               onScreenshot={onScreenshot}
               onLiveView={onLiveView}
+              swoopCapable={machine.capabilities?.swoop === 1}
+              onSwoop={onSwoop}
               onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}
               rebootSchedule={machine.rebootSchedule}
             />

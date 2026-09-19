@@ -26,6 +26,9 @@ const PROTECTED_PATHS = [
   // `/cortex` is absent on purpose: next.config.ts permanently redirects it to `/hoot`.
   '/hoot',
   '/talons',
+  // /swoop/[siteId]/[machineId] drives a live remote session — keyboard and mouse on
+  // someone's machine — so it never renders without a completed MFA challenge.
+  '/swoop',
   // /settings/* manages account + security state — needs completed MFA, not just password.
   '/settings',
 ] as const;
@@ -49,10 +52,38 @@ function isScalarApiReferencePath(pathname: string) {
   return pathname === '/docs/api' || pathname === '/docs/api/';
 }
 
+/**
+ * connect-src sources for the swoop signaling socket, derived from SWOOP_SIGNAL_URL: the
+ * https origin (the page's own fetches) and its wss form (the room WebSocket). Unset —
+ * dev, preview, any deployment without a signaling worker — emits nothing, so those keep
+ * working. The browser learns the URL from the session-create API response, never from a
+ * NEXT_PUBLIC_ variable, so this is the only place the origin reaches the client.
+ *
+ * NOTE: CSP does not constrain RTCPeerConnection. STUN/TURN and the media path are outside
+ * connect-src entirely — this buys the signaling socket only.
+ */
+function swoopSignalConnectSources() {
+  const raw = process.env.SWOOP_SIGNAL_URL;
+  if (!raw) return '';
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    // A malformed value must not 500 every request the proxy touches.
+    return '';
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
+
+  // https://host → wss://host (http → ws for a local wrangler dev worker).
+  return ` ${parsed.origin} ${parsed.origin.replace(/^http/, 'ws')}`;
+}
+
 function buildContentSecurityPolicy(nonce: string, pathname: string) {
   const scalarApiReference = isScalarApiReferencePath(pathname);
   const scalarFontSource = scalarApiReference ? ' https://fonts.scalar.com' : '';
   const scalarConnectSource = scalarApiReference ? ' https://api.scalar.com' : '';
+  const swoopConnectSource = swoopSignalConnectSources();
 
   return [
     "default-src 'self'",
@@ -70,7 +101,7 @@ function buildContentSecurityPolicy(nonce: string, pathname: string) {
     "style-src-attr 'unsafe-inline'",
     `img-src 'self' data: blob: https:${isEmulatorBuild ? ' http://127.0.0.1:*' : ''}`,
     `font-src 'self' data:${scalarFontSource}`,
-    `connect-src 'self' https://*.firebaseio.com https://*.googleapis.com https://firestore.googleapis.com wss://*.firebaseio.com https://accounts.google.com https://*.ingest.sentry.io https://*.r2.cloudflarestorage.com https://challenges.cloudflare.com${scalarConnectSource}${isEmulatorBuild ? ' http://127.0.0.1:* ws://127.0.0.1:*' : ''}`,
+    `connect-src 'self' https://*.firebaseio.com https://*.googleapis.com https://firestore.googleapis.com wss://*.firebaseio.com https://accounts.google.com https://*.ingest.sentry.io https://*.r2.cloudflarestorage.com https://challenges.cloudflare.com${scalarConnectSource}${swoopConnectSource}${isEmulatorBuild ? ' http://127.0.0.1:* ws://127.0.0.1:*' : ''}`,
     // Turnstile's challenge iframe; without this the widget mounts permanently blank.
     "frame-src 'self' https://accounts.google.com https://*.firebaseapp.com https://challenges.cloudflare.com",
     "frame-ancestors 'none'",

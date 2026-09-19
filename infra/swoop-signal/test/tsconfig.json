@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // the tests run in node and drive the worker over http, so they use node's
+    // globals, not workerd's. src/jwt.ts and src/messages.ts are imported directly
+    // and use only globals both runtimes have.
+    "types": ["node"],
+    // dom is here for the web-platform globals node exposes but @types/node does
+    // not declare (CryptoKey, the WebSocket event types), not for a browser.
+    "lib": ["es2022", "dom"],
+    "module": "esnext",
+    "noEmit": true
+  },
+  "include": ["**/*.ts", "../src/jwt.ts", "../src/messages.ts", "../vitest.config.ts"]
+}

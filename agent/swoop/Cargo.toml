@@ -1,0 +1,308 @@
+[package]
+name = "owlette-swoop"
+# Kept in step with /VERSION by scripts/sync-versions.js, which rewrites only
+# the FIRST `version = "X.Y.Z"` line in this file — so it must stay above every
+# dependency table. The agent refuses to spawn a streamer whose version differs
+# from its own (plan.md D2), and build.rs stamps this into the exe's
+# VERSIONINFO, so a stale number here strands the feature on the machine.
+version = "3.3.5"
+description = "owlette swoop remote-desktop streamer"
+authors = ["Tridant Inc."]
+license = "FSL-1.1-Apache-2.0"
+repository = "https://github.com/tridant-io/owlette"
+edition = "2021"
+# Measured in spike 0.2 §11.1, in both directions: 1.91.0 compiles the whole
+# resolved graph, 1.90.0 is refused outright. The floor is set by `moq-nvenc`,
+# not by str0m (1.85.0). Exit condition: a moq-nvenc release that lowers its own
+# floor — nothing else in the graph declares above 1.88.
+rust-version = "1.91.0"
+publish = false
+# spikes/ holds nested packages (each its own workspace root, so they never join
+# this build). Excluding them keeps `cargo package`/`publish` from tripping over
+# those manifests — spike 0.8 §12.
+exclude = ["spikes"]
+
+# Standalone on purpose, exactly like agent/host and desktop/src-tauri. An empty
+# [workspace] table stops a future root Cargo.toml from absorbing this crate,
+# and stops the spikes below it from being pulled in as members. Run every cargo
+# command with this directory as the working directory, never --manifest-path,
+# which silently drops .cargo/config.toml and with it +crt-static.
+[workspace]
+
+# A library half as well as the binary: the integration tests under tests/ can
+# only reach these modules through a lib target.
+[lib]
+name = "owlette_swoop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "owlette-swoop"
+path = "src/main.rs"
+
+[features]
+# NVENC is the first-class encoder (plan.md D7) and loads nvEncodeAPI64.dll by
+# absolute path at runtime, so a non-NVIDIA box simply fails probe() rather than
+# failing to start. Task 10.1 finalises the rest of this list and never adds
+# `testhooks`.
+default = ["encode-nvenc"]
+
+encode-nvenc = ["dep:moq-nvenc"]
+# The Intel/AMD/software backends are chosen by hardware measurement in spikes
+# 6.7 and 7.2, so no crate is pinned for them yet: pinning a dependency nothing
+# has established is used is worse than leaving it out (.claude/CLAUDE.md). The
+# feature names exist now so Waves 6–10 never edit this manifest; the task that
+# picks a backend adds its optional dependency to the matching line.
+encode-ffmpeg = []
+encode-vpl = []
+encode-amf = []
+# Media Foundation needs no new crate, only more of the windows bindings.
+encode-mf = ["windows/Win32_Media_MediaFoundation"]
+encode-openh264 = []
+# Host-side TURN (plan.md D13, Task 7.4) is written on std UDP — str0m has no
+# TURN client and we are not adding a second stack for one.
+turn = []
+audio-opus = ["dep:audiopus", "dep:audiopus_sys"]
+# Non-default, and it must stay that way: it gates the bundle's test-only
+# `overrides` object (Task 8.7). A streamer built without it rejects a bundle
+# carrying `overrides` with exit 10.
+testhooks = []
+
+[dependencies]
+# Exact (`=`) pins throughout. This crate ships as a binary onto customer
+# machines, so the manifest and Cargo.lock agree on one version and any move is
+# a deliberate edit. Where a pin holds a package BACK the comment names the
+# constraint and what lifts it; the rest carry the standing exit condition — the
+# dependency-currency review each release cycle (.claude/CLAUDE.md), which moves
+# them unless a named constraint says otherwise.
+
+# WebRTC, sans-IO (plan.md D4). G1 chose arm B — an RTP media track rendered
+# into a <video> — which is str0m's mature path: the libwebrtc GoogCC port,
+# NACK/RTX, the RFC 7798 H.265 packetizer and per-packet header extensions
+# (which is how playout-delay is set). No [patch] table: arm A's sctp-proto
+# patches are not on the chosen path and stay in the spike.
+# 0.23.1 exactly because that is the release the bake-off measured end to end
+# against Chrome 153. Exit condition: 0.24, re-measured on the LAN row.
+#
+# default-features = false drops aws-lc-rs (needs NASM on Windows) and the
+# `examples` feature (rouille + rustls). No OpenSSL and nothing new in the
+# installer — but a C toolchain IS required to build this crate and has been
+# since the rustls pin below: it brings `ring 0.17.14`, which compiles C and
+# assembly through `cc 1.4.6`. `audio-opus` adds cmake on top of that; see
+# `audiopus_sys`.
+#
+# `wincrypto-dimpl`, NOT `wincrypto`: the plain feature does DTLS through
+# SChannel, and against Chrome 153 every handshake fails with "crypto error:
+# decryption failed" (spike 0.2 §13.4). `wincrypto-dimpl` keeps Windows CNG for
+# SRTP and hashing and does DTLS in str0m's own `dimpl`. Exit condition: str0m
+# PR #1038 removes SChannel outright, and the feature name goes with it.
+#
+# Carried forward, not solved here: str0m's pacer is unusable as configured —
+# BWE on measured 1015.6 ms p50 of pacer queue with zero loss, PLI or NACK, so
+# it presents as latency and never as loss. That lands on Tasks 3.8 and 4.7.
+str0m = { version = "=0.23.1", default-features = false, features = ["wincrypto-dimpl"] }
+
+# The bundle, the stdin/stdout event lines, the signaling messages and `probe`
+# output are all JSON. `derive` because every one of those is a struct.
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+
+# Typed errors per module (thiserror) with one anyhow chain at the process
+# boundary, so a failure maps onto an exit code instead of a panic.
+thiserror = "=2.0.20"
+anyhow = "=1.0.104"
+
+# JWT segments are base64url without padding; hex is for the golden-vector
+# fixtures and for ids in log lines.
+base64 = "=0.23.1"
+hex = "=0.4.3"
+
+# plan.md D8: k = HKDF(K_session, viewerId), and the host MACs its DTLS
+# fingerprint + sid with it. One RustCrypto generation across all three or the
+# digest traits do not line up.
+hmac = "=0.13.0"
+sha2 = "=0.11.0"
+hkdf = "=0.13.0"
+
+# The streamer verifies viewer JWTs itself (EdDSA), independently of the Worker,
+# using the public key delivered in the bundle.
+ed25519-dalek = "=3.0.0"
+
+# Bundle secrets and derived keys are wiped on drop; `derive` for the
+# ZeroizeOnDrop the bundle types need.
+zeroize = { version = "=1.9.0", features = ["derive"] }
+
+# Single-use `jti` values and DTLS/ICE nonces.
+rand = "=0.10.2"
+
+# capture → encode → per-viewer sender hand-offs. Bounded channels with
+# try_send are how a slow viewer drops frames instead of stalling capture.
+crossbeam-channel = "=0.5.17"
+
+# Logging facade only: the one sink is the size-capped rotating writer in
+# src/log.rs. No env_logger — the streamer has no console to log to. `std`
+# because `set_boxed_logger` is gated behind it.
+log = { version = "=0.4.34", features = ["std"] }
+
+# Vendor DLLs (NVENC, and whatever spike 6.7 picks) are loaded by absolute path
+# at runtime, never linked. Exit condition: none — this is how the binary stays
+# startable on a machine with no GPU vendor runtime at all.
+libloading = "=0.9.0"
+
+# The signaling socket — `src/signal/socket.rs`, the one place in this crate
+# that opens one. The rest of `signal/` is sans-IO behind `SignalTransport`.
+#
+# Sync tungstenite, NOT tokio-tungstenite: the streamer is a threaded process
+# with no async runtime, the session loop drives capture, str0m and this socket
+# on one thread, and a runtime dragged in for a single socket is weight nothing
+# else here would use. default-features = false leaves the server half out; we
+# only ever dial. Exit condition: the standing dependency-currency review.
+tungstenite = { version = "=0.30.0", default-features = false, features = [
+    "handshake",
+    "rustls-tls-native-roots",
+] }
+
+# TLS for that socket, and it is a direct dependency for a reason that is not
+# pinning alone: tungstenite enables only `rustls/std`, and rustls with no
+# crypto provider compiled in PANICS the first time a `ClientConfig` is built.
+# This line is what chooses the provider.
+#
+# `ring` and not the default `aws_lc_rs`, which wants NASM on Windows — the
+# same constraint that keeps str0m on default-features = false. `tls12` because
+# a kiosk behind a tls-inspecting corporate proxy is a fielded case and those
+# proxies are not all on 1.3. Exit condition: rustls 0.24, which moves the
+# provider out of the crate's features and is a deliberate re-pin rather than a
+# version bump.
+rustls = { version = "=0.23.45", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+    "logging",
+] }
+
+# The trust anchors, from the machine's own store rather than a Mozilla set
+# compiled into the exe (webpki-roots). Pinned explicitly although it arrives
+# through a tungstenite feature, because which roots the streamer trusts is a
+# decision and not a resolver outcome. Signage boxes and kiosks sit behind
+# tls-inspecting proxies, and a root an administrator added to the machine is
+# exactly what a compiled-in list cannot see; it also makes a root rotation an
+# os update rather than an agent release. Exit condition: the standing
+# dependency-currency review.
+rustls-native-certs = "=0.8.4"
+
+# Opus, behind the non-default `audio-opus` feature. 0.3.0-rc.0 rather than
+# 0.2.0 (the "max stable") because 0.2.0 is a 2019 release against audiopus_sys
+# 0.1, and the rc is both newer and the last thing this author published — an rc
+# in name only, five years old and the version the rest of the ecosystem
+# encodes Opus with. It holds nothing back: there is nothing later. Exit
+# condition: a 0.3.0 final or any 0.3.x, at the dependency-currency review.
+#
+# `features = ["encoder"]` and no more. audiopus declares a feature literally
+# named `default_features`, which is NOT cargo's `default` — the crate has no
+# `default`, so nothing is on unless it is named, and naming only `encoder`
+# keeps the decoder, repacketizer and multistream halves out of the binary.
+audiopus = { version = "=0.3.0-rc.0", optional = true, features = ["encoder"] }
+
+# libopus itself. Pinned explicitly although it arrives through `audiopus`,
+# because `static` is the decision and a resolver would never make it: without
+# that feature audiopus_sys links a system libopus or a DLL nothing ships, and
+# the streamer is one exe spawned on a machine with nothing installed on it.
+# `static` compiles the opus source vendored in the crate and links it in — so
+# `audio-opus` also puts **cmake** on the build machine, on top of the C
+# toolchain `ring` already needs. 0.2.2 is the newest and the last release
+# (2021), so this pin holds nothing back; it does mean the vendored libopus
+# moves only when this line does.
+#
+# Known, and not a surprise to be discovered at a release: **RUSTSEC-2026-0150,
+# `audiopus_sys` is unmaintained** (informational, no vulnerability). It matters
+# for one concrete reason — the vendored opus says `cmake_minimum_required(3.1)`
+# and **CMake 4.0 refuses anything below 3.5**, so a build machine on CMake 4
+# fails this crate until it is built with `CMAKE_POLICY_VERSION_MINIMUM=3.5`.
+# Builds today are on the CMake that ships inside Visual Studio (3.29).
+# Exit condition: a 0.2.3+, a maintained fork, or an opus binding that does not
+# need cmake — whichever arrives first, at the dependency-currency review. Any
+# libopus CVE moves this line on its own, because this pin is the vendored copy.
+audiopus_sys = { version = "=0.2.2", optional = true, features = ["static"] }
+
+# Windows-only, declared here so `cargo check` still resolves on a macOS or
+# Linux host (Wave 9 adds the siblings, and until then the modules that use
+# these bindings are behind #[cfg(windows)]).
+[target.'cfg(windows)'.dependencies]
+# Every Win32 subsystem this crate's modules use, declared up front because a
+# Wave 3+ task must not edit this manifest: Direct3D11/DXGI for capture and the
+# GPU convert/scale path, Gdi + HiDpi for display geometry, KeyboardAndMouse for
+# injection, StationsAndDesktops for the secure desktop, DataExchange + Memory
+# for the clipboard, Media_Audio for the WASAPI loopback capture, Devices_Display
+# for the display topology, LibraryLoader for the DLL search path, Performance
+# for QPC timestamps.
+#
+# Com_StructuredStorage and Variant are not subsystems this crate calls: both
+# `IMMDevice::Activate` and `ActivateAudioInterfaceAsync` are generated behind
+# the pair, for the `PROPVARIANT` activation-params pointer they are always
+# handed as null. Without them the vtable slot is a private `usize` and there is
+# no way to activate an `IAudioClient` at all.
+#
+# 0.62 is the version all three spikes measured against.
+windows = { version = "=0.62.2", features = [
+    "Win32_Devices_Display",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Performance",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# NVENC bindings, behind `encode-nvenc`. The only crate on crates.io that
+# vendors pre-generated nvEncodeAPI bindings AND dlopens the entry points, so
+# there is no Video Codec SDK zip and no libclang in the build, and the binary
+# still links on a builder with no NVIDIA driver (spikes 0.9 and 0.2).
+# Pinned at 0.0.5 — a 0.0.x crate has no compatible-update guarantee at all, so
+# the pin is the only thing keeping the vendored NVENCAPI header stable. It also
+# sets this crate's MSRV. Exit condition: read its changelog at the
+# dependency-currency review; a bump re-runs spike 0.9's validation.
+moq-nvenc = { version = "=0.0.5", optional = true }
+
+[build-dependencies]
+# Embeds the VERSIONINFO resource and icon (see build.rs). Same crate agent/host
+# and the Tauri desktop build already use, so it is not new to this repo.
+# Exit condition: the standing dependency-currency review.
+winresource = "=0.1.31"
+
+[profile.release]
+# Copied from agent/host/Cargo.toml with its comment, because the reason is the
+# reason and not a preference. It is written about owlette-host.exe; it binds
+# every Rust binary this repo ships.
+#
+# A supervisor spends its life asleep, so size was the only thing this profile
+# optimised for — `opt-level = "z"`, full LTO, one codegen unit, symbols
+# stripped. On 2026-09-08 Defender's ML classifier (signature set 1.459.111.0)
+# started quarantining that image as Trojan:Win32/Bearfoos.B!ml: a small,
+# dense, stripped, statically-linked, metadata-free PE is the profile of a
+# packed dropper, and the classifier scores static features, not behaviour.
+#
+# So the profile now looks like an ordinary release build instead of the
+# densest image the toolchain can produce. The cost is ~100-200 KB on a 43 MB
+# installer. `+crt-static` in .cargo/config.toml is deliberately KEPT: dropping
+# it reintroduces the VCRUNTIME140 fleet failure that 3.2.3 shipped to fix.
+#
+# This is a change to the classifier's inputs, not a guarantee. A rebuilt
+# candidate must be scanned (MpCmdRun -Scan -ScanType 3 -File <copy>
+# -DisableRemediation) before it is packaged, and the durable fix is signing.
+opt-level = 2
+lto = "thin"
+strip = false

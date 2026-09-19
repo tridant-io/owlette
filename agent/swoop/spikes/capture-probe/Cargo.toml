@@ -1,0 +1,39 @@
+[package]
+name = "capture-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "swoop spike 0.8 - DXGI Desktop Duplication measurement probe"
+
+# Empty on purpose. The spike must never be absorbed into a parent workspace:
+# agent/swoop (Task 1.2) is the product crate and this directory sits inside it,
+# so without this table a future `[workspace]` there would pull the spike into
+# the product build and its dependency graph.
+[workspace]
+
+[[bin]]
+name = "capture-probe"
+path = "src/main.rs"
+
+[dependencies]
+# Only dependency. DXGI Desktop Duplication is COM; hand-rolled vtable FFI for
+# IDXGIOutputDuplication would be more unsafe code than the measurement itself.
+# Not pinned to the version Task 1.2 will choose - a spike measures the API, and
+# windows-rs is a thin generated binding over the same dxgi.dll either way.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = false

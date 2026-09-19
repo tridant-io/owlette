@@ -1,0 +1,51 @@
+{
+  "protocolVersion": 1,
+  "agentVersion": "3.4.0",
+  "sid": "sid_0000000000000001",
+  "site": "site_goldenvector",
+  "machine": "machine_goldenvector",
+  "now": 1789689600,
+  "streamerEpoch": 1789689600000000,
+  "signalUrl": "wss://swoop-signal.example.invalid/v1/room/site_goldenvector/machine_goldenvector",
+  "hostToken": "FAKE.HOST.TOKEN",
+  "jwtKeys": [
+    {
+      "kid": "test-kid-1",
+      "alg": "EdDSA",
+      "key": "Xn7YVoJkEjPxnCQeR6DJr15ZUjEoCk7GvHAL_mJ1kyU"
+    },
+    {
+      "kid": "test-kid-2",
+      "alg": "EdDSA",
+      "key": "GMOynckD8oXeeP9rykWSjBb0qDoQadetEekhN6Zucnk"
+    }
+  ],
+  "sessionKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+  "iceServers": [
+    {
+      "urls": [
+        "stun:stun.cloudflare.com:3478"
+      ]
+    },
+    {
+      "urls": [
+        "turn:turn.example.invalid:3478?transport=udp",
+        "turns:turn.example.invalid:5349?transport=tcp"
+      ],
+      "username": "FAKE-TURN-USERNAME",
+      "credential": "FAKE-TURN-CREDENTIAL"
+    }
+  ],
+  "enablement": {
+    "membersMayWatch": true,
+    "maxViewers": 4,
+    "leaseSeconds": 300,
+    "sessionCapSeconds": 43200
+  },
+  "indicator": "banner",
+  "ctl": true,
+  "overrides": {
+    "source": "testpattern",
+    "encoder": "soft"
+  }
+}

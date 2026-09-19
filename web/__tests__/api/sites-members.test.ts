@@ -54,6 +54,13 @@ jest.mock('@/lib/auditLogClient', () => ({
   scopeFingerprint: jest.fn(() => 'fp'),
 }));
 
+// Swoop revocation is fired and not awaited, so the route only owes it the
+// call; what it then does is `__tests__/lib/swoop/lease.test.ts`.
+const mockRevokeSwoopSessions = jest.fn(async () => ({ revokedSids: [] }));
+jest.mock('@/lib/swoop/revokeViewerSessions.server', () => ({
+  revokeSwoopSessionsForUser: (...a: unknown[]) => mockRevokeSwoopSessions(...a),
+}));
+
 const mockResolveAuth = jest.fn();
 jest.mock('@/lib/apiAuth.server', () => {
   const actual = jest.requireActual('@/lib/apiAuth.server');
@@ -838,6 +845,41 @@ describe('DELETE /api/sites/{siteId}/members/{uid}', () => {
     );
   });
 
+  it('revokes the removed member’s live swoop sessions', async () => {
+    // The lease alone drops them within five minutes; this is the <= 2 s half
+    // of the same decision (PROTOCOL.md §10).
+    authedAsSuperadminWithKey();
+    seedSite(SITE);
+    seedUser('alice', { role: 'admin', sites: [SITE] });
+
+    const res = await memberDELETE(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/alice`, {
+        method: 'DELETE',
+      }),
+      { params: Promise.resolve({ siteId: SITE, uid: 'alice' }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockRevokeSwoopSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: SITE, uid: 'alice', reason: 'member_removed' }),
+    );
+  });
+
+  it('does not revoke when there was no membership to remove', async () => {
+    authedAsSuperadminWithKey();
+    seedSite(SITE);
+    seedUser('alice', { role: 'admin', sites: [] });
+
+    await memberDELETE(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/alice`, {
+        method: 'DELETE',
+      }),
+      { params: Promise.resolve({ siteId: SITE, uid: 'alice' }) },
+    );
+
+    expect(mockRevokeSwoopSessions).not.toHaveBeenCalled();
+  });
+
   it('refuses to remove the site owner (409 cannot_remove_owner)', async () => {
     authedAsSuperadminWithKey();
     seedSite(SITE, { owner: 'alice' });
@@ -1036,6 +1078,49 @@ describe('PATCH /api/sites/{siteId}/members/{uid} — per-site role change', () 
     expect(docStore[`sites/${SITE}/members/alice`]?.data?.role).toBe('admin');
     // Global role untouched.
     expect(docStore['users/alice']?.data?.role).toBe('member');
+  });
+
+  it('a demotion revokes only the sessions that member holds control in', async () => {
+    // Demoting to `member` loses MACHINE_REMOTE_CONTROL and nothing else, so a
+    // watch they may still have is left alone.
+    authedAsSuperadminWithKey();
+    seedSite(SITE);
+    seedUser('alice', { role: 'member', sites: [SITE] });
+    docStore[`sites/${SITE}/members/alice`] = {
+      data: { uid: 'alice', role: 'admin', status: 'active' },
+    };
+
+    const res = await memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/alice`, {
+        method: 'PATCH',
+        body: { role: 'member' },
+      }),
+      { params: Promise.resolve({ siteId: SITE, uid: 'alice' }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockRevokeSwoopSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ uid: 'alice', reason: 'role_changed', controlOnly: true }),
+    );
+  });
+
+  it('a promotion revokes nothing', async () => {
+    authedAsSuperadminWithKey();
+    seedSite(SITE);
+    seedUser('alice', { role: 'member', sites: [SITE] });
+    docStore[`sites/${SITE}/members/alice`] = {
+      data: { uid: 'alice', role: 'member', status: 'active' },
+    };
+
+    await memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/alice`, {
+        method: 'PATCH',
+        body: { role: 'admin' },
+      }),
+      { params: Promise.resolve({ siteId: SITE, uid: 'alice' }) },
+    );
+
+    expect(mockRevokeSwoopSessions).not.toHaveBeenCalled();
   });
 
   it('refuses to change the OWNER\'s role (409 cannot_change_owner_role)', async () => {

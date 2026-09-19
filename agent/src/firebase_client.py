@@ -23,6 +23,7 @@ import hardware_profile
 import display_manager
 import nvapi_display
 import config_sync
+import swoop_capability
 
 # OAuth REST modules — deliberately not firebase_admin
 from auth_manager import AuthManager, AuthenticationError, TokenRefreshError
@@ -1536,6 +1537,13 @@ class FirebaseClient:
                 # this is missing or < 1. Bump on helper IPC contract changes only
                 # — unrelated to agent_version.
                 'capabilities.displayRemoteApply': 1,
+                # Swoop: binary presence only, so it costs one stat per beat.
+                # capabilities.swoop == 1 is the gate the dashboard reads.
+                'capabilities.swoop': swoop_capability.swoop_capability_value(),
+                # Cross-plan rule C3. Absent means windows — every fielded agent
+                # predates these keys.
+                'osFamily': swoop_capability.os_family(),
+                'arch': swoop_capability.arch(),
                 'metrics.schemaVersion': 2,
                 'metrics.profileHash': profile_hash,
                 'metrics.timestamp': SERVER_TIMESTAMP,
@@ -1567,7 +1575,12 @@ class FirebaseClient:
     # Fast (<30s) and concurrency-safe. The two cancel_* interrupts MUST stay on
     # this lane or they serialise behind the work they are meant to stop (OWL-06).
     # Heavy roost work (sync_pull, rollback) stays on the slow lane.
-    _FAST_COMMAND_TYPES = frozenset({'mcp_tool_call', 'capture_screenshot', 'cancel_sync', 'cancel_mcp_tool'})
+    # The three swoop types belong here too: on the slow lane they would queue
+    # behind an in-flight install, which would make the kill switch minutes late.
+    _FAST_COMMAND_TYPES = frozenset({
+        'mcp_tool_call', 'capture_screenshot', 'cancel_sync', 'cancel_mcp_tool',
+        'swoop_session_requested', 'swoop_kill', 'swoop_refresh',
+    })
 
     def _process_command(self, cmd_id: str, cmd_data: Dict[str, Any]):
         """Dispatch a command to its execution lane.

@@ -1,0 +1,16 @@
+{
+  "name": "swoop-signal-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Spike 0.4 — swoop signaling Worker + Durable Object room on the WebSocket hibernation API. Throwaway: infra/swoop-signal/ (Tasks 1.4/2.8) is the product tree.",
+  "scripts": {
+    "keys": "node scripts/gen-keys.mjs",
+    "dev": "wrangler dev",
+    "test": "node --test \"test/*.test.mjs\"",
+    "measure": "node scripts/measure.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.134.0"
+  }
+}

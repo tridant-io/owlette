@@ -1,0 +1,22 @@
+name = "swoop-signal-spike"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+# SQLite-backed Durable Objects: the only kind the Workers free plan will create,
+# and the default Cloudflare recommends for new classes. This room keeps storage
+# at zero, so the backing store costs nothing either way.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SignalRoom"]
+
+[[durable_objects.bindings]]
+name = "SIGNAL_ROOM"
+class_name = "SignalRoom"
+
+[observability]
+enabled = true
+
+# Secrets (SWOOP_JWT_PUBLIC_KEYS, SWOOP_SIGNAL_RING_SECRET) are never in this
+# file. `npm run keys` writes them to .dev.vars for `wrangler dev`; a deploy
+# uses `wrangler secret put`.

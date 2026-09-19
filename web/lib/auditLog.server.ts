@@ -29,6 +29,10 @@ export type SystemActorName =
   | 'cortex_autonomous'
   | 'cortex_provisioning'
   | 'scheduled_cleanup'
+  // the swoop streamer reporting its own lifecycle and refusals through
+  // `POST /api/agent/swoop/events`. An audit SUBJECT only — it invokes nothing,
+  // so it is deliberately absent from `capabilities.ts`'s system matrix.
+  | 'swoop_host'
   | 'talon_runner';
 
 export type UserActor = {
@@ -54,6 +58,9 @@ export type AuditTargetKind =
   | 'process'
   | 'preset'
   | 'installer'
+  // one swoop session, named by its opaque sid — the row's `machineId` says
+  // which machine it ran against.
+  | 'swoop_session'
   | 'talon';
 
 export interface AuditTarget {

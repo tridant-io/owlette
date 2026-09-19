@@ -23,6 +23,7 @@ owlette roost push ./my-project --to rst_my_project_id --site site-1
 
 - `roost` - push, list, inspect, diff, and deploy content-addressed project bundles; use top-level `rollback` to revert versions.
 - `machine` - list machines, inspect machine state, view deployments, and run supported machine actions.
+- `swoop` - open the swoop remote-desktop viewer for a machine in your browser.
 - `audit-log` - list and inspect site audit-log records for operational history.
 - `quota` - inspect current quota usage and usage history for a site.
 - `chat` - create, list, send, rename, and delete hoot chat sessions.
