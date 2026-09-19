@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 51/80 complete
+**Progress**: 56/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -653,31 +653,31 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`; a unit test proves a desktop change recreates duplication and that an `OpenInputDesktop` failure is not reported as "locked"; `pytest agent/tests/unit/test_swoop_manager_sas.py` proves `sas_request` → `SendSAS` runs off the main loop, is rate-limited to one SAS per ≥ 2 s, and returns `sas_result`; `npx eslint web/components/swoop/SwoopSpecialKeys.tsx` clean. Human: from a second machine, confirm the logon screen after a reboot with nobody logged in, the lock screen and a UAC consent prompt are visible and controllable, and that ctrl+alt+del from the menu reaches the secure desktop. No UAC prompt is raised by swoop itself.
   - Depends on: 2.1, 4.2, 4.3, 5.1
 
-- [ ] **Task 6.2: Clipboard** `[agent]`
+- [x] **Task 6.2: Clipboard** `[agent]`
   - Files: `agent/swoop/src/clipboard/mod.rs`, `agent/swoop/src/clipboard/listener.rs`, `agent/swoop/src/clipboard/formats.rs`, `web/lib/swoop/clipboard.ts`, `web/__tests__/lib/swoop/clipboard.test.ts`
   - Do: Fill the `clipboard` Feature (already registered as a no-op; do not edit `session/features.rs`). Host: a listener thread owning a message-only window (`HWND_MESSAGE`) on the **default** desktop with `AddClipboardFormatListener` → `WM_CLIPBOARDUPDATE`. Formats: `CF_UNICODETEXT`, the registered `"PNG"` format, and `CF_DIB`/`CF_DIBV5` for images; `CF_HDROP` is **rejected**, documented in the module doc comment (`PROTOCOL.md` belongs to Task 1.1 — do not edit it). Echo-loop suppression uses both mechanisms: record `GetClipboardSequenceNumber()` after your own `SetClipboardData` and hash the content; drop an update matching either. Caps: text ≤ 256 KiB, image ≤ 2 MiB, chunked and paced so a paste never starves video — str0m caps buffering at 128 KiB across *all* channels (review-1 F1). Only a viewer whose verified JWT carries `ctl` may push to the host. Refuse clipboard sync entirely while the input desktop is `Winlogon` — read it yourself with `OpenInputDesktop` + `GetUserObjectInformationW`, do not depend on Task 6.1. Report transfers above 64 KiB to `/api/agent/swoop/events` for audit. Browser: `clipboard.ts` exports `attach(session)` (called by `features.ts`; do not edit it or the hook) — intercept `copy`/`cut`/`paste`, read the client clipboard on the paste keystroke **before** forwarding it, and apply host→client writes inside the user-activation window.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`, covering echo suppression (sequence number and hash), both size caps, `CF_HDROP` rejection and the Winlogon refusal; `npm test` in `web/` covers paste interception ordering (the clipboard read resolves before the key event is forwarded) and the activation-window write; `npx eslint web/lib/swoop/clipboard.ts` clean; manually: text and a PNG round-trip both directions between Chrome and this box.
   - Depends on: 4.6, 5.1, 5.6
 
-- [ ] **Task 6.3: Audio** `[agent]`
+- [x] **Task 6.3: Audio** `[agent]`
   - Files: `agent/swoop/src/audio/mod.rs`, `agent/swoop/src/audio/wasapi.rs`, `agent/swoop/src/audio/opus.rs`, `web/lib/swoop/audio.ts`, `web/components/swoop/SwoopAudioToggle.tsx`
   - Do: Fill the `audio` Feature (already registered as a no-op; do not edit `session/features.rs`). WASAPI loopback: `IAudioClient::Initialize` with `AUDCLNT_SHAREMODE_SHARED | AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK` plus `SetEventHandle`, on a thread registered via `AvSetMmThreadCharacteristics("Pro Audio")`. Handle `AUDCLNT_BUFFERFLAGS_SILENT` and a `GetNextPacketSize()` of 0 by generating comfort silence so the Opus timeline never drifts. Encode Opus at **10 ms** frames, 48 kHz stereo, 96–128 kbps, `OPUS_APPLICATION_AUDIO`, **in-band FEC on**, **DTX off** (research `03` §9). Work behind the `audio-opus` cargo feature and do not enable it by default — Task 10.1 owns `Cargo.toml`. Send as an RTP audio track in **its own MediaStream**, never the video one, so the browser cannot A/V-sync and add video latency; fmtp carries `stereo=1; sprop-stereo=1; minptime=10; useinbandfec=1; usedtx=0`. With no render endpoint, emit `status` `audio: "no_endpoint"`; never create a virtual device and never change the default render endpoint. Browser: `audio.ts` exports `attach(session)`, starts **muted** and unmutes on the first user gesture; `SwoopAudioToggle.tsx` is a lucide `volume-2`/`volume-x` toggle with a disabled "no audio endpoint" state.
   - Done when: `cargo clippy --features audio-opus -- -D warnings` and `cargo test --features audio-opus` pass from `agent/swoop`; a unit test proves silence-fill keeps packet timestamps monotonic at 10 ms across a device gap; hardware tests are `#[ignore]`d with the manual command documented; `npx eslint` clean on both web files; observed: audio plays after the first click, mute takes effect immediately, and a machine whose audio device is disabled reports `no_endpoint` instead of stalling the session.
   - Depends on: 3.8, 4.1, 4.2
 
-- [ ] **Task 6.4: Displays** `[agent+human]`
+- [x] **Task 6.4: Displays** `[agent+human]`
   - Files: `agent/swoop/src/displays/mod.rs`, `agent/swoop/src/displays/enumerate.rs`, `agent/swoop/src/displays/policy.rs`, `web/lib/swoop/displays.ts`, `web/components/swoop/SwoopDisplayPicker.tsx`
   - Do: Fill the `displays` Feature (already registered as a no-op; do not edit `session/features.rs`). Enumerate outputs through DXGI (`EnumOutputs` → `DXGI_OUTPUT_DESC`) keyed by the **stable device path, never the index** — a virtual display driver makes indices move (research `03` §10). Report per output: device path, friendly name, virtual-desktop rect (outputs left of or above the primary have **negative** coordinates), DPI scale and refresh, plus an "all outputs" virtual canvas. A per-output capture switch tears down and recreates duplication on the capture thread and forces a new IDR plus a decoder reconfigure. Downscale policy: keep the encoded size inside both encoder and decoder limits — H.264 max axis 4096, HEVC 8192, AMD 4096 on **both** axes — downscaling on the GPU (Task 4.5) to the largest legal size that preserves aspect, and reporting the scale factor in stats. Headless (no output, or duplication yields only black): emit `status` `displays: "headless"` and let the page show the lowercase dummy-plug message. swoop never calls `ChangeDisplaySettingsEx`/`SetDisplayConfig` — v1 has no per-machine display-config opt-in, so the code path must not exist. Include the virtual-desktop → output → client-canvas coordinate transform, and the cursor hotspot under non-100% scaling.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`, including a transform unit test over a negative-origin, mixed-DPI, mixed-refresh layout and a policy test that a 3×4K canvas picks a legal encode size per codec; `npx eslint` clean on both web files; the picker lists both monitors on this box with correct rects. Human: pull the display cables (or the dummy plug) and confirm the headless message appears, no display configuration changed, and the session recovers when they are reconnected.
   - Depends on: 3.6, 4.5, 5.1
 
-- [ ] **Task 6.5: Quality menu + governor v2 + resolution change** `[agent]`
+- [x] **Task 6.5: Quality menu + governor v2 + resolution change** `[agent]`
   - Files: `agent/swoop/src/session/quality.rs`, `agent/swoop/src/transport/governor.rs`, `web/components/swoop/SwoopQualityMenu.tsx`
   - Do: `quality.rs` defines the presets: `auto` (default), bandwidth caps (5/10/20/30/50 Mbps), resolution caps (native/1440p/1080p/720p), fps (60/30) and codec preference (auto/hevc/h264). A preset is a **ceiling** — the governor still adapts below it. Governor v2 in `governor.rs` consumes viewer feedback (arrival/decode/present plus app-level RTT, delivered by Tasks 3.12/4.7) and the transport estimate, and acts on bitrate first, then fps, then resolution, with hysteresis and a minimum dwell so it cannot oscillate. Keep a **floor frame rate on a static desktop** (≥ 1 fps) — hardware decoders stall otherwise (D5). A resolution change is always: a `reconfigure` control message so the browser calls `VideoDecoder.configure()`, **then** the new IDR; never emit a chunk whose references the client cannot have. Loss recovery stays **IDR with a 250–500 ms cooldown** on every encoder; reference invalidation/LTR is explicitly out of scope. Add stats fields: active preset, encoded size, target vs actual bitrate, fps, IDR count, governor state. `SwoopQualityMenu.tsx` writes through the existing session control channel.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`; a deterministic governor test replays a scripted feedback trace and asserts the ladder decisions with no oscillation; a test proves reconfigure-then-IDR ordering on a resolution change and that repeated loss reports inside the cooldown coalesce into one IDR; `npx eslint web/components/swoop/SwoopQualityMenu.tsx` clean; observed: switching presets mid-session never black-screens Chrome and never leaves the decoder erroring.
   - Depends on: 3.7, 4.7, 5.1
 
-- [ ] **Task 6.6: Lease renewal + revocation** `[agent]`
+- [x] **Task 6.6: Lease renewal + revocation** `[agent]`
   - Files: `web/lib/swoop/lease.ts`, `web/lib/swoop/revokeViewerSessions.server.ts`, `web/app/api/sites/[siteId]/members/[uid]/route.ts`, `web/lib/actions/removeSiteFromUser.server.ts`, `agent/swoop/src/viewers/lease.rs`, `web/__tests__/lib/swoop/lease.test.ts`
   - Do: Browser half — `lease.ts` exports `attach(session)` and silently renews the 5-minute lease at ~60% of its life via `POST …/swoop/sessions/{sid}/lease` (Task 3.2's route re-checks membership, site enablement and capability). On 401/403 it tears the session down with a lowercase toast; a hard stop lands at the 12 h absolute cap; tokens never go in a URL. Host half — `viewers/lease.rs` stores `lease_expires_at` derived from the bundle's authoritative time anchor plus monotonic elapsed, **never the kiosk clock** (review-2 M4); a viewer whose lease lapses past a ≤ 30 s grace is dropped, its peer connection closed, and **every key and button it held is released** (`SendInput` does not reset keyboard state — research `01` line 252); emit `viewer_left` with the reason. Revocation — `revokeViewerSessions.server.ts` exports `revokeSwoopSessionsForUser({ siteId, uid, reason })`, which ends that user's live `swoop_sessions` with an `endReason`, rings the Worker through `killSession` from `web/lib/swoop/signal.server.ts` (Task 2.4) — never a hand-rolled fetch — and writes the sid-only `swoop_kill` command. Call it **after** the membership write in the member route's DELETE (after `removeMember`, ~:192) and PATCH (after `changeRole`, ~:306 — a demotion loses `MACHINE_REMOTE_CONTROL`), and in `removeSiteFromUser.server.ts` after its `removeMember` loop. Fire it outside the Firestore transaction; never block the response on the ring.
   - Done when: `npm test` in `web/` covers renewal timing, the 12 h cap, 403 teardown, and that a removed **and** a demoted member's live sessions are revoked; `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop` for the lapse → drop → release-all-keys path; `npx eslint` clean on every touched web file; measured: a removed member is dropped within one lease (≤ 5 min), and in ≤ 2 s when the ring path is healthy.
@@ -1501,3 +1501,93 @@ and kid must match the worker byte for byte), moving `CLOUDFLARE_API_TOKEN` out 
 `.claude/.env.local` so next does not load a workers-admin credential, **spike 0.3** (the SYSTEM spawn path
 is still unverified on hardware and 6.1 cannot start without it), spike 0.10, 5.7, and **SAST has still
 never run on this branch.**
+
+### 2026-09-18 — **wave 6: 5 of 8. 56/80.** 6.1 is still blocked on spike 0.3; 6.7 and 6.8 are human spikes.
+
+verified on the merged tree: `agent/swoop` clippy `--all-targets` clean on **both** feature sets;
+`cargo test` **254 passed / 17 ignored** default and **262 / 18** with `audio-opus`, 0 failed; agent
+**1348 passed / 6 skipped**; web `tsc` exit 0, **290 suites / 5807 passed**; eslint clean on the three
+changed web files. commits `92e8dfa1` (the five features) and `b0d0197d` (the wiring + audio).
+
+**the wave ran as four parallel agents on reserved files, then one consolidated wiring pass.** three of
+the five features finished complete-but-unconnected because their call sites all live in
+`session/mod.rs`, `ipc.rs` and `transport/rtc.rs`. that was the right trade — the alternative was four
+agents editing one file — but it means **"task complete" and "feature reachable" were two different
+things for about an hour**, and a wave that ended at the first hand-back would have shipped five
+features and connected two of them.
+
+**three plan corrections, all of them cases where following the text would have produced working-looking
+dead code:**
+- **6.5's resolution actuator narrows by the RUNG's cap, not the ceiling's**, as both the task text and
+  `governor.rs`'s own module doc worded it. the ceiling *is* the top rung, so narrowing by it makes a
+  resolution move a re-plan that changes nothing. at the top rung the two are identical, which is why the
+  wording survived review. the axis would have been wired and inert.
+- **6.5's `reconfigure`/`VideoDecoder` clause is arm-A-only** — the fourth task written against the
+  path G1 rejected. what survives is the correctness half: a width or height change is a *new encoder*,
+  never a reconfigure, and its first frame is an IDR.
+- **6.3's `EVENTCALLBACK` + MMCSS prescription is wrong for loopback.** a loopback client raises its
+  event only while something is playing, which is exactly when the frame clock still has to emit. polled
+  on the same 10 ms tick instead; the 200 ms endpoint buffer absorbs a late one, which is also why MMCSS
+  is not needed.
+
+**the lease bug was worse than the number.** `lease-ok` answered `claims.exp` — the token's **60 s**
+expiry — where §10 wants the 5-minute lease. the browser renews at 60% of whatever the server returns, so
+it would have renewed every **36 s instead of every 3 min**: five times the traffic on the one path that
+re-checks membership and capability every time. **every test passed and it would have looked like it
+worked.** same shape as the `jitterBufferTarget` catch in wave 5 — a correct-looking constant on a path
+nothing asserts an end-to-end number against.
+
+**§10 needed no amendment.** str0m 0.23.1 exposes `DirectApi::remote_dtls_fingerprint()`, the value
+computed from the peer's certificate as the handshake completes, so renewals now bind to the established
+DTLS session rather than the offer's claim. `PeerEvent::Connected` fires *before* `swoop-control` opens,
+so the **connect** token is bound too. worth stating plainly: until this commit, §10 was the stated
+justification for putting the lease on `swoop-control` and **was not true of the code**.
+
+**audio is host-complete and unheard.** `audiopus` is pinned with static linking behind the non-default
+`audio-opus` feature; the whole path measured **196 frames / 32586 bytes / ~130 kbps over two seconds**,
+every timestamp exactly 480 ticks after the last. the browser had never offered an audio m-line, so the
+host had nothing to answer however complete it was. what cannot be observed without a live session: that
+a viewer actually *hears* it.
+
+**two dependency facts that belong to the owner, not to me:**
+- **`audiopus_sys` carries RUSTSEC-2026-0150 (unmaintained; informational, no vulnerability)** and it has
+  teeth: its vendored opus declares `cmake_minimum_required(3.1)` and **cmake 4.0 refuses below 3.5**, so
+  a cmake-4 build box fails the crate until it builds with `CMAKE_POLICY_VERSION_MINIMUM=3.5`. builds here
+  use the cmake inside visual studio (3.29). it may surface in `check-security-alerts.mjs` at task 10.1 —
+  **an informational advisory needs an owner decision, never an agent's ack.**
+- **`audio-opus` puts cmake on the build machine.** nothing changes today (`build_installer_full.bat`
+  builds default features), but the moment task 10.1 puts `audio-opus` in `default`, the installer box
+  and the `rust-build` workflow need cmake on PATH. it is **not** on PATH here — it exists only inside the
+  VS install. github's windows-latest runner ships it.
+
+**the windows crate could not activate an `IAudioClient` at all** until `Win32_System_Com_StructuredStorage`
+and `Win32_System_Variant` were added — both `IMMDevice::Activate` and `ActivateAudioInterfaceAsync` are
+generated behind that pair for a `PROPVARIANT` pointer always passed null, and without them the vtable slot
+is a private `usize`. an incomplete feature list, not a decision.
+
+**no golden vector moved.** `Event::Status` gained seven fields, every one `Option` + `skip_serializing_if`,
+so the lines stay byte-identical and the TypeScript half needs no move. `KNOWN_EVENTS` needed nothing: no new
+event *type* was added, and `_last_status` copies fields generically.
+
+**gaps recorded, not papered over:**
+- **the ladder wiring has no unit test.** `Live` cannot be constructed without a live room and a bundle —
+  the same limitation the file already documents. the pieces are tested (`frame_interval`, the top-rung
+  exemption, `governor_phase`'s four arms, the IDR count, every new status field's wire spelling); the
+  end-to-end proof is the manual `run`-verb invocation.
+- **`cargo fmt --check` is not clean**, on ~200 pre-existing sites across the crate. there is no fmt gate
+  in CI. left alone deliberately rather than reformatting a crate mid-wave.
+- a machine whose audio device is disabled reports `no_endpoint` by the same probe that returns `true`
+  here — **the `false` branch has not been seen on real hardware.**
+- mute latency, the unmute gesture, and A/V drift over a long session are all single-path code that has
+  never been clicked.
+
+**still open for the owner, unchanged from wave 5 and now the only thing between here and G2:** **no
+machine in the fleet has a streamer installed**, so `capabilities.swoop` is 0 and nothing since wave 3 has
+been seen in a browser. `websocket-client` is also absent from 3.3.5's bundled python, which makes a full
+installer build the honest route rather than copying an exe into place. also still open: railway dev's six
+env values, **spike 0.3** (6.1 cannot start without it), spike 0.10, 5.7, 6.7, 6.8, and **SAST has still
+never run on this branch**.
+
+**done meanwhile:** `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` moved out of `web/.env.local` into
+`.claude/.env.local`, where `.env.example` always documented them — next was loading a workers-admin
+credential into every dev server, and neither is a web runtime var.
