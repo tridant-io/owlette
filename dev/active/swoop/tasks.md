@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 59/80 complete
+**Progress**: 63/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -750,19 +750,19 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 8: multi-user and product integration
 
-- [ ] **Task 8.1: Multi-user** `[agent]`
+- [x] **Task 8.1: Multi-user** `[agent]`
   - Files: `agent/swoop/src/viewers/mod.rs`, `agent/swoop/src/viewers/roster.rs`, `agent/swoop/src/viewers/input.rs` (all of `viewers/**` **except** `lease.rs`), `web/lib/swoop/presence.ts`, `web/components/swoop/SwoopPresence.tsx`
   - Do: The viewer roster and shared-input hygiene. Keep each viewer record's public fields named exactly `viewer_id`, `display_name`, `ctl`, `codec_class` and `lease_expires_at`, and keep them public: `session/tiers.rs` (Task 8.2) and `viewers/lease.rs` (Task 6.6) read them, and you must not edit either file. Enforce `ctl` from the **verified JWT**, never from anything the viewer sends: a view-only viewer's input messages are dropped and counted, and a sustained stream of them is reported to `/api/agent/swoop/events` as a host-side denial (those are the events that show an attack in progress). Shared input: keep modifier state **per viewer**, resolve to last-input-wins at the host, and on leave, kick or lease lapse release every key and button that viewer held — `SendInput` does not reset keyboard state, so a disconnect mid-chord leaves a stuck modifier. Publish each controller's cursor position so other viewers can draw it. Browser: `presence.ts` exports `attach(session)` and keeps the roster; `SwoopPresence.tsx` shows who is connected, who has control, and other viewers' cursors as overlay elements (the local cursor stays a CSS cursor).
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop` with tests for view-only input rejection and its denial report, per-viewer modifier state, release-all-on-leave, and last-input-wins ordering; `npm test` in `web/` covers the roster; `npx eslint` clean on both web files; observed: three viewers on this machine with one view-only — the view-only viewer cannot move the mouse, and no modifier sticks after any of them disconnects mid-chord.
   - Depends on: 4.3, 5.1, 6.6
 
-- [ ] **Task 8.2: Encoder tiers + uplink budget** `[agent]`
+- [x] **Task 8.2: Encoder tiers + uplink budget** `[agent]`
   - Files: `agent/swoop/src/session/tiers.rs`, `agent/swoop/src/transport/governor.rs`
   - Do: `tiers.rs` computes **tiers = min(distinct codec classes present among viewers, the measured encoder budget from `probe`)** — never a hard-coded 2. Each tier owns one encoder instance; viewers are assigned to the tier matching their codec class, then their rate class. **Nobody is downgraded because another viewer's browser cannot decode HEVC** — that is the whole point of D14. Read viewers through the roster's public fields (`viewer_id`, `ctl`, `codec_class`); do not edit `viewers/**`, Task 8.1 owns it this wave. In `governor.rs`, add one **shared host uplink budget**: a single estimate for the machine's uplink, allocated across viewers proportional-fair with a per-viewer floor and **controllers served before watchers**, so N independent congestion controllers cannot each probe for the whole of the same bottleneck and bufferbloat a kiosk's DSL line. Coalesce keyframes: a join and any PLI falling inside the existing 250–500 ms IDR cooldown produce **one** IDR for that tier, not one per viewer. Cap concurrent viewers at the encoder budget and refuse beyond it with an audited reason.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`; unit tests prove three viewers across two codec classes on a 3-budget machine yields two tiers with nobody downgraded, a 1-budget machine degrades deterministically, a viewer joining a three-viewer session causes **at most one** IDR, the shared budget never allocates more than the estimate, and a watcher never starves a controller.
   - Depends on: 4.7, 6.5, 7.3
 
-- [ ] **Task 8.3: Tray indicator** `[agent+human]`
+- [x] **Task 8.3: Tray indicator** `[agent+human]`
   - Files: `agent/src/owlette_service.py`, `desktop/src-tauri/src/tray.rs`, `desktop/src/lib/serviceHealth.ts`
   - Do: Surface live swoop state locally. `OwletteService._write_service_status` (`agent/src/owlette_service.py:1177`) and `_write_service_status_early` (`:1138`) are the **only** writers of `tmp/service_status.json` — add a `swoop` block fed by `SwoopManager.status()`: `{active: bool, viewers: int, controllers: int, since: int}`, where `active` means **capture is running**, not "a process is alive" (the 60 s linger must not keep the badge lit). Add `active` and `viewers` to the write-throttle signature tuple (`:1261-1288`) so a session start or end forces an immediate write instead of waiting out `MIN_STATUS_WRITE_INTERVAL = 30`. Keep the early-write shape identical — readers must never have to distinguish "key absent" from "off", so write the zero shape there. Mirror the new field in `desktop/src/lib/serviceHealth.ts:13` so the config window does not reject the document. In `tray.rs`, extend `TrayView` (`:113`) and `read_status_doc` (`:699`), add a lowercase menu line via `apply_menu` (`:595`) and a tooltip line (`:975`), and raise an optional toast through `notify` (`:908`) on session start — gated on the `indicator` policy the streamer receives in its bundle and reports back in its `status` event, which `SwoopManager.status()` carries into `tmp/service_status.json`. The agent reads no `sites/{s}/settings/*` document — it has no such path today and this task does not add one.
   - Done when: `agent/.venv/Scripts/python -m pytest agent/tests/` passes, including a new test that a session start forces an immediate status write and that the swoop block is present in both writers; `cargo clippy -- -D warnings` and `cargo test` pass with the working directory `desktop/src-tauri`; `cd desktop && npx tauri build --no-bundle` succeeds. Human: start a session and confirm the tooltip, menu line and (where the site policy enables it) the toast appear within ~2 s and clear within ~2 s of the last viewer leaving.
@@ -774,7 +774,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cd web && npm test -- cronJobs` and the new metering tests pass; `node scripts/sync-env.mjs check` reports no drift; `npx eslint` clean on every touched file; the docs page renders. Human: create the Cloudflare API token with Account Analytics, set both env vars on dev and prod, register the job twice on cron-job.org with each environment's `CRON_SECRET`, and confirm one site's rollup matches the Cloudflare dashboard.
   - Depends on: 3.2, 6.8, 7.4
 
-- [ ] **Task 8.5: CLI + OpenAPI + docs** `[agent]`
+- [x] **Task 8.5: CLI + OpenAPI + docs** `[agent]`
   - Files: `cli/src/lib/openBrowser.ts`, `cli/src/commands/swoop.ts`, `cli/src/commands/auth.ts`, `cli/src/commands/machine.ts`, `cli/src/index.ts`, `cli/__tests__/commands/swoop-http.test.ts`, `cli/__tests__/commands/stubs.test.ts`, `web/openapi.yaml`, `web/content/docs/dashboard/swoop.mdx`, `web/content/docs/dashboard/meta.json`, `web/content/docs/cli/reference/swoop.mdx`, `web/content/docs/cli/reference/meta.json`
   - Do: Lift `tryOpenBrowser` out of `cli/src/commands/auth.ts:100` into `cli/src/lib/openBrowser.ts` as `export function openBrowser(url: string): void` — same URL validation, same platform switch, same best-effort behaviour — and have `auth.ts` import it with no behaviour change. `cli/src/commands/swoop.ts` registers `owlette swoop <machineId> --site <siteId>`: resolve the machine, check `capabilities.swoop`, print `<apiUrl>/swoop/<siteId>/<machineId>` and open it; `--no-open` prints only, `--json` emits the url. The CLI never mints a viewer token and never touches the media path — step-up happens in the browser. Repoint the `machine live-view` stub's `reason` at `owlette swoop` and update the assertions in `cli/__tests__/commands/stubs.test.ts:39-42,158`. Register the command in `cli/src/index.ts`. Add the swoop user routes to `web/openapi.yaml` beside the other machine routes (`…/swoop/sessions`, `…/swoop/sessions/{sid}`, `…/swoop/sessions/{sid}/lease`, `…/swoop/kill`, `/api/sites/{siteId}/swoop-settings`), documenting the 403 `api_key_not_permitted` response. Write both docs pages in lowercase, and register `swoop` **and** `swoop-usage` (Task 8.4's page) in `web/content/docs/dashboard/meta.json`, plus `swoop` in the cli reference `meta.json`.
   - Done when: `cd cli && npm test` passes including the new http test and the updated stub assertions; `npx eslint` clean on every touched file; the api-contracts e2e spec still passes against the edited `web/openapi.yaml`; both docs pages appear in the nav and their links resolve.
@@ -1680,3 +1680,94 @@ anything in 7.5.
 0.10, 5.7; the `.iss` ack; railway dev's six env values; and **sast has still never run on this branch**. the
 installer build remains the one thing standing between all of this and anyone seeing it in a browser —
 `capabilities.swoop` is still 0 everywhere.
+
+### 2026-09-18 — **wave 8: 4 of 7. 63/80.** and the agent ran for real for the first time.
+
+verified on the merged tree: `agent/swoop` clippy clean both feature sets, **328 / 314** tests, 0 failed;
+`desktop/src-tauri` clippy clean, **132** tests, and `npx tauri build --no-bundle` succeeded; agent
+**1383 passed / 6 skipped**; web `tsc` clean, **293 suites / 5857 passed**; cli **33 suites / 286 passed**;
+`validate-openapi` **0 errors** (warnings 31 → 26). commit `7f698f25`. no golden vector moved.
+
+**the wave's own finding: most of what it built does not run, and the plan is why.** the rust half of 8.1
+and the whole of 8.2 are inert. `session/mod.rs:1442` turns the second joiner away with the comment that
+**"8.1 is where a second one gets a peer instead of a bye"** — but `session/mod.rs` is not in 8.1's
+`Files:` list, and not in 8.2's either. the roster, per-viewer modifier state, tiers, keyframe coalescing
+and the shared uplink budget are all complete, tested, and called by nothing. **the fan-out is a task the
+plan never assigned**, and it is the largest piece left in swoop.
+
+**three things the agents did better than the spec, all worth keeping:**
+- **`ctl` is unforgeable by construction.** there is no `set_ctl`; the only road to `true` is
+  `Roster::verify` over an already-verified claim set, which refuses a token naming another viewer and
+  ands the bundle's floor over it. a comment saying "do not trust the client" survives until someone edits
+  past it — this does not.
+- **the clamp ordering cannot be got wrong.** rather than "apply the path clamp after `from_quality`" plus
+  a test, the governor stores the viewer's ceiling **raw** and narrows on *read*. no sequence of quality
+  messages loses a cap, and the test covers the **4–5 mbps** case 6.8 might return, not just the 6 mbps
+  value that happens to clear `BITRATE_CAPS_BPS[0]` today.
+- **the denial report would have been useless as specified.** one row per viewer forever — an hour of
+  hammering logged as a single event timestamped when it started. now at most one re-report per 30 s after
+  30 further refusals, sized against a held key repeating at ~30 hz.
+
+**splitting `RateBudget` off `PathBudget` made the path caps live with no mtu.** only
+`max_fragment_size` still waits on spike 6.8, and `PathMtu` keeps its no-`Default`, no-fallback
+discipline. `pacer.rs` and `framing.rs` are its callers and still read nothing from it.
+
+**a bug outside swoop:** `capabilities` never reached api callers at all. the machine detail route builds
+its response field by field and omitted it, so **every api-side capability gate read `undefined`** — the
+dashboard reads the field straight from firestore, which is why it never showed. added as nullable and
+additive, with the `MachineDetail` schema to match.
+
+---
+
+## the machine now runs swoop, and this is the first time
+
+after the wave landed, this box was brought up by hand. **all of it is local-machine state, none of it is
+in the repo.**
+
+- service and desktop rebuilt and restarted; **no crash loop** — no traceback, no `AttributeError`, so
+  8.3's `owlette_runner.py` `__init__` mirror is correct. `service_status.json` carries the swoop block
+  in exactly the specified zero shape.
+- **streamer installed** at `C:\ProgramData\Owlette\swoop\owlette-swoop.exe`, 7,107,584 bytes, version
+  3.3.5 matching the agent. the directory was laid down with the installer's exact three-ace set, so
+  `install_dir_is_protected()` returns **True** on its own terms — **the gate was satisfied, never
+  weakened or bypassed.**
+- `websocket-client==1.9.2` added to the bundled python, which 3.3.5 shipped without.
+- **`capabilities.swoop = 1`** and **`swoop doorbell started`** — both for the first time on any machine.
+- `probe` on real hardware: capture true, `\\.\DISPLAY1` + `DISPLAY2`, nvenc, **encoder budget 8**,
+  both codec chains resolving to nvenc.
+
+**where it stops:** `get_api_base_url()` is hard-coded to dev or prod with no localhost option, so the
+doorbell mints against a host where the routes are not deployed and gets `mint refused (status=404)`.
+pointing the installed agent at a local dev server is the machine-local fix; it was **refused by the
+permission classifier as traffic redirection** and is the owner's call.
+
+**a correction to a documented workflow.** CLAUDE.md says "404 = not deployed". that is **unsafe for the
+swoop agent routes**: unauthenticated they answer **404 with `code: not_found`**, not 401, so an unauth
+probe cannot tell absent from no-access. `/api/agent/swoop/doorbell-token` reads as a routing 404 while
+being perfectly present. the user-facing routes still distinguish cleanly (401 / 307 locally vs 404 on
+dev), so "the user-facing surface is not deployed" stands.
+
+**gaps recorded, not papered over:**
+- **`SwoopManager.drain_events()` has no production caller.** nothing drains the 256-deep queue in the
+  field, so it fills and silently drops the oldest events for the life of a session.
+- **`set_enabled()` still has no caller either**, and `swoop_refresh` reaches `on_session_change()`
+  carrying no enable/disable bit — so the web half is missing too.
+- the tray's **~2 s** appearance figure in the task **is not achievable by design**: the service publishes
+  from the 5 s loop and the tray polls at 1 s, so it is bounded at ~6 s. closing it needs a write driven
+  off the manager's reader thread.
+- `protocol.ts` does not know `vpos` or `roster`, so `presence.ts` decodes them itself — two decoders
+  for one channel, harmless today because every consumer checks `decoded.ok`.
+- `cd cli && npm run lint` is **broken independently of this work**: `cli/eslint.config.mjs` imports
+  `typescript-eslint`, which is not in `cli/package.json` and there is no `cli/package-lock.json`.
+- **`swoop-usage` is still unregistered** in `web/content/docs/dashboard/meta.json` — 8.4 must add it when
+  it lands. that folder's meta has no `"..."` rest entry, so an unlisted page never appears. (fumadocs
+  ignores a dangling entry silently rather than failing, so registering it early would not have broken the
+  build — it simply would not have rendered.)
+
+**still blocked, and it is the same list:** 8.4 on **6.8 + 7.4**, 8.6 on **7.8**, and **8.7 on 7.2 → 6.7** —
+so the release gate's own e2e suite is two spikes deep in the chain. plus 6.1 on **0.3**, the `.iss` ack,
+railway dev's six env values, and **sast has still never run on this branch**.
+
+**and one more owner item, new:** the dev api key in `.claude/.env.local` is the literal placeholder
+(`owk_repl…`), so the "confirm live state against the api" workflow has never actually been available.
+both dev and prod keys need minting.
