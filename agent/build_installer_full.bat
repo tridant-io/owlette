@@ -346,6 +346,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: the vendored opus declares cmake_minimum_required(3.1) and cmake 4.0 refuses
+:: anything below 3.5. harmless on an older cmake, required on a new one.
+set "CMAKE_POLICY_VERSION_MINIMUM=3.5"
+
 pushd "%SWOOP_DIR%"
 call cargo build --release --features audio-opus
 if errorlevel 1 (

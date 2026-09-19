@@ -122,10 +122,18 @@ jobs:
       # audiopus_sys vendors libopus and needs cmake; windows-latest has it.
       - name: clippy owlette-swoop (audio-opus)
         working-directory: agent/swoop
+        env:
+          # audiopus_sys vendors an opus whose CMakeLists declares
+          # cmake_minimum_required(3.1), and cmake 4.0 removed support for
+          # anything below 3.5. the runner ships cmake 4.x. documented on the
+          # audiopus_sys pin in Cargo.toml; exit condition is the same line.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: cargo clippy --all-targets --features audio-opus -- -D warnings
 
       - name: test owlette-swoop (audio-opus)
         working-directory: agent/swoop
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: cargo test --locked --features audio-opus
 
       # No `npm ci && npm run build` in desktop/ first: tauri-build only warns
