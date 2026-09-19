@@ -14,10 +14,13 @@ machine rather than degrading it. Task 3.1 assigns the instance as
 
 import json
 import logging
+import os
 import queue
+import subprocess
 import threading
 import time
 
+import shared_utils
 import swoop_spawn
 
 logger = logging.getLogger(__name__)
@@ -61,6 +64,34 @@ WORK_QUEUE_MAX = 32
 # worth less than the agent's memory, and it is never worth blocking the reader.
 AUDIT_QUEUE_MAX = 100
 AUDIT_BATCH_MAX = 20
+
+# side effects -- the two machine-wide changes swoop needs, and the record that
+# makes both of them reversible. the identities below are the ones the enable,
+# the disable and the uninstaller all agree on; changing one changes three.
+FIREWALL_RULE_NAME = 'Owlette-swoop-UDP-In'
+FIREWALL_RULE_DISPLAY = 'Owlette swoop'
+FIREWALL_MDNS_RULE_NAME = 'Owlette-swoop-mDNS-In'
+FIREWALL_MDNS_RULE_DISPLAY = 'Owlette swoop (mDNS)'
+# every rule carries the group, because deleting by group is what lets the
+# uninstaller sweep them without knowing each name.
+FIREWALL_GROUP = 'Owlette swoop'
+MDNS_PORT = 5353
+
+SAS_POLICY_KEY = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+SAS_VALUE_NAME = 'SoftwareSASGeneration'
+SAS_ENABLED_VALUE = 3
+SAS_VALUE_MAX = 3
+# the policy's unset state is a value in its own right: restoring "absent" as a
+# zero would turn a policy nobody set into one explicitly disabled.
+SAS_ABSENT = 'absent'
+
+STATE_KEY_FIREWALL = 'firewall'
+STATE_KEY_SAS_PRIOR = 'sasPrior'
+SIDE_EFFECT_STATE_PATH = shared_utils.get_data_path('tmp/swoop_side_effects.json')
+
+# generous: New-NetFirewallRule on a machine with a cold WMI/MI stack is slow,
+# and this never runs on the service's loop.
+POWERSHELL_TIMEOUT_S = 60
 
 
 class SwoopManager:
@@ -110,6 +141,10 @@ class SwoopManager:
     def kill(self, reason='kill'):
         """End the current session. Returns without waiting."""
         self._submit(('kill', reason))
+
+    def set_enabled(self, enabled):
+        """Apply or undo swoop's machine-wide side effects. Returns without waiting."""
+        self._submit(('side_effects', bool(enabled)))
 
     def on_session_change(self):
         """A swoop session may have appeared or gone -- poke the doorbell."""
@@ -172,6 +207,8 @@ class SwoopManager:
                     self._do_ensure(payload)
                 elif action == 'kill':
                     self._do_kill(payload)
+                elif action == 'side_effects':
+                    self._do_side_effects(payload)
             except Exception as e:
                 logger.error('swoop: %s failed: %s', action, e)
 
@@ -453,6 +490,96 @@ class SwoopManager:
                 # draining. requests' message carries the status and url only.
                 logger.warning('swoop: %d host events not recorded: %s', len(batch), e)
 
+    # side effects
+
+    def _do_side_effects(self, enabled):
+        if enabled:
+            self._enable_side_effects()
+        else:
+            self._disable_side_effects()
+
+    def _enable_side_effects(self):
+        """Add the firewall rule and set the SAS policy, once, and never raise.
+
+        Always on a worker thread -- a powershell spawn on the service's
+        5-second loop would stall every other check. Nothing here elevates: the
+        service is already SYSTEM, so there is no ``runas`` and no path that can
+        raise a UAC prompt.
+        """
+        try:
+            state = _read_side_effect_state()
+            if state is None:
+                # an unreadable record is not an empty one: capturing again
+                # would record the 3 we set ourselves as the value to restore.
+                logger.warning('swoop: side-effect record unreadable, nothing applied')
+                return
+
+            applied = []
+            exe_path = shared_utils.get_swoop_exe_path()
+            if not exe_path:
+                logger.debug('swoop: streamer not installed, no firewall rule')
+            # the recorded path, not a flag: an install that moved leaves a rule
+            # scoped to the old exe, and only the path says so.
+            elif state.get(STATE_KEY_FIREWALL) != exe_path:
+                if _run_powershell(_firewall_create_script(exe_path)):
+                    state[STATE_KEY_FIREWALL] = exe_path
+                    applied.append('firewall')
+
+            prior = None
+            if STATE_KEY_SAS_PRIOR not in state:
+                prior = _read_sas_value()
+                if prior is None:
+                    logger.warning('swoop: sas policy unreadable, leaving it alone')
+                else:
+                    state[STATE_KEY_SAS_PRIOR] = prior
+
+            if not applied and prior is None:
+                return
+
+            if not _write_side_effect_state(state):
+                # the record is the only thing that can undo the policy, so the
+                # policy does not move until the record is on disk.
+                return
+            if prior is not None and _write_sas_value(SAS_ENABLED_VALUE):
+                applied.append(f'sas prior={prior}')
+
+            if applied:
+                self._log_event('swoop_side_effects_applied', 'info', ' '.join(applied))
+        except Exception as e:
+            logger.error('swoop: applying side effects failed: %s', e)
+            self._log_event('swoop_side_effects_failed', 'warning', f'enable: {e}')
+
+    def _disable_side_effects(self):
+        """Remove the rule and put the policy back exactly. Never raises."""
+        try:
+            state = _read_side_effect_state()
+            if not state:
+                # no record -- unreadable included -- means nothing of ours is
+                # on this machine to undo.
+                return
+
+            removed = []
+            if state.get(STATE_KEY_FIREWALL) and _run_powershell(_firewall_remove_script()):
+                state.pop(STATE_KEY_FIREWALL)
+                removed.append('firewall')
+            if STATE_KEY_SAS_PRIOR in state:
+                prior = state[STATE_KEY_SAS_PRIOR]
+                if _restore_sas_value(prior):
+                    state.pop(STATE_KEY_SAS_PRIOR)
+                    removed.append(f'sas prior={prior}')
+
+            # whatever is left failed and is retried on the next disable.
+            if state:
+                _write_side_effect_state(state)
+            else:
+                _clear_side_effect_state()
+
+            if removed:
+                self._log_event('swoop_side_effects_removed', 'info', ' '.join(removed))
+        except Exception as e:
+            logger.error('swoop: removing side effects failed: %s', e)
+            self._log_event('swoop_side_effects_failed', 'warning', f'disable: {e}')
+
     # firebase plumbing
 
     def _auth_manager(self):
@@ -471,3 +598,166 @@ class SwoopManager:
             self._firebase.log_event(action, level, details=details)
         except Exception as e:
             logger.debug('swoop: log_event(%s) failed: %s', action, e)
+
+
+# side-effect primitives. every one of them returns a value rather than raising,
+# because the two callers above must never fail a session over a firewall rule.
+
+def _read_side_effect_state():
+    """The record as a dict, ``{}`` when there is none, ``None`` when unreadable."""
+    try:
+        with open(SIDE_EFFECT_STATE_PATH, 'r') as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        logger.warning('swoop: side-effect record not readable: %s', e)
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def _write_side_effect_state(state):
+    try:
+        os.makedirs(os.path.dirname(SIDE_EFFECT_STATE_PATH), exist_ok=True)
+        tmp_path = SIDE_EFFECT_STATE_PATH + '.tmp'
+        with open(tmp_path, 'w') as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp_path, SIDE_EFFECT_STATE_PATH)
+        return True
+    except OSError as e:
+        logger.error('swoop: side-effect record not written: %s', e)
+        return False
+
+
+def _clear_side_effect_state():
+    try:
+        os.remove(SIDE_EFFECT_STATE_PATH)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning('swoop: side-effect record not removed: %s', e)
+
+
+def _ps_quote(text):
+    """``text`` as a powershell single-quoted literal."""
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def _firewall_create_script(exe_path):
+    """Remove-then-create, so a rule left by a relocated install is corrected
+    rather than kept, and a second enable lands on the same two rules.
+
+    ``-Profile Any`` because kiosks land on networks Windows calls Public, and
+    a Private-only rule would fail exactly where swoop is needed.
+    """
+    common = (f"-Group {_ps_quote(FIREWALL_GROUP)} -Direction Inbound -Action Allow"
+              " -Enabled True -Profile Any -Protocol UDP -ErrorAction Stop")
+    return (
+        f"Remove-NetFirewallRule -Name {_ps_quote(FIREWALL_RULE_NAME)}"
+        " -ErrorAction SilentlyContinue;"
+        f"New-NetFirewallRule -Name {_ps_quote(FIREWALL_RULE_NAME)}"
+        f" -DisplayName {_ps_quote(FIREWALL_RULE_DISPLAY)} {common}"
+        f" -LocalPort Any -Program {_ps_quote(exe_path)} | Out-Null;"
+        f"Remove-NetFirewallRule -Name {_ps_quote(FIREWALL_MDNS_RULE_NAME)}"
+        " -ErrorAction SilentlyContinue;"
+        f"New-NetFirewallRule -Name {_ps_quote(FIREWALL_MDNS_RULE_NAME)}"
+        f" -DisplayName {_ps_quote(FIREWALL_MDNS_RULE_DISPLAY)} {common}"
+        f" -LocalPort {MDNS_PORT} | Out-Null"
+    )
+
+
+def _firewall_remove_script():
+    """By group, so both rules go in one call and a missing one is not an error."""
+    return (f"Remove-NetFirewallRule -Group {_ps_quote(FIREWALL_GROUP)}"
+            " -ErrorAction SilentlyContinue; exit 0")
+
+
+def _run_powershell(script, timeout=POWERSHELL_TIMEOUT_S):
+    """Run one ``-Command`` and report whether it exited 0.
+
+    No shell, no ``runas``, no ShellExecute: the service is already SYSTEM and
+    nothing here may raise a UAC prompt.
+    """
+    try:
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+            capture_output=True, text=True, timeout=timeout,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+        )
+    except Exception as e:
+        logger.warning('swoop: powershell did not run: %s', e)
+        return False
+    if result.returncode != 0:
+        logger.warning('swoop: powershell exited %s', result.returncode)
+        return False
+    return True
+
+
+def _open_sas_key(access):
+    import winreg
+    # the 64-bit view explicitly: the policy lives there, and a 32-bit python
+    # would otherwise be redirected into WOW6432Node.
+    return winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, SAS_POLICY_KEY, 0,
+                          access | winreg.KEY_WOW64_64KEY)
+
+
+def _read_sas_value():
+    """The policy value, :data:`SAS_ABSENT` when unset, ``None`` when unreadable."""
+    try:
+        import winreg
+    except ImportError:
+        return None
+    try:
+        with _open_sas_key(winreg.KEY_READ) as key:
+            value, _ = winreg.QueryValueEx(key, SAS_VALUE_NAME)
+        return int(value)
+    except FileNotFoundError:
+        return SAS_ABSENT
+    except (OSError, TypeError, ValueError) as e:
+        logger.warning('swoop: sas policy not readable: %s', e)
+        return None
+
+
+def _write_sas_value(value):
+    try:
+        import winreg
+    except ImportError:
+        return False
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, SAS_POLICY_KEY, 0,
+                                winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
+            winreg.SetValueEx(key, SAS_VALUE_NAME, 0, winreg.REG_DWORD, int(value))
+        return True
+    except OSError as e:
+        logger.warning('swoop: sas policy not written: %s', e)
+        return False
+
+
+def _delete_sas_value():
+    try:
+        import winreg
+    except ImportError:
+        return False
+    try:
+        with _open_sas_key(winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, SAS_VALUE_NAME)
+        return True
+    except FileNotFoundError:
+        return True  # already gone, which is what the caller asked for
+    except OSError as e:
+        logger.warning('swoop: sas policy not cleared: %s', e)
+        return False
+
+
+def _restore_sas_value(prior):
+    """Put the policy back exactly: absent deletes the value, 0..3 sets it.
+
+    Anything else is refused rather than guessed -- a damaged record must not
+    turn a policy nobody set into one that is explicitly set.
+    """
+    if prior == SAS_ABSENT:
+        return _delete_sas_value()
+    if isinstance(prior, int) and not isinstance(prior, bool) and 0 <= prior <= SAS_VALUE_MAX:
+        return _write_sas_value(prior)
+    logger.warning('swoop: sas record is not restorable, policy left as it is')
+    return False

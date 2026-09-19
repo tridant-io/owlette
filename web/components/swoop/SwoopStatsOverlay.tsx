@@ -2,8 +2,8 @@
 
 /**
  * the per-stage latency breakdown — capture, encode, send, arrive, decode,
- * present — plus the app-level rtt `feedback.ts` measures. task 7.6 adds the
- * path profile.
+ * present — plus the app-level rtt `feedback.ts` measures, and the path
+ * profile with the cap that path carries.
  *
  * every number here already arrives through `FrameObservation`, resampled once
  * a second by `useSwoopSession`. this component must never arm a second
@@ -19,7 +19,7 @@
  * needs no offset at all.
  */
 
-import { Fragment } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import type { SwoopSession } from '@/lib/swoop/features';
 import type { SwoopStats } from '@/hooks/useSwoopSession';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';
@@ -37,6 +37,93 @@ interface Row {
 }
 
 const show = (ms: number | null): string => (ms === null ? '—' : `${ms.toFixed(1)} ms`);
+
+export type SwoopPathProfile = 'direct' | 'relay-udp' | 'relay-tls';
+
+/**
+ * the read-out of `agent/swoop/src/transport/budget.rs`. the host classifies
+ * the path from its own selected pair and is the only thing that enforces a
+ * cap — this side re-derives the same answer from `getStats()` so the overlay
+ * can say what is in force without a new field on a frozen wire type. the
+ * numbers and the strings are that module's; keep the two in step.
+ *
+ * the fragment size is not shown: it comes from the relay path mtu spike 6.8
+ * has not measured yet, and a placeholder here would read as a measurement.
+ */
+const PATH_BUDGETS: Record<SwoopPathProfile, { label: string; cap: string; reason: string }> = {
+  direct: {
+    label: 'direct',
+    cap: '50 mbps / 60 fps',
+    reason: 'peer to peer — no relay cap',
+  },
+  'relay-udp': {
+    label: 'relayed (udp)',
+    cap: '25 mbps / 60 fps',
+    reason: 'relay shapes above ~50 mbps and ~5 kpps',
+  },
+  'relay-tls': {
+    label: 'relayed (tls)',
+    cap: '6 mbps / 30 fps',
+    reason: 'tcp head-of-line blocking — fec off',
+  },
+};
+
+/**
+ * the selected candidate pair's local candidate, as the two fields the rust
+ * classifier reads. an unknown token is the looser answer on both axes, for
+ * the reason `budget.rs` gives: a session wrongly shown as degraded looks like
+ * a bad network and reports nothing.
+ */
+export function classifyPath(report: RTCStatsReport): SwoopPathProfile | null {
+  let local: { candidateType?: string; relayProtocol?: string } | undefined;
+  report.forEach((entry) => {
+    const stat = entry as { type?: string; state?: string; nominated?: boolean; localCandidateId?: string };
+    if (stat.type !== 'candidate-pair' || stat.state !== 'succeeded' || stat.nominated === false) return;
+    if (!stat.localCandidateId) return;
+    local = report.get(stat.localCandidateId) as typeof local;
+  });
+  if (!local?.candidateType) return null;
+  if (local.candidateType !== 'relay') return 'direct';
+  const protocol = local.relayProtocol;
+  return protocol === 'tcp' || protocol === 'tls' || protocol === 'ssltcp' ? 'relay-tls' : 'relay-udp';
+}
+
+/** how often the path is re-read. a forced-relay session has to show inside 2 s. */
+const PATH_POLL_MS = 1000;
+
+/**
+ * the read carries the session it came from, so a second session's overlay
+ * cannot show the first one's path for a poll — that is state the effect would
+ * otherwise have to clear synchronously, which is a cascading render.
+ */
+function usePathProfile(session: SwoopSession | null, open: boolean): SwoopPathProfile | null {
+  const [read, setRead] = useState<{ of: SwoopSession; profile: SwoopPathProfile | null } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!session || !open) return;
+    let live = true;
+    const poll = async () => {
+      let report: RTCStatsReport;
+      try {
+        report = await session.peer.connection.getStats();
+      } catch {
+        // a closing peer: keep the last answer rather than flapping to unknown.
+        return;
+      }
+      if (live) setRead({ of: session, profile: classifyPath(report) });
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), PATH_POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [session, open]);
+
+  return read && read.of === session ? read.profile : null;
+}
 
 /**
  * the six stages, each the interval between two consecutive stamps. the last
@@ -74,9 +161,11 @@ function stageRows(frame: FrameObservation | null, offsetUs: number | null): Row
   ];
 }
 
-export function SwoopStatsOverlay({ stats, open }: SwoopStatsOverlayProps) {
+export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayProps) {
+  const path = usePathProfile(session, open);
   if (!open) return null;
 
+  const budget = path ? PATH_BUDGETS[path] : null;
   const { frame, feedback, presenter } = stats;
   const offsetUs = feedback?.clockOffsetUs ?? null;
   const rows = stageRows(frame, offsetUs);
@@ -115,7 +204,14 @@ export function SwoopStatsOverlay({ stats, open }: SwoopStatsOverlayProps) {
         <dd className="text-right font-mono text-foreground">
           {presenter.gaps} / {presenter.duplicates}
         </dd>
+        <dt className="mt-1 border-t border-border pt-1">path</dt>
+        <dd className="mt-1 border-t border-border pt-1 text-right font-mono text-foreground">
+          {budget ? budget.label : '—'}
+        </dd>
+        <dt>cap</dt>
+        <dd className="text-right font-mono text-foreground">{budget ? budget.cap : '—'}</dd>
       </dl>
+      {budget ? <p className="mt-1 leading-snug">{budget.reason}</p> : null}
     </aside>
   );
 }

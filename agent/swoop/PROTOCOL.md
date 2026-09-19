@@ -330,7 +330,7 @@ loop.
 `input_not_permitted`, `join_refused`, `clipboard_audit` — so a name added here has to be added there too, or
 the route answers 400 for the whole batch. `viewer` is absent when the refusal is not attributable to one.
 
-`status` carries thirteen **optional** fields, each omitted when it has nothing to say: a session whose
+`status` carries fourteen **optional** fields, each omitted when it has nothing to say: a session whose
 features are all quiet and whose peer is down emits exactly the nine-field line above, which is what the
 golden vector holds.
 
@@ -343,6 +343,7 @@ golden vector holds.
 | `denials` | the control gate's cumulative refusals, including every one suppressed behind a single `host_event`. absent means zero. |
 | `testOverride` | the bundle's test-only `overrides`, named so an overridden session cannot pass for a real one in `logs/swoop`. absent on every release build, which refuses such a bundle with exit 10. |
 | `idrs` | keyframes the host actually forced since `ready`, **after** section 4's coalescing — not the number of requests, which a receiver in a loss storm raises on every record. absent means zero. |
+| `encoder` | which backend of the fallback chain the session is encoding on: `nvenc` \| `qsv` \| `amf` \| `mf` \| `openh264`. absent until a viewer's offer has named a codec and the first encoder is open, and absent again once the last viewer leaves — the pause closes the encoder with the duplication. `ready`'s `codecs[]` says what the machine *can* do; this says what it did. |
 
 the five below are the rate governor's, and they ride a `status` **only while a viewer's peer is connected**:
 with nobody watching there is no rate being governed, `bitrateKbps` and `fps` are already zero, and the

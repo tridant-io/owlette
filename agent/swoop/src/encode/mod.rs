@@ -25,6 +25,11 @@ pub mod qsv;
 #[cfg(any(feature = "encode-openh264", feature = "encode-ffmpeg"))]
 pub mod soft;
 
+// The chain over whichever of the above are built, and the only module that
+// knows their order. Never gated: with no backend compiled in it still answers,
+// with nothing.
+pub mod select;
+
 /// Video codecs, in the order plan.md D5 prefers them.
 ///
 /// A codec is chosen per viewer from the browser's capability probe ∩ this

@@ -24,16 +24,21 @@ fn main() -> ExitCode {
             println!("{}", env!("CARGO_PKG_VERSION"));
             ExitCode::from(exit::OK)
         }
-        Some("probe") => match serde_json::to_string(&probe::report()) {
-            Ok(json) => {
-                println!("{json}");
-                ExitCode::from(exit::OK)
+        // The report prints whichever way it goes: a machine that cannot encode
+        // is exactly the one somebody needs the adapter list from.
+        Some("probe") => {
+            let report = probe::report();
+            match serde_json::to_string(&report) {
+                Ok(json) => {
+                    println!("{json}");
+                    ExitCode::from(report.exit().code())
+                }
+                Err(e) => {
+                    eprintln!("owlette-swoop: probe failed: {e}");
+                    ExitCode::from(exit::INTERNAL)
+                }
             }
-            Err(e) => {
-                eprintln!("owlette-swoop: probe failed: {e}");
-                ExitCode::from(exit::INTERNAL)
-            }
-        },
+        }
         Some("run") => run(),
         _ => {
             eprintln!("usage: owlette-swoop <run|probe|version>");

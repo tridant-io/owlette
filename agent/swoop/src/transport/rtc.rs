@@ -85,10 +85,11 @@ use str0m::format::Codec as Str0mCodec;
 use str0m::media::{MediaAdded, MediaKind, MediaTime, Mid, Pt};
 use str0m::net::{Protocol, Receive};
 use str0m::rtp::{Extension, ExtensionMap};
-use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
+use str0m::{Candidate, CandidateKind, Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
 
 use crate::encode::{Codec, EncodedFrame};
 use crate::signal::messages::channel::Channel;
+use crate::transport::ice_policy::{self, IceEvent};
 use crate::transport::pacer::{Admission, PacerStats, SendPacer};
 use crate::transport::VideoSink;
 
@@ -129,6 +130,12 @@ const BWE_HEADROOM: u64 = 3;
 /// The poll loop never sleeps past this even when str0m has nothing to do, so
 /// a caller that passes a generous budget still comes back to look for frames.
 const MIN_POLL_WAIT: Duration = Duration::from_micros(200);
+
+/// How many of the viewer's relay candidates are remembered, for the one
+/// question [`crate::transport::ice_policy`] asks about the selected pair. A
+/// browser trickles a handful; the cap is because the list is the viewer's own
+/// input and it is held for the life of the peer.
+const MAX_TRACKED_RELAYS: usize = 32;
 
 // --------------------------------------------------------------- config ---
 
@@ -173,6 +180,10 @@ pub enum PeerEvent {
     /// A local candidate to trickle to the viewer through the signaling
     /// client, as an SDP `candidate:` attribute value.
     LocalCandidate(String),
+    /// An edge for [`crate::transport::ice_policy::IcePolicy::observe`]. The
+    /// policy is the session's, not the peer's — it outlives a renegotiation
+    /// and it is the thread with the clock — so the peer only reports.
+    Ice(IceEvent),
     /// PLI or FIR. The session coalesces keyframes across viewers and asks the
     /// encoder once (plan.md D14) — this is never forwarded straight through.
     KeyframeRequest,
@@ -353,6 +364,12 @@ pub struct RtcPeer {
     pacer: SendPacer,
     out: OutQueue,
     channels: Vec<(ChannelId, Channel)>,
+    /// The addresses of the viewer's `typ relay` candidates, which is all the
+    /// pair classification below needs — the host's own candidates are host
+    /// candidates until Task 7.4 allocates a relay.
+    remote_relays: Vec<SocketAddr>,
+    /// Where str0m last asked for a packet to go. See [`RtcPeer::on_send_addr`].
+    sending_to: Option<SocketAddr>,
     /// Emitted on the next poll: candidates are gathered while answering, and
     /// the caller's event vector only exists inside `poll`.
     pending_events: VecDeque<PeerEvent>,
@@ -435,6 +452,8 @@ impl RtcPeer {
             pacer: SendPacer::new(Instant::now(), u64::from(cfg.bitrate_bps), cfg.fps),
             out: OutQueue::default(),
             channels: Vec::new(),
+            remote_relays: Vec::new(),
+            sending_to: None,
             pending_events: VecDeque::new(),
             keyframe_requested: false,
             irap_sent: false,
@@ -511,7 +530,7 @@ impl RtcPeer {
     pub fn accept_offer(&mut self, offer: &str) -> Result<String> {
         let parsed = SdpOffer::from_sdp_string(offer).map_err(|e| anyhow!("parse offer: {e}"))?;
         if self.stats.negotiations == 0 {
-            let candidate = Candidate::host(self.local_addr, "udp")
+            let candidate = Candidate::host(self.local_addr, ice_policy::LOCAL_TRANSPORT)
                 .map_err(|e| anyhow!("host candidate for {}: {e}", self.local_addr))?;
             self.add_local_candidate(candidate)?;
         }
@@ -526,9 +545,18 @@ impl RtcPeer {
     }
 
     /// Add one local candidate and queue it for trickling. The host candidate
-    /// is added while answering; Task 7.4/7.5 adds server-reflexive and
-    /// relayed ones through here.
+    /// is added while answering; Task 7.4 adds server-reflexive and relayed
+    /// ones through here.
     pub fn add_local_candidate(&mut self, candidate: Candidate) -> Result<()> {
+        // §2 of the ICE policy: a passive ICE-TCP candidate is unreachable from
+        // every browser we serve, so one is never gathered — and a relay
+        // candidate arrives over udp too.
+        if !ice_policy::gathers_local_transport(&candidate.proto().to_string()) {
+            return Err(anyhow!(
+                "swoop gathers {} candidates only",
+                ice_policy::LOCAL_TRANSPORT
+            ));
+        }
         let sdp = candidate.to_sdp_string();
         if self.rtc.add_local_candidate(candidate).is_none() {
             return Err(anyhow!("str0m rejected the local candidate {sdp}"));
@@ -539,11 +567,48 @@ impl RtcPeer {
     }
 
     /// A candidate trickled by the viewer, as the SDP attribute value.
+    ///
+    /// It has already been through
+    /// [`crate::transport::ice_policy::admit_remote`] — an mDNS name arrives
+    /// here resolved, because str0m parses a candidate into a `SocketAddr` and
+    /// has no resolver of its own.
     pub fn add_remote_candidate(&mut self, candidate: &str) -> Result<()> {
         let parsed = Candidate::from_sdp_string(candidate)
             .map_err(|e| anyhow!("parse remote candidate: {e}"))?;
+        if parsed.kind() == CandidateKind::Relayed
+            && self.remote_relays.len() < MAX_TRACKED_RELAYS
+            && !self.remote_relays.contains(&parsed.addr())
+        {
+            self.remote_relays.push(parsed.addr());
+        }
         self.rtc.add_remote_candidate(parsed);
         Ok(())
+    }
+
+    /// Is the pair ICE is on a relayed one?
+    ///
+    /// str0m 0.23 reports no selected pair, so this is what can be known for
+    /// certain instead: every packet it asks to be sent once the peer is up
+    /// goes to the nominated remote candidate, so the destination *is* that
+    /// candidate. An address that is not one of the viewer's relay candidates
+    /// is a direct one — including a peer-reflexive address str0m learned and
+    /// we were never told about, which is direct by definition.
+    fn sending_over_relay(&self) -> bool {
+        self.sending_to
+            .is_some_and(|addr| self.remote_relays.contains(&addr))
+    }
+
+    /// One nominated-pair datagram's destination. A change of it under a live
+    /// peer is the pair changing, which is exactly what the promotion timer
+    /// wants — before the peer is up there is no selection to report.
+    fn on_send_addr(&mut self, destination: SocketAddr, events: &mut Vec<PeerEvent>) {
+        if self.state != PeerState::Connected || self.sending_to == Some(destination) {
+            return;
+        }
+        self.sending_to = Some(destination);
+        events.push(PeerEvent::Ice(IceEvent::PairChanged {
+            relayed: self.sending_over_relay(),
+        }));
     }
 
     /// Queue one record for a channel. Never blocks and never writes straight
@@ -579,11 +644,20 @@ impl RtcPeer {
                 Output::Timeout(t) => break t,
                 Output::Transmit(t) => {
                     let len = t.contents.len();
+                    let destination = t.destination;
+                    // RFC 7983's demultiplexer: 0..=3 is STUN, which goes to
+                    // every pair still being checked. Everything above it —
+                    // DTLS, SRTP, SCTP — goes only to the pair ICE nominated,
+                    // which is what makes its destination a pair report.
+                    let nominated = t.contents.first().is_some_and(|first| *first > 3);
                     self.socket
-                        .send_to(&t.contents, t.destination)
-                        .with_context(|| format!("send_to {}", t.destination))?;
+                        .send_to(&t.contents, destination)
+                        .with_context(|| format!("send_to {destination}"))?;
                     self.stats.datagrams_sent += 1;
                     self.pacer.record_sent(now, len);
+                    if nominated {
+                        self.on_send_addr(destination, events);
+                    }
                 }
                 Output::Event(e) => self.handle_event(e, events),
             }
@@ -663,6 +737,14 @@ impl RtcPeer {
                 self.state = PeerState::Connected;
                 events.push(PeerEvent::Connected);
             }
+            // ICE reached a pair. `Completed` restates it once gathering is
+            // over, and either one re-arms the policy's promotion timer against
+            // whatever pair is now carrying the packets.
+            Event::IceConnectionStateChange(
+                IceConnectionState::Connected | IceConnectionState::Completed,
+            ) => events.push(PeerEvent::Ice(IceEvent::Connected {
+                relayed: self.sending_over_relay(),
+            })),
             // Terminal for this peer, both of them: the browser always
             // re-offers (plan.md D8), so a viewer that comes back gets a new
             // peer rather than this one recovering. An ICE *restart* arrives

@@ -11,9 +11,13 @@ if (!('crypto' in globalThis)) {
 
 import { PLAYOUT_DELAY_URI, base64UrlDecode, type SignalingMessage } from '@/lib/swoop/protocol';
 import {
+  DISCONNECTED_GRACE_MS,
   RELAY_PROBE_MS,
   SwoopPeer,
+  candidateType,
   createSwoopIdentity,
+  extractIceUfrag,
+  partitionIceServers,
   playoutDelayNegotiated,
   type RtcPeerConnectionFactory,
   type SwoopIdentity,
@@ -31,7 +35,13 @@ const HOST_FINGERPRINT =
   'A0:A1:A2:A3:A4:A5:A6:A7:A8:A9:AA:AB:AC:AD:AE:AF:B0:B1:B2:B3:B4:B5:B6:B7:B8:B9:BA:BB:BC:BD:BE:BF';
 const HOST_MAC = '978r-6XwmS2AgAfC9QnpRr8zuwaMc7ickNeZyBbcaAQ';
 
-function answerSdp(fingerprint = HOST_FINGERPRINT, withPlayoutDelay = true): string {
+function answerSdp(
+  fingerprint = HOST_FINGERPRINT,
+  withPlayoutDelay = true,
+  // str0m mints fresh credentials for an answered ice restart (rfc 8445 §9),
+  // so the ufrag is what tells one generation's answer from another's.
+  ufrag: string | null = null,
+): string {
   return [
     'v=0',
     'o=- 0 0 IN IP4 127.0.0.1',
@@ -39,6 +49,7 @@ function answerSdp(fingerprint = HOST_FINGERPRINT, withPlayoutDelay = true): str
     't=0 0',
     'm=video 9 UDP/TLS/RTP/SAVPF 96',
     `a=fingerprint:sha-256 ${fingerprint}`,
+    ...(ufrag === null ? [] : [`a=ice-ufrag:${ufrag}`]),
     ...(withPlayoutDelay ? [`a=extmap:5 ${PLAYOUT_DELAY_URI}`] : []),
     'a=sendonly',
     '',
@@ -73,6 +84,8 @@ interface FakePeerState {
   restarts: number;
   closed: number;
   stats: Map<string, unknown>;
+  configurations: RTCConfiguration[];
+  candidates: RTCIceCandidateInit[];
 }
 
 class FakePeerConnection {
@@ -83,11 +96,29 @@ class FakePeerConnection {
   localDescription: { sdp: string } | null = null;
   transceivers: { kind: string; init: unknown }[] = [];
 
+  private active: RTCConfiguration;
+
   constructor(
     readonly configuration: RTCConfiguration,
     private readonly state: FakePeerState,
   ) {
     state.created += 1;
+    this.active = configuration;
+  }
+
+  getConfiguration(): RTCConfiguration {
+    return this.active;
+  }
+
+  setConfiguration(configuration: RTCConfiguration): void {
+    this.active = configuration;
+    this.state.configurations.push(configuration);
+  }
+
+  /** drive an ice state change the way the browser does. */
+  iceState(state: string): void {
+    this.iceConnectionState = state;
+    this.oniceconnectionstatechange?.();
   }
 
   addTransceiver(kind: string, init: unknown): void {
@@ -114,7 +145,9 @@ class FakePeerConnection {
     this.state.remoteDescriptions.push(description);
   }
 
-  async addIceCandidate(): Promise<void> {}
+  async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+    this.state.candidates.push(candidate);
+  }
 
   async getStats(): Promise<Map<string, unknown>> {
     return this.state.stats;
@@ -154,8 +187,22 @@ function newState(): FakePeerState {
     restarts: 0,
     closed: 0,
     stats: relayStats('srflx'),
+    configurations: [],
+    candidates: [],
   };
 }
+
+/** no candidate pair has succeeded yet: nothing is connected. */
+function noStats(): Map<string, unknown> {
+  return new Map<string, unknown>();
+}
+
+const STUN: RTCIceServer = { urls: ['stun:stun.cloudflare.com:3478'] };
+const TURN: RTCIceServer = {
+  urls: ['turn:turn.cloudflare.com:3478?transport=udp', 'turns:turn.cloudflare.com:443?transport=tcp'],
+  username: 'minted',
+  credential: 'by-the-api',
+};
 
 /** a certificate that answers `getFingerprints()` the way a browser does: lowercase. */
 function lowercaseCertificate(): RTCCertificate {
@@ -185,7 +232,7 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-function peerHarness(state = newState()): PeerHarness {
+function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): PeerHarness {
   const sent: SignalingMessage[] = [];
   const errors: SwoopPeerError[] = [];
   const counters = { refreshes: 0, leases: 0 };
@@ -195,7 +242,7 @@ function peerHarness(state = newState()): PeerHarness {
     sid: SID,
     viewerId: VIEWER_ID,
     viewerKey: VIEWER_KEY,
-    iceServers: [{ urls: ['stun:stun.cloudflare.com:3478'] }],
+    iceServers,
     send: (message) => sent.push(message),
     refreshToken: async () => {
       counters.refreshes += 1;
@@ -289,6 +336,8 @@ describe('swoop peer — offer', () => {
     expect(pc.configuration.bundlePolicy).toBe('max-bundle');
     expect(pc.configuration.rtcpMuxPolicy).toBe('require');
     expect(pc.configuration.iceCandidatePoolSize).toBe(1);
+    // relay is the fallback and never the policy.
+    expect(pc.configuration.iceTransportPolicy).toBe('all');
     expect(h.sent.map((m) => m.type)).toEqual(['offer']);
   });
 
@@ -505,6 +554,426 @@ describe('swoop peer — relay promotion', () => {
 
     await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
     expect(h.state.restarts).toBe(0);
+  });
+});
+
+describe('swoop peer — stage-2 browser turn', () => {
+  it('splits the granted list and offers on the stun half alone', async () => {
+    const h = peerHarness(newState(), [STUN, TURN]);
+    await h.peer.start();
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+
+    // cloudflare bills server->client egress, so the host's own allocation is
+    // the one that carries the video unbilled (plan.md D13). the browser's
+    // relay servers are held back until the host says it has none.
+    expect(pc.configuration.iceServers).toEqual([STUN]);
+    expect(h.peer.diagnostics().browserRelayAdded).toBe(false);
+  });
+
+  it('splits an entry that mixes stun and turn urls rather than dropping it', () => {
+    const mixed: RTCIceServer = {
+      urls: ['stun:stun.cloudflare.com:3478', 'turn:turn.cloudflare.com:3478?transport=udp'],
+      username: 'u',
+      credential: 'c',
+    };
+    expect(partitionIceServers([mixed])).toEqual({
+      direct: [{ ...mixed, urls: ['stun:stun.cloudflare.com:3478'] }],
+      relay: [{ ...mixed, urls: ['turn:turn.cloudflare.com:3478?transport=udp'] }],
+    });
+    expect(partitionIceServers([])).toEqual({ direct: [], relay: [] });
+  });
+
+  it('reads the type off a candidate attribute', () => {
+    expect(candidateType('candidate:1 1 udp 1 1.2.3.4 1 typ relay raddr 0.0.0.0')).toBe('relay');
+    expect(candidateType('candidate:1 1 udp 1 1.2.3.4 1 typ host')).toBe('host');
+    expect(candidateType('candidate:1 1 udp 1 1.2.3.4 1')).toBeNull();
+  });
+
+  it('adds the browser relay servers when nothing connected and the host holds no allocation', async () => {
+    jest.useFakeTimers();
+    const state = newState();
+    state.stats = noStats();
+    const h = peerHarness(state, [STUN, TURN]);
+    await h.peer.start();
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS);
+
+    expect(state.configurations).toHaveLength(1);
+    expect(state.configurations[0].iceServers).toEqual([STUN, TURN]);
+    expect(state.restarts).toBe(1);
+    expect(h.state.offers[1]).toEqual({ iceRestart: true });
+    expect(h.peer.diagnostics().browserRelayAdded).toBe(true);
+
+    // and only once, however long it stays unconnected.
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
+    expect(state.configurations).toHaveLength(1);
+  });
+
+  it('leaves the browser relay out when the host trickled a relay candidate of its own', async () => {
+    jest.useFakeTimers();
+    const state = newState();
+    state.stats = noStats();
+    const h = peerHarness(state, [STUN, TURN]);
+    await h.peer.start();
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+    // task 7.4's allocation, announced the only way it can be before media
+    // flows: as a candidate.
+    await h.peer.handleSignal({
+      type: 'candidate',
+      candidate: 'candidate:4 1 udp 41885439 198.51.100.7 49203 typ relay raddr 0.0.0.0 rport 0',
+      sdpMid: '0',
+      sdpMLineIndex: 0,
+    });
+
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
+
+    expect(h.peer.diagnostics().hostHoldsRelay).toBe(true);
+    expect(state.configurations).toHaveLength(0);
+    expect(state.restarts).toBe(0);
+  });
+
+  it('honours an explicit host report over the candidate it saw', async () => {
+    jest.useFakeTimers();
+    const state = newState();
+    state.stats = noStats();
+    const sent: SignalingMessage[] = [];
+    const peer = new SwoopPeer({
+      identity: IDENTITY,
+      sid: SID,
+      viewerId: VIEWER_ID,
+      viewerKey: VIEWER_KEY,
+      iceServers: [STUN, TURN],
+      send: (message) => sent.push(message),
+      hostRelayAllocation: () => true,
+      factory: factoryFor(state, IDENTITY.certificate),
+    });
+    openPeers.push(peer);
+    await peer.start();
+    await peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
+    expect(state.configurations).toHaveLength(0);
+  });
+
+  it('never restarts for a stage 2 it has no relay servers for', async () => {
+    jest.useFakeTimers();
+    const state = newState();
+    state.stats = noStats();
+    const h = peerHarness(state, [STUN]);
+    await h.peer.start();
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
+    expect(state.restarts).toBe(0);
+  });
+
+  it('still owes the promotion attempt after a stage-2 restart', async () => {
+    jest.useFakeTimers();
+    const state = newState();
+    state.stats = noStats();
+    const h = peerHarness(state, [STUN, TURN]);
+    await h.peer.start();
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS);
+    expect(state.restarts).toBe(1);
+
+    // the restart is not a restart until its answer lands: the promotion probe
+    // re-arms off that answer, not off the offer.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'stage2'),
+      mac: HOST_MAC,
+    });
+    expect(state.remoteDescriptions).toHaveLength(2);
+
+    // the stage-2 attempt connected, on relay — which is exactly the pair the
+    // promotion attempt exists for.
+    state.stats = relayStats('relay');
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS);
+    expect(state.restarts).toBe(2);
+    expect(h.peer.diagnostics().promotionUsed).toBe(true);
+
+    // and that is the end of it.
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
+    expect(state.restarts).toBe(2);
+  });
+});
+
+describe('swoop peer — restart triggers', () => {
+  async function live(): Promise<PeerHarness> {
+    const h = peerHarness();
+    await h.peer.start();
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+    (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
+    return h;
+  }
+
+  it('restarts a link that is still disconnected after the grace window', async () => {
+    jest.useFakeTimers();
+    const h = await live();
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+
+    pc.iceState('disconnected');
+    // consent freshness has 30 s to run; the checks get 2 of them.
+    await jest.advanceTimersByTimeAsync(DISCONNECTED_GRACE_MS - 1);
+    expect(h.state.restarts).toBe(0);
+
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.state.restarts).toBe(1);
+    expect(h.state.offers[1]).toEqual({ iceRestart: true });
+    expect(h.errors).toEqual([]);
+  });
+
+  it('leaves a link that recovers inside the grace window alone', async () => {
+    jest.useFakeTimers();
+    const h = await live();
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+
+    pc.iceState('disconnected');
+    await jest.advanceTimersByTimeAsync(DISCONNECTED_GRACE_MS / 2);
+    pc.iceState('connected');
+    await jest.advanceTimersByTimeAsync(DISCONNECTED_GRACE_MS * 10);
+
+    expect(h.state.restarts).toBe(0);
+  });
+
+  it('restarts on failed at once, and gives up on the second one', async () => {
+    jest.useFakeTimers();
+    const h = await live();
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+
+    pc.iceState('failed');
+    await jest.advanceTimersByTimeAsync(0);
+    expect(h.state.restarts).toBe(1);
+    expect(h.errors).toEqual([]);
+
+    // a second failure with no connection in between is a path that is gone.
+    pc.iceState('failed');
+    await jest.advanceTimersByTimeAsync(0);
+    expect(h.state.restarts).toBe(1);
+    expect(h.errors).toEqual(['ice_failed']);
+    expect(h.state.closed).toBe(1);
+  });
+
+  it('earns a fresh restart once the link came back in between', async () => {
+    jest.useFakeTimers();
+    const h = await live();
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+
+    pc.iceState('failed');
+    await jest.advanceTimersByTimeAsync(0);
+    // the restart completes — without its answer there is no new generation to
+    // fail, and the next failure has nothing fresh to ask for.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+      mac: HOST_MAC,
+    });
+    pc.iceState('connected');
+    pc.iceState('failed');
+    await jest.advanceTimersByTimeAsync(0);
+
+    expect(h.state.restarts).toBe(2);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('does not restart after the peer is closed', async () => {
+    jest.useFakeTimers();
+    const h = await live();
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+
+    pc.iceState('disconnected');
+    h.peer.close();
+    await jest.advanceTimersByTimeAsync(DISCONNECTED_GRACE_MS * 10);
+    expect(h.state.restarts).toBe(0);
+  });
+});
+
+describe('swoop peer — the restart answer', () => {
+  /** connected on the first answer, with an ice restart offer outstanding. */
+  async function restarting(): Promise<PeerHarness> {
+    const h = peerHarness();
+    await h.peer.start();
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'first'),
+      mac: HOST_MAC,
+    });
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+    pc.iceState('connected');
+    pc.iceState('failed');
+    await jest.advanceTimersByTimeAsync(0);
+    expect(h.state.restarts).toBe(1);
+    expect(h.state.offers[1]).toEqual({ iceRestart: true });
+    return h;
+  }
+
+  it('reads the ufrag the restart turns over', () => {
+    expect(extractIceUfrag(answerSdp(HOST_FINGERPRINT, true, 'abc123'))).toBe('abc123');
+    expect(extractIceUfrag(answerSdp())).toBeNull();
+  });
+
+  it('applies the answer to a restart offer, which is what puts it in force', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+      mac: HOST_MAC,
+    });
+
+    // restartIce() alone changes nothing: the new credentials arrive in the
+    // answer, so a restart that never reaches setRemoteDescription is a
+    // restart that never happened.
+    expect(h.state.remoteDescriptions).toHaveLength(2);
+    expect(h.state.remoteDescriptions[1]).toEqual({
+      type: 'answer',
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+    });
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
+  });
+
+  it('ignores an answer with no offer outstanding, and a replay of the one in force', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+    const first = answerSdp(HOST_FINGERPRINT, true, 'first');
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: first, mac: HOST_MAC });
+    expect(h.state.remoteDescriptions).toHaveLength(1);
+
+    // a duplicate with nothing outstanding has nothing to answer.
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: first, mac: HOST_MAC });
+    expect(h.state.remoteDescriptions).toHaveLength(1);
+
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+    pc.iceState('connected');
+    pc.iceState('failed');
+    await jest.advanceTimersByTimeAsync(0);
+
+    // and replayed into the restart it still carries the credentials already in
+    // force, so applying it would put the session back on the dead pair. its
+    // mac verifies — this is the check that stops it.
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: first, mac: HOST_MAC });
+    expect(h.state.remoteDescriptions).toHaveLength(1);
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
+
+    // the real one still lands.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+      mac: HOST_MAC,
+    });
+    expect(h.state.remoteDescriptions).toHaveLength(2);
+  });
+
+  it('verifies the mac again on the restart answer', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+
+    const attacker = HOST_FINGERPRINT.replace('A0:', 'FF:');
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(attacker, true, 'second'),
+      mac: HOST_MAC,
+    });
+
+    // the relay gets a second bite at substituting an sdp at every restart, so
+    // the mac is a per-answer check and never a first-answer one.
+    expect(h.state.remoteDescriptions).toHaveLength(1);
+    expect(h.errors).toEqual(['host_mac_mismatch']);
+    expect(h.state.closed).toBe(1);
+  });
+
+  it('checks playout-delay again on the restart answer', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, false, 'second'),
+      mac: HOST_MAC,
+    });
+
+    expect(h.state.remoteDescriptions).toHaveLength(1);
+    expect(h.errors).toEqual(['playout_delay_not_negotiated']);
+  });
+
+  it('holds the candidates that arrive during a restart for its answer', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+    const candidate = 'candidate:9 1 udp 2122260223 192.0.2.8 51234 typ host';
+
+    await h.peer.handleSignal({ type: 'candidate', candidate, sdpMid: '0', sdpMLineIndex: 0 });
+    // added against the answer being replaced it would join the generation on
+    // its way out.
+    expect(h.state.candidates).toHaveLength(0);
+
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+      mac: HOST_MAC,
+    });
+
+    expect(h.state.candidates).toEqual([{ candidate, sdpMid: '0', sdpMLineIndex: 0 }]);
+  });
+
+  it('treats a host-ready after the answer as the host asking for a restart', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'first'),
+      mac: HOST_MAC,
+    });
+
+    // the host answers and never offers, so this is the only ask it has.
+    await h.peer.handleSignal({ type: 'host-ready', sid: SID, to: VIEWER_ID });
+    expect(h.state.restarts).toBe(1);
+    expect(h.state.offers[1]).toEqual({ iceRestart: true });
+
+    // a second ask while that offer is outstanding is the same ask.
+    await h.peer.handleSignal({ type: 'host-ready', sid: SID, to: VIEWER_ID });
+    expect(h.state.restarts).toBe(1);
+
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+      mac: HOST_MAC,
+    });
+    await h.peer.handleSignal({ type: 'host-ready', sid: SID, to: VIEWER_ID });
+    expect(h.state.restarts).toBe(2);
+  });
+
+  it('ignores a host-ready for another session once connected', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'first'),
+      mac: HOST_MAC,
+    });
+
+    await h.peer.handleSignal({ type: 'host-ready', sid: 'sid_someone_else' });
+    expect(h.state.restarts).toBe(0);
+    expect(h.sent.map((m) => m.type)).toEqual(['offer']);
   });
 });
 

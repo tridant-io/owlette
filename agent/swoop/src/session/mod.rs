@@ -631,7 +631,9 @@ mod host {
         self, DesktopWatcher, Duplication, OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS,
     };
     use crate::cursor::{self, CursorTracker, OutputGeometry, PointerReader};
-    use crate::encode::{BackendCaps, Codec, CodecCaps, EncodedFrame, Encoder, EncoderConfig};
+    use crate::encode::{
+        select, BackendCaps, Codec, CodecCaps, EncodedFrame, Encoder, EncoderConfig,
+    };
     use crate::gpu::scale::{self, Downscaler, Plan};
     use crate::gpu::Frame;
     use crate::input::{Injector, PointerSpace, SendInputInjector, ViewerInput};
@@ -648,6 +650,10 @@ mod host {
     };
     use crate::transport::framing::{flags, FrameCodec, FrameHeader, FrameSequencer, FrameStamps};
     use crate::transport::governor::{Governor, GovernorConfig, GovernorState};
+    use crate::transport::ice_policy::{
+        admit_remote, ifwatch::InterfaceWatcher, Admission, DropReason, IceAction, IceEvent,
+        IcePolicy, SystemResolver,
+    };
     use crate::transport::rtc::{qpc_hz, PeerConfig, PeerEvent, PeerState, RtcPeer};
     use crate::transport::VideoSink;
     use crate::viewers::lease::LeaseLedger;
@@ -753,6 +759,9 @@ mod host {
         /// The source's texture size changed under a rebuild; the session
         /// re-plans and re-sends [`ToCapture::Encode`].
         SourceSize { width: u32, height: u32 },
+        /// Which backend the selection chain actually opened on. Sent when it
+        /// changes, which on a machine with one compiled backend is once.
+        Backend(&'static str),
         /// The rate limit on one viewer's input, cumulative.
         InputDropped(u64),
     }
@@ -802,6 +811,24 @@ mod host {
         Control(Control),
         /// EOF: §6 says the service is gone and the streamer exits 0.
         Eof,
+    }
+
+    /// Session → the candidate resolver.
+    ///
+    /// **Every** remote candidate goes through it, not only the `.local` ones:
+    /// `admit_remote` is the one place the admission rules live, and deciding
+    /// here which ones need a resolver would be a second copy of them. The cost
+    /// is one turn — 2 ms — on a candidate that did not need resolving.
+    struct ToResolver {
+        viewer: String,
+        candidate: String,
+    }
+
+    /// The resolver's answer: the attribute to hand the ICE agent — rewritten
+    /// when the name resolved — or why it is not being handed one.
+    struct FromResolver {
+        viewer: String,
+        admitted: Result<String, DropReason>,
     }
 
     // ------------------------------------------------------------- entry ---
@@ -856,8 +883,15 @@ mod host {
         let displays = outputs.len() as u32;
         let output = primary(&outputs).clone();
 
-        let caps = encoder_caps();
-        let codec_caps: Vec<CodecCaps> = caps.into_iter().flat_map(|backend| backend.codecs).collect();
+        // Probed once, here, and then carried: NVENC's `probe` opens encode
+        // sessions until the driver refuses in order to count them, and the
+        // capture thread opens a new encoder on every resolution rung, every
+        // retarget and every ACCESS_LOST recovery.
+        let caps = select::probe_all();
+        let codec_caps: Vec<CodecCaps> = caps
+            .iter()
+            .flat_map(|backend| backend.codecs.iter().cloned())
+            .collect();
         let codecs: Vec<Codec> = codec_caps.iter().map(|c| c.codec).collect();
         if codecs.is_empty() {
             ::log::error!("swoop: no encoder backend on this machine");
@@ -869,6 +903,8 @@ mod host {
         let (capture_tx, capture_rx) = bounded::<ToCapture>(8);
         let (input_tx, input_rx) = bounded::<ToInput>(256);
         let (service_tx, service_rx) = bounded::<FromService>(8);
+        let (resolver_tx, resolver_work) = bounded::<ToResolver>(32);
+        let (resolved_tx, resolved_rx) = bounded::<FromResolver>(32);
 
         let spawned = {
             let tx = worker_tx.clone();
@@ -876,7 +912,7 @@ mod host {
             let output = output.clone();
             thread::Builder::new()
                 .name("swoop-capture".into())
-                .spawn(move || capture_thread(output, clock, tx, capture_rx, stop))
+                .spawn(move || capture_thread(output, caps, clock, tx, capture_rx, stop))
         };
         let capture_handle = match spawned {
             Ok(handle) => handle,
@@ -935,6 +971,14 @@ mod host {
             .spawn(move || stdin_thread(stdin, service_tx))
             .ok();
 
+        // Detached like the stdin thread, and for the same reason: it ends when
+        // its channel closes, and what it is blocked in is a resolver call the
+        // process exit takes with it.
+        thread::Builder::new()
+            .name("swoop-resolver".into())
+            .spawn(move || resolver_thread(resolver_work, resolved_tx))
+            .ok();
+
         let outcome = connect_and_serve(
             &bundle,
             Wiring {
@@ -947,6 +991,8 @@ mod host {
                 capture_tx: capture_tx.clone(),
                 input_tx: input_tx.clone(),
                 service_rx,
+                resolver_tx,
+                resolved_rx,
             },
         );
 
@@ -1049,6 +1095,8 @@ mod host {
         capture_tx: Sender<ToCapture>,
         input_tx: Sender<ToInput>,
         service_rx: Receiver<FromService>,
+        resolver_tx: Sender<ToResolver>,
+        resolved_rx: Receiver<FromResolver>,
     }
 
     fn connect_and_serve(bundle: &Bundle, w: Wiring) -> (Exit, ExitReason) {
@@ -1119,6 +1167,16 @@ mod host {
             input_tx: w.input_tx,
             worker_rx: w.worker_rx,
             service_rx: w.service_rx,
+            resolver_tx: w.resolver_tx,
+            resolved_rx: w.resolved_rx,
+            ice: IcePolicy::new(),
+            ifwatch: match InterfaceWatcher::start() {
+                Ok(watcher) => Some(watcher),
+                Err(rc) => {
+                    ::log::warn!("swoop: no interface-change notifications (win32 {rc})");
+                    None
+                }
+            },
             bind_addr: local_bind_addr(),
             idle_since: Some(w.started),
             idr: IdrPolicy::new(),
@@ -1128,6 +1186,7 @@ mod host {
             last_status: w.started,
             frames_at_status: 0,
             input_dropped: 0,
+            encoder: None,
             last_size: None,
             display: 0,
             sas_pending: None,
@@ -1198,6 +1257,15 @@ mod host {
         input_tx: Sender<ToInput>,
         worker_rx: Receiver<FromWorker>,
         service_rx: Receiver<FromService>,
+        resolver_tx: Sender<ToResolver>,
+        resolved_rx: Receiver<FromResolver>,
+        /// §7.5's ICE decisions. Fed the peer's edges and polled once a turn;
+        /// it owns no clock and no socket, so `now` is this thread's.
+        ice: IcePolicy,
+        /// `NotifyIpInterfaceChange`, as a flag this loop reads. A machine that
+        /// would not let us register carries on without the trigger rather than
+        /// failing the session.
+        ifwatch: Option<InterfaceWatcher>,
         bind_addr: SocketAddr,
         idle_since: Option<Instant>,
         idr: IdrPolicy,
@@ -1207,6 +1275,10 @@ mod host {
         last_status: Instant,
         frames_at_status: u64,
         input_dropped: u64,
+        /// The backend the capture thread's encoder is open on, as the
+        /// selection chain named it. `None` until the first encoder opens —
+        /// a session with no viewer has no encoder and nothing to report.
+        encoder: Option<&'static str>,
         /// The last encoded size put on the wire, so a change sets
         /// `RESOLUTION_CHANGED` exactly once.
         last_size: Option<(u16, u16)>,
@@ -1272,6 +1344,8 @@ mod host {
                 if let Some(end) = self.pump_peer() {
                     return end;
                 }
+                self.pump_candidates();
+                self.pump_ice();
                 self.pump_features();
                 self.tick();
                 if let Some(end) = self.deadlines() {
@@ -1341,15 +1415,7 @@ mod host {
                     Effect::Offer { viewer, sdp, .. } => self.on_offer(&viewer, &sdp),
                     Effect::Candidate {
                         viewer, candidate, ..
-                    } => {
-                        if self.is_viewer(&viewer) {
-                            if let Some(peer) = self.peer.as_mut() {
-                                if let Err(e) = peer.add_remote_candidate(&candidate) {
-                                    ::log::warn!("swoop: bad remote candidate: {e}");
-                                }
-                            }
-                        }
-                    }
+                    } => self.admit_candidate(viewer, candidate),
                     Effect::ViewerGone { viewer, reason } => self.on_viewer_gone(&viewer, reason),
                     Effect::Denied(denial) => self.on_denial(denial),
                     Effect::RoomError { code, reaction } => {
@@ -1538,6 +1604,13 @@ mod host {
             self.peer = None;
             self.viewer = None;
             self.last_size = None;
+            // The pause above closed the encoder with the duplication, so §6's
+            // quiet line stays the nine-field one it promises.
+            self.encoder = None;
+            // The policy's promotion attempt belongs to an ICE agent, and the
+            // next viewer gets a new peer with a new one — holding the spent
+            // attempt across would leave that session on relay for good.
+            self.ice = IcePolicy::new();
             self.denials.forget();
             // A viewer that left by any other road than a lapse: a stale entry
             // would be swept as an expiry long after it went.
@@ -1560,6 +1633,7 @@ mod host {
                         self.source = (width, height);
                         self.replan();
                     }
+                    Ok(FromWorker::Backend(backend)) => self.encoder = Some(backend),
                     Ok(FromWorker::InputDropped(dropped)) => self.input_dropped = dropped,
                     Ok(FromWorker::Failed(exit)) => {
                         ::log::error!("swoop: capture stopped: exit {}", exit.code());
@@ -1716,6 +1790,98 @@ mod host {
             None
         }
 
+        /// One candidate the viewer trickled, handed to the resolver thread.
+        ///
+        /// Never admitted here: `admit_remote` resolves `.local` names through
+        /// the machine's resolver, which **blocks** for as long as that resolver
+        /// takes to give up, and this is the thread that turns the peer every
+        /// 2 ms. A full queue means the resolver is still inside a lookup; the
+        /// candidate is refused rather than queued behind it, which costs one
+        /// pair and never a turn.
+        fn admit_candidate(&mut self, viewer: String, candidate: String) {
+            if !self.is_viewer(&viewer) {
+                return;
+            }
+            if self
+                .resolver_tx
+                .try_send(ToResolver { viewer, candidate })
+                .is_err()
+            {
+                ::log::warn!(
+                    "swoop: the candidate resolver is busy, a remote candidate was dropped"
+                );
+            }
+        }
+
+        /// What the resolver answered, handed to the ICE agent.
+        ///
+        /// A candidate for a viewer that has since gone is dropped: it would be
+        /// added to whatever peer is here now, which is a different session.
+        fn pump_candidates(&mut self) {
+            loop {
+                let Ok(answer) = self.resolved_rx.try_recv() else {
+                    return;
+                };
+                if !self.is_viewer(&answer.viewer) {
+                    continue;
+                }
+                // The reason and never the attribute: a candidate's address has
+                // no business in a log line.
+                let candidate = match answer.admitted {
+                    Ok(candidate) => candidate,
+                    Err(reason) => {
+                        ::log::debug!("swoop: remote candidate refused ({reason:?})");
+                        continue;
+                    }
+                };
+                if let Some(peer) = self.peer.as_mut() {
+                    if let Err(e) = peer.add_remote_candidate(&candidate) {
+                        ::log::warn!("swoop: bad remote candidate: {e}");
+                    }
+                }
+            }
+        }
+
+        /// The ICE policy's turn: the interface watcher's flag, then its timers.
+        ///
+        /// The flag is taken every turn whether or not there is a peer — it
+        /// means "something changed since it was last read", and one left
+        /// standing between viewers would be read as a change under the next
+        /// one. Acting on it needs a peer, because there is no other ICE here.
+        fn pump_ice(&mut self) {
+            let changed = self.ifwatch.as_ref().is_some_and(|w| w.take_changed());
+            if self.peer.is_none() {
+                return;
+            }
+            let now = Instant::now();
+            if changed {
+                if let Some(action) = self.ice.observe(now, IceEvent::InterfaceChanged) {
+                    self.on_ice_action(action);
+                }
+            }
+            if let Some(action) = self.ice.poll(now) {
+                self.on_ice_action(action);
+            }
+        }
+
+        /// The one thing the policy asks for.
+        ///
+        /// The host answers and never offers (plan.md D8), so it is the ICE
+        /// *controlled* agent: it cannot renegotiate by itself. `host-ready` is
+        /// the ask the protocol gives it, and str0m's own ICE restart happens in
+        /// `accept_offer` when the browser's re-offer arrives carrying fresh
+        /// credentials — which is the "every later offer is an ICE restart" path
+        /// in `on_offer`.
+        fn on_ice_action(&mut self, action: IceAction) {
+            let IceAction::RestartIce(reason) = action;
+            let Some(viewer) = self.viewer.as_ref().map(|v| v.id.clone()) else {
+                return;
+            };
+            ::log::info!("swoop: asking viewer {viewer} for an ice restart ({reason:?})");
+            let ready = self.client.host_ready(Some(&viewer));
+            self.send(&ready);
+        }
+
         /// Every feature's turn to produce, then the one write.
         ///
         /// Only while the peer is connected: a feature's outbound is for the
@@ -1863,6 +2029,11 @@ mod host {
                         server_time_ms: None,
                     };
                     self.send(&message);
+                }
+                PeerEvent::Ice(event) => {
+                    if let Some(action) = self.ice.observe(Instant::now(), event) {
+                        self.on_ice_action(action);
+                    }
                 }
                 PeerEvent::KeyframeRequest => self.request_idr(),
                 PeerEvent::ChannelOpen(Channel::SwoopControl) => self.send_hello_host(),
@@ -2265,6 +2436,7 @@ mod host {
                 input_dropped: (self.input_dropped > 0).then_some(self.input_dropped),
                 denials: (self.denials.count() > 0).then(|| self.denials.count()),
                 test_override: self.test_override.clone(),
+                encoder: self.encoder.map(str::to_owned),
                 preset: governed.then(|| self.governor.ceiling().label()),
                 target_kbps: governed.then(|| self.governor.target_bps() / 1000),
                 rung_fps: governed.then_some(stats.rung.fps),
@@ -2372,6 +2544,7 @@ mod host {
     /// captured behind an indicator that has already come down.
     fn capture_thread(
         output: OutputInfo,
+        caps: Vec<BackendCaps>,
         clock: HostClock,
         tx: Sender<FromWorker>,
         rx: Receiver<ToCapture>,
@@ -2387,6 +2560,7 @@ mod host {
 
         let mut ctx = CaptureCtx {
             output,
+            caps,
             clock,
             tx,
             rx,
@@ -2395,10 +2569,14 @@ mod host {
             bitrate: DEFAULT_BITRATE_BPS,
             fps: TARGET_FPS,
             reported: None,
+            backend: None,
         };
         while !ctx.stop.load(Ordering::Relaxed) {
             match capture_pass(&mut ctx) {
                 Pass::Paused => {
+                    // The encoder went with the pass, so the next viewer's is a
+                    // fresh selection and is reported again.
+                    ctx.backend = None;
                     if !wait_for_resume(&mut ctx) {
                         return;
                     }
@@ -2414,6 +2592,11 @@ mod host {
     /// What the capture thread keeps across a pause.
     struct CaptureCtx {
         output: OutputInfo,
+        /// What every compiled backend reported, probed once by `drive`. The
+        /// selection table is a pure function over it, so a rebuild picks a
+        /// backend without touching a driver again — NVENC's own probe counts
+        /// sessions by opening them until it is refused.
+        caps: Vec<BackendCaps>,
         clock: HostClock,
         tx: Sender<FromWorker>,
         rx: Receiver<ToCapture>,
@@ -2431,6 +2614,9 @@ mod host {
         /// The source size the session has been told about. It hears `Opened`
         /// once; every later open reports a change or says nothing.
         reported: Option<(u32, u32)>,
+        /// Which backend the last encoder opened on, so a rebuild that lands on
+        /// the same one is not re-reported to the session.
+        backend: Option<&'static str>,
     }
 
     enum Pass {
@@ -2698,7 +2884,7 @@ mod host {
             };
 
             if encoder.is_none() {
-                match create_encoder(&EncoderConfig {
+                let cfg = EncoderConfig {
                     codec,
                     width,
                     height,
@@ -2706,8 +2892,19 @@ mod host {
                     // A rebuild is a new encoder, so the governor's current
                     // target is re-applied here rather than inherited.
                     bitrate_bps: ctx.bitrate,
-                }) {
-                    Ok(created) => encoder = Some(created),
+                };
+                // The chain, not NVENC: `select::create` walks down it, so a
+                // backend that probed fine and then refused the session costs
+                // one rung rather than the session.
+                match select::create(&ctx.caps, &cfg) {
+                    Ok((backend, created)) => {
+                        encoder = Some(created);
+                        if ctx.backend != Some(backend) {
+                            ctx.backend = Some(backend);
+                            ::log::info!("swoop: encoding on {backend}");
+                            let _ = ctx.tx.try_send(FromWorker::Backend(backend));
+                        }
+                    }
                     Err(e) => {
                         ::log::error!("swoop: could not open the encoder: {e}");
                         let _ = ctx.tx.try_send(FromWorker::Failed(Exit::NoEncoder));
@@ -2812,6 +3009,32 @@ mod host {
         }
     }
 
+    /// The viewer's candidates, admitted off the session thread.
+    ///
+    /// This thread exists for one call: `SystemResolver::resolve` goes to the
+    /// Windows DNS client for a `*.local` name and blocks until it answers or
+    /// gives up. On the session thread that would be a stall in the loop that
+    /// drives the peer; here it costs nothing but this thread.
+    fn resolver_thread(rx: Receiver<ToResolver>, tx: Sender<FromResolver>) {
+        let resolver = SystemResolver;
+        while let Ok(work) = rx.recv() {
+            let admitted = match admit_remote(&work.candidate, &resolver) {
+                Admission::Accept => Ok(work.candidate),
+                // str0m parses a candidate into a `SocketAddr`, so the name has
+                // to be gone by the time it sees the attribute.
+                Admission::Resolved(rewritten) => Ok(rewritten),
+                Admission::Drop(reason) => Err(reason),
+            };
+            let answer = FromResolver {
+                viewer: work.viewer,
+                admitted,
+            };
+            if tx.send(answer).is_err() {
+                return;
+            }
+        }
+    }
+
     /// Control lines. Line 1 was the bundle and was read before this started.
     fn stdin_thread(mut stdin: impl BufRead, tx: Sender<FromService>) {
         let mut line = String::new();
@@ -2881,28 +3104,6 @@ mod host {
             Codec::H265 => FrameCodec::Hevc,
             Codec::H264 => FrameCodec::H264,
         }
-    }
-
-    #[cfg(feature = "encode-nvenc")]
-    fn encoder_caps() -> Vec<BackendCaps> {
-        vec![crate::encode::nvenc::probe()]
-    }
-
-    #[cfg(not(feature = "encode-nvenc"))]
-    fn encoder_caps() -> Vec<BackendCaps> {
-        // Task 7.3 selects across backends; without one compiled in there is
-        // nothing to select and the session exits 13.
-        Vec::new()
-    }
-
-    #[cfg(feature = "encode-nvenc")]
-    fn create_encoder(cfg: &EncoderConfig) -> anyhow::Result<Box<dyn Encoder>> {
-        crate::encode::nvenc::create(cfg)
-    }
-
-    #[cfg(not(feature = "encode-nvenc"))]
-    fn create_encoder(_cfg: &EncoderConfig) -> anyhow::Result<Box<dyn Encoder>> {
-        anyhow::bail!("no encoder backend is compiled in")
     }
 
     #[cfg(test)]
@@ -3026,9 +3227,10 @@ mod host {
             let output = primary(&outputs).clone();
             let space = output.clone();
 
-            let caps: Vec<CodecCaps> = encoder_caps()
-                .into_iter()
-                .flat_map(|backend| backend.codecs)
+            let backends = select::probe_all();
+            let caps: Vec<CodecCaps> = backends
+                .iter()
+                .flat_map(|backend| backend.codecs.iter().cloned())
                 .collect();
             assert!(!caps.is_empty(), "no encoder backend on this machine");
             let codec = caps[0].codec;
@@ -3044,7 +3246,7 @@ mod host {
             let (capture_tx, capture_rx) = bounded::<ToCapture>(8);
             let handle = {
                 let stop = Arc::clone(&stop);
-                thread::spawn(move || capture_thread(output, clock, tx, capture_rx, stop))
+                thread::spawn(move || capture_thread(output, backends, clock, tx, capture_rx, stop))
             };
 
             let source = match rx.recv_timeout(CAPTURE_OPEN_TIMEOUT) {
@@ -3148,9 +3350,10 @@ mod host {
             assert!(!outputs.is_empty(), "no attached output to duplicate");
             let output = primary(&outputs).clone();
 
-            let caps: Vec<CodecCaps> = encoder_caps()
-                .into_iter()
-                .flat_map(|backend| backend.codecs)
+            let backends = select::probe_all();
+            let caps: Vec<CodecCaps> = backends
+                .iter()
+                .flat_map(|backend| backend.codecs.iter().cloned())
                 .collect();
             assert!(!caps.is_empty(), "no encoder backend on this machine");
             let codec = caps[0].codec;
@@ -3166,7 +3369,7 @@ mod host {
             let (capture_tx, capture_rx) = bounded::<ToCapture>(8);
             let handle = {
                 let stop = Arc::clone(&stop);
-                thread::spawn(move || capture_thread(output, clock, tx, capture_rx, stop))
+                thread::spawn(move || capture_thread(output, backends, clock, tx, capture_rx, stop))
             };
 
             let source = match rx.recv_timeout(CAPTURE_OPEN_TIMEOUT) {
