@@ -1,0 +1,12 @@
+{
+  "sender": {
+    "role": "server",
+    "id": "server"
+  },
+  "message": {
+    "type": "ring",
+    "sid": "sid_0000000000000001",
+    "sentAtMs": 1789689599996,
+    "serverTimeMs": 1789689600000
+  }
+}

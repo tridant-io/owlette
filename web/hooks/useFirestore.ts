@@ -255,6 +255,16 @@ export interface Machine {
   agent_version?: string;  // Agent version for update detection (e.g., "2.0.0")
   machineTimezone?: string;  // IANA tz from the agent's tzlocal lookup; undefined on pre-IANA agent builds.
   cortexEnabled?: boolean;  // kill switch for Hoot tool-call delivery; undefined = enabled.
+  /**
+   * Agent capability handshake, written as dotted paths by the heartbeat
+   * (`firebase_client.py`). Absent on every agent that predates a key, so each
+   * one gates off when missing. `swoop === 1` is the ONLY gate for the swoop
+   * entry — SWOOP_MIN_AGENT_VERSION in lib/versionUtils.ts is advisory copy.
+   */
+  capabilities?: {
+    swoop?: number;
+    displayRemoteApply?: number;
+  };
   // `reboot*` are agent-written wire contracts; the legacy spelling is deliberate (UI says "restart").
   rebooting?: boolean;
   shuttingDown?: boolean;
@@ -1307,6 +1317,7 @@ export function useMachines(siteId: string) {
               // only an explicit false disables hoot — absent means enabled, matching
               // the server's `isHootEnabled` (hoot-utils.server.ts)
               cortexEnabled: data.cortexEnabled !== false,
+              capabilities: data.capabilities,
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
               rebootScheduledAt: restartScheduledAt,

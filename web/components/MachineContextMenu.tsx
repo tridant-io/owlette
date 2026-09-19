@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor } from 'lucide-react';
+import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -47,6 +47,14 @@ interface MachineContextMenuProps {
   onCancelRestart?: () => Promise<void>;
   onScreenshot?: () => void;
   onLiveView?: () => void;
+  /**
+   * `capabilities.swoop === 1` from the heartbeat: the machine has a streamer
+   * installed. Swoop then replaces live view in the online block — exactly one
+   * of the two renders. Whether this user may actually get a session is decided
+   * server-side (site enablement, membersMayWatch, step-up), not here.
+   */
+  swoopCapable?: boolean;
+  onSwoop?: () => void;
   onViewDisplays?: () => void;
   rebootSchedule?: RestartSchedule;
 }
@@ -66,6 +74,8 @@ export function MachineContextMenu({
   onCancelRestart,
   onScreenshot,
   onLiveView,
+  swoopCapable,
+  onSwoop,
   onViewDisplays,
   rebootSchedule,
 }: MachineContextMenuProps) {
@@ -319,16 +329,34 @@ export function MachineContextMenu({
                 <Camera className="mr-2 h-4 w-4" />
                 screenshot
               </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onLiveView?.();
-                }}
-                className="text-blue-400 focus:bg-blue-950/30 focus:text-blue-300 cursor-pointer"
-              >
-                <Eye className="mr-2 h-4 w-4" />
-                live view
-              </DropdownMenuItem>
+              {/* Swoop supersedes live view on a machine that can stream; the
+                  slideshow stays for every agent that can't, so the menu never
+                  loses its screen entry. */}
+              {swoopCapable ? (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSwoop?.();
+                  }}
+                  data-testid="machine-context-menu-swoop"
+                  className="text-blue-400 focus:bg-blue-950/30 focus:text-blue-300 cursor-pointer"
+                >
+                  <MonitorPlay className="mr-2 h-4 w-4" />
+                  swoop
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onLiveView?.();
+                  }}
+                  data-testid="machine-context-menu-live-view"
+                  className="text-blue-400 focus:bg-blue-950/30 focus:text-blue-300 cursor-pointer"
+                >
+                  <Eye className="mr-2 h-4 w-4" />
+                  live view
+                </DropdownMenuItem>
+              )}
             </>
           )}
           {onViewDisplays && (

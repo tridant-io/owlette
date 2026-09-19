@@ -433,3 +433,89 @@ describe('proxy — CSP header', () => {
     expect(migratedCsp).not.toContain('https://api.scalar.com');
   });
 });
+
+// swoop: the page is a protected path, and the signaling socket is the only swoop
+// connection CSP can gate — RTCPeerConnection (ICE, STUN/TURN, media) is outside
+// connect-src entirely.
+
+describe('proxy — swoop page gate + signaling connect-src', () => {
+  const SIGNAL_URL_KEY = 'SWOOP_SIGNAL_URL';
+  const originalSignalUrl = process.env[SIGNAL_URL_KEY];
+
+  beforeEach(() => {
+    mockValidateSession.mockResolvedValue(null);
+    mockEvaluateSessionMfa.mockReset();
+    delete process.env[SIGNAL_URL_KEY];
+  });
+
+  afterAll(() => {
+    if (originalSignalUrl === undefined) {
+      delete process.env[SIGNAL_URL_KEY];
+    } else {
+      process.env[SIGNAL_URL_KEY] = originalSignalUrl;
+    }
+  });
+
+  function connectSrc(response: Response): string {
+    return (response.headers.get('Content-Security-Policy') ?? '')
+      .split(';')
+      .map((directive) => directive.trim())
+      .find((directive) => directive.startsWith('connect-src ')) ?? '';
+  }
+
+  it('redirects an unauthenticated /swoop request to /login', async () => {
+    mockEvaluateSessionMfa.mockResolvedValue({
+      outcome: 'unauthenticated',
+      userId: null,
+    });
+    const response = await proxy(makeRequest('/swoop/site-1/machine-1'));
+    expect(response.status).toBe(307);
+    const loc = response.headers.get('location') ?? '';
+    expect(loc).toContain('/login');
+    expect(loc).toContain('redirect=%2Fswoop%2Fsite-1%2Fmachine-1');
+  });
+
+  it('challenges an authenticated-but-MFA-pending /swoop request', async () => {
+    // A live remote session is keyboard and mouse on someone's machine — a password
+    // alone must never reach it.
+    mockEvaluateSessionMfa.mockResolvedValue({
+      outcome: 'challenge',
+      userId: 'user-1',
+    });
+    const response = await proxy(makeRequest('/swoop/site-1/machine-1'));
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toContain('/verify-2fa');
+  });
+
+  it('allows the signaling origin over https and wss when SWOOP_SIGNAL_URL is set', async () => {
+    // The origin only — a path on the env value must not leak into the policy.
+    process.env[SIGNAL_URL_KEY] = 'https://swoop-signal.example.workers.dev/v1/room';
+    mockEvaluateSessionMfa.mockResolvedValue({ outcome: 'pass', userId: 'user-1' });
+
+    const directive = connectSrc(await proxy(makeRequest('/swoop/site-1/machine-1')));
+    expect(directive).toContain('https://swoop-signal.example.workers.dev');
+    expect(directive).toContain('wss://swoop-signal.example.workers.dev');
+    expect(directive).not.toContain('/v1/room');
+  });
+
+  it('emits no swoop origin at all when SWOOP_SIGNAL_URL is unset', async () => {
+    // Dev and preview run without a signaling worker; an empty value must not widen
+    // connect-src or emit a stray token.
+    mockEvaluateSessionMfa.mockResolvedValue({ outcome: 'pass', userId: 'user-1' });
+
+    const directive = connectSrc(await proxy(makeRequest('/swoop/site-1/machine-1')));
+    expect(directive).not.toContain('swoop');
+    // The Firestore listener source is the only websocket origin left.
+    expect(directive.match(/wss:\/\/\S+/g)).toEqual(['wss://*.firebaseio.com']);
+  });
+
+  it('ignores a malformed SWOOP_SIGNAL_URL instead of failing every request', async () => {
+    // buildContentSecurityPolicy runs on every response; a bad value must not 500 the site.
+    process.env[SIGNAL_URL_KEY] = 'not a url';
+    mockEvaluateSessionMfa.mockResolvedValue({ outcome: 'pass', userId: 'user-1' });
+
+    const directive = connectSrc(await proxy(makeRequest('/swoop/site-1/machine-1')));
+    expect(directive).toContain("connect-src 'self'");
+    expect(directive).not.toContain('not a url');
+  });
+});

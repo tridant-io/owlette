@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "note": "real H.264 SPS units emitted by NVENC on the spike 0.9 dev box (RTX 2080 Ti, driver 591.86, 1920x1080, High profile, 20 Mbps, the shipping configuration). they are the oracle for the parser in src/encode/nvenc/mod.rs because the point of that parser is reading back what the encoder actually emitted, not what it was asked to emit. measurements and the before/after latency pair: dev/active/swoop/spikes/0.9-nvenc-config.md section 1.",
+  "vectors": [
+    {
+      "name": "level-4.2-vui-off",
+      "sps": "6764002aac2b280f0044fcb808800001f40000ea6042",
+      "description": "NEGATIVE: bitstreamRestrictionFlag = 0, NVENC's default. chrome then assumes the level's maximum dpb (4 frames at level 4.2 and 1080p) and holds output for 67.2 ms p50",
+      "expect": {
+        "profileIdc": 100,
+        "levelIdc": 42,
+        "codecString": "avc1.64002a",
+        "vuiPresent": true,
+        "bitstreamRestrictionFlag": false,
+        "maxNumReorderFrames": null,
+        "maxDecFrameBuffering": null
+      }
+    },
+    {
+      "name": "level-4.2-vui-on",
+      "sps": "6764002aac2b280f0044fcb808800001f40000ea60478e152c",
+      "description": "the shipping configuration: max_num_reorder_frames = 0 and chrome outputs in 0.5 ms p50. max_dec_frame_buffering is 4, not 0 - nvenc has no field for it and tracks maxNumRefFrames instead",
+      "expect": {
+        "profileIdc": 100,
+        "levelIdc": 42,
+        "codecString": "avc1.64002a",
+        "vuiPresent": true,
+        "bitstreamRestrictionFlag": true,
+        "maxNumReorderFrames": 0,
+        "maxDecFrameBuffering": 4
+      }
+    },
+    {
+      "name": "level-5.1-vui-off",
+      "sps": "67640033ac2b280f0044fcb808800001f40000ea6042",
+      "description": "NEGATIVE: the same default at level 5.1, where the level's dpb ceiling is 16 frames - 267.2 ms p50. the penalty is the level's dpb, not a constant, so it grows with resolution",
+      "expect": {
+        "profileIdc": 100,
+        "levelIdc": 51,
+        "codecString": "avc1.640033",
+        "vuiPresent": true,
+        "bitstreamRestrictionFlag": false,
+        "maxNumReorderFrames": null,
+        "maxDecFrameBuffering": null
+      }
+    },
+    {
+      "name": "level-5.1-vui-on",
+      "sps": "67640033ac2b280f0044fcb808800001f40000ea60478e152c",
+      "description": "the fix at level 5.1: same two vui values as level 4.2, 0.4 ms p50. the flag matters more at 4k, not less",
+      "expect": {
+        "profileIdc": 100,
+        "levelIdc": 51,
+        "codecString": "avc1.640033",
+        "vuiPresent": true,
+        "bitstreamRestrictionFlag": true,
+        "maxNumReorderFrames": 0,
+        "maxDecFrameBuffering": 4
+      }
+    }
+  ]
+}

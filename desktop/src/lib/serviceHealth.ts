@@ -37,6 +37,22 @@ export interface ServiceStatusFile {
     schedule_timezone?: string
     last_heartbeat?: number
   }
+  /**
+   * Live swoop state, published by every agent that carries swoop. `active`
+   * is capture running, not the streamer being alive — it goes false the moment the last
+   * viewer leaves, while the process lingers for another minute. Written with
+   * every count zeroed when swoop is idle or absent, so the shape never
+   * depends on whether a session has ever run.
+   */
+  swoop?: {
+    active?: boolean
+    viewers?: number
+    controllers?: number
+    /** Unix seconds capture started; 0 while inactive. */
+    since?: number
+    /** The site's indicator policy, as the streamer reported it back. */
+    indicator?: 'banner' | 'tray' | 'none'
+  }
   health?: {
     status?: string
     error_code?: string | null

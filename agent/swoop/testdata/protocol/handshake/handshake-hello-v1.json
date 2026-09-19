@@ -1,0 +1,17 @@
+{
+  "supported": 1,
+  "message": {
+    "type": "hello",
+    "protocolVersion": 1,
+    "role": "viewer",
+    "id": "viewer_0000000001",
+    "sid": "sid_0000000000000001",
+    "ctl": true,
+    "peers": {
+      "doorbell": 1,
+      "host": 1,
+      "viewer": 0
+    },
+    "serverTimeMs": 1789689600000
+  }
+}

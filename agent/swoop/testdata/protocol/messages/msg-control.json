@@ -1,0 +1,72 @@
+{
+  "channel": "swoop-control",
+  "viewer": {
+    "id": "viewer_0000000001",
+    "ctl": true
+  },
+  "messages": [
+    {
+      "dir": "host-to-viewer",
+      "t": "hello-host",
+      "codec": "hevc",
+      "width": 1920,
+      "height": 1080,
+      "displays": [
+        {
+          "index": 0,
+          "width": 1920,
+          "height": 1080,
+          "primary": true
+        },
+        {
+          "index": 1,
+          "width": 3840,
+          "height": 2160,
+          "primary": false
+        }
+      ],
+      "streamerEpoch": 1789689600000000,
+      "protocolVersion": 1
+    },
+    {
+      "dir": "viewer-to-host",
+      "t": "quality",
+      "preset": "balanced",
+      "maxBitrateKbps": 20000,
+      "maxFps": 60
+    },
+    {
+      "dir": "viewer-to-host",
+      "t": "display",
+      "index": 1
+    },
+    {
+      "dir": "viewer-to-host",
+      "t": "idr"
+    },
+    {
+      "dir": "viewer-to-host",
+      "t": "sas"
+    },
+    {
+      "dir": "host-to-viewer",
+      "t": "sas-result",
+      "ok": true
+    },
+    {
+      "dir": "viewer-to-host",
+      "t": "lease",
+      "token": "FAKE.RENEWAL.TOKEN"
+    },
+    {
+      "dir": "host-to-viewer",
+      "t": "lease-ok",
+      "expiresAt": 1789689900
+    },
+    {
+      "dir": "host-to-viewer",
+      "t": "ended",
+      "reason": "kill"
+    }
+  ]
+}

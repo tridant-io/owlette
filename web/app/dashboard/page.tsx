@@ -727,6 +727,17 @@ export default function DashboardPage() {
     [machines],
   );
 
+  // Its own window, never an iframe or a dialog: the stage grabs the keyboard and
+  // pointer, and a session must survive navigating the dashboard. No token in the
+  // URL — the page authorizes itself against the session-create route.
+  const openSwoop = (machineId: string) => {
+    window.open(
+      `/swoop/${encodeURIComponent(currentSiteId)}/${encodeURIComponent(machineId)}`,
+      '_blank',
+      'noopener',
+    );
+  };
+
   // A click SWAPS the panel selection (overwrites this machine's graphTabs) rather than
   // merging, so clicking cells behaves like switching tabs, not accumulating them.
   const handleMetricClick = (machineId: string, metric: MetricType) => {
@@ -1065,7 +1076,6 @@ export default function DashboardPage() {
               <div className="animate-in fade-in duration-300">
                 <MachineCardView
                   machines={machines}
-                  schedulesFollowSiteTime={currentSite?.schedulesFollowSiteTime}
                   statsExpanded={userPreferences.statsExpanded}
                   processesExpanded={userPreferences.processesExpanded}
                   displaysExpanded={userPreferences.displaysExpanded ?? false}
@@ -1097,6 +1107,7 @@ export default function DashboardPage() {
                     setLiveViewTarget({ machineId, machineName: machineId });
                     setLiveViewOpen(true);
                   }}
+                  onSwoop={openSwoop}
                 />
               </div>
             )}
@@ -1150,6 +1161,7 @@ export default function DashboardPage() {
                           setLiveViewTarget({ machineId: machine.machineId, machineName: machine.machineId });
                           setLiveViewOpen(true);
                         }}
+                        onSwoop={() => openSwoop(machine.machineId)}
                       />
                     ))}
                   </TableBody>

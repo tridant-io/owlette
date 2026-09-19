@@ -42,6 +42,7 @@ import {
   readAndParseJsonBody,
 } from '../../../../_shared';
 import { changeRole, removeMember } from '@/lib/membership.server';
+import { revokeSwoopSessionsForUser } from '@/lib/swoop/revokeViewerSessions.server';
 
 // The talon store pulls in `node:crypto` for webhook secret minting.
 export const runtime = 'nodejs';
@@ -207,6 +208,20 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
               return problemNotFound(`site ${siteId} not found`);
             }
           }
+          // After the membership write and only when it landed, outside its
+          // transaction, and never awaited into the response: the lease already
+          // ends their sessions within five minutes (PROTOCOL.md §10) and this
+          // only closes that window to the kill path's two seconds.
+          if (removal.ok) {
+            void revokeSwoopSessionsForUser({
+              siteId,
+              uid,
+              actor: ctx.actor,
+              auditActor: auditActorIdentifier(ctx.auth),
+              reason: 'member_removed',
+              ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
+            });
+          }
         }
 
         emitMutation({
@@ -304,6 +319,21 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
       parsed.raw,
       async () => {
         const result = await changeRole({ siteId, uid, role });
+
+        // A demotion to `member` loses MACHINE_REMOTE_CONTROL, so any session
+        // in which they hold control has to end — but a watch they are still
+        // entitled to survives, which is why this is `controlOnly`.
+        if (result.ok && role === 'member') {
+          void revokeSwoopSessionsForUser({
+            siteId,
+            uid,
+            actor: ctx.actor,
+            auditActor: auditActorIdentifier(ctx.auth),
+            reason: 'role_changed',
+            controlOnly: true,
+            ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
+          });
+        }
 
         if (!result.ok) {
           if (result.failure.kind === 'is_owner') {

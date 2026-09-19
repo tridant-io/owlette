@@ -156,3 +156,14 @@ export function isValidVersion(version: string | undefined | null): boolean {
  * "needs a newer agent" warning.
  */
 export const SITE_TIME_MIN_AGENT_VERSION = '3.2.3';
+
+/**
+ * Oldest agent that can serve a swoop session. COPY ONLY, exactly like
+ * SITE_TIME_MIN_AGENT_VERSION above: the authorization gate is the machine's
+ * own `capabilities.swoop == 1` heartbeat key, never this string — a version
+ * number cannot see an upgrade that is still waiting on a reboot, and the
+ * dashboard must keep offering legacy live view to every machine that has no
+ * swoop. Provisional: Task 10.1, the swoop release, sets the real version and
+ * must confirm this matches the installer that actually shipped.
+ */
+export const SWOOP_MIN_AGENT_VERSION = '3.4.0';

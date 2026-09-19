@@ -1,0 +1,9 @@
+# Link the CRT statically, matching agent/host/.cargo/config.toml.
+#
+# The product streamer (agent/swoop, Task 1.2) inherits that file verbatim, so
+# the spike builds under the same flags: a VCRUNTIME140 import would be a fleet
+# failure on a freshly imaged kiosk, and a spike that never exercised
+# +crt-static would not have proven the NVENC + D3D11 dependency chain links
+# under it.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

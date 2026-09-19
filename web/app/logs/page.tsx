@@ -211,6 +211,18 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
       { value: 'talon_skipped', label: 'talon skipped' },
     ],
   },
+  // The operational half of swoop only. These three are every string
+  // `swoop_manager.py` passes to `log_event`; who started a session, who was
+  // refused and why live in `sites/{siteId}/audit_log`, which this feed does
+  // not read and a site admin cannot bulk-delete.
+  {
+    group: 'swoop',
+    options: [
+      { value: 'swoop_session_start', label: 'swoop session started' },
+      { value: 'swoop_session_end', label: 'swoop session ended' },
+      { value: 'swoop_spawn_refused', label: 'swoop spawn refused' },
+    ],
+  },
 ];
 
 /** Flat view for value→label lookups (the clear-logs scope copy). */

@@ -40,13 +40,16 @@ export function getTemperatureStatus(celsius: number): 'normal' | 'warning' | 'c
   }
 }
 
-/** Tailwind text-colour classes for the temperature status. */
+/**
+ * Tailwind text-colour classes for the temperature status. Normal returns no class:
+ * colour is reserved for crossed thresholds, so a green wall of numbers can't hide them.
+ */
 export function getTemperatureColorClass(celsius: number): string {
   const status = getTemperatureStatus(celsius);
 
   switch (status) {
     case 'normal':
-      return 'text-green-500';
+      return '';
     case 'warning':
       return 'text-yellow-500';
     case 'critical':

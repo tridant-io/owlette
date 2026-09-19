@@ -24,14 +24,15 @@ updates:
 
   # Node dependencies. Each of these has its own package-lock.json: the repo
   # root (an npm workspace that also owns cli/ and sdks/node/), the desktop
-  # shell's frontend, the Cloud Functions, and the web app. Minor/patch bumps
-  # are grouped; majors open their own PR.
+  # shell's frontend, the Cloud Functions, the web app, and the swoop signaling
+  # Cloudflare Worker. Minor/patch bumps are grouped; majors open their own PR.
   - package-ecosystem: npm
     directories:
       - /
       - /desktop
       - /functions
       - /web
+      - /infra/swoop-signal
     target-branch: dev
     schedule:
       interval: weekly
@@ -62,11 +63,13 @@ updates:
       - dependency-name: "commander"
         update-types: ["version-update:semver-major"]
 
-  # Rust crates: the owlette-host service wrapper and the Tauri desktop app.
+  # Rust crates: the owlette-host service wrapper, the Tauri desktop app, and
+  # the swoop remote-desktop host crate.
   - package-ecosystem: cargo
     directories:
       - /agent/host
       - /desktop/src-tauri
+      - /agent/swoop
     target-branch: dev
     schedule:
       interval: weekly

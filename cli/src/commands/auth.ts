@@ -9,9 +9,7 @@
  */
 
 import { Command } from 'commander';
-import { spawn } from 'child_process';
 import { createDecipheriv, hkdfSync } from 'crypto';
-import { platform } from 'os';
 import {
   _resetConfigCache,
   defaultConfigPath,
@@ -25,6 +23,7 @@ import {
   type WriteCredentialResult,
 } from '../credentialStore';
 import { fetchWithTimeout } from '../lib/http';
+import { openBrowser } from '../lib/openBrowser';
 import { runWhoami } from './whoami';
 
 const DEVICE_CODE_WRAP_VERSION = 'v1';
@@ -97,32 +96,6 @@ interface PollEncryptedResponse {
   phrase: string;
 }
 
-function tryOpenBrowser(url: string): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return;
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
-
-  const p = platform();
-  const command = p === 'win32' ? 'explorer.exe' : p === 'darwin' ? 'open' : 'xdg-open';
-  try {
-    const child = spawn(command, [parsed.toString()], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.on('error', () => {
-      /* best-effort - the user has the url to copy-paste */
-    });
-    child.unref();
-  } catch {
-    /* ignore */
-  }
-}
-
 function describeCredentialLocation(result: WriteCredentialResult): string {
   if (result.source === 'keychain') return 'OS keychain';
   return result.credentialPath ?? 'token file';
@@ -179,7 +152,7 @@ export function registerAuthCommands(program: Command): void {
 
       if (opts.browser !== false) {
         process.stdout.write('owlette: opening the verification url in your browser…\n');
-        tryOpenBrowser(pairingUrl);
+        openBrowser(pairingUrl);
       } else {
         process.stdout.write('owlette: open the url above in your browser to continue.\n');
       }
