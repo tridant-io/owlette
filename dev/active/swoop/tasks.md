@@ -1771,3 +1771,107 @@ railway dev's six env values, and **sast has still never run on this branch**.
 **and one more owner item, new:** the dev api key in `.claude/.env.local` is the literal placeholder
 (`owk_repl…`), so the "confirm live state against the api" workflow has never actually been available.
 both dev and prod keys need minting.
+
+### 2026-09-19 — **the first live session, and the nine bugs it found.** still 63/80.
+
+the agent side was brought up by hand on this box and a real browser drove a real session end to
+end: device pairing → site policy → passkey step-up → session create → firestore command → doorbell
+ring over cloudflare → streamer spawn → dxgi capture → nvenc hevc → opus → webrtc → input. **none of
+what follows was visible to any suite.** commits `9decba2d` and `4a59bf97`.
+
+**every unit test passed the whole time.** that is the finding. the suites mock the other side, so
+each of these lived precisely in the seam between two things that were individually correct.
+
+**three confident diagnoses of mine were overturned by agents that measured instead:**
+- i said the stuck session was the **rate limit** tripping on nine interfaces. the log said
+  `room error bye`, not `rate limited` — i anchored on the `Backoff` reaction and stopped reading.
+  the real cause: the room closed the **host's** socket whenever the host sent a bye, and the
+  streamer sends `bye(Some(viewer))` to mean "this viewer is done" — exactly what a reconnecting
+  browser causes, because the second viewer is turned away. (the rate limit was a real latent bug
+  too, and is fixed.)
+- i said the blocky picture needed a **D7 decision** about the one-frame VBV. it did not. the VBV is
+  a *delta* decision and is byte-identical; `lowDelayKeyFrameScale = 1` was applying the delta cap
+  to the IDR. **keyframe 40,903 B against a 38,204 B mean delta — a ratio of 1.07.** it was a
+  p-frame with an idr header, which is why static regions never resolved.
+- i said `input/` **never attached** to the input desktop. it has since `7dbac34f`. the bug is that
+  capture's watcher opens the desktop with `READOBJECTS|WRITEOBJECTS` — enough to duplicate, not
+  enough to inject — so every `SendInput` returned 0 with `ERROR_ACCESS_DENIED` on an unlocked
+  `Default`. i had grepped one directory and concluded from an absence.
+
+**the lesson worth keeping: a guess written as a fact costs hours.** the input error string said
+"blocked, most likely by UIPI". it was never UIPI — the streamer runs as SYSTEM, above the integrity
+UIPI gates — and that string sent the diagnosis in the wrong direction for most of a session. it now
+prints both desktop names read fresh and `GetLastError` cleared immediately before the call, and
+names UIPI only when the error is 0, because that absence is its documented signature.
+
+**a test that asserted the bug.** the worker's golden-vector test *required* the doorbell to receive
+`viewer-join` and the sdp `offer`. that is the defect: an offer is over the doorbell's frame limit
+and dropped the socket the next ring needed. the suite was green while the live doorbell was being
+knocked offline every session. both assertions are now inverted.
+
+**the bugs, in the order they blocked a session:**
+1. doorbell discarded the `hello` frame — §2's version gate was unimplemented on that client.
+2. worker fanned session traffic to the doorbell as well as the host.
+3. a host joining a room with viewers already waiting was never told their ids → `unknown_viewer`,
+   and the browser sat on "connecting" forever. **not a race — the default path**, since ring →
+   spawn → join always puts the host last.
+4. `m=audio 0 UDP/TLS/RTP/SAVPF ` with an empty format list — invalid sdp, chrome discarded the
+   whole answer. **a default-feature streamer could not complete a session at all**, and
+   `build_installer_full.bat` builds default features. str0m's writer (`sdp/data.rs:1356`); its own
+   code carries the comment that the grammar requires one fmt on a port-0 m-line and never applies
+   it to the no-codec-matched case.
+5. `useSwoopSession.ts:435` `void`ed the `setRemoteDescription` rejection, which is why 4 presented
+   as "stuck, then ended" rather than an error.
+6. the room killed the host on a viewer bye (above).
+7. keyframe starvation (above) — and **8.** a pacer drop never asked for a keyframe, so a refused
+   delta left a hole nothing repaired while chrome's PLI produced an idr that was itself crushed.
+   **the repair could not repair.**
+9. input injected nothing (above).
+
+**measured, on this box:** keyframe **40,903 → 312,314 B** (h264) / **285,094 B** (hevc);
+steady-state latency unchanged, +1.1 ms h264 / +0.2 ms hevc on the keyframe's own encode; a 4-frame
+VBV was measured and **rejected** (deltas reach 117 KB against a 41,666 B pacer bucket, and the
+scale is ignored entirely once the VBV is not single-frame). input: untouched lands 11/12, capture's
+mask fails every run, `+ JOURNALPLAYBACK` lands. **attaching pre-emptively silently kills the
+keyboard** while the mouse keeps working, 8/8 vs 0/8 — measured as a user process, never as SYSTEM.
+
+**owner's verdict after the fixes: "picture is manageable now — not perfect but much much better."**
+
+**held for the owner's decision, NOT committed:** the step-up re-prompt fix. binding the 10-minute
+window to (user, machine) rather than the session removes the prompt on every reload — but
+**plan.md:163 names the 30-day device-trust cookie as the specific thing this gate defends against**,
+and a cookie-born session carries `mfaCompletedAt = now` with no ceremony behind it. the change
+would let such a session inherit a window for 10 minutes. recommended instead: reuse the window only
+for sessions that themselves passed a real ceremony. **if it is ever landed as built, plan.md:164 and
+tasks.md:307 must be amended in the same commit** — a decision reversed silently is worse than either
+choice.
+
+**follow-ups this session created, none of them done:**
+- **`session/mod.rs`'s input-thread `DesktopWatcher` must be split, not deleted.** it is also
+  **trigger 4 of `release_all`** — a desktop switch releases every held key. deleting it as
+  "redundant" would reintroduce the stuck-modifier bug the module header calls the top user-visible
+  bug of every remote-desktop product. the fix is a read-only change *detector* for the release, with
+  attachment left to the injector.
+- **`RtcPeer::poll` treats a `send_to` failure as fatal** — one unreachable remote candidate panics
+  the peer (WSAENETUNREACH on a vpn address). belongs with 7.4/7.5.
+- **PROTOCOL §2 documents no rate limiting at all** — `rate_limited` and `4008` appear nowhere, so
+  that behaviour has been contract only by virtue of the README and two client implementations.
+  amendment drafted in the worker's README.
+- **no firestore rules test** for `swoop_step_up_revocations`; it rests on the catch-all deny.
+- **there is no way out of a session but minimising the browser.** on a self-controlled machine the
+  injected absolute pointer fights the physical one, and pointer lock is not what holds it. harmless
+  in the loopback case, but "how do i get out" deserves an answer that is not "alt-tab".
+- the **connect budget** is unmeasured; the owner wants <2 s. 7.5's stage-2 turn probe waits a fixed
+  3 s and always runs, because the host never holds an allocation.
+
+**what loopback cannot prove, and why the next test needs a second machine:** latency (no network),
+input (the feedback loop above), and ICE (everything resolves to a host candidate). **that is the
+same wall spike 0.2's LAN row hit.** a phone on the LAN would also exercise touch input, which
+nothing has tested.
+
+**machine-local state, none of it in the repo:** the streamer is installed from a
+`--features audio-opus` build, `websocket-client` was added to the bundled python, two firewall
+rules were created by hand (task 7.7's, since `set_enabled()` has no caller), swoop is enabled on
+`default_site` in **dev firestore**, and `shared_utils.py` is patched to point at localhost
+(original at `.predev`). `web/lib/versionUtils.ts` is patched to 3.3.5 and **must be reverted** —
+the real value is 3.4.0 and the pre-commit hook catches it.
