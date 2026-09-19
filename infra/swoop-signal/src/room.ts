@@ -152,6 +152,25 @@ export class SignalRoom implements DurableObject {
           serverTimeMs: Date.now(),
         })
       );
+    } else if (role === 'host') {
+      // a host is spawned by the ring, so every viewer waiting for it announced
+      // itself before this socket existed and that `viewer-join` is gone. the
+      // host would then refuse their offers as `unknown_viewer` -- replay the
+      // joins it missed, to this socket alone so a second host cannot see them
+      // twice. same shape as the live announcement; the host needs no new type.
+      for (const waiting of this.socketsByRole('viewer')) {
+        const viewer = waiting.deserializeAttachment() as Identity | null;
+        if (!viewer || viewer.departed) continue;
+        server.send(
+          JSON.stringify({
+            type: 'viewer-join',
+            viewer: viewer.id,
+            sid: viewer.sid,
+            ctl: viewer.ctl,
+            serverTimeMs: Date.now(),
+          })
+        );
+      }
     }
 
     const headers: Record<string, string> = {};
@@ -283,7 +302,10 @@ export class SignalRoom implements DurableObject {
   }
 
   private toAgentSide(payload: string): void {
-    for (const socket of [...this.socketsByRole('host'), ...this.socketsByRole('doorbell')]) socket.send(payload);
+    // the host, and only the host. the doorbell is a notification socket that
+    // speaks `ring` and `error`: an sdp offer sent to it is over its frame
+    // limit, and it drops the socket the next ring has to arrive on.
+    for (const socket of this.socketsByRole('host')) socket.send(payload);
   }
 
   private fanOut(role: Role, payload: string, to: string | undefined): void {

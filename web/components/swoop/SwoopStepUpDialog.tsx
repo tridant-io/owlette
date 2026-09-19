@@ -10,7 +10,7 @@
  * stored and never inspected on the way through.
  *
  * `enrolled: false` means the account holds no second factor at all — the
- * dialog shows an enrol hint pointing at the security settings rather than a
+ * dialog shows an enroll hint pointing at the security settings rather than a
  * code field, because such an account cannot take control at all.
  */
 
@@ -154,7 +154,8 @@ function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'ope
         <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
           <p className="text-xs text-muted-foreground">
-            enrol an authenticator app or a passkey in{' '}
+            signing in with google or a password is not a second factor. enroll an
+            authenticator app or a passkey in{' '}
             <Link href="/setup-2fa" className="underline underline-offset-2">
               security settings
             </Link>

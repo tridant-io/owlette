@@ -129,6 +129,20 @@ TOKEN_HARD_DEADLINE_SECONDS = 30.0  # close and back off rather than run past ex
 AUTH_CLOSE_CODE = 4401
 AUTH_ERROR_CODES = frozenset({'auth', 'token_expired', 'unknown_kid'})
 
+# The protocol integer this build speaks (PROTOCOL.md section 1). One integer,
+# no minor version, no negotiation: a bump is a fleet event that moves the
+# agent, the worker and the web app together. This mirrors the streamer's
+# agent/swoop/src/bundle.rs SWOOP_PROTOCOL_VERSION -- the agent side has no
+# other home for it -- and test_swoop_doorbell.py pins both to the golden-vector
+# manifest so the mirror cannot drift silently.
+SWOOP_PROTOCOL_VERSION = 1
+
+# Section 1's mismatch arm: a `bye` reason on the wire, and the sentence the
+# operator reads. The room's protocol is ahead of ours, so the machine is the
+# side that is behind.
+VERSION_MISMATCH_REASON = 'version_mismatch'
+VERSION_MISMATCH_MESSAGE = 'this machine needs an agent update'
+
 # A ring carries a sid and nothing else (PROTOCOL.md section 11). The room
 # stamps sentAtMs/serverTimeMs on what it forwards, so those two are accepted as
 # transport metadata and ignored; any OTHER key is a shape we do not recognise
@@ -566,7 +580,12 @@ class SwoopDoorbell:
         self._socket_open.set()
         self._dial_settled.set()
 
-    def _handle_message(self, _app, raw):
+    def _handle_message(self, app, raw):
+        if self._close_reason == VERSION_MISMATCH_REASON:
+            # our own `bye` earns `wrong_role` from the room (section 2 gives a
+            # doorbell no send rights for one), and that answer must not land on
+            # the reject counter that exists to reveal a misbehaving server.
+            return
         if isinstance(raw, (bytes, bytearray)):
             self._reject('binary')
             return
@@ -586,6 +605,9 @@ class SwoopDoorbell:
             return
 
         kind = message.get('type')
+        if kind == 'hello':
+            self._check_hello(app, message)
+            return
         if kind == 'error':
             if message.get('code') in AUTH_ERROR_CODES:
                 self._close_reason = 'auth'
@@ -604,6 +626,35 @@ class SwoopDoorbell:
             self._reject('bad_sid')
             return
         self._enqueue_ring(sid)
+
+    def _check_hello(self, app, message):
+        """Section 1's version gate. `hello` is the room's first frame to every
+        socket, so this runs once per connection and is not a rejection.
+
+        A mismatch is a `bye`, a close and a sentence for the operator -- never
+        a negotiation, never a downgrade, never "proceed anyway". Section 2
+        gives a doorbell no send rights for a `bye`, but section 1 requires it
+        of every client, so it is sent and the room's refusal is ignored.
+        """
+        version = message.get('protocolVersion')
+        # the type before the value: `True == 1` in python, and a bool is not a
+        # protocol version.
+        if type(version) is int and version == SWOOP_PROTOCOL_VERSION:
+            return
+        # the room's integer is server-controlled text and this module logs
+        # enums and class names only, so the log carries ours, not theirs.
+        self.logger.warning(
+            f"[SWOOP-DOORBELL] the signalling room does not speak protocol "
+            f"{SWOOP_PROTOCOL_VERSION}; {VERSION_MISMATCH_MESSAGE}")
+        self._close_reason = VERSION_MISMATCH_REASON
+        try:
+            app.send(json.dumps(
+                {'type': 'bye', 'reason': VERSION_MISMATCH_REASON}))
+        except Exception as error:
+            # the close below is what the room acts on either way.
+            self.logger.debug(
+                f"[SWOOP-DOORBELL] bye not sent ({type(error).__name__})")
+        self._close_socket(VERSION_MISMATCH_REASON)
 
     def _handle_close(self, _app, status_code, _reason):
         if status_code == AUTH_CLOSE_CODE:
@@ -702,6 +753,13 @@ class SwoopDoorbell:
             self._count_failure()
         elif reason == 'disabled':
             self._forget_token()
+            self._state = STATE_DISABLED_SLOW
+            return
+        elif reason == VERSION_MISMATCH_REASON:
+            # neither a failure of the origin nor anything a ladder can fix, so
+            # it takes the same slow retry a disabled site does: the socket is
+            # only worth trying again once this machine is upgraded or the
+            # worker is rolled back, and the token is still good.
             self._state = STATE_DISABLED_SLOW
             return
         elif reason == 'protocol' or uptime < STABLE_CONNECTION_SECONDS:
@@ -803,7 +861,8 @@ class SwoopDoorbell:
 
         No `bye` frame: PROTOCOL.md section 2 admits `bye` from a viewer or a
         host only, and a doorbell sending one earns `wrong_role`. The close
-        frame is what tells the room the peer is gone.
+        frame is what tells the room the peer is gone. Section 1's version
+        mismatch is the one exception, and _check_hello sends that one itself.
         """
         app = self._app
         if app is None:

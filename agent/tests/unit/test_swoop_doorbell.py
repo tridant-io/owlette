@@ -35,6 +35,18 @@ from connection_manager import ConnectionManager, ConnectionState
 SRC_DIR = Path(__file__).resolve().parents[2] / 'src'
 SOURCE = (SRC_DIR / 'swoop_doorbell.py').read_text(encoding='utf-8')
 
+# The golden vectors, and the manifest the rust protocol core and the web
+# protocol library also iterate. The doorbell is the third client on the same
+# wire, so it reads the same files rather than a hand-written copy of them.
+VECTORS = Path(__file__).resolve().parents[2] / 'swoop' / 'testdata' / 'protocol'
+MANIFEST = json.loads((VECTORS / 'index.json').read_text(encoding='utf-8'))
+HANDSHAKE = [v for v in MANIFEST['vectors'] if v['kind'] == 'handshake']
+
+
+def golden(vector):
+    """One vector file, named by its manifest entry."""
+    return json.loads((VECTORS / vector['file']).read_text(encoding='utf-8'))
+
 TOKEN = 'doorbell-token-ZZQQ7788-nevereverlogged-4413XXYY'
 SIGNAL_URL = 'wss://swoop-signal.example/v1/room/site-1/machine-1'
 EXPIRES_IN = 43200
@@ -85,6 +97,7 @@ class FakeSocket:
         self.closed = False
         self.close_code = None
         self.close_reason = None
+        self.sent = []
         self._release = threading.Event()
 
     def run_forever(self, **kwargs):
@@ -96,6 +109,9 @@ class FakeSocket:
         self.on_open(self)
         self._release.wait(10)
         self.on_close(self, self.close_code, self.close_reason)
+
+    def send(self, raw):
+        self.sent.append(raw)
 
     def close(self):
         self.closed = True
@@ -831,3 +847,77 @@ def test_unexpected_exception_does_not_kill_the_thread(caplog):
 
 def test_module_contains_no_time_sleep():
     assert 'sleep(' not in SOURCE
+
+
+# 22, 23, 24 - PROTOCOL.md section 1's version gate, from the golden vectors
+
+
+def test_the_compiled_in_protocol_version_is_the_one_the_manifest_pins():
+    """The integer is not the doorbell's to choose: the worker, the browser and
+    the streamer all assert the same one, and a bump is a fleet event."""
+    assert sd.SWOOP_PROTOCOL_VERSION == MANIFEST['protocolVersion']
+    # every handshake vector states the version its client speaks; ours is it.
+    assert [golden(v)['supported'] for v in HANDSHAKE] == (
+        [sd.SWOOP_PROTOCOL_VERSION] * len(HANDSHAKE))
+
+
+@pytest.mark.parametrize('vector', HANDSHAKE, ids=[v['file'] for v in HANDSHAKE])
+def test_every_handshake_vector_gets_the_verdict_the_manifest_names(caplog, vector):
+    """`hello` is the room's first frame to every socket, so both arms run on
+    every connection this agent makes."""
+    caplog.set_level(logging.DEBUG)
+    harness = build()
+    connect(harness)
+    sock = harness.factory.last
+
+    sock.deliver(json.dumps(golden(vector)['message']))
+
+    # a hello is a legitimate frame on both arms: the counter that exists to
+    # reveal a misbehaving server must not move for either.
+    assert harness.doorbell._rejects == 0
+    text = '\n'.join(r.getMessage() for r in caplog.records)
+    assert 'rejected frame' not in text
+
+    if vector['expect'] == 'accept':
+        assert sock.sent == []
+        assert sock.closed is False
+        assert harness.doorbell.state == sd.STATE_CONNECTED
+        # and it is still a working doorbell afterwards
+        with ring_worker(harness.doorbell):
+            sock.deliver(json.dumps({'type': 'ring', 'sid': 'sid-after-hello'}))
+            deadline = time.monotonic() + 5
+            while not harness.rings and time.monotonic() < deadline:
+                time.sleep(0.01)
+        assert harness.rings == ['sid-after-hello']
+        return
+
+    # never negotiated, never downgraded: bye, close, and a sentence for the
+    # operator rather than a protocol code.
+    assert [json.loads(raw) for raw in sock.sent] == [
+        {'type': 'bye', 'reason': vector['reason']}]
+    assert sock.closed is True
+    assert harness.doorbell._close_reason == vector['reason']
+    assert sd.VERSION_MISMATCH_MESSAGE in text
+
+    assert harness.doorbell._socket_closed.wait(5)
+    harness.step()
+    # a dead end on the slow retry, not a ladder: no redial can fix it.
+    assert harness.doorbell.state == sd.STATE_DISABLED_SLOW
+    assert (harness.doorbell._failures, harness.doorbell._exponent) == (0, 0)
+
+
+def test_the_rooms_refusal_of_our_own_bye_is_not_a_rejection():
+    """Section 2 gives a doorbell no send rights for a `bye`, so the room
+    answers the one section 1 demands with `wrong_role`. That answer is the
+    protocol working, not a server misbehaving."""
+    mismatch = next(v for v in HANDSHAKE if v['expect'] == 'reject')
+    harness = build()
+    connect(harness)
+    sock = harness.factory.last
+    sock.deliver(json.dumps(golden(mismatch)['message']))
+    assert sock.closed is True
+
+    sock.deliver(json.dumps({'type': 'error', 'code': 'wrong_role'}))
+
+    assert harness.doorbell._rejects == 0
+    assert harness.doorbell._close_reason == sd.VERSION_MISMATCH_REASON

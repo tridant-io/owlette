@@ -55,7 +55,7 @@ const subscribeNever = (): (() => void) => () => {};
 
 const STATE_LABEL: Record<SwoopSessionState, string> = {
   idle: 'idle',
-  authorizing: 'authorising',
+  authorizing: 'authorizing',
   connecting: 'connecting',
   connected: 'connected',
   ended: 'ended',
@@ -71,6 +71,12 @@ function StateIcon({ state }: { state: SwoopSessionState }) {
 
 export interface SwoopToolbarProps {
   session: SwoopSession | null;
+  /**
+   * the machine this window is pointed at. passed rather than read off
+   * `session`, which is null until the peer connects -- "connecting" is
+   * precisely when you want to know which machine you are waiting on.
+   */
+  machineId: string;
   state: SwoopSessionState;
   error: string | null;
   onEnd: () => void;
@@ -82,6 +88,7 @@ export interface SwoopToolbarProps {
 
 export function SwoopToolbar({
   session,
+  machineId,
   state,
   onEnd,
   statsOpen,
@@ -150,6 +157,10 @@ export function SwoopToolbar({
       <span className="flex items-center gap-2 text-sm text-foreground">
         <StateIcon state={state} />
         {STATE_LABEL[state]}
+      </span>
+
+      <span className="truncate text-sm font-medium text-foreground" title={machineId}>
+        {machineId}
       </span>
 
       {session && !session.ctl && (

@@ -117,7 +117,8 @@ async function openStepUpFromProof(args: {
         type: ProblemType.Unauthorized,
         title: 'step-up required',
         status: 401,
-        detail: 'enrol a second factor before taking control of a machine.',
+        detail:
+          'enroll a passkey or an authenticator app before taking control of a machine. signing in with google or a password is not a second factor.',
         code: 'step_up_required',
       }),
     };

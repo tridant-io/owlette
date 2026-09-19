@@ -43,6 +43,7 @@ export default function SwoopPage({
   return (
     <main className="flex h-full w-full flex-col">
       <SwoopToolbar
+        machineId={machineId}
         session={session}
         state={state}
         error={error}

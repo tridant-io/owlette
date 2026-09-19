@@ -377,6 +377,33 @@ describe('flood limits', () => {
 });
 
 describe('golden signaling vectors, on the wire', () => {
+  it('tells a host joining after a viewer who is already waiting', async () => {
+    const machine = machineId('joinorder');
+    // the real order: the viewer opens the page and waits, the api rings, and the
+    // agent spawns a streamer that joins seconds later. the live `viewer-join`
+    // fired before this host existed, and `hello` carries counts, not ids -- so
+    // without a replay the host refuses the offer that follows as unknown_viewer.
+    const doorbell = await dialAgent(doorbellToken(machine), machine);
+    await doorbell.waitFor('hello');
+    const viewer = await dialBrowser(viewerToken(machine), machine);
+    const viewerHello = await viewer.waitFor('hello');
+
+    const host = await dialAgent(hostToken(machine), machine);
+    expect((await host.waitFor('hello')).role).toBe('host');
+    const join = await host.waitFor('viewer-join');
+    expect(join.viewer).toBe(viewerHello.id);
+
+    // and only once: a replay must not double-announce a viewer that then joins
+    // a second host, nor reach the doorbell.
+    await settle();
+    expect(host.frames.filter((frame) => frame.type === 'viewer-join')).toHaveLength(1);
+    expect(doorbell.frames.some((frame) => frame.type === 'viewer-join')).toBe(false);
+
+    host.close();
+    viewer.close();
+    doorbell.close();
+  });
+
   it('round-trips every message type through a real room', async () => {
     const machine = machineId('goldenvector');
     // doorbell first, then host: the golden hello is the host’s, and its peer
@@ -394,19 +421,25 @@ describe('golden signaling vectors, on the wire', () => {
     await viewer.waitFor('hello');
     const joinVector = readVector<{ message: Frame }>('signaling/signal-viewer-join.json');
     expect(stripTime(await host.waitFor('viewer-join'))).toEqual(stripTime(joinVector.message));
-    expect(stripTime(await doorbell.waitFor('viewer-join'))).toEqual(stripTime(joinVector.message));
 
     // offer: viewer -> host and doorbell
     const offerVector = readVector<{ message: Frame }>('signaling/signal-offer.json');
     viewer.send({ type: 'offer', sdp: offerVector.message.sdp });
     expect(stripTime(await host.waitFor('offer'))).toEqual(stripTime(offerVector.message));
-    expect(stripTime(await doorbell.waitFor('offer'))).toEqual(stripTime(offerVector.message));
 
     // candidate: viewer -> agent side
     const candidateVector = readVector<{ message: Frame }>('signaling/signal-candidate.json');
     const { from: _f, fromRole: _r, serverTimeMs: _t, ...candidateSent } = candidateVector.message;
     viewer.send(candidateSent);
     expect(stripTime(await host.waitFor('candidate'))).toEqual(stripTime(candidateVector.message));
+
+    // the doorbell is a notification socket: `ring` and `error` only. session
+    // traffic used to reach it, and an sdp offer is over its frame limit -- so
+    // it dropped the socket the next ring had to arrive on.
+    await settle();
+    expect(doorbell.frames.some((frame) => frame.type === 'viewer-join')).toBe(false);
+    expect(doorbell.frames.some((frame) => frame.type === 'offer')).toBe(false);
+    expect(doorbell.frames.some((frame) => frame.type === 'candidate')).toBe(false);
 
     // answer: host -> the named viewer only
     const answerVector = readVector<{ message: Frame }>('signaling/signal-answer.json');
