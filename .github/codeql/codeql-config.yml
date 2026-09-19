@@ -34,6 +34,13 @@ paths-ignore:
   # Vendored Terraform provider binaries and plugin cache
   - infra/cloudflare/.terraform
 
+  # Spike and prototype code — throwaway harnesses and local test pages kept
+  # for the record. agent/swoop/Cargo.toml carries exclude = ["spikes"], the
+  # installer packages none of it, and nothing imports it, so a finding here
+  # is not a shippable vulnerability. Same argument as the test exclusions
+  # above; delete this entry if a spike ever graduates into the product.
+  - agent/swoop/spikes
+
   # Documentation and internal planning notes (no shipped code)
   - docs
   - dev
