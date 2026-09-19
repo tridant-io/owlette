@@ -539,10 +539,14 @@ def _self_attrs_assigned_in(path, class_name):
         if isinstance(node, ast.ClassDef) and node.name == class_name:
             init = next(f for f in node.body
                         if isinstance(f, ast.FunctionDef) and f.name == '__init__')
+            # both forms: `self._x = ...` and the annotated `self._x: T = ...`.
+            # the annotated one is live in this file, so collecting only
+            # ast.Assign left the guard blind to the drift it exists to catch.
             return {
                 t.attr for stmt in ast.walk(init)
-                if isinstance(stmt, ast.Assign)
-                for t in stmt.targets
+                for t in (stmt.targets if isinstance(stmt, ast.Assign)
+                          else [stmt.target] if isinstance(stmt, ast.AnnAssign)
+                          else [])
                 if isinstance(t, ast.Attribute)
                 and isinstance(t.value, ast.Name) and t.value.id == 'self'
             }

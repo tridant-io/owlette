@@ -454,7 +454,10 @@ fn count_sessions(device: &ID3D11Device) -> u32 {
 /// checked without one: that the driver exists, and that the size is inside the
 /// codec's ceiling.
 pub fn create(cfg: &EncoderConfig) -> anyhow::Result<Box<dyn Encoder>> {
-    ensure_driver()?;
+    // the size check is first and deliberately needs no driver: it is an
+    // argument error, and on a machine with no nvidia gpu the driver load
+    // would otherwise mask it. the selector treats either refusal the same
+    // way -- walk down to the next backend.
     let max = max_dimension(cfg.codec);
     if cfg.width > max || cfg.height > max {
         return Err(NvencError::UnsupportedSize {
@@ -465,6 +468,7 @@ pub fn create(cfg: &EncoderConfig) -> anyhow::Result<Box<dyn Encoder>> {
         }
         .into());
     }
+    ensure_driver()?;
     Ok(Box::new(NvencEncoder {
         cfg: cfg.clone(),
         session: None,
