@@ -74,9 +74,25 @@ jest.mock('@/lib/apiAuth.server', () => {
   return { ...actual, resolveAuth: (...a: unknown[]) => mockResolveAuth(...a) };
 });
 
-const mockSession = { userId: '', expiresAt: 0 };
+/**
+ * The login session behind the request. The window is keyed on (user, machine)
+ * so a reload can reuse it, and the route reads this for the one fact that
+ * gates that reuse: did THIS session pass a ceremony of its own. The predicate
+ * is the real one — a stub would prove nothing about which satisfier counts —
+ * and only the cookie plumbing around it is replaced.
+ */
+const mockLogin: { userId: string; expiresAt: number; mfaSatisfiedBy?: string } = {
+  userId: '',
+  expiresAt: 0,
+};
+const mockMarkCeremony = jest.fn(async (userId: string) => {
+  if (mockLogin.userId === userId) mockLogin.mfaSatisfiedBy = 'challenge';
+});
 jest.mock('@/lib/sessionManager.server', () => ({
-  getSessionFromRequest: jest.fn(async () => mockSession),
+  getSessionFromRequest: jest.fn(async () => mockLogin),
+  sessionPassedMfaCeremony: jest.requireActual('@/lib/sessionManager.server')
+    .sessionPassedMfaCeremony,
+  markSessionMfaCeremony: (...a: unknown[]) => mockMarkCeremony(...(a as [string])),
 }));
 
 const mfaFactors = { totp: false, passkeys: 0 };
@@ -107,7 +123,7 @@ import {
   GET,
   DELETE,
 } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route';
-import { stepUpSessionBinding } from '@/lib/swoop/policy.server';
+import { stepUpMachineBinding } from '@/lib/swoop/policy.server';
 
 const SITE = 'site-a';
 const MACHINE = 'machine-1';
@@ -138,17 +154,25 @@ function routeContext(sessionId?: string) {
   };
 }
 
-function signIn(userId: string): void {
+/**
+ * Sign in, and say how this login session came to be MFA-verified.
+ * `device-trust` is the 30-day cookie: verified, `mfaCompletedAt = now`, and no
+ * ceremony behind any of it.
+ */
+function signIn(userId: string, satisfiedBy?: 'challenge' | 'device-trust'): void {
   mockResolveAuth.mockResolvedValue({ userId, keyContext: null });
-  mockSession.userId = userId;
-  mockSession.expiresAt = Date.now() + 86_400_000;
+  mockLogin.userId = userId;
+  mockLogin.expiresAt = Date.now() + 86_400_000;
+  mockLogin.mfaSatisfiedBy = satisfiedBy ?? 'challenge';
 }
 
-function openWindow(userId: string): void {
-  const binding = stepUpSessionBinding({ userId, expiresAt: mockSession.expiresAt });
+/** A ceremony this user already ran, `openedAt` ms ago, for one machine. */
+function openWindow(userId: string, machineId = MACHINE, openedAgoMs = 0): void {
+  const binding = stepUpMachineBinding({ userId, siteId: SITE, machineId });
+  const openedAt = Date.now() - openedAgoMs;
   staged.set(`users/${userId}/swoop_step_up/${binding}`, {
-    openedAt: Date.now(),
-    expiresAt: Date.now() + 600_000,
+    openedAt,
+    expiresAt: openedAt + 600_000,
     factorUsed: 'totp',
   });
 }
@@ -350,6 +374,195 @@ describe('POST swoop/sessions', () => {
     );
 
     expect(res.status).toBe(201);
+  });
+
+  it('opens the window from a live proof and grants control in the same request', async () => {
+    const res = await POST(
+      createMockRequest(url(), {
+        method: 'POST',
+        body: { control: true, fp: FP, mfaProof: { code: '123456' } },
+      }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(mockVerifyMfaProof).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The bug: every page reload ends the swoop session and starts a new one, and
+   * the window used to be bound to the LOGIN session — whose binding moved on
+   * every re-POST of /api/auth/session — so each new swoop session demanded a
+   * fresh ceremony. Two control sessions in a row, no proof in either, is the
+   * reload the operator actually does.
+   */
+  it('lets a ceremony-backed session reconnect inside the window with no fresh proof', async () => {
+    openWindow(ADMIN, MACHINE, 60_000);
+
+    for (const _attempt of [1, 2]) {
+      const res = await POST(
+        createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+        routeContext(),
+      );
+      const { status, body } = await parseResponse(res);
+      expect(status).toBe(201);
+      expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    }
+    expect(mockVerifyMfaProof).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reconnect once the window has lapsed', async () => {
+    openWindow(ADMIN, MACHINE, 11 * 60_000);
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+  });
+
+  it('does not carry a window from one machine to another', async () => {
+    openWindow(ADMIN, 'machine-2');
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+  });
+
+  it('does not let one operator take control on another operator window', async () => {
+    // Both hold MACHINE_REMOTE_CONTROL; only the owner ran the ceremony.
+    openWindow(SITE_OWNER);
+    signIn(ADMIN);
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+  });
+
+  it('refuses an open window held by an account that has lost its last factor', async () => {
+    openWindow(ADMIN);
+    mfaFactors.totp = false;
+    mfaFactors.passkeys = 0;
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+  });
+
+  it('refuses an api-key caller holding an open window', async () => {
+    openWindow(SITE_OWNER);
+    mockResolveAuth.mockResolvedValue(apiKeyAuth(SITE_OWNER));
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(403);
+    expect(body.code).toBe('api_key_not_permitted');
+  });
+
+  /**
+   * plan.md D10: step-up is a live proof and never a freshness timestamp,
+   * because the 30-day device-trust cookie births sessions with
+   * `mfaCompletedAt = now`. Keying the window on (user, machine) must not hand
+   * such a session a window somebody else's ceremony opened.
+   */
+  it('prompts a device-trust-born session even inside a live window', async () => {
+    openWindow(ADMIN, MACHINE, 60_000);
+    signIn(ADMIN, 'device-trust');
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+  });
+
+  it('prompts a session that predates the satisfier being recorded', async () => {
+    openWindow(ADMIN, MACHINE, 60_000);
+    signIn(ADMIN);
+    delete mockLogin.mfaSatisfiedBy;
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+  });
+
+  /**
+   * And the way back: one ceremony is recorded on the session that ran it, so
+   * that operator's own reloads cost nothing for the rest of the 10 minutes.
+   */
+  it('covers a device-trust session reloads once it has run the ceremony itself', async () => {
+    signIn(ADMIN, 'device-trust');
+    // The window the ceremony opens. `mocks.set` does not feed `mocks.get`, so
+    // the document it writes is staged rather than round-tripped.
+    openWindow(ADMIN);
+
+    const first = await POST(
+      createMockRequest(url(), {
+        method: 'POST',
+        body: { control: true, fp: FP, mfaProof: { code: '123456' } },
+      }),
+      routeContext(),
+    );
+    expect(first.status).toBe(201);
+    expect(mockMarkCeremony).toHaveBeenCalledWith(ADMIN);
+
+    const second = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(second);
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(mockVerifyMfaProof).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a control session on a window a kill has closed', async () => {
+    openWindow(ADMIN);
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_step_up_revocations/current`, {
+      revokedAt: Date.now() + 1_000,
+    });
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
   });
 });
 

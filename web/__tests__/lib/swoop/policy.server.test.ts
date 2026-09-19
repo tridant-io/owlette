@@ -2,29 +2,31 @@
  * @jest-environment node
  */
 
-const mockSettingsGet = jest.fn();
-const mockStepUpGet = jest.fn();
-const mockStepUpSet = jest.fn().mockResolvedValue(undefined);
+/**
+ * A path-keyed Firestore. Which document a window is stored under IS the
+ * security property here — a window that can be read back for another user or
+ * another machine is the bug — so the mock records full paths rather than
+ * answering every `doc()` with the same stub.
+ */
+const mockDocs = new Map<string, Record<string, unknown>>();
+const mockWrites: Array<{ path: string; data: Record<string, unknown> }> = [];
 const mockReadMfaFactors = jest.fn();
 
-jest.mock('@/lib/firebase-admin', () => ({
-  getAdminDb: () => ({
-    collection: (name: string) =>
-      name === 'users'
-        ? {
-            doc: () => ({
-              collection: () => ({
-                doc: () => ({ get: mockStepUpGet, set: mockStepUpSet }),
-              }),
-            }),
-          }
-        : {
-            doc: () => ({
-              collection: () => ({ doc: () => ({ get: mockSettingsGet }) }),
-            }),
-          },
-  }),
-}));
+jest.mock('@/lib/firebase-admin', () => {
+  const doc = (path: string) => ({
+    get: async () => ({
+      exists: mockDocs.has(path),
+      data: () => mockDocs.get(path),
+    }),
+    set: async (data: Record<string, unknown>) => {
+      mockWrites.push({ path, data });
+      mockDocs.set(path, data);
+    },
+    collection: (name: string) => collection(`${path}/${name}`),
+  });
+  const collection = (path: string) => ({ doc: (id: string) => doc(`${path}/${id}`) });
+  return { getAdminDb: () => ({ collection: (name: string) => collection(name) }) };
+});
 
 jest.mock('firebase-admin/firestore', () => ({
   FieldValue: { serverTimestamp: jest.fn(() => '__SERVER_TS__') },
@@ -47,7 +49,8 @@ import {
   loadSwoopSettings,
   openStepUpWindow,
   parseSwoopSettings,
-  stepUpSessionBinding,
+  revokeStepUpWindows,
+  stepUpMachineBinding,
   type SwoopSiteSettings,
 } from '@/lib/swoop/policy.server';
 
@@ -75,8 +78,9 @@ function access(over: Partial<Parameters<typeof evaluateSwoopAccess>[0]>) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockDocs.clear();
+  mockWrites.length = 0;
   mockReadMfaFactors.mockResolvedValue({ totp: true, passkeys: 0 });
-  mockStepUpSet.mockResolvedValue(undefined);
 });
 
 describe('parseSwoopSettings', () => {
@@ -100,7 +104,7 @@ describe('parseSwoopSettings', () => {
   });
 
   it('reads the site settings document', async () => {
-    mockSettingsGet.mockResolvedValue({ exists: true, data: () => ({ enabled: true }) });
+    mockDocs.set(`sites/${SITE}/settings/swoop`, { enabled: true });
     expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
   });
 });
@@ -124,6 +128,28 @@ describe('evaluateSwoopAccess', () => {
   it('refuses an excluded machine', () => {
     expect(access({ settings: { ...ON, excludedMachineIds: [MACHINE] } })).toMatchObject({
       code: 'machine_excluded',
+    });
+  });
+
+  /**
+   * The window is a NECESSARY condition and never a sufficient one — every
+   * other bar is read first, so disabling swoop or excluding a machine ends a
+   * control session that holds a live window.
+   */
+  it('is not satisfied by an open window when any earlier bar refuses', () => {
+    expect(
+      access({ actor: admin, intent: 'control', stepUpOpen: true, settings: SWOOP_SETTINGS_DEFAULTS }),
+    ).toMatchObject({ code: 'swoop_disabled' });
+    expect(
+      access({
+        actor: admin,
+        intent: 'control',
+        stepUpOpen: true,
+        settings: { ...ON, excludedMachineIds: [MACHINE] },
+      }),
+    ).toMatchObject({ code: 'machine_excluded' });
+    expect(access({ actor: outsider, intent: 'control', stepUpOpen: true })).toMatchObject({
+      code: 'capability_missing',
     });
   });
 
@@ -235,27 +261,51 @@ describe('evaluateLeaseRenewal', () => {
   });
 });
 
-describe('step-up window', () => {
-  const binding = stepUpSessionBinding({ userId: 'uid-1', expiresAt: 42 });
 
-  it('binds to one login session — a new session inherits nothing', () => {
-    expect(stepUpSessionBinding({ userId: 'uid-1', expiresAt: 43 })).not.toBe(binding);
-    expect(stepUpSessionBinding({ userId: 'uid-2', expiresAt: 42 })).not.toBe(binding);
-    expect(binding).not.toContain('uid-1');
+describe('step-up window', () => {
+  const USER = 'uid-1';
+  const OTHER_USER = 'uid-2';
+  const OTHER_MACHINE = 'machine-y';
+  const OTHER_SITE = 'site-b';
+  const NOW = 1_700_000_000_000;
+
+  const target = { userId: USER, siteId: SITE, machineId: MACHINE };
+  const windowPath = (t: { userId: string; siteId: string; machineId: string }) =>
+    `users/${t.userId}/swoop_step_up/${stepUpMachineBinding(t)}`;
+
+  const proof = { ok: true, factorUsed: 'passkey' } as const;
+
+  /**
+   * Read the window the way a session that ran its own ceremony does. Every
+   * case below is about the window itself; the session's half of the gate has
+   * its own cases at the end of this block.
+   */
+  const readWindow = (over: Partial<Parameters<typeof hasOpenStepUpWindow>[0]> = {}) =>
+    hasOpenStepUpWindow({ ...target, sessionPassedCeremony: true, ...over });
+
+  it('binds to one (user, machine) pair, and names neither in the document id', () => {
+    const binding = stepUpMachineBinding(target);
+    expect(stepUpMachineBinding({ ...target, userId: OTHER_USER })).not.toBe(binding);
+    expect(stepUpMachineBinding({ ...target, machineId: OTHER_MACHINE })).not.toBe(binding);
+    expect(stepUpMachineBinding({ ...target, siteId: OTHER_SITE })).not.toBe(binding);
+    expect(binding).not.toContain(USER);
+    expect(binding).not.toContain(MACHINE);
   });
 
-  it('opens for 10 minutes on a live proof', async () => {
-    const now = 1_700_000_000_000;
-    const expiresAt = await openStepUpWindow({
-      userId: 'uid-1',
-      binding,
-      proof: { ok: true, factorUsed: 'passkey' },
-      nowMs: now,
-    });
-    expect(expiresAt).toBe(now + SWOOP_STEP_UP_WINDOW_MS);
-    expect(mockStepUpSet).toHaveBeenCalledWith(
-      expect.objectContaining({ openedAt: now, expiresAt, factorUsed: 'passkey' }),
-    );
+  it('opens for 10 minutes from the ceremony, on the (user, machine) document', async () => {
+    const expiresAt = await openStepUpWindow({ ...target, proof, nowMs: NOW });
+
+    expect(expiresAt).toBe(NOW + SWOOP_STEP_UP_WINDOW_MS);
+    expect(mockWrites).toEqual([
+      {
+        path: windowPath(target),
+        data: expect.objectContaining({
+          openedAt: NOW,
+          expiresAt,
+          factorUsed: 'passkey',
+        }),
+      },
+    ]);
   });
 
   it('cannot be opened from a timestamp', async () => {
@@ -263,45 +313,154 @@ describe('step-up window', () => {
     // 30-day device-trust cookie with no ceremony — a freshness check against
     // it passes for a stolen cookie, so it must not open a window here.
     await expect(
-      openStepUpWindow({
-        userId: 'uid-1',
-        binding,
-        proof: { mfaCompletedAt: Date.now() } as never,
-      }),
+      openStepUpWindow({ ...target, proof: { mfaCompletedAt: Date.now() } as never }),
     ).rejects.toThrow(SwoopPolicyError);
 
     await expect(
-      openStepUpWindow({ userId: 'uid-1', binding, proof: { ok: true } as never }),
+      openStepUpWindow({ ...target, proof: { ok: true } as never }),
     ).rejects.toThrow(/step_up_proof_invalid/);
 
     await expect(
-      openStepUpWindow({
-        userId: 'uid-1',
-        binding,
-        proof: { ok: false, status: 401, error: 'x', code: 'y' },
-      }),
+      openStepUpWindow({ ...target, proof: { ok: false, status: 401, error: 'x', code: 'y' } }),
     ).rejects.toThrow(/step_up_proof_invalid/);
 
-    expect(mockStepUpSet).not.toHaveBeenCalled();
+    expect(mockWrites).toHaveLength(0);
   });
 
-  it('refuses an account with zero enrolled factors', async () => {
+  it('refuses to open for an account with zero enrolled factors', async () => {
     mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 0 });
-    await expect(
-      openStepUpWindow({ userId: 'uid-1', binding, proof: { ok: true, factorUsed: 'totp' } }),
-    ).rejects.toThrow(/no_mfa_factors/);
-    expect(mockStepUpSet).not.toHaveBeenCalled();
-  });
 
-  it('reads the window back, and lets it lapse', async () => {
-    const now = 1_700_000_000_000;
-    mockStepUpGet.mockResolvedValue({ exists: true, data: () => ({ expiresAt: now + 1000 }) });
-    expect(await hasOpenStepUpWindow({ userId: 'uid-1', binding, nowMs: now })).toBe(true);
-    expect(await hasOpenStepUpWindow({ userId: 'uid-1', binding, nowMs: now + 2000 })).toBe(false);
+    await expect(
+      openStepUpWindow({ ...target, proof: { ok: true, factorUsed: 'totp' } }),
+    ).rejects.toThrow(/no_mfa_factors/);
+    expect(mockWrites).toHaveLength(0);
   });
 
   it('is closed when there is no window document at all', async () => {
-    mockStepUpGet.mockResolvedValue({ exists: false, data: () => undefined });
-    expect(await hasOpenStepUpWindow({ userId: 'uid-1', binding })).toBe(false);
+    expect(await readWindow({ nowMs: NOW })).toBe(false);
+  });
+
+  /**
+   * The bug this keying exists to fix: a page reload ends the swoop session and
+   * starts a new one, and the ceremony must not run again for each.
+   */
+  it('lets a reconnect inside the 10 minutes through without a second ceremony', async () => {
+    await openStepUpWindow({ ...target, proof, nowMs: NOW });
+    mockWrites.length = 0;
+
+    expect(await readWindow({ nowMs: NOW + 1_000 })).toBe(true);
+    expect(await readWindow({ nowMs: NOW + 120_000 })).toBe(true);
+    expect(
+      await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS - 1 }),
+    ).toBe(true);
+    // Reading a window never writes one: reuse cannot slide the 10 minutes on.
+    expect(mockWrites).toHaveLength(0);
+  });
+
+  it('refuses a reconnect after the 10 minutes have run out', async () => {
+    await openStepUpWindow({ ...target, proof, nowMs: NOW });
+
+    expect(await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS })).toBe(
+      false,
+    );
+    expect(
+      await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS + 60_000 }),
+    ).toBe(false);
+  });
+
+  it('caps a stored expiry at 10 minutes from the ceremony, whatever the document says', async () => {
+    mockDocs.set(windowPath(target), {
+      openedAt: NOW,
+      expiresAt: NOW + 30 * 24 * 60 * 60 * 1000,
+      factorUsed: 'totp',
+    });
+
+    expect(await readWindow({ nowMs: NOW + 60_000 })).toBe(true);
+    expect(await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS })).toBe(
+      false,
+    );
+  });
+
+  it('reads as closed when a field is missing or the wrong type', async () => {
+    mockDocs.set(windowPath(target), { expiresAt: NOW + 60_000 });
+    expect(await readWindow({ nowMs: NOW })).toBe(false);
+
+    mockDocs.set(windowPath(target), { openedAt: NOW, expiresAt: '9999999999999' });
+    expect(await readWindow({ nowMs: NOW })).toBe(false);
+  });
+
+  it('does not cross machines — a proof for one machine is not a proof for another', async () => {
+    await openStepUpWindow({ ...target, proof, nowMs: NOW });
+
+    expect(
+      await readWindow({ machineId: OTHER_MACHINE, nowMs: NOW + 1_000 }),
+    ).toBe(false);
+    expect(
+      await readWindow({ siteId: OTHER_SITE, nowMs: NOW + 1_000 }),
+    ).toBe(false);
+  });
+
+  it('does not cross users — one operator cannot ride another operator proof', async () => {
+    await openStepUpWindow({ ...target, proof, nowMs: NOW });
+
+    expect(
+      await readWindow({ userId: OTHER_USER, nowMs: NOW + 1_000 }),
+    ).toBe(false);
+  });
+
+  it('closes when the account loses its last second factor', async () => {
+    await openStepUpWindow({ ...target, proof, nowMs: NOW });
+    expect(await readWindow({ nowMs: NOW + 1_000 })).toBe(true);
+
+    mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 0 });
+    expect(await readWindow({ nowMs: NOW + 1_000 })).toBe(false);
+  });
+
+  it('closes on a kill, for every user on that machine, and not for any other machine', async () => {
+    await openStepUpWindow({ ...target, proof, nowMs: NOW });
+    await openStepUpWindow({ ...target, userId: OTHER_USER, proof, nowMs: NOW });
+    await openStepUpWindow({ ...target, machineId: OTHER_MACHINE, proof, nowMs: NOW });
+
+    await revokeStepUpWindows({ siteId: SITE, machineId: MACHINE, nowMs: NOW + 1_000 });
+
+    expect(await readWindow({ nowMs: NOW + 2_000 })).toBe(false);
+    expect(
+      await readWindow({ userId: OTHER_USER, nowMs: NOW + 2_000 }),
+    ).toBe(false);
+    expect(
+      await readWindow({ machineId: OTHER_MACHINE, nowMs: NOW + 2_000 }),
+    ).toBe(true);
+  });
+
+  it('lets a ceremony run after a kill open a fresh window', async () => {
+    await revokeStepUpWindows({ siteId: SITE, machineId: MACHINE, nowMs: NOW });
+    await openStepUpWindow({ ...target, proof, nowMs: NOW + 1_000 });
+
+    expect(await readWindow({ nowMs: NOW + 2_000 })).toBe(true);
+  });
+
+  /**
+   * The (user, machine) keying is what lets a reload reuse a window; this is
+   * what stops it handing one to the 30-day device-trust cookie. plan.md D10:
+   * step-up is a live proof, never a freshness timestamp, and a device-trust
+   * birth stamps `mfaCompletedAt = now` having proved nothing.
+   */
+  it('refuses a session that ran no ceremony of its own, however live the window', async () => {
+    await openStepUpWindow({ ...target, proof, nowMs: NOW });
+
+    expect(await readWindow({ nowMs: NOW + 1_000 })).toBe(true);
+    expect(
+      await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: false, nowMs: NOW + 1_000 }),
+    ).toBe(false);
+  });
+
+  it('does not read the window at all for a session that ran no ceremony', async () => {
+    await openStepUpWindow({ ...target, proof, nowMs: NOW });
+    mockReadMfaFactors.mockClear();
+
+    expect(
+      await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: false, nowMs: NOW + 1_000 }),
+    ).toBe(false);
+    expect(mockReadMfaFactors).not.toHaveBeenCalled();
   });
 });

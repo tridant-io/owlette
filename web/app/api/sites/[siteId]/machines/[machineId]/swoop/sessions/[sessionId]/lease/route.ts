@@ -92,12 +92,11 @@ const leaseHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { 
     if (!viewer || viewer.uid !== userId) return problemNotFound('session not found');
 
     const gate = await swoopGate({
-      request,
       ctx,
       machineId,
       intent: viewer.ctl ? 'control' : 'view',
     });
-    const decision = evaluateLeaseRenewal({ ...gate.input, startedAt: session.startedAt });
+    const decision = evaluateLeaseRenewal({ ...gate, startedAt: session.startedAt });
     if (!decision.ok) {
       recordSwoopDenied({
         ...auditBase,

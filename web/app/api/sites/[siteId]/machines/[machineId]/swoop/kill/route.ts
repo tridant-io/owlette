@@ -15,6 +15,10 @@
  * Deliberately NOT gated on the site's swoop settings: stopping a stream has to
  * work after the feature has been switched off, which is exactly when an
  * operator wants it most. The capability check is the whole gate.
+ *
+ * It also closes every open step-up window on the machine, before either path
+ * runs. A kill the operator it cut off can undo by reconnecting a second later
+ * on a window they already held is not a kill.
  */
 
 import { NextResponse } from 'next/server';
@@ -23,6 +27,7 @@ import { applyAuthDeprecations, readAndParseJsonBody } from '@/app/api/_shared';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
 import logger from '@/lib/logger';
+import { revokeStepUpWindows } from '@/lib/swoop/policy.server';
 import { killSession } from '@/lib/swoop/signal.server';
 import {
   requestSwoopSession,
@@ -45,6 +50,22 @@ const killHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       return problemValidation('field `sid` is not a session id');
     }
     const sid = body.sid as string | undefined;
+
+    // First, so there is no window left open for the seconds the stop takes.
+    // A failure here is logged and the kill goes on: a stream that keeps
+    // running is worse than a window that outlives its 10 minutes.
+    try {
+      await revokeStepUpWindows({ siteId, machineId });
+    } catch (err) {
+      logger.warn('[swoop/kill] step-up windows could not be closed; killing anyway', {
+        context: 'swoop/kill',
+        data: {
+          siteId,
+          machineId,
+          err: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
 
     const broadcast = await killSession({ siteId, machineId, ...(sid ? { sid } : {}) });
     if (broadcast.ok) {

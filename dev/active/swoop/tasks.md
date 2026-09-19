@@ -304,9 +304,12 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
     2.11 owns that). `policy.server.ts`: enablement from `sites/{s}/settings/swoop` (`enabled`,
     `excludedMachineIds`, `membersMayWatch`, `indicator`), a member refused when `membersMayWatch` is false, an
     excluded machine refused, `ctx.auth.keyContext !== null` refused with `api_key_not_permitted`, a 10-minute
-    server-side step-up window keyed to the session that **only a live `verifyMfaProof` /
-    `verifyPasskeyStepUpAssertion` ceremony** may open (never `session.mfaCompletedAt`, never a device-trust
-    cookie — `web/lib/sessionManager.server.ts:219-221`), zero-factor accounts refused, and 5-minute lease
+    server-side step-up window keyed to the **(user, machine)** pair that **only a live `verifyMfaProof` /
+    `verifyPasskeyStepUpAssertion` ceremony** may open, and that only a login session which itself passed a
+    ceremony may read back (`sessionPassedMfaCeremony`) — so a reload reuses the window but a device-trust
+    birth never inherits one (never `session.mfaCompletedAt`, never a device-trust cookie —
+    `web/lib/sessionManager.server.ts`, the `deviceTrusted` arm of `resolveMfaOnSessionCreate`), a kill closes
+    every window on the machine, zero-factor accounts refused, and 5-minute lease
     rules with a 12 h cap that re-check membership, enablement and capability. `signal.server.ts`: the
     server's only client for the Worker's control routes — `ringDoorbell({siteId, machineId, sid})` →
     `POST {SWOOP_SIGNAL_URL}/v1/ring` and `killSession({siteId, machineId, sid})` → `POST /v1/kill`, both

@@ -13,10 +13,29 @@
  *
  * The step-up window CANNOT be opened from a timestamp. `session.mfaCompletedAt`
  * is set to `now` when a session is born from a 30-day device-trust cookie with
- * no ceremony performed (`lib/sessionManager.server.ts:219-221`), so any
- * freshness check against it passes for a stolen cookie. `openStepUpWindow`
- * therefore takes the OUTCOME of `verifyMfaProof` / `verifyPasskeyStepUpAssertion`
- * and validates it at runtime as well as in the types.
+ * no ceremony performed (`lib/sessionManager.server.ts`, the `deviceTrusted`
+ * arm of `resolveMfaOnSessionCreate`), so any freshness check against it passes
+ * for a stolen cookie. `openStepUpWindow` therefore takes the OUTCOME of
+ * `verifyMfaProof` / `verifyPasskeyStepUpAssertion` and validates it at runtime
+ * as well as in the types.
+ *
+ * The window is stored against the (user, machine) pair, NOT against one login
+ * session. A page reload ends a swoop session and starts a new one, and a
+ * session-bound window could never be inherited by the next one — so every
+ * reload demanded a fresh ceremony.
+ *
+ * Reuse is not free, though, and this is the half that keeps the same
+ * device-trust cookie out: a window may only be read back by a login session
+ * that ITSELF passed a live ceremony (`sessionPassedMfaCeremony`). A
+ * device-trust-born session is refused the window however live it is, and is
+ * sent through the ceremony — which then stamps that session, so ITS reloads
+ * cost nothing. The claim the window makes is therefore unchanged: "this user
+ * proved possession of a second factor within the last 10 minutes, for this
+ * machine, and the session asking also proved one". It is never "proved once,
+ * trusted forever" — the 10 minutes run from the ceremony, reuse does not
+ * extend them, and the window is a NECESSARY condition that
+ * `evaluateSwoopAccess` consults only after site enablement, the machine
+ * exclusion list and the capability have all already passed.
  */
 
 import { FieldValue } from 'firebase-admin/firestore';
@@ -35,10 +54,12 @@ export const SWOOP_LEASE_SECONDS = 300;
 /** Absolute cap from `ready`, a hard stop rather than a renewal ceiling. */
 export const SWOOP_SESSION_CAP_SECONDS = 12 * 60 * 60;
 
-/** How long one live ceremony authorises control for. */
+/** How long one live ceremony authorises control for, measured from the ceremony. */
 export const SWOOP_STEP_UP_WINDOW_MS = 10 * 60 * 1000;
 
 const STEP_UP_COLLECTION = 'swoop_step_up';
+const STEP_UP_REVOCATION_COLLECTION = 'swoop_step_up_revocations';
+const STEP_UP_REVOCATION_DOC = 'current';
 
 export type SwoopIndicator = 'banner' | 'tray' | 'none';
 
@@ -196,25 +217,50 @@ export function evaluateLeaseRenewal(
 
 // -------------------------------------------------------------- step-up window
 
+/** The (user, machine) pair one window covers. */
+export interface StepUpTarget {
+  userId: string;
+  siteId: string;
+  machineId: string;
+}
+
 /**
- * Binds a window to ONE login session. `expiresAt` is fixed when the session is
- * created, so a fresh login — including one born from a device-trust cookie —
- * produces a different binding and inherits no window. Hashed so the stored
- * document id carries nothing about the session.
+ * Binds a window to ONE (user, machine) pair. Every part is a Firestore
+ * document id and so cannot contain `/`, which makes the join injective: no two
+ * different triples share a binding, so a window can be read back for the
+ * machine it was opened for and for no other. Hashed so the stored document id
+ * carries nothing about which machine it names.
  */
-export function stepUpSessionBinding(session: { userId: string; expiresAt: number }): string {
+export function stepUpMachineBinding(target: StepUpTarget): string {
   return createHash('sha256')
-    .update(`${session.userId}:${session.expiresAt}`, 'utf8')
+    .update(`${target.userId}/${target.siteId}/${target.machineId}`, 'utf8')
     .digest('hex')
     .slice(0, 32);
 }
 
+/**
+ * `users/{uid}/swoop_step_up/{binding}` and
+ * `sites/{siteId}/machines/{machineId}/swoop_step_up_revocations/current`.
+ *
+ * Neither has a `firestore.rules` match, so the catch-all denies every client:
+ * the window is server-side state that no browser can read, forge or extend.
+ */
 function stepUpRef(userId: string, binding: string) {
   return getAdminDb()
     .collection('users')
     .doc(userId)
     .collection(STEP_UP_COLLECTION)
     .doc(binding);
+}
+
+function stepUpRevocationRef(siteId: string, machineId: string) {
+  return getAdminDb()
+    .collection('sites')
+    .doc(siteId)
+    .collection('machines')
+    .doc(machineId)
+    .collection(STEP_UP_REVOCATION_COLLECTION)
+    .doc(STEP_UP_REVOCATION_DOC);
 }
 
 const STEP_UP_FACTORS: ReadonlySet<string> = new Set(['totp', 'backup_code', 'passkey']);
@@ -226,9 +272,7 @@ const STEP_UP_FACTORS: ReadonlySet<string> = new Set(['totp', 'backup_code', 'pa
  * only by the type checker, because the type checker is not what an attacker
  * goes through.
  */
-export async function openStepUpWindow(args: {
-  userId: string;
-  binding: string;
+export async function openStepUpWindow(args: StepUpTarget & {
   proof: MfaProofOutcome;
   nowMs?: number;
 }): Promise<number> {
@@ -249,7 +293,9 @@ export async function openStepUpWindow(args: {
 
   const now = args.nowMs ?? Date.now();
   const expiresAt = now + SWOOP_STEP_UP_WINDOW_MS;
-  await stepUpRef(args.userId, args.binding).set({
+  // A plain `set`, so a second ceremony replaces the window rather than
+  // extending one: `openedAt` always names the ceremony the window rests on.
+  await stepUpRef(args.userId, stepUpMachineBinding(args)).set({
     openedAt: now,
     expiresAt,
     factorUsed: proof.factorUsed,
@@ -258,19 +304,78 @@ export async function openStepUpWindow(args: {
   return expiresAt;
 }
 
-export async function hasOpenStepUpWindow(args: {
-  userId: string;
-  binding: string;
+/**
+ * Close every open window on this machine, for every user, from `nowMs` back.
+ *
+ * The kill switch is the "stop now" lever, and it would mean very little if the
+ * operator it just cut off could reconnect into control a second later on a
+ * window they opened before it. A ceremony run AFTER this still opens a window,
+ * because it is `openedAt` that is compared.
+ */
+export async function revokeStepUpWindows(args: {
+  siteId: string;
+  machineId: string;
   nowMs?: number;
-}): Promise<boolean> {
-  const snap = await stepUpRef(args.userId, args.binding).get();
-  if (!snap.exists) return false;
-  const expiresAt = snap.data()?.expiresAt;
-  if (typeof expiresAt !== 'number') return false;
-  return expiresAt > (args.nowMs ?? Date.now());
+}): Promise<void> {
+  await stepUpRevocationRef(args.siteId, args.machineId).set({
+    revokedAt: args.nowMs ?? Date.now(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
 }
 
-/** Zero-factor accounts cannot control. Read before offering the ceremony. */
+async function stepUpRevokedAt(siteId: string, machineId: string): Promise<number> {
+  const snap = await stepUpRevocationRef(siteId, machineId).get();
+  const revokedAt = snap.exists ? snap.data()?.revokedAt : undefined;
+  return typeof revokedAt === 'number' ? revokedAt : 0;
+}
+
+/**
+ * May this request take control on a window already open for this user on this
+ * machine?
+ *
+ * `sessionPassedCeremony` is `sessionPassedMfaCeremony()` for the login session
+ * behind the request, and it is a required argument so that no call site can
+ * reach the window without answering the question. It is not something the
+ * browser asserts: the value comes off the server's own encrypted, signed
+ * session cookie, and the client has no field it can set to change it.
+ *
+ * Four things can close a window, and all four are read here rather than
+ * trusted to have deleted the document: the asking session not having run a
+ * ceremony, the 10 minutes lapsing, a kill on the machine, and the account
+ * losing its last second factor. A missing or malformed field reads as closed.
+ */
+export async function hasOpenStepUpWindow(
+  args: StepUpTarget & { sessionPassedCeremony: boolean; nowMs?: number },
+): Promise<boolean> {
+  // First, and before any read: a session born from the 30-day device-trust
+  // cookie ran no ceremony, so it inherits nothing — plan.md D10. It costs that
+  // session no Firestore round trip either.
+  if (!args.sessionPassedCeremony) return false;
+
+  const [snap, revokedAt, enrolled] = await Promise.all([
+    stepUpRef(args.userId, stepUpMachineBinding(args)).get(),
+    stepUpRevokedAt(args.siteId, args.machineId),
+    hasEnrolledFactor(args.userId),
+  ]);
+  // A window opened before the last factor was removed must not outlive it —
+  // an account with zero factors cannot control, window or not.
+  if (!enrolled || !snap.exists) return false;
+
+  const data = snap.data() ?? {};
+  const openedAt = data.openedAt;
+  const expiresAt = data.expiresAt;
+  if (typeof openedAt !== 'number' || typeof expiresAt !== 'number') return false;
+  if (openedAt <= revokedAt) return false;
+
+  // The window's length is the READER's constant: whatever is stored can only
+  // shorten it, never stretch it past 10 minutes from the ceremony.
+  return Math.min(expiresAt, openedAt + SWOOP_STEP_UP_WINDOW_MS) > (args.nowMs ?? Date.now());
+}
+
+/**
+ * Zero-factor accounts cannot control. Read before offering the ceremony, and
+ * again on every window check, so losing the last factor closes the window.
+ */
 export async function hasEnrolledFactor(userId: string): Promise<boolean> {
   return deriveMfaEnrolled(await readMfaFactors(userId));
 }
