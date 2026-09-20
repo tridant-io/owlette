@@ -14,6 +14,7 @@ import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { toast } from '@/lib/toast';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
 import { formatHeartbeatTime, getDisplayTimezone } from '@/lib/timeUtils';
@@ -51,7 +52,7 @@ interface MachineCardViewProps {
   onRestart?: (machineId: string) => Promise<void>;
   onShutdown?: (machineId: string) => Promise<void>;
   onCancelRestart?: (machineId: string) => Promise<void>;
-  onDismissRestartPending?: (machineId: string, processName: string) => Promise<void>;
+  onDismissRestartPending?: (machineId: string) => Promise<void>;
   onScreenshot?: (machineId: string) => void;
   onLiveView?: (machineId: string) => void;
   onSwoop?: (machineId: string) => void;
@@ -85,7 +86,7 @@ interface MachineCardProps {
   onRestart?: () => Promise<void>;
   onShutdown?: () => Promise<void>;
   onCancelRestart?: () => Promise<void>;
-  onDismissRestartPending?: (processName: string) => Promise<void>;
+  onDismissRestartPending?: () => Promise<void>;
   onScreenshot?: () => void;
   onLiveView?: () => void;
   onSwoop?: () => void;
@@ -299,33 +300,55 @@ function MachineCard({
           </div>
         </div>
       </CardHeader>
-      {/* Restart Pending Banner */}
+      {/* Restart Pending Banner. The flag is agent-written and only the agent's
+          next service start clears it locally, so it outlives an unreachable
+          machine — still worth showing (the operator wants to know it is set),
+          but not as a live alarm. `machine.online` is the derived flag from
+          `isMachineOnline`: the same 5-minute heartbeat rule as
+          `isHeartbeatStale`, plus the agent's own flag. */}
       {machine.rebootPending?.active && (
-        <div className="mx-4 mb-2 p-3 rounded-lg border border-amber-600/30 bg-amber-950/20">
+        <div
+          data-testid="reboot-pending-banner"
+          className={`mx-4 mb-2 p-3 rounded-lg border ${
+            machine.online ? 'border-amber-600/30 bg-amber-950/20' : 'border-border/60 bg-muted/20'
+          }`}
+        >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0" />
-              <span className="text-sm text-amber-300 truncate">
+              <AlertTriangle className={`h-4 w-4 flex-shrink-0 ${machine.online ? 'text-amber-400' : 'text-muted-foreground'}`} />
+              <span className={`text-sm truncate ${machine.online ? 'text-amber-300' : 'text-muted-foreground'}`}>
                 restart pending: {machine.rebootPending.reason || 'process crashed'}
+                {!machine.online && ' — machine offline, cannot restart'}
               </span>
             </div>
             {isSiteAdmin && (
               <div className="flex items-center gap-1.5 flex-shrink-0">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  data-testid="reboot-pending-approve"
-                  className="h-7 px-2.5 text-xs bg-amber-600 hover:bg-amber-700 text-white cursor-pointer"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    if (onRestart) {
-                      try { await onRestart(); } catch {}
-                    }
-                  }}
-                >
-                  <RotateCcw className="h-3 w-3 mr-1" />
-                  approve
-                </Button>
+                {/* No approve while offline: the command would 409 machine_offline. */}
+                {machine.online && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    data-testid="reboot-pending-approve"
+                    className="h-7 px-2.5 text-xs bg-amber-600 hover:bg-amber-700 text-white cursor-pointer"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!onRestart) return;
+                      try {
+                        await onRestart();
+                        toast.success('restart approved');
+                      } catch (error: unknown) {
+                        toast.error('could not send the restart command', {
+                          description: error instanceof Error ? error.message : 'unknown error',
+                        });
+                      }
+                    }}
+                  >
+                    <RotateCcw className="h-3 w-3 mr-1" />
+                    approve
+                  </Button>
+                )}
+                {/* Always offered: dismissing clears a cloud field through the
+                    api, so it does not need the machine to be reachable. */}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -333,8 +356,14 @@ function MachineCard({
                   className="h-7 px-2.5 text-xs text-muted-foreground hover:text-white hover:bg-accent cursor-pointer"
                   onClick={async (e) => {
                     e.stopPropagation();
-                    if (onDismissRestartPending && machine.rebootPending?.processName) {
-                      try { await onDismissRestartPending(machine.rebootPending.processName); } catch {}
+                    if (!onDismissRestartPending) return;
+                    try {
+                      await onDismissRestartPending();
+                      toast.success('restart pending dismissed');
+                    } catch (error: unknown) {
+                      toast.error('could not dismiss the pending restart', {
+                        description: error instanceof Error ? error.message : 'unknown error',
+                      });
                     }
                   }}
                 >
@@ -1046,7 +1075,7 @@ export function MachineCardView({
           onRestart={onRestart ? () => onRestart(machine.machineId) : undefined}
           onShutdown={onShutdown ? () => onShutdown(machine.machineId) : undefined}
           onCancelRestart={onCancelRestart ? () => onCancelRestart(machine.machineId) : undefined}
-          onDismissRestartPending={onDismissRestartPending ? (processName) => onDismissRestartPending(machine.machineId, processName) : undefined}
+          onDismissRestartPending={onDismissRestartPending ? () => onDismissRestartPending(machine.machineId) : undefined}
           onScreenshot={onScreenshot ? () => onScreenshot(machine.machineId) : undefined}
           onLiveView={onLiveView ? () => onLiveView(machine.machineId) : undefined}
           onSwoop={onSwoop ? () => onSwoop(machine.machineId) : undefined}

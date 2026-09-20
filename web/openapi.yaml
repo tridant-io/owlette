@@ -5821,6 +5821,32 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
 
+  /api/sites/{siteId}/machines/{machineId}/reboot-pending:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+    delete:
+      operationId: dismissMachineRebootPending
+      tags: [Machines]
+      summary: dismiss a machine's pending-restart flag
+      description: >
+        Clears `rebootPending` on the machine status doc and relays
+        `dismiss_reboot_pending` to the agent best-effort. Succeeds on an offline
+        machine — `data.commandId` is then null, because the flag is cloud state
+        and the agent resets its own local counters when it next starts.
+        Requires `machine=<machineId>:write`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      responses:
+        '200': { description: Pending-restart flag cleared. }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
   /api/sites/{siteId}/machines/{machineId}/reboot-schedule:
     parameters:
       - $ref: '#/components/parameters/SiteIdPath'
