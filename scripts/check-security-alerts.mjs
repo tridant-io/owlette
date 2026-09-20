@@ -864,9 +864,22 @@ function main(argv) {
     console.log(`  ... plus ${routine.length} routine: already patched on this branch, or filed against a manifest `
       + 'this branch does not carry. Re-run with --json to enumerate.');
   }
+  // An unmatched ack means "gone" only where we actually looked. Code-scanning
+  // alerts are queried scoped to this ref, so on a branch CodeQL has never
+  // scanned every code-scanning ack goes unmatched — and telling someone to
+  // delete a waiver on that basis is the opposite of the truth. All ten
+  // code-scanning acks read as "the finding is gone" on a feature branch while
+  // being open on the repo. Say UNKNOWN when the coverage probe already said so.
+  const sastUnscanned = findings.some((f) => f.key === 'verify:code-scanning-coverage');
   for (const [key, why] of acks) {
-    if (findings.some((f) => f.key === key)) console.log(`ACKED ${key} — ${why}`);
-    else console.log(`NOTE: ack ${key} matched nothing; the finding is gone — remove the entry`);
+    if (findings.some((f) => f.key === key)) {
+      console.log(`ACKED ${key} — ${why}`);
+    } else if (sastUnscanned && key.startsWith('alert:code-scanning:')) {
+      console.log(`NOTE: ack ${key} could not be graded — SAST has not run on this ref, so this is `
+        + 'UNKNOWN, not gone. Do NOT remove it on this evidence; re-check on a scanned branch (dev/main).');
+    } else {
+      console.log(`NOTE: ack ${key} matched nothing; the finding is gone — remove the entry`);
+    }
   }
   for (const item of expired) {
     console.log(`EXPIRED WAIVER: ${item} — no longer applied. Re-accept it with a new expiry, or fix the finding.`);
