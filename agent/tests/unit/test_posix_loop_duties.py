@@ -27,7 +27,6 @@ import datetime
 import json
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -50,7 +49,7 @@ def _bound(name, svc):
 
 
 @pytest.fixture
-def console_user(monkeypatch, os_arm):
+def console_user(monkeypatch):
     """Whoever is running the suite, standing in for the user at the machine."""
     import pwd
 
@@ -126,7 +125,6 @@ def test_script_arguments_survive_the_handoff(console_user, monkeypatch):
     assert spawned[0][-1] == '/var/lib/owlette/ipc/jobs/a b.json'
 
 
-@pytest.mark.needs_os_arm
 def test_the_hoot_tick_degrades_when_nobody_is_signed_in(monkeypatch, caplog):
     """The headless case — a rebooted kiosk before anyone logs in, and every
     server-shaped install. It is a skipped launch, not an exception out of the
@@ -154,7 +152,6 @@ def test_the_hoot_tick_degrades_when_nobody_is_signed_in(monkeypatch, caplog):
     assert 'no interactive user session' in caplog.text
 
 
-@pytest.mark.needs_os_arm
 def test_a_managed_launch_goes_to_the_adapter_and_is_recorded(monkeypatch, tmp_path):
     """The POSIX half of `launch_process_as_user`: no token ladder, the adapter
     resolves the console user and spawns as them, and the durable identity
@@ -726,7 +723,7 @@ def test_a_deployment_resolves_its_close_names_against_the_managed_entries(
 
 
 def test_a_live_managed_process_is_adopted_rather_than_launched_again(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, private_executable):
     """Task 3.1's own Done-when: restarting the daemon with a managed process
     running leaves that pid alive and the agent re-adopts it. The lookup every
     adoption tier is fed by folded separators on POSIX, so nothing was ever
@@ -734,8 +731,7 @@ def test_a_live_managed_process_is_adopted_rather_than_launched_again(
     """
     monkeypatch.setattr(
         shared_utils, 'RESULT_FILE_PATH', str(tmp_path / 'app_states.json'))
-    exe = shutil.copy('/bin/sleep', tmp_path / 'kiosk-app')
-    os.chmod(exe, 0o755)
+    exe = private_executable('kiosk-app')
     child = subprocess.Popen([str(exe), '30'])
     svc = SimpleNamespace(last_started={}, firebase_client=None)
     svc._find_running_process_by_exe = _bound(
@@ -775,7 +771,6 @@ def _pending_writer(rows, written=True):
     return _set_reboot_pending
 
 
-@pytest.mark.needs_os_arm
 def test_the_hoot_launcher_does_not_resolve_the_seat_on_every_tick(monkeypatch):
     """Resolving the console user off Windows is `loginctl list-sessions` plus
     a `loginctl show-session` per session, each with a five-second budget, and

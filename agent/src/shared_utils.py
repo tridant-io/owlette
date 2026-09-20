@@ -2592,6 +2592,98 @@ def normalize_exe_path(path):
     return text.replace('/', '\\').lower()
 
 
+# A macOS application bundle names the directory LaunchServices opens, not the
+# image the kernel runs: `/Applications/TouchDesigner.app` executes
+# `Contents/MacOS/TouchDesigner`, and that inner path is what psutil reports.
+_APP_BUNDLE_SUFFIX = '.app'
+# A property list is read the way everything owlette opens out of a tree it did
+# not build is — Info.plist belongs to whoever can write the bundle: bounded,
+# off a descriptor on the entry itself, never through a link.
+_PLIST_LIMIT = 1 << 20
+# Windows has neither O_NOFOLLOW nor O_NONBLOCK, and needs O_BINARY for the
+# bytes to arrive untranslated; the property lists read here are macOS's, but
+# the suite reads them on every leg.
+_PLIST_OPEN_FLAGS = (
+    os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    | getattr(os, 'O_BINARY', 0)
+)
+
+
+def resolve_exec_target(exe_path):
+    """The executable a configured path runs.
+
+    On macOS an application bundle resolves to the binary its Info.plist names
+    under Contents/MacOS — the image the kernel runs, and so the one every
+    identity comparison sees. Every other path, and every path on every other
+    platform, is returned as given. So is a bundle that does not resolve: a
+    comparison against the bundle directory matches no live image, and a launch
+    of it is refused as a path that is not an executable.
+
+    Nothing below the bundle is followed through a link: the executable must be
+    the bundle's own file, not whatever a planted `Contents` or `MacOS` entry
+    points at.
+    """
+    text = str(exe_path or '')
+    bundle = text.rstrip('/')
+    if not _IS_MACOS or not bundle.endswith(_APP_BUNDLE_SUFFIX):
+        return text
+    executable = _bundle_executable(bundle)
+    if executable is None:
+        return text
+    target = os.path.join(bundle, 'Contents', 'MacOS', executable)
+    inside = os.path.join(os.path.realpath(bundle), 'Contents', 'MacOS', executable)
+    if os.path.realpath(target) != inside or not os.path.isfile(target):
+        logging.debug(f"{bundle} names {executable!r}, which is not its own file")
+        return text
+    return target
+
+
+def read_plist(path):
+    """The property list at `path`; None when there is none to read.
+
+    A regular file of plausible size, opened without following a link and
+    without blocking on a fifo planted in its place.
+    """
+    import plistlib
+    from xml.parsers.expat import ExpatError
+
+    try:
+        fd = os.open(path, _PLIST_OPEN_FLAGS)
+    except OSError as e:
+        logging.debug(f"No readable property list at {path}: {e}")
+        return None
+    try:
+        with os.fdopen(fd, 'rb') as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                logging.debug(f"{path} is not a regular file")
+                return None
+            data = f.read(_PLIST_LIMIT + 1)
+        if len(data) > _PLIST_LIMIT:
+            logging.debug(f"{path} is larger than a property list should be")
+            return None
+        return plistlib.loads(data)
+    except (OSError, ValueError, ExpatError) as e:
+        logging.debug(f"Could not read {path}: {e}")
+        return None
+
+
+def read_bundle_info(bundle):
+    """A bundle's Contents/Info.plist as a dict; None when there is none to read."""
+    info = read_plist(os.path.join(bundle, 'Contents', 'Info.plist'))
+    return info if isinstance(info, dict) else None
+
+
+def _bundle_executable(bundle):
+    """The CFBundleExecutable a bundle's Info.plist names; None when it names
+    nothing that could be a file inside Contents/MacOS."""
+    info = read_bundle_info(bundle)
+    executable = info.get('CFBundleExecutable') if info is not None else None
+    if (not isinstance(executable, str) or executable in ('', '.', '..')
+            or '/' in executable or '\0' in executable):
+        return None
+    return executable
+
+
 def read_process_identity(pid):
     """Snapshot a live process's identity: {pid, create_time, exe}.
 
@@ -2760,10 +2852,12 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
     compares the path exactly as the kernel reports it. Folding it there turned
     the configured /usr/bin/app into \\usr\\bin\\app, whose basename is the whole
     string, so no candidate could ever match and every adoption tier was
-    unreachable on Linux.
+    unreachable on Linux. A configured macOS application bundle is compared as
+    the binary it runs (resolve_exec_target), for the same reason: the kernel
+    reports that path and never the bundle's.
     """
     try:
-        exe_key = normalize_exe_path(exe_path)
+        exe_key = normalize_exe_path(resolve_exec_target(exe_path))
         exe_basename = os.path.basename(exe_key)
         file_path_key = normalize_exe_path(file_path) if file_path else None
         # Same normalisation as the live cmdlines below, so recorded evidence

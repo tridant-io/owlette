@@ -13,6 +13,7 @@ the command callback.
 """
 
 import os
+import plistlib
 import stat
 import subprocess
 import sys
@@ -253,14 +254,83 @@ def test_a_refused_handoff_is_not_reported_as_an_update(commands):
     assert detail.startswith('update_handoff_failed:')
 
 
-def test_macos_submits_the_installer_to_launchd(commands):
+@pytest.fixture
+def launchd(monkeypatch):
+    """launchctl as the macOS handoff meets it: the update job's state as
+    `print` reports it, and the plist each bootstrap was handed, read while
+    the file still exists."""
+    record = SimpleNamespace(issued=[], jobs=[], state=None, bootstrap=FakeRun())
+
+    def fake_run(command, timeout_seconds):
+        record.issued.append(list(command))
+        if command[1] == 'print':
+            if record.state is None:
+                return FakeRun(returncode=113)
+            return FakeRun(stdout=f'system/app.owlette.update = {{\n\tstate = {record.state}\n}}\n')
+        if command[1] == 'bootstrap':
+            with open(command[3], 'rb') as f:
+                record.jobs.append((command[3], plistlib.load(f)))
+            return record.bootstrap
+        return FakeRun()
+
+    monkeypatch.setattr(installer_utils, '_run_update_command', fake_run)
+    return record
+
+
+def test_macos_runs_the_installer_as_a_launchd_job_that_runs_once(launchd):
+    """Never `launchctl submit`: measured on macOS 26.6, a submitted command
+    that exited 0 was scheduled to run again ten seconds later — an installer
+    reinstalling the package, and restarting the agent, every ten seconds."""
     started, detail = installer_utils.start_self_update('/tmp/owlette.pkg', 'macos')
 
     assert started, detail
-    assert commands.issued == [[
-        'launchctl', 'submit', '-l', installer_utils.UPDATE_JOB_LABEL, '--',
-        '/usr/sbin/installer', '-pkg', '/tmp/owlette.pkg', '-target', '/',
-    ]]
+    assert [command[:3] for command in launchd.issued] == [
+        ['launchctl', 'print', 'system/app.owlette.update'],
+        ['launchctl', 'bootstrap', 'system'],
+    ]
+    path, job = launchd.jobs[0]
+    assert job['Label'] == installer_utils.UPDATE_JOB_LABEL
+    assert job['ProgramArguments'] == [
+        '/usr/sbin/installer', '-pkg', '/tmp/owlette.pkg', '-target', '/']
+    assert job['RunAtLoad'] is True
+    assert job['KeepAlive'] is False
+    assert job['StandardOutPath'] == shared_utils.get_data_path('logs/update_installer.log')
+    # launchd read the plist at bootstrap; nothing of it is left behind.
+    assert not os.path.exists(path)
+    assert not any('submit' in command for command in launchd.issued)
+
+
+def test_a_finished_update_job_is_booted_out_before_the_next(launchd):
+    """The job stays loaded once the installer has exited, and a bootstrap
+    under a label launchd still holds is refused."""
+    launchd.state = 'not running'
+
+    started, detail = installer_utils.start_self_update('/tmp/owlette.pkg', 'macos')
+
+    assert started, detail
+    assert [command[1] for command in launchd.issued] == ['print', 'bootout', 'bootstrap']
+    assert launchd.issued[1] == ['launchctl', 'bootout', 'system/app.owlette.update']
+
+
+def test_an_update_still_installing_defers_the_next(launchd):
+    """Negative control for the bootout above: a bootout of a running job
+    ends it, and an installer ended mid-install is a half-installed agent."""
+    launchd.state = 'running'
+
+    started, detail = installer_utils.start_self_update('/tmp/owlette.pkg', 'macos')
+
+    assert not started
+    assert detail.startswith('update_deferred:')
+    assert [command[1] for command in launchd.issued] == ['print']
+
+
+def test_a_refused_bootstrap_is_not_reported_as_an_update(launchd):
+    launchd.bootstrap = FakeRun(returncode=5, stderr='Bootstrap failed: 5: Input/output error')
+
+    started, detail = installer_utils.start_self_update('/tmp/owlette.pkg', 'macos')
+
+    assert not started
+    assert detail.startswith('update_handoff_failed:')
 
 
 def test_there_is_no_posix_update_path_for_windows():

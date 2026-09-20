@@ -14,8 +14,11 @@ here runs a real system command.
 """
 
 import os
+import plistlib
 import sys
 import tempfile
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -617,24 +620,149 @@ def test_pending_reboot_reads_the_debian_marker(linux, monkeypatch):
     }
 
 
-def test_pending_reboot_reads_softwareupdate_on_macos(macos, ran):
-    ran.reply('softwareupdate', (0, (
-        '* Label: macOS Sequoia 15.6.1-24G90\n'
-        '\tTitle: macOS Sequoia, Version: 15.6.1, Size: 3.2 GiB, Recommended: YES, '
-        'Action: restart, [restart]\n'
-    ), ''))
+class _MacUpdateState:
+    """What softwareupdated leaves on disk, laid out under tmp_path in the
+    shapes measured on macOS 26.6 — a Mac running 25G72 with 26.6.2 (25G83)
+    prepared and suspended, and nothing staged into its cryptex."""
+
+    RUNNING = '25G72'
+    PREBOOT = '997B1426-615E-4429-9985-21896E18E90D'
+
+    def __init__(self, root, monkeypatch, ran):
+        self.root = root
+        self.volume = root / 'Update'
+        self.suspended = self.volume / 'softwareupdate.5832.MSKlok'
+        self.suspended.mkdir(parents=True)
+        paths = {
+            'MACOS_SYSTEM_VERSION': root / 'SystemVersion.plist',
+            'MACOS_PREPARED_UPDATE': self.volume / 'Update.plist',
+            'MACOS_UPDATE_VOLUME': self.volume,
+            'MACOS_STAGED_CRYPTEX': root / 'Preboot' / '{}' / 'RestoreVersion.plist',
+            'MACOS_ACTIVE_CRYPTEX': root / 'Cryptexes' / 'RestoreVersion.plist',
+            'MACOS_UPDATE_JOURNAL': root / 'journal.plist',
+        }
+        self.paths = {name: str(path) for name, path in paths.items()}
+        for name, path in self.paths.items():
+            monkeypatch.setattr(tools_posix, name, path)
+        ran.reply('kern.apfsprebootuuid', (0, f'{self.PREBOOT}\n', ''))
+        self.write('MACOS_SYSTEM_VERSION', {'ProductBuildVersion': self.RUNNING})
+        self.prepare()
+        self.cryptex(staged='25.7.72.0.0,0', active='25.7.72.0.0,0')
+
+    def write(self, name, value, *parts):
+        path = Path(self.paths[name].format(*parts) if parts else self.paths[name])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(plistlib.dumps(value))
+
+    def prepare(self, target='25G83', prepared_from=RUNNING, suspended=None):
+        self.write('MACOS_PREPARED_UPDATE', {
+            'OriginalOSVersion': prepared_from,
+            'BootedOSVersion': prepared_from,
+            'suspended-update-path': f'{suspended or self.suspended}/',
+            'update-asset-attributes': {
+                'Build': target, 'OSVersion': '26.6.2', 'PrerequisiteBuild': prepared_from,
+            },
+        })
+
+    def cryptex(self, staged, active):
+        self.write('MACOS_STAGED_CRYPTEX', {'RestoreLongVersion': staged}, self.PREBOOT)
+        self.write('MACOS_ACTIVE_CRYPTEX', {'RestoreLongVersion': active})
+
+
+@pytest.fixture
+def mac_updates(macos, ran, tmp_path, monkeypatch):
+    return _MacUpdateState(tmp_path, monkeypatch, ran)
+
+
+def test_pending_reboot_on_macos_is_an_update_prepared_for_a_restart(mac_updates, ran):
+    """Measured on macOS 26.6: 26.6.2 prepared and suspended, never listed by
+    `softwareupdate --list`, which offered only the available 26.7 and 27."""
+    mac_updates.write('MACOS_UPDATE_JOURNAL', [
+        {'installDate': datetime(2026, 8, 2, 16, 32, 57), 'title': 'Command Line Tools'},
+        {'installDate': datetime(2026, 7, 28, 12, 24, 20), 'title': 'macOS Tahoe 26.6',
+         '__isMobileSoftwareUpdate': True},
+        {'installDate': datetime(2025, 7, 2, 16, 34, 43), 'title': 'macOS Sequoia 15.5',
+         '__isMobileSoftwareUpdate': True},
+    ])
 
     result = mcp_tools.execute_tool('check_pending_reboot', {})
 
-    assert ran.calls == [['softwareupdate', '--list', '--no-scan']]
+    assert result == {
+        'pending': True,
+        'reasons': ['os_update_prepared'],
+        'last_update_installed': '2026-07-28T12:24:20Z',
+        'next_scheduled_update': None,
+    }
+
+
+def test_softwareupdate_is_never_asked_on_macos(mac_updates, ran):
+    """What it lists is available, not waiting — every OS update carries
+    `Action: restart` — and from the command line it rescans Apple's catalog on
+    every call, `--no-scan` or not: 26 seconds cold, every fifteen minutes."""
+    ran.reply('softwareupdate', (0, (
+        '* Label: macOS 27-26A428\n'
+        '\tTitle: macOS 27, Version: 27, Size: 11727219KiB, Recommended: YES, '
+        'Action: restart, \n'
+    ), ''))
+    mac_updates.prepare(target=mac_updates.RUNNING)
+
+    result = mcp_tools.execute_tool('check_pending_reboot', {})
+
+    assert result['pending'] is False
+    assert [call for call in ran.calls if call[0] == 'softwareupdate'] == []
+
+
+@pytest.mark.parametrize('prepared', [
+    {'target': _MacUpdateState.RUNNING},
+    {'prepared_from': '25F71'},
+    {'suspended': '/private/var/tmp/elsewhere'},
+])
+def test_an_update_record_that_is_no_longer_waiting_is_not_pending(mac_updates, prepared):
+    """The record outlives the update it describes: applied (it names the build
+    that is running), prepared against a build this Mac no longer runs, or
+    pointing at a suspended update that is not on the update volume."""
+    mac_updates.prepare(**prepared)
+
+    assert mcp_tools.execute_tool('check_pending_reboot', {})['pending'] is False
+
+
+def test_an_update_whose_suspended_update_is_gone_is_not_pending(mac_updates):
+    mac_updates.suspended.rmdir()
+
+    assert mcp_tools.execute_tool('check_pending_reboot', {})['pending'] is False
+
+
+def test_a_security_response_staged_for_a_restart_is_pending(mac_updates):
+    mac_updates.prepare(target=mac_updates.RUNNING)
+    mac_updates.cryptex(staged='25.7.72.10.2,0', active='25.7.72.0.0,0')
+
+    result = mcp_tools.execute_tool('check_pending_reboot', {})
+
+    assert result['reasons'] == ['security_update_staged']
     assert result['pending'] is True
-    assert result['reasons'] == ['software_update']
 
 
-def test_pending_reboot_reports_a_failed_softwareupdate_query(macos, ran):
-    ran.reply('softwareupdate', (-1, '', 'softwareupdate timed out after 25s'))
+@pytest.mark.parametrize('answer', [(1, '', 'unknown oid'), (0, '../../../etc\n', '')])
+def test_a_preboot_that_cannot_be_named_stages_nothing(mac_updates, ran, answer):
+    """The booted system's Preboot group is what the staged cryptex is read
+    under, so an answer that is not a volume uuid never becomes part of a path."""
+    mac_updates.prepare(target=mac_updates.RUNNING)
+    mac_updates.cryptex(staged='25.7.72.10.2,0', active='25.7.72.0.0,0')
+    ran.replies.clear()
+    ran.reply('kern.apfsprebootuuid', answer)
 
-    assert 'softwareupdate query failed' in mcp_tools.execute_tool('check_pending_reboot', {})['error']
+    assert mcp_tools.execute_tool('check_pending_reboot', {})['pending'] is False
+
+
+def test_a_mac_with_no_update_state_is_not_pending(macos, ran, tmp_path, monkeypatch):
+    for name in ('MACOS_SYSTEM_VERSION', 'MACOS_PREPARED_UPDATE', 'MACOS_STAGED_CRYPTEX',
+                 'MACOS_ACTIVE_CRYPTEX', 'MACOS_UPDATE_JOURNAL'):
+        monkeypatch.setattr(tools_posix, name, str(tmp_path / 'absent' / '{}'))
+
+    assert mcp_tools.execute_tool('check_pending_reboot', {}) == {
+        'pending': False, 'reasons': [],
+        'last_update_installed': None, 'next_scheduled_update': None,
+    }
 
 
 # ─── get_gpu_processes ──────────────────────────────────────────────────────

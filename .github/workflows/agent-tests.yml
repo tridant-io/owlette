@@ -65,10 +65,7 @@ jobs:
           # markers. Everything else gates: a POSIX regression fails the leg.
           # Anything Windows-only inside a module that does collect carries
           # @pytest.mark.windows instead, which reports as a skip rather than
-          # hiding the whole file — and a test that needs an osadapter arm
-          # this platform has no module for carries @pytest.mark.needs_os_arm,
-          # which is what keeps macos-15 green while osadapter/darwin.py is
-          # still on the Mac branch.
+          # hiding the whole file.
           - os: macos-15
             data_root: /tmp/owlette-data
             pytest_addopts: >-

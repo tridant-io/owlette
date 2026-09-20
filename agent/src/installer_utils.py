@@ -603,10 +603,13 @@ def cancel_installation(installer_name: str, active_processes: Dict[str, int]) -
 
 # The transient unit and the launchd job the update runs as. Named rather than
 # spawned: the installer stops the agent, and a child of the daemon dies with it
-# — `systemd-run --collect` and `launchctl submit` both outlive the process that
-# asked for them.
+# — a `systemd-run --collect` unit and a bootstrapped launchd job both outlive
+# the process that asked for them.
 UPDATE_UNIT_NAME = 'owlette-update'
 UPDATE_JOB_LABEL = 'app.owlette.update'
+# Where the launchd job's installer writes, under the data root: the job runs
+# detached from the agent, and a failed install would otherwise leave no trace.
+_MACOS_UPDATE_LOG = 'logs/update_installer.log'
 
 _APT_SIMULATE_TIMEOUT = 120
 _UPDATE_HANDOFF_TIMEOUT = 30
@@ -718,15 +721,58 @@ def _dpkg_frontend_lock_held() -> bool:
 
 def _start_macos_update(installer_path: str) -> tuple[bool, str]:
     """`installer` as a launchd job rather than a child: the package stops the
-    daemon, and `launchctl bootout` takes the daemon's whole process group."""
-    result = _run_update_command(
-        ['launchctl', 'submit', '-l', UPDATE_JOB_LABEL, '--',
-         '/usr/sbin/installer', '-pkg', installer_path, '-target', '/'],
-        _UPDATE_HANDOFF_TIMEOUT,
-    )
+    daemon, and `launchctl bootout` takes the daemon's whole process group.
+
+    A job that runs once, loaded from a plist launchd reads at bootstrap. Not
+    `launchctl submit`: that marks its job keepalive whatever the command
+    exits with — measured on macOS 26.6, a submitted command that exited 0 was
+    scheduled to run again ten seconds later — so the installer would have
+    reinstalled the package, restarting the agent each time, for as long as
+    the job stayed loaded. An earlier update job left loaded under the label
+    is booted out first; one that is still installing defers this update
+    rather than being killed mid-install.
+    """
+    import plistlib
+
+    import shared_utils
+
+    state = _update_job_state()
+    if state == 'running':
+        return False, 'update_deferred: an earlier update is still installing'
+    if state is not None:
+        _run_update_command(
+            ['launchctl', 'bootout', f'system/{UPDATE_JOB_LABEL}'], _UPDATE_HANDOFF_TIMEOUT)
+
+    log_path = shared_utils.get_data_path(_MACOS_UPDATE_LOG)
+    with tempfile.TemporaryDirectory() as staging:
+        plist = os.path.join(staging, f'{UPDATE_JOB_LABEL}.plist')
+        with open(plist, 'wb') as f:
+            plistlib.dump({
+                'Label': UPDATE_JOB_LABEL,
+                'ProgramArguments': [
+                    '/usr/sbin/installer', '-pkg', installer_path, '-target', '/'],
+                'RunAtLoad': True,
+                'KeepAlive': False,
+                'StandardOutPath': log_path,
+                'StandardErrorPath': log_path,
+            }, f)
+        result = _run_update_command(
+            ['launchctl', 'bootstrap', 'system', plist], _UPDATE_HANDOFF_TIMEOUT)
     if result is None or result.returncode != 0:
         return False, f"update_handoff_failed: {_complaint(result)[:300]}"
     return True, f"installer is running as the launchd job {UPDATE_JOB_LABEL}"
+
+
+def _update_job_state() -> Optional[str]:
+    """The update job's launchd state; None when it is not loaded at all."""
+    result = _run_update_command(
+        ['launchctl', 'print', f'system/{UPDATE_JOB_LABEL}'], _UPDATE_HANDOFF_TIMEOUT)
+    if result is None or result.returncode != 0:
+        return None
+    for line in (result.stdout or '').splitlines():
+        if line.startswith('\tstate = '):
+            return line[len('\tstate = '):].strip()
+    return 'unknown'
 
 
 def _run_update_command(command: List[str], timeout_seconds: int):

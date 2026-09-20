@@ -507,7 +507,6 @@ class TestManualCountdown:
     second command.
     """
 
-    @pytest.mark.needs_os_arm
     @pytest.mark.parametrize('handler,operation,flag,copy', [
         ('_handle_reboot_machine', 'reboot',
          'rebootScheduledAt', 'Reboot scheduled in'),

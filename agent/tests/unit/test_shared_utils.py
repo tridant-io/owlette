@@ -8,8 +8,7 @@ import psutil
 import pytest
 import json
 import logging
-import os
-import shutil
+import plistlib
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -988,15 +987,15 @@ class TestIdentityPathNormalisation:
     @pytest.mark.skipif(
         sys.platform == 'win32',
         reason='the Windows ladder is pinned by test_process_lookup')
-    def test_the_lookup_compares_the_path_the_kernel_reports(self, tmp_path):
+    def test_the_lookup_compares_the_path_the_kernel_reports(
+            self, private_executable):
         """The third comparison of a configured path against a live image, and
         the one that folded on every platform: `/usr/bin/app` became
         `\\usr\\bin\\app`, whose basename is the whole string, so neither the
         full match nor the basename match could ever be true and every tier
         below it — adoption, kill, restart — was unreachable on Linux.
         """
-        exe = shutil.copy('/bin/sleep', tmp_path / 'kiosk-app')
-        os.chmod(exe, 0o755)
+        exe = private_executable('kiosk-app')
         child = subprocess.Popen([str(exe), '30'])
         try:
             found = shared_utils.find_running_process_by_exe(str(exe))
@@ -1023,6 +1022,138 @@ class TestIdentityPathNormalisation:
                 {**record, 'exe': shouted}, child.pid) is False
         finally:
             _stop(child)
+
+
+@pytest.mark.skipif(
+    sys.platform == 'win32', reason='an application bundle is a macOS layout')
+class TestApplicationBundles:
+    """A configured macOS application bundle is the binary inside it.
+
+    The kernel runs `Contents/MacOS/<CFBundleExecutable>` and psutil reports
+    that path, so a bundle path compared as given matched no live process:
+    adoption launched a duplicate, a kill found nothing, and a launch refused
+    the directory as an executable that does not exist.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _on_macos(self, monkeypatch):
+        # Resolution is plain file reading, so every POSIX leg holds it to the
+        # same rules rather than the Mac alone.
+        monkeypatch.setattr(shared_utils, '_IS_MACOS', True)
+
+    @staticmethod
+    def _bundle(root, info, executable='Kiosk', fmt=plistlib.FMT_XML):
+        bundle = root / 'Kiosk.app'
+        macos = bundle / 'Contents' / 'MacOS'
+        macos.mkdir(parents=True)
+        (macos / executable).write_bytes(b'')
+        (bundle / 'Contents' / 'Info.plist').write_bytes(plistlib.dumps(info, fmt=fmt))
+        return bundle
+
+    @pytest.mark.parametrize('fmt', [plistlib.FMT_XML, plistlib.FMT_BINARY])
+    def test_a_bundle_is_the_binary_its_info_plist_names(self, tmp_path, fmt):
+        bundle = self._bundle(
+            tmp_path, {'CFBundleExecutable': 'KioskBinary'}, 'KioskBinary', fmt)
+        inner = str(bundle / 'Contents' / 'MacOS' / 'KioskBinary')
+
+        assert shared_utils.resolve_exec_target(str(bundle)) == inner
+        assert shared_utils.resolve_exec_target(f'{bundle}/') == inner
+
+    def test_anything_that_is_not_a_bundle_is_returned_as_given(
+            self, tmp_path, monkeypatch):
+        bundle = self._bundle(tmp_path, {'CFBundleExecutable': 'Kiosk'})
+
+        assert shared_utils.resolve_exec_target('/usr/bin/true') == '/usr/bin/true'
+        assert shared_utils.resolve_exec_target(None) == ''
+
+        # The negative control: off macOS a directory named .app is a directory.
+        monkeypatch.setattr(shared_utils, '_IS_MACOS', False)
+        assert shared_utils.resolve_exec_target(str(bundle)) == str(bundle)
+
+    @pytest.mark.parametrize('executable', ['../../../bin/sh', '..', '', 'MacOS/Kiosk', 7])
+    def test_a_name_that_is_not_a_file_of_the_bundle_does_not_resolve(
+            self, tmp_path, executable):
+        """Info.plist is the bundle writer's to fill in, and a name that
+        climbs out of Contents/MacOS would launch whatever it reaches."""
+        bundle = self._bundle(tmp_path, {'CFBundleExecutable': executable})
+
+        assert shared_utils.resolve_exec_target(str(bundle)) == str(bundle)
+
+    def test_a_bundle_whose_info_plist_is_missing_or_broken_does_not_resolve(
+            self, tmp_path):
+        bundle = self._bundle(tmp_path, {'CFBundleName': 'Kiosk'})
+        assert shared_utils.resolve_exec_target(str(bundle)) == str(bundle)
+
+        (bundle / 'Contents' / 'Info.plist').write_bytes(b'<plist><dict><key>')
+        assert shared_utils.resolve_exec_target(str(bundle)) == str(bundle)
+
+        (bundle / 'Contents' / 'Info.plist').unlink()
+        assert shared_utils.resolve_exec_target(str(bundle)) == str(bundle)
+
+    def test_nothing_below_the_bundle_is_followed_through_a_link(self, tmp_path):
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        (outside / 'Kiosk').write_bytes(b'')
+        (outside / 'Info.plist').write_bytes(
+            plistlib.dumps({'CFBundleExecutable': 'Kiosk'}))
+
+        linked_macos = tmp_path / 'one' / 'Kiosk.app' / 'Contents'
+        linked_macos.mkdir(parents=True)
+        (linked_macos / 'Info.plist').write_bytes(
+            plistlib.dumps({'CFBundleExecutable': 'Kiosk'}))
+        (linked_macos / 'MacOS').symlink_to(outside)
+
+        linked_binary = self._bundle(tmp_path, {'CFBundleExecutable': 'Kiosk'})
+        (linked_binary / 'Contents' / 'MacOS' / 'Kiosk').unlink()
+        (linked_binary / 'Contents' / 'MacOS' / 'Kiosk').symlink_to(outside / 'Kiosk')
+
+        linked_plist = tmp_path / 'two' / 'Kiosk.app'
+        (linked_plist / 'Contents' / 'MacOS').mkdir(parents=True)
+        (linked_plist / 'Contents' / 'MacOS' / 'Kiosk').write_bytes(b'')
+        (linked_plist / 'Contents' / 'Info.plist').symlink_to(outside / 'Info.plist')
+
+        for bundle in (linked_macos.parent, linked_binary, linked_plist):
+            assert shared_utils.resolve_exec_target(str(bundle)) == str(bundle)
+
+    def test_a_managed_bundle_launches_as_the_binary_inside_it(self, tmp_path):
+        """A launch of the bundle directory was refused as an executable that
+        does not exist. The binary is what is spawned, since it is what
+        supervision later finds by path; `open -a` would hand the launch to
+        LaunchServices and leave no pid of ours at all."""
+        from osadapter import posix
+
+        bundle = self._bundle(tmp_path, {'CFBundleExecutable': 'Kiosk'})
+
+        assert posix._managed_argv(
+            {'exe_path': str(bundle), 'file_path': '--fullscreen'}
+        ) == [str(bundle / 'Contents' / 'MacOS' / 'Kiosk'), '--fullscreen']
+
+        # The negative control: a bundle naming no binary of its own is still
+        # refused, and never launched as the directory.
+        (bundle / 'Contents' / 'MacOS' / 'Kiosk').unlink()
+        with pytest.raises(FileNotFoundError):
+            posix._managed_argv({'exe_path': str(bundle)})
+
+    def test_a_running_bundle_is_found_by_the_path_the_operator_configured(
+            self, tmp_path, monkeypatch, private_executable):
+        bundle = tmp_path / 'Kiosk.app'
+        (bundle / 'Contents' / 'MacOS').mkdir(parents=True)
+        (bundle / 'Contents' / 'Info.plist').write_bytes(
+            plistlib.dumps({'CFBundleExecutable': 'Kiosk'}))
+        inner = private_executable('Kiosk').rename(
+            bundle / 'Contents' / 'MacOS' / 'Kiosk')
+        child = subprocess.Popen([str(inner), '30'])
+        try:
+            found = shared_utils.find_running_process_by_exe(str(bundle), strict=True)
+            monkeypatch.setattr(shared_utils, '_IS_MACOS', False)
+            unresolved = shared_utils.find_running_process_by_exe(
+                str(bundle), strict=True)
+        finally:
+            _stop(child)
+
+        assert found == child.pid
+        # The negative control: the bundle path as given names no live image.
+        assert unresolved is None
 
 
 class TestAppStateWrites:

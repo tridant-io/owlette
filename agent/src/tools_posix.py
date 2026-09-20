@@ -22,6 +22,7 @@ import psutil
 
 import mcp_tools
 import osadapter
+import shared_utils
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,27 @@ _SUPPORTED_ACTIONS = ('start', 'stop', 'restart', 'set_startup', 'get_details')
 # Debian and Ubuntu write this when a package upgrade needs a reboot. /run is
 # the real path; /var/run is the compatibility symlink on older images.
 _REBOOT_MARKERS = ('/run/reboot-required', '/var/run/reboot-required')
+
+# What a Mac is waiting on a restart for is read off the state softwareupdated
+# leaves on disk, never asked of `softwareupdate --list`: that lists what is
+# available — every OS update carries `Action: restart` — and not an update
+# already prepared, and from the command line it rescans Apple's catalog on
+# every call whatever `--no-scan` asks. Measured on macOS 26.6: a prepared
+# 26.6.2 absent from the list, and 26 seconds for a cold call, past this
+# module's timeout, from a check the service runs every fifteen minutes.
+MACOS_SYSTEM_VERSION = '/System/Library/CoreServices/SystemVersion.plist'
+# An OS update downloaded and prepared — "Restart Now": the build it installs,
+# the build it was prepared against, and the suspended update a restart resumes.
+MACOS_PREPARED_UPDATE = '/System/Volumes/Update/Update.plist'
+MACOS_UPDATE_VOLUME = '/System/Volumes/Update'
+# A Background Security Improvement or Rapid Security Response is staged into
+# the booted system's Preboot cryptex and replaces the active one at a restart;
+# until then the two carry different restore versions.
+MACOS_STAGED_CRYPTEX = '/System/Volumes/Preboot/{}/cryptex1/current/RestoreVersion.plist'
+MACOS_ACTIVE_CRYPTEX = '/System/Cryptexes/OS/System/Library/CoreServices/RestoreVersion.plist'
+# softwareupdated's record of what it installed, dated in UTC.
+MACOS_UPDATE_JOURNAL = '/var/db/softwareupdate/journal.plist'
+_PREBOOT_UUID = re.compile(r'^[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$')
 
 # Where launchd keeps system-domain daemon plists. A job that `stop` booted out
 # of the domain is loaded back from its own file, which is named for its label.
@@ -367,28 +389,100 @@ def check_pending_reboot(params, config):
     """Whether the OS is waiting on a reboot (read-only).
 
     The keys match the Windows arm's exactly — osadapter.pending_reboot() is one
-    shape on all three platforms — and neither POSIX source reports when the
-    last update landed or when the next one is due.
+    shape on all three platforms. Only something already installed or prepared
+    that a restart completes counts, as on Windows: an update that is merely
+    available is not a reboot the machine is waiting on. Neither POSIX source
+    says when the next update is due, and only macOS records when the last one
+    landed.
     """
     del params, config
     if _is_macos():
-        rc, out, err = mcp_tools.run_capture(
-            ['softwareupdate', '--list', '--no-scan'], mcp_tools.SUBPROCESS_TIMEOUT,
-        )
-        if rc != 0:
-            return {'error': f'softwareupdate query failed: {(err or out).strip()[:500]}'}
-        # softwareupdate tags an update that needs one with `[restart]`, on
-        # either stream depending on the release.
-        reasons = ['software_update'] if '[restart]' in (out + err).lower() else []
+        reasons = _macos_restart_reasons()
+        last_update_installed = _macos_last_update_installed()
     else:
         reasons = ['package_update'] if any(os.path.exists(p) for p in _REBOOT_MARKERS) else []
+        last_update_installed = None
 
     return {
         'pending': bool(reasons),
         'reasons': reasons,
-        'last_update_installed': None,
+        'last_update_installed': last_update_installed,
         'next_scheduled_update': None,
     }
+
+
+def _macos_restart_reasons():
+    """What this Mac has installed or prepared that only a restart completes."""
+    reasons = []
+    if _macos_update_prepared():
+        reasons.append('os_update_prepared')
+    if _macos_security_update_staged():
+        reasons.append('security_update_staged')
+    return reasons
+
+
+def _macos_update_prepared():
+    """An OS update prepared against the build that is running, suspended until
+    a restart resumes it.
+
+    The build is the sealed system volume's own, not `sw_vers`': a security
+    response adds a suffix there, and an update is prepared against the base
+    build. A record prepared against another build, one naming the build that
+    is already running, or one whose suspended update is gone describes an
+    update that is no longer waiting.
+    """
+    system = shared_utils.read_plist(MACOS_SYSTEM_VERSION)
+    update = shared_utils.read_plist(MACOS_PREPARED_UPDATE)
+    if not isinstance(system, dict) or not isinstance(update, dict):
+        return False
+    running = system.get('ProductBuildVersion')
+    asset = update.get('update-asset-attributes')
+    if not isinstance(running, str) or not isinstance(asset, dict):
+        return False
+    target = asset.get('Build')
+    prepared_from = update.get('OriginalOSVersion') or asset.get('PrerequisiteBuild')
+    if not isinstance(target, str) or target == running or prepared_from != running:
+        return False
+    suspended = update.get('suspended-update-path')
+    return (
+        isinstance(suspended, str)
+        and os.path.normpath(suspended).startswith(MACOS_UPDATE_VOLUME + os.sep)
+        and os.path.isdir(suspended)
+    )
+
+
+def _macos_security_update_staged():
+    """A security response staged into the booted system's Preboot cryptex and
+    not yet the active one."""
+    rc, out, _ = mcp_tools.run_capture(['sysctl', '-n', 'kern.apfsprebootuuid'], 5)
+    preboot = out.strip() if rc == 0 else ''
+    if not _PREBOOT_UUID.match(preboot):
+        return False
+    staged = shared_utils.read_plist(MACOS_STAGED_CRYPTEX.format(preboot))
+    active = shared_utils.read_plist(MACOS_ACTIVE_CRYPTEX)
+    if not isinstance(staged, dict) or not isinstance(active, dict):
+        return False
+    staged_version = staged.get('RestoreLongVersion')
+    active_version = active.get('RestoreLongVersion')
+    return (
+        isinstance(staged_version, str)
+        and isinstance(active_version, str)
+        and staged_version != active_version
+    )
+
+
+def _macos_last_update_installed():
+    """When softwareupdated last installed an OS update, as UTC ISO 8601."""
+    journal = shared_utils.read_plist(MACOS_UPDATE_JOURNAL)
+    if not isinstance(journal, list):
+        return None
+    installed = [
+        entry['installDate'] for entry in journal
+        if isinstance(entry, dict)
+        and entry.get('__isMobileSoftwareUpdate') is True
+        and isinstance(entry.get('installDate'), datetime)
+    ]
+    return max(installed).strftime('%Y-%m-%dT%H:%M:%SZ') if installed else None
 
 
 def show_notification(params, config):
