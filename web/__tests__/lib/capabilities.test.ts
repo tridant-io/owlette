@@ -217,6 +217,35 @@ describe('isSiteScopedCapability', () => {
   });
 });
 
+describe('hasCapability — inherited property names are not roles', () => {
+  // `actor.siteRoles[siteId]` is a bare object lookup. A siteId spelling an
+  // Object.prototype member ('constructor', 'toString', '__proto__', …) returns
+  // an inherited function, which survives an `=== undefined` guard and then
+  // indexes SiteRoleCapabilityMatrix with a function — a TypeError, i.e. a 500
+  // on an auth path. CodeQL filed this against the writes that build siteRoles
+  // (alerts 311, 313); the reachable hazard is the read.
+  const PROTOTYPE_KEYS = ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__'];
+
+  for (const key of PROTOTYPE_KEYS) {
+    it(`denies a site-scoped capability for siteId "${key}" with no membership`, () => {
+      const actor = userActor({ role: 'member', siteRoles: {} });
+      expect(() => hasCapability(actor, Capability.MACHINE_VIEW, key)).not.toThrow();
+      expect(hasCapability(actor, Capability.MACHINE_VIEW, key)).toBe(false);
+    });
+
+    it(`denies siteId "${key}" even when another site is held`, () => {
+      const actor = userActor({ role: 'member', siteRoles: { site_a: 'owner' } });
+      expect(() => hasCapability(actor, Capability.MACHINE_VIEW, key)).not.toThrow();
+      expect(hasCapability(actor, Capability.MACHINE_VIEW, key)).toBe(false);
+    });
+  }
+
+  it('still grants a genuinely held site', () => {
+    const actor = userActor({ role: 'member', siteRoles: { site_a: 'owner' } });
+    expect(hasCapability(actor, Capability.MACHINE_VIEW, 'site_a')).toBe(true);
+  });
+});
+
 describe('hasCapability — per-site role × every capability', () => {
   const siteRoles: SiteRole[] = ['member', 'admin', 'owner'];
 

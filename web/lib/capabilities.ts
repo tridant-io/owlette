@@ -253,6 +253,14 @@ export function hasCapability(
     // Absent membership denies. The caller is responsible for populating
     // `siteRoles` for the site it is asking about; an unresolved site must never
     // read as a grant.
+    //
+    // Own properties only. A siteId spelling an Object.prototype member
+    // ('constructor', 'toString', '__proto__', …) returns an inherited function,
+    // which survives the `=== undefined` guard and then indexes the matrix below
+    // with a function — a TypeError on an auth path. Every caller today resolves
+    // the site before asking, so this is defence in depth at the one choke point
+    // rather than in all 14 of them.
+    if (!Object.prototype.hasOwnProperty.call(actor.siteRoles, siteId)) return false;
     const siteRole = actor.siteRoles[siteId];
     if (siteRole === undefined) return false;
     return SiteRoleCapabilityMatrix[siteRole].includes(capability);
