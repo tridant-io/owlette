@@ -1,0 +1,94 @@
+---
+title: "account settings"
+description: "Your own preferences, not the site's: how timestamps render, which alert emails you get, which machines you have muted, your hoot key, password and second factors, and your API keys."
+keywords: ["preferences", "my settings", "profile", "change password", "celsius fahrenheit", "24 hour clock", "unsubscribe", "stop emails", "delete my account"]
+---
+
+account settings is per **user**, not per site. changing it affects what you see and what lands in your inbox — nobody else's dashboard moves.
+
+open it from your avatar in the top right. seven sections:
+
+| section | holds |
+|---|---|
+| **profile** | first and last name, and the email you signed in with |
+| **preferences** | how timestamps and temperatures render |
+| **alerts** | which alert emails you get, where, and which machines are silenced |
+| **hoot** | your LLM provider, model, and api key |
+| **security** | password, second factors, passkeys |
+| **api** | your scoped api keys |
+| **danger zone** | delete your account |
+
+---
+
+## preferences
+
+**display times in** decides the clock every absolute timestamp on the dashboard is rendered against — heartbeats, activity logs, event history:
+
+| mode | what you see |
+|---|---|
+| **my timezone** | every machine rendered in the timezone you pick below. one shared reference frame, wherever the machines are |
+| **site timezone** | every machine rendered in the site's configured timezone, set in manage sites |
+
+the **timezone** field below it is only consulted in *my timezone* mode.
+
+this preference does **not** move schedules. a process window or a restart entry is a wall-clock rule evaluated against its own clock — see [timezones](/docs/dashboard/timezones) for which clock that is in each case. changing this setting changes how times are *displayed*, never when anything fires.
+
+the other two are straightforward: **temperature unit** is Celsius or Fahrenheit, and **time format** is 12-hour or 24-hour. the restart schedule editor's "next scheduled restart" preview follows your time format.
+
+---
+
+## alerts
+
+seven categories, each on by default and individually switchable:
+
+| toggle | emails you about |
+|---|---|
+| **machine offline alerts** | a machine stops reporting |
+| **process crash alerts** | a managed process crashes |
+| **threshold alerts** | a metric crosses a rule on [`/admin/alerts`](/docs/dashboard/admin/email-alerts#threshold-alert-rules) |
+| **hoot escalation alerts** | hoot escalates something to a human |
+| **display events** | monitors removed, layouts drifting, or an apply failing — see [displays](/docs/dashboard/displays) |
+| **talon alerts** | a [talon](/docs/dashboard/talons) run needs your attention |
+| **api key expiry** | one of *your* keys is about to expire |
+
+**alert email** is where they go. **additional CC recipients** copies up to five more addresses onto your alert emails.
+
+### muted machines
+
+muting silences every alert category for one machine, for you. mute and unmute from that machine's context menu on the dashboard; this section lists what you have muted and lets you lift a mute without going back to the card.
+
+muting is per user. a machine you have muted still pages everyone else on the site.
+
+### the deep link
+
+every alert email ends with **manage alerts**, which opens `/settings/alerts` — the same toggles as this section, on their own page, so you can turn something off from your phone without going through the dashboard. each toggle saves as you flip it.
+
+---
+
+## hoot
+
+your provider, model, and api key for [hoot](/docs/dashboard/hoot). the key is yours and stored encrypted; full setup is in the [hoot guide](/docs/dashboard/hoot#setup).
+
+---
+
+## security
+
+- **second factors** — add, name, and remove TOTP authenticators; see [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication)
+- **passkeys** — register and remove WebAuthn credentials
+- **change password** — current password, then the new one twice
+
+backup codes are issued during [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication), not here.
+
+---
+
+## api
+
+your personal scoped api keys, the same ones managed at `/settings/api-keys`. scopes, rotation, and expiry are covered in [api authentication](/docs/api/authentication).
+
+---
+
+## danger zone
+
+**delete account** removes your account after you re-enter your password.
+
+if you **own a site that has other members**, the deletion is refused with `needs_successor` — transfer ownership to another admin first. this is a hard stop, not a warning: an owned shared site cannot be left without an owner.

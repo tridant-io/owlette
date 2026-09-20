@@ -120,7 +120,7 @@ Recovery itself never adopts on an image-name match — a matching image is not 
 Each process has a configurable `relaunch_attempts` limit. The desktop app creates new processes with 5 attempts and the dashboard with 3; the service falls back to `MAX_RELAUNCH_ATTEMPTS` (3) only when the stored value is missing, blank, non-numeric, or negative. A stored `0` means **unlimited** — that process is relaunched forever and never escalates to a machine restart, which is how a kiosk opts out of self-rebooting. When a non-zero limit is reached:
 
 1. The agent stops trying to restart the process
-2. A **reboot countdown prompt** appears on screen (the desktop app, launched with `--restart-prompt`), and the agent writes a `rebootPending` flag so the dashboard can dismiss it remotely
+2. A **reboot countdown prompt** appears on screen (the desktop app, launched with `--restart-prompt`), and the agent writes a `rebootPending` flag that raises the [restart pending banner](/docs/dashboard/machine-monitoring#restart-pending) on the dashboard, where an admin can approve or dismiss it remotely
 3. The prompt starts at 2:00 and has three controls: a **pause the countdown** switch, **cancel**, and **restart now**. It cannot be dismissed by clicking away or pressing escape
 4. If the countdown reaches 0:00 untouched, the machine restarts automatically
 5. The relaunch counter resets when the prompt opens, when an operator starts or restarts the process, when launch mode is switched from `off` back to `always` or `scheduled`, and when an admin dismisses the reboot banner from the dashboard — a successful auto-restart does not reset it

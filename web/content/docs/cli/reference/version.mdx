@@ -71,7 +71,7 @@ cli <X.Y.Z>  |  server <YYYY-MM-DD>  |  supported versions: <D1>, <D2>, ...
 | `supportedVersions` | string[] | every supported API date returned by the api, in server order |
 | `minimumVersion` | string | lex-min of `supportedVersions` (lex order on `YYYY-MM-DD` is chronological), or `server` if the list is empty |
 
-> note: `version` predates the `{ ok, data }` wrapper. its json envelope is the raw shape above for compatibility with scripts written against earlier cli versions — see [overview](/docs/cli/overview#json-envelope-schema).
+> note: `version` predates the `{ ok, data }` wrapper. its json envelope is the raw shape above for compatibility with scripts written against earlier cli versions — see [overview](/docs/cli/overview#json-output-shapes).
 
 ---
 

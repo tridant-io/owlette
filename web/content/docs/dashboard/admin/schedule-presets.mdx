@@ -1,0 +1,74 @@
+---
+title: "schedule presets"
+description: "Named process launch windows, shared across a site. Build a schedule once on the admin schedules page and apply it to any process in scheduled launch mode."
+keywords: ["business hours", "opening hours", "launch window", "process schedule", "night shift", "operating hours"]
+---
+
+**Location**: Admin Panel -> schedules (`/admin/schedules`)
+
+**Storage**: Firestore `config/{siteId}/schedule_presets/{presetId}`
+
+**API**: `/api/sites/{siteId}/presets/schedule` — capability `PRESET_MANAGE`
+
+---
+
+## what they are
+
+A schedule preset is a named set of **process launch windows** — days plus time ranges — stored on a site and reusable across its machines. Setting a process to `scheduled` launch mode and picking a preset saves rebuilding the same weekday 09:00-17:00 pattern on every machine.
+
+Presets are site-scoped. The page has a site selector, and it offers only the sites you belong to.
+
+They are one of three preset families in owlette, and they are easy to confuse:
+
+| preset family | controls | lives at |
+|---------------|----------|----------|
+| **schedule presets** | when a process is allowed to run | `/admin/schedules` (this page) |
+| **restart presets** | when a machine reboots | the [restart schedule](/docs/dashboard/restart-schedules#presets) editor |
+| **[system presets](/docs/dashboard/admin/system-presets)** | installer templates for deployments | `/admin/presets` |
+
+---
+
+## built-in presets
+
+Four ship with every site and need no setup:
+
+| preset | windows |
+|--------|---------|
+| **business hours** | Mon-Fri, 09:00-17:00 |
+| **extended hours** | Mon-Fri, 07:00-22:00 |
+| **weekday 24h** | Mon-Fri, 00:00-23:59 |
+| **24/7** | every day, 00:00-23:59 |
+
+Built-ins are merged in by the dashboard rather than stored. Editing one writes a site-level override that wins from then on — the original definition is not lost, but that site stops seeing it.
+
+---
+
+## creating and editing
+
+**+ new preset** opens the editor:
+
+| field | notes |
+|-------|-------|
+| **name** | Required. Shown wherever a preset is picked. |
+| **description** | Optional. |
+| **schedule** | One or more blocks. Each block is a set of days plus one or more start/stop ranges, and can carry its own name (for example `morning shift`). |
+
+Every row previews as a seven-day bar, so a preset that only covers half the week is obvious before you save it. The same bar appears in the process editor.
+
+A range whose stop time is earlier than its start is an overnight window and carries into the next day.
+
+The pencil edits a preset; the bin deletes it. Neither changes a process that already uses it: applying a preset copies its blocks onto the process, alongside a `schedulePresetId` noting where they came from. Editing a preset does not push the change out to processes already using it — re-apply it to each one.
+
+---
+
+## using a preset
+
+Presets are applied from the process editor, not from this page. Set a process's launch mode to `scheduled`, then pick a preset to fill in its blocks — see [process management](/docs/dashboard/process-management#process-settings-reference).
+
+---
+
+## which clock they run on
+
+Launch windows follow **the site's schedule clock**: the site's own timezone if the site has opted into site time, each machine's local timezone otherwise. Presets store wall-clock times and nothing else, so the same preset means different absolute instants at a site spread across timezones.
+
+This is the opposite of restart schedules, which are always machine-local. [Timezones](/docs/dashboard/timezones#process-schedules) explains why, and how a site opts in.

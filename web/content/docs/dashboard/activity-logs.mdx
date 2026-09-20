@@ -1,6 +1,7 @@
 ---
 title: "activity logs"
 description: "The activity logs page shows a site-scoped timeline for agent, process, command, deployment, and scheduled reboot events. Open it from the dashboard menu by selecting logs, or go directly to /logs."
+keywords: ["history", "audit trail", "event log", "who did what"]
 ---
 
 ---
@@ -22,9 +23,14 @@ Common stored action values include:
 | `deployment_completed` | deployment completed | info |
 | `deployment_failed` | deployment failed | error |
 | `deployment_cancelled` | deployment cancelled | warning |
-| `scheduled_reboot` | scheduled reboot | warning |
+| `scheduled_reboot_announced` | scheduled restart announced | info |
+| `scheduled_reboot_success` | scheduled restart completed | info |
+| `scheduled_reboot_cancelled` | scheduled restart cancelled | warning |
+| `scheduled_reboot_missed` | scheduled restart missed | warning |
+| `scheduled_reboot_failed` | scheduled restart failed | error |
 
-The menu also includes **all actions** as the reset value.
+The menu also includes **all actions** as the reset value. The scheduled-restart
+outcomes are explained in [restart schedules](/docs/dashboard/restart-schedules#what-shows-up-in-the-logs).
 
 ---
 
