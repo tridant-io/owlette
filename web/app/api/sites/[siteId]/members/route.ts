@@ -10,11 +10,15 @@
  *      derived, and mirrors the id into the legacy `users/{uid}.sites[]` while
  *      that field still exists. `email` is the dashboard's affordance (an admin
  *      knows a colleague's address, not their uid) and resolves through Admin
- *      Auth to the same uid path. Idempotency-Key required.
+ *      Auth to the same uid path. Idempotency-Key required. `roleHonored` says
+ *      whether the row was actually written at the requested role — adding an
+ *      existing member is a 200 no-op, not a promotion.
  *
  * Auth (both verbs): `authorizedSiteHandler({ capability: 'SITE_MEMBER_MANAGE' })`,
  * with api-key permissions `['read','admin']` on GET and `['write','admin']` on
  * POST. Site access is membership — a global `admin` role grants nothing here.
+ * POST additionally re-checks the capability IN the handler, where the
+ * `capability_enforcement` kill switch cannot skip it — see the comment there.
  *
  * api-sprint wave 3 track 3B (users-api / site-members).
  */
@@ -31,6 +35,7 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { withIdempotency } from '@/lib/idempotency';
 import { emitMutation } from '@/lib/auditLogClient';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
+import { Capability, hasCapability } from '@/lib/capabilities';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
@@ -153,6 +158,39 @@ export const POST = authorizedSiteHandler<RouteParams>({
 })(async (request: NextRequest, ctx, routeContext) => {
   try {
     const { siteId } = await routeContext.params;
+
+    // CAPABILITY, RE-CHECKED IN THE HANDLER — deliberately not a duplicate of
+    // the wrapper's check, because the wrapper's is SKIPPED while
+    // `capability_enforcement` is false (the 4h operator break-glass in
+    // `global/security_config`) and SITE_MEMBER_MANAGE is not in
+    // BYPASS_EXEMPT_CAPABILITIES. Browser sessions never reach `requireScope`
+    // either, so during that window a plain site `member` reached this handler
+    // and could write a membership row for any account at any role. Nothing
+    // below stopped it: the owner guard refuses only the OWNER as a target, and
+    // `addMember`'s create() refuses only a target that ALREADY has a row.
+    //
+    // What makes that worse than an ordinary bypass is that the grant OUTLIVES
+    // the window. The added account is a site admin on merit, so it keeps
+    // MACHINE_REMOTE_CONTROL and SWOOP_SETTINGS_MANAGE once the switch is back
+    // on, and can then promote the original caller through the sibling PATCH
+    // with enforcement fully restored. Time-boxed break-glass, permanent admin.
+    //
+    // Placed before the body read and before `withIdempotency`: the decision
+    // depends on nothing but actor and site, and `withIdempotency` saves
+    // whatever the handler returns — a 403 stored under a key would be replayed
+    // at a legitimate later call.
+    if (!hasCapability(ctx.actor, Capability.SITE_MEMBER_MANAGE, siteId)) {
+      return problem({
+        type: ProblemType.Forbidden,
+        title: 'forbidden',
+        status: 403,
+        detail:
+          'adding a member requires the SITE_MEMBER_MANAGE capability on this site',
+        instance: `/api/sites/${siteId}/members`,
+        code: 'site_member_manage_required',
+      });
+    }
+
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
 
@@ -294,15 +332,22 @@ export const POST = authorizedSiteHandler<RouteParams>({
           });
         }
 
-        // Always true, and kept only so the response shape does not break callers.
+        // What actually happened to the ROW, which is not always what was asked.
         //
-        // It used to compute whether the GLOBAL role would make the requested
-        // per-site role stick, back when per-site roles were derived at read time.
-        // `addMember` writes the requested role into the member row — the row that
-        // now grants — so the request is always honoured. Reporting `false` while
-        // writing a real site-admin row made the response, the dashboard toast, both
-        // SDKs and the AUDIT ROW state the inverse of what happened.
-        const roleHonored = true;
+        // This once computed whether the GLOBAL role would let the requested
+        // per-site role stick, back when per-site roles were derived at read
+        // time; reporting `false` while writing a real site-admin row made the
+        // response, the dashboard toast, both SDKs and the AUDIT ROW state the
+        // inverse of what happened. Hardcoding `true` fixed that case and
+        // introduced its mirror image: `addMember` uses create(), so a target who
+        // is ALREADY a member is `already_member` — nothing is written and the
+        // row keeps the role it had. This endpoint still answers 200 there on
+        // purpose (see the note above), which leaves `roleHonored` as the only
+        // thing carrying the difference, in the response AND in the audit row
+        // someone reads after a break-glass to find out what was granted.
+        //
+        // Changing an existing member's role is PATCH /members/{uid}.
+        const roleHonored = added.ok;
         // Still reported so a caller can see the account's platform tier, which is
         // now unrelated to what they may do on this site.
         const targetGlobalRole =
