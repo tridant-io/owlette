@@ -8,7 +8,7 @@ pytest-mock==3.15.1
 pytest-asyncio==1.4.0
 
 # Code Quality
-pylint==3.0.3
+pylint==4.0.8
 black==26.5.1
 flake8==7.3.0
 
