@@ -407,8 +407,8 @@ function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {nicDevice && nicDevice.txBps != null && nicDevice.rxBps != null && (
-                        <>net <span className="text-orange-400">{'↑'}{formatThroughputShort(nicDevice.txBps)}</span>
-                          <span className="ml-1 text-green-400">{'↓'}{formatThroughputShort(nicDevice.rxBps)}</span>
+                        <>net <span className="text-orange-400">{'\u2191 '}{formatThroughputShort(nicDevice.txBps)}</span>
+                          <span className="ml-1 text-green-400">{'\u2193 '}{formatThroughputShort(nicDevice.rxBps)}</span>
                           {(machine.metrics.network?.packetLossPct ?? 0) > 0 && (
                             <span className="ml-1 text-red-400">{machine.metrics.network?.packetLossPct}% loss</span>
                           )}

@@ -48,15 +48,21 @@ describe('formatThroughput', () => {
 describe('formatThroughputShort', () => {
   // the machine card shows two of these plus arrows plus a loss badge in one
   // truncating column, so width is the requirement, not a preference.
-  // five, not four: the 1000-1023 B window renders `1023B`. everything from a
-  // kilobyte up is four or fewer, so the column sizes on 5.
-  it('never exceeds five characters, and only bytes reach five', () => {
-    for (const b of [0, 1, 1023, 1024, 2867, 8400, 99_000, 1_153_434, 12e6, 999e6, 5e9]) {
-      expect(formatThroughputShort(b).length).toBeLessThanOrEqual(5);
-    }
-    expect(formatThroughputShort(1023)).toBe('1023B');
-    for (const b of [1024, 2867, 99_000, 1_153_434, 999e6, 5e9]) {
+  it('never exceeds four characters', () => {
+    for (const b of [0, 50, 512, 907, 1023, 1024, 2867, 8400, 99_000, 1_153_434, 12e6, 999e6, 5e9]) {
       expect(formatThroughputShort(b).length).toBeLessThanOrEqual(4);
+    }
+  });
+
+  // bytes are deliberately not a unit here: mixing B and K across a pair of
+  // numbers side by side is what made the cell hard to read.
+  it('floors at kilobytes and never says B', () => {
+    expect(formatThroughputShort(0)).toBe('0K');
+    expect(formatThroughputShort(50)).toBe('0K');
+    expect(formatThroughputShort(512)).toBe('0.5K');
+    expect(formatThroughputShort(907)).toBe('0.9K');
+    for (const b of [0, 1, 512, 907, 1023]) {
+      expect(formatThroughputShort(b)).not.toContain('B');
     }
   });
 
@@ -72,9 +78,8 @@ describe('formatThroughputShort', () => {
     expect(formatThroughputShort(999e6)).toBe('953M');
   });
 
-  it('trims a trailing .0 and keeps bytes whole', () => {
-    expect(formatThroughputShort(0)).toBe('0B');
-    expect(formatThroughputShort(512)).toBe('512B');
+  it('trims a trailing .0', () => {
     expect(formatThroughputShort(1024)).toBe('1K');
+    expect(formatThroughputShort(2 * 1024 * 1024)).toBe('2M');
   });
 });
