@@ -266,11 +266,15 @@ export interface Machine {
   osVersion?: string;      // operator-facing, e.g. "Windows 11 Pro 24H2" / "Ubuntu 24.04.5 LTS"
   cortexEnabled?: boolean;  // kill switch for Hoot tool-call delivery; undefined = enabled.
   /**
-   * Agent-written capability handshake: the version of each remote operation
-   * this agent can dispatch (`displayRemoteApply` gates the display panel's
-   * restore). Undefined on agents predating the map, which reads as unsupported.
+   * Agent capability handshake, written as dotted paths by the heartbeat
+   * (`firebase_client.py`). Absent on every agent that predates a key, so each
+   * one gates off when missing. `swoop === 1` is the ONLY gate for the swoop
+   * entry — SWOOP_MIN_AGENT_VERSION in lib/versionUtils.ts is advisory copy.
    */
-  capabilities?: Record<string, number>;
+  capabilities?: {
+    swoop?: number;
+    displayRemoteApply?: number;
+  };
   // `reboot*` are agent-written wire contracts; the legacy spelling is deliberate (UI says "restart").
   rebooting?: boolean;
   shuttingDown?: boolean;
@@ -1752,9 +1756,19 @@ export function useMachines(siteId: string) {
     await sendMachineCommand(machineId, 'cancel_reboot');
   };
 
-  const dismissRestartPending = async (machineId: string, processName: string) => {
-    // 'dismiss_reboot_pending' is the agent's wire verb — keep it.
-    await sendMachineCommand(machineId, 'dismiss_reboot_pending', { process_name: processName });
+  /**
+   * Clears the cloud `rebootPending` flag. It used to queue the agent command
+   * and nothing else, so an offline machine could never be dismissed — the flag
+   * is cloud state the dashboard is responsible for. The route still relays the
+   * command so a reachable agent resets its local counters, and reads the
+   * flag's own `processName` — often null — rather than taking it from here.
+   */
+  const dismissRestartPending = async (machineId: string) => {
+    if (!db || !siteId) throw new Error('Firebase not configured');
+    await apiJson(
+      `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/reboot-pending`,
+      { method: 'DELETE' },
+    );
   };
 
   const captureScreenshot = async (machineId: string) => {

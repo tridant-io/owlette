@@ -1,0 +1,11 @@
+{
+  "sender": {
+    "role": "viewer",
+    "id": "viewer_0000000001"
+  },
+  "message": {
+    "type": "answer",
+    "to": "host",
+    "sdp": "v=0\r\n"
+  }
+}

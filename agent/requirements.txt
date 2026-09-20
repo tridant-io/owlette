@@ -33,6 +33,18 @@ pythonnet==3.1.0 ; sys_platform == "win32"  # HardwareMonitor's CLR bridge (was 
 wmi==1.5.1 ; sys_platform == "win32"  # DIRECT dependency (hardware_profile + shared_utils disk/BIOS probes); used to arrive transitively through WinTmp
 nvidia-ml-py==13.610.43  # NVML bindings — the GPU load/VRAM/temperature source (shared_utils, mcp_tools)
 
+# swoop doorbell — the one persistent WebSocket the agent holds to the signalling
+# room (swoop_doorbell.py). Approved in plan.md, "Approved new dependencies".
+# Reason for the pin: the agent is a threaded Windows service with no asyncio
+# loop, and this is the maintained pure-python client that drives protocol PING
+# frames from run_forever() on a plain daemon thread — the asyncio clients would
+# drag an event loop into the service for one socket. Pinned exactly like every
+# other line here, because this ships to the fleet.
+# Exit condition: unpin when the agent gains an event loop of its own, or when
+# the pin blocks a security fix, or when the protocol needs per-frame control
+# this client does not expose.
+websocket-client==1.9.2
+
 # hoot (cortex on the wire) — the local Claude Code agent behind hoot turns.
 # Unblocked 2026-09-12: pywin32 306 -> 312 lifts the freeze this pin sat under
 # for 83 minor versions. The old chain was pywin32==306 -> mcp capped at 1.10.1

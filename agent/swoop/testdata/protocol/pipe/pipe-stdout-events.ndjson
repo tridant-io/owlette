@@ -1,0 +1,6 @@
+{"type":"ready","sid":"sid_0000000000000001","pid":4242,"version":"3.4.0","protocolVersion":1,"codecs":["hevc","h264"],"displays":2}
+{"type":"viewer_joined","sid":"sid_0000000000000001","viewer":"viewer_0000000001","ctl":true,"codec":"hevc"}
+{"type":"status","sid":"sid_0000000000000001","viewers":1,"controllers":1,"indicator":"banner","bitrateKbps":18000,"fps":60,"path":"direct","display":0,"uptimeS":42}
+{"type":"sas_request","sid":"sid_0000000000000001","viewer":"viewer_0000000001"}
+{"type":"viewer_left","sid":"sid_0000000000000001","viewer":"viewer_0000000001","reason":"bye"}
+{"type":"exiting","sid":"sid_0000000000000001","code":0,"reason":"idle"}

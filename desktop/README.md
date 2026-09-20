@@ -20,8 +20,8 @@ its commands from inside `desktop/`.
 cd desktop
 npm install
 
-npm run tauri dev      # compile the Rust host + start vite, open the app window
-npm run tauri build    # produce an installer in src-tauri/target/release/bundle/
+npm run tauri dev                  # compile the Rust host + start vite, open the app window
+npx tauri build --no-bundle        # release exe at src-tauri/target/release/owlette-desktop.exe
 
 npm run dev            # frontend only, in a browser at :1420 (no Tauri IPC)
 npm run build          # typecheck + production frontend bundle into dist/
@@ -33,6 +33,11 @@ npm run lint           # oxlint
 
 The first `tauri dev` compiles ~435 crates and takes several minutes; later runs
 are incremental and start in seconds.
+
+Always pass `--no-bundle` to `tauri build`. The agent installer (Inno Setup, in
+`agent/`) is what ships this app; the Tauri bundler would demand NSIS/WiX and
+produce a second, competing installer. The full installer build runs the same
+command, and the quick build re-copies the exe from `target/release/`.
 
 ## Layout
 

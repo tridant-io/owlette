@@ -179,6 +179,13 @@ Source: "vendor\PawnIO_setup.exe"; Flags: dontcopy
 ; Tools — owlette-host.exe, the Windows service host (replaced NSSM in 3.0.0)
 Source: "build\installer_package\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion
 
+; swoop — owlette-swoop.exe, the remote-session streamer the service spawns.
+; shared_utils.get_swoop_exe_path() resolves exactly this path, so the directory
+; name is a contract with the service, not a preference, and the installer is
+; the only thing that creates it. Its ACL is set in [Code] at ssPostInstall —
+; [Dirs]' Permissions: parameter cannot express it (see CurStepChanged).
+Source: "build\installer_package\swoop\*"; DestDir: "{app}\swoop"; Flags: ignoreversion
+
 ; Scripts
 Source: "build\installer_package\scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
@@ -906,6 +913,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
   InstallBat: String;
+  SwoopDir: String;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -916,6 +924,43 @@ begin
     // Step 0b: PawnIO driver, BEFORE the service install so the agent's very
     // first heartbeat can already read CPU temperatures. Never fatal.
     EnsurePawnIO();
+
+    // Step 0c: set the ACL on {app}\swoop. ssPostInstall is where this belongs:
+    // [Files] and [Dirs] have both already run, so Inno's own permission pass
+    // cannot overwrite it afterwards. It is an icacls shell-out rather than a
+    // [Dirs] entry because Inno's Permissions: parameter only adds access
+    // entries — it cannot mark the ACL as not inheriting.
+    //
+    // Well-known SIDs, never account names: "Administrators" and "Users" are
+    // localized and do not resolve on a non-English Windows, which would leave
+    // the directory unreadable to the console session.
+    //   S-1-5-18     NT AUTHORITY\SYSTEM       full
+    //   S-1-5-32-544 BUILTIN\Administrators    full
+    //   S-1-5-32-545 BUILTIN\Users             read + execute
+    //
+    // Runs unconditionally on every install AND every upgrade, so a machine
+    // arriving from any older version is brought to this state by the installer
+    // alone — the only new code that runs on it during a self-update.
+    //
+    // Never fatal. The service verifies this ACL before it spawns the streamer,
+    // so a failure here costs the swoop feature on this machine and never the
+    // install.
+    SwoopDir := ExpandConstant('{app}\swoop');
+    Log('Setting permissions on ' + SwoopDir);
+    Exec('icacls.exe',
+      '"' + SwoopDir + '" /inheritance:r ' +
+      '/grant:r "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)"',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Log('Swoop directory permissions returned: ' + IntToStr(ResultCode));
+
+    // The payload [Files] just wrote still carries the entries the directory had
+    // at copy time; this re-applies the new ones to it. The \* is load-bearing —
+    // icacls on the directory itself with /reset /T undoes the command above.
+    // /C /Q keeps an empty directory silent and non-fatal.
+    Exec('icacls.exe',
+      '"' + SwoopDir + '\*" /reset /T /C /Q',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Log('Swoop payload permission reset returned: ' + IntToStr(ResultCode));
 
     // Step 1: pairing handoff, BEFORE the service install. The order is
     // load-bearing: install.bat starts the service, OwletteService.main()
@@ -1153,6 +1198,22 @@ begin
     'Stop-Process -Force -ErrorAction SilentlyContinue"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Log('Service host kill returned: ' + IntToStr(ResultCode));
+
+  // Kill any orphaned swoop streamer. It is a child of the service's job object
+  // and normally exits with the service stopped above, so this covers the one
+  // that outlived it. It must run before the file copy: a live streamer holds
+  // its own image open, and a miss costs a DELAY_UNTIL_REBOOT replacement that
+  // nobody sees in silent mode (see the note below). Scoped by exe path so a
+  // same-named process elsewhere is never touched, and by name, never by PID —
+  // a PID read from a status file can be stale or recycled.
+  Log('Killing any orphaned Owlette swoop streamer...');
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command ' +
+    '"Get-Process -Name owlette-swoop -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Path -like ''*\Owlette\*'' } | ' +
+    'Stop-Process -Force -ErrorAction SilentlyContinue"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Swoop streamer kill returned: ' + IntToStr(ResultCode));
 
   // Kill ALL Owlette Python processes to release DLL locks before file overwrite.
   // Must run BEFORE Inno Setup's file copy phase — if any python.exe or pythonw.exe

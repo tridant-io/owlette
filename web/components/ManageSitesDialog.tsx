@@ -13,6 +13,8 @@ import { SiteMachinesList } from '@/components/SiteMachinesList';
 import { useUserManagement } from '@/hooks/useUserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import { useScrollFade } from '@/hooks/useScrollFade';
+import { useSwoopSettings } from '@/hooks/useSwoopSettings';
+import { Switch } from '@/components/ui/switch';
 
 interface Site {
   id: string;
@@ -45,6 +47,57 @@ function highlightMatch(text: string, query: string): React.ReactNode {
     i = idx + q.length;
   }
   return parts;
+}
+
+/**
+ * Site-wide swoop switch. Off is the safe state and the default, and turning it
+ * off reaches machines that are already connected — the api tells every online
+ * machine to re-dial, and their next doorbell request is refused.
+ */
+function SwoopSiteToggle({ siteId }: { siteId: string }) {
+  const { settings, loading } = useSwoopSettings(siteId);
+  const [busy, setBusy] = useState(false);
+
+  const setEnabled = async (next: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/swoop-settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail || body?.title || 'failed to update swoop');
+      }
+      // The switch itself follows the snapshot, so only the failure needs saying.
+    } catch (err) {
+      console.error('Failed to update swoop settings:', err);
+      toast.error(err instanceof Error ? err.message : 'failed to update swoop');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
+      <div className="space-y-0.5">
+        <Label htmlFor={`swoop-${siteId}`} className="text-white">
+          swoop
+        </Label>
+        <p className="text-xs text-muted-foreground">
+          let admins watch and control this site&apos;s machines remotely
+        </p>
+      </div>
+      <Switch
+        id={`swoop-${siteId}`}
+        checked={settings.enabled}
+        onCheckedChange={(next) => void setEnabled(next)}
+        disabled={busy || loading}
+      />
+    </div>
+  );
 }
 
 interface ManageSitesDialogProps {
@@ -566,6 +619,7 @@ export function ManageSitesDialog({
                         can act when things go wrong for a customer. */}
                     {expandedSiteId === site.id && (
                       <div className="animate-in slide-in-from-top-2 fade-in duration-200 border-t border-border/60">
+                        {isSiteAdmin(site.id) && <SwoopSiteToggle siteId={site.id} />}
                         <SiteMachinesList siteId={site.id} onCountLoaded={handleMachineCountLoaded} />
                       </div>
                     )}

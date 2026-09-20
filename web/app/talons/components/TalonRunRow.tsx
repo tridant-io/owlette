@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { TruncatedText } from '@/components/ui/truncated-text';
 import {
   describeTalonDisabledReason,
   type TalonRunCondition,
@@ -233,12 +234,7 @@ export function TalonRunRow({ run }: TalonRunRowProps) {
             </TooltipContent>
           </Tooltip>
         ) : run.error ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="block truncate text-muted-foreground">{run.error}</span>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-md whitespace-pre-wrap">{run.error}</TooltipContent>
-          </Tooltip>
+          <TruncatedText text={run.error} className="block text-muted-foreground" />
         ) : null}
       </div>
 

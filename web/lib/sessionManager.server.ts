@@ -14,6 +14,9 @@
  *                        /setup-2fa, which is what makes "remove your last
  *                        factor" safe instead of leaving the account roaming
  *                        un-enrolled.
+ * A fourth field, mfaSatisfiedBy, records HOW `mfaVerified` was earned. Nothing
+ * in the proxy reads it; it exists because `mfaCompletedAt` cannot tell a live
+ * ceremony from a device-trust grant, and swoop's step-up has to.
  * Proxy: `mfaRequired && !mfaVerified` → /verify-2fa, and setup outranks it.
  * Sessions minted before a field existed are upgraded fail-closed on first
  * proxy hit — see `evaluateSessionMfa()`.
@@ -27,6 +30,13 @@ import {
   DEVICE_TRUST_COOKIE,
   findValidTrustedDevice,
 } from '@/lib/deviceTrust.server';
+
+/**
+ * How a session's MFA requirement came to be satisfied. Deliberately a *how*
+ * and never a *when*: `challenge` and `passkey-uv` are live ceremonies this
+ * session itself ran, `device-trust` is a 30-day cookie being presented.
+ */
+export type MfaSatisfiedBy = 'challenge' | 'passkey-uv' | 'device-trust';
 
 export interface SessionData {
   userId: string;
@@ -45,6 +55,14 @@ export interface SessionData {
   mfaVerified?: boolean;
   /** Unix ms timestamp of the last successful MFA verification. */
   mfaCompletedAt?: number;
+  /**
+   * HOW `mfaVerified` was earned, which is the question `mfaCompletedAt` cannot
+   * answer: a device-trust birth stamps it with `now` having run no ceremony.
+   * Absent on sessions minted before the field existed and on accounts with no
+   * MFA at all; both read as "no ceremony". `sessionPassedMfaCeremony()` is the
+   * only intended reader.
+   */
+  mfaSatisfiedBy?: MfaSatisfiedBy;
   /**
    * Cached from `users/{uid}.requiresMfaSetup` (written by
    * `lib/mfaFactors.server.ts` whenever an account drops to zero factors, and
@@ -165,16 +183,20 @@ function canPreserveVerifiedMfa(
  *
  * Priority order (do not reorder):
  *   1. not required        → verified, NO mfaCompletedAt (no challenge happened)
- *   2. canPreserveVerifiedMfa → verified, carry prev.mfaCompletedAt so the
- *      ORIGINAL completion time survives the every-load re-POST
+ *   2. canPreserveVerifiedMfa → verified, carry prev.mfaCompletedAt AND
+ *      prev.mfaSatisfiedBy so the ORIGINAL completion time and the ORIGINAL
+ *      way it was earned both survive the every-load re-POST
  *   3. mfaSatisfiedBy==='passkey-uv' → verified, now (one UV ceremony proves
  *      credential + human, so it is both factors)
- *   4. deviceTrusted       → verified, now
+ *   4. deviceTrusted       → verified, now, satisfied BY the device-trust
+ *      cookie — recorded as such, because no ceremony was run
  *   otherwise              → unverified → /verify-2fa
  *
  * 3 and 4 are only consulted inside the required arm, so neither can flip
  * `mfaRequired`. A passkey-born session satisfies `canPreserveVerifiedMfa`, so
- * later re-POSTs (which pass no `mfaSatisfiedBy`) don't re-challenge.
+ * later re-POSTs (which pass no `mfaSatisfiedBy`) don't re-challenge — and 2
+ * carries the satisfier verbatim, so a re-POST cannot launder a device-trust
+ * birth into a ceremony either.
  */
 export function resolveMfaOnSessionCreate(input: {
   prev: {
@@ -183,6 +205,7 @@ export function resolveMfaOnSessionCreate(input: {
     mfaRequired?: boolean;
     mfaVerified?: boolean;
     mfaCompletedAt?: number;
+    mfaSatisfiedBy?: MfaSatisfiedBy;
   };
   resolved: { mfaRequired: boolean; mfaVerified: boolean };
   userId: string;
@@ -193,7 +216,12 @@ export function resolveMfaOnSessionCreate(input: {
    * the same name. Set only by a route that itself performed the ceremony.
    */
   mfaSatisfiedBy?: 'passkey-uv';
-}): { mfaRequired: boolean; mfaVerified: boolean; mfaCompletedAt?: number } {
+}): {
+  mfaRequired: boolean;
+  mfaVerified: boolean;
+  mfaCompletedAt?: number;
+  mfaSatisfiedBy?: MfaSatisfiedBy;
+} {
   const { prev, resolved, userId, now, deviceTrusted, mfaSatisfiedBy } = input;
 
   if (!resolved.mfaRequired) {
@@ -206,18 +234,24 @@ export function resolveMfaOnSessionCreate(input: {
       mfaRequired: true,
       mfaVerified: true,
       mfaCompletedAt: prev.mfaCompletedAt,
+      mfaSatisfiedBy: prev.mfaSatisfiedBy,
     };
   }
 
   // A UV WebAuthn ceremony completed during THIS request satisfies the
   // challenge outright; the verifying route pins requireUserVerification.
   if (mfaSatisfiedBy === 'passkey-uv') {
-    return { mfaRequired: true, mfaVerified: true, mfaCompletedAt: now };
+    return { mfaRequired: true, mfaVerified: true, mfaCompletedAt: now, mfaSatisfiedBy };
   }
 
   // Valid device-trust cookie; the grant is itself a fresh verification event.
   if (deviceTrusted) {
-    return { mfaRequired: true, mfaVerified: true, mfaCompletedAt: now };
+    return {
+      mfaRequired: true,
+      mfaVerified: true,
+      mfaCompletedAt: now,
+      mfaSatisfiedBy: 'device-trust',
+    };
   }
 
   return { mfaRequired: true, mfaVerified: false };
@@ -256,6 +290,7 @@ export async function createSession(
     mfaRequired: session.mfaRequired,
     mfaVerified: session.mfaVerified,
     mfaCompletedAt: session.mfaCompletedAt,
+    mfaSatisfiedBy: session.mfaSatisfiedBy,
   };
 
   const now = Date.now();
@@ -314,6 +349,15 @@ export async function createSession(
   } else {
     // Clear any stale value carried over from a reused cookie.
     delete session.mfaCompletedAt;
+  }
+  if (mfa.mfaSatisfiedBy) {
+    session.mfaSatisfiedBy = mfa.mfaSatisfiedBy;
+  } else {
+    // Same reason, and it matters more here: a stale `challenge` surviving into
+    // a session that ran no ceremony is exactly what swoop's step-up must not
+    // see. Dropping an account's last factor lands here too (mfaRequired turns
+    // false), so it closes the ceremony claim with it.
+    delete session.mfaSatisfiedBy;
   }
 
   await session.save();
@@ -501,6 +545,7 @@ export async function markSessionMfaVerified(): Promise<void> {
   session.mfaRequired = true;
   session.mfaVerified = true;
   session.mfaCompletedAt = Date.now();
+  session.mfaSatisfiedBy = 'challenge';
   // Reaching here requires a completed challenge, hence at least one factor —
   // mandatory setup is satisfied. Stamping now (not at the next createSession)
   // stops the proxy diverting to /setup-2fa on the very next request.
@@ -521,12 +566,53 @@ export async function markSessionMfaDisabled(): Promise<void> {
   session.mfaRequired = false;
   session.mfaVerified = true;
   session.mfaCompletedAt = Date.now();
+  // A disable is not a second-factor ceremony, and the account it leaves behind
+  // may hold no second factor at all, so the ceremony claim goes with it.
+  delete session.mfaSatisfiedBy;
   // A disable can leave zero factors (re-arms `users/{uid}.requiresMfaSetup`)
   // or passkeys still enrolled; this helper can't see the resulting inventory,
   // and a stale cached `false` would walk the account past the /setup-2fa gate.
   // Dropping it makes `evaluateSessionMfa` resolve from Firestore next request
   // (mfaRequired=false here, so its derivation can't short-circuit).
   delete session.requiresMfaSetup;
+  await session.save();
+}
+
+/**
+ * Did THIS session itself pass a live second-factor ceremony?
+ *
+ * swoop's step-up window is keyed on (user, machine) rather than on one login
+ * session, so a reload — which ends the swoop session and starts a new one —
+ * can reuse it instead of re-running the ceremony. This is the gate on that
+ * reuse: without it a session born from the 30-day device-trust cookie, which
+ * ran no ceremony and only carries `mfaCompletedAt = now` to say otherwise,
+ * would inherit a window somebody else's ceremony opened. Anything unknown —
+ * a session minted before the field existed, an account with no MFA — reads as
+ * "no ceremony", so the answer fails closed.
+ */
+export function sessionPassedMfaCeremony(session: {
+  mfaSatisfiedBy?: MfaSatisfiedBy;
+}): boolean {
+  return session.mfaSatisfiedBy === 'challenge' || session.mfaSatisfiedBy === 'passkey-uv';
+}
+
+/**
+ * Record that this session has just completed a live second-factor ceremony
+ * away from the login flow — swoop's step-up is the only caller, and it reaches
+ * here only after `verifyMfaProof` has returned a successful outcome.
+ *
+ * Deliberately narrow: it stamps the satisfier and nothing else, so it cannot
+ * move `mfaRequired`, `mfaVerified` or `requiresMfaSetup` and is not a second
+ * way into the login MFA state machine. A no-op unless the cookie names the
+ * same user the ceremony was run for — a request authenticated by an ID token
+ * must never stamp whatever session cookie happened to ride along with it.
+ */
+export async function markSessionMfaCeremony(userId: string): Promise<void> {
+  const session = await getSession();
+  if (!session.userId || session.userId !== userId) {
+    return;
+  }
+  session.mfaSatisfiedBy = 'challenge';
   await session.save();
 }
 
@@ -554,6 +640,9 @@ export async function getSessionData(): Promise<SessionData | null> {
   }
   if (typeof session.mfaCompletedAt === 'number') {
     data.mfaCompletedAt = session.mfaCompletedAt;
+  }
+  if (session.mfaSatisfiedBy) {
+    data.mfaSatisfiedBy = session.mfaSatisfiedBy;
   }
   if (typeof session.requiresMfaSetup === 'boolean') {
     data.requiresMfaSetup = session.requiresMfaSetup;

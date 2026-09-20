@@ -1,0 +1,29 @@
+{
+  "hkdf": {
+    "hash": "SHA-256",
+    "viewerKey": {
+      "ikm": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+      "ikmNote": "K_session for this sid. fake, 32 bytes of 0x5a",
+      "salt": "owlette-swoop/viewer/v1",
+      "info": "viewer_0000000001",
+      "length": 32,
+      "expected": "aC3vYYwlNHnvNFH-5IiZXUay4W1QnqLmMtmod6Hy-LU"
+    },
+    "sessionKeyNote": "K_session itself = HKDF-SHA256(SWOOP_SESSION_MASTER_KEY, salt \"owlette-swoop/session/v1\", info sid, L 32). the master key exists only in the api, so there is no vector for that half."
+  },
+  "hostMac": {
+    "algorithm": "HMAC-SHA256",
+    "key": "aC3vYYwlNHnvNFH-5IiZXUay4W1QnqLmMtmod6Hy-LU",
+    "parts": [
+      "owlette-swoop/host-fp/v1",
+      "0x00",
+      "sid_0000000000000001",
+      "0x00",
+      "viewer_0000000001",
+      "0x00",
+      "sha-256 A0:A1:A2:A3:A4:A5:A6:A7:A8:A9:AA:AB:AC:AD:AE:AF:B0:B1:B2:B3:B4:B5:B6:B7:B8:B9:BA:BB:BC:BD:BE:BF"
+    ],
+    "input": "b3dsZXR0ZS1zd29vcC9ob3N0LWZwL3YxAHNpZF8wMDAwMDAwMDAwMDAwMDAxAHZpZXdlcl8wMDAwMDAwMDAxAHNoYS0yNTYgQTA6QTE6QTI6QTM6QTQ6QTU6QTY6QTc6QTg6QTk6QUE6QUI6QUM6QUQ6QUU6QUY6QjA6QjE6QjI6QjM6QjQ6QjU6QjY6Qjc6Qjg6Qjk6QkE6QkI6QkM6QkQ6QkU6QkY",
+    "expected": "978r-6XwmS2AgAfC9QnpRr8zuwaMc7ickNeZyBbcaAQ"
+  }
+}

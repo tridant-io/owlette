@@ -5,6 +5,30 @@ export const Capability = {
   // mutating MACHINE_EXEC_COMMAND capability. Site-scoped like the other
   // machine capabilities.
   MACHINE_VIEW: 'MACHINE_VIEW',
+  // Interactive control of a machine through swoop: keyboard, mouse and
+  // clipboard injected as SYSTEM, including on the logon, lock and UAC
+  // desktops. Split from MACHINE_REMOTE_VIEW because control is an integrity
+  // boundary where watching is only a confidentiality one — site admin/owner
+  // only, and exempt from the capability_enforcement bypass
+  // (BYPASS_EXEMPT_CAPABILITIES, lib/authorizedHandler.server.ts).
+  MACHINE_REMOTE_CONTROL: 'MACHINE_REMOTE_CONTROL',
+  // Watching a swoop stream: a continuous screen feed plus system audio. This
+  // is deliberately NOT MACHINE_VIEW — that one gates a 5-60 s screenshot
+  // slideshow, and a live feed with sound is a different exposure, so it gets
+  // its own capability instead of riding on the existing one. Members hold it;
+  // whether a member may actually watch is the site's `membersMayWatch`
+  // setting, enforced in lib/swoop/policy.server.ts and never in this matrix.
+  MACHINE_REMOTE_VIEW: 'MACHINE_REMOTE_VIEW',
+  // Turning swoop ON for a site, and the policy around it: excluded machines,
+  // `membersMayWatch`, and the on-machine indicator. Its OWN capability rather
+  // than MACHINE_CONFIG_WRITE because it is the switch in FRONT of the two
+  // above, and a switch has to be at least as protected as the thing it
+  // controls. Both of those are exempt from the capability_enforcement bypass
+  // (BYPASS_EXEMPT_CAPABILITIES, lib/authorizedHandler.server.ts) and this one
+  // is too; MACHINE_CONFIG_WRITE could not be, because it also gates the
+  // process, schedule and display config the kill switch exists to keep
+  // reachable. Site admin/owner, exactly as it was under MACHINE_CONFIG_WRITE.
+  SWOOP_SETTINGS_MANAGE: 'SWOOP_SETTINGS_MANAGE',
   MACHINE_CONFIG_WRITE: 'MACHINE_CONFIG_WRITE',
   MACHINE_REMOVE: 'MACHINE_REMOVE',
   DEPLOYMENT_MANAGE: 'DEPLOYMENT_MANAGE',
@@ -111,11 +135,14 @@ const SELF_CAPABILITIES: readonly Capability[] = [
 /** Per-site `member`: a read-only operator who may observe a machine's screen. */
 const SITE_MEMBER_CAPABILITIES: readonly Capability[] = [
   Capability.MACHINE_VIEW,
+  Capability.MACHINE_REMOTE_VIEW,
 ];
 
 const SITE_ADMIN_CAPABILITIES: readonly Capability[] = [
   ...SITE_MEMBER_CAPABILITIES,
   Capability.MACHINE_EXEC_COMMAND,
+  Capability.MACHINE_REMOTE_CONTROL,
+  Capability.SWOOP_SETTINGS_MANAGE,
   Capability.MACHINE_CONFIG_WRITE,
   // Site-scoped (see SITE_SCOPED_CAPABILITIES): admins can remove machines on their
   // OWN assigned sites; superadmins on any site.
@@ -144,6 +171,9 @@ const SITE_OWNER_CAPABILITIES: readonly Capability[] = [
 const SITE_SCOPED_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   Capability.MACHINE_EXEC_COMMAND,
   Capability.MACHINE_VIEW,
+  Capability.MACHINE_REMOTE_CONTROL,
+  Capability.MACHINE_REMOTE_VIEW,
+  Capability.SWOOP_SETTINGS_MANAGE,
   Capability.MACHINE_CONFIG_WRITE,
   Capability.MACHINE_REMOVE,
   Capability.DEPLOYMENT_MANAGE,

@@ -1,0 +1,19 @@
+{
+  "channel": "swoop-control",
+  "viewer": {
+    "id": "viewer_0000000001",
+    "ctl": true
+  },
+  "messages": [
+    {
+      "t": "clip",
+      "dir": "to-host",
+      "fmt": "text",
+      "seq": 9,
+      "chunk": 0,
+      "chunks": 1,
+      "totalBytes": 11,
+      "data": "aGVsbG8gd29ybGQ="
+    }
+  ]
+}

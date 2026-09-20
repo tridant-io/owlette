@@ -236,6 +236,172 @@ class TestScheduleTimezone:
         assert not path.exists()
 
 
+class FakeSwoopManager:
+    """Only what `_swoop_section` reads off SwoopManager.status()."""
+
+    def __init__(self, viewers=0, controllers=0, indicator=None):
+        self.viewers = viewers
+        self.controllers = controllers
+        self.indicator = indicator
+
+    def status(self):
+        streamer = {} if self.indicator is None else {'indicator': self.indicator}
+        return {
+            'state': 'running' if self.viewers else 'idle',
+            'viewers': self.viewers,
+            'controllers': self.controllers,
+            'streamer': streamer,
+        }
+
+
+def swoop_section(path):
+    with open(path) as handle:
+        return json.load(handle)['swoop']
+
+
+class TestSwoopSection:
+    """`swoop` — the tray's live session row.
+
+    The desktop app has no other way to know a session is running: it never
+    talks to the cloud and never reads the streamer. `active` is capture, not
+    the process — the streamer lingers for a minute after the last viewer
+    leaves, and a badge that outlives the capture is exactly what the session
+    indicator promises never happens.
+    """
+
+    def test_an_idle_machine_publishes_the_zero_shape(self, tmp_path, monkeypatch):
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service.swoop_manager = None
+
+        service._write_service_status()
+
+        assert swoop_section(path) == {
+            'active': False, 'viewers': 0, 'controllers': 0,
+            'since': 0, 'indicator': 'none',
+        }
+
+    def test_the_early_write_carries_the_same_shape(self, tmp_path, monkeypatch):
+        # Written before swoop exists. Readers must never have to tell "key
+        # absent" from "nobody is watching".
+        service, path = make_service(tmp_path, monkeypatch, None)
+
+        service._write_service_status_early()
+
+        assert swoop_section(path) == {
+            'active': False, 'viewers': 0, 'controllers': 0,
+            'since': 0, 'indicator': 'none',
+        }
+
+    def test_a_live_session_counts_its_viewers(self, tmp_path, monkeypatch):
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service.swoop_manager = FakeSwoopManager(
+            viewers=2, controllers=1, indicator='tray')
+
+        service._write_service_status()
+
+        section = swoop_section(path)
+        assert section['active'] is True
+        assert section['viewers'] == 2
+        assert section['controllers'] == 1
+        # The site's policy, as the streamer echoed it back from its bundle.
+        assert section['indicator'] == 'tray'
+        assert section['since'] > 0
+
+    def test_a_session_start_forces_an_immediate_write(self, tmp_path, monkeypatch):
+        # The load-bearing one. Writes are skipped for up to
+        # MIN_STATUS_WRITE_INTERVAL unless the signature changed, so a session
+        # left out of it would light the tray up to half a minute late.
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service.swoop_manager = FakeSwoopManager()
+        service._write_service_status()
+        assert swoop_section(path)['active'] is False
+
+        service.swoop_manager.viewers = 1
+        service.swoop_manager.indicator = 'tray'
+        service._write_service_status()
+
+        assert swoop_section(path)['active'] is True
+
+    def test_a_session_end_forces_an_immediate_write(self, tmp_path, monkeypatch):
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service.swoop_manager = FakeSwoopManager(viewers=1, indicator='tray')
+        service._write_service_status()
+        assert swoop_section(path)['active'] is True
+
+        service.swoop_manager.viewers = 0
+        service._write_service_status()
+
+        section = swoop_section(path)
+        assert section['active'] is False
+        # Zeroed with the badge: a stale start time on a cleared row would put
+        # the tray's one-toast-per-session guard on the wrong session.
+        assert section['since'] == 0
+
+    def test_a_lingering_streamer_does_not_keep_the_badge_lit(
+        self, tmp_path, monkeypatch
+    ):
+        # The streamer stays alive for 60s after the last viewer leaves. The
+        # manager still reports a running state; capture has already stopped.
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        manager = FakeSwoopManager(viewers=0, indicator='tray')
+        manager.status = lambda: {
+            'state': 'running', 'viewers': 0, 'controllers': 0,
+            'streamer': {'indicator': 'tray'},
+        }
+        service.swoop_manager = manager
+
+        service._write_service_status()
+
+        assert swoop_section(path)['active'] is False
+
+    def test_the_start_time_holds_still_across_writes(self, tmp_path, monkeypatch):
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service.swoop_manager = FakeSwoopManager(viewers=1, indicator='tray')
+        service._write_service_status()
+        since = swoop_section(path)['since']
+
+        service.swoop_manager.viewers = 2
+        service._write_service_status()
+
+        # Same session: a moving start time would re-toast on every write.
+        assert swoop_section(path)['since'] == since
+
+    def test_an_unknown_indicator_is_not_published(self, tmp_path, monkeypatch):
+        # The three the bundle can carry, and nothing else: the tray gates a
+        # toast on this value.
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service.swoop_manager = FakeSwoopManager(viewers=1, indicator='everywhere')
+
+        service._write_service_status()
+
+        assert swoop_section(path)['indicator'] == 'none'
+
+    def test_a_manager_that_cannot_answer_does_not_lose_the_write(
+        self, tmp_path, monkeypatch
+    ):
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        manager = FakeSwoopManager()
+        manager.status = lambda: (_ for _ in ()).throw(RuntimeError('wedged'))
+        service.swoop_manager = manager
+
+        service._write_service_status()
+
+        assert swoop_section(path)['active'] is False
+        assert firebase_section(path)['site_id'] == 'default_site'
+
+    def test_an_idle_session_does_not_defeat_the_throttle(self, tmp_path, monkeypatch):
+        # Negative control: the new signature fields must still compare equal
+        # to themselves, or the service rewrites this file every 5 seconds.
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service.swoop_manager = FakeSwoopManager()
+        service._write_service_status()
+
+        path.unlink()
+        service._write_service_status()
+
+        assert not path.exists()
+
+
 def stale_network_error():
     """The verdict TEC-B4A's boot-time probe recorded seconds before DHCP
     finished — the snapshot that used to outlive the condition it described."""

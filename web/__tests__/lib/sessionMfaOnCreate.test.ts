@@ -16,7 +16,11 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: jest.fn(),
 }));
 
-import { resolveMfaOnSessionCreate } from '@/lib/sessionManager.server';
+import {
+  resolveMfaOnSessionCreate,
+  sessionPassedMfaCeremony,
+  type MfaSatisfiedBy,
+} from '@/lib/sessionManager.server';
 
 const NOW = 1_700_000_000_000;
 const USER = 'user-1';
@@ -31,6 +35,7 @@ function preservablePrev(
   mfaRequired?: boolean;
   mfaVerified?: boolean;
   mfaCompletedAt?: number;
+  mfaSatisfiedBy?: MfaSatisfiedBy;
 } {
   return {
     userId: USER,
@@ -38,6 +43,7 @@ function preservablePrev(
     mfaRequired: true,
     mfaVerified: true,
     mfaCompletedAt: PREV_COMPLETED_AT,
+    mfaSatisfiedBy: 'challenge',
     ...overrides,
   };
 }
@@ -59,7 +65,26 @@ describe('resolveMfaOnSessionCreate', () => {
         mfaRequired: true,
         mfaVerified: true,
         mfaCompletedAt: PREV_COMPLETED_AT,
+        mfaSatisfiedBy: 'challenge',
       });
+    });
+
+    /**
+     * AuthContext re-POSTs /api/auth/session on every load, so this branch runs
+     * constantly. It must carry the satisfier verbatim: a device-trust birth
+     * that laundered itself into `challenge` on the next page load would hand
+     * swoop's step-up window to a cookie that ran no ceremony.
+     */
+    it('carries prev.mfaSatisfiedBy verbatim rather than upgrading it', () => {
+      const out = resolveMfaOnSessionCreate({
+        prev: preservablePrev({ mfaSatisfiedBy: 'device-trust' }),
+        resolved: REQUIRED,
+        userId: USER,
+        now: NOW,
+        deviceTrusted: false,
+      });
+      expect(out.mfaSatisfiedBy).toBe('device-trust');
+      expect(sessionPassedMfaCeremony(out)).toBe(false);
     });
 
     it('takes precedence over device trust (completion time from prev, not now)', () => {
@@ -132,7 +157,24 @@ describe('resolveMfaOnSessionCreate', () => {
         mfaRequired: true,
         mfaVerified: true,
         mfaCompletedAt: NOW,
+        mfaSatisfiedBy: 'device-trust',
       });
+    });
+
+    /**
+     * The whole point of recording the satisfier: this session is verified and
+     * carries a completion time of `now`, and nothing was proved to get it.
+     */
+    it('is not a ceremony, however fresh its mfaCompletedAt looks', () => {
+      const out = resolveMfaOnSessionCreate({
+        prev: preservablePrev({ userId: 'someone-else' }),
+        resolved: REQUIRED,
+        userId: USER,
+        now: NOW,
+        deviceTrusted: true,
+      });
+      expect(out.mfaCompletedAt).toBe(NOW);
+      expect(sessionPassedMfaCeremony(out)).toBe(false);
     });
   });
 
@@ -180,7 +222,10 @@ describe('resolveMfaOnSessionCreate', () => {
         mfaRequired: true,
         mfaVerified: true,
         mfaCompletedAt: NOW,
+        mfaSatisfiedBy: 'passkey-uv',
       });
+      // One UV ceremony is a live proof of credential and human alike.
+      expect(sessionPassedMfaCeremony(out)).toBe(true);
     });
 
     it('is the only difference: the same input without it still challenges', () => {
@@ -222,11 +267,12 @@ describe('resolveMfaOnSessionCreate', () => {
         mfaRequired: true,
         mfaVerified: true,
         mfaCompletedAt: PREV_COMPLETED_AT,
+        mfaSatisfiedBy: 'challenge',
       });
       expect(out.mfaCompletedAt).not.toBe(NOW);
     });
 
-    it('does not disturb the device-trust path (same output with or without it)', () => {
+    it('outranks device trust, and is recorded as the ceremony it is', () => {
       // Different uid, so preserve can't apply and the birth paths are reached.
       const both = resolveMfaOnSessionCreate({
         prev: preservablePrev({ userId: 'someone-else' }),
@@ -243,12 +289,17 @@ describe('resolveMfaOnSessionCreate', () => {
         now: NOW,
         deviceTrusted: true,
       });
-      expect(both).toEqual(trustOnly);
+      // Verified either way, and at the same moment; the satisfier is the whole
+      // difference, and it is the one that names a live ceremony.
       expect(both).toEqual({
         mfaRequired: true,
         mfaVerified: true,
         mfaCompletedAt: NOW,
+        mfaSatisfiedBy: 'passkey-uv',
       });
+      expect(trustOnly).toEqual({ ...both, mfaSatisfiedBy: 'device-trust' });
+      expect(sessionPassedMfaCeremony(both)).toBe(true);
+      expect(sessionPassedMfaCeremony(trustOnly)).toBe(false);
     });
   });
 });

@@ -108,10 +108,10 @@ export function formatHeartbeatTime(
 ): { display: string; isStale: boolean; tooltip: string } {
   // Reject epoch 0 / negative / sub-day timestamps as "never seen".
   if (!timestampSeconds || timestampSeconds < 86400) {
-    return { display: '--', isStale: true, tooltip: 'No heartbeat received' };
+    return { display: '--', isStale: true, tooltip: 'no heartbeat received' };
   }
   const isStale = isHeartbeatStale(timestampSeconds);
-  const tooltip = formatFullTimestamp(timestampSeconds, timezone, timeFormat);
+  const tooltip = `last seen ${formatFullTimestamp(timestampSeconds, timezone, timeFormat)}`;
 
   if (isStale) {
     return {

@@ -277,7 +277,7 @@ def test_schedule_window_stop_terminates_out_of_window_process(
                  '_detect_reboot_success_on_startup',
                  '_revert_stale_display_sentinel',
                  'start_local_config_watcher', '_try_launch_cortex',
-                 '_process_cortex_ipc_commands', '_process_privileged_requests',
+                 '_process_cortex_ipc_commands', '_process_privileged_requests', '_check_console_session',
                  '_diff_and_apply_launch_modes',
                  '_check_scheduled_reboot', '_check_display_topology',
                  '_maybe_dispatch_roost_scrub', '_relaunch_if_restarting',

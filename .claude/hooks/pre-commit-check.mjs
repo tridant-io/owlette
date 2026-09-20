@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
+import { agentPython, AGENT_VENV_SETUP_HINT } from './lib/agent-python.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SESSION_FILE = join(__dirname, '..', 'session-edits.json')
@@ -46,6 +47,8 @@ try {
   }
 
   const errors = []
+  const python = hasAgent ? agentPython(PROJECT_ROOT) : null
+  if (hasAgent && !python) errors.push(AGENT_VENV_SETUP_HINT)
 
   if (hasWeb) {
     try {
@@ -63,13 +66,13 @@ try {
     }
   }
 
-  if (hasAgent) {
+  if (python) {
     const pyFiles = editedFiles
       .filter(f => /[/\\]agent[/\\]/.test(f) && f.endsWith('.py'))
 
     for (const file of pyFiles) {
       try {
-        execSync(`python -m py_compile "${file}"`, {
+        execSync(`"${python}" -m py_compile "${file}"`, {
           cwd: PROJECT_ROOT,
           timeout: 10000,
           stdio: 'pipe'
@@ -103,12 +106,12 @@ try {
     }
   }
 
-  if (hasAgent) {
+  if (python) {
     // Captured on both paths: a green run's stdout still carries the skip
     // summary, and that is the only place the module-skip check below can read.
     let output = ''
     try {
-      output = execSync('python -m pytest agent/tests/ -x -q --tb=line', {
+      output = execSync(`"${python}" -m pytest agent/tests/ -x -q --tb=line`, {
         cwd: PROJECT_ROOT,
         // 300s, not 60s: tests/lifecycle (added 2026-09-05, process-identity
         // Wave 0) spawns real processes and takes ~60s by itself, so the whole

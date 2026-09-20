@@ -1,0 +1,29 @@
+--- a/src/association/mod.rs
++++ b/src/association/mod.rs
+@@ -435,7 +435,12 @@
+         // RFC 4960 Sec 7.2.1
+         // The initial cwnd before DATA transmission or after a sufficiently
+         // long idle period MUST be set to min(4*MTU, max (2*MTU, 4380bytes)).
+-        let cwnd = (4 * mtu).min((2 * mtu).max(4380));
++        //
++        // swoop spike 0.2 patch (review-1 F1): 4380 B is three packets. Chrome's
++        // dcSCTP ships `cwnd_mtus_initial = 10` (IW10, RFC 6928), and so does
++        // every TCP stack this path competes with. The RFC 4960 text above is
++        // from 2007.
++        let cwnd = 10 * mtu;
+ 
+         Association {
+             side,
+@@ -4235,7 +4240,11 @@
+                 //      cwnd = 1*MTU
+ 
+                 self.ssthresh = core::cmp::max(self.cwnd / 2, 4 * self.mtu);
+-                self.cwnd = self.mtu;
++                // swoop spike 0.2 patch (review-1 F1): collapsing to one MTU
++                // after an RTO costs a slow-start climb from 1228 bytes on a
++                // path that was carrying tens of megabits a moment earlier.
++                // Chrome's dcSCTP floors it at `cwnd_mtus_min = 4`.
++                self.cwnd = 4 * self.mtu;
+                 trace!(
+                     "[{}] updated cwnd={} ssthresh={} inflight={} (RTO)",
+                     self.side,

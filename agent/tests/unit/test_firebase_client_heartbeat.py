@@ -16,6 +16,9 @@ Contract now enforced:
 
 We bypass __init__ (FirebaseClient.__new__) so we don't pull in real auth /
 connection setup; only the handful of attributes _upload_metrics touches are stubbed.
+
+The same write also carries the swoop capability handshake (capabilities.swoop)
+and cross-plan rule C3's osFamily/arch keys; those are pinned at the bottom.
 """
 import sys
 from unittest.mock import MagicMock, patch
@@ -133,7 +136,6 @@ def test_the_heartbeat_write_carries_the_os_identity(monkeypatch):
     _stub_os_identity(monkeypatch)
 
     assert fc._upload_metrics(_metrics()) is True
-
     metrics_ref = (
         fc.db.collection.return_value.document.return_value
         .collection.return_value.document.return_value
@@ -191,3 +193,57 @@ def test_the_os_string_is_probed_once_across_ticks(monkeypatch):
     fc._upload_metrics(_metrics())
 
     assert len(builds) == 1
+
+
+# Swoop capability + C3 platform keys
+
+
+def _heartbeat_payload(fc):
+    """The dict handed to metrics_ref.update() by one heartbeat."""
+    assert fc._upload_metrics(_metrics()) is True
+    metrics_ref = (
+        fc.db.collection.return_value.document.return_value
+        .collection.return_value.document.return_value
+    )
+    return metrics_ref.update.call_args[0][0]
+
+
+
+
+def test_heartbeat_carries_the_swoop_and_platform_keys(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(
+        shared_utils, "get_swoop_exe_path",
+        lambda: r"C:\ProgramData\Owlette\swoop\owlette-swoop.exe",
+    )
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["capabilities.swoop"] == 1
+    assert payload["osFamily"] == "windows"
+    assert payload["arch"] in ("x64", "arm64", "unknown")
+    # dotted keys only: a whole-map capabilities write would drop this sibling.
+    assert payload["capabilities.displayRemoteApply"] == 1
+    assert "capabilities" not in payload
+
+
+def test_swoop_capability_is_zero_when_the_streamer_is_absent(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shared_utils, "get_swoop_exe_path", lambda: None)
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["capabilities.swoop"] == 0
+    assert payload["capabilities.displayRemoteApply"] == 1
+
+
+def test_swoop_command_types_are_on_the_fast_lane():
+    """The slow lane queues behind an in-flight install — minutes, not seconds.
+
+    swoop_kill is the kill switch's last-resort path; it cannot wait on an msi.
+    """
+    fast = FirebaseClient._FAST_COMMAND_TYPES
+
+    assert {"swoop_session_requested", "swoop_kill", "swoop_refresh"} <= fast
+    # the pre-existing lane members must stay (OWL-06).
+    assert {"mcp_tool_call", "capture_screenshot", "cancel_sync", "cancel_mcp_tool"} <= fast

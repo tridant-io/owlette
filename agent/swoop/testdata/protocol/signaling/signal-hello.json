@@ -1,0 +1,20 @@
+{
+  "sender": {
+    "role": "server",
+    "id": "server"
+  },
+  "message": {
+    "type": "hello",
+    "protocolVersion": 1,
+    "role": "host",
+    "id": "host",
+    "sid": "sid_0000000000000001",
+    "ctl": false,
+    "peers": {
+      "doorbell": 1,
+      "host": 1,
+      "viewer": 0
+    },
+    "serverTimeMs": 1789689600000
+  }
+}

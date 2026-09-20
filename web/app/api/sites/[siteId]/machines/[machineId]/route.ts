@@ -75,6 +75,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         os: data.os ?? data.presence?.os ?? null,
         hostname: data.hostname ?? data.presence?.hostname ?? null,
         metrics: data.metrics ?? data.status?.metrics ?? null,
+        // what the agent reports it can do, as the heartbeat wrote it. the
+        // dashboard reads this from firestore directly; api callers had no
+        // way to see it at all, so every capability gate read undefined.
+        capabilities: data.capabilities ?? null,
         processes: Array.isArray(data.processes)
           ? data.processes
           : Array.isArray(data.status?.processes)

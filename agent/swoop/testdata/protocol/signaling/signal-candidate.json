@@ -1,0 +1,15 @@
+{
+  "sender": {
+    "role": "viewer",
+    "id": "viewer_0000000001"
+  },
+  "message": {
+    "type": "candidate",
+    "candidate": "candidate:1 1 udp 2130706431 192.0.2.10 54321 typ host",
+    "sdpMid": "0",
+    "sdpMLineIndex": 0,
+    "from": "viewer_0000000001",
+    "fromRole": "viewer",
+    "serverTimeMs": 1789689600000
+  }
+}

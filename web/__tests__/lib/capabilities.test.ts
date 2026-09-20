@@ -20,6 +20,9 @@ const ALL_CAPABILITIES: Capability[] = Object.values(Capability);
 const SITE_SCOPED: Capability[] = [
   Capability.MACHINE_EXEC_COMMAND,
   Capability.MACHINE_VIEW,
+  Capability.MACHINE_REMOTE_CONTROL,
+  Capability.MACHINE_REMOTE_VIEW,
+  Capability.SWOOP_SETTINGS_MANAGE,
   Capability.MACHINE_CONFIG_WRITE,
   Capability.MACHINE_REMOVE,
   Capability.DEPLOYMENT_MANAGE,
@@ -65,6 +68,9 @@ describe('Capability enum', () => {
       new Set([
         'MACHINE_EXEC_COMMAND',
         'MACHINE_VIEW',
+        'MACHINE_REMOTE_CONTROL',
+        'MACHINE_REMOTE_VIEW',
+        'SWOOP_SETTINGS_MANAGE',
         'MACHINE_CONFIG_WRITE',
         'MACHINE_REMOVE',
         'DEPLOYMENT_MANAGE',
@@ -93,14 +99,22 @@ describe('Capability enum', () => {
 
 describe('SiteRoleCapabilityMatrix', () => {
   it('member is a read-only operator: it may watch a machine and nothing else', () => {
-    expect([...SiteRoleCapabilityMatrix.member].sort()).toEqual(['MACHINE_VIEW']);
+    // Both watch capabilities, no control one: MACHINE_VIEW is the screenshot /
+    // live-view slideshow, MACHINE_REMOTE_VIEW the swoop feed (owner ruling —
+    // members watch by default, gated per site by `membersMayWatch` in policy).
+    expect([...SiteRoleCapabilityMatrix.member].sort()).toEqual(
+      ['MACHINE_VIEW', 'MACHINE_REMOTE_VIEW'].sort()
+    );
   });
 
   it('admin adds every site-scoped write, but NOT destroying the site', () => {
     expect([...SiteRoleCapabilityMatrix.admin].sort()).toEqual(
       [
         'MACHINE_VIEW',
+        'MACHINE_REMOTE_VIEW',
+        'MACHINE_REMOTE_CONTROL',
         'MACHINE_EXEC_COMMAND',
+        'SWOOP_SETTINGS_MANAGE',
         'MACHINE_CONFIG_WRITE',
         'MACHINE_REMOVE',
         'DEPLOYMENT_MANAGE',
@@ -284,12 +298,14 @@ describe('hasCapability — site-scope enforcement edge cases', () => {
     }
   });
 
-  it('member is denied site-scoped WRITE capabilities even on their assigned site (but MACHINE_VIEW is allowed)', () => {
+  it('member is denied site-scoped WRITE capabilities even on their assigned site (but the watch capabilities are allowed)', () => {
     const actor = userActor({ role: 'member', siteRoles: { ['site_a']: 'member' } });
     for (const cap of SITE_SCOPED) {
-      // MACHINE_VIEW is the one site-scoped capability members hold (read-only
-      // screenshot / live view); every other site-scoped cap is a write and denied.
-      const expected = cap === Capability.MACHINE_VIEW;
+      // The two read-class capabilities members hold: MACHINE_VIEW (screenshot /
+      // live view) and MACHINE_REMOTE_VIEW (watching a swoop stream). Every
+      // other site-scoped cap is a write or a control verb, and denied.
+      const expected =
+        cap === Capability.MACHINE_VIEW || cap === Capability.MACHINE_REMOTE_VIEW;
       expect(hasCapability(actor, cap, 'site_a')).toBe(expected);
     }
   });
@@ -430,6 +446,66 @@ describe('AGENT_TOKEN_REVOKE — site-admin grant for the agent-tokens list + re
     const superadmin = userActor({ userId: 'u0', role: 'superadmin', siteRoles: {} });
     expect(hasCapability(superadmin, Capability.AGENT_TOKEN_REVOKE)).toBe(true);
     expect(hasCapability(superadmin, Capability.AGENT_TOKEN_REVOKE, 's2')).toBe(true);
+  });
+});
+
+describe('swoop — MACHINE_REMOTE_VIEW vs MACHINE_REMOTE_CONTROL', () => {
+  const member = userActor({ userId: 'u1', role: 'member', siteRoles: { ['s1']: 'member' } });
+  const admin = userActor({ userId: 'u2', role: 'admin', siteRoles: { ['s1']: 'admin' } });
+  const owner = userActor({ userId: 'u3', role: 'member', siteRoles: { ['s1']: 'owner' } });
+
+  it('a site member may watch but may not control', () => {
+    // The split is the whole point: watching a machine is a confidentiality
+    // decision the site makes with `membersMayWatch`; driving its keyboard as
+    // SYSTEM is an admin one. A member holding both would collapse them.
+    expect(hasCapability(member, Capability.MACHINE_REMOTE_VIEW, 's1')).toBe(true);
+    expect(hasCapability(member, Capability.MACHINE_REMOTE_CONTROL, 's1')).toBe(false);
+  });
+
+  it('admins and owners inherit watching and add control', () => {
+    for (const actor of [admin, owner]) {
+      expect(hasCapability(actor, Capability.MACHINE_REMOTE_VIEW, 's1')).toBe(true);
+      expect(hasCapability(actor, Capability.MACHINE_REMOTE_CONTROL, 's1')).toBe(true);
+    }
+  });
+
+  it('both are site-scoped: standing on one site never reaches another, and neither is held unscoped', () => {
+    for (const cap of [Capability.MACHINE_REMOTE_VIEW, Capability.MACHINE_REMOTE_CONTROL]) {
+      expect(isSiteScopedCapability(cap)).toBe(true);
+      expect(hasCapability(admin, cap, 's2')).toBe(false);
+      expect(hasCapability(admin, cap)).toBe(false);
+    }
+  });
+
+  it('no system actor can start or watch a swoop session', () => {
+    // Hoot, talons and the cleanup sweep act unattended; a remote-control grant
+    // there would be an unattended interactive session on a customer machine.
+    for (const name of Object.keys(SystemCapabilityMatrix) as SystemActorName[]) {
+      const actor = systemActor({ name, siteId: 's1' });
+      expect(hasCapability(actor, Capability.MACHINE_REMOTE_VIEW, 's1')).toBe(false);
+      expect(hasCapability(actor, Capability.MACHINE_REMOTE_CONTROL, 's1')).toBe(false);
+    }
+  });
+
+  it('MACHINE_VIEW does not imply either of them', () => {
+    // Negative control: swoop deliberately did not reuse MACHINE_VIEW. If these
+    // ever become aliases, a continuous feed with audio inherits the screenshot
+    // capability's much wider reach.
+    expect(Capability.MACHINE_REMOTE_VIEW).not.toBe(Capability.MACHINE_VIEW);
+    expect(Capability.MACHINE_REMOTE_CONTROL).not.toBe(Capability.MACHINE_VIEW);
+  });
+
+  it('SWOOP_SETTINGS_MANAGE is site admin/owner, never a member', () => {
+    // The site's own switch for the feature. A member holds the watch
+    // capability on merit, so granting them the switch would let them enable
+    // what they may then watch.
+    expect(hasCapability(member, Capability.SWOOP_SETTINGS_MANAGE, 's1')).toBe(false);
+    for (const actor of [admin, owner]) {
+      expect(hasCapability(actor, Capability.SWOOP_SETTINGS_MANAGE, 's1')).toBe(true);
+    }
+    expect(isSiteScopedCapability(Capability.SWOOP_SETTINGS_MANAGE)).toBe(true);
+    expect(hasCapability(admin, Capability.SWOOP_SETTINGS_MANAGE, 's2')).toBe(false);
+    expect(hasCapability(admin, Capability.SWOOP_SETTINGS_MANAGE)).toBe(false);
   });
 });
 

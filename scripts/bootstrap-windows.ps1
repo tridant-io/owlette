@@ -7,16 +7,20 @@ Reports required and optional Windows development tools, their detected versions
 and where to fix gaps. This script is read-mostly and does not install system
 dependencies or modify PATH. The optional -InstallWebDeps switch runs npm ci
 and Playwright browser setup in the repo's web directory after required checks
-pass.
+pass. The optional -InstallAgentDeps switch creates the agent venv
+(agent\.venv, Python 3.11) and installs agent\requirements.txt and
+agent\requirements-dev.txt into it; the build hooks run agent checks with that
+interpreter.
 
 .EXAMPLE
 .\scripts\bootstrap-windows.ps1 -Detailed
 
 .EXAMPLE
-.\scripts\bootstrap-windows.ps1 -InstallWebDeps
+.\scripts\bootstrap-windows.ps1 -InstallWebDeps -InstallAgentDeps
 #>
 param(
     [switch]$InstallWebDeps,
+    [switch]$InstallAgentDeps,
     [switch]$Detailed
 )
 
@@ -33,6 +37,8 @@ $script:FailSymbol = [char]0x2717
 $script:InfoSymbol = [char]0x2139
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$agentVenvPath = Join-Path $repoRoot 'agent\.venv'
+$agentVenvPython = Join-Path $agentVenvPath 'Scripts\python.exe'
 
 function Write-Pass {
     param([string]$Message)
@@ -390,6 +396,27 @@ Invoke-Check -Name 'Python 3.11' -OnError Fail -ScriptBlock {
     }
 }
 
+# A warn, not a fail: a missing venv is what -InstallAgentDeps creates, and that
+# step is skipped whenever any required check has failed.
+Invoke-Check -Name 'agent venv' -OnError Warn -ScriptBlock {
+    if (-not (Test-Path -LiteralPath $agentVenvPython -PathType Leaf)) {
+        Write-Warn 'agent venv: missing; run with -InstallAgentDeps (the commit hook runs pytest with it)'
+        return
+    }
+
+    $venvResult = Invoke-Native -FilePath $agentVenvPython -ArgumentList @('--version')
+    $venvVersion = Get-FirstLine $venvResult.Output
+
+    if ($venvResult.ExitCode -eq 0 -and $venvVersion -match 'Python 3\.11') {
+        Write-Pass "agent venv: $venvVersion"
+    }
+    else {
+        Write-Warn "agent venv: $venvVersion is not Python 3.11 or does not run; recreate agent\.venv with -InstallAgentDeps"
+    }
+
+    Write-Detail "agent venv detail: path $agentVenvPython"
+}
+
 # The desktop app replaced the tkinter GUI in 3.0.0 and owlette-host replaced
 # NSSM, so the installer build now needs a Rust toolchain instead of a system
 # Python with Tk. Fatal, not a warn: without cargo the full build stops at step
@@ -592,6 +619,53 @@ if ($InstallWebDeps) {
 }
 else {
     Write-Host 'tip: run with -InstallWebDeps to install web dev dependencies after fixing any failures.' -ForegroundColor Cyan
+}
+
+if ($InstallAgentDeps) {
+    if ($script:failed -ne 0) {
+        Write-Info 'agent dependencies: skipped because required checks failed'
+        Complete-Script
+    }
+
+    $agentPath = Join-Path $repoRoot 'agent'
+
+    # An existing 3.11 venv is reused: pip install -r is idempotent, so a rerun
+    # brings it up to the current pins. One on any other interpreter stops the
+    # install instead of being rebuilt, because rebuilding means deleting the
+    # directory, and that is left to the person running the script.
+    if (Test-Path -LiteralPath $agentVenvPython -PathType Leaf) {
+        $existingResult = Invoke-Native -FilePath $agentVenvPython -ArgumentList @('--version')
+        $existingVersion = Get-FirstLine $existingResult.Output
+        if ($existingResult.ExitCode -ne 0 -or $existingVersion -notmatch 'Python 3\.11') {
+            Write-Fail "agent dependencies: $agentVenvPath is not a working Python 3.11 venv ($existingVersion); delete it and rerun"
+            Complete-Script
+        }
+    }
+    else {
+        Write-Info "agent dependencies: creating venv at $agentVenvPath"
+        & py -3.11 -m venv $agentVenvPath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail 'agent dependencies: py -3.11 -m venv failed'
+            Complete-Script
+        }
+    }
+
+    Write-Info 'agent dependencies: upgrading pip'
+    & $agentVenvPython -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail 'agent dependencies: pip upgrade failed'
+        Complete-Script
+    }
+
+    Write-Info 'agent dependencies: installing requirements.txt and requirements-dev.txt'
+    & $agentVenvPython -m pip install -r (Join-Path $agentPath 'requirements.txt') -r (Join-Path $agentPath 'requirements-dev.txt')
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail 'agent dependencies: pip install failed'
+        Complete-Script
+    }
+}
+else {
+    Write-Host 'tip: run with -InstallAgentDeps to create the agent venv after fixing any failures.' -ForegroundColor Cyan
 }
 
 Complete-Script

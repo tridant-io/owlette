@@ -1,0 +1,25 @@
+{
+  "channel": "swoop-cursor",
+  "messages": [
+    {
+      "t": "cpos",
+      "x": 0.5123,
+      "y": 0.2044,
+      "visible": true,
+      "tsUs": 5000200
+    },
+    {
+      "t": "cshape",
+      "id": 7,
+      "hotX": 4,
+      "hotY": 4,
+      "w": 32,
+      "h": 32,
+      "png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    },
+    {
+      "t": "cshape",
+      "id": 7
+    }
+  ]
+}

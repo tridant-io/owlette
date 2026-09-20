@@ -1,0 +1,59 @@
+{
+  "channel": "swoop-input",
+  "viewer": {
+    "id": "viewer_0000000001",
+    "ctl": true
+  },
+  "messages": [
+    {
+      "t": "m",
+      "x": 0.5123,
+      "y": 0.2044,
+      "seq": 1201,
+      "tsUs": 5000000
+    },
+    {
+      "t": "b",
+      "button": 0,
+      "down": true,
+      "seq": 1202,
+      "tsUs": 5000900
+    },
+    {
+      "t": "b",
+      "button": 0,
+      "down": false,
+      "seq": 1203,
+      "tsUs": 5088400
+    },
+    {
+      "t": "k",
+      "code": "KeyA",
+      "down": true,
+      "seq": 1204,
+      "tsUs": 5200000
+    },
+    {
+      "t": "k",
+      "code": "KeyA",
+      "down": false,
+      "seq": 1205,
+      "tsUs": 5260000
+    },
+    {
+      "t": "w",
+      "dx": 0,
+      "dy": -120,
+      "mode": "pixel",
+      "seq": 1206,
+      "tsUs": 5400000
+    },
+    {
+      "t": "mr",
+      "dx": -4,
+      "dy": 7,
+      "seq": 1207,
+      "tsUs": 5500000
+    }
+  ]
+}

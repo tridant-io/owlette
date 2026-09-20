@@ -1,0 +1,14 @@
+{
+  "sender": {
+    "role": "host",
+    "id": "host"
+  },
+  "message": {
+    "type": "host-ready",
+    "to": "viewer_0000000001",
+    "sid": "sid_0000000000000001",
+    "from": "host",
+    "fromRole": "host",
+    "serverTimeMs": 1789689600000
+  }
+}

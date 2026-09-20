@@ -1,0 +1,6 @@
+target/
+runs/
+
+# Materialised by sctp-patches/apply.sh from the local cargo registry. The
+# repository carries the diff, not 3.5 MB of somebody else's crate.
+vendor/

@@ -1,0 +1,11 @@
+{
+  "sender": {
+    "role": "server",
+    "id": "server"
+  },
+  "message": {
+    "type": "kill",
+    "sid": "sid_0000000000000001",
+    "serverTimeMs": 1789689600000
+  }
+}

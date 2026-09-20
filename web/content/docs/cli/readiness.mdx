@@ -57,7 +57,8 @@ Legend:
 | `owlette machine reboot <machineId>` | ready | [machine](/docs/cli/reference/machine) | `POST /api/sites/{siteId}/machines/{machineId}/commands` with `type=reboot_machine` |
 | `owlette machine shutdown <machineId>` | ready | [machine](/docs/cli/reference/machine) | `POST /api/sites/{siteId}/machines/{machineId}/commands` with `type=shutdown_machine` |
 | `owlette machine screenshot <machineId>` | ready | [machine](/docs/cli/reference/machine) | `POST /api/sites/{siteId}/machines/{machineId}/commands` with `type=capture_screenshot`, then `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}` |
-| `owlette machine live-view <machineId>` | stub | [machine](/docs/cli/reference/machine) | no public route yet; `public-api deferred: live-view-webrtc` |
+| `owlette machine live-view <machineId>` | stub | [machine](/docs/cli/reference/machine) | no public route yet; `public-api deferred: swoop` |
+| `owlette swoop <machineId>` | ready | [swoop](/docs/cli/reference/swoop) | `GET /api/sites/{siteId}/machines/{machineId}`, then the viewer url `/swoop/{siteId}/{machineId}` |
 
 ## hoot chat
 

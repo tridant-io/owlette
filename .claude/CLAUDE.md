@@ -68,8 +68,9 @@ cd web && npm run e2e                    # Playwright E2E suite (requires JDK 21
 cd web && npm run lint                   # Lint
 
 # Agent
-cd agent && pip install -r requirements.txt
-python agent/src/owlette_runner.py --debug       # Debug mode (requires admin)
+powershell -File scripts/bootstrap-windows.ps1 -InstallAgentDeps   # agent/.venv (Python 3.11) + requirements*.txt
+agent/.venv/Scripts/python -m pytest agent/tests/                  # Agent tests (what the commit hook runs)
+cd agent/src && ../.venv/Scripts/python owlette_runner.py --debug  # Debug mode (requires admin)
 cd agent && build_installer_full.bat              # Full build (~5-10 min)
 cd agent && build_installer_quick.bat             # Quick build (~30 sec)
 

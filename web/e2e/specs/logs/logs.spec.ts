@@ -43,7 +43,10 @@ test('filters by action, machine, level, and custom date; reset restores rows', 
 
   await page.getByRole('button', { name: /reset filters/i }).click();
   await page.getByTestId('logs-filter-action').click();
-  await page.getByRole('option', { name: 'scheduled restart completed', exact: true }).click();
+  // 50 actions deep: the search field is how you reach one of them.
+  await page.getByTestId('logs-filter-action-search').fill('scheduled restart completed');
+  await page.getByRole('checkbox', { name: 'scheduled restart completed' }).click();
+  await page.keyboard.press('Escape');
   await expect(page.getByText(/no logs found for this site/i)).toBeVisible();
 
   await page.getByRole('button', { name: /reset filters/i }).click();
@@ -87,4 +90,68 @@ test('clear filtered logs removes only matching rows', async ({ page }) => {
     .collection('logs')
     .get();
   expect(remaining.docs.map((doc) => doc.id).sort()).toEqual(['e2e-log-crash', 'e2e-log-info']);
+});
+
+test('the process column reveals a clipped name, and stays quiet when it fits', async ({ page }) => {
+  // jsdom can't prove this one — it needs real layout in a 116px column.
+  await seedLogEvents('site-A', [
+    {
+      id: 'e2e-log-long-proc',
+      action: 'process_crash',
+      level: 'error',
+      machineId: 'e2e-logs-machine',
+      processName: 'constellation renderer node 07 (primary)',
+      timestamp: new Date(),
+    },
+    {
+      id: 'e2e-log-short-proc',
+      action: 'agent_started',
+      level: 'info',
+      machineId: 'e2e-logs-machine',
+      processName: 'td',
+      timestamp: new Date(Date.now() - 60_000),
+    },
+  ]);
+  await gotoSiteALogs(page);
+
+  // The quiet case goes FIRST, while no tooltip exists anywhere: an open tooltip
+  // renders over the row beneath it, so hovering the second cell would land on
+  // the first cell's tooltip and Radix would keep it open.
+  const whole = page.getByTestId('log-row-e2e-log-short-proc').getByTestId('log-process');
+  await expect(whole).toBeVisible();
+  // Radix stamps `data-state` on the trigger it wraps; a cell that fits is a
+  // bare span with no trigger at all.
+  await expect(whole).not.toHaveAttribute('data-state');
+  await whole.hover();
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+
+  const clipped = page.getByTestId('log-row-e2e-log-long-proc').getByTestId('log-process');
+  await expect(clipped).toHaveAttribute('data-state', 'closed');
+  await clipped.hover();
+  await expect(page.getByRole('tooltip')).toContainText('constellation renderer node 07 (primary)');
+});
+
+test('the action filter selects several types at once, and resets', async ({ page }) => {
+  await gotoSiteALogs(page);
+  await page.getByRole('button', { name: /show filters/i }).click();
+
+  const actionFilter = page.getByTestId('logs-filter-action');
+  await expect(actionFilter).toHaveText(/all actions/);
+
+  await actionFilter.click();
+  await page.getByRole('checkbox', { name: 'process crashed' }).click();
+  await page.getByRole('checkbox', { name: 'agent started' }).click();
+  await page.keyboard.press('Escape');
+
+  // Two picks read as a count, not a truncated list of labels.
+  await expect(actionFilter).toHaveText(/2 actions/);
+
+  // Both selected kinds survive; the third seeded row (deployment failed) does not.
+  await expect(page.getByTestId('log-row-e2e-log-crash')).toBeVisible();
+  await expect(page.getByTestId('log-row-e2e-log-info')).toBeVisible();
+  await expect(page.getByTestId('log-row-e2e-log-warning')).toHaveCount(0);
+
+  await page.getByRole('button', { name: /reset filters/i }).click();
+  await expect(actionFilter).toHaveText(/all actions/);
+  await expect(page.getByTestId('log-row-e2e-log-warning')).toBeVisible();
 });

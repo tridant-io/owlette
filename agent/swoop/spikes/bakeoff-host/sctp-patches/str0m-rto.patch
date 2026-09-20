@@ -1,0 +1,17 @@
+--- a/src/sctp/snap.rs
++++ b/src/sctp/snap.rs
+@@ -18,6 +18,14 @@
+         TransportConfig::default()
+             .with_max_init_retransmits(None)
+             .with_max_data_retransmits(None)
++            // swoop spike 0.2 patch (review-1 F1). sctp-proto already exposes
++            // these; str0m simply never sets them, so a WebRTC data channel
++            // inherits RFC 4960's `RTO_INITIAL = 3000` and `RTO_MIN = 1000`
++            // (`sctp-proto/src/config.rs:18-19`). One tail loss on a 60 fps
++            // video channel then costs a full second - about 60 frames - before
++            // the retransmit. Chrome's dcSCTP uses 500 ms / 400 ms.
++            .with_rto_initial_ms(500)
++            .with_rto_min_ms(400)
+             .with_max_receive_message_size(LOCAL_MAX_MESSAGE_SIZE),
+     )
+ }

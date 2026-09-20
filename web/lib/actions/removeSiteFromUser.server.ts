@@ -10,6 +10,8 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
 import { removeMember } from '@/lib/membership.server';
+import { revokeSwoopSessionsForUser } from '@/lib/swoop/revokeViewerSessions.server';
+import type { Actor } from '@/lib/capabilities';
 import { cancelUserCommandsOnSites } from '@/lib/userDeleteCascade.server';
 import logger from '@/lib/logger';
 import { SITE_ID_RE } from '@/lib/sitePolicy.server';
@@ -26,6 +28,8 @@ export interface RemoveSiteFromUserInput {
 
 export interface RemoveSiteFromUserContext {
   auditActor: string;
+  /** Whoever is removing the sites. They end any live swoop session on them. */
+  actor: Actor;
   endpoint?: string;
   method?: string;
 }
@@ -100,6 +104,19 @@ export async function removeSiteFromUser(
     const result = await removeMember({ siteId, uid: input.uid, db: input.db });
     if (!result.ok && result.failure.kind !== 'site_not_found') {
       return { kind: 'remove_failed', siteId, reason: result.failure.kind };
+    }
+    // After the membership write and only when it landed, never awaited into
+    // the response: the lease ends their sessions within five minutes on its
+    // own (PROTOCOL.md §10) and this only closes that window to the kill path's
+    // two seconds.
+    if (result.ok) {
+      void revokeSwoopSessionsForUser({
+        siteId,
+        uid: input.uid,
+        actor: ctx.actor,
+        auditActor: ctx.auditActor,
+        reason: 'member_removed',
+      });
     }
   }
 

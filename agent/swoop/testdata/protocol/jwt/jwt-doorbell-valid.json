@@ -1,0 +1,26 @@
+{
+  "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3Qta2lkLTEifQ.eyJpc3MiOiJvd2xldHRlLWFwaSIsImF1ZCI6InN3b29wLXNpZ25hbCIsInJvbGUiOiJkb29yYmVsbCIsInNpdGUiOiJzaXRlX2dvbGRlbnZlY3RvciIsIm1hY2hpbmUiOiJtYWNoaW5lX2dvbGRlbnZlY3RvciIsImlhdCI6MTc4OTY4OTYwMCwiZXhwIjoxNzg5Njg5OTAwLCJqdGkiOiJqdGlfMDAwMDAwMDAwMDAwMDAwNyJ9.JR1HgR0hLJGe_QohU1hf4xsgI4gAe844xr0GQGCh5YtAanwVeZwhYSk8NQwf05bfPh01lMTEXlfjZIZD2h4ACQ",
+  "verifier": {
+    "aud": "swoop-signal",
+    "site": "site_goldenvector",
+    "machine": "machine_goldenvector",
+    "sid": null,
+    "anchorNow": 1789689600,
+    "elapsedSeconds": 2,
+    "offerFingerprint": null,
+    "keys": [
+      "test-kid-1",
+      "test-kid-2"
+    ]
+  },
+  "claims": {
+    "iss": "owlette-api",
+    "aud": "swoop-signal",
+    "role": "doorbell",
+    "site": "site_goldenvector",
+    "machine": "machine_goldenvector",
+    "iat": 1789689600,
+    "exp": 1789689900,
+    "jti": "jti_0000000000000007"
+  }
+}
