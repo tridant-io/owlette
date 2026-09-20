@@ -21,11 +21,15 @@ description: "The owlette web dashboard is a Next.js application that provides r
 | **deploy** | `/deployments` | Remote software deployment management |
 | **roost** | `/roosts` | Content-addressed file sync, immutable versions, target sync, and rollback |
 | **logs** | `/logs` | Activity log viewer with filtering |
+| **talons** | `/talons` | Site automations — trigger, condition, and outputs |
+| **swoop** | `/swoop/{siteId}/{machineId}` | Live remote desktop for one machine |
+| **shared chat** | `/share/{token}` | Read-only view of a shared hoot conversation |
 | **settings: webhooks** | `/settings/webhooks` | Site webhook subscriptions, delivery history, retries, and secret rotation |
 | **settings: api keys** | `/settings/api-keys` | Scoped API key management for automation |
+| **settings: alerts** | `/settings/alerts` | Per-user alert email preferences; the destination of "manage alerts" in every alert email |
 | **Admin: Members** | `/admin/members` | Site membership management (site admins, scoped to their sites) |
 | **Admin: Tokens** | `/admin/tokens` | Agent token management (site admins, scoped to their sites) |
-| **Admin: Schedules** | `/admin/schedules` | Schedule preset management (site admins, scoped to their sites) |
+| **Admin: Schedules** | `/admin/schedules` | [Schedule preset](/docs/dashboard/admin/schedule-presets) management (site admins, scoped to their sites) |
 | **Admin: Alerts** | `/admin/alerts` | Threshold-based alert rule management (site admins, scoped to their sites) |
 | **Admin: Webhooks** | `/admin/webhooks` | Outbound webhook configuration (site admins, scoped to their sites) |
 | **Admin: Users** | `/admin/users` | Account, global role, and site assignment management (internal) |
