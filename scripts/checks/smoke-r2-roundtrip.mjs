@@ -107,7 +107,11 @@ async function main() {
   console.log(`r2 round-trip smoke`);
   console.log(`  base url:  ${baseUrl}`);
   console.log(`  site id:   ${siteId}`);
-  console.log(`  api key:   ${apiKey.slice(0, 12)}...`);
+  // A fingerprint, not a prefix. The point of the line is to let the operator
+  // confirm WHICH key they passed; the first 12 characters leak key bytes to
+  // do it, and the house rule is not even partially.
+  const keyFp = createHash('sha256').update(apiKey).digest('hex').slice(0, 12);
+  console.log(`  api key:   fp:${keyFp}`);
   console.log();
 
   // Random, so nothing on the server can collide: check #1 must say missing.
