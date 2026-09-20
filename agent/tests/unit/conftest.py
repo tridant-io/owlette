@@ -64,7 +64,9 @@ def private_executable(request, tmp_path):
                   if sys.platform == 'darwin' else '/bin/sleep')
         target = tmp_path / name
         shutil.copy(source, target)
-        os.chmod(target, 0o755)
+        # 0o700, not 0o755: the test runs it as the user that made it, so
+        # group and world need nothing. codeql flags the permissive mask.
+        os.chmod(target, 0o700)
         return target
 
     return make
