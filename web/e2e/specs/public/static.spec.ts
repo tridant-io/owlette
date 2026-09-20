@@ -86,6 +86,47 @@ test.describe('public routes', () => {
     const authenticationHtml = await authentication.text();
     expect(authenticationHtml).toContain('id="nd-docs-layout"');
     expect(authenticationHtml).toContain('authentication');
+
+    // Pages that exist only because they were added to a meta.json — a typo in
+    // the nav list silently drops them from the sidebar while the URL still works.
+    const inNav = ['restart-schedules', 'displays', 'account-settings'];
+    const dashboardIndex = await request.get('/docs/dashboard');
+    const dashboardHtml = await dashboardIndex.text();
+    for (const slug of inNav) {
+      const page = await request.get(`/docs/dashboard/${slug}`);
+      expect(page.status(), `/docs/dashboard/${slug}`).toBe(200);
+      expect(dashboardHtml, `${slug} in sidebar`).toContain(`/docs/dashboard/${slug}`);
+    }
+
+    const schedulePresets = await request.get('/docs/dashboard/admin/schedule-presets');
+    expect(schedulePresets.status()).toBe(200);
+  });
+
+  test('docs search caps its results, honours keywords, and survives a typo', async ({ request }) => {
+    // fumadocs hands the engine `limit: undefined` when the client omits one,
+    // which clobbers its own default and returns every matching section. the
+    // bundled client never sends a limit, so the route has to impose one.
+    const broad = await request.get('/api/search?query=machine');
+    expect(broad.status()).toBe(200);
+    const broadRows = await broad.json();
+    expect(broadRows.length).toBeGreaterThan(0);
+    expect(broadRows.length).toBeLessThanOrEqual(24);
+
+    const capped = await request.get('/api/search?query=machine&limit=5');
+    expect((await capped.json()).length).toBe(5);
+
+    // `keywords` frontmatter is folded into the index, so a word the page never
+    // uses still reaches it — swoop's prose says "remote desktop", not "remote
+    // control".
+    const synonym = await request.get('/api/search?query=remote+control');
+    const synonymPages = (await synonym.json())
+      .filter((row: { type: string }) => row.type === 'page')
+      .map((row: { url: string }) => row.url);
+    expect(synonymPages).toContain('/docs/dashboard/swoop');
+
+    // a misspelling falls back to the tolerant index instead of dead-ending.
+    const typo = await request.get('/api/search?query=sceduled');
+    expect((await typo.json()).length).toBeGreaterThan(0);
   });
 
   test('download permalink redirects to latest installer and falls back when empty', async ({ request }) => {

@@ -1,0 +1,100 @@
+---
+title: "displays"
+description: "Store a machine's monitor arrangement, watch for drift from it, and put it back — manually or unattended. Covers the display panel, the assigned layout, auto-restore and its circuit breaker."
+keywords: ["monitors", "screen layout", "resolution changed", "monitor moved", "display drift", "multi-monitor", "screens rearranged", "mosaic"]
+---
+
+owlette records what monitors a machine has, where they sit, and how they are configured. you can store that arrangement as the machine's **assigned layout**, and from then on the dashboard tells you when reality has moved away from it — and, if you let it, the agent puts it back.
+
+open the panel from **view displays** in a machine's context menu, or by clicking the displays row on its card.
+
+---
+
+## the panel
+
+three tabs:
+
+| tab | shows |
+|---|---|
+| **live** | what the machine reports right now — monitor positions, resolution after rotation, refresh rate, scale, which one is primary |
+| **assigned** | the stored layout, if one has been captured, and the editor for changing it |
+| **events** | this machine's display history — drift, applies, reverts, monitors coming and going |
+
+the badge on the displays row is the **drift count**: how many live monitors differ from their assigned counterpart. a second dot appears when auto-restore has been paused by its circuit breaker.
+
+---
+
+## the assigned layout
+
+**store current arrangement** captures the live layout as the assigned one. it replaces whatever was stored, including saved edits.
+
+you can also build a layout by hand — the **assigned** tab's editor lets you drag monitors and change their settings without touching the machine, and saves as a draft until you apply it. if the machine's hardware changes while you are editing, the panel offers to reload your draft from the new live topology.
+
+**clear assigned layout** removes it. drift detection, restore, and auto-restore all go quiet until a layout is stored again — there is nothing to compare against.
+
+### what counts as drift
+
+a live monitor is matched to its assigned counterpart by EDID hash, so re-plugging a monitor into a different connector is not drift. a matched monitor drifts if any of these differ:
+
+`position.x` · `position.y` · `resolution.width` · `resolution.height` · `refreshHz` · `rotation` · `scalePct` · `primary`
+
+a monitor present on only one side is not counted as drift — that is a monitor added or removed, and it gets its own event.
+
+---
+
+## putting a layout back
+
+**restore** re-applies the assigned layout to the machine. monitors rearrange within a few seconds.
+
+- **it is gated twice.** the machine's agent has to report that it can apply layouts at all, *and* a site admin has to turn on remote apply for that machine (**enable restore**). the second gate exists so nobody rearranges a production wall by accident — turn it on once the apply test has succeeded on that machine.
+- **it auto-reverts.** if the agent does not get a confirmation within 30 seconds, it puts the previous arrangement back. a layout that blanks the screen you were going to confirm from cannot strand the machine.
+- **mosaic blocks it.** on a machine running an NVIDIA mosaic topology, apply is refused rather than attempted.
+
+---
+
+## auto-restore
+
+auto-restore is the unattended version: the agent notices drift and re-applies the assigned layout itself, without anyone watching. it is **off by default** and enabled per machine from the panel.
+
+the agent checks displays every 30 seconds. before it will act, seven things must be true:
+
+1. the displays feature is not switched off for the machine
+2. auto-restore is explicitly enabled for it
+3. the circuit breaker is not tripped
+4. no manual apply is in flight — it never races an operator
+5. every drifted monitor exists in the assigned layout (a newly plugged-in monitor cannot be "restored" to a layout that never had it; logged as `auto-restore skipped`)
+6. the drift has persisted for **two consecutive checks**, so a cable wiggle cannot fire it
+7. the apply rate-limit window has elapsed
+
+an assigned monitor that is currently powered off also stops it — silently, because the monitor's absence is already recorded, and drift is re-evaluated when it comes back.
+
+### the circuit breaker
+
+three consecutive genuine apply failures trip it, and auto-restore stops for that machine until an operator resets it from the panel. skipped applies — the pre-flight refusals above — are not failures and do not count.
+
+the point is to stop a machine whose layout cannot be applied from retrying forever and filling its history with identical failures. the breaker records the last error, so the panel can tell you *why* it gave up.
+
+reset it from the display panel once the underlying problem is fixed. the agent picks the reset up on its next config sync.
+
+---
+
+## events
+
+the events tab and [activity logs](/docs/dashboard/activity-logs) carry the same record:
+
+| event | means |
+|---|---|
+| `display_drift` | a matched monitor no longer matches its assigned settings |
+| `display_monitor_added` / `display_monitor_removed` | the set of monitors changed |
+| `display_monitor_swapped` | a monitor was replaced by a different one |
+| `display_apply_succeeded` / `display_apply_acked` | a layout was applied, then confirmed by the machine |
+| `display_apply_failed` | the apply itself failed — the message is kept |
+| `display_auto_revert_fired` | no confirmation arrived in time; the previous arrangement was restored |
+| `display_revert_deferred` | a revert was due but held back |
+| `display_auto_restore_fired` | auto-restore corrected drift |
+| `display_auto_restore_skipped_unfixable` | drift involved a monitor the assigned layout does not contain |
+| `display_auto_restore_circuit_breaker_tripped` | three failures in a row; auto-restore paused |
+| `display_apply_refused_mosaic` / `display_mosaic_disabled` | mosaic-related refusals |
+| `display_sync_lost` | the agent stopped being able to read display state |
+
+**display events** can also be emailed — it is one of the per-user toggles in [account settings → alerts](/docs/dashboard/account-settings#alerts).

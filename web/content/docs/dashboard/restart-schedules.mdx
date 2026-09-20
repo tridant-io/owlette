@@ -1,0 +1,129 @@
+---
+title: "restart schedules"
+description: "Restart a machine on a recurring weekly schedule — a set of days and a time, in the machine's own timezone. Set it per machine from the machine menu, save it as a site preset, and copy it to the rest of the fleet."
+keywords: ["scheduled restarts", "scheduled reboot", "nightly restart", "auto restart", "recurring reboot", "2am restart", "restart every night"]
+---
+
+a restart schedule reboots a machine on a recurring weekly pattern — "every day at 02:00", "weekdays at 03:30 and sundays at 06:00". it is set per machine, stored in that machine's config, and carried out by the agent on the machine itself.
+
+two things to know before you set one:
+
+- **times are in the machine's local timezone**, not yours and not the site's. an entry at `02:00` on a Tokyo kiosk fires at 02:00 in Tokyo.
+- **the agent fires it whether or not it can reach us.** the schedule lives in the agent's local config, so a kiosk on flaky wifi keeps restarting on time.
+
+---
+
+## opening the editor
+
+the editor lives in a machine's context menu (the **⋮** button on its card or row). where it appears depends on whether the machine is online:
+
+| machine state | where to click |
+|---|---|
+| online | the small sliders icon on the right of **restart machine** |
+| offline | the **schedule restarts** item |
+
+you need to be a site admin. an offline machine can still be scheduled — the schedule is written to its config doc, and the agent picks it up from its local cache the next time it connects.
+
+---
+
+## entries
+
+a schedule is a list of **entries**. each entry is one or more days plus a time:
+
+- click the day pills to include or exclude a day. an entry needs at least one day or the save is refused.
+- the time field is 24-hour, `HH:MM`. the abbreviation beside it (`PDT`, `JST`) is the machine's zone.
+- **add restart** adds another entry. entries are independent — two entries on the same day both fire.
+- the **×** on the right removes an entry.
+
+**enable scheduled restarts** is a separate switch from the entries themselves. turning it off leaves the entries in place, dormant, so you can suspend a schedule without rebuilding it.
+
+with the switch on, the editor shows **next scheduled restart** — the next entry to fire, rendered in the machine's zone. when the machine's agent predates the timezone-aware builds the zone reads as unknown and the preview falls back to your browser's local time.
+
+---
+
+## presets
+
+presets are named schedules, shared across a site. one ships built in:
+
+| preset | schedule |
+|---|---|
+| **2am daily** | every day at 02:00 |
+
+clicking a preset loads its entries into the editor. it does not save — you still press **save** to apply it to this machine.
+
+**+ new preset** names the schedule currently in the editor and stores it for the site. a name that already exists offers to replace that preset rather than creating a second one with the same name. the pencil renames a preset; the bin deletes it.
+
+if you pick a custom preset, edit the entries, and then save, the edit is written back to the preset as well as to the machine — the editor assumes a modified preset is a preset you meant to change. built-in presets are never rewritten this way; editing one just leaves the machine on a schedule that no longer matches any preset.
+
+---
+
+## applying to other machines
+
+**apply to other machines…** copies what is currently in the editor to any other machines in the site. the machine you are editing is pre-checked and handled by the main **save** button.
+
+each machine gets its own independent copy. a later edit to one machine's schedule does not propagate to the others — use a preset if you want one definition you can re-apply.
+
+---
+
+## how a restart actually fires
+
+the agent checks its schedule every 30 seconds against the machine's local clock. when an entry is due:
+
+1. the agent records the attempt locally, then announces it to the dashboard.
+2. after a short pause so the dashboard can catch up, it issues `shutdown /r /t 60`.
+3. the machine card shows a **60-second countdown** with a cancel button. cancelling runs `shutdown /a` and clears the attempt. see [reboot countdown & cancel](/docs/dashboard/machine-monitoring#reboot-countdown--cancel).
+
+the rules that keep this predictable:
+
+- **each entry fires at most once per local day.** the agent keeps a per-entry record of the day it last fired, on disk, so a service restart cannot make it fire twice.
+- **there is no uptime floor.** an entry fires on its instant however recently the machine booted. (agents before 2.12.7 refused to fire within 30 minutes of a boot, which silently skipped short-interval schedules.)
+- **five minutes late is too late.** if the agent only notices a due entry more than five minutes after the instant — it was offline, mid-deploy, restarting — it does not fire. it records the entry as done for the day and logs `scheduled restart missed`.
+- **a failed restart is never retried.** if an attempt is found half-finished after a crash, it is logged as failed and marked done for the day.
+- **an offline machine still restarts.** reaching us is a visibility step, not permission. if the announce fails, the restart goes ahead anyway.
+
+---
+
+## what shows up in the logs
+
+five outcomes reach [activity logs](/docs/dashboard/activity-logs), filterable by action:
+
+| action | means |
+|---|---|
+| `scheduled_reboot_announced` | the agent has committed to restarting; countdown is running |
+| `scheduled_reboot_success` | the machine came back up and the agent matched it to the attempt |
+| `scheduled_reboot_cancelled` | someone cancelled inside the countdown |
+| `scheduled_reboot_missed` | due, but observed more than five minutes late — skipped for the day |
+| `scheduled_reboot_failed` | the attempt was interrupted; not retried |
+
+---
+
+## timezones, precisely
+
+restart entries are **machine-local, always**. this is the one place where the site's *"schedules follow site time"* setting does not apply — that setting moves [process launch windows](/docs/dashboard/timezones#process-schedules), not restart entries.
+
+the reasoning: a restart is a physical event on a physical machine. a kiosk that must not reboot while a venue is open needs to follow the venue's clock, not the clock of whoever set the schedule.
+
+---
+
+## over the API
+
+the editor writes through one endpoint:
+
+```
+PUT /api/sites/{siteId}/machines/{machineId}/reboot-schedule
+```
+
+```json
+{
+  "schedule": {
+    "enabled": true,
+    "entries": [
+      { "id": "a1b2c3", "days": ["mon", "tue", "wed", "thu", "fri"], "time": "03:00" }
+    ]
+  }
+}
+```
+
+it needs the `MACHINE_CONFIG_WRITE` capability, or an api key scoped `machine=<id>:write`. `enabled` must be a boolean; every entry needs a non-empty `id`, at least one day, and a `time` matching `HH:MM`. the whole schedule is replaced on every write — there is no partial update.
+
+the stored field is `rebootSchedule` on `config/{siteId}/machines/{machineId}`. the `reboot` spelling is a wire contract with deployed agents; only the interface says "restart".

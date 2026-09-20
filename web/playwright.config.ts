@@ -153,6 +153,13 @@ export default defineConfig({
       NEXT_PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
       TURNSTILE_SECRET: '1x0000000000000000000000000000000AA',
       TURNSTILE_HOSTNAMES: 'example.com,localhost,127.0.0.1',
+      // Neutralised, not inherited. A developer's .env.local carries a REAL
+      // Resend key; without this the suite builds a live client and
+      // /api/auth/forgot-password actually tries to mail
+      // password-reset-test@e2e.test, which Resend rejects -> 500 -> two tests
+      // fail locally while CI (no .env.local, so no key) stays green. Empty is
+      // the CI shape: getResend() returns null and the route still answers 200.
+      RESEND_API_KEY: '',
     },
   },
 });

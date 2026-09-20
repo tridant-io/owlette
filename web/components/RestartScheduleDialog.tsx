@@ -395,8 +395,8 @@ export default function RestartScheduleDialog({
           <DialogHeader>
             <DialogTitle>restart schedule — {machineName}</DialogTitle>
             <DialogDescription className="text-muted-foreground text-pretty">
-              automatically restart this machine on a recurring schedule.
-              the machine must have been up for at least 30 minutes.
+              automatically restart this machine on a recurring schedule,
+              in the machine&apos;s own timezone.
             </DialogDescription>
           </DialogHeader>
 

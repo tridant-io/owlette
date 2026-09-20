@@ -50,7 +50,7 @@ Owlette builds the recipient list from users assigned to the site plus the site 
 
 **api key expiry is the exception.** A key belongs to a user, not a site, so its notice goes to that one owner and nobody else — no site enumeration, no `ADMIN_EMAIL` fallback (that exists so an orphan *site* still pages someone; applied to a key it would mail the admin about a stranger's credential), and no machine mutes.
 
-Each user's **account settings -> alerts** section controls:
+Each user's [**account settings -> alerts**](/docs/dashboard/account-settings#alerts) section controls:
 
 - **Machine offline alerts** (`healthAlerts`)
 - **Process crash alerts** (`processAlerts`)
@@ -62,7 +62,7 @@ Each user's **account settings -> alerts** section controls:
 - **Additional CC recipients** (`alertCcEmails`, maximum 5)
 - **Muted machines** (`mutedMachines`)
 
-Alert preferences default to enabled unless the stored preference is explicitly `false`. CC recipients are added to that user's alert emails, and muted machines suppress all alert emails for that user for the selected machine. Users mute or unmute a machine from the machine context menu; muted entries can also be removed from account settings.
+Alert preferences default to enabled unless the stored preference is explicitly `false`. CC recipients are added to that user's alert emails, and muted machines suppress all alert emails for that user for the selected machine. Users mute or unmute a machine from the machine context menu; muted entries can also be removed from account settings. The same toggles are reachable on their own at `/settings/alerts`, which is where the **manage alerts** link in every alert email lands.
 
 ---
 

@@ -1,6 +1,7 @@
 ---
 title: "machine monitoring"
 description: "The dashboard provides real-time visibility into all your machines' health, performance, and process status."
+keywords: ["machine menu", "three dots", "delete a machine", "decommission", "stop alerts for one machine"]
 ---
 
 ---
@@ -39,7 +40,7 @@ Metrics are reported by the agent alongside each heartbeat (see adaptive interva
 | **disk/storage** | Per-volume storage percentage, used/total GB, and read/write disk I/O throughput |
 | **GPU** | Per-GPU usage percentage, VRAM usage, and temperature when reported |
 | **network** | Per-NIC transmit/receive throughput and utilization, plus gateway ping latency and packet-loss percentage when available |
-| **displays** | Live monitor topology, monitor count, effective resolution after rotation, primary-display marker, mosaic data, display-drift indicator, and auto-restore circuit-breaker indicator |
+| **displays** | Live monitor topology, monitor count, effective resolution after rotation, primary-display marker, mosaic data, display-drift indicator, and auto-restore circuit-breaker indicator. See [displays](/docs/dashboard/displays) |
 | **local time** | Machine local clock and IANA timezone when multiple machine timezones are visible |
 | **screen access** | Machine-menu entry points for screenshot capture/history and live view on online machines |
 
@@ -57,6 +58,14 @@ Usage metrics use the same threshold bands as the dashboard accent bars and hove
 
 Temperature values use separate hardware thresholds: normal below 70 C, warning from 70 C to below 85 C, and critical at 85 C or higher. Temperatures can display in Celsius or Fahrenheit according to the user's preferences.
 
+### picking which device a row shows
+
+A machine with more than one CPU, disk, GPU, or network interface gets a small dropdown on that metric row. The dropdown is hidden when there is only one device to choose from.
+
+**auto (most active)** is the default: the row follows whichever device the agent reports as primary. Pick a specific device and the row pins to it.
+
+The choice is yours alone and is remembered per machine in card view, and once for the whole table in list view. If a pinned device disappears from a machine — a disk unmounted, a NIC removed — the row falls back to the primary device rather than going blank.
+
 ---
 
 ## view modes
@@ -73,7 +82,7 @@ The default view displays each machine as a card:
 - Sparkline mini-charts showing recent trends
 - Process list with status badges
 - Agent version
-- Machine menu actions for screenshot capture, live view, reboot/shutdown, alert muting, token revocation, and machine removal when permissions allow
+- The machine menu (**⋮**) — every action it offers is listed under [the machine menu](#the-machine-menu) below
 
 Click a machine card to expand details.
 
@@ -152,9 +161,30 @@ Click a process to open the [Process Dialog](/docs/dashboard/process-management)
 
 ---
 
+## restart pending
+
+When a managed process exhausts its relaunch attempts, the agent stops trying and asks for a restart instead of deciding on its own. It raises a **restart pending** flag on the machine, and the card shows an amber banner naming the process — `restart pending: ndi_recording crashed 3 times`.
+
+The machine itself also opens a restart prompt on its own screen, as a local fallback for a machine nobody is watching from the dashboard. **That prompt has a two-minute countdown and restarts the machine on its own if nobody touches it** — so the banner is usually a record of a restart that is about to happen anyway, not a decision waiting on you. See [relaunch limits](/docs/agent/process-monitoring#relaunch-limits).
+
+Site admins get two actions on the banner:
+
+| action | what it does |
+|--------|--------------|
+| **approve** | Sends the restart command, exactly as **restart machine** would. Only offered while the machine is online — the command would be refused otherwise. |
+| **dismiss** | Clears the flag and resets that process's relaunch counter, so it gets a fresh set of attempts. |
+
+**The banner outlives an unreachable machine.** The flag is agent-written and only the agent's next service start clears it locally, so a machine that crashed and never came back keeps showing it. The banner renders greyed rather than amber in that case and adds *machine offline, cannot restart* — it is a record of something that happened, not a live alarm.
+
+Dismiss still works on an offline machine. It clears cloud state through the API rather than asking the agent, which is exactly the case that most needs clearing.
+
+Dismissing requires `MACHINE_EXEC_COMMAND` — the same bar as sending the restart itself.
+
+---
+
 ## reboot countdown & cancel
 
-When a reboot or shutdown is scheduled (from the dashboard, from hoot, or via the Tier 3 `reboot_machine` / `shutdown_machine` tools), the machine card displays a red pulsing **MM:SS** countdown timer in place of its normal status indicator. This gives the operator a visible, unambiguous window in which to abort.
+When a reboot or shutdown is scheduled (from the dashboard, from hoot, from a [restart schedule](/docs/dashboard/restart-schedules), or via the Tier 3 `reboot_machine` / `shutdown_machine` tools), the machine card displays a red pulsing **MM:SS** countdown timer in place of its normal status indicator. This gives the operator a visible, unambiguous window in which to abort.
 
 ### timing
 
@@ -166,6 +196,42 @@ When a reboot or shutdown is scheduled (from the dashboard, from hoot, or via th
 - Once the countdown expires the machine card flips to a rebooting or shutting-down state and the cancel path closes.
 
 This behavior was introduced in v2.6.2 (commit `52e1ed8`) and replaces the older fire-and-forget reboot UX.
+
+---
+
+## the machine menu
+
+The **⋮** button on a card or row opens the machine menu. What it offers depends on whether the machine is online and whether you are a site admin:
+
+| action | needs | what it does |
+|--------|-------|--------------|
+| **restart machine** | online, site admin | Reboots the machine after a 30-second delay. See [reboot countdown & cancel](#reboot-countdown--cancel) |
+| **schedule restarts** | site admin | Opens the [restart schedule](/docs/dashboard/restart-schedules) editor. On an online machine it is the small sliders icon beside **restart machine**; on an offline one it is a menu item of its own |
+| **shutdown machine** | online, site admin | Powers the machine off, same 30-second delay |
+| **cancel restart** / **cancel shutdown** | online, site admin, countdown running | Replaces the two entries above while a countdown is in flight |
+| **screenshot** | online | Captures the machine's screen and opens the [screenshot](/docs/agent/remote-commands) history |
+| **swoop** | online, agent reports it can stream | Opens the live remote-desktop session — see [swoop](/docs/dashboard/swoop), which covers the site policy that decides whether the session itself is allowed |
+| **live view** | online, agent cannot stream | The older screenshot slideshow. Exactly one of swoop and live view is ever offered, so the menu never loses its screen entry |
+| **view displays** | any signed-in user | Opens the [displays](/docs/dashboard/displays) panel |
+| **mute alerts** / **unmute alerts** | any signed-in user | Silences every alert email for this machine, **for you only**. Listed under [account settings → alerts](/docs/dashboard/account-settings#muted-machines) |
+| **revoke token** | site admin | Invalidates the agent's refresh token for this hostname. See below |
+| **remove machine** | site admin | Removes the machine from the site. See below |
+
+An offline machine keeps **schedule restarts**, **view displays**, **mute alerts**, **revoke token** and **remove machine** — everything else needs an agent on the other end.
+
+### revoke token
+
+Revoking invalidates the agent's stored refresh token, so that agent can no longer reconnect until it is paired again. Two scopes are offered: the most recently used token for the hostname, or every token for it.
+
+This is the per-machine version of the [token management](/docs/dashboard/admin/token-management) page, which does the same thing across a whole site.
+
+### remove machine
+
+Removal is permanent and deletes the machine's data, process configuration, and command history, and deregisters the agent.
+
+- **A machine with deployments in progress cannot be removed.** The dialog blocks confirmation until they finish.
+- **An online machine can be removed.** Its agent notices and stops syncing.
+- Getting it back means re-running the installer and pairing it again with a fresh 3-word phrase.
 
 ---
 

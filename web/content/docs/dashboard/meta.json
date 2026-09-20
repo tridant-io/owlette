@@ -4,6 +4,8 @@
     "index",
     "getting-started",
     "machine-monitoring",
+    "restart-schedules",
+    "displays",
     "process-management",
     "deployments",
     "roost",
@@ -12,6 +14,7 @@
     "talons",
     "activity-logs",
     "timezones",
+    "account-settings",
     "admin"
   ]
 }
