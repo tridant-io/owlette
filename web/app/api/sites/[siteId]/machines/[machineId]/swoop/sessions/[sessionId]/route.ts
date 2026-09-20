@@ -10,6 +10,12 @@
  * paths: the worker broadcast (<= 2 s, authoritative) and the polled command
  * (last resort). Neither failing withholds the 200 — the record is already
  * ended, and a streamer that survives both is stopped by its own lease.
+ *
+ * DELETE deliberately does NOT close the caller's step-up window: this is the
+ * path a page reload takes (`hooks/useSwoopSession.ts` beacons `closed` on
+ * teardown), and it sits on the WATCH bar, so any member could otherwise put
+ * every admin on the machine through a fresh ceremony. Closing windows is the
+ * kill route's job, and that one takes the control capability.
  */
 
 import { NextResponse } from 'next/server';
@@ -50,7 +56,7 @@ const CALLER_END_REASONS: ReadonlySet<string> = new Set<SwoopSessionEndReason>([
   'revoked',
 ]);
 
-const readHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { params }) => {
+const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { params }) => {
   try {
     const keyRefusal = apiKeyRefusal(ctx);
     if (keyRefusal) return keyRefusal;
@@ -58,8 +64,8 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     const { machineId, sessionId } = await params;
     if (!isValidSid(sessionId)) return problemValidation('invalid session id');
 
-    const gate = await swoopGate({ request, ctx, machineId, intent: 'view' });
-    const decision = evaluateSwoopAccess({ ...gate.input, stepUpOpen: false });
+    const gate = await swoopGate({ ctx, machineId, intent: 'view' });
+    const decision = evaluateSwoopAccess({ ...gate, stepUpOpen: false });
     if (!decision.ok) return decisionProblem(decision);
 
     const session = await getSwoopSession(ctx.siteId, machineId, sessionId);
@@ -121,8 +127,8 @@ const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, {
     }
     const endReason = (raw.endReason ?? 'closed') as SwoopSessionEndReason;
 
-    const gate = await swoopGate({ request, ctx, machineId, intent: 'view' });
-    const decision = evaluateSwoopAccess({ ...gate.input, stepUpOpen: false });
+    const gate = await swoopGate({ ctx, machineId, intent: 'view' });
+    const decision = evaluateSwoopAccess({ ...gate, stepUpOpen: false });
     if (!decision.ok) {
       recordSwoopDenied({
         ...auditBase,

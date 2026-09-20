@@ -55,10 +55,12 @@ jest.mock('@/lib/rateLimit.server', () => ({
   rateLimitHeaders: jest.fn(() => ({})),
 }));
 
+// Flipped by the break-glass test below; reset to on in `beforeEach`.
+const capabilityEnforcement = { value: true };
 jest.mock('@/lib/securityConfig.server', () => ({
   securityConfig: {
     read: jest.fn(async () => ({
-      capability_enforcement: true,
+      capability_enforcement: capabilityEnforcement.value,
       rate_limit_enforcement: true,
     })),
   },
@@ -70,6 +72,9 @@ jest.mock('@/lib/apiAuth.server', () => {
   return { ...actual, resolveAuth: (...a: unknown[]) => mockResolveAuth(...a) };
 });
 
+// Nothing on these paths reads a login session: the kill route never does, and
+// the only session started here is a WATCH, which never touches step-up state.
+// Stubbed so the real module stays out of a route test.
 const mockSession = { userId: '', expiresAt: 0 };
 jest.mock('@/lib/sessionManager.server', () => ({
   getSessionFromRequest: jest.fn(async () => mockSession),
@@ -100,6 +105,7 @@ const OFFLINE_MACHINE = 'machine-offline';
 const ADMIN = 'user-admin';
 const MEMBER = 'user-member';
 const SID = 'sid0000000000000000000000000001';
+const OTHER_SID = 'sid0000000000000000000000000002';
 const FP = 'sha-256 AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
 
 /** Documents the routes read, keyed by their full Firestore path. */
@@ -132,9 +138,36 @@ function commandWrites(): Array<Record<string, unknown>> {
     .flatMap(([payload]) => Object.values(payload as Record<string, Record<string, unknown>>));
 }
 
+function sessionPath(sid: string): string {
+  return `sites/${SITE}/machines/${MACHINE}/swoop_sessions/${sid}`;
+}
+
+/** A session document the kill route can read back and close. */
+function stageSession(sid = SID, state: string = 'live'): void {
+  const startedAt = Date.now();
+  staged.set(sessionPath(sid), {
+    sid,
+    siteId: SITE,
+    machineId: MACHINE,
+    state,
+    createdBy: `user:${ADMIN}`,
+    startedAt,
+    absoluteExpiresAt: startedAt + 43_200_000,
+    viewers: [{ viewerId: 'v1', uid: ADMIN, ctl: true, joinedAt: startedAt, leaseExpiresAt: startedAt }],
+  });
+}
+
+/** Every `swoop_sessions/{sid}` write that closed a record. */
+function endWrites(): Array<Record<string, unknown>> {
+  return mocks.set.mock.calls
+    .map(([payload]) => payload as Record<string, unknown>)
+    .filter((payload) => payload.state === 'ended');
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   process.env.SWOOP_SIGNAL_URL = 'https://signal-dev.example.workers.dev';
+  capabilityEnforcement.value = true;
   mockKill.mockResolvedValue({ ok: true });
 
   staged.clear();
@@ -169,6 +202,48 @@ describe('PATCH swoop-settings', () => {
       expect.objectContaining({ outcome: 'deny', denyReason: 'capability_missing' }),
     );
     expect(commandWrites()).toHaveLength(0);
+  });
+
+  /**
+   * The break-glass switch must not hand a member this document. A member holds
+   * MACHINE_REMOTE_VIEW on merit, so a bypassable enablement route is a full
+   * privilege escalation on its own: turn swoop on, let members watch, exclude
+   * nothing, indicator off — then start a view session that passes the exempt
+   * capability check legitimately. Exempting the watch capability is only worth
+   * something while the switch in front of it is exempt too.
+   */
+  it('a member still cannot PATCH settings with capability_enforcement off', async () => {
+    capabilityEnforcement.value = false;
+    signIn(MEMBER);
+
+    const res = await PATCH(
+      createMockRequest(settingsUrl(), {
+        method: 'PATCH',
+        body: { enabled: true, membersMayWatch: true, excludedMachineIds: [], indicator: 'none' },
+      }),
+      siteContext(),
+    );
+
+    expect(res.status).toBe(403);
+    expect(writeAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'capability_missing' }),
+    );
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(commandWrites()).toHaveLength(0);
+  });
+
+  it('an admin still gets through with capability_enforcement off', async () => {
+    // The other half of the carve-out: it re-runs the real check rather than
+    // denying outright, so an admin is unaffected by the switch either way.
+    capabilityEnforcement.value = false;
+
+    const res = await PATCH(
+      createMockRequest(settingsUrl(), { method: 'PATCH', body: { enabled: true } }),
+      siteContext(),
+    );
+
+    expect(res.status).toBe(200);
   });
 
   it('enabling sends swoop_refresh only to online machines', async () => {
@@ -272,6 +347,12 @@ describe('PATCH swoop-settings', () => {
 });
 
 describe('POST swoop/kill', () => {
+  // The machines query belongs to the settings route; here the only collection
+  // read is the machine's unended sessions, and most cases have none.
+  beforeEach(() => {
+    mocks.collectionGet.mockResolvedValue(querySnapshot([]));
+  });
+
   it('kills over the worker and does not queue a command when it lands', async () => {
     const res = await KILL(
       createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
@@ -283,6 +364,139 @@ describe('POST swoop/kill', () => {
     expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
     expect((body.data as { via: string }).via).toBe('signal');
     expect(commandWrites()).toHaveLength(0);
+  });
+
+  /**
+   * A kill the operator it cut off could undo by reconnecting on a window they
+   * already held would not be a kill, so the window closes first — before
+   * either stop path has had its couple of seconds.
+   */
+  it('closes the machine step-up windows before it stops anything', async () => {
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    const revocation = mocks.set.mock.calls.findIndex(
+      ([payload]) => typeof payload === 'object' && payload !== null && 'revokedAt' in payload,
+    );
+    expect(revocation).toBeGreaterThanOrEqual(0);
+    expect(mocks.set.mock.invocationCallOrder[revocation]).toBeLessThan(
+      mockKill.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('still kills when the windows cannot be closed', async () => {
+    mocks.set.mockRejectedValueOnce(new Error('firestore down'));
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
+  });
+
+  /**
+   * The emergency stop has to be visible in the state an operator reads. A
+   * record left `pending` also keeps answering as live to the revocation sweep,
+   * which then re-kills a session that ended days ago on every membership
+   * change.
+   */
+  it('closes the record it stops, naming the kill as the reason', async () => {
+    stageSession();
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(endWrites()).toEqual([
+      expect.objectContaining({ state: 'ended', endReason: 'killed', viewers: [] }),
+    ]);
+  });
+
+  it('closes the record before it stops anything', async () => {
+    stageSession();
+
+    await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    // An ended record is itself the slowest of the three stops — the lease
+    // route will not renew one — and both fast paths can throw, so it is closed
+    // first or not at all.
+    const close = mocks.set.mock.calls.findIndex(
+      ([payload]) => (payload as Record<string, unknown>).state === 'ended',
+    );
+    expect(close).toBeGreaterThanOrEqual(0);
+    expect(mocks.set.mock.invocationCallOrder[close]).toBeLessThan(
+      mockKill.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('closes every unended record on the machine when no sid is named', async () => {
+    mocks.collectionGet.mockResolvedValue(
+      querySnapshot([
+        { id: SID, data: { state: 'live', machineId: MACHINE, startedAt: 1 } },
+        { id: OTHER_SID, data: { state: 'pending', machineId: MACHINE, startedAt: 1 } },
+      ]),
+    );
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: {} }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(endWrites()).toHaveLength(2);
+    expect(mocks.where).toHaveBeenCalledWith('state', 'in', ['pending', 'live']);
+  });
+
+  it('leaves an already-ended record alone rather than restating why it ended', async () => {
+    stageSession(SID, 'ended');
+
+    await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(endWrites()).toEqual([]);
+  });
+
+  /**
+   * The store merges, so ending a sid with no document would CREATE one — a
+   * kill would become a way to grow the collection a document at a time.
+   */
+  it('never creates a record for a sid that has none', async () => {
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(endWrites()).toEqual([]);
+  });
+
+  it('still kills when the record cannot be closed', async () => {
+    stageSession();
+    mocks.set
+      .mockResolvedValueOnce(undefined) // the step-up revocation
+      .mockRejectedValueOnce(new Error('firestore down')); // the record
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    // Killing is the safety control: a failure to record must never withhold
+    // the stop.
+    expect(res.status).toBe(200);
+    expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
   });
 
   it('falls back to the polled command when the worker reports no session', async () => {

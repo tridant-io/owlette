@@ -15,6 +15,11 @@
  *
  * This module never writes a command document. That is
  * `lib/actions/requestSwoopSession.server.ts`, and only that.
+ *
+ * Documents are removed by the retention sweep (`/api/cron/swoop-retention`)
+ * and nowhere else. It takes its pages as REFERENCES from here rather than
+ * building its own query, so every read and every write of the collection is
+ * still shaped in this file.
  */
 
 import { FieldValue } from 'firebase-admin/firestore';
@@ -22,12 +27,19 @@ import { getAdminDb } from '@/lib/firebase-admin';
 
 export type SwoopSessionState = 'pending' | 'live' | 'ended';
 
+/**
+ * Why a session stopped. `closed`, `killed` and `revoked` are ours; the rest
+ * are the streamer's own `exiting.reason` vocabulary (PROTOCOL.md §6) as the
+ * host reports it, plus `host_exit` for a stop it named no reason for.
+ */
 export type SwoopSessionEndReason =
   | 'closed'
   | 'idle'
   | 'killed'
   | 'lease_expired'
   | 'session_cap'
+  | 'signal_lost'
+  | 'host_exit'
   | 'revoked'
   | 'error';
 
@@ -97,14 +109,17 @@ export function assertNoKeyMaterial(data: unknown, path = ''): void {
   }
 }
 
-function sessionRef(siteId: string, machineId: string, sid: string) {
+function sessionsRef(siteId: string, machineId: string) {
   return getAdminDb()
     .collection('sites')
     .doc(siteId)
     .collection('machines')
     .doc(machineId)
-    .collection('swoop_sessions')
-    .doc(sid);
+    .collection('swoop_sessions');
+}
+
+function sessionRef(siteId: string, machineId: string, sid: string) {
+  return sessionsRef(siteId, machineId).doc(sid);
 }
 
 /** Every write in this module goes through here — that is the whole guard. */
@@ -218,6 +233,87 @@ export async function listUnendedSwoopSessionsForUser(args: {
     );
 }
 
+/**
+ * Every unended session on ONE machine — what a kill with no sid stops, and so
+ * what it has to close. Filtered on `state` alone, which is one field and needs
+ * no composite index, and scoped to the machine's own subcollection.
+ */
+export async function listUnendedSwoopSessionsForMachine(args: {
+  siteId: string;
+  machineId: string;
+}): Promise<SwoopSession[]> {
+  const snap = await sessionsRef(args.siteId, args.machineId)
+    .where('state', 'in', UNENDED_STATES)
+    .get();
+  return snap.docs.map((doc) =>
+    parseSession(
+      (doc.data() ?? {}) as Record<string, unknown>,
+      args.siteId,
+      args.machineId,
+      doc.id,
+    ),
+  );
+}
+
+/**
+ * Unended sessions on this machine whose absolute 12-hour cap has already
+ * passed — records nobody closed, because the browser went away without its
+ * teardown reaching us. The cap is absolute, so one of these cannot still be
+ * running, and left alone it answers as live to
+ * `listUnendedSwoopSessionsForUser` for as long as the document exists.
+ *
+ * One page, by `state` alone: the whole point is that unended sessions are a
+ * handful, and the sweep that calls this is what keeps them that way.
+ */
+export async function listExpiredUnendedSwoopSessions(args: {
+  siteId: string;
+  machineId: string;
+  nowMs: number;
+  limit: number;
+}): Promise<SwoopSession[]> {
+  const snap = await sessionsRef(args.siteId, args.machineId)
+    .where('state', 'in', UNENDED_STATES)
+    .limit(args.limit)
+    .get();
+  return snap.docs
+    .map((doc) =>
+      parseSession(
+        (doc.data() ?? {}) as Record<string, unknown>,
+        args.siteId,
+        args.machineId,
+        doc.id,
+      ),
+    )
+    .filter((session) => session.absoluteExpiresAt < args.nowMs);
+}
+
+/**
+ * One page of session documents on this machine that started before `beforeMs`,
+ * oldest first — the retention sweep's unit of work.
+ *
+ * References rather than sessions: the sweep only deletes them, and `startedAt`
+ * is the one field every document carries whatever state it is in, so nothing
+ * escapes the sweep by never having ended.
+ */
+export async function listSwoopSessionRefsStartedBefore(args: {
+  siteId: string;
+  machineId: string;
+  beforeMs: number;
+  limit: number;
+}): Promise<FirebaseFirestore.DocumentReference[]> {
+  const snap = await sessionsRef(args.siteId, args.machineId)
+    .where('startedAt', '<', args.beforeMs)
+    .orderBy('startedAt', 'asc')
+    .limit(args.limit)
+    .get();
+  return snap.docs.map((doc) => doc.ref);
+}
+
+/**
+ * `pending` -> `live`, which only the streamer can witness: it is reported as a
+ * `session_started` host event (`/api/agent/swoop/events`). Ending a session is
+ * `endSwoopSession`, so `ended` is not a state this can set.
+ */
 export async function setSwoopSessionState(
   siteId: string,
   machineId: string,
@@ -241,6 +337,10 @@ export async function upsertSwoopViewer(args: {
   });
 }
 
+/**
+ * Drop one viewer, on the host's `viewer_left`. Only the streamer sees a viewer
+ * go, so without that event the row outlives the person it names.
+ */
 export async function removeSwoopViewer(args: {
   siteId: string;
   machineId: string;

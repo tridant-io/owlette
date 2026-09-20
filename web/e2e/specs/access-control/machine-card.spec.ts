@@ -11,9 +11,10 @@
  *   3. MachineCardView's amber "restart pending" banner — members see the
  *      banner without approve/dismiss.
  *
- * Three machines seeded on site-A cover the states: baseline (no restart),
+ * Four machines seeded on site-A cover the states: baseline (no restart),
  * rebooting (scheduledAt 120s out, above the 5s cancel lockout), pending
- * (rebootPending.active, card view only).
+ * (rebootPending.active, card view only), and offline-pending (the same
+ * flag on a machine whose heartbeat has aged out).
  */
 
 import { test, expect, type Page, type Locator } from '@playwright/test';
@@ -24,12 +25,22 @@ const SITE_ID = 'site-A';
 const BASELINE_MACHINE_ID = 'e2e-machine-baseline';
 const REBOOTING_MACHINE_ID = 'e2e-machine-rebooting';
 const PENDING_MACHINE_ID = 'e2e-machine-pending';
+// not '...-pending-offline': cardFor filters on hasText, so an id that CONTAINS
+// another seeded id matches two cards and trips strict mode.
+const OFFLINE_PENDING_MACHINE_ID = 'e2e-machine-offline-pending';
 
 test.beforeAll(async () => {
-  // Seeds coexist so one dashboard render exposes all three states.
+  // Seeds coexist so one dashboard render exposes all four states.
   await seedMachine(SITE_ID, BASELINE_MACHINE_ID);
   await seedMachine(SITE_ID, REBOOTING_MACHINE_ID, { rebootingInSec: 120 });
   await seedMachine(SITE_ID, PENDING_MACHINE_ID, { rebootPending: true });
+  // 600s > the 300s window useFirestore derives `online` from. seedMachine
+  // writes `online: true` regardless; the hook ignores it, which is the
+  // whole point -- a killed agent leaves the stored flag stuck true.
+  await seedMachine(SITE_ID, OFFLINE_PENDING_MACHINE_ID, {
+    rebootPending: true,
+    heartbeatOffsetSec: 600,
+  });
 });
 
 /**
@@ -186,6 +197,27 @@ test.describe('machine card — admin on site-A', () => {
     await expect(card).toContainText(/restart pending/i);
     await expect(card.getByTestId('reboot-pending-approve')).toBeVisible();
     await expect(card.getByTestId('reboot-pending-dismiss')).toBeVisible();
+  });
+
+  test('offline machine keeps the banner and dismiss, but drops approve', async ({ page }) => {
+    const card = await cardFor(page, OFFLINE_PENDING_MACHINE_ID);
+
+    // Still shown -- the flag is real state the operator wants to see -- but
+    // approve is gone because the command path 409s `machine_offline`.
+    await expect(card).toContainText(/restart pending/i);
+    await expect(card).toContainText(/machine offline, cannot restart/i);
+    await expect(card.getByTestId('reboot-pending-approve')).toHaveCount(0);
+    await expect(card.getByTestId('reboot-pending-dismiss')).toBeVisible();
+  });
+
+  test('dismiss clears the flag on an offline machine', async ({ page }) => {
+    // The regression: dismissal used to queue an agent command and nothing
+    // else, so a machine that never came back could not be dismissed at all.
+    // Clicking is the contract, not the route -- the banner must go away.
+    const card = await cardFor(page, OFFLINE_PENDING_MACHINE_ID);
+    await card.getByTestId('reboot-pending-dismiss').click();
+
+    await expect(card.getByTestId('reboot-pending-banner')).toHaveCount(0);
   });
 });
 

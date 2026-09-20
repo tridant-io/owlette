@@ -3,19 +3,16 @@
  * (`sessions`, `sessions/{sid}`, `sessions/{sid}/lease`).
  *
  * Every decision itself lives in `lib/swoop/policy.server.ts` — this only turns
- * one into an RFC 7807 response, resolves the step-up binding from the caller's
- * login session, and mints the opaque ids. Nothing here reads or writes a
- * session document, and nothing here ever touches a token or a key.
+ * one into an RFC 7807 response and mints the opaque ids. Nothing here reads or
+ * writes a session document, and nothing here ever touches a token or a key.
  */
 
-import type { NextRequest, NextResponse } from 'next/server';
+import type { NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
 import { problem, ProblemType } from '@/lib/apiErrors';
 import type { SiteHandlerContext } from '@/lib/authorizedHandler.server';
-import { getSessionFromRequest } from '@/lib/sessionManager.server';
 import {
   loadSwoopSettings,
-  stepUpSessionBinding,
   type SwoopAccessInput,
   type SwoopDecision,
   type SwoopIntent,
@@ -82,43 +79,21 @@ export function viewerSignalUrl(siteId: string, machineId: string): string | nul
   return `${origin}/v1/room/${encodeURIComponent(siteId)}/${encodeURIComponent(machineId)}`;
 }
 
-/**
- * The step-up window is bound to ONE login session, so a caller authenticating
- * with an id token rather than the session cookie has nothing to bind to and
- * cannot hold a window. Null means "no window is possible", which reads as
- * `step_up_required` — never as a grant.
- */
-async function stepUpBinding(request: NextRequest, userId: string): Promise<string | null> {
-  const session = await getSessionFromRequest(request);
-  if (session.userId !== userId || typeof session.expiresAt !== 'number') return null;
-  return stepUpSessionBinding({ userId, expiresAt: session.expiresAt });
-}
-
-export interface SwoopGate {
-  /** Null when no step-up window can exist for this caller — never a grant. */
-  binding: string | null;
-  /** Everything `evaluateSwoopAccess` / `evaluateLeaseRenewal` need but the window state. */
-  input: Omit<SwoopAccessInput, 'stepUpOpen'>;
-}
+/** Everything `evaluateSwoopAccess` / `evaluateLeaseRenewal` need but the window state. */
+export type SwoopGate = Omit<SwoopAccessInput, 'stepUpOpen'>;
 
 export async function swoopGate(args: {
-  request: NextRequest;
   ctx: SiteHandlerContext;
   machineId: string;
   intent: SwoopIntent;
 }): Promise<SwoopGate> {
-  const settings = await loadSwoopSettings(args.ctx.siteId);
-  const binding = await stepUpBinding(args.request, args.ctx.actor.userId);
   return {
-    binding,
-    input: {
-      actor: args.ctx.actor,
-      siteId: args.ctx.siteId,
-      machineId: args.machineId,
-      intent: args.intent,
-      viaApiKey: args.ctx.auth.keyContext !== null,
-      settings,
-    },
+    actor: args.ctx.actor,
+    siteId: args.ctx.siteId,
+    machineId: args.machineId,
+    intent: args.intent,
+    viaApiKey: args.ctx.auth.keyContext !== null,
+    settings: await loadSwoopSettings(args.ctx.siteId),
   };
 }
 

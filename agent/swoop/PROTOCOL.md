@@ -225,7 +225,10 @@ machine's own token. the line's `kind` is that route's closed vocabulary; its `r
 refusing module already owns (`unknown_kid`, `join_too_soon`, `fp_missing`), and the route refuses anything
 outside `^[a-z0-9_]{1,48}$`. a refusal is reported **once per viewer**, not once per message — a watcher
 holding a key down repeats at 30 Hz — and the count of everything suppressed behind that one line rides
-`status.denials`.
+`status.denials`. once per viewer *forever* is the opposite failure, though: an hour of a scripted viewer
+hammering `swoop-input` would be one row timestamped when it started. so a viewer still being refused is
+reported again, at most every 30 s and only after a further 30 refusals, with reason `input_sustained`.
+those repeats are what an attack in progress looks like in the audit trail.
 
 ### input — `swoop-input`, viewer → host, requires `ctl`
 
@@ -345,9 +348,15 @@ loop.
 `input_not_permitted`, `join_refused`, `clipboard_audit` — so a name added here has to be added there too, or
 the route answers 400 for the whole batch. `viewer` is absent when the refusal is not attributable to one.
 
-`status` carries fourteen **optional** fields, each omitted when it has nothing to say: a session whose
-features are all quiet and whose peer is down emits exactly the nine-field line above, which is what the
-golden vector holds.
+`status` carries fifteen **optional** fields, each omitted when it has nothing to say: a session whose
+features are all quiet and whose peers are all down emits exactly the nine-field line above, which is what
+the golden vector holds.
+
+one streamer serves every viewer on the machine, so the nine required fields are machine-wide. `viewers` and
+`controllers` are the host's own roster — `controllers` counts the verified jwts that carried `ctl`, not the
+room's claim. `bitrateKbps` is the **sum** of what every peer put on the link and `fps` is the **highest**
+frame rate any one of them was written at, because the picture is one stream however many copies of it go
+out. with a single viewer every one of these is the number it always was.
 
 | field | meaning |
 |---|---|
@@ -358,11 +367,15 @@ golden vector holds.
 | `denials` | the control gate's cumulative refusals, including every one suppressed behind a single `host_event`. absent means zero. |
 | `testOverride` | the bundle's test-only `overrides`, named so an overridden session cannot pass for a real one in `logs/swoop`. absent on every release build, which refuses such a bundle with exit 10. |
 | `idrs` | keyframes the host actually forced since `ready`, **after** section 4's coalescing — not the number of requests, which a receiver in a loss storm raises on every record. absent means zero. |
-| `encoder` | which backend of the fallback chain the session is encoding on: `nvenc` \| `qsv` \| `amf` \| `mf` \| `openh264`. absent until a viewer's offer has named a codec and the first encoder is open, and absent again once the last viewer leaves — the pause closes the encoder with the duplication. `ready`'s `codecs[]` says what the machine *can* do; this says what it did. |
+| `encoder` | which backend of the fallback chain the session is encoding on: `nvenc` \| `qsv` \| `amf` \| `mf` \| `openh264`. absent until a viewer's offer has named a codec and the first encoder is open, and absent again once the last viewer leaves — the pause closes the encoders with the duplication. `ready`'s `codecs[]` says what the machine *can* do; this says what it did. |
+| `tiers` | how many encode sessions the viewers are costing this machine: `min(distinct codec classes present, the measured encoder budget)`. **absent means one**, which is every session whose viewers all negotiated the same codec, and a session with nobody watching. one capture feeds all of them, so this is the whole of what multi-viewer costs the gpu. |
 
-the five below are the rate governor's, and they ride a `status` **only while a viewer's peer is connected**:
-with nobody watching there is no rate being governed, `bitrateKbps` and `fps` are already zero, and the
-nine-field line is what a quiet session promises.
+the five below are the rate governor's, and they ride a `status` **only while at least one viewer's peer is
+connected**: with nobody watching there is no rate being governed, `bitrateKbps` and `fps` are already zero,
+and the nine-field line is what a quiet session promises. there is one governor **per viewer**, so `preset`,
+`rungFps`, `rungResolution`, `rungIndex` and `governor` report the **most degraded** of them — the viewer
+somebody is about to call about. `targetKbps` is the sum across all of them, so it stays comparable with
+`bitrateKbps`.
 
 | field | meaning |
 |---|---|

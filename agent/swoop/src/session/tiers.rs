@@ -57,6 +57,7 @@
 //! keeps the whole of it a pure function, testable with no roster, no peer and
 //! no GPU.
 
+use std::fmt;
 use std::time::Instant;
 
 use crate::encode::Codec;
@@ -221,15 +222,17 @@ fn narrowest(a: Ceiling, b: Ceiling) -> Ceiling {
 
 /// A join turned away because the machine has no encode session left for it.
 ///
-/// Audited, not silent: [`BudgetRefusal::kind`] is the `/api/agent/swoop/events`
-/// record the session loop reports, and [`BudgetRefusal::reason`] is the whole
-/// arithmetic in one lowercase line, so an operator who sees a refusal can tell
-/// it from a token failure without reading a log.
+/// Audited, not silent, and in two spellings because the two readers want
+/// different things. [`BudgetRefusal::reason`] is the code on the
+/// `/api/agent/swoop/events` row [`BudgetRefusal::kind`] names: that route takes
+/// `^[a-z0-9_]{1,48}$` and refuses the **whole batch** on anything else, so
+/// prose there would discard every event batched behind it. `Display` is the
+/// same refusal as arithmetic, for `logs/swoop`, so an operator who sees a
+/// refusal can tell it from a token failure without counting viewers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BudgetRefusal {
     pub budget: u32,
     pub viewers: u32,
-    pub reason: String,
 }
 
 impl BudgetRefusal {
@@ -238,6 +241,21 @@ impl BudgetRefusal {
     /// statement: the session turned a join away on a limit of its own.
     pub fn kind(&self) -> HostEventKind {
         HostEventKind::JoinRefused
+    }
+
+    /// The finer code behind that `kind`, in the same spelling every other
+    /// refusal in this crate reports itself with. One cause, so one code.
+    pub fn reason(&self) -> &'static str {
+        "encoder_budget"
+    }
+}
+
+impl fmt::Display for BudgetRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // destructured rather than read through `self`, so a third field added
+        // here is a compile error instead of a line that quietly omits it.
+        let Self { budget, viewers } = self;
+        write!(f, "encoder budget exhausted: {viewers} of {budget} encode sessions in use")
     }
 }
 
@@ -251,13 +269,7 @@ pub fn admit(current_viewers: u32, encoder_budget: u32) -> Result<(), BudgetRefu
     if current_viewers < budget {
         return Ok(());
     }
-    Err(BudgetRefusal {
-        budget,
-        viewers: current_viewers,
-        reason: format!(
-            "encoder budget exhausted: {current_viewers} of {budget} encode sessions in use"
-        ),
-    })
+    Err(BudgetRefusal { budget, viewers: current_viewers })
 }
 
 /// One [`IdrPolicy`] per tier, so a join and every PLI inside the cooldown cost
@@ -536,13 +548,56 @@ mod tests {
         assert_eq!(refusal.budget, 3);
         assert_eq!(refusal.viewers, 3);
         assert_eq!(refusal.kind(), HostEventKind::JoinRefused);
+        assert_eq!(refusal.reason(), "encoder_budget");
+        // The operator's half keeps the arithmetic the code cannot carry.
         assert_eq!(
-            refusal.reason,
+            refusal.to_string(),
             "encoder budget exhausted: 3 of 3 encode sessions in use"
         );
         // A probe that measured nothing still serves one viewer: a machine with
         // no encoder at all fails at `select`, not at the admission gate.
         assert_eq!(admit(0, 0), Ok(()));
         assert!(admit(1, 0).is_err());
+    }
+
+    /// `POST /api/agent/swoop/events` validates every `reason` against this and
+    /// refuses the **whole batch** on a miss, so a code that does not match
+    /// discards the events batched behind it as well as its own.
+    const REASON_PATTERN: &str = "^[a-z0-9_]{1,48}$";
+
+    /// [`REASON_PATTERN`] spelled out: there is no regex crate in this build.
+    /// ASCII-only, so a byte count is the character count `{1,48}` bounds.
+    fn matches_reason_pattern(code: &str) -> bool {
+        (1..=48).contains(&code.len())
+            && code
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    }
+
+    #[test]
+    fn every_reason_code_this_module_can_produce_is_one_the_route_accepts() {
+        // `reason` has no branch and no field behind it, so one refusal proves
+        // the lot — but the codes are read off real refusals rather than named
+        // here, so a second cause added to this module lands inside this loop
+        // instead of beside it.
+        let refusals = [admit(1, 0), admit(3, 3), admit(u32::MAX, 1)];
+        for refusal in refusals.into_iter().map(|r| r.expect_err("past the budget")) {
+            let code = refusal.reason();
+            assert!(matches_reason_pattern(code), "{code} is not {REASON_PATTERN}");
+            // and the prose deliberately is not one: it is for the log.
+            assert!(!matches_reason_pattern(&refusal.to_string()));
+        }
+    }
+
+    /// The matcher above is a copy, and a copy drifts. This is what makes the
+    /// drift loud: the route's own line, read at compile time.
+    #[test]
+    fn the_route_still_spells_the_pattern_the_matcher_copies() {
+        let route = include_str!("../../../../web/app/api/agent/swoop/events/route.ts");
+        let declared = format!("REASON_PATTERN = /{REASON_PATTERN}/");
+        assert!(
+            route.contains(&declared),
+            "the route no longer declares `{declared}` — matches_reason_pattern has to move with it"
+        );
     }
 }

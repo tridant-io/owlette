@@ -215,9 +215,32 @@ impl FrameHeader {
     }
 }
 
-/// Sender side of "never a chunk with a dangling reference": a record whose
-/// `frameId` is not `previousFrameId + 1` gets IRAP set, because a gap without
-/// it *is* the dangling reference.
+/// Where the record [`FrameSequencer::prepare`] just stamped sits in its run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Continuity {
+    /// `previousFrameId + 1`, or the first record on this track.
+    Continuous,
+    /// A frame in between never went out — the transport refused it, or the
+    /// peer was not writable. Honest on the wire and recoverable: the receiver
+    /// drops to the next recovery point and asks for an idr.
+    Gap,
+}
+
+/// Sender side of "never a chunk with a dangling reference": the flags describe
+/// the access unit that goes with the record, and never the shape of the run.
+///
+/// A frame the transport refused is one this never sees — §4's record is only
+/// written for a frame that went out — so the next frame it stamps opens a gap
+/// in the frame-id run while its payload is still a delta. §4 gives the receiver
+/// a rule for that gap, and `frame/frame-dangling-reference.bin` is the vector
+/// for it: drop everything until the next IRAP and ask for an idr. It gives no
+/// rule for a delta *stamped* IRAP — the receiver takes it as a clean start and
+/// hands the decoder a chunk whose references it never had, which chrome
+/// hard-fails into a black stream. So a gap is left visible rather than papered
+/// over with a flag the payload does not carry.
+///
+/// One per viewer: a frame-id run belongs to one track, and each viewer's
+/// transport refuses on its own budget.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FrameSequencer {
     last: Option<u32>,
@@ -228,21 +251,22 @@ impl FrameSequencer {
         Self::default()
     }
 
-    /// Stamp one record before it goes out. Under arm B the header-only record
-    /// is all that is sent, so this is the only place the invariant can be
-    /// enforced.
-    pub fn prepare(&mut self, header: &mut FrameHeader) {
-        let continuous = self
-            .last
-            .is_some_and(|last| header.frame_id == last.wrapping_add(1));
-        if !continuous || header.resolution_changed() {
-            header.flags |= flags::IRAP;
-        }
+    /// Stamp one record before it goes out, and say where it landed in the run.
+    /// Under arm B the header-only record is all that is sent, so this is the
+    /// only place the flags can be got right.
+    pub fn prepare(&mut self, header: &mut FrameHeader) -> Continuity {
+        let continuity = match self.last {
+            Some(last) if header.frame_id != last.wrapping_add(1) => Continuity::Gap,
+            _ => Continuity::Continuous,
+        };
         // vps/sps/pps go in band with every irap, so the flag is not optional.
+        // IRAP itself is the caller's to set, from the encoder's own verdict on
+        // the access unit: nothing here can turn a delta into a recovery point.
         if header.is_irap() {
             header.flags |= flags::PARAMETER_SETS_IN_BAND;
         }
         self.last = Some(header.frame_id);
+        continuity
     }
 }
 
@@ -332,20 +356,59 @@ mod tests {
     }
 
     #[test]
-    fn the_sequencer_never_produces_a_gap_without_irap() {
+    fn the_sequencer_stamps_the_payload_and_never_more_than_it() {
         let mut sequencer = FrameSequencer::new();
-        let mut first = header();
-        sequencer.prepare(&mut first);
-        assert!(first.is_irap(), "the first record on a track is a recovery point");
-        assert!(first.parameter_sets_in_band());
+        // The first record written to a viewer is a recovery point because the
+        // peer refuses to be sent anything else until one goes out; the flag is
+        // that access unit's, not a consequence of being first.
+        let mut first = FrameHeader { flags: flags::IRAP, ..header() };
+        assert_eq!(sequencer.prepare(&mut first), Continuity::Continuous);
+        assert!(first.is_irap() && first.parameter_sets_in_band());
 
         let mut next = FrameHeader { frame_id: 42, ..header() };
-        sequencer.prepare(&mut next);
+        assert_eq!(sequencer.prepare(&mut next), Continuity::Continuous);
         assert!(!next.is_irap(), "a continuous record needs no recovery point");
 
-        let mut gapped = FrameHeader { frame_id: 45, ..header() };
-        sequencer.prepare(&mut gapped);
-        assert!(gapped.is_irap(), "a gap is always closed by an irap");
+        // A size change is a new encoder and its first frame is forced to an
+        // IRAP upstream, so this cannot arrive on a delta — and if it ever did,
+        // chromium rejects a non-irap config change outright, which a flag we
+        // invented here would turn from a recovery into a black stream.
+        let mut resized =
+            FrameHeader { frame_id: 43, flags: flags::RESOLUTION_CHANGED, ..header() };
+        assert_eq!(sequencer.prepare(&mut resized), Continuity::Continuous);
+        assert!(!resized.is_irap());
+    }
+
+    #[test]
+    fn a_frame_the_transport_refused_does_not_make_the_next_one_a_recovery_point() {
+        // The pacer refuses frame 42, so no record is written for it and the
+        // sequencer never sees it. Frame 43 is still a delta referencing a
+        // picture the viewer never got, and its record has to say so.
+        let mut sequencer = FrameSequencer::new();
+        let mut first = FrameHeader { flags: flags::IRAP, ..header() };
+        sequencer.prepare(&mut first);
+        assert!(first.is_irap());
+
+        let mut after_refusal = FrameHeader { frame_id: 43, ..header() };
+        assert_eq!(sequencer.prepare(&mut after_refusal), Continuity::Gap);
+        assert!(
+            !after_refusal.is_irap(),
+            "a delta across the hole a refusal left is not a clean start"
+        );
+        assert!(!after_refusal.parameter_sets_in_band());
+
+        // The gap it leaves is honest, and §4 gives the receiver a rule for it.
+        let mut receiver = ReceiverState { last_frame_id: Some(41), have_irap: true };
+        assert_eq!(
+            receiver.admit(&after_refusal),
+            Err(FrameError::DanglingReference)
+        );
+
+        // The recovery point that answers it is a real one.
+        let mut recovery = FrameHeader { frame_id: 44, flags: flags::IRAP, ..header() };
+        sequencer.prepare(&mut recovery);
+        assert!(recovery.is_irap() && recovery.parameter_sets_in_band());
+        assert_eq!(receiver.admit(&recovery), Ok(()));
     }
 
     #[test]

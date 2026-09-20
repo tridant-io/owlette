@@ -254,6 +254,45 @@ describe('POST swoop/sessions/{sid}/lease', () => {
     expect(body.code).toBe('session_cap_reached');
   });
 
+  /**
+   * The cap is absolute and no renewal moves it, so the refusal IS the end of
+   * the session. Left open, the record answers as live to the revocation sweep
+   * forever and nothing else would ever close it.
+   */
+  it('closes the record when the cap ends the session', async () => {
+    stageSession({ startedAt: Date.now() - (SWOOP_SESSION_CAP_SECONDS * 1000 + 1000) });
+
+    await POST(request(), routeContext);
+
+    expect(mocks.set).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'ended', endReason: 'session_cap', viewers: [] }),
+      { merge: true },
+    );
+  });
+
+  it('leaves the record alone on a refusal the session can come back from', async () => {
+    // A site switched off, a membership restored: recoverable, so the session
+    // is refused this renewal and not ended.
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: false });
+
+    const res = await POST(request(), routeContext);
+
+    expect(res.status).toBe(403);
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it('still answers 403 when the record cannot be closed at the cap', async () => {
+    stageSession({ startedAt: Date.now() - (SWOOP_SESSION_CAP_SECONDS * 1000 + 1000) });
+    mocks.set.mockRejectedValueOnce(new Error('firestore down'));
+
+    const res = await POST(request(), routeContext);
+    const { status, body } = await parseResponse(res);
+
+    // The refusal is the enforcement; the record is bookkeeping behind it.
+    expect(status).toBe(403);
+    expect(body.code).toBe('session_cap_reached');
+  });
+
   it('refuses another user’s viewer row as if it did not exist', async () => {
     stageSession({ uid: MEMBER });
 

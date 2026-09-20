@@ -270,6 +270,12 @@ pub enum Event {
         /// nothing has been selected.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         encoder: Option<String>,
+        /// How many encode sessions the viewers cost this machine — plan.md
+        /// D14's `min(codec classes present, the measured encoder budget)`.
+        /// Absent means one, which is every session whose viewers all
+        /// negotiated the same codec.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tiers: Option<u32>,
         /// The quality ceiling in force, as `Ceiling::label` renders it. The
         /// five below are the governor's, and they ride a `status` only while a
         /// viewer's peer is connected: with nobody watching there is no rate
@@ -385,6 +391,7 @@ mod tests {
             denials: None,
             test_override: None,
             encoder: None,
+            tiers: None,
             preset: None,
             target_kbps: None,
             rung_fps: None,
@@ -421,6 +428,7 @@ mod tests {
             denials: Some(3),
             test_override: Some("source=testpattern".to_owned()),
             encoder: Some("nvenc".to_owned()),
+            tiers: Some(2),
             preset: Some("auto".to_owned()),
             target_kbps: Some(16_000),
             rung_fps: Some(30),
@@ -437,6 +445,7 @@ mod tests {
         assert!(line.contains("\"denials\":3"), "{line}");
         assert!(line.contains("\"testOverride\":\"source=testpattern\""), "{line}");
         assert!(line.contains("\"encoder\":\"nvenc\""), "{line}");
+        assert!(line.contains("\"tiers\":2"), "{line}");
         assert!(line.contains("\"preset\":\"auto\""), "{line}");
         assert!(line.contains("\"targetKbps\":16000"), "{line}");
         assert!(line.contains("\"rungFps\":30"), "{line}");

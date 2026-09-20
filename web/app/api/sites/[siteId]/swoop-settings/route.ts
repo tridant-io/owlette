@@ -90,7 +90,12 @@ function auditActorOf(ctx: SiteHandlerContext): string {
 }
 
 const sharedHandlerOptions = {
-  capability: Capability.MACHINE_CONFIG_WRITE,
+  // NOT MACHINE_CONFIG_WRITE. This route decides whether swoop runs on the site
+  // at all, so it has to be at least as protected as the session routes it
+  // stands in front of — which means exempt from the capability_enforcement
+  // kill switch, and MACHINE_CONFIG_WRITE cannot be. Same grant (site
+  // admin/owner), see lib/capabilities.ts.
+  capability: Capability.SWOOP_SETTINGS_MANAGE,
   siteIdParam: 'path' as const,
 };
 

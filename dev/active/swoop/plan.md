@@ -161,7 +161,11 @@ exempt from the `capability_enforcement=false` bypass. API-key callers are rejec
 (`ctx.auth.keyContext !== null` → 403): step-up cannot apply to them. Step-up is a **live proof in the request**
 (`verifyMfaProof` / `verifyPasskeyStepUpAssertion`, the `api/mfa/backup-codes` pattern), never a freshness
 timestamp — the 30-day device-trust cookie births sessions with `mfaCompletedAt = now`. A successful ceremony
-opens a 10-minute server-side step-up window bound to the session; accounts with zero factors cannot control.
+opens a 10-minute server-side step-up window stored against the **(user, machine)** pair, so a page reload —
+which ends the swoop session and starts a new one — does not cost another ceremony. Reuse is gated on the
+login session having passed a live ceremony ITSELF (`session.mfaSatisfiedBy`, set by the login challenge, by a
+passkey-uv login, or by this very step-up): a device-trust-born session inherits no window however live it is,
+which is what keeps the cookie named above out. Accounts with zero factors cannot control.
 Live sessions hold a 5-minute lease the browser renews silently (the API re-checks membership, enablement and
 capability); absolute cap 12 h. The host enforces `ctl` from the verified JWT. Site enablement lives at
 `sites/{siteId}/settings/swoop` (covered by the existing `settings/{settingId}` rule).

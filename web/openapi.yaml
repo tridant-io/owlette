@@ -5821,6 +5821,32 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
 
+  /api/sites/{siteId}/machines/{machineId}/reboot-pending:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+    delete:
+      operationId: dismissMachineRebootPending
+      tags: [Machines]
+      summary: dismiss a machine's pending-restart flag
+      description: >
+        Clears `rebootPending` on the machine status doc and relays
+        `dismiss_reboot_pending` to the agent best-effort. Succeeds on an offline
+        machine — `data.commandId` is then null, because the flag is cloud state
+        and the agent resets its own local counters when it next starts.
+        Requires `machine=<machineId>:write`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      responses:
+        '200': { description: Pending-restart flag cleared. }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
   /api/sites/{siteId}/machines/{machineId}/reboot-schedule:
     parameters:
       - $ref: '#/components/parameters/SiteIdPath'
@@ -6335,7 +6361,7 @@ paths:
       summary: read a site's swoop policy
       description: |
         swoop is off until a site turns it on. Site-admin surface: requires
-        `site=<siteId>:read` and the machine-config capability. Unlike the
+        `site=<siteId>:read` and the swoop-settings capability. Unlike the
         session routes, this one does admit a scoped api key.
       security:
         - apiKey: []
@@ -6362,7 +6388,7 @@ paths:
       summary: change a site's swoop policy
       description: |
         Changes any subset of the policy. Requires `site=<siteId>:write` and
-        the machine-config capability.
+        the swoop-settings capability.
 
         Turning swoop off also reaches machines that are already connected:
         `refreshed` counts the machines the change was fanned out to.
@@ -7548,9 +7574,14 @@ paths:
 
         The role is PER SITE. `role: 'admin'` makes them an admin of this
         site and nothing else; their account role is untouched and they
-        gain nothing on any other site. It is always honoured, so
-        `roleHonored` is always `true` — retained only for response-shape
-        stability.
+        gain nothing on any other site.
+
+        `roleHonored` says whether the row was actually written at the
+        requested role. Adding someone who is ALREADY a member is a 200
+        no-op — nothing is overwritten and their existing role stands — and
+        answers `roleHonored: false`. Use
+        `PATCH /api/sites/{siteId}/members/{uid}` to change an existing
+        member's role.
 
         Identify the target by **exactly one** of `uid` or `email`.
         `email` is trimmed and lowercased, then resolved to a uid through
@@ -7583,10 +7614,10 @@ paths:
                 - required: [uid]
                 - required: [email]
       responses:
-        '200': { description: Member added }
+        '200': { description: "Member added, or already a member (`roleHonored: false`)" }
         '400': { description: Validation failure }
         '401': { description: Unauthorized }
-        '403': { description: Forbidden (not site admin) }
+        '403': { description: "Forbidden (not site admin — `site_member_manage_required`)" }
         '404': { description: User or site not found }
 
   /api/sites/{siteId}/transfer-ownership:
@@ -7676,6 +7707,11 @@ paths:
         (`409 cannot_change_owner_role`). Both are enforced inside the
         transaction that performs the write.
 
+        A caller may never change their OWN row
+        (`403 cannot_modify_own_membership`), whatever their role and whatever
+        the platform's `capability_enforcement` setting: the row is what decides
+        what they may do. Ask another admin on the site.
+
         Requires `site=<siteId>:admin` scope or session/id-token from an admin
         of this site.
       security:
@@ -7695,7 +7731,7 @@ paths:
         '200': { description: Role changed }
         '400': { description: Validation failure (including role=owner) }
         '401': { description: Unauthorized }
-        '403': { description: Forbidden (not site admin) }
+        '403': { description: "Forbidden (not site admin, or the target is the caller's own row — `cannot_modify_own_membership`)" }
         '404': { description: User is not a member of this site }
         '409': { description: Target is the site owner }
     delete:
@@ -7719,6 +7755,10 @@ paths:
 
         True-idempotent: removing a non-member returns 200 with
         `wasMember: false`.
+
+        A caller may never remove their OWN row
+        (`403 cannot_modify_own_membership`), whatever their role — ask another
+        admin on the site. Same rule as the sibling `PATCH`.
 
         Requires `site=<siteId>:admin` scope or session/id-token from an
         admin of this site. Reassignment additionally requires `TALON_MANAGE`.
@@ -7753,7 +7793,7 @@ paths:
                     items: { type: string }
         '400': { description: Malformed or refused talonSuccessorUid }
         '401': { description: Unauthorized }
-        '403': { description: Forbidden (not site admin, or lacks TALON_MANAGE) }
+        '403': { description: "Forbidden (not site admin, lacks TALON_MANAGE, or the target is the caller's own row — `cannot_modify_own_membership`)" }
         '404': { description: User or site not found }
         '409': { description: Cannot remove site owner }
 

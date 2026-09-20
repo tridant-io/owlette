@@ -10,6 +10,11 @@
  * The write is awaited and a failure is a 503 — an audit-only endpoint that
  * swallows its own write failure records nothing and says it did.
  *
+ * Three of the lifecycle events are also mirrored onto the session record
+ * (`mirrorSessionRecord`), because the streamer is the only thing that sees
+ * them happen. That mirror runs AFTER the audit write and never changes the
+ * response: the audit row is what this endpoint promises.
+ *
  * Events carry a type, a reason code and ids. No token, no key, no fingerprint,
  * no clipboard content ever reaches this route or a log line.
  */
@@ -19,7 +24,15 @@ import { apiError } from '@/lib/apiErrorResponse';
 import { problemValidation } from '@/lib/apiErrors';
 import type { AuditOutcome } from '@/lib/auditLog.server';
 import { Capability } from '@/lib/capabilities';
+import logger from '@/lib/logger';
 import { recordSwoopHostEvent } from '@/lib/swoop/audit.server';
+import {
+  endSwoopSession,
+  getSwoopSession,
+  removeSwoopViewer,
+  setSwoopSessionState,
+  type SwoopSessionEndReason,
+} from '@/lib/swoop/sessionStore.server';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { NO_STORE, SWOOP_ID_PATTERN, requireSwoopAgent } from '../_shared';
 
@@ -73,7 +86,11 @@ function optionalId(value: unknown): string | null | undefined {
 function parseEvent(raw: unknown): SwoopEvent | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const { type, sid, reason, viewerId, uid, atMs } = raw as Record<string, unknown>;
-  if (typeof type !== 'string' || !(type in EVENT_KINDS)) return null;
+  // hasOwnProperty, not `in`: `constructor` satisfies the vocabulary check on
+  // the prototype chain and would reach the audit write with no outcome at all.
+  if (typeof type !== 'string' || !Object.prototype.hasOwnProperty.call(EVENT_KINDS, type)) {
+    return null;
+  }
   if (typeof sid !== 'string' || !SWOOP_ID_PATTERN.test(sid)) return null;
 
   if (reason !== undefined && (typeof reason !== 'string' || !REASON_PATTERN.test(reason))) {
@@ -139,6 +156,80 @@ export const POST = withRateLimit(
   { strategy: 'api', identifier: 'ip' },
 );
 
+/** The events that move the session record, not just the audit trail. */
+const MIRRORED_EVENTS = new Set<SwoopEventType>([
+  'session_started',
+  'viewer_left',
+  'session_ended',
+]);
+
+type MirroredEvent = SwoopEvent & {
+  type: 'session_started' | 'viewer_left' | 'session_ended';
+};
+
+function isMirrored(event: SwoopEvent): event is MirroredEvent {
+  return MIRRORED_EVENTS.has(event.type);
+}
+
+/**
+ * The streamer's own `exiting.reason` vocabulary (PROTOCOL.md §6) as the
+ * reason the record keeps. A stop it named nothing recognisable for is
+ * `host_exit` — "the streamer said it ended" — rather than a reason invented
+ * on its behalf.
+ */
+const HOST_END_REASONS = new Map<string, SwoopSessionEndReason>([
+  ['kill', 'killed'],
+  ['idle', 'idle'],
+  ['session_cap', 'session_cap'],
+  ['signal_lost', 'signal_lost'],
+  ['error', 'error'],
+]);
+
+/**
+ * Mirror one host lifecycle event onto `swoop_sessions/{sid}`.
+ *
+ * These three transitions have no other witness: without this the record never
+ * leaves `pending`, a viewer who left stays in `viewers[]`, and a finished
+ * session reads as live to the revocation sweep for as long as the document
+ * exists.
+ *
+ * Two things it will not do. It never re-creates a session — the store merges,
+ * so an event naming a swept or foreign sid would otherwise write a fresh
+ * document, and a host could grow the collection one event at a time. And it
+ * never touches an already-ended record: whatever closed it — a kill, a
+ * revocation, the cap — recorded why, and a late `session_ended` must not
+ * restate it.
+ */
+async function mirrorSessionRecord(
+  siteId: string,
+  machineId: string,
+  event: MirroredEvent,
+): Promise<void> {
+  const session = await getSwoopSession(siteId, machineId, event.sid);
+  if (!session || session.state === 'ended') return;
+
+  switch (event.type) {
+    case 'session_started':
+      await setSwoopSessionState(siteId, machineId, event.sid, 'live');
+      return;
+    case 'viewer_left':
+      if (event.viewerId) {
+        await removeSwoopViewer({ siteId, machineId, sid: event.sid, viewerId: event.viewerId });
+      }
+      return;
+    case 'session_ended':
+      await endSwoopSession({
+        siteId,
+        machineId,
+        sid: event.sid,
+        // A Map, not an object: `reason` passes REASON_PATTERN, so `constructor`
+        // is a legal value and a plain lookup would answer with Object itself.
+        endReason: (event.reason && HOST_END_REASONS.get(event.reason)) || 'host_exit',
+      });
+      return;
+  }
+}
+
 async function recordEvents(
   siteId: string,
   machineId: string,
@@ -161,5 +252,24 @@ async function recordEvents(
       ...(event.uid ? { uid: event.uid } : {}),
       ...(event.atMs !== undefined ? { atMs: event.atMs } : {}),
     });
+
+    // After the audit row and never fatal. The agent re-posts a batch it got a
+    // 503 for, so failing here would duplicate audit rows to fix a record the
+    // 12-hour cap and the retention sweep both close anyway.
+    if (isMirrored(event)) {
+      try {
+        await mirrorSessionRecord(siteId, machineId, event);
+      } catch (error: unknown) {
+        logger.warn('[swoop/events] session record could not be mirrored', {
+          context: 'swoop/events',
+          data: {
+            siteId,
+            machineId,
+            event: event.type,
+            err: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    }
   }
 }

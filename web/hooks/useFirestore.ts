@@ -1743,9 +1743,19 @@ export function useMachines(siteId: string) {
     await sendMachineCommand(machineId, 'cancel_reboot');
   };
 
-  const dismissRestartPending = async (machineId: string, processName: string) => {
-    // 'dismiss_reboot_pending' is the agent's wire verb — keep it.
-    await sendMachineCommand(machineId, 'dismiss_reboot_pending', { process_name: processName });
+  /**
+   * Clears the cloud `rebootPending` flag. It used to queue the agent command
+   * and nothing else, so an offline machine could never be dismissed — the flag
+   * is cloud state the dashboard is responsible for. The route still relays the
+   * command so a reachable agent resets its local counters, and reads the
+   * flag's own `processName` — often null — rather than taking it from here.
+   */
+  const dismissRestartPending = async (machineId: string) => {
+    if (!db || !siteId) throw new Error('Firebase not configured');
+    await apiJson(
+      `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/reboot-pending`,
+      { method: 'DELETE' },
+    );
   };
 
   const captureScreenshot = async (machineId: string) => {
