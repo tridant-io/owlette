@@ -16,9 +16,10 @@
  * work after the feature has been switched off, which is exactly when an
  * operator wants it most. The capability check is the whole gate.
  *
- * It also closes every open step-up window on the machine, before either path
- * runs. A kill the operator it cut off can undo by reconnecting a second later
- * on a window they already held is not a kill.
+ * It also closes every open step-up window on the machine, and the session
+ * records themselves, before either path runs. A kill the operator it cut off
+ * can undo by reconnecting a second later on a window they already held is not
+ * a kill; nor is one whose record still reads `pending` afterwards.
  */
 
 import { NextResponse } from 'next/server';
@@ -33,7 +34,62 @@ import {
   requestSwoopSession,
   RequestSwoopSessionError,
 } from '@/lib/actions/requestSwoopSession.server';
+import {
+  endSwoopSession,
+  getSwoopSession,
+  listUnendedSwoopSessionsForMachine,
+  type SwoopSession,
+} from '@/lib/swoop/sessionStore.server';
 import { apiKeyRefusal, isValidSid, type SwoopRouteParams } from '../_shared';
+
+/**
+ * Close the records this kill stops, so the emergency stop is visible in the
+ * state an operator reads and a killed session stops answering as live to
+ * `listUnendedSwoopSessionsForUser` — which is what would otherwise re-kill it
+ * on every later membership change, days after it ended.
+ *
+ * BEFORE either stop path, for two reasons. An ended record is itself a stop,
+ * the slowest of the three: the lease route refuses to renew one, so the
+ * streamer is gone within a lease even if both fast paths fail. And both fast
+ * paths can throw — `requestSwoopSession` answers 404 or 409 — which would
+ * leave the record `pending` forever if the close came after them.
+ *
+ * Best-effort, and that is the whole point of the ordering: killing is the
+ * safety control, so a store that cannot be written costs the record, never the
+ * stop. Every failure is logged and the kill carries on.
+ */
+async function closeKilledRecords(args: {
+  siteId: string;
+  machineId: string;
+  sid?: string;
+}): Promise<void> {
+  const { siteId, machineId, sid } = args;
+  try {
+    // A named sid is read back rather than trusted: the store merges, so ending
+    // a sid with no record would CREATE one, and a kill would become a way to
+    // grow the collection a document at a time.
+    const sessions: SwoopSession[] = sid
+      ? [await getSwoopSession(siteId, machineId, sid)].filter(
+          (session): session is SwoopSession => session !== null,
+        )
+      : await listUnendedSwoopSessionsForMachine({ siteId, machineId });
+
+    for (const session of sessions) {
+      // An already-ended record keeps the reason that closed it.
+      if (session.state === 'ended') continue;
+      await endSwoopSession({ siteId, machineId, sid: session.sid, endReason: 'killed' });
+    }
+  } catch (err) {
+    logger.warn('[swoop/kill] session record could not be closed; killing anyway', {
+      context: 'swoop/kill',
+      data: {
+        siteId,
+        machineId,
+        err: err instanceof Error ? err.message : String(err),
+      },
+    });
+  }
+}
 
 const killHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { params }) => {
   try {
@@ -66,6 +122,8 @@ const killHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
         },
       });
     }
+
+    await closeKilledRecords({ siteId, machineId, ...(sid ? { sid } : {}) });
 
     const broadcast = await killSession({ siteId, machineId, ...(sid ? { sid } : {}) });
     if (broadcast.ok) {

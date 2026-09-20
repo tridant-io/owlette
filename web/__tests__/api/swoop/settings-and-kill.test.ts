@@ -105,6 +105,7 @@ const OFFLINE_MACHINE = 'machine-offline';
 const ADMIN = 'user-admin';
 const MEMBER = 'user-member';
 const SID = 'sid0000000000000000000000000001';
+const OTHER_SID = 'sid0000000000000000000000000002';
 const FP = 'sha-256 AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99';
 
 /** Documents the routes read, keyed by their full Firestore path. */
@@ -135,6 +136,32 @@ function commandWrites(): Array<Record<string, unknown>> {
   return mocks.set.mock.calls
     .filter(([payload]) => Object.keys(payload as object).every((k) => k.startsWith('cmd_')))
     .flatMap(([payload]) => Object.values(payload as Record<string, Record<string, unknown>>));
+}
+
+function sessionPath(sid: string): string {
+  return `sites/${SITE}/machines/${MACHINE}/swoop_sessions/${sid}`;
+}
+
+/** A session document the kill route can read back and close. */
+function stageSession(sid = SID, state: string = 'live'): void {
+  const startedAt = Date.now();
+  staged.set(sessionPath(sid), {
+    sid,
+    siteId: SITE,
+    machineId: MACHINE,
+    state,
+    createdBy: `user:${ADMIN}`,
+    startedAt,
+    absoluteExpiresAt: startedAt + 43_200_000,
+    viewers: [{ viewerId: 'v1', uid: ADMIN, ctl: true, joinedAt: startedAt, leaseExpiresAt: startedAt }],
+  });
+}
+
+/** Every `swoop_sessions/{sid}` write that closed a record. */
+function endWrites(): Array<Record<string, unknown>> {
+  return mocks.set.mock.calls
+    .map(([payload]) => payload as Record<string, unknown>)
+    .filter((payload) => payload.state === 'ended');
 }
 
 beforeEach(() => {
@@ -320,6 +347,12 @@ describe('PATCH swoop-settings', () => {
 });
 
 describe('POST swoop/kill', () => {
+  // The machines query belongs to the settings route; here the only collection
+  // read is the machine's unended sessions, and most cases have none.
+  beforeEach(() => {
+    mocks.collectionGet.mockResolvedValue(querySnapshot([]));
+  });
+
   it('kills over the worker and does not queue a command when it lands', async () => {
     const res = await KILL(
       createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
@@ -362,6 +395,106 @@ describe('POST swoop/kill', () => {
       machineContext(),
     );
 
+    expect(res.status).toBe(200);
+    expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
+  });
+
+  /**
+   * The emergency stop has to be visible in the state an operator reads. A
+   * record left `pending` also keeps answering as live to the revocation sweep,
+   * which then re-kills a session that ended days ago on every membership
+   * change.
+   */
+  it('closes the record it stops, naming the kill as the reason', async () => {
+    stageSession();
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(endWrites()).toEqual([
+      expect.objectContaining({ state: 'ended', endReason: 'killed', viewers: [] }),
+    ]);
+  });
+
+  it('closes the record before it stops anything', async () => {
+    stageSession();
+
+    await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    // An ended record is itself the slowest of the three stops — the lease
+    // route will not renew one — and both fast paths can throw, so it is closed
+    // first or not at all.
+    const close = mocks.set.mock.calls.findIndex(
+      ([payload]) => (payload as Record<string, unknown>).state === 'ended',
+    );
+    expect(close).toBeGreaterThanOrEqual(0);
+    expect(mocks.set.mock.invocationCallOrder[close]).toBeLessThan(
+      mockKill.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('closes every unended record on the machine when no sid is named', async () => {
+    mocks.collectionGet.mockResolvedValue(
+      querySnapshot([
+        { id: SID, data: { state: 'live', machineId: MACHINE, startedAt: 1 } },
+        { id: OTHER_SID, data: { state: 'pending', machineId: MACHINE, startedAt: 1 } },
+      ]),
+    );
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: {} }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(endWrites()).toHaveLength(2);
+    expect(mocks.where).toHaveBeenCalledWith('state', 'in', ['pending', 'live']);
+  });
+
+  it('leaves an already-ended record alone rather than restating why it ended', async () => {
+    stageSession(SID, 'ended');
+
+    await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(endWrites()).toEqual([]);
+  });
+
+  /**
+   * The store merges, so ending a sid with no document would CREATE one — a
+   * kill would become a way to grow the collection a document at a time.
+   */
+  it('never creates a record for a sid that has none', async () => {
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(endWrites()).toEqual([]);
+  });
+
+  it('still kills when the record cannot be closed', async () => {
+    stageSession();
+    mocks.set
+      .mockResolvedValueOnce(undefined) // the step-up revocation
+      .mockRejectedValueOnce(new Error('firestore down')); // the record
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    // Killing is the safety control: a failure to record must never withhold
+    // the stop.
     expect(res.status).toBe(200);
     expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
   });

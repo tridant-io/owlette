@@ -150,6 +150,30 @@
       "note": "Against a large first-time backlog, schedule hourly until a run reports truncated:false, then drop back to daily. Any quiet hour works; 04:00 is the documented default."
     },
     {
+      "id": "cron-swoop-retention",
+      "path": "/api/cron/swoop-retention",
+      "method": "GET",
+      "authHeader": "X-Cron-Secret",
+      "authScheme": "raw",
+      "authEnvVar": "CRON_SECRET",
+      "schedule": "30 4 * * *",
+      "cadenceLabel": "daily at 04:30",
+      "minTimeoutSeconds": 30,
+      "environments": ["dev", "prod"],
+      "urls": {
+        "dev": "https://dev.owlette.app/api/cron/swoop-retention",
+        "prod": "https://owlette.app/api/cron/swoop-retention"
+      },
+      "purpose": "Sweeps sites/{siteId}/machines/{machineId}/swoop_sessions. First closes records still marked pending or live past their absolute 12-hour cap — sessions nobody closed, because the browser went away without its teardown landing — then deletes every session document that started more than SWOOP_SESSION_RETENTION_DAYS (30) ago. Bounded at 200 closes and 2000 deletes per invocation, oldest-first so progress is monotonic across runs.",
+      "failureMode": {
+        "silent": true,
+        "description": "Nothing errors. Session documents accumulate forever, each naming the user who started the session and every viewer uid in it — who watched which machine, when — with no other deletion path, since this collection is deliberately not covered by a Firestore TTL policy. Abandoned records also keep answering as live to the revocation sweep, so every later membership change re-kills sessions that ended months ago."
+      },
+      "detectedBy": "nothing — read the response body instead: truncated:true means the run hit a ceiling or a delete exhausted its retries, and records remain. A steadily non-zero closed count means sessions are ending without anything closing them, which is a bug upstream of this job, not a healthy sweep.",
+      "sourceFile": "web/app/api/cron/swoop-retention/route.ts",
+      "note": "Separate from cron-retention on purpose: that job's 400-day window is the public commitment for operational history, and this collection is not history — the audit trail for a session lives in sites/{siteId}/audit_log, which a site admin cannot delete. Scheduled 30 minutes after cron-retention so the two daily sweeps do not overlap; any quiet time works."
+    },
+    {
       "id": "cron-api-key-expiry",
       "path": "/api/cron/api-key-expiry",
       "method": "GET",

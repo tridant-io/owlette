@@ -20,6 +20,8 @@ const mockVerifyIdToken = jest.fn();
 /** Path-keyed stand-in for the documents these routes read and write. */
 const docs = new Map<string, Record<string, unknown>>();
 const written: { path: string; data: Record<string, unknown> }[] = [];
+/** Document paths whose writes throw, for the best-effort/fail-closed split. */
+const failingWrites = new Set<string>();
 
 function makeDoc(docPath: string) {
   return {
@@ -28,6 +30,7 @@ function makeDoc(docPath: string) {
       data: () => docs.get(docPath),
     }),
     set: async (data: Record<string, unknown>) => {
+      if (failingWrites.has(docPath)) throw new Error('firestore down');
       written.push({ path: docPath, data });
       docs.set(docPath, data);
     },
@@ -136,6 +139,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   docs.clear();
   written.length = 0;
+  failingWrites.clear();
   enableSwoop();
   seedSession();
 });
@@ -383,6 +387,158 @@ describe('POST /api/agent/swoop/events', () => {
     expect(rows[0].data.denyReason).toBeUndefined();
   });
 
+  /**
+   * The streamer is the only thing that sees a session stop, so without this
+   * mirror the record never leaves `pending`: it answers as live to the
+   * revocation sweep for as long as the document exists.
+   */
+  describe('the session record it mirrors', () => {
+    const SESSION = sessionPath(SITE, MACHINE, SID);
+
+    /** The mirrored write, if the route made one. */
+    function recordWrite(): Record<string, unknown> | undefined {
+      return written.find((w) => w.path === SESSION)?.data;
+    }
+
+    it("closes the record on session_ended, keeping the streamer's own reason", async () => {
+      agentToken();
+      const response = await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'session_ended', sid: SID, reason: 'idle' }],
+        }),
+      );
+
+      expect(response.status).toBe(202);
+      expect(recordWrite()).toMatchObject({ state: 'ended', endReason: 'idle', viewers: [] });
+    });
+
+    it('records host_exit when the streamer names no reason we know', async () => {
+      agentToken();
+      await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'session_ended', sid: SID, reason: 'something_new' }],
+        }),
+      );
+
+      expect(recordWrite()).toMatchObject({ state: 'ended', endReason: 'host_exit' });
+    });
+
+    it('moves a pending record to live on session_started', async () => {
+      agentToken();
+      await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'session_started', sid: SID }],
+        }),
+      );
+
+      expect(recordWrite()).toMatchObject({ state: 'live' });
+    });
+
+    it('drops a viewer who left, so the row does not outlive them', async () => {
+      agentToken();
+      docs.set(SESSION, {
+        ...(docs.get(SESSION) as Record<string, unknown>),
+        viewers: [
+          { viewerId: 'viewer-1', uid: 'uid-1', ctl: false, joinedAt: 1, leaseExpiresAt: 2 },
+          { viewerId: 'viewer-2', uid: 'uid-2', ctl: false, joinedAt: 1, leaseExpiresAt: 2 },
+        ],
+      });
+
+      await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'viewer_left', sid: SID, viewerId: 'viewer-1', reason: 'bye' }],
+        }),
+      );
+
+      expect(recordWrite()?.viewers).toEqual([
+        { viewerId: 'viewer-2', uid: 'uid-2', ctl: false, joinedAt: 1, leaseExpiresAt: 2 },
+      ]);
+    });
+
+    /**
+     * The store merges, so a write for a sid with no document CREATES one — the
+     * host would be able to grow the collection the retention sweep just
+     * drained, one event at a time.
+     */
+    it('never re-creates a session the sweep has already removed', async () => {
+      agentToken();
+      docs.delete(SESSION);
+
+      const response = await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'session_ended', sid: SID, reason: 'idle' }],
+        }),
+      );
+
+      expect(response.status).toBe(202);
+      expect(recordWrite()).toBeUndefined();
+    });
+
+    it('leaves an already-ended record alone rather than restating why it ended', async () => {
+      agentToken();
+      docs.set(SESSION, {
+        ...(docs.get(SESSION) as Record<string, unknown>),
+        state: 'ended',
+        endReason: 'killed',
+      });
+
+      await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'session_ended', sid: SID, reason: 'idle' }],
+        }),
+      );
+
+      expect(recordWrite()).toBeUndefined();
+    });
+
+    /**
+     * The audit row is what this endpoint promises and is fail-closed; the
+     * mirror is not. A 503 here would have the agent re-post the batch and
+     * duplicate the rows, to fix a record the 12-hour cap and the retention
+     * sweep both close anyway.
+     */
+    it('still records the audit row when the mirror cannot be written', async () => {
+      agentToken();
+      failingWrites.add(SESSION);
+
+      const response = await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'session_ended', sid: SID, reason: 'idle' }],
+        }),
+      );
+
+      expect(response.status).toBe(202);
+      expect(written.filter((w) => w.path.startsWith(`sites/${SITE}/audit_log/`))).toHaveLength(1);
+    });
+
+    it('leaves the record untouched for an event that is not a lifecycle one', async () => {
+      agentToken();
+      await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'jwt_rejected', sid: SID, reason: 'unknown_kid' }],
+        }),
+      );
+
+      expect(recordWrite()).toBeUndefined();
+    });
+  });
+
   it('refuses an unrecognised event type and writes nothing', async () => {
     agentToken();
     const response = await eventsPOST(
@@ -394,6 +550,35 @@ describe('POST /api/agent/swoop/events', () => {
     );
     expect(response.status).toBe(400);
     expect(written).toHaveLength(0);
+  });
+
+  // `constructor` satisfies both the type vocabulary and the reason pattern on
+  // the prototype chain, so a lookup that is not own-property-checked answers
+  // with Object itself rather than refusing.
+  it.each(['constructor', 'valueOf', '__proto__'])(
+    'refuses %s as an event type',
+    async (type) => {
+      agentToken();
+      const response = await eventsPOST(
+        eventsRequest({ siteId: SITE, machineId: MACHINE, events: [{ type, sid: SID }] }),
+      );
+      expect(response.status).toBe(400);
+      expect(written).toHaveLength(0);
+    },
+  );
+
+  it('records host_exit rather than Object for a reason named constructor', async () => {
+    agentToken();
+    await eventsPOST(
+      eventsRequest({
+        siteId: SITE,
+        machineId: MACHINE,
+        events: [{ type: 'session_ended', sid: SID, reason: 'constructor' }],
+      }),
+    );
+
+    const record = written.find((w) => w.path === sessionPath(SITE, MACHINE, SID));
+    expect(record?.data).toMatchObject({ state: 'ended', endReason: 'host_exit' });
   });
 
   it("returns 404 when machine A reports events against machine B", async () => {
