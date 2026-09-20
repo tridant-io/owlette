@@ -10,6 +10,11 @@
  *
  * The write itself, and the `swoop_refresh` fan-out that makes a disable reach
  * a machine that is already connected, live in the action module.
+ *
+ * Api keys are refused on both verbs, like every other swoop route. This one is
+ * the switch the rest stand behind — a key that can PATCH it can turn swoop on,
+ * open it to members and set the on-screen indicator to none — and reading the
+ * policy says whether a site can be watched and by whom.
  */
 
 import { NextResponse } from 'next/server';
@@ -33,8 +38,28 @@ interface SwoopSettingsParams {
   siteId: string;
 }
 
+/**
+ * Mirrors the machine swoop routes' `apiKeyRefusal`, which lives in their own
+ * `_shared` and words itself for sessions. Not shared with it: nothing else
+ * here needs it, and importing across that boundary for one 403 would be the
+ * larger change.
+ */
+function refuseApiKey(ctx: SiteHandlerContext): NextResponse | null {
+  if (ctx.auth.keyContext === null) return null;
+  return problem({
+    type: ProblemType.Forbidden,
+    title: 'forbidden',
+    status: 403,
+    code: 'api_key_not_permitted',
+    detail: 'swoop settings cannot be read or changed with an api key.',
+  });
+}
+
 const readHandler: SiteRouteHandler<SwoopSettingsParams> = async (_request, ctx) => {
   try {
+    const keyRefusal = refuseApiKey(ctx);
+    if (keyRefusal) return keyRefusal;
+
     const settings = await loadSwoopSettings(ctx.siteId);
     return applyAuthDeprecations(
       NextResponse.json({ ok: true, data: settings }),
@@ -47,6 +72,9 @@ const readHandler: SiteRouteHandler<SwoopSettingsParams> = async (_request, ctx)
 
 const writeHandler: SiteRouteHandler<SwoopSettingsParams> = async (request, ctx) => {
   try {
+    const keyRefusal = refuseApiKey(ctx);
+    if (keyRefusal) return keyRefusal;
+
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
     const body = (parsed.body ?? {}) as SetSwoopSettingsInput;
