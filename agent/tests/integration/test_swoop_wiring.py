@@ -8,7 +8,8 @@ real pipes (fake_streamer.py); the ConnectionManager is the real one.
 The two properties that matter:
 
 * a ring reaches the streamer and a service stop ends it, through the same
-  method the SCM watcher and SvcStop both funnel into;
+  method the SCM watcher funnels into (SvcStop went with the pywin32
+  ServiceFramework base class -- owlette-host is the service);
 * a signalling outage is not a Firestore failure. The doorbell is the one
   component allowed its own reconnection ladder, so every test here that runs
   it also asserts that ConnectionManager was never touched.
@@ -299,8 +300,7 @@ class ServiceDouble:
     COMMAND_RATE_LIMIT_SECONDS = OwletteService.COMMAND_RATE_LIMIT_SECONDS
 
     _BOUND = ('_start_swoop', '_stop_swoop', '_check_console_session',
-              'handle_firebase_command', 'graceful_shutdown', 'SvcStop',
-              'terminate_cortex')
+              'handle_firebase_command', 'graceful_shutdown')
 
     def __init__(self, firebase_client=None):
         self.firebase_client = firebase_client
@@ -409,7 +409,7 @@ def test_a_ring_spawns_the_streamer_and_a_service_stop_kills_it(wired):
     assert proc.is_running()
     assert backend.bundles == 1
 
-    svc.SvcStop()
+    svc.graceful_shutdown('svc_stop')
 
     assert wait_for(lambda: not proc.is_running()), 'the streamer outlived the service'
     assert svc._swoop_shutdown.is_set()
@@ -421,7 +421,7 @@ def test_a_ring_and_a_stop_never_touch_connection_manager(wired):
 
     wired['factory'].sockets[0].deliver(json.dumps({'type': 'ring', 'sid': 'sid-2'}))
     assert wait_for(lambda: wired['backend'].procs)
-    svc.SvcStop()
+    svc.graceful_shutdown('svc_stop')
     assert wait_for(lambda: not wired['backend'].procs[0].is_running())
 
     # The doorbell is self-supervised: no supervised thread, no reported error.
@@ -482,7 +482,9 @@ def test_init_registers_the_swoop_handlers():
     # The functional half is above; this is the half that proves the production
     # __init__ does the registration, in the same non-fatal shape as the roost,
     # machine and process handlers.
-    source = inspect.getsource(OwletteService.__init__)
+    # __init__ went into _init_state() in tri-platform wave 1; the
+    # registration moved with it.
+    source = inspect.getsource(OwletteService._init_state)
     assert 'from swoop_commands import register_handlers' in source
     assert '_register_swoop_handlers(self._command_router)' in source
     assert 'Failed to register swoop handlers' in source
@@ -540,7 +542,8 @@ def test_the_console_session_check_reports_changes_not_the_first_read(monkeypatc
     manager = RecordingManager()
     svc.swoop_manager = manager
     sessions = [1, 1, 2]
-    monkeypatch.setattr(owlette_service.win32ts, 'WTSGetActiveConsoleSessionId',
+    import win32ts
+    monkeypatch.setattr(win32ts, 'WTSGetActiveConsoleSessionId',
                         lambda: sessions.pop(0))
 
     svc._check_console_session()  # baseline
@@ -555,7 +558,8 @@ def test_the_console_session_check_does_nothing_before_swoop_starts(monkeypatch)
     # machine with Firebase disabled -- and must not read win32ts at all.
     svc = ServiceDouble()
     reads = []
-    monkeypatch.setattr(owlette_service.win32ts, 'WTSGetActiveConsoleSessionId',
+    import win32ts
+    monkeypatch.setattr(win32ts, 'WTSGetActiveConsoleSessionId',
                         lambda: reads.append(1))
 
     svc._check_console_session()

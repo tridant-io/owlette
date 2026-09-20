@@ -55,104 +55,6 @@ export const validateEmail = (email: string): ValidationResult => {
   return { isValid: true };
 };
 
-/** Process name: <=255 chars of alphanumerics, spaces, `-`, `_`, `.`. */
-export const validateProcessName = (name: string): ValidationResult => {
-  if (!name || name.trim() === '') {
-    return {
-      isValid: false,
-      error: 'Process name is required',
-    };
-  }
-
-  if (name.length > 255) {
-    return {
-      isValid: false,
-      error: 'Process name too long (max 255 characters)',
-    };
-  }
-
-  if (!/^[a-zA-Z0-9\s\-_.]+$/.test(name)) {
-    return {
-      isValid: false,
-      error: 'Process name contains invalid characters. Use only letters, numbers, spaces, hyphens, underscores, and periods.',
-    };
-  }
-
-  return { isValid: true };
-};
-
-/** Windows exe path: valid drive-letter form, no `..`, must have an extension. */
-export const validateExecutablePath = (path: string): ValidationResult => {
-  if (!path || path.trim() === '') {
-    return {
-      isValid: false,
-      error: 'Executable path is required',
-    };
-  }
-
-  // path traversal
-  if (path.includes('..')) {
-    return {
-      isValid: false,
-      error: 'Path traversal is not allowed',
-    };
-  }
-
-  // Accepts C:\path\to\file.exe and C:/path/to/file.exe
-  const windowsPathRegex = /^[A-Za-z]:[\\\/][\w\s\-_.\\\/()]+\.\w+$/;
-
-  if (!windowsPathRegex.test(path)) {
-    return {
-      isValid: false,
-      error: 'Invalid executable path format. Use format: C:/Program Files/app.exe',
-    };
-  }
-
-  return { isValid: true };
-};
-
-/** Numeric string within a range. */
-export const validateNumericString = (
-  value: string,
-  min: number,
-  max: number,
-  fieldName: string
-): ValidationResult => {
-  const num = parseInt(value, 10);
-
-  if (isNaN(num)) {
-    return {
-      isValid: false,
-      error: `${fieldName} must be a number`,
-    };
-  }
-
-  if (num < min || num > max) {
-    return {
-      isValid: false,
-      error: `${fieldName} must be between ${min} and ${max}`,
-    };
-  }
-
-  return { isValid: true };
-};
-
-/** Enum membership. */
-export const validateEnum = <T extends string>(
-  value: string,
-  allowedValues: readonly T[],
-  fieldName: string
-): ValidationResult => {
-  if (!allowedValues.includes(value as T)) {
-    return {
-      isValid: false,
-      error: `Invalid ${fieldName}. Allowed values: ${allowedValues.join(', ')}`,
-    };
-  }
-
-  return { isValid: true };
-};
-
 /** Site IDs that cannot be claimed. */
 const RESERVED_SITE_IDS: readonly string[] = [
   'admin',
@@ -214,17 +116,6 @@ export const validateSiteId = (siteId: string): ValidationResult => {
   }
 
   return { isValid: true };
-};
-
-/** "New York Office" -> "new-york-office". */
-export const generateSiteIdFromName = (siteName: string): string => {
-  return siteName
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9\s-]/g, '') // Remove special characters
-    .replace(/\s+/g, '-') // Replace spaces with hyphens
-    .replace(/-+/g, '-') // Collapse multiple hyphens
-    .replace(/^-|-$/g, ''); // Remove leading/trailing hyphens
 };
 
 const ADJECTIVES = [

@@ -76,7 +76,7 @@ test.beforeEach(async () => {
 test('lists seeded versions with sizes, uploader and the latest badge on the right row', async ({ page }) => {
   await page.goto('/admin/installers');
 
-  // 10s, not the 5s default: RequireSuperadmin holds a "verifying
+  // 10s, not the 5s default: RequireAdminAccess holds a "verifying
   // permissions..." gate while AuthContext hydrates against the auth emulator,
   // which races the default on cold-emulator runs. Every heading check here
   // keeps the bump.
@@ -109,7 +109,7 @@ test('lists seeded versions with sizes, uploader and the latest badge on the rig
 
 test('the latest row hides the set-as-latest and delete buttons', async ({ page }) => {
   await page.goto('/admin/installers');
-  // RequireSuperadmin spinner — see the first test.
+  // RequireAdminAccess spinner — see the first test.
   await expect(
     page.getByRole('heading', { name: 'installers', exact: true }),
   ).toBeVisible({ timeout: 10_000 });
@@ -131,7 +131,7 @@ test('the latest row hides the set-as-latest and delete buttons', async ({ page 
 
 test('set-as-latest confirms via dialog and updates Firestore latest doc', async ({ page }) => {
   await page.goto('/admin/installers');
-  // RequireSuperadmin spinner — see the first test.
+  // RequireAdminAccess spinner — see the first test.
   await expect(
     page.getByRole('heading', { name: 'installers', exact: true }),
   ).toBeVisible({ timeout: 10_000 });
@@ -161,7 +161,7 @@ test('set-as-latest confirms via dialog and updates Firestore latest doc', async
 
 test('clicking "upload new version" opens the upload dialog', async ({ page }) => {
   await page.goto('/admin/installers');
-  // RequireSuperadmin spinner — see the first test.
+  // RequireAdminAccess spinner — see the first test.
   await expect(
     page.getByRole('heading', { name: 'installers', exact: true }),
   ).toBeVisible({ timeout: 10_000 });

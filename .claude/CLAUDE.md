@@ -70,7 +70,7 @@ cd web && npm run lint                   # Lint
 # Agent
 powershell -File scripts/bootstrap-windows.ps1 -InstallAgentDeps   # agent/.venv (Python 3.11) + requirements*.txt
 agent/.venv/Scripts/python -m pytest agent/tests/                  # Agent tests (what the commit hook runs)
-cd agent/src && ../.venv/Scripts/python owlette_service.py debug   # Debug mode (requires admin)
+cd agent/src && ../.venv/Scripts/python owlette_runner.py --debug  # Debug mode (requires admin)
 cd agent && build_installer_full.bat              # Full build (~5-10 min)
 cd agent && build_installer_quick.bat             # Quick build (~30 sec)
 
@@ -178,7 +178,7 @@ that stops being true.
 
 | if you bump | you must also |
 | --- | --- |
-| `claude-agent-sdk` | re-run `scripts/upload-cortex-cli.mjs` for **dev AND prod** — the SDK vendors the Claude CLI, the pin in `installer_metadata/cortex_cli` moves with it, and agents keep fetching the old CLI until you do |
+| `claude-agent-sdk` | re-run `scripts/upload-cortex-cli.mjs` once per environment, for **dev AND prod**, passing every platform's binary in the one run — the SDK vendors the Claude CLI and the per-platform pins in `installer_metadata/cortex_cli_<osfamily>_<arch>` move with it. That run also rewrites the legacy `installer_metadata/cortex_cli`, the only id a pre-3.4 agent reads; keep it until the fleet floor is 3.4. Agents keep fetching the old CLI until you do |
 | `mcp` to 2.x | `pywin32>=311` (mcp 1.11.0+ already needs `>=310`) |
 | `ai` / `@ai-sdk/*` | re-check the hoot test fixtures — `ai>=6.0.280` runs tools only on `finishReason.unified`, and string mock chunks silently skip tool calls |
 | `pywin32` | full agent suite **and** a real machine test — it is how the agent does services and COM, not an incidental dep |

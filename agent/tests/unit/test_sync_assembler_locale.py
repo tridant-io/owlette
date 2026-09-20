@@ -13,7 +13,6 @@ and confirm:
 """
 
 import hashlib
-import sys
 import unicodedata
 from pathlib import Path
 
@@ -230,7 +229,7 @@ def test_state_row_queryable_by_unicode_path(tmp_path):
 
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='windows-only behavior')
+@pytest.mark.windows(reason='windows-only behavior')
 def test_windows_reserved_chars_are_rejected(tmp_path):
     """windows reserves <>:"|?* in filenames. these MUST fail loud and early
     (allowlist validation rejects via path resolution); we never want a

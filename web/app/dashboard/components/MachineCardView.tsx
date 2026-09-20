@@ -17,7 +17,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
-import { formatHeartbeatTime, getDisplayTimezone } from '@/lib/timeUtils';
+import { formatHeartbeatTime, formatMachineLocalClock, formatTimezoneShortName, getDisplayTimezone } from '@/lib/timeUtils';
+import { machineClockTooltip } from '@/lib/scheduleClockCopy';
+import { useMinuteTick } from '@/hooks/useMinuteTick';
 import { formatThroughput, formatThroughputShort } from '@/lib/networkUtils';
 import { DISK_IO_COLORS, formatDiskIO } from '@/lib/diskIOUtils';
 import { useAllSparklineData } from '@/hooks/useSparklineData';
@@ -40,6 +42,14 @@ interface MachineCardViewProps {
   currentSiteId: string;
   siteTimezone?: string;
   siteTimeFormat?: '12h' | '24h';
+  /**
+   * `sites/{siteId}.schedulesFollowSiteTime`, straight off the Firestore
+   * snapshot (`useCurrentSite` / `useSites`). Three-state: `undefined` = never
+   * asked, `false` = declined, `true` = site time. Do not source it from
+   * `GET /api/sites`, which collapses the first two. Left unset, every clock
+   * tooltip renders exactly as it did before the site-time work.
+   */
+  schedulesFollowSiteTime?: boolean;
   onEditProcess: (machineId: string, process: Process) => void;
   onDuplicateProcess?: (machineId: string, process: Process) => void;
   onCreateProcess: (machineId: string) => void;
@@ -67,6 +77,7 @@ interface MachineCardProps {
   currentSiteId: string;
   siteTimezone: string;
   siteTimeFormat: '12h' | '24h';
+  schedulesFollowSiteTime?: boolean;
   userPreferences: { temperatureUnit: 'C' | 'F' };
   isSiteAdmin: boolean;
   cardPref: { cpu?: string; disk?: string; gpu?: string; nic?: string };
@@ -90,6 +101,7 @@ interface MachineCardProps {
   onScreenshot?: () => void;
   onLiveView?: () => void;
   onSwoop?: () => void;
+  showLocalClock?: boolean;
 }
 
 function MachineCard({
@@ -100,6 +112,7 @@ function MachineCard({
   currentSiteId,
   siteTimezone,
   siteTimeFormat,
+  schedulesFollowSiteTime,
   userPreferences,
   isSiteAdmin,
   cardPref,
@@ -123,6 +136,7 @@ function MachineCard({
   onScreenshot,
   onLiveView,
   onSwoop,
+  showLocalClock,
 }: MachineCardProps) {
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
@@ -151,6 +165,34 @@ function MachineCard({
     siteTimezone
   );
   const heartbeat = formatHeartbeatTime(machine.lastHeartbeat, displayTz, siteTimeFormat);
+
+  // Shared wall-clock minute tick: one app-wide interval re-renders every
+  // card in lockstep so the clock string stays current.
+  useMinuteTick();
+  const localClock = formatMachineLocalClock(machine.machineTimezone, siteTimeFormat);
+  const localTzShort = formatTimezoneShortName(machine.machineTimezone);
+  // Non-null exactly when the machine has reported a timezone, so it doubles as
+  // the render guard below. One line unless this site evaluates launch windows
+  // in site time, which splits restarts (always machine-local, decision D2)
+  // from the windows that now follow the site.
+  const clockTooltip = machine.machineTimezone
+    ? machineClockTooltip({
+        machineTimezone: machine.machineTimezone,
+        siteTimezone,
+        schedulesFollowSiteTime,
+        agentVersion: machine.agent_version,
+      })
+    : null;
+  // The line under the hostname. The OS takes it when the agent reports one —
+  // the clock it replaces is already beside the online pill, whose tooltip
+  // names the timezone so the city is not lost. Whichever string it shows, the
+  // line keeps the clock tooltip: its schedule copy is the only place a card
+  // says which clock launch windows run on.
+  const subtitle = machine.osVersion
+    ? machine.osVersion
+    : showLocalClock && localClock
+      ? `${localTzShort}, ${localClock} local`
+      : null;
 
   // Resolve per-card device selection (user pref → primary → first).
   const primary = machine.metrics?.primary;
@@ -250,6 +292,34 @@ function MachineCard({
                 {machine.machineId}
                 {isMuted && <span title="alerts muted"><BellOff className="h-3.5 w-3.5 text-muted-foreground" /></span>}
               </CardTitle>
+              {subtitle && (showLocalClock && clockTooltip ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      data-testid={machine.osVersion ? 'machine-os-version' : undefined}
+                      className="text-xs text-muted-foreground mt-0.5 cursor-help select-none"
+                    >
+                      {subtitle}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="max-w-xs">{clockTooltip.machineLine}</p>
+                    {clockTooltip.scheduleLine && (
+                      <p className="max-w-xs mt-1">{clockTooltip.scheduleLine}</p>
+                    )}
+                    {clockTooltip.advisory && (
+                      <p className="max-w-xs mt-1 text-amber-400">{clockTooltip.advisory}</p>
+                    )}
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <span
+                  data-testid="machine-os-version"
+                  className="text-xs text-muted-foreground mt-0.5"
+                >
+                  {subtitle}
+                </span>
+              ))}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -273,6 +343,11 @@ function MachineCard({
               </TooltipTrigger>
               <TooltipContent>
                 <p>{heartbeat.tooltip}</p>
+                {/* The machine's own zone, still within reach on the cards
+                    whose subtitle now shows the OS instead of the clock. */}
+                {machine.machineTimezone && (
+                  <p className="mt-1">machine timezone: {localTzShort}</p>
+                )}
               </TooltipContent>
             </Tooltip>
             {!isDemo && (
@@ -1030,10 +1105,13 @@ export function MachineCardView({
   onScreenshot,
   onLiveView,
   onSwoop,
+  schedulesFollowSiteTime,
 }: MachineCardViewProps) {
   const { userPreferences, isSiteAdmin } = useAuth();
   const canSiteAdmin = isSiteAdmin(currentSiteId);
   const { prefs, setCardPref } = useDevicePrefs();
+  const uniqueTimezones = new Set(machines.map(m => m.machineTimezone).filter(Boolean));
+  const showLocalClock = uniqueTimezones.size > 1;
 
   return (
     // `machines-grid` hooks the globals.css slide-perf rule: under
@@ -1079,6 +1157,8 @@ export function MachineCardView({
           onScreenshot={onScreenshot ? () => onScreenshot(machine.machineId) : undefined}
           onLiveView={onLiveView ? () => onLiveView(machine.machineId) : undefined}
           onSwoop={onSwoop ? () => onSwoop(machine.machineId) : undefined}
+          schedulesFollowSiteTime={schedulesFollowSiteTime}
+          showLocalClock={showLocalClock}
         />
       ))}
     </div>

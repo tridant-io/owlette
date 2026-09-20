@@ -53,15 +53,15 @@ def load_isolated_shared_utils():
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
-    """shared_utils imported against a throwaway %PROGRAMDATA%."""
-    monkeypatch.setenv('PROGRAMDATA', str(tmp_path))
+    """shared_utils imported against a throwaway data root."""
+    monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path / 'Owlette'))
     return load_isolated_shared_utils()
 
 
 @pytest.fixture
 def data_root(tmp_path, monkeypatch):
     """Redirect the live module's runtime get_data_path() at a temp root."""
-    monkeypatch.setenv('PROGRAMDATA', str(tmp_path))
+    monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path / 'Owlette'))
     return tmp_path / 'Owlette'
 
 

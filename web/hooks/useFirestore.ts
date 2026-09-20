@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { logger } from '@/lib/logger';
+import { isMachineOsFamily, type MachineOsFamily } from '@/lib/machineOs';
 
 /** Every shape a Firestore timestamp field arrives in on the client. parseFirestoreSeconds handles all of them. */
 export type FirestoreTs =
@@ -254,6 +255,15 @@ export interface Machine {
   online: boolean;
   agent_version?: string;  // Agent version for update detection (e.g., "2.0.0")
   machineTimezone?: string;  // IANA tz from the agent's tzlocal lookup; undefined on pre-IANA agent builds.
+  /**
+   * The machine's operating system, written on every heartbeat by the agents
+   * that report it. All three are undefined on agents that don't: an absent
+   * `osFamily` reads as windows, and an absent `osVersion` leaves both machine
+   * views showing exactly what they showed before.
+   */
+  osFamily?: MachineOsFamily;
+  arch?: string;           // 'x64' | 'arm64' — the agent's normalised spelling
+  osVersion?: string;      // operator-facing, e.g. "Windows 11 Pro 24H2" / "Ubuntu 24.04.5 LTS"
   cortexEnabled?: boolean;  // kill switch for Hoot tool-call delivery; undefined = enabled.
   /**
    * Agent capability handshake, written as dotted paths by the heartbeat
@@ -1314,6 +1324,9 @@ export function useMachines(siteId: string) {
               online: isOnline,
               agent_version: data.agent_version,
               machineTimezone: typeof data.machine_timezone_iana === 'string' ? data.machine_timezone_iana : undefined,
+              osFamily: isMachineOsFamily(data.osFamily) ? data.osFamily : undefined,
+              arch: typeof data.arch === 'string' ? data.arch : undefined,
+              osVersion: typeof data.osVersion === 'string' ? data.osVersion : undefined,
               // only an explicit false disables hoot — absent means enabled, matching
               // the server's `isHootEnabled` (hoot-utils.server.ts)
               cortexEnabled: data.cortexEnabled !== false,

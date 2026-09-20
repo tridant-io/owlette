@@ -440,6 +440,21 @@ export function MachineRow({
               <span className="truncate">{machine.machineId}</span>
               {isMuted && <span title="alerts muted"><BellOff className="h-3 w-3 text-muted-foreground flex-shrink-0" /></span>}
             </div>
+            {/* The muted figure style the ram and disk columns use, and flush
+                to the cell rather than indented to the clock line: the hostname
+                column is a fixed 130px, so every pixel of indent is a pixel of
+                OS string that would need a hover to read. Nothing renders at
+                all for an agent that reports no osVersion — the row keeps its
+                height. */}
+            {machine.osVersion && (
+              <span
+                data-testid="machine-os-version"
+                className="text-muted-foreground text-xs truncate"
+                title={machine.osVersion}
+              >
+                {machine.osVersion}
+              </span>
+            )}
             {showLocalClock && clockTooltip && localClock && (
               <Tooltip>
                 <TooltipTrigger asChild>

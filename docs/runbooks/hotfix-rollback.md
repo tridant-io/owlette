@@ -351,11 +351,11 @@ Lesson: every install command must stay aligned or one workflow drifts.
 ## tribal knowledge a hotfix author must know
 | # | fact | hotfix consequence |
 |---|------|--------------------|
-| 1 | Two `__init__` paths drift: `win32serviceutil` -> `OwletteService.__init__` at `agent/src/owlette_service.py:193`; PROD (hosted by owlette-host) -> `MockService` at `agent/src/owlette_runner.py:117` manually mirrors. | Any new `self._foo` must be added to both classes or the agent crash-loops in production. Bitten 3 times. |
+| 1 | `OwletteService` has no constructor: `agent/src/owlette_service.py` `_init_state()` is the single place instance attributes are set, and `agent/src/owlette_runner.py` builds the instance with `object.__new__` and calls it. | Any new `self._foo` goes in `_init_state()`. The two-copy version of this was bitten 3 times before the second copy was deleted. |
 | 2 | Main loop is 10 seconds at `agent/src/owlette_service.py:6557`. `_upload_metrics()` is the recurring heartbeat, not `_update_presence`. Adaptive: about 5s GUI, 30s monitored procs, 120s idle. Dashboard checks `online && heartbeatAge < 300s`. | Do not strip `online` or `lastHeartbeat` from `_upload_metrics()`. |
 | 3 | `ConnectionManager` backoff: `BACKOFF_BASE=30s`, `BACKOFF_MAX=3600s`, `BACKOFF_JITTER=0.5`, `FATAL_ERROR_BACKOFF=3600s`, `WATCHDOG_INTERVAL=10s` at `agent/src/connection_manager.py:225-234`. | Older "5 minute" docs refer to recovery probe cadence, not backoff cap. Backoff has 1 hour ceiling and never gives up. |
 | 4 | Agent uses a custom Firestore REST client and never imports `firebase_admin`. Auth is Firebase ID token custom claims `{role:'agent', site_id, machine_id}`. Agents do not have `users/{uid}` docs. | Do not debug agent auth by looking for user docs or adding Admin SDK. |
-| 5 | `.tokens.enc` is machine-bound to MachineGuid plus hostname and cannot be migrated. | Re-pair via device code on transfer. Never read, log, or commit it. |
+| 5 | `.tokens.enc` is machine-bound to the machine binding alone — MachineGuid on Windows, IOPlatformUUID on macOS, `/etc/machine-id` on Linux. The hostname term was dropped when identity moved to `config/machine_id`, so a rename no longer bricks the store; another machine still cannot read it. A store written under the old derivation is re-encrypted on first load and the original is kept beside it as `.tokens.enc.v1` for one minor. | Re-pair via device code on transfer. Never read, log, or commit it. Rolling the agent back below that change: rename `.tokens.enc.v1` over `.tokens.enc` first, or the old build cannot decrypt the store — but the copy is never refreshed, so once the agent has refreshed once (hourly, 5-minute grace on the superseded token) the rename restores a dead refresh token and the 401 clears both files: copy `.tokens.enc` aside first and expect a re-pair. `cortex.apiKeyEncrypted` in `config.json` is re-encrypted in place with no copy kept, so re-provision the hoot key from the dashboard after any such rollback. |
 | 6 | Under LocalSystem, `os.path.expanduser('~')` -> `C:\Windows\System32\config\systemprofile\`. `agent/src/destination_allowlist.py` resolves via auto-login user, most-recently-modified non-system profile, then `C:\Users\Public`. | Test service-context path behavior as a real Windows service. |
 | 7 | Reboot scheduler uses machine local timezone. Process schedules use site timezone. | Do not change one when touching the other. |
 | 8 | Web has two auth wrappers: `requireSiteAuthAndScope` is api-key scope only; `authorizedSiteHandler` is full pipeline. | Use `authorizedSiteHandler` on every mutating route. |
@@ -376,7 +376,7 @@ Lesson: every install command must stay aligned or one workflow drifts.
 - No blocking operations in the 10 second loop.
 - No reconnection logic outside `ConnectionManager`.
 - Never assume interactive-user paths match LocalSystem paths.
-- Never add `self._foo` to only one of `OwletteService` or `MockService`.
+- Never set a new `self._foo` anywhere but `OwletteService._init_state()`.
 - Never treat `_update_presence` as the recurring heartbeat.
 - Never strip `online` or `lastHeartbeat` from `_upload_metrics()`.
 - Never weaken destination allowlist behavior to get writes unstuck.
@@ -462,7 +462,6 @@ Do not speculate around them.
 - Migration rollback SOP not written.
 - Sentry-context-for-hotfixes runbook doesn't exist.
 - No pre-flight `setAsLatest` confirmation gate.
-- MockService/OwletteService parity is enforced by tribal knowledge only, with no static assertion or unit test.
 - Status-page readiness gate not wired into deploy.
 - Customer comms protocol on hotfix not in any doc.
 - Reboot-scheduler "fired against my dev machine" guard is memory-only, not a code-level guard.
@@ -474,7 +473,6 @@ Maintainer input needed:
 - Sentry release/context checklist for hotfixes.
 - Customer communication owner and template.
 - Code-level guard for reboot scheduler on dev machines.
-- Static or unit-test enforcement for `MockService` / `OwletteService` init parity.
 ## further reading
 - [/docs/runbooks/production-deploy.md](production-deploy.md)
 - [/docs/runbooks/agent-installer-release.md](agent-installer-release.md)

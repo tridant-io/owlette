@@ -26,7 +26,7 @@ async function stubTestEmail(page: Page, response: Record<string, unknown>, stat
 test('config card renders provider + from/admin emails + environment', async ({ page }) => {
   await page.goto('/admin/email');
 
-  // 10s because RequireSuperadmin gates on AuthContext hydrating against the auth emulator, which
+  // 10s because RequireAdminAccess gates on AuthContext hydrating against the auth emulator, which
   // races the default 5s timeout on cold-emulator runs. Same bump throughout this spec.
   await expect(
     page.getByRole('heading', { name: 'email', exact: true }),

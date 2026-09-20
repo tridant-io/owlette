@@ -83,7 +83,7 @@ npm run dev                  # http://localhost:3000
 ## day-2: agent + desktop dev
 
 1. Install the agent with the installer on a Windows 10/11 64-bit machine and pair it with a device code using [agent/installation.mdx](../web/content/docs/agent/installation.mdx) (published at `/docs/agent/installation`). The service is hosted by `owlette-host`; do not run `python owlette_service.py install`, which registers a second, competing service.
-2. To run the agent from source in the foreground (admin shell): `cd agent/src && ..\.venv\Scripts\python owlette_service.py debug`.
+2. To run the agent from source in the foreground (admin shell): `cd agent/src && ..\.venv\Scripts\python owlette_runner.py --debug`.
 3. Under Claude Code, edits to `agent/src/*.py` are mirrored to `C:\ProgramData\Owlette\agent\src\` and the service is restarted by the `.claude/hooks/deploy-agent.mjs` hook. The restart order for doing it by hand is in [.claude/CLAUDE.md](../.claude/CLAUDE.md) under "Agent Dev Testing Workflow".
 4. The local UI is the Tauri app in `desktop/`: `npm run tauri dev` for development, and the command list is in [desktop/README.md](../desktop/README.md). Desktop changes are not mirrored by the hook — rebuild with `npx tauri build --no-bundle` and copy the exe into `C:\ProgramData\Owlette\app\`.
 
@@ -115,7 +115,7 @@ Treat [docs/internal/version-management.md](internal/version-management.md) and 
 
 ## machine-bound state — do not copy across machines
 
-> The agent's encrypted token store, `/ProgramData/Owlette/.tokens.enc`, is bound to MachineGuid + hostname; see [agent/src/secure_storage.py](../agent/src/secure_storage.py) for reference. On any machine transfer, the agent must be re-paired via device code, not migrated. The same rule applies to the agent's local Cortex LLM key.
+> The agent's encrypted token store, `/ProgramData/Owlette/.tokens.enc`, is bound to the machine binding alone — MachineGuid on Windows, IOPlatformUUID on macOS, `/etc/machine-id` on Linux; see [agent/src/secure_storage.py](../agent/src/secure_storage.py) for reference. A store written before the hostname term was dropped is re-encrypted on first load, with the original kept as `.tokens.enc.v1` for one minor. On any machine transfer, the agent must be re-paired via device code, not migrated. The same rule applies to the agent's local Cortex LLM key, which rides the same cipher and migrates with it.
 
 ## known portability gaps (open work)
 

@@ -1,4 +1,6 @@
 import os
+import errno
+import stat
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -6,13 +8,16 @@ import socket
 from packaging import version
 import psutil
 import platform
+import re
 import subprocess
 import sys
 import threading
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-import winreg
 import time
 from pathlib import Path
+
+import osadapter
 
 # VERSION MANAGEMENT
 def get_app_version():
@@ -36,6 +41,16 @@ SERVICE_NAME = 'OwletteService'
 
 
 # OS
+_IS_WINDOWS = sys.platform == 'win32'
+# The two POSIX arms answer the shelling metric probes differently: macOS has
+# no /proc and no iproute2, and its ping counts -W in milliseconds.
+_IS_MACOS = sys.platform == 'darwin'
+
+# Windows' "no console flash" flag, and nothing at all where there are no
+# console windows to flash: every creationflags site in this module passes it,
+# so it has to be spellable on all three platforms.
+_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 json_lock = threading.Lock()
 
 # Cross-process mutex for JSON file access (service + desktop app coordination)
@@ -53,6 +68,15 @@ _JSON_MUTEX_SDDL = "D:(A;;0x1F0001;;;SY)(A;;0x1F0001;;;BA)(A;;0x100001;;;AU)"
 
 # The two rights the descriptor above hands to ordinary users.
 _MUTEX_OPEN_ACCESS = 0x00100000 | 0x0001  # SYNCHRONIZE | MUTEX_MODIFY_STATE
+
+# The POSIX half of the same lock: flock(2) on one file in the data root, which
+# is the identity desktop/src-tauri/src/json_io.rs takes there. The installer
+# pre-creates it; created here 0660 when it has not, because the daemon runs at
+# umask 022 and a 0640 lock file is one the desktop app — the console user,
+# reaching it through the group — cannot take.
+JSON_LOCK_FILE = 'tmp/json.lock'
+_JSON_LOCK_MODE = 0o660
+_JSON_LOCK_RETRY_SECONDS = 0.01
 
 
 def _get_json_file_mutex():
@@ -93,33 +117,393 @@ def _get_json_file_mutex():
                 _json_file_mutex = False  # Fallback: skip cross-process locking
     return _json_file_mutex
 
+
+def _open_json_lock_file():
+    """A descriptor on the lock file, creating it at _JSON_LOCK_MODE if needed.
+
+    The mode is set explicitly rather than left to the creating process's umask,
+    which would otherwise decide whether the other writer can take the lock at
+    all.
+    """
+    path = get_data_path(JSON_LOCK_FILE)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, _JSON_LOCK_MODE)
+    except FileExistsError:
+        return _open_existing_lock_file(path)
+    os.fchmod(fd, _JSON_LOCK_MODE)
+    return fd
+
+
+def _open_existing_lock_file(path):
+    """A descriptor on the lock file that is already there — the file itself.
+
+    `tmp/` is group-writable by design, so the entry can have been swapped for a
+    link to something the daemon must not open; refusing it costs the lock and
+    never more than a lost update, which is what proceeding unlocked already
+    risks.
+    """
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+    if stat.S_ISREG(os.fstat(fd).st_mode):
+        return fd
+    os.close(fd)
+    raise OSError(errno.EINVAL, 'not a regular file', path)
+
+
 class _CrossProcessLock:
-    """Context manager for cross-process file locking using a Windows named mutex."""
+    """Context manager for the cross-process JSON lock the desktop app takes for
+    the same writes: a Windows named mutex, and flock(2) on POSIX.
+
+    A lock that cannot be taken — refused outright, or still held when the
+    timeout runs out — proceeds unlocked rather than failing the write. Writes
+    are atomic (temp file + os.replace), so the worst case is a lost update and
+    never a torn file.
+    """
     def __init__(self, timeout_ms=2000):
         self.timeout_ms = timeout_ms
-        self.mutex = _get_json_file_mutex()
+        self.mutex = _get_json_file_mutex() if _IS_WINDOWS else None
+        self.fd = None
         self.acquired = False
 
     def __enter__(self):
-        if self.mutex:
-            try:
-                import win32event, win32con
-                result = win32event.WaitForSingleObject(self.mutex, self.timeout_ms)
-                self.acquired = result in (win32event.WAIT_OBJECT_0, win32event.WAIT_ABANDONED)
-            except Exception:
-                pass
+        if _IS_WINDOWS:
+            self._take_mutex()
+        else:
+            self._take_flock()
         return self
 
     def __exit__(self, *args):
-        if self.acquired and self.mutex:
+        if _IS_WINDOWS:
+            self._release_mutex()
+        else:
+            self._release_flock()
+
+    def _take_mutex(self):
+        if not self.mutex:
+            return
+        try:
+            import win32event
+            result = win32event.WaitForSingleObject(self.mutex, self.timeout_ms)
+            self.acquired = result in (win32event.WAIT_OBJECT_0, win32event.WAIT_ABANDONED)
+        except Exception:
+            pass
+
+    def _release_mutex(self):
+        if not (self.acquired and self.mutex):
+            return
+        try:
+            import win32event
+            win32event.ReleaseMutex(self.mutex)
+        except Exception:
+            pass
+        self.acquired = False
+
+    def _take_flock(self):
+        import fcntl
+
+        try:
+            self.fd = _open_json_lock_file()
+        except OSError as e:
+            logging.debug(
+                f"Cross-process JSON lock unavailable ({e}) — proceeding unlocked"
+            )
+            return
+        # LOCK_NB and retry rather than a blocking LOCK_EX: flock(2) has no
+        # timeout of its own, and a writer that died holding the lock would
+        # otherwise stall every later write for good.
+        deadline = time.monotonic() + self.timeout_ms / 1000.0
+        while True:
             try:
-                import win32event
-                win32event.ReleaseMutex(self.mutex)
-            except Exception:
-                pass
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.acquired = True
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    logging.debug(
+                        f"Cross-process JSON lock still held after "
+                        f"{self.timeout_ms} ms — proceeding unlocked"
+                    )
+                    return
+                time.sleep(_JSON_LOCK_RETRY_SECONDS)
+
+    def _release_flock(self):
+        if self.fd is None:
+            return
+        if self.acquired:
+            try:
+                import fcntl
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+            except OSError as e:
+                logging.debug(f"Cross-process JSON lock release failed: {e}")
+            self.acquired = False
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        self.fd = None
 
 def get_hostname():
     return socket.gethostname()
+
+# `(osFamily, arch)` the way the fleet spells them: the machine document's
+# fields, the cortex CLI's pin id and the installer artefact's family all key on
+# this pair, so the normalisation for the wire lives here. An unrecognised value
+# travels verbatim rather than being forced into a wrong bucket.
+# `destination_allowlist._os_family()` is the deliberate second reader: a
+# security gate buckets an unknown platform into 'linux' rather than leaving it
+# unmatched, and stays injectable so its POSIX arms drive from any host.
+_OS_FAMILIES = {'win32': 'windows', 'darwin': 'macos', 'linux': 'linux'}
+# Keyed case-folded: Windows reports PROCESSOR_ARCHITECTURE verbatim ('AMD64',
+# 'ARM64'), POSIX reports uname's spelling ('x86_64', 'aarch64').
+_ARCHITECTURES = {'amd64': 'x64', 'x86_64': 'x64', 'arm64': 'arm64', 'aarch64': 'arm64'}
+
+_unrecognised_platform_logged = set()
+
+
+def _log_unrecognised_platform(source, value):
+    """Once per process — the platform is a constant for the life of it."""
+    if (source, value) in _unrecognised_platform_logged:
+        return
+    _unrecognised_platform_logged.add((source, value))
+    logging.warning(f"Unrecognised {source} '{value}' — reporting it verbatim")
+
+
+def get_os_family_arch():
+    """This machine as ('windows'|'macos'|'linux', 'x64'|'arm64')."""
+    raw_family, raw_arch = sys.platform, platform.machine()
+
+    family = _OS_FAMILIES.get(raw_family)
+    if family is None:
+        _log_unrecognised_platform('sys.platform', raw_family)
+        family = raw_family
+
+    arch = _ARCHITECTURES.get(raw_arch.lower())
+    if arch is None:
+        _log_unrecognised_platform('platform.machine()', raw_arch)
+        arch = raw_arch
+
+    return family, arch
+
+
+# ProductName still reads 'Windows 10 …' on Windows 11 — Microsoft never
+# updated the registry value — and the build number is what actually separates
+# the two.
+_WINDOWS_11_MIN_BUILD = 22000
+
+# Read rather than imported from `platform` so the unit tests can point it at a
+# fixture: every POSIX distribution publishes PRETTY_NAME here.
+_OS_RELEASE_PATH = '/etc/os-release'
+
+_os_version_string = None
+
+
+def get_os_version_string():
+    """This machine's OS the way an operator names it — 'Windows 11 Pro 24H2',
+    'Ubuntu 24.04.5 LTS', 'macOS 15.6'.
+
+    Published on the machine document as `osVersion`, where it is prose for a
+    dashboard subtitle rather than a parseable version. Computed once for the
+    life of the process: the platform cannot change under a running agent, and
+    the Windows arm reads the registry on the path the heartbeat walks every
+    tick.
+    """
+    global _os_version_string
+    if _os_version_string is None:
+        _os_version_string = _build_os_version_string()
+    return _os_version_string
+
+
+def _build_os_version_string():
+    """One arm per platform, each falling back to `platform`'s own spelling
+    rather than to an empty field."""
+    if _IS_WINDOWS:
+        product, display, _build = _windows_version_parts()
+        if product:
+            return f"{product} {display}".strip()
+        # The edition and the 24H2-style release live in the registry alone;
+        # platform.version() at least carries the build.
+        return f"Windows {platform.version()}".strip()
+
+    if _IS_MACOS:
+        release = platform.mac_ver()[0]
+        if release:
+            return f"macOS {release}"
+        return f"{platform.system()} {platform.release()}".strip()
+
+    return (_read_os_release_pretty_name()
+            or f"{platform.system()} {platform.release()}".strip())
+
+
+def _read_os_release_pretty_name():
+    """PRETTY_NAME from /etc/os-release, '' when the file or the key is absent.
+
+    The format quotes any value with spaces, so Ubuntu arrives as
+    `PRETTY_NAME="Ubuntu 24.04.5 LTS"`.
+    """
+    try:
+        with open(_OS_RELEASE_PATH, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                key, sep, value = line.partition('=')
+                if sep and key.strip() == 'PRETTY_NAME':
+                    return value.strip().strip('"\'')
+    except OSError:
+        return ''
+    return ''
+
+
+def _windows_version_parts():
+    """(edition, release, build) from the registry, e.g. ('Windows 11 Pro',
+    '24H2', '26100'). ('', '', '') when the edition cannot be read.
+
+    Each value is read on its own. Windows 10 1809/LTSC 2019 and Server
+    2016/2019 — machines this fleet still runs — publish no `DisplayVersion`
+    and name the release `ReleaseId` instead, and one absent value must not
+    cost the edition, which is the half an operator actually reads.
+    """
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r'SOFTWARE\Microsoft\Windows NT\CurrentVersion') as key:
+            product = _windows_registry_string(key, 'ProductName')
+            display = (_windows_registry_string(key, 'DisplayVersion')
+                       or _windows_registry_string(key, 'ReleaseId'))
+            build = _windows_registry_string(key, 'CurrentBuildNumber')
+    except Exception:
+        return '', '', ''
+
+    if not product:
+        return '', '', ''
+
+    return _windows_edition_for_build(product, build), display, build
+
+
+def _windows_registry_string(key, name):
+    """One value of an open key as text, '' when that name is absent."""
+    import winreg
+    try:
+        return str(winreg.QueryValueEx(key, name)[0]).strip()
+    except OSError:
+        return ''
+
+
+def _windows_edition_for_build(product, build):
+    """'Windows 10 Pro' on build 22000 or newer is a Windows 11 edition."""
+    try:
+        is_eleven = int(build) >= _WINDOWS_11_MIN_BUILD
+    except (TypeError, ValueError):
+        return product
+    if is_eleven and product.startswith('Windows 10'):
+        return 'Windows 11' + product[len('Windows 10'):]
+    return product
+
+
+MACHINE_ID_FILE = 'config/machine_id'
+MACHINE_ID_READ_ATTEMPTS = 3
+MACHINE_ID_READ_BACKOFF = 0.1
+
+_machine_id = None
+_machine_id_lock = threading.Lock()
+
+
+def get_machine_id():
+    """The identity this machine is known by — its Firestore document id.
+
+    Persisted at config/machine_id and seeded from the hostname the first time
+    it is read, so a machine that is already registered keeps the document it
+    has and is stable afterwards: a rename, or a DHCP-driven change to a macOS
+    `Name.local`, no longer forks the document or bricks the token store.
+
+    Only a persisted identity is cached. A file that exists but could not be
+    read yields the hostname for that call alone, so a scanner holding it open
+    for a few seconds cannot pin the process to an identity the machine's token
+    does not cover.
+    """
+    global _machine_id
+    if _machine_id is not None:
+        return _machine_id
+
+    with _machine_id_lock:
+        if _machine_id is not None:
+            return _machine_id
+
+        machine_id, persisted = _read_or_seed_machine_id()
+        if persisted:
+            _machine_id = machine_id
+        return machine_id
+
+
+def _read_machine_id_file(path):
+    """The persisted id, or None when the file is missing or empty.
+
+    An OSError propagates: an id that is on disk but momentarily unreadable —
+    an antivirus scan, a sharing violation — must never be reseeded over.
+    """
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def _seed_machine_id_file(path, machine_id):
+    """Write the seed through a temp file and rename it into place.
+
+    A machine killed mid-seed then comes back to either no file or a complete
+    one, never to the empty file every later run would read as "no identity
+    yet" — which would put the hostname back in the identity's place.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temp_path = f"{path}.{os.getpid()}.tmp"
+    try:
+        fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        try:
+            os.write(fd, machine_id.encode('utf-8'))
+        finally:
+            os.close(fd)
+        os.replace(temp_path, path)
+    except OSError:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+
+
+def _read_or_seed_machine_id():
+    """(identity, persisted) — config/machine_id, created from the current
+    hostname when it is missing.
+
+    `persisted` is False when the identity could be neither read nor written:
+    the hostname stands in, but the caller must not keep it. The read is
+    retried first, because the usual cause is another process holding the file
+    open for a moment.
+    """
+    path = get_data_path(MACHINE_ID_FILE)
+
+    for attempt in range(MACHINE_ID_READ_ATTEMPTS):
+        try:
+            persisted = _read_machine_id_file(path)
+            break
+        except OSError as e:
+            if attempt + 1 == MACHINE_ID_READ_ATTEMPTS:
+                logging.warning(
+                    f"Failed to read {MACHINE_ID_FILE}: {e} — using the hostname "
+                    f"for this call only"
+                )
+                return get_hostname(), False
+            time.sleep(MACHINE_ID_READ_BACKOFF)
+
+    if persisted:
+        return persisted, True
+
+    machine_id = get_hostname()
+    try:
+        _seed_machine_id_file(path, machine_id)
+        logging.info(f"Machine identity seeded from the hostname: {machine_id}")
+    except OSError as e:
+        logging.warning(f"Failed to persist {MACHINE_ID_FILE}: {e} — using the hostname")
+        return machine_id, False
+
+    return machine_id, True
+
 
 def get_machine_timezone():
     """Machine timezone as the Windows registry name (e.g. "Pacific Standard
@@ -127,6 +511,7 @@ def get_machine_timezone():
     from get_machine_timezone_iana().
     """
     try:
+        import winreg
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                             r'SYSTEM\CurrentControlSet\Control\TimeZoneInformation') as key:
             return winreg.QueryValueEx(key, 'TimeZoneKeyName')[0]
@@ -152,33 +537,44 @@ def get_cpu_name():
     """CPU model name (e.g. "Intel(R) Core(TM) i9-9900X CPU @ 3.50GHz"), or
     "Unknown CPU" if every probe fails. Fastest/most reliable source first.
     """
-    # 1. Registry — fast, no admin rights
-    try:
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                            r'HARDWARE\DESCRIPTION\System\CentralProcessor\0')
-        cpu_name = winreg.QueryValueEx(key, 'ProcessorNameString')[0].strip()
-        winreg.CloseKey(key)
-        if cpu_name:
-            return cpu_name
-    except Exception as e:
-        logging.debug(f"Registry CPU detection failed: {e}")
-
-    # 2. PowerShell CIM — Windows 11 compatible
-    try:
-        result = subprocess.run(
-            ['powershell', '-NoProfile', '-Command',
-             'Get-CimInstance -ClassName Win32_Processor | Select-Object -ExpandProperty Name'],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW  # No console flash
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            cpu_name = result.stdout.strip()
+    if _IS_WINDOWS:
+        # 1. Registry — fast, no admin rights
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r'HARDWARE\DESCRIPTION\System\CentralProcessor\0')
+            cpu_name = winreg.QueryValueEx(key, 'ProcessorNameString')[0].strip()
+            winreg.CloseKey(key)
             if cpu_name:
                 return cpu_name
-    except Exception as e:
-        logging.debug(f"PowerShell CPU detection failed: {e}")
+        except Exception as e:
+            logging.debug(f"Registry CPU detection failed: {e}")
+
+        # 2. PowerShell CIM — Windows 11 compatible
+        try:
+            result = subprocess.run(
+                ['powershell', '-NoProfile', '-Command',
+                 'Get-CimInstance -ClassName Win32_Processor | Select-Object -ExpandProperty Name'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=_NO_WINDOW
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                cpu_name = result.stdout.strip()
+                if cpu_name:
+                    return cpu_name
+        except Exception as e:
+            logging.debug(f"PowerShell CPU detection failed: {e}")
+    else:
+        # 1. What the OS itself holds — the same string the registry holds on
+        #    Windows: sysctl on macOS, /proc/cpuinfo on Linux and no spawn
+        try:
+            cpu_name = _sysctl_cpu_name() if _IS_MACOS else _proc_cpu_name()
+            if cpu_name:
+                return cpu_name
+        except Exception as e:
+            logging.debug(f"POSIX CPU detection failed: {e}")
 
     # 3. platform.processor() — incomplete but always available
     try:
@@ -190,6 +586,25 @@ def get_cpu_name():
 
     logging.warning("All CPU detection methods failed")
     return "Unknown CPU"
+
+
+def _sysctl_cpu_name():
+    """The brand string macOS keeps the CPU name in, '' when sysctl has none —
+    Apple Silicon answers `Apple M2`, Intel the full Intel string."""
+    return subprocess.check_output(
+        ['sysctl', '-n', 'machdep.cpu.brand_string'], text=True, timeout=5
+    ).strip()
+
+
+def _proc_cpu_name():
+    """The `model name` /proc/cpuinfo gives the first core, '' when it gives
+    none — an arm64 board names its SoC elsewhere and falls through."""
+    with open('/proc/cpuinfo', 'r', encoding='utf-8', errors='replace') as f:
+        for line in f:
+            key, separator, value = line.partition(':')
+            if separator and key.strip() == 'model name':
+                return value.strip()
+    return ''
 
 # Temperature read suppression. A timed-out read (hung driver bind or CLR
 # load) leaks its worker thread — the watchdog can't kill it — so a persistent
@@ -440,6 +855,11 @@ def _wmi_logical_disk_with_timeout(timeout: float = 10.0):
     spaced ~16 min apart matching SCM event 7040. The metrics loop has its own
     thread, so a 10s call stalls nothing else.
     """
+    # The counter set is Windows'; off it the import can only fail, and this
+    # sits on every metrics tick.
+    if not _IS_WINDOWS:
+        return None
+
     def _query():
         try:
             import pythoncom
@@ -648,65 +1068,139 @@ _ping_thread: threading.Thread = None
 
 
 def _detect_default_gateway() -> str:
-    """Detect default gateway IP via ipconfig."""
+    """Detect default gateway IP: ipconfig on Windows, `route -n get default` on
+    macOS, `ip route` on Linux."""
     global _cached_gateway, _cached_gateway_time
     now = time.time()
     # Cache gateway for 5 minutes
     if _cached_gateway and now - _cached_gateway_time < 300:
         return _cached_gateway
     try:
-        output = subprocess.check_output(
-            ['ipconfig'], text=True, timeout=5, creationflags=0x08000000
-        )
-        for line in output.splitlines():
-            if 'Default Gateway' in line:
-                parts = line.split(':')
-                if len(parts) >= 2:
-                    ip = parts[-1].strip()
-                    if ip and not ip.startswith('fe80'):  # skip IPv6 link-local
-                        _cached_gateway = ip
-                        _cached_gateway_time = now
-                        return ip
+        if _IS_WINDOWS:
+            ip = _ipconfig_gateway()
+        elif _IS_MACOS:
+            ip = _route_get_gateway()
+        else:
+            ip = _ip_route_gateway()
     except Exception:
-        pass
+        return ''
+    if ip:
+        _cached_gateway = ip
+        _cached_gateway_time = now
+    return ip
+
+
+def _ipconfig_gateway() -> str:
+    """The first usable gateway ipconfig lists, '' when it lists none."""
+    output = subprocess.check_output(
+        ['ipconfig'], text=True, timeout=5, creationflags=_NO_WINDOW
+    )
+    for line in output.splitlines():
+        if 'Default Gateway' in line:
+            parts = line.split(':')
+            if len(parts) >= 2:
+                ip = parts[-1].strip()
+                if ip and not ip.startswith('fe80'):  # skip IPv6 link-local
+                    return ip
+    return ''
+
+
+def _ip_route_gateway() -> str:
+    """`default via 192.168.1.1 dev eth0 proto dhcp metric 100` — iproute2
+    prints the default routes best first, so the first `via` is the one the
+    traffic this measures actually takes."""
+    output = subprocess.check_output(
+        ['ip', 'route', 'show', 'default'], text=True, timeout=5
+    )
+    for line in output.splitlines():
+        fields = line.split()
+        for index, field in enumerate(fields[:-1]):
+            if field == 'via':
+                return fields[index + 1]
+    return ''
+
+
+def _route_get_gateway() -> str:
+    """`route -n get default` prints the route macOS would actually take as
+    indented `key: value` lines; `gateway` is the hop this measures."""
+    output = subprocess.check_output(
+        ['route', '-n', 'get', 'default'], text=True, timeout=5
+    )
+    for line in output.splitlines():
+        key, separator, value = line.partition(':')
+        if separator and key.strip() == 'gateway':
+            return value.strip()
     return ''
 
 
 def _run_ping(target: str) -> dict:
-    """Run ping and parse results. Returns {latency_ms, packet_loss_pct}."""
+    """Run ping and parse results. Returns {latency_ms, packet_loss_pct}.
+
+    Four echoes with a one-second wait for each on every platform; a ping that
+    loses every packet exits non-zero and comes back unmeasured rather than as
+    100% loss, which is the reading the Windows agent has always reported.
+    """
     try:
+        if _IS_WINDOWS:
+            output = subprocess.check_output(
+                ['ping', '-n', '4', '-w', '1000', target],
+                text=True, timeout=10, creationflags=_NO_WINDOW
+            )
+            return _parse_windows_ping(output)
+        # `-W` is the wait for one reply and the unit is the ping's:
+        # seconds on iputils, milliseconds on the BSD ping macOS ships — where
+        # `1` waits a millisecond and reports the whole link as lost.
+        wait = '1000' if _IS_MACOS else '1'
         output = subprocess.check_output(
-            ['ping', '-n', '4', '-w', '1000', target],
-            text=True, timeout=10, creationflags=0x08000000
+            ['ping', '-c', '4', '-W', wait, target], text=True, timeout=10
         )
-        # Parse packet loss: "(0% loss)" or "(25% loss)"
-        packet_loss = 100.0
-        for line in output.splitlines():
-            if '% loss' in line or '% lost' in line:
-                import re
-                m = re.search(r'\((\d+)%', line)
-                if m:
-                    packet_loss = float(m.group(1))
-                break
-
-        # Parse average latency: "Average = 5ms"
-        latency = -1.0
-        for line in output.splitlines():
-            if 'Average' in line or 'average' in line:
-                import re
-                m = re.search(r'(\d+)ms', line)
-                if m:
-                    latency = float(m.group(1))
-                break
-
-        return {
-            'latency_ms': latency if latency >= 0 else None,
-            'packet_loss_pct': packet_loss
-        }
+        return _parse_posix_ping(output)
     except subprocess.TimeoutExpired:
         return {'latency_ms': None, 'packet_loss_pct': 100.0}
     except Exception:
         return {'latency_ms': None, 'packet_loss_pct': None}
+
+
+def _parse_windows_ping(output: str) -> dict:
+    """Windows prints the loss as "(0% loss)" and the latency as "Average = 5ms"."""
+    packet_loss = 100.0
+    for line in output.splitlines():
+        if '% loss' in line or '% lost' in line:
+            m = re.search(r'\((\d+)%', line)
+            if m:
+                packet_loss = float(m.group(1))
+            break
+
+    latency = -1.0
+    for line in output.splitlines():
+        if 'Average' in line or 'average' in line:
+            m = re.search(r'(\d+)ms', line)
+            if m:
+                latency = float(m.group(1))
+            break
+
+    return {
+        'latency_ms': latency if latency >= 0 else None,
+        'packet_loss_pct': packet_loss
+    }
+
+
+def _parse_posix_ping(output: str) -> dict:
+    """POSIX prints "4 packets transmitted, 4 received, 0% packet loss" and
+    "rtt min/avg/max/mdev = 0.3/0.5/0.9/0.2 ms" — the average is the second
+    field, and macOS spells that line round-trip min/avg/max/stddev."""
+    packet_loss = 100.0
+    latency = None
+    for line in output.splitlines():
+        loss = re.search(r'([\d.]+)% packet loss', line)
+        if loss:
+            packet_loss = float(loss.group(1))
+            continue
+        rtt = re.search(r'min/avg/max[^=]*=\s*[\d.]+/([\d.]+)/', line)
+        if rtt:
+            latency = float(rtt.group(1))
+
+    return {'latency_ms': latency, 'packet_loss_pct': packet_loss}
 
 
 def _ping_background():
@@ -756,10 +1250,29 @@ def get_path(filename=None):
 
     return path
 
+# Where the bundled interpreter lives on each POSIX platform. Windows resolves
+# its own from the install root so a relocated install still works; the macOS
+# and Linux payloads install to a fixed prefix and there is nothing to relocate.
+_POSIX_PYTHON_PATHS = {
+    'darwin': '/Library/Application Support/Owlette/runtime/python/bin/python3',
+    'linux': '/opt/owlette/python/bin/python3',
+}
+
 def get_python_exe_path():
-    """Bundled interpreter: pythonw.exe if present (no console window), else
-    python.exe. Raises FileNotFoundError if neither exists.
+    """The bundled interpreter for this OS. Raises FileNotFoundError if absent.
+
+    Windows prefers pythonw.exe (no console window) and falls back to
+    python.exe; the POSIX payloads ship a single python3.
     """
+    if not _IS_WINDOWS:
+        candidate = _POSIX_PYTHON_PATHS.get(sys.platform)
+        if candidate is None:
+            raise FileNotFoundError(
+                f"No bundled python interpreter is packaged for '{sys.platform}'")
+        if os.path.exists(candidate):
+            return candidate
+        raise FileNotFoundError(f"Python interpreter not found at {candidate}")
+
     # src lives at <install>\agent\src — two levels up is the install root
     install_root = os.path.dirname(os.path.dirname(get_path()))
 
@@ -776,46 +1289,59 @@ def get_python_exe_path():
     )
 
 def get_data_path(filename=None):
-    """Absolute path under %PROGRAMDATA%\Owlette — where a Windows service is
-    supposed to keep runtime data.
+    """Absolute path under the agent's data root — where a Windows service is
+    supposed to keep runtime data. OWLETTE_DATA_ROOT relocates the whole tree.
 
     get_data_path() -> C:\ProgramData\Owlette
     get_data_path('config/config.json') -> C:\ProgramData\Owlette\config\config.json
     """
-    program_data = os.environ.get('PROGRAMDATA', 'C:\\ProgramData')
-    owlette_data = os.path.join(program_data, 'Owlette')
-
-    if filename is not None:
-        path = os.path.join(owlette_data, filename)
-    else:
-        path = owlette_data
-
-    path = os.path.normpath(path)
-
-    return path
+    return osadapter.data_root(filename)
 
 def ensure_data_directories():
-    """Create every required ProgramData directory. True if all exist after."""
+    """Create every required data-root directory. True if all exist after."""
     directories = [
         get_data_path(),
         get_data_path('config'),
         get_data_path('logs'),
+        get_data_path('logs/swoop'),
         get_data_path('cache'),
         get_data_path('tmp'),
+        get_data_path('ipc'),
         get_data_path('ipc/cortex_commands'),
         get_data_path('ipc/cortex_results'),
         get_data_path('ipc/cortex_events'),
-        get_data_path('logs/swoop'),
+        get_data_path('ipc/jobs'),
+        get_data_path('ipc/results'),
         get_data_path('ipc/swoop'),
+        get_data_path('ipc/requests'),
+        get_data_path('logs/swoop'),
     ]
 
     try:
         for directory in directories:
             os.makedirs(directory, exist_ok=True)
-        return True
     except Exception as e:
         logging.error(f"Failed to create data directories: {e}")
         return False
+
+    if not _IS_WINDOWS:
+        # The tree is shared with a desktop app that runs as the console user,
+        # so the POSIX arm opens what that app writes into to the daemon's
+        # group and closes everything else.
+        from osadapter import posix
+
+        posix.harden_data_root(get_data_path(), directories)
+    return True
+
+
+def grant_data_group(path):
+    """Give a file the daemon wrote in the data root to the group that reaches
+    it. A no-op on Windows, where the tree is ACL'd rather than grouped."""
+    if _IS_WINDOWS:
+        return
+    from osadapter import posix
+
+    posix.adopt_into_group(path)
 
 def get_environment():
     """'production' or 'development' from config; 'production' by default."""
@@ -907,7 +1433,7 @@ def build_detached_launch_command(exe_path, args=()):
 
 
 def read_desktop_pid(pid_path):
-    """PID from pid_path, but only if it is a live owlette-desktop.exe.
+    """PID from pid_path, but only if it is a live desktop-app process.
 
     A python-image cmdline scan can't be used — it only matches "python" image names.
     Checking the image name as well as the PID is what stops a recycled PID from
@@ -923,7 +1449,7 @@ def read_desktop_pid(pid_path):
         return None
 
     try:
-        if (psutil.Process(pid).name() or '').lower() == DESKTOP_EXE_NAME:
+        if (psutil.Process(pid).name() or '').lower() == osadapter.desktop_process_name():
             return pid
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
@@ -934,96 +1460,110 @@ def is_desktop_window_open():
     """True while the operator has the desktop app's main window on screen."""
     return read_desktop_pid(GUI_PID_PATH) is not None
 
-# Lazy GPUtil import — eager probing at module load costs ~5-10 MB plus startup
-# delay for every importer. Failures are sticky only for _GPUTIL_RETRY_BACKOFF so
-# a transient error during a driver update recovers on its own.
-_gputil_module = None
-_gputil_retry_after = 0.0  # monotonic seconds; 0 = retry immediately
-_gputil_popen_patched = False
-_GPUTIL_RETRY_BACKOFF = 300.0  # 5 min between retries after a failed import
+# NVML is probed lazily. The verdicts that mean "no NVIDIA GPU on this box" —
+# the library is absent, or it is present but no driver is loaded, which is what
+# a machine that once had an NVIDIA card reports — are cached for
+# _NVML_RETRY_BACKOFF, so the 5s monitor loop stops re-probing on every tick; a
+# driver install still recovers on its own. Every other failure (a driver
+# reload, a TDR) retries on the next tick, so a transient error costs one sample
+# rather than minutes of blank GPU data.
+_nvml_retry_after = 0.0  # monotonic seconds; 0 = probe immediately
+_NVML_RETRY_BACKOFF = 300.0  # 5 min between retries once NVML is known absent
+_nvml_warn_after = {}  # message -> monotonic seconds; throttles _nvml_warn()
 
-def _ensure_gputil_no_window_popen_patched():
-    global _gputil_popen_patched
-    if _gputil_popen_patched:
-        return
-    if sys.platform != 'win32':
-        _gputil_popen_patched = True
-        return
+GpuReading = namedtuple(
+    'GpuReading',
+    ['id', 'uuid', 'name', 'load', 'memoryTotal', 'memoryUsed', 'memoryFree'],
+)
 
+
+def _nvml_str(value):
+    """NVML text is str on nvidia-ml-py 12.x and bytes on older builds."""
+    return value.decode('utf-8', 'replace') if isinstance(value, bytes) else value
+
+
+def _nvml_warn(message):
+    """WARNING at most once per _NVML_RETRY_BACKOFF per distinct message.
+
+    A driver fault has to be tellable from 'no NVIDIA GPU here' at the default
+    log level, but get_gpus() runs every 5s on three threads, so an unthrottled
+    line per GPU per tick would bury service.log.
+    """
+    now = time.monotonic()
+    if now < _nvml_warn_after.get(message, 0.0):
+        return
+    _nvml_warn_after[message] = now + _NVML_RETRY_BACKOFF
+    logging.warning(message)
+
+
+def get_gpus():
+    """Live per-GPU readings, or [] when no NVIDIA GPU is visible.
+
+    `load` is 0.0-1.0 and the three memory values are MB. Never raises: callers
+    read it inline in the metrics path.
+    """
+    global _nvml_retry_after
+    if time.monotonic() < _nvml_retry_after:
+        return []
     try:
-        import GPUtil.GPUtil as _gputil_impl
-
-        def _wrap_popen(original_popen):
-            if getattr(original_popen, '_owlette_create_no_window', False):
-                return original_popen
-
-            def _popen_no_window(*args, **kwargs):
-                kwargs['creationflags'] = (
-                    (kwargs.get('creationflags') or 0)
-                    | subprocess.CREATE_NO_WINDOW
-                )
-                return original_popen(*args, **kwargs)
-
-            _popen_no_window._owlette_create_no_window = True
-            _popen_no_window._owlette_original_popen = original_popen
-            return _popen_no_window
-
-        patched_targets = []
-
-        popen = getattr(_gputil_impl, 'Popen', None)
-        if popen is not None:
-            _gputil_impl.Popen = _wrap_popen(popen)
-            patched_targets.append('GPUtil.GPUtil.Popen')
-
-        gputil_subprocess = getattr(_gputil_impl, 'subprocess', None)
-        subprocess_popen = getattr(gputil_subprocess, 'Popen', None)
-        if subprocess_popen is not None:
-            class _SubprocessProxy:
-                def __init__(self, module, popen_wrapper):
-                    self._module = module
-                    self.Popen = popen_wrapper
-
-                def __getattr__(self, name):
-                    return getattr(self._module, name)
-
-            _gputil_impl.subprocess = _SubprocessProxy(
-                gputil_subprocess,
-                _wrap_popen(subprocess_popen),
-            )
-            patched_targets.append('GPUtil.GPUtil.subprocess.Popen')
-
-        if patched_targets:
-            logging.debug(
-                "Patched GPUtil Popen for hidden Windows launches: %s",
-                ", ".join(patched_targets),
-            )
-        else:
-            logging.debug(
-                "GPUtil Popen patch warning: no supported Popen reference found"
-            )
-    except Exception as e:
-        logging.debug(
-            "GPUtil Popen patch warning: failed to apply hidden Windows launch: %s",
-            e,
-            exc_info=True,
+        from pynvml import (
+            nvmlInit, nvmlShutdown, nvmlDeviceGetCount,
+            nvmlDeviceGetHandleByIndex, nvmlDeviceGetName, nvmlDeviceGetUUID,
+            nvmlDeviceGetMemoryInfo, nvmlDeviceGetUtilizationRates,
+            nvmlMemory_v2, NVMLError, NVMLError_DriverNotLoaded,
+            NVMLError_LibraryNotFound,
         )
-    finally:
-        _gputil_popen_patched = True
+    except ImportError as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[GPU] NVML unavailable: {e}")
+        return []
 
-def _get_gputil():
-    global _gputil_module, _gputil_retry_after
-    if _gputil_module is not None:
-        return _gputil_module
-    if time.monotonic() < _gputil_retry_after:
-        return None
     try:
-        import GPUtil as _g
-        _ensure_gputil_no_window_popen_patched()
-        _gputil_module = _g
-        return _gputil_module
-    except Exception:
-        _gputil_retry_after = time.monotonic() + _GPUTIL_RETRY_BACKOFF
-        return None
+        nvmlInit()
+    except (NVMLError_LibraryNotFound, NVMLError_DriverNotLoaded) as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[GPU] NVML unavailable: {e}")
+        return []
+    except Exception as e:
+        _nvml_warn(f"[GPU] NVML init failed: {e}")
+        return []
+
+    gpus = []
+    try:
+        for i in range(nvmlDeviceGetCount()):
+            try:
+                handle = nvmlDeviceGetHandleByIndex(i)
+                try:
+                    # v2 leaves driver-reserved VRAM out of `used`, the number
+                    # nvidia-smi reports and the fleet's history is built on; v1
+                    # counts it. v2 needs driver 510+, so the fallback stands.
+                    mem = nvmlDeviceGetMemoryInfo(handle, version=nvmlMemory_v2)
+                except NVMLError:
+                    mem = nvmlDeviceGetMemoryInfo(handle)
+                try:
+                    load = nvmlDeviceGetUtilizationRates(handle).gpu / 100.0
+                except Exception:
+                    load = 0.0
+                gpus.append(GpuReading(
+                    id=i,
+                    uuid=_nvml_str(nvmlDeviceGetUUID(handle)),
+                    name=_nvml_str(nvmlDeviceGetName(handle)),
+                    load=load,
+                    memoryTotal=mem.total / (1024 ** 2),
+                    memoryUsed=mem.used / (1024 ** 2),
+                    memoryFree=mem.free / (1024 ** 2),
+                ))
+            except Exception as e:
+                _nvml_warn(f"[GPU] NVML read failed for GPU {i}: {e}")
+    except Exception as e:
+        _nvml_warn(f"[GPU] NVML enumeration failed: {e}")
+    finally:
+        try:
+            nvmlShutdown()
+        except Exception:
+            pass
+
+    return gpus
 
 # mtime-invalidated config cache: read_config() runs several times per 5s tick
 # across three threads. Semantics are unchanged — external edits land as soon as
@@ -1243,16 +1783,11 @@ def initialize_logging(log_file_name, level=logging.INFO):
 def _get_windows_version_string():
     """Return friendly Windows version e.g. 'Windows 11 Pro 23H2 (Build 22631)'.
     Falls back to platform.version() if registry read fails."""
-    try:
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                             r'SOFTWARE\Microsoft\Windows NT\CurrentVersion')
-        product = winreg.QueryValueEx(key, 'ProductName')[0]
-        display = winreg.QueryValueEx(key, 'DisplayVersion')[0]
-        build   = winreg.QueryValueEx(key, 'CurrentBuildNumber')[0]
-        winreg.CloseKey(key)
-        return f"{product} {display} (Build {build})"
-    except Exception:
+    product, display, build = _windows_version_parts()
+    if not product:
         return platform.version()
+    edition = f"{product} {display}".strip()
+    return f"{edition} (Build {build})" if build else edition
 
 
 def _log_startup_banner(level, log_file_path):
@@ -1300,8 +1835,7 @@ def log_startup_system_snapshot():
         logging.info(f"  RAM          : {mem_gb} GB total")
         logging.info(f"  Disk (C:\\)   : {disk_str}")
         try:
-            _g = _get_gputil()
-            gpus = _g.getGPUs() if _g else []
+            gpus = get_gpus()
             if gpus:
                 for i, gpu in enumerate(gpus):
                     vram_gb = round(gpu.memoryTotal / 1024, 1)
@@ -1701,6 +2235,81 @@ def read_json_from_file(file_path, max_retries=3, initial_delay=0.1):
 
         return {}  # All retries exhausted
 
+def open_new_file(temp_path, mode=0o600):
+    """A descriptor on a temp file this process created itself.
+
+    Off Windows `config/` and `tmp/` are group-writable, so a fixed temp name
+    the daemon is about to write is one the kiosk session can occupy first: a
+    plain open would follow a symlink and hand a root-owned file outside the
+    tree the write, the mode and the group that follow, and os.replace would
+    then move the link over the destination. A stale temp from a killed write
+    is removed, O_EXCL refuses anything still under the name, and O_NOFOLLOW
+    refuses a link planted in the race.
+    """
+    try:
+        os.unlink(temp_path)
+    except FileNotFoundError:
+        pass
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    return os.open(temp_path, flags, mode)
+
+
+def _carry_file_identity(destination, temp_fd):
+    """Carry the destination's mode and group onto its replacement.
+
+    POSIX only, and onto the descriptor rather than the name: the temp file
+    sits in a group-writable directory, so a path-based chmod is one more thing
+    that can be redirected between the write and the replace. A destination
+    that is not a file of its own — missing, or a link planted in that same
+    directory — has no identity to carry and takes its directory's instead.
+
+    The write is a temp file plus os.replace, so a file the data-root mode table
+    opened to the desktop app — config.json is 0660 root:<group> — would
+    otherwise come back at the daemon's umask and lock that writer out until the
+    next service start.
+    """
+    if _IS_WINDOWS:
+        return
+    try:
+        existing = os.lstat(destination)
+    except OSError:
+        existing = None
+    if existing is None or stat.S_ISLNK(existing.st_mode):
+        _seed_file_identity(destination, temp_fd)
+        return
+    try:
+        # 0o777 and not 0o7777: a setuid or setgid bit sitting on the
+        # destination is not one to carry onto a file the daemon wrote as root.
+        os.fchmod(temp_fd, existing.st_mode & 0o777)
+        if os.fstat(temp_fd).st_gid != existing.st_gid:
+            os.fchown(temp_fd, -1, existing.st_gid)
+    except OSError as e:
+        logging.debug(
+            f"Could not carry {destination}'s mode onto its replacement: {e}"
+        )
+
+
+def _seed_file_identity(destination, temp_fd):
+    """Give a file written for the first time the access its directory grants.
+
+    There is no mode to carry yet, and the daemon's umask would leave the file
+    0600 root inside a directory the mode table opened to the group — config.json
+    on a machine paired before the next service start is exactly that file.
+    """
+    try:
+        directory = os.stat(os.path.dirname(destination) or '.')
+        if not directory.st_mode & stat.S_IWGRP:
+            return
+        os.fchmod(temp_fd, 0o660)
+        if os.fstat(temp_fd).st_gid != directory.st_gid:
+            os.fchown(temp_fd, -1, directory.st_gid)
+    except OSError as e:
+        logging.debug(
+            f"Could not open {destination} to the group of the directory "
+            f"holding it: {e}"
+        )
+
+
 def write_json_to_file(data, file_path, max_retries=3, initial_delay=0.1):
     """Atomically write JSON (temp file + replace), retrying past file locks.
 
@@ -1711,8 +2320,9 @@ def write_json_to_file(data, file_path, max_retries=3, initial_delay=0.1):
 
         for attempt in range(max_retries):
             try:
-                with open(temp_path, 'w') as f:
+                with os.fdopen(open_new_file(temp_path), 'w') as f:
                     json.dump(data, f, indent=4)
+                    _carry_file_identity(file_path, f.fileno())
 
                 # os.replace is atomic on Windows; os.rename is not.
                 os.replace(temp_path, file_path)
@@ -1923,7 +2533,7 @@ def _reap_orphaned_descendants(snapshot, pid):
 
 
 def graceful_terminate(pid, timeout=5, exe_path=None):
-    """WM_CLOSE, then hard terminate. True if killed, False if already gone.
+    """WM_CLOSE on Windows, then hard terminate. True if killed, False if gone.
 
     `exe_path` only decides whether to reap children. A .bat/.cmd target runs
     behind a cmd.exe wrapper (process_launcher.build_hidden_batch_command), so
@@ -1935,16 +2545,13 @@ def graceful_terminate(pid, timeout=5, exe_path=None):
     own business (TouchDesigner tears down TouchEngine.exe during WM_CLOSE) and
     reaping would race that cleanup.
     """
-    import win32gui
-    import win32con
-
     try:
         proc = psutil.Process(pid)
     except psutil.NoSuchProcess:
         return False
 
     # Snapshot while the parent lives — afterwards orphans are unattributable.
-    wrapper_target = bool(exe_path) and exe_path.replace('/', '\\').lower().endswith(('.bat', '.cmd'))
+    wrapper_target = normalize_exe_path(exe_path).endswith(('.bat', '.cmd'))
     child_snapshot = []
     if wrapper_target:
         try:
@@ -1961,21 +2568,27 @@ def graceful_terminate(pid, timeout=5, exe_path=None):
             _reap_orphaned_descendants(child_snapshot, pid)
         return result
 
-    # Graceful: WM_CLOSE every visible window.
-    windows = find_windows_by_pid(pid)
-    if windows:
-        for hwnd in windows:
-            try:
-                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
-            except Exception:
-                pass
+    # Graceful: WM_CLOSE every visible window. Windows only - there is no
+    # POSIX analogue of a close request to a window, and terminate() below
+    # already sends the SIGTERM a POSIX application is asked to exit on.
+    if _IS_WINDOWS:
+        import win32con
+        import win32gui
 
-        try:
-            proc.wait(timeout=timeout)
-            logging.info(f"Process {pid} exited gracefully after WM_CLOSE")
-            return _finish(True)
-        except psutil.TimeoutExpired:
-            logging.info(f"Process {pid} did not exit after WM_CLOSE ({timeout}s), forcing terminate")
+        windows = find_windows_by_pid(pid)
+        if windows:
+            for hwnd in windows:
+                try:
+                    win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                except Exception:
+                    pass
+
+            try:
+                proc.wait(timeout=timeout)
+                logging.info(f"Process {pid} exited gracefully after WM_CLOSE")
+                return _finish(True)
+            except psutil.TimeoutExpired:
+                logging.info(f"Process {pid} did not exit after WM_CLOSE ({timeout}s), forcing terminate")
 
     # Fall back to hard terminate
     try:
@@ -1994,16 +2607,123 @@ def graceful_terminate(pid, timeout=5, exe_path=None):
 
 # PROCESSES
 
+def normalize_exe_path(path):
+    """One spelling for the executable paths owlette compares.
+
+    Windows is case-insensitive and accepts either separator, so a comparison
+    there has to fold both. POSIX filesystems are case-sensitive and `/` is the
+    only separator, so the path is compared exactly as the kernel reports it:
+    folding it made /usr/bin/Foo and /usr/bin/foo the same file, and the
+    separator swap stored "\\usr\\bin\\sleep" in every Linux identity record.
+    """
+    text = str(path or '')
+    if sys.platform != 'win32':
+        return text
+    return text.replace('/', '\\').lower()
+
+
+# A macOS application bundle names the directory LaunchServices opens, not the
+# image the kernel runs: `/Applications/TouchDesigner.app` executes
+# `Contents/MacOS/TouchDesigner`, and that inner path is what psutil reports.
+_APP_BUNDLE_SUFFIX = '.app'
+# A property list is read the way everything owlette opens out of a tree it did
+# not build is — Info.plist belongs to whoever can write the bundle: bounded,
+# off a descriptor on the entry itself, never through a link.
+_PLIST_LIMIT = 1 << 20
+# Windows has neither O_NOFOLLOW nor O_NONBLOCK, and needs O_BINARY for the
+# bytes to arrive untranslated; the property lists read here are macOS's, but
+# the suite reads them on every leg.
+_PLIST_OPEN_FLAGS = (
+    os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    | getattr(os, 'O_BINARY', 0)
+)
+
+
+def resolve_exec_target(exe_path):
+    """The executable a configured path runs.
+
+    On macOS an application bundle resolves to the binary its Info.plist names
+    under Contents/MacOS — the image the kernel runs, and so the one every
+    identity comparison sees. Every other path, and every path on every other
+    platform, is returned as given. So is a bundle that does not resolve: a
+    comparison against the bundle directory matches no live image, and a launch
+    of it is refused as a path that is not an executable.
+
+    Nothing below the bundle is followed through a link: the executable must be
+    the bundle's own file, not whatever a planted `Contents` or `MacOS` entry
+    points at.
+    """
+    text = str(exe_path or '')
+    bundle = text.rstrip('/')
+    if not _IS_MACOS or not bundle.endswith(_APP_BUNDLE_SUFFIX):
+        return text
+    executable = _bundle_executable(bundle)
+    if executable is None:
+        return text
+    target = os.path.join(bundle, 'Contents', 'MacOS', executable)
+    inside = os.path.join(os.path.realpath(bundle), 'Contents', 'MacOS', executable)
+    if os.path.realpath(target) != inside or not os.path.isfile(target):
+        logging.debug(f"{bundle} names {executable!r}, which is not its own file")
+        return text
+    return target
+
+
+def read_plist(path):
+    """The property list at `path`; None when there is none to read.
+
+    A regular file of plausible size, opened without following a link and
+    without blocking on a fifo planted in its place.
+    """
+    import plistlib
+    from xml.parsers.expat import ExpatError
+
+    try:
+        fd = os.open(path, _PLIST_OPEN_FLAGS)
+    except OSError as e:
+        logging.debug(f"No readable property list at {path}: {e}")
+        return None
+    try:
+        with os.fdopen(fd, 'rb') as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                logging.debug(f"{path} is not a regular file")
+                return None
+            data = f.read(_PLIST_LIMIT + 1)
+        if len(data) > _PLIST_LIMIT:
+            logging.debug(f"{path} is larger than a property list should be")
+            return None
+        return plistlib.loads(data)
+    except (OSError, ValueError, ExpatError) as e:
+        logging.debug(f"Could not read {path}: {e}")
+        return None
+
+
+def read_bundle_info(bundle):
+    """A bundle's Contents/Info.plist as a dict; None when there is none to read."""
+    info = read_plist(os.path.join(bundle, 'Contents', 'Info.plist'))
+    return info if isinstance(info, dict) else None
+
+
+def _bundle_executable(bundle):
+    """The CFBundleExecutable a bundle's Info.plist names; None when it names
+    nothing that could be a file inside Contents/MacOS."""
+    info = read_bundle_info(bundle)
+    executable = info.get('CFBundleExecutable') if info is not None else None
+    if (not isinstance(executable, str) or executable in ('', '.', '..')
+            or '/' in executable or '\0' in executable):
+        return None
+    return executable
+
+
 def read_process_identity(pid):
     """Snapshot a live process's identity: {pid, create_time, exe}.
 
     The record half of the managed-or-inherited rule: owlette operations touch
     only processes owlette launched or deliberately inherited, and both cases
     are later proven by comparing this snapshot against the live process
-    (identity_matches). The exe is normalised the way the matching code in
-    find_running_process_by_exe normalises paths (forward slashes to back,
-    lowercase) so stored records compare cheaply, without re-normalising on
-    every check.
+    (identity_matches). The exe is stored through normalize_exe_path, so the
+    record one run writes compares against the live process on the next
+    without re-normalising on every check -- and on POSIX it is the path the
+    kernel reports, not a Windows spelling of it.
 
     Returns None on ANY failure (dead pid, access denied, zombie) -- a caller
     that cannot read an identity must treat the process as unmanaged.
@@ -2018,7 +2738,7 @@ def read_process_identity(pid):
         return {
             'pid': int(pid),
             'create_time': create_time,
-            'exe': exe.replace('/', '\\').lower(),
+            'exe': normalize_exe_path(exe),
         }
     except Exception as e:
         logging.debug(f"read_process_identity({pid}) failed: {e}")
@@ -2063,9 +2783,10 @@ def identity_matches(record, pid):
     recorded_exe = record.get('exe')
     if recorded_exe:
         # Records written by read_process_identity are already normalised;
-        # normalise again anyway so hand-written or legacy records compare
-        # fairly instead of failing on slash direction or case.
-        recorded_exe_normalised = str(recorded_exe).replace('/', '\\').lower()
+        # normalise again anyway so a hand-written or legacy record compares
+        # fairly. Off Windows the path IS the identity, so one differing in
+        # case or separator is a different file and the refusal is right.
+        recorded_exe_normalised = normalize_exe_path(recorded_exe)
         if recorded_exe_normalised != live['exe']:
             logging.warning(
                 f"identity_matches: pid {recorded_pid} create_time matches but "
@@ -2098,12 +2819,30 @@ def update_process_status_in_json(pid, new_status, firebase_client=None, process
     if str(pid) not in data:
         data[str(pid)] = {}
 
+    previous = dict(data[str(pid)]) if isinstance(data[str(pid)], dict) else None
+
     data[str(pid)]['status'] = new_status
     if process_id:
         data[str(pid)]['id'] = process_id
     if isinstance(extra, dict):
         data[str(pid)].update(extra)
+    # The 5-second loop stamps RUNNING on every managed process on every
+    # tick, so a machine whose processes are all up rewrote the same bytes
+    # ~17,000 times a day: the content-signature skip service_status.json
+    # already applies, covering that stamp. It covers this writer only.
+    # owlette_scout -- launched per running managed process per tick on
+    # Windows -- rewrites the same responsive row through write_json_to_file
+    # on every call, as does every other caller of that function. Nothing
+    # reads this file's mtime -- the desktop app watches the directory for
+    # the atomic replace and re-reads the content -- so an identical
+    # document is not worth a write.
+    if data[str(pid)] == previous:
+        return
     write_json_to_file(data, RESULT_FILE_PATH)
+
+def _normalized_cmdline(proc):
+    """A live command line in the spelling the configured paths compare in."""
+    return normalize_exe_path(' '.join(proc.cmdline()))
 
 def find_running_process_by_exe(exe_path, file_path=None, strict=False,
                                 expected_cmdline=None):
@@ -2137,60 +2876,69 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
 
     strict=True additionally refuses bare image-name candidates outright.
     Anything that kills or restarts MUST pass strict=True.
+
+    Every comparison runs through normalize_exe_path, the same spelling
+    read_process_identity records: Windows folds case and separators, POSIX
+    compares the path exactly as the kernel reports it. Folding it there turned
+    the configured /usr/bin/app into \\usr\\bin\\app, whose basename is the whole
+    string, so no candidate could ever match and every adoption tier was
+    unreachable on Linux. A configured macOS application bundle is compared as
+    the binary it runs (resolve_exec_target), for the same reason: the kernel
+    reports that path and never the bundle's.
     """
     try:
-        exe_lower = exe_path.replace('/', '\\').lower()
-        exe_basename = os.path.basename(exe_lower)
-        file_path_lower = file_path.replace('/', '\\').lower() if file_path else None
+        exe_key = normalize_exe_path(resolve_exec_target(exe_path))
+        exe_basename = os.path.basename(exe_key)
+        file_path_key = normalize_exe_path(file_path) if file_path else None
         # Same normalisation as the live cmdlines below, so recorded evidence
         # compares exactly regardless of slash direction or case.
-        expected_lower = (expected_cmdline.replace('/', '\\').lower()
-                          if expected_cmdline else None)
-        is_script = exe_lower.endswith(('.bat', '.cmd'))
+        expected_key = (normalize_exe_path(expected_cmdline)
+                        if expected_cmdline else None)
+        is_script = exe_key.endswith(('.bat', '.cmd'))
         candidates = []      # (pid, full_match, cmdline-or-None) -- exe targets
         script_matches = []  # (pid, cmdline) -- cmd.exe wrappers for a script
         for proc in psutil.process_iter(['pid', 'exe']):
             try:
                 if not proc.info['exe']:
                     continue
-                proc_exe = proc.info['exe'].lower()
+                proc_exe = normalize_exe_path(proc.info['exe'])
                 if is_script:
                     # The wrapper is cmd.exe; identify it by its command line.
                     if os.path.basename(proc_exe) != 'cmd.exe':
                         continue
                     try:
-                        cmdline = ' '.join(proc.cmdline()).replace('/', '\\').lower()
+                        cmdline = _normalized_cmdline(proc)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
-                    if exe_lower not in cmdline:
+                    if exe_key not in cmdline:
                         continue
-                    if file_path_lower and file_path_lower not in cmdline:
+                    if file_path_key and file_path_key not in cmdline:
                         continue
                     # Collect instead of returning first: several wrappers for
                     # one script are ambiguous and must refuse (D3).
                     script_matches.append((proc.info['pid'], cmdline))
                     continue
-                full_match = proc_exe == exe_lower
+                full_match = proc_exe == exe_key
                 basename_match = os.path.basename(proc_exe) == exe_basename
                 if not (full_match or basename_match):
                     continue
                 # Strict: a bare basename match is never enough.
-                if strict and not full_match and not file_path_lower:
+                if strict and not full_match and not file_path_key:
                     continue
-                if file_path_lower:
+                if file_path_key:
                     try:
-                        cmdline = ' '.join(proc.cmdline()).replace('/', '\\').lower()
-                        if file_path_lower not in cmdline:
+                        cmdline = _normalized_cmdline(proc)
+                        if file_path_key not in cmdline:
                             continue  # wrong instance
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue  # unverifiable cmdline -- don't risk a false match
                     return proc.info['pid']  # cmdline-corroborated
                 cmdline = None
-                if expected_lower:
+                if expected_key:
                     # Reading a cmdline is a per-process syscall -- only pay
                     # for it when there is recorded evidence to compare with.
                     try:
-                        cmdline = ' '.join(proc.cmdline()).replace('/', '\\').lower()
+                        cmdline = _normalized_cmdline(proc)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         cmdline = None  # unreadable -> can never corroborate
                 candidates.append((proc.info['pid'], full_match, cmdline))
@@ -2199,9 +2947,9 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
         if is_script:
             if len(script_matches) == 1:
                 return script_matches[0][0]
-            if expected_lower:
+            if expected_key:
                 exact = [pid for pid, cmdline in script_matches
-                         if cmdline == expected_lower]
+                         if cmdline == expected_key]
                 if len(exact) == 1:
                     return exact[0]
             if script_matches:
@@ -2225,9 +2973,9 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
         # exactly one winner. Zero exact matches is a mismatch, several is
         # still ambiguity -- both refuse, because a wrong guess here is
         # precisely the disease D3 cures.
-        if expected_lower:
+        if expected_key:
             exact = [pid for pid, _, cmdline in candidates
-                     if cmdline == expected_lower]
+                     if cmdline == expected_key]
             if len(exact) == 1:
                 return exact[0]
         if candidates:
@@ -2274,8 +3022,7 @@ def get_system_info():
     cpu_usage = psutil.cpu_percent()
     memory_info = psutil.virtual_memory()
     disk_info = psutil.disk_usage('/')
-    _g = _get_gputil()
-    gpus = _g.getGPUs() if _g else []
+    gpus = get_gpus()
     gpu_info = gpus[0] if gpus else "No GPU detected"
 
     bytes_to_gb = lambda x: round(x / (1024 ** 3), 2)
@@ -2296,7 +3043,7 @@ def get_system_metrics(skip_gpu=False):
     """System metrics for Firebase: CPU model/%, memory and disk in GB, GPU
     usage % and VRAM GB, plus per-process config + runtime state.
 
-    skip_gpu: skip GPU probes, which flash a console window when called from a UI.
+    skip_gpu: skip the GPU load and temperature probes.
     """
     # mtime-cached read; returns a deep copy, safe to pass down.
     config = read_config()
@@ -2311,7 +3058,7 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
     instead.
 
     config: reuse a dict to skip a disk read; None goes through the mtime cache.
-    skip_gpu: skip the nvidia-smi / sensor probes that flash a console window.
+    skip_gpu: skip the NVML and temperature sensor probes.
     """
     if config is None:
         config = read_config()
@@ -2345,8 +3092,7 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
         gpu_temp = None
         if not skip_gpu:
             try:
-                _g = _get_gputil()
-                gpus = _g.getGPUs() if _g else []
+                gpus = get_gpus()
                 if gpus:
                     g0 = gpus[0]
                     gpu_usage_percent = round(g0.load * 100, 1)

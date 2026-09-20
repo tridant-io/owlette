@@ -77,6 +77,12 @@ class FakeProc:
     def exe(self):
         return self._exe
 
+    def status(self):
+        # Util.is_pid_running reads this off Windows to tell a live process
+        # from a zombie the daemon has not reaped yet; a double without it
+        # makes every identity check raise there and nowhere else.
+        return psutil.STATUS_RUNNING
+
 
 def install_process_table(monkeypatch, table):
     """Replace the live process view with `table` ({pid: FakeProc}).
@@ -683,6 +689,8 @@ def test_deploy_suppress_mismatch_refuses_but_still_locks(
     assert machine_scan_spy.call_count == 0
 
 
+@pytest.mark.windows(
+    reason='close_processes carries Windows exe basenames; software deployment is Windows-only')
 def test_deploy_close_resolves_managed_entry_recorded_pid(
         state_file, config, gt, machine_scan_spy, monkeypatch):
     """close_processes=['demo.exe'] maps to the config entry by exe

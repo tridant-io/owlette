@@ -963,7 +963,7 @@ begin
     Log('Swoop payload permission reset returned: ' + IntToStr(ResultCode));
 
     // Step 1: pairing handoff, BEFORE the service install. The order is
-    // load-bearing: install.bat starts the service, OwletteService.__init__
+    // load-bearing: install.bat starts the service, OwletteService.main()
     // calls _try_launch_tray(), and a --tray instance holding the
     // single-instance lock would turn the --pair launch into a FORWARDED second
     // instance whose app.emit is dropped when the webview has not yet

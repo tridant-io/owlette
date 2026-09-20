@@ -1,7 +1,0 @@
-"""Small subset of ntsecuritycon constants used by ACL hardening paths."""
-
-GENERIC_ALL = 0x10000000
-FILE_GENERIC_READ = 0x00120089
-FILE_GENERIC_WRITE = 0x00120116
-FILE_GENERIC_EXECUTE = 0x001200A0
-DELETE = 0x00010000

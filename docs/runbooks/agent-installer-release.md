@@ -357,9 +357,8 @@ If omitted, the server computes the checksum.
 - [ ] Step 3 uses `PUT /api/installer/upload`.
 - [ ] Step 3 has a different unique `Idempotency-Key`.
 - [ ] Step 3 supplies `checksum_sha256` when possible.
-- [ ] MockService and OwletteService constructor state are in parity.
-- [ ] Any new `self.*` attribute is added to both classes.
-- [ ] `agent/src/owlette_runner.py` hosted startup path still works with MockService.
+- [ ] Any new `self.*` attribute is set in `OwletteService._init_state()`.
+- [ ] `agent/tests/unit/test_service_shutdown.py::test_the_hosted_instance_carries_every_shutdown_attribute` passes.
 - [ ] `service.log` will be tailed for at least 30 seconds after restart.
 - [ ] No blocking IO was added to the 10-second main service loop at `agent/src/owlette_service.py:6557`.
 - [ ] ConnectionManager backoff remains `BACKOFF_BASE=30s`.
@@ -374,7 +373,7 @@ If omitted, the server computes the checksum.
 - [ ] If using CI artifact, it was downloaded from the GitHub Release.
 - [ ] If using local artifact, no checksum match with CI is expected.
 - [ ] A Windows test machine is ready for smoke testing.
-- [ ] `installer_metadata/cortex_cli` exists in the target environment and pins the CLI version the shipped SDK expects (`claude_agent_sdk/_cli_version.py`). Since 3.0.0 the installer no longer bundles `claude.exe`; a missing or stale pin leaves Cortex dead on every fresh install. See `/docs/internal/cortex-cli-provisioning.md`.
+- [ ] The cortex CLI pin the shipped agent actually reads exists in the target environment and pins the CLI version the shipped SDK expects (`claude_agent_sdk/_cli_version.py`). A 3.4+ agent reads `installer_metadata/cortex_cli_<osFamily>_<arch>` — `cortex_cli_windows_x64` for a Windows installer — and never the unsuffixed `installer_metadata/cortex_cli`, which every pre-3.4 agent in the field still reads and which must stay current alongside it until the fleet floor is 3.4. Since 3.0.0 the installer no longer bundles `claude.exe`; a missing or stale pin leaves Cortex dead on every fresh install. See `/docs/internal/cortex-cli-provisioning.md`.
 
 ## post-release smoke
 
@@ -383,7 +382,7 @@ If omitted, the server computes the checksum.
 3. Pair a controlled Windows test machine using the new installer.
 4. Watch `service.log` for at least 30 seconds after restart.
 5. Look for `AttributeError`, crash-loop entries in `logs\service_host.log`, startup failures, connection failures, and update loop failures.
-6. Treat log stability as a release gate because MockService and OwletteService parity has caused repeated crash loops before.
+6. Treat log stability as a release gate because missing service state has caused repeated crash loops before.
 7. Confirm the dashboard shows the agent online.
 8. Confirm the dashboard shows the released version.
 9. Confirm normal service traffic works.

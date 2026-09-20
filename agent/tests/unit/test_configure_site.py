@@ -4,6 +4,8 @@ import re
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # No module-level skip guard, deliberately: a broken agent dependency must fail
 # collection (pytest exit 2) rather than silently delete these tests behind a
 # green run. Unguarded imports are the house norm (test_shared_utils.py:14,
@@ -180,11 +182,19 @@ def test_add_poll_includes_machine_id_and_version():
     }
 
 
-def test_machine_id_uses_shared_hostname_source(monkeypatch):
-    """AuthManager, FirebaseClient, and /ADD= poll should share hostname source."""
-    sentinel = "SENTINEL-HOST"
+@pytest.mark.skipif(sys.platform == 'win32',
+                    reason='the POSIX arm of the clipboard affordance')
+def test_the_clipboard_copy_is_a_no_op_off_windows():
+    """A root daemon has no clipboard to take, and pairing never depended on
+    one: the phrase is printed either way, and off Windows that is all."""
+    assert configure_site._copy_to_clipboard('silver-compass-drift') is False
+
+
+def test_machine_id_uses_the_persisted_identity(monkeypatch):
+    """AuthManager, FirebaseClient, and /ADD= poll should share one identity source."""
+    sentinel = "SENTINEL-ID"
     storage = _storage()
-    monkeypatch.setattr(shared_utils, "get_hostname", lambda: sentinel)
+    monkeypatch.setattr(shared_utils, "get_machine_id", lambda: sentinel)
     monkeypatch.setattr("auth_manager.get_storage", lambda: storage)
 
     auth_manager = AuthManager(api_base="https://owlette.app/api", storage=storage)

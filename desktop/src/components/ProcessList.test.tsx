@@ -2,19 +2,9 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProcessList } from '@/components/ProcessList'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { resetExeIconCache } from '@/hooks/useExeIcon'
 import type { ProcessEntry } from '@/lib/owletteConfig'
 import type { AppStates } from '@/lib/processStatus'
 import { isRowDragging } from '@/lib/rowDrag'
-
-/** Only TouchDesigner has an icon here; the other two exercise the fallback. */
-const exeIcon = vi.fn(async (path: string) =>
-  path.toLowerCase().includes('touchdesigner') ? 'data:image/png;base64,TOUCH' : null,
-)
-
-vi.mock('@/lib/ipc', () => ({
-  exeIcon: (path: string) => exeIcon(path),
-}))
 
 const processes: ProcessEntry[] = [
   { id: 'a', name: 'touch', exe_path: 'C:/Program Files/Derivative/bin/TouchDesigner.exe' },
@@ -55,13 +45,6 @@ function setup(
 
   return handlers
 }
-
-beforeEach(() => {
-  // The icon cache is module-level, so one test's answers would otherwise be
-  // the next one's first paint.
-  resetExeIconCache()
-  exeIcon.mockClear()
-})
 
 function rows() {
   return screen.getAllByTestId('process-row')
@@ -199,51 +182,23 @@ describe('process list', () => {
   })
 })
 
-describe('exe icons', () => {
-  it('asks the host once per entry that has an exe', async () => {
+describe('process icons', () => {
+  it('draws one glyph per entry, in the same box', () => {
     setup()
 
-    // The nameless third entry has no exe to ask about.
-    expect(exeIcon.mock.calls.map(([path]) => path)).toEqual([
-      'C:/Program Files/Derivative/bin/TouchDesigner.exe',
-      'C:/tools/node.exe',
-    ])
-
-    const icons = await screen.findAllByTestId('process-icon')
-    expect(icons).toHaveLength(1)
-    expect(icons[0].getAttribute('src')).toBe('data:image/png;base64,TOUCH')
+    const icons = screen.getAllByTestId('process-icon')
+    expect(icons).toHaveLength(3)
+    expect(icons[0].getAttribute('class')).toContain('size-4')
   })
 
-  it('draws the fallback glyph for an entry with no icon, in the same box', async () => {
+  it('puts the icon between the status dot and the name', () => {
     setup()
-    await screen.findAllByTestId('process-icon')
-
-    const fallbacks = screen.getAllByTestId('process-icon-fallback')
-    // node.exe answered null, and the nameless entry has no exe at all.
-    expect(fallbacks).toHaveLength(2)
-    // Same box as the image, so a late icon moves nothing beside it.
-    expect(fallbacks[0].getAttribute('class')).toContain('size-4')
-    expect(screen.getAllByTestId('process-icon')[0].getAttribute('class')).toContain('size-4')
-  })
-
-  it('puts the icon between the status dot and the name', async () => {
-    setup()
-    const icon = (await screen.findAllByTestId('process-icon'))[0]
+    const icon = screen.getAllByTestId('process-icon')[0]
 
     const row = icon.closest('[data-testid="process-row"]')
     const children = [...(row?.children ?? [])]
     expect(children.indexOf(icon)).toBe(2) // grip, dot, icon, name
     expect(children[3]?.textContent).toBe('touch')
-  })
-
-  it('shares one host call between rows pointing at the same exe', async () => {
-    setup(null, [
-      { id: 'a', name: 'one', exe_path: 'C:/tools/node.exe' },
-      { id: 'b', name: 'two', exe_path: 'C:/tools/node.exe' },
-    ])
-    await screen.findAllByTestId('process-icon-fallback')
-
-    expect(exeIcon).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -256,10 +211,10 @@ describe('the collapsed rail', () => {
     expect(screen.queryByText('processes')).toBeNull()
   })
 
-  it('shows one icon per entry, with the status dot in its corner', async () => {
+  it('shows one icon per entry, with the status dot in its corner', () => {
     setup(null, processes, { collapsed: true })
-    await screen.findAllByTestId('process-icon')
 
+    expect(screen.getAllByTestId('process-icon')).toHaveLength(3)
     const dots = screen.getAllByTestId('rail-status-dot')
     expect(dots).toHaveLength(3)
     // Same statuses as the expanded list draws, in the same colours.

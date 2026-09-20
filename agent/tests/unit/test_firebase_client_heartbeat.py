@@ -116,7 +116,87 @@ def test_returns_false_when_not_connected():
     fc.connection_manager.report_success.assert_not_called()
 
 
+# The machine document's OS identity — osFamily / arch / osVersion — rides the
+# two writes the agent already makes: the presence write that registers a fresh
+# machine, and the metrics write that IS the heartbeat. The dashboard labels a
+# machine from these, and reads an absent osFamily as windows.
+
+def _stub_os_identity(monkeypatch):
+    """Pin the two probes on the shared_utils module firebase_client holds.
+
+    Never patch('firebase_client.<name>') here: resolving that target imports a
+    second firebase_client, which is exactly what the module header warns about.
+    """
+    monkeypatch.setattr(shared_utils, 'get_os_family_arch', lambda: ('linux', 'x64'))
+    monkeypatch.setattr(shared_utils, 'get_os_version_string', lambda: 'Ubuntu 24.04.5 LTS')
+
+
+def test_the_heartbeat_write_carries_the_os_identity(monkeypatch):
+    fc = _make_client()
+    _stub_os_identity(monkeypatch)
+
+    assert fc._upload_metrics(_metrics()) is True
+    metrics_ref = (
+        fc.db.collection.return_value.document.return_value
+        .collection.return_value.document.return_value
+    )
+    payload = metrics_ref.update.call_args[0][0]
+
+    assert payload['osFamily'] == 'linux'
+    assert payload['arch'] == 'x64'
+    assert payload['osVersion'] == 'Ubuntu 24.04.5 LTS'
+    # Beside the fields it has always carried, on the same write.
+    assert payload['lastHeartbeat'] is not None
+    assert 'agent_version' in payload
+    # update() patches the named fields; a set() would replace the document and
+    # drop everything the server and the dashboard wrote onto it.
+    metrics_ref.set.assert_not_called()
+
+
+def test_the_registration_write_carries_the_os_identity(monkeypatch):
+    fc = _make_client()
+    fc._last_heartbeat_time = 0.0
+    _stub_os_identity(monkeypatch)
+
+    fc._update_presence(True)
+
+    presence_ref = (
+        fc.db.collection.return_value.document.return_value
+        .collection.return_value.document.return_value
+    )
+    args, kwargs = presence_ref.set.call_args
+
+    assert args[0]['osFamily'] == 'linux'
+    assert args[0]['arch'] == 'x64'
+    assert args[0]['osVersion'] == 'Ubuntu 24.04.5 LTS'
+    assert 'lastHeartbeat' in args[0]
+    # merge=True, never a bare set: this write must not drop a field it does
+    # not name.
+    assert kwargs == {'merge': True}
+
+
+def test_the_os_string_is_probed_once_across_ticks(monkeypatch):
+    """The metrics loop runs every 5s at its fastest; the Windows arm of the
+    probe reads the registry. Negative control for the cache: without it this
+    counts one build per tick."""
+    fc = _make_client()
+    builds = []
+
+    def _build():
+        builds.append(1)
+        return 'Ubuntu 24.04.5 LTS'
+
+    monkeypatch.setattr(shared_utils, '_os_version_string', None)
+    monkeypatch.setattr(shared_utils, '_build_os_version_string', _build)
+
+    fc._upload_metrics(_metrics())
+    fc._upload_metrics(_metrics())
+
+    assert len(builds) == 1
+
+
 # Swoop capability + C3 platform keys
+
 
 def _heartbeat_payload(fc):
     """The dict handed to metrics_ref.update() by one heartbeat."""
@@ -126,6 +206,8 @@ def _heartbeat_payload(fc):
         .collection.return_value.document.return_value
     )
     return metrics_ref.update.call_args[0][0]
+
+
 
 
 def test_heartbeat_carries_the_swoop_and_platform_keys(monkeypatch):

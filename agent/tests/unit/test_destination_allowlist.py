@@ -11,11 +11,23 @@ from unittest.mock import patch
 
 import pytest
 
+import destination_allowlist as mod
 from destination_allowlist import (
-    DEFAULT_ROOTS,
     DestinationAllowlist,
     DestinationNotAllowedError,
+    default_roots,
+    get_interactive_user_ids,
 )
+
+
+class FakePasswd:
+    """stand-in for a `pwd.struct_passwd`, so the POSIX arms are drivable from
+    any host."""
+
+    def __init__(self, pw_dir, pw_uid=1001, pw_gid=1002):
+        self.pw_dir = pw_dir
+        self.pw_uid = pw_uid
+        self.pw_gid = pw_gid
 
 
 def test_none_roots_rejects_all_paths():
@@ -38,18 +50,16 @@ def test_empty_roots_validate_raises_with_clear_message():
 
 
 def test_from_config_with_missing_agent_config_applies_defaults(tmp_path, monkeypatch):
-    """no agent_config key → field unset → apply DEFAULT_ROOTS."""
-    # Don't depend on ~/Documents/Owlette existing on the CI runner.
-    import destination_allowlist as mod
-    monkeypatch.setattr(mod, 'DEFAULT_ROOTS', [str(tmp_path)])
+    """no agent_config key → field unset → apply this OS's default roots."""
+    # Don't depend on the real default root existing on the CI runner.
+    monkeypatch.setattr(mod, 'default_roots', lambda os_family=None: [str(tmp_path)])
     allowlist = mod.DestinationAllowlist.from_config({})
     assert allowlist.is_allowed(str(tmp_path / 'x' / 'y.toe'))
 
 
 def test_from_config_with_missing_allowed_extract_roots_applies_defaults(tmp_path, monkeypatch):
-    """agent_config exists but no allowed_extract_roots → apply DEFAULT_ROOTS."""
-    import destination_allowlist as mod
-    monkeypatch.setattr(mod, 'DEFAULT_ROOTS', [str(tmp_path)])
+    """agent_config exists but no allowed_extract_roots → apply the defaults."""
+    monkeypatch.setattr(mod, 'default_roots', lambda os_family=None: [str(tmp_path)])
     allowlist = mod.DestinationAllowlist.from_config({'agent_config': {}})
     assert allowlist.is_allowed(str(tmp_path / 'x' / 'y.toe'))
 
@@ -149,7 +159,15 @@ def test_multiple_roots_any_match_allows(tmp_path):
     assert not allowlist.is_allowed(str(tmp_path / 'c' / 'file'))
 
 
-def test_tilde_in_root_is_expanded():
+def test_tilde_in_root_is_expanded(tmp_path, monkeypatch):
+    """an unprivileged agent is its own user, so `~` is the stdlib's answer.
+
+    the home is sandboxed rather than read off the machine: the suite runs as
+    root on the linux leg, and /root is a system path the allowlist refuses.
+    """
+    monkeypatch.setattr(mod, '_running_as_root', lambda: False)
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('USERPROFILE', str(tmp_path))  # ntpath.expanduser reads this one
     allowlist = DestinationAllowlist(['~/Documents/Owlette'])
     home = Path.home() / 'Documents' / 'Owlette'
     resolved_roots = allowlist.roots
@@ -158,7 +176,32 @@ def test_tilde_in_root_is_expanded():
     )
 
 
+def test_tilde_in_root_expands_through_the_console_user(tmp_path, monkeypatch):
+    """under the privileged daemon `~` is the human at the machine, wherever
+    the suite itself happens to be running from."""
+    home = tmp_path / 'home' / 'kiosk'
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(mod, '_console_user_passwd', lambda: FakePasswd(str(home)))
+
+    allowlist = DestinationAllowlist(['~/projects'])
+
+    assert allowlist.roots == [(home / 'projects').resolve()]
+
+
+def test_tilde_in_root_is_refused_with_nobody_at_the_machine(tmp_path, monkeypatch):
+    """negative control: no console user, no interactive home — the root is
+    dropped rather than quietly becoming the daemon's own."""
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(mod, '_console_user_passwd', lambda: None)
+
+    assert DestinationAllowlist(['~/projects']).roots == []
+    assert not DestinationAllowlist([str(tmp_path)]).is_allowed('~/projects/a.toe')
+
+
 def test_tilde_in_target_is_expanded(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, '_running_as_root', lambda: False)
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('USERPROFILE', str(tmp_path))  # windows
     allowed = tmp_path / 'Documents' / 'Owlette'
@@ -186,9 +229,11 @@ def test_invalid_root_entries_are_skipped_keeping_valid_one(tmp_path):
 
 
 def test_from_config_with_valid_roots():
+    """neither path is under a system path on any OS — `/tmp` would be, since
+    macOS resolves it to `/private/tmp`."""
     config = {
         'agent_config': {
-            'allowed_extract_roots': ['/tmp/projects', '/data/projects']
+            'allowed_extract_roots': ['/opt/projects', '/data/projects']
         }
     }
     allowlist = DestinationAllowlist.from_config(config)
@@ -212,24 +257,34 @@ def test_repr_includes_roots(tmp_path):
     assert 'second-root' in repr_str
 
 
-def test_default_roots_constant_is_safe():
+@pytest.mark.parametrize('family,expected', [
+    ('windows', ['~/Documents']),
+    ('macos', ['/Users/Shared/Owlette']),
+    ('linux', ['/var/lib/owlette/projects']),
+])
+def test_default_roots_per_os(family, expected):
     """
-    feedback fix: previous final assertion `root.startswith('~') or '/' in root or '\\' in root`
-    was tautological for any non-empty string. now actually verifies safety.
+    the per-OS landing pad. windows keeps `~/Documents`; the POSIX defaults are
+    absolute, because `~` under the root daemon is /root (/var/root on macOS),
+    which no kiosk user can read.
     """
-    assert DEFAULT_ROOTS, "DEFAULT_ROOTS must not be empty"
-    for root in DEFAULT_ROOTS:
-        # explicit anti-system-path checks
-        assert 'System32' not in root
-        assert 'Program Files' not in root
-        assert 'Windows' not in root
-        # must be in user space — accept tilde or absolute user-dir paths
-        assert root.startswith('~') or 'Users' in root or 'home' in root, (
-            f"DEFAULT_ROOTS entry {root!r} doesn't look like a user-space path"
-        )
+    assert default_roots(family) == expected
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Windows-specific reparse-point check')
+def test_default_roots_follow_the_running_os(monkeypatch):
+    monkeypatch.setattr(mod, '_os_family', lambda: 'macos')
+    assert default_roots() == ['/Users/Shared/Owlette']
+
+
+@pytest.mark.parametrize('family', ['macos', 'linux'])
+def test_posix_default_root_is_not_refused_by_its_own_os(family, monkeypatch):
+    """the carve-outs exist so the default root survives the system-path set."""
+    monkeypatch.setattr(mod, '_os_family', lambda: family)
+    for root in default_roots(family):
+        assert mod._is_dangerous_root(Path(root)) is False
+
+
+@pytest.mark.windows(reason='Windows-specific reparse-point check')
 def test_windows_symlink_in_parent_is_rejected(tmp_path):
     """
     create a symlink inside the allowed root pointing OUT of it.
@@ -253,7 +308,7 @@ def test_windows_symlink_in_parent_is_rejected(tmp_path):
     assert not allowlist.is_allowed(target_via_symlink)
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Windows reparse-point attribute check')
+@pytest.mark.windows(reason='Windows reparse-point attribute check')
 def test_windows_reparse_point_detected_via_mocked_attribute(tmp_path):
     """
     junctions don't require admin to create but are fiddly to set up in
@@ -295,7 +350,7 @@ def test_windows_reparse_point_detected_via_mocked_attribute(tmp_path):
             allowlist.validate(str(target))
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Windows NTFS is case-insensitive')
+@pytest.mark.windows(reason='Windows NTFS is case-insensitive')
 def test_windows_case_insensitive_allowlist_match(tmp_path):
     """
     NTFS is case-insensitive but Path.relative_to() is case-sensitive.
@@ -317,7 +372,7 @@ def test_windows_case_insensitive_allowlist_match(tmp_path):
 # stat OSError fails closed; it used to log and allow.
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Windows alternate data streams')
+@pytest.mark.windows(reason='Windows alternate data streams')
 def test_windows_alternate_data_stream_rejected(tmp_path):
     """
     `C:\\AllowedDir\\file.toe:hidden:$DATA` is a Windows ADS — colon
@@ -333,7 +388,7 @@ def test_windows_alternate_data_stream_rejected(tmp_path):
     assert not allowlist.is_allowed(target)
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Windows drive-root + system-dir rejection')
+@pytest.mark.windows(reason='Windows drive-root + system-dir rejection')
 def test_windows_drive_root_in_allowlist_is_rejected():
     """
     operator misconfiguration: an admin who types `C:\\` as an allowed root
@@ -346,7 +401,7 @@ def test_windows_drive_root_in_allowlist_is_rejected():
     assert not allowlist.is_allowed('C:\\Windows\\System32\\evil.dll')
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Windows system-dir rejection')
+@pytest.mark.windows(reason='Windows system-dir rejection')
 def test_windows_system_root_in_allowlist_is_rejected():
     """
     `C:\\Windows` (or whatever %SystemRoot% resolves to) must be rejected
@@ -366,7 +421,7 @@ def test_posix_root_in_allowlist_is_rejected():
     assert allowlist.roots == []
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Windows reserved device names')
+@pytest.mark.windows(reason='Windows reserved device names')
 def test_windows_reserved_device_names_rejected(tmp_path):
     """
     Windows reserved device names (NUL, CON, PRN, AUX, COM1-9, LPT1-9)
@@ -385,7 +440,7 @@ def test_windows_reserved_device_names_rejected(tmp_path):
     assert allowlist.is_allowed(str(tmp_path / 'communications.toe')) # not COM1
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Windows system-dir descendant check')
+@pytest.mark.windows(reason='Windows system-dir descendant check')
 def test_windows_descendant_of_system_dir_rejected(tmp_path):
     """
     `_is_dangerous_root` previously only checked p-as-ancestor of system
@@ -403,7 +458,7 @@ def test_windows_descendant_of_system_dir_rejected(tmp_path):
     )
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='reparse-point check is windows-only')
+@pytest.mark.windows(reason='reparse-point check is windows-only')
 def test_windows_stat_permission_error_fails_closed(tmp_path):
     """
     if we can't stat a parent path, FAIL-CLOSED. previous behavior was
@@ -429,3 +484,239 @@ def test_windows_stat_permission_error_fails_closed(tmp_path):
     with patch('destination_allowlist.os.lstat', side_effect=fake_lstat):
         with pytest.raises(DestinationNotAllowedError, match="cannot verify"):
             allowlist.validate(str(target))
+
+
+# POSIX system paths, `~` and file ownership.
+# `_os_family` is the module's one platform read, so every case below runs on
+# any host; the paths are compared as PurePosixPath and never touch the disk.
+
+# (family, root, dangerous?) — the post-resolve() spelling, which is what
+# DestinationAllowlist.__init__ hands `_is_dangerous_root`.
+_POSIX_ROOT_CASES = [
+    # linux: is / contains / sits under a system path
+    ('linux', '/', True),
+    ('linux', '/etc', True),
+    ('linux', '/etc/systemd/system', True),
+    ('linux', '/usr', True),
+    ('linux', '/usr/local/bin', True),
+    ('linux', '/var', True),
+    ('linux', '/var/lib', True),
+    ('linux', '/bin', True),
+    ('linux', '/sbin', True),
+    ('linux', '/lib', True),
+    ('linux', '/lib64', True),
+    ('linux', '/boot', True),
+    ('linux', '/sys/kernel', True),
+    ('linux', '/proc/1', True),
+    ('linux', '/dev/shm', True),
+    ('linux', '/run/user/1000', True),
+    ('linux', '/root', True),
+    ('linux', '/root/Documents', True),
+    # linux: the carve-out and ordinary operator-chosen roots
+    ('linux', '/var/lib/owlette', False),
+    ('linux', '/var/lib/owlette/projects', False),
+    ('linux', '/var/lib/owlette/projects/show1', False),
+    ('linux', '/opt/exhibit', False),
+    ('linux', '/home/kiosk/projects', False),
+    ('linux', '/srv/roost', False),
+    # macos: the /private/... spellings resolve() produces
+    ('macos', '/', True),
+    ('macos', '/private/etc', True),
+    ('macos', '/private/etc/ssh', True),
+    ('macos', '/private/var', True),
+    ('macos', '/private/var/root', True),
+    ('macos', '/private/var/db', True),
+    ('macos', '/private/tmp', True),
+    ('macos', '/private', True),          # contains /private/etc
+    # macos: the bare spellings, for a path that never touches the disk
+    ('macos', '/etc', True),
+    ('macos', '/var', True),
+    ('macos', '/var/root', True),
+    ('macos', '/tmp', True),
+    # macos: the rest of the OS
+    ('macos', '/System', True),
+    ('macos', '/System/Library/LaunchDaemons', True),
+    ('macos', '/Library', True),
+    ('macos', '/Library/LaunchDaemons', True),
+    ('macos', '/Applications', True),
+    ('macos', '/Applications/owlette.app', True),
+    ('macos', '/usr/local/bin', True),
+    ('macos', '/bin', True),
+    ('macos', '/sbin', True),
+    # macos: the carve-outs and ordinary operator-chosen roots
+    ('macos', '/Users/Shared/Owlette', False),
+    ('macos', '/Users/Shared/Owlette/show1', False),
+    ('macos', '/Users/Shared', False),
+    ('macos', '/Users/kiosk/Movies', False),
+    # the per-user temp tree is under /private/var: shipped policy refuses it,
+    # and the suite injects its own tmp root on macOS rather than widen this.
+    ('macos', '/private/var/folders/ab/cd/T/pytest-of-runner/pytest-0', True),
+    ('macos', '/opt/exhibit', False),
+]
+
+
+@pytest.mark.parametrize('family,root,dangerous', _POSIX_ROOT_CASES)
+def test_posix_dangerous_roots(family, root, dangerous, monkeypatch):
+    """
+    the POSIX arm refuses a root that IS, CONTAINS or SITS UNDER one of the OS's
+    system paths. the pre-3.8 set matched exact strings only, so every
+    descendant here (`/usr/local/bin`, `/Library/LaunchDaemons`, `/private/etc`)
+    was authorised for a root daemon.
+    """
+    monkeypatch.setattr(mod, '_os_family', lambda: family)
+    assert mod._is_dangerous_root(Path(root)) is dangerous
+
+
+def test_posix_dangerous_root_rejection_empties_the_allowlist(monkeypatch):
+    """a refused root is dropped, and an empty allowlist rejects everything."""
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_is_dangerous_root', lambda p: True)
+    allowlist = DestinationAllowlist(['/var/lib/owlette/projects'])
+    assert allowlist.roots == []
+    assert not allowlist.is_allowed('/var/lib/owlette/projects/show1/a.toe')
+
+
+def test_posix_tilde_resolves_through_the_console_user(monkeypatch):
+    """
+    under the root daemon `~` must mean the kiosk user's home. the stdlib would
+    answer /root (/var/root on macOS), where the operator can see nothing.
+    """
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(mod, '_console_user_passwd', lambda: FakePasswd('/home/kiosk'))
+    assert mod._safe_expanduser('~') == '/home/kiosk'
+    assert mod._safe_expanduser('~/projects') == '/home/kiosk/projects'
+
+
+def test_posix_tilde_without_a_console_user_is_refused(monkeypatch):
+    """
+    no console user → there is no interactive session, so `~` resolves to
+    nothing. the stdlib would answer /root, which the operator cannot even read.
+    """
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(mod, '_console_user_passwd', lambda: None)
+    monkeypatch.setenv('HOME', '/root')
+    monkeypatch.setenv('USERPROFILE', '/root')  # ntpath.expanduser reads this one
+
+    with pytest.raises(mod.UnresolvableHomeError):
+        mod._safe_expanduser('~/Documents')
+
+    assert mod._safe_expanduser('/root/Documents') == '/root/Documents'
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='pwd resolves `~user` on POSIX')
+def test_posix_tilde_user_names_its_own_account(monkeypatch):
+    """
+    only the bare `~` means "the human at the machine". `~kiosk/...` names an
+    account pwd can resolve whoever is signed in, so it is not the daemon's home
+    and is not refused with nobody there.
+    """
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(mod, '_console_user_passwd', lambda: None)
+    import pwd
+
+    account = pwd.getpwuid(os.getuid())
+
+    expanded = mod._safe_expanduser(f'~{account.pw_name}/projects')
+
+    assert expanded == f'{account.pw_dir}/projects'
+
+
+def test_posix_tilde_is_stdlib_when_not_root(monkeypatch):
+    """an unprivileged agent is its own user — nothing to redirect."""
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_running_as_root', lambda: False)
+    monkeypatch.setenv('HOME', '/home/dev')
+    monkeypatch.setenv('USERPROFILE', '/home/dev')
+    assert mod._safe_expanduser('~/projects') == '/home/dev/projects'
+
+
+def test_expanduser_skips_the_home_lookup_for_a_plain_path(monkeypatch):
+    """validate() sends every assembled file path through here, and on POSIX the
+    home lookup asks the OS who is at the console. only a leading `~` needs it."""
+    def boom():
+        raise AssertionError('home lookup on a path with no `~`')
+
+    monkeypatch.setattr(mod, '_privileged_home', boom)
+    target = '/var/lib/owlette/projects/show1/a.toe'
+    assert mod._safe_expanduser(target) == target
+
+
+def test_interactive_user_ids_none_when_not_root(monkeypatch):
+    """windows has no geteuid, so this is also the windows answer."""
+    monkeypatch.setattr(mod, '_running_as_root', lambda: False)
+    assert get_interactive_user_ids() is None
+
+
+def test_interactive_user_ids_come_from_the_console_user(monkeypatch):
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(
+        mod, '_console_user_passwd', lambda: FakePasswd('/home/kiosk', 1001, 1002)
+    )
+    assert get_interactive_user_ids() == (1001, 1002)
+
+
+def test_interactive_user_ids_none_when_console_user_unresolved(monkeypatch):
+    """no account to hand the files to → leave them root-owned, don't guess."""
+    monkeypatch.setattr(mod, '_running_as_root', lambda: True)
+    monkeypatch.setattr(mod, '_console_user_passwd', lambda: None)
+    assert get_interactive_user_ids() is None
+
+
+def test_console_user_lookup_retries_until_it_resolves(monkeypatch):
+    """
+    the daemon starts before the kiosk autologin completes, so the first lookup
+    of a run can legitimately find nobody. pinning that answer would leave every
+    later sync of the run root-owned and every `~` root refused until a service
+    restart, so only a resolved entry is kept.
+    """
+    import types
+
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_cached_console_user_passwd', None)
+    monkeypatch.setattr(mod, '_console_user_failed_at', None)
+    monkeypatch.setattr(mod, '_CONSOLE_USER_RETRY_SECONDS', 0.0)
+
+    answers = ['', 'kiosk']
+    osadapter_stub = types.ModuleType('osadapter')
+    osadapter_stub.console_user = lambda: answers.pop(0)
+    monkeypatch.setitem(sys.modules, 'osadapter', osadapter_stub)
+
+    entry = FakePasswd('/home/kiosk')
+    pwd_stub = types.ModuleType('pwd')
+    pwd_stub.getpwnam = lambda name: entry
+    monkeypatch.setitem(sys.modules, 'pwd', pwd_stub)
+
+    assert mod._console_user_passwd() is None   # nobody logged in yet
+    assert mod._console_user_passwd() is entry  # retried after login
+    # and then kept: a third console_user() call would exhaust `answers`.
+    assert mod._console_user_passwd() is entry
+
+
+def test_console_user_failure_is_throttled(monkeypatch):
+    """
+    the assembler asks once per extracted file and the POSIX lookup asks the OS,
+    so a machine with nobody logged in must not pay for it — or warn about it —
+    5,000 times in one sync.
+    """
+    import types
+
+    monkeypatch.setattr(mod, '_os_family', lambda: 'linux')
+    monkeypatch.setattr(mod, '_cached_console_user_passwd', None)
+    monkeypatch.setattr(mod, '_console_user_failed_at', None)
+
+    calls = []
+    osadapter_stub = types.ModuleType('osadapter')
+
+    def console_user():
+        calls.append(1)
+        return ''
+
+    osadapter_stub.console_user = console_user
+    monkeypatch.setitem(sys.modules, 'osadapter', osadapter_stub)
+
+    for _ in range(5):
+        assert mod._console_user_passwd() is None
+    assert len(calls) == 1

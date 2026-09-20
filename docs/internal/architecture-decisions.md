@@ -282,7 +282,7 @@ config/
 
 ```bash
 cd agent/src
-python owlette_service.py
+python owlette_runner.py --debug
 ```
 
 ### for portal development
@@ -298,7 +298,7 @@ npm run dev
 **Terminal 1 (Agent):**
 ```bash
 cd agent/src
-python owlette_service.py
+python owlette_runner.py --debug
 ```
 
 **Terminal 2 (Portal):**

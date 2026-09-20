@@ -1,4 +1,5 @@
-"""The Cortex IPC pump must not execute on the 5-second main service loop.
+"""The Cortex IPC pump must not execute on the 5-second main service loop,
+and must not execute at all with hoot switched off.
 
 Until 2026-09-07 `_process_cortex_ipc_commands` ran the tool inline on the tick.
 A single `capture_screenshot` costs ~55s end to end (user-session poll plus the
@@ -20,7 +21,15 @@ import pytest
 
 
 @pytest.fixture
-def ipc_dirs(tmp_path, monkeypatch):
+def cortex_enabled(monkeypatch):
+    """The kill switch the drain is gated on, on."""
+    import shared_utils
+
+    monkeypatch.setattr(shared_utils, 'is_cortex_enabled', lambda config=None: True)
+
+
+@pytest.fixture
+def ipc_dirs(tmp_path, monkeypatch, cortex_enabled):
     import shared_utils
 
     cmd_dir = tmp_path / 'cortex_commands'
@@ -92,7 +101,37 @@ def test_single_flight_while_a_drain_is_in_progress(ipc_dirs):
     assert len(starts) == 1
 
 
-def test_no_worker_spawned_when_there_is_nothing_to_drain(tmp_path, monkeypatch):
+def test_nothing_is_drained_with_hoot_switched_off(ipc_dirs, monkeypatch):
+    """The queue is group-writable so the console user's hoot process can
+    write to it. With hoot off nothing legitimate does, and a command
+    hand-written there by any member of that group would otherwise run as
+    root on the next tick.
+
+    ipc_dirs has already written one; the kill switch is what stops it.
+    """
+    import shared_utils
+
+    monkeypatch.setattr(shared_utils, 'is_cortex_enabled', lambda config=None: False)
+
+    svc = SimpleNamespace(
+        _cortex_ipc_thread=None,
+        _drain_cortex_ipc_commands=lambda: pytest.fail('drained with hoot off'),
+    )
+    _dispatcher(svc)()
+
+    assert svc._cortex_ipc_thread is None
+    # Negative control: the same command IS picked up with hoot on, so the
+    # switch is what refused it and not an empty queue.
+    monkeypatch.setattr(shared_utils, 'is_cortex_enabled', lambda config=None: True)
+    drained = []
+    svc._drain_cortex_ipc_commands = lambda: drained.append(1)
+    _dispatcher(svc)()
+    svc._cortex_ipc_thread.join(5)
+    assert drained == [1]
+
+
+def test_no_worker_spawned_when_there_is_nothing_to_drain(
+        tmp_path, monkeypatch, cortex_enabled):
     import shared_utils
 
     empty = tmp_path / 'empty'

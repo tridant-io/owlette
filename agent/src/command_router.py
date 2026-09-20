@@ -26,6 +26,14 @@ from typing import Callable, Dict, Optional, Any
 logger = logging.getLogger(__name__)
 
 
+# What a handler returns instead of a result when it finishes its work on a
+# thread of its own: the command lane is released at once and the terminal
+# status is that thread's to write, through FirebaseClient.finish_command. The
+# alternative is a progress write landing after the lane has already marked the
+# command terminal, which leaves the row non-terminal for good.
+COMMAND_DEFERRED = object()
+
+
 # command handler signature: (cmd_data, cmd_id, service) -> str
 # - cmd_data: full command dict from firestore
 # - cmd_id: command id string

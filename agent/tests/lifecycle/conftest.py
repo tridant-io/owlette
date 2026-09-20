@@ -38,9 +38,9 @@ This conftest builds three things and documents the honesty contract of each.
    command line without raising in a repo checkout.
 
 3. ISOLATION. shared_utils freezes CONFIG_PATH / RESULT_FILE_PATH at import
-   from %PROGRAMDATA%, so a plain env redirect is NOT enough once the module
+   from the data root, so a plain env redirect is NOT enough once the module
    is imported (and the wider suite imports it first). The seam used here is
-   both: os.environ['PROGRAMDATA'] is set (covers every runtime
+   both: os.environ['OWLETTE_DATA_ROOT'] is set (covers every runtime
    get_data_path() call - launcher handoff files, restart flag, sentinels)
    AND the two import-frozen module constants are monkeypatched onto
    tmp_path. An autouse probe then re-resolves every path the suite can
@@ -306,7 +306,7 @@ def data_root(tmp_path, monkeypatch):
     (root / 'logs').mkdir()
 
     # Runtime seam: everything that calls get_data_path() from now on.
-    monkeypatch.setenv('PROGRAMDATA', str(tmp_path))
+    monkeypatch.setenv('OWLETTE_DATA_ROOT', str(root))
     # Import-frozen seam: constants resolved before this fixture existed.
     monkeypatch.setattr(shared_utils, 'CONFIG_PATH',
                         str(root / 'config' / 'config.json'))
@@ -409,6 +409,7 @@ _REAL_METHODS = [
     '_kill_and_relaunch_locked',
     'handle_unresponsive_process',
     'reached_max_relaunch_attempts',
+    '_seat_absent',
     '_is_restart_prompt_active',
     'log_and_notify',
     '_find_running_process_by_exe',
@@ -416,6 +417,7 @@ _REAL_METHODS = [
     'recover_running_processes',
     '_terminate_processes_for_install',
     'launch_process_as_user',
+    '_record_launch',
     'handle_firebase_command',
     '_get_process_launch_mode',
     'main',
@@ -430,7 +432,7 @@ def service_factory(monkeypatch, decoy_env):
     files preserved IS the simulated service restart.
     """
     import shared_utils
-    import owlette_service
+    import win32process
     from owlette_service import OwletteService
 
     # -- launch seam (installed once per test) ----------------------------
@@ -465,14 +467,14 @@ def service_factory(monkeypatch, decoy_env):
         # (hProcess, hThread, dwProcessId, dwThreadId) of the helper.
         return None, None, popen.pid, 0
 
-    monkeypatch.setattr(owlette_service.win32process, 'CreateProcessAsUser',
+    monkeypatch.setattr(win32process, 'CreateProcessAsUser',
                         _fake_create_process_as_user)
 
     # -- double builder ---------------------------------------------------
     def _make():
         svc = SimpleNamespace(
-            # attribute set mirrors OwletteService.__init__ (the slice these
-            # methods touch); MockService parity rule applies to src, not here
+            # attribute set mirrors OwletteService._init_state (the slice
+            # these methods touch); the parity rule applies to src, not here
             last_started={},
             install_locks={},
             relaunch_attempts={},
@@ -481,6 +483,9 @@ def service_factory(monkeypatch, decoy_env):
             firebase_client=None,
             _shutting_down=False,
             _skip_launch_delay=set(),
+            _seat_probe=None,
+            _seat_probe_thread=threading.get_ident(),
+            _seatless_entries=set(),
             manual_overrides={},
             current_time=datetime.datetime.now(),
             current_timestamp=int(time.time()),

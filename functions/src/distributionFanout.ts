@@ -39,8 +39,8 @@ interface Roost {
   extractPath?: string;
 }
 
-// Fallback when the roost doc has no extractPath. Must match agent
-// DEFAULT_ROOTS in destination_allowlist.py.
+// Fallback when the roost doc has no extractPath. Must match the windows
+// entry of the agent's `default_roots()` in destination_allowlist.py.
 const DEFAULT_EXTRACT_ROOT = '~/Documents/Owlette';
 
 interface RolloutDoc {

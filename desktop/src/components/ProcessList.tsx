@@ -347,7 +347,7 @@ export function ProcessList({
                             // Dot badged onto the icon's corner: a separate dot
                             // would cost a third of the icon's width here.
                             <span className="relative flex size-8 shrink-0 items-center justify-center">
-                              <ProcessIcon exePath={process.exe_path} className="size-5" />
+                              <ProcessIcon className="size-5" />
                               <span
                                 aria-hidden
                                 data-testid="rail-status-dot"
@@ -371,7 +371,7 @@ export function ProcessList({
                                 aria-hidden
                                 className={cn('size-2 shrink-0 rounded-full', STATUS_DOT[status])}
                               />
-                              <ProcessIcon exePath={process.exe_path} />
+                              <ProcessIcon />
                               <span className="truncate">{name}</span>
                             </>
                           )}
