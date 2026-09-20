@@ -260,7 +260,6 @@ function MachineCard({
               shutdownScheduledAt={machine.shutdownScheduledAt}
               isSiteAdmin={isSiteAdmin}
               onCancel={onCancelRestart}
-              tooltip={heartbeat.tooltip}
             />
             <Tooltip>
               <TooltipTrigger asChild>
@@ -361,10 +360,10 @@ function MachineCard({
                   <div className="grid grid-cols-5 gap-x-2 flex-1 min-w-0 text-sm text-muted-foreground/70">
                     <span className="min-w-0 truncate tabular-nums">
                       {cpuDevice && cpuDevice.percent != null && (
-                        <>cpu <span className="text-foreground font-medium">{cpuDevice.percent}%</span>
+                        <>cpu <span className="text-foreground font-medium">{Math.round(cpuDevice.percent)}%</span>
                           {cpuDevice.temperature != null && (
                             <span className={`ml-1 ${getTemperatureColorClass(cpuDevice.temperature)}`}>
-                              {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit)}
+                              {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit, 0)}
                             </span>
                           )}
                         </>
@@ -372,22 +371,22 @@ function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {memory?.percent != null && (
-                        <>mem <span className="text-foreground font-medium">{memory.percent}%</span></>
+                        <>mem <span className="text-foreground font-medium">{Math.round(memory.percent)}%</span></>
                       )}
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {diskDevice && diskDevice.percent != null && (() => {
                         const io = machine.metrics?.diskio?.[diskDevice.id];
                         return (
-                          <>disk <span className="text-foreground font-medium">{diskDevice.percent}%</span>
+                          <>disk <span className="text-foreground font-medium">{Math.round(diskDevice.percent)}%</span>
                             {io && io.readBps > 0 && (
                               <span className="ml-1" style={{ color: DISK_IO_COLORS.read }}>
-                                r {formatDiskIO(io.readBps)}
+                                r {formatThroughputShort(io.readBps)}
                               </span>
                             )}
                             {io && io.writeBps > 0 && (
                               <span className="ml-1" style={{ color: DISK_IO_COLORS.write }}>
-                                w {formatDiskIO(io.writeBps)}
+                                w {formatThroughputShort(io.writeBps)}
                               </span>
                             )}
                           </>
@@ -396,10 +395,10 @@ function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {gpuDevice && gpuDevice.usagePercent != null && (
-                        <>gpu <span className="text-foreground font-medium">{gpuDevice.usagePercent}%</span>
+                        <>gpu <span className="text-foreground font-medium">{Math.round(gpuDevice.usagePercent)}%</span>
                           {gpuDevice.temperature != null && (
                             <span className={`ml-1 ${getTemperatureColorClass(gpuDevice.temperature)}`}>
-                              {formatTemperature(gpuDevice.temperature, userPreferences.temperatureUnit)}
+                              {formatTemperature(gpuDevice.temperature, userPreferences.temperatureUnit, 0)}
                             </span>
                           )}
                         </>
@@ -410,7 +409,7 @@ function MachineCard({
                         <>net <span className="text-orange-400">{'\u2191 '}{formatThroughputShort(nicDevice.txBps)}</span>
                           <span className="ml-1 text-green-400">{'\u2193 '}{formatThroughputShort(nicDevice.rxBps)}</span>
                           {(machine.metrics.network?.packetLossPct ?? 0) > 0 && (
-                            <span className="ml-1 text-red-400">{machine.metrics.network?.packetLossPct}% loss</span>
+                            <span className="ml-1 text-red-400">{Math.round(machine.metrics.network?.packetLossPct ?? 0)}% loss</span>
                           )}
                         </>
                       )}

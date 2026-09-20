@@ -13,8 +13,6 @@ interface MachineStatusPillProps {
   shutdownScheduledAt?: number;  // Unix seconds — TARGET shutdown time
   onCancel?: () => Promise<void>;
   isSiteAdmin?: boolean;
-  /** hover text for the idle online dot; the heartbeat tooltip, so both read the same */
-  tooltip?: string;
 }
 
 const CANCEL_LOCKOUT_THRESHOLD = 5; // Hide cancel in final 5s — Windows shutdown /a is unreliable
@@ -33,7 +31,6 @@ export function MachineStatusPill({
   shutdownScheduledAt,
   onCancel,
   isSiteAdmin,
-  tooltip,
 }: MachineStatusPillProps) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
@@ -81,7 +78,7 @@ export function MachineStatusPill({
           />
         </TooltipTrigger>
         <TooltipContent>
-          <p>{tooltip ?? 'online'}</p>
+          <p>online</p>
         </TooltipContent>
       </Tooltip>
     ) : (
