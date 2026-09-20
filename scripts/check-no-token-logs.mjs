@@ -24,6 +24,7 @@ const SCAN_ROOTS = [
   join(ROOT, 'web', 'contexts'),
   join(ROOT, 'web', 'scripts'),
   join(ROOT, 'agent', 'src'),
+  join(ROOT, 'scripts'),
 ];
 
 const INCLUDE_EXT = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.py']);
