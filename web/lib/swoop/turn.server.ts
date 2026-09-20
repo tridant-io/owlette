@@ -5,8 +5,13 @@
  * server->client egress, so `customIdentifier` is the site id and the metering
  * in Wave 8 reads it back per site.
  *
- * Credentials are short-lived and revoked on every clean end (session DELETE,
- * kill, membership revocation). They are never stored in `swoop_sessions`.
+ * Credentials are never stored in `swoop_sessions`, and are NOT revoked:
+ * `revokeTurnCredentials` below has no caller, so every credential lives its
+ * full 12h ttl through session end, kill and membership revocation. Wiring it
+ * up needs somewhere to keep the username handle first — both call sites
+ * discard it, and `assertNoKeyMaterial` would reject a field named for a
+ * credential. Tracked with the metering (task 8.4) and the host-side
+ * allocation (task 7.4); until then a relay allocation outlives its session.
  */
 
 import logger from '@/lib/logger';
@@ -126,9 +131,12 @@ export async function mintTurnCredentials(args: {
 }
 
 /**
- * Revoke one credential by its username. Called on session DELETE, on kill and
- * when a member's access is revoked mid-session — the TTL alone would leave a
- * relay allocation billable for hours after the session ended.
+ * Revoke one credential by its username.
+ *
+ * NOT CALLED. Written ahead of the session-teardown wiring and still waiting on
+ * it — see the header. The TTL alone leaves a relay allocation billable for up
+ * to 12h after the session ended, which is the gap this closes once something
+ * persists the username to call it with.
  */
 export async function revokeTurnCredentials(username: string): Promise<TurnRevokeResult> {
   const creds = credentials();

@@ -18,6 +18,7 @@ import {
   mockDbFactory,
   docSnapshot,
   querySnapshot,
+  apiKeyAuth,
   seedMember,
   seedSiteOwner,
 } from '../helpers/firestore-mock';
@@ -95,7 +96,7 @@ jest.mock('@/lib/swoop/turn.server', () => ({
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
 }));
 
-import { PATCH } from '@/app/api/sites/[siteId]/swoop-settings/route';
+import { GET, PATCH } from '@/app/api/sites/[siteId]/swoop-settings/route';
 import { POST as KILL } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/kill/route';
 import { POST as START_SESSION } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/route';
 
@@ -129,6 +130,16 @@ function signIn(userId: string): void {
   mockResolveAuth.mockResolvedValue({ userId, keyContext: null });
   mockSession.userId = userId;
   mockSession.expiresAt = Date.now() + 86_400_000;
+}
+
+/**
+ * Same actor, presenting an api key instead of a session. `apiKeyAuth` grants
+ * every scope on purpose: the refusal must not depend on the key being
+ * under-scoped, or it proves only that the scope check works.
+ */
+function signInWithApiKey(userId: string): void {
+  signIn(userId);
+  mockResolveAuth.mockResolvedValue(apiKeyAuth(userId));
 }
 
 /** Every `commands/pending` write this test run produced. */
@@ -188,6 +199,35 @@ beforeEach(() => {
 });
 
 describe('PATCH swoop-settings', () => {
+  /**
+   * This route is the switch every session route stands behind, so it refuses
+   * an api key for the same reason they do. It used to admit one: the five
+   * machine-scoped routes call `apiKeyRefusal`, this one never did, and it
+   * declared site read/write scope — so a key held by an admin or owner could
+   * turn swoop on, open it to members and set the indicator to none.
+   */
+  it('refuses an api key on PATCH, even an admin key', async () => {
+    signInWithApiKey(ADMIN);
+
+    const res = await PATCH(
+      createMockRequest(settingsUrl(), { method: 'PATCH', body: { enabled: true } }),
+      siteContext(),
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('api_key_not_permitted');
+    expect(commandWrites()).toHaveLength(0);
+  });
+
+  it('refuses an api key on GET — the policy says who may watch', async () => {
+    signInWithApiKey(ADMIN);
+
+    const res = await GET(createMockRequest(settingsUrl()), siteContext());
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('api_key_not_permitted');
+  });
+
   it('a member cannot PATCH settings', async () => {
     signIn(MEMBER);
 

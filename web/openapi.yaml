@@ -6361,11 +6361,12 @@ paths:
       summary: read a site's swoop policy
       description: |
         swoop is off until a site turns it on. Site-admin surface: requires
-        `site=<siteId>:read` and the swoop-settings capability. Unlike the
-        session routes, this one does admit a scoped api key.
+        `site=<siteId>:read` and the swoop-settings capability.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`. This route is the switch the session routes
+        stand behind, so it refuses a key for the same reason they do.
       security:
-        - apiKey: []
-        - bearerApiKey: []
         - firebaseIdToken: []
       responses:
         '200':
@@ -6390,11 +6391,12 @@ paths:
         Changes any subset of the policy. Requires `site=<siteId>:write` and
         the swoop-settings capability.
 
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+
         Turning swoop off also reaches machines that are already connected:
         `refreshed` counts the machines the change was fanned out to.
       security:
-        - apiKey: []
-        - bearerApiKey: []
         - firebaseIdToken: []
       requestBody:
         required: true
