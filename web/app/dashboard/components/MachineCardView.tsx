@@ -17,7 +17,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
-import { formatHeartbeatTime, getDisplayTimezone } from '@/lib/timeUtils';
+import { formatHeartbeatTime, formatMachineLocalClock, formatTimezoneShortName, getDisplayTimezone } from '@/lib/timeUtils';
+import { machineClockTooltip } from '@/lib/scheduleClockCopy';
+import { useMinuteTick } from '@/hooks/useMinuteTick';
 import { formatThroughput, formatThroughputShort } from '@/lib/networkUtils';
 import { DISK_IO_COLORS, formatDiskIO } from '@/lib/diskIOUtils';
 import { useAllSparklineData } from '@/hooks/useSparklineData';
@@ -40,6 +42,14 @@ interface MachineCardViewProps {
   currentSiteId: string;
   siteTimezone?: string;
   siteTimeFormat?: '12h' | '24h';
+  /**
+   * `sites/{siteId}.schedulesFollowSiteTime`, straight off the Firestore
+   * snapshot (`useCurrentSite` / `useSites`). Three-state: `undefined` = never
+   * asked, `false` = declined, `true` = site time. Do not source it from
+   * `GET /api/sites`, which collapses the first two. Left unset, every clock
+   * tooltip renders exactly as it did before the site-time work.
+   */
+  schedulesFollowSiteTime?: boolean;
   onEditProcess: (machineId: string, process: Process) => void;
   onDuplicateProcess?: (machineId: string, process: Process) => void;
   onCreateProcess: (machineId: string) => void;
@@ -67,6 +77,7 @@ interface MachineCardProps {
   currentSiteId: string;
   siteTimezone: string;
   siteTimeFormat: '12h' | '24h';
+  schedulesFollowSiteTime?: boolean;
   userPreferences: { temperatureUnit: 'C' | 'F' };
   isSiteAdmin: boolean;
   cardPref: { cpu?: string; disk?: string; gpu?: string; nic?: string };
@@ -90,6 +101,7 @@ interface MachineCardProps {
   onScreenshot?: () => void;
   onLiveView?: () => void;
   onSwoop?: () => void;
+  showLocalClock?: boolean;
 }
 
 function MachineCard({
@@ -100,6 +112,7 @@ function MachineCard({
   currentSiteId,
   siteTimezone,
   siteTimeFormat,
+  schedulesFollowSiteTime,
   userPreferences,
   isSiteAdmin,
   cardPref,
@@ -123,6 +136,7 @@ function MachineCard({
   onScreenshot,
   onLiveView,
   onSwoop,
+  showLocalClock,
 }: MachineCardProps) {
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
@@ -1091,10 +1105,13 @@ export function MachineCardView({
   onScreenshot,
   onLiveView,
   onSwoop,
+  schedulesFollowSiteTime,
 }: MachineCardViewProps) {
   const { userPreferences, isSiteAdmin } = useAuth();
   const canSiteAdmin = isSiteAdmin(currentSiteId);
   const { prefs, setCardPref } = useDevicePrefs();
+  const uniqueTimezones = new Set(machines.map(m => m.machineTimezone).filter(Boolean));
+  const showLocalClock = uniqueTimezones.size > 1;
 
   return (
     // `machines-grid` hooks the globals.css slide-perf rule: under
@@ -1140,6 +1157,8 @@ export function MachineCardView({
           onScreenshot={onScreenshot ? () => onScreenshot(machine.machineId) : undefined}
           onLiveView={onLiveView ? () => onLiveView(machine.machineId) : undefined}
           onSwoop={onSwoop ? () => onSwoop(machine.machineId) : undefined}
+          schedulesFollowSiteTime={schedulesFollowSiteTime}
+          showLocalClock={showLocalClock}
         />
       ))}
     </div>
