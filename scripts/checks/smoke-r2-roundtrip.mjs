@@ -107,11 +107,12 @@ async function main() {
   console.log(`r2 round-trip smoke`);
   console.log(`  base url:  ${baseUrl}`);
   console.log(`  site id:   ${siteId}`);
-  // A fingerprint, not a prefix. The point of the line is to let the operator
-  // confirm WHICH key they passed; the first 12 characters leak key bytes to
-  // do it, and the house rule is not even partially.
-  const keyFp = createHash('sha256').update(apiKey).digest('hex').slice(0, 12);
-  console.log(`  api key:   fp:${keyFp}`);
+  // No api-key line at all. It printed the first 12 characters (codeql 299); a
+  // sha256 fingerprint fixed the leak and tripped js/insufficient-password-hash
+  // (384); a bare length tripped check-no-token-logs, which forbids naming a
+  // credential inside a log call and is right to. Three attempts to keep a line
+  // that earns nothing: the base url and site id already say which run this is,
+  // and a wrong key announces itself as a 401 on the first call below.
   console.log();
 
   // Random, so nothing on the server can collide: check #1 must say missing.
