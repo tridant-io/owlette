@@ -55,14 +55,22 @@ jobs:
           # names a tree that is, so these legs fail on the regressions they
           # are here to catch rather than on the data root.
           #
-          # All four ignored modules are display_manager's, which is never
-          # ported (test_no_platform_imports lists it as Windows-only) and
-          # asserts its own struct layout at import. Three import it at module
-          # scope, so collecting them off Windows fails before a test runs;
-          # test_display_enumeration_gate.py imports it inside its bodies and
-          # collects, then fails every test on the same assertion. `-x` aborts
-          # the leg on either, which is why both kinds are --ignore rather than
-          # markers. Everything else gates: a POSIX regression fails the leg.
+          # Four of the five ignored modules are display_manager's, which is
+          # never ported (test_no_platform_imports lists it as Windows-only)
+          # and asserts its own struct layout at import. Three import it at
+          # module scope, so collecting them off Windows fails before a test
+          # runs; test_display_enumeration_gate.py imports it inside its bodies
+          # and collects, then fails every test on the same assertion.
+          #
+          # The fifth is swoop: test_swoop_wiring.py imports win32event at
+          # module scope. Swoop is Windows-only by construction, not yet —
+          # agent/swoop/src/main.rs returns an internal error off Windows and
+          # platform/ holds win.rs alone — so this one does not lift when the
+          # macOS and Linux agents land. It lifts if swoop Wave 9 ever does.
+          #
+          # `-x` aborts the leg on either kind, which is why both are --ignore
+          # rather than markers. Everything else gates: a POSIX regression
+          # fails the leg.
           # Anything Windows-only inside a module that does collect carries
           # @pytest.mark.windows instead, which reports as a skip rather than
           # hiding the whole file.
@@ -73,6 +81,7 @@ jobs:
               --ignore=agent/tests/test_display_helper.py
               --ignore=agent/tests/unit/test_display_enumeration_gate.py
               --ignore=agent/tests/unit/test_display_manager.py
+              --ignore=agent/tests/integration/test_swoop_wiring.py
           - os: ubuntu-24.04
             data_root: /tmp/owlette-data
             pytest_addopts: >-
@@ -80,6 +89,7 @@ jobs:
               --ignore=agent/tests/test_display_helper.py
               --ignore=agent/tests/unit/test_display_enumeration_gate.py
               --ignore=agent/tests/unit/test_display_manager.py
+              --ignore=agent/tests/integration/test_swoop_wiring.py
     permissions:
       contents: read # checkout
     # The suite itself is ~95s locally. The rest of the budget is the pip
