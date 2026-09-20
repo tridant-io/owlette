@@ -5,7 +5,7 @@
  * and trailing-".0" trim behavior is easy to regress, so pin them here.
  */
 
-import { formatThroughput } from '@/lib/networkUtils';
+import { formatThroughput, formatThroughputShort } from '@/lib/networkUtils';
 
 describe('formatThroughput', () => {
   it('rounds sub-KB values to whole bytes', () => {
@@ -42,5 +42,39 @@ describe('formatThroughput', () => {
   it('handles the rounding edge at 999.95 KB/s', () => {
     // toFixed(1) would render "1000.0 KB/s" — must promote to MB.
     expect(formatThroughput(999.95 * 1024)).toBe('1 MB/s');
+  });
+});
+
+describe('formatThroughputShort', () => {
+  // the machine card shows two of these plus arrows plus a loss badge in one
+  // truncating column, so width is the requirement, not a preference.
+  // five, not four: the 1000-1023 B window renders `1023B`. everything from a
+  // kilobyte up is four or fewer, so the column sizes on 5.
+  it('never exceeds five characters, and only bytes reach five', () => {
+    for (const b of [0, 1, 1023, 1024, 2867, 8400, 99_000, 1_153_434, 12e6, 999e6, 5e9]) {
+      expect(formatThroughputShort(b).length).toBeLessThanOrEqual(5);
+    }
+    expect(formatThroughputShort(1023)).toBe('1023B');
+    for (const b of [1024, 2867, 99_000, 1_153_434, 999e6, 5e9]) {
+      expect(formatThroughputShort(b).length).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it('keeps one decimal below ten, where it carries information', () => {
+    expect(formatThroughputShort(2867)).toBe('2.8K');
+    expect(formatThroughputShort(1_153_434)).toBe('1.1M');
+    expect(formatThroughputShort(5e9)).toBe('4.7G');
+  });
+
+  it('drops the decimal at ten and above, where it is noise', () => {
+    expect(formatThroughputShort(99_000)).toBe('97K');
+    expect(formatThroughputShort(12e6)).toBe('11M');
+    expect(formatThroughputShort(999e6)).toBe('953M');
+  });
+
+  it('trims a trailing .0 and keeps bytes whole', () => {
+    expect(formatThroughputShort(0)).toBe('0B');
+    expect(formatThroughputShort(512)).toBe('512B');
+    expect(formatThroughputShort(1024)).toBe('1K');
   });
 });

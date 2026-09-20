@@ -17,7 +17,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
 import { formatHeartbeatTime, getDisplayTimezone } from '@/lib/timeUtils';
-import { formatThroughput } from '@/lib/networkUtils';
+import { formatThroughput, formatThroughputShort } from '@/lib/networkUtils';
 import { DISK_IO_COLORS, formatDiskIO } from '@/lib/diskIOUtils';
 import { useAllSparklineData } from '@/hooks/useSparklineData';
 import { useDevicePrefs, type DeviceKind } from '@/hooks/useDevicePrefs';
@@ -407,8 +407,8 @@ function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {nicDevice && nicDevice.txBps != null && nicDevice.rxBps != null && (
-                        <>net <span className="text-orange-400">{'↑'}{formatThroughput(nicDevice.txBps)}</span>
-                          <span className="ml-1 text-green-400">{'↓'}{formatThroughput(nicDevice.rxBps)}</span>
+                        <>net <span className="text-orange-400">{'↑'}{formatThroughputShort(nicDevice.txBps)}</span>
+                          <span className="ml-1 text-green-400">{'↓'}{formatThroughputShort(nicDevice.rxBps)}</span>
                           {(machine.metrics.network?.packetLossPct ?? 0) > 0 && (
                             <span className="ml-1 text-red-400">{machine.metrics.network?.packetLossPct}% loss</span>
                           )}
