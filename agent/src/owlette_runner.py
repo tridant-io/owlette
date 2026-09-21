@@ -103,7 +103,7 @@ if __name__ == '__main__':
 
             try:
                 from health_probe import HealthProbe
-                _api_base = shared_utils.read_config(['firebase', 'api_base']) or shared_utils.get_api_base_url()
+                _api_base = shared_utils.get_configured_api_base()
                 self._health_state = HealthProbe(
                     config_path=shared_utils.CONFIG_PATH,
                     api_base=_api_base,
@@ -116,7 +116,7 @@ if __name__ == '__main__':
                 self._health_state = None
 
             self._auth_manager = None
-            self._api_base = shared_utils.read_config(['firebase', 'api_base']) or shared_utils.get_api_base_url()
+            self._api_base = shared_utils.get_configured_api_base()
 
             self.is_alive = True
             self._restart_exit_code = 0
@@ -217,7 +217,7 @@ if __name__ == '__main__':
                     try:
                         site_id = shared_utils.read_config(['firebase', 'site_id'])
                         project_id = shared_utils.read_config(['firebase', 'project_id'])
-                        api_base = shared_utils.read_config(['firebase', 'api_base'])
+                        api_base = self._api_base
                         cache_path = shared_utils.get_data_path('cache/firebase_cache.json')
 
                         logging.info(f"Firebase config - site_id: {site_id}, project_id: {project_id}")
@@ -228,12 +228,12 @@ if __name__ == '__main__':
                         # arms a backoff for nothing. Bounded 90s, non-fatal.
                         try:
                             from health_probe import wait_for_network, reprobe_if_network_error
-                            if wait_for_network(api_base or self._api_base):
+                            if wait_for_network(api_base):
                                 # the probe's network_error verdict predates the NIC; refresh it
                                 self._health_state = reprobe_if_network_error(
                                     self._health_state,
                                     shared_utils.CONFIG_PATH,
-                                    api_base or self._api_base,
+                                    api_base,
                                 )
                         except Exception as e:
                             logging.warning(f"Network gate error (proceeding anyway): {e}")

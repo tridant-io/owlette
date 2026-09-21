@@ -132,10 +132,13 @@ class AuthManager:
         machine_id: Optional[str] = None,
         storage: Optional[SecureStorage] = None,
     ):
-        """api_base is required; machine_id defaults to the hostname, storage to the singleton."""
+        """api_base must be an owlette API base; machine_id defaults to the hostname, storage to the singleton."""
         if not api_base:
             raise ValueError("api_base is required for AuthManager initialization")
         self.api_base = api_base.rstrip('/')
+        # every token request goes to api_base
+        if not shared_utils.is_owlette_api_base(self.api_base):
+            raise ValueError(f"api_base {self.api_base!r} is not an owlette API base")
         self.machine_id = machine_id or shared_utils.get_hostname()
         self.storage = storage or get_storage()
 

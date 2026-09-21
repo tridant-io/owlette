@@ -161,6 +161,26 @@ def test_interactive_names_the_development_environment_it_is_pairing_with(tmp_pa
     assert "environment: development" in out.split("configuration complete!")[1]
 
 
+def test_a_foreign_url_is_refused_before_the_phrase_or_tokens_move(capsys):
+    """--url may name only an owlette API base: the phrase and the tokens go there."""
+    with patch.object(configure_site, "_determine_environment", return_value=_PROD), \
+         patch.object(configure_site, "_save_config") as save_config, \
+         patch("auth_manager.AuthManager") as auth_manager, \
+         patch("requests.post") as post:
+        success, message, site_id = configure_site.run_pairing_flow(
+            api_base="https://attacker.example/api",
+            add_phrase="silver-compass-drift",
+            show_prompts=True,
+        )
+
+    assert (success, site_id) == (False, None)
+    assert "https://attacker.example/api" in message
+    assert message in _plain(capsys.readouterr().out)
+    auth_manager.assert_not_called()
+    post.assert_not_called()
+    save_config.assert_not_called()
+
+
 def test_add_poll_includes_machine_id_and_version():
     """The /ADD= poll should identify the agent host and version."""
     auth_manager = MagicMock()

@@ -893,6 +893,26 @@ def get_api_base_url(environment=None):
     else:
         return 'https://owlette.app/api'
 
+def is_owlette_api_base(api_base):
+    """True only for the production and dev API bases, the hosts this agent sends credentials to."""
+    return api_base in (get_api_base_url('production'), get_api_base_url('development'))
+
+def get_configured_api_base(config=None):
+    """firebase.api_base when it is an owlette API base, else the environment's.
+
+    Local users can edit config.json, so any other host there would receive this
+    machine's refresh token. Reads from disk when config is None.
+    """
+    if config is None:
+        config = read_config()
+    configured = (config.get('firebase') or {}).get('api_base')
+    if is_owlette_api_base(configured):
+        return configured
+    api_base = get_api_base_url(config.get('environment'))
+    if configured:
+        logging.warning(f"Ignoring firebase.api_base {configured!r}: not an owlette API base, using {api_base}")
+    return api_base
+
 def get_project_id(environment=None):
     """Firebase project ID. environment defaults to config."""
     if environment is None:
