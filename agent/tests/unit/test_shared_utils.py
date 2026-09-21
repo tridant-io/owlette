@@ -313,3 +313,63 @@ class TestRotateLogIfOversized:
         monkeypatch.setattr(shared_utils.os, 'replace', _boom)
         assert shared_utils.rotate_log_if_oversized(str(log), max_bytes=1024) is False
         assert log.exists()
+
+
+class TestWriteJsonToFileLocks:
+    """A target held open without delete sharing cannot be replaced. A
+    single-attempt caller (the service's 5-second status write) tries again on
+    its own next tick, so that lock is debug; a multi-attempt call still
+    reports it at error once its retries run out."""
+
+    @staticmethod
+    def _hold(path):
+        import win32file
+        return win32file.CreateFile(
+            str(path), win32file.GENERIC_READ,
+            win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE,
+            None, win32file.OPEN_EXISTING, 0, None)
+
+    @staticmethod
+    def _lock_records(caplog):
+        return [r for r in caplog.records if 'ile locked' in r.getMessage()]
+
+    def test_a_single_attempt_lock_logs_debug_and_never_error(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        target = tmp_path / 'service_status.json'
+        target.write_text('{}')
+        sleeps = []
+        monkeypatch.setattr(shared_utils.time, 'sleep', sleeps.append)
+
+        held = self._hold(target)
+        try:
+            with caplog.at_level(logging.DEBUG):
+                shared_utils.write_json_to_file({'a': 1}, str(target), max_retries=1)
+        finally:
+            held.Close()
+
+        assert [r.levelno for r in self._lock_records(caplog)] == [logging.DEBUG]
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert sleeps == []
+        assert json.loads(target.read_text()) == {}
+        assert not (tmp_path / 'service_status.json.tmp').exists()
+
+    def test_a_multi_attempt_lock_still_logs_error_after_the_last_retry(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        target = tmp_path / 'app_states.json'
+        target.write_text('{}')
+        sleeps = []
+        monkeypatch.setattr(shared_utils.time, 'sleep', sleeps.append)
+
+        held = self._hold(target)
+        try:
+            with caplog.at_level(logging.DEBUG):
+                shared_utils.write_json_to_file({'a': 1}, str(target))
+        finally:
+            held.Close()
+
+        assert [r.levelno for r in self._lock_records(caplog)] == [
+            logging.WARNING, logging.WARNING, logging.ERROR]
+        assert sleeps == [0.1, 0.2]
+        assert json.loads(target.read_text()) == {}

@@ -1,5 +1,6 @@
 import os
 import json
+import functools
 import logging
 from logging.handlers import RotatingFileHandler
 import socket
@@ -13,6 +14,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 import winreg
 import time
 from pathlib import Path
+
+import acl_hardening
 
 # VERSION MANAGEMENT
 def get_app_version():
@@ -794,26 +797,84 @@ def get_data_path(filename=None):
 
     return path
 
+_SYSTEM_SID = 'S-1-5-18'
+
+
+@functools.lru_cache(maxsize=None)
+def _process_user_sid():
+    """This process's token user as a string SID, or None if it cannot be read.
+
+    Read once: a process token's user never changes for the life of the process.
+    """
+    try:
+        import win32api
+        import win32security
+
+        token = win32security.OpenProcessToken(
+            win32api.GetCurrentProcess(), win32security.TOKEN_QUERY
+        )
+        try:
+            user_sid, _attributes = win32security.GetTokenInformation(
+                token, win32security.TokenUser
+            )
+        finally:
+            token.Close()
+        return win32security.ConvertSidToStringSid(user_sid)
+    except Exception as e:
+        logging.warning(f"Could not read this process's token user: {e}")
+        return None
+
+
+def is_system_process():
+    """True when this process runs as LocalSystem. An unreadable token counts as
+    not SYSTEM, which creates and writes everything as a user process would."""
+    return _process_user_sid() == _SYSTEM_SID
+
+
 def ensure_data_directories():
-    """Create every required ProgramData directory. True if all exist after."""
+    """Create the ProgramData directories. True if the base directories exist after.
+
+    The cortex IPC trio is service-owned: only a SYSTEM process creates it,
+    fail-closed, and a user-session process skips it.
+    """
     directories = [
         get_data_path(),
         get_data_path('config'),
         get_data_path('logs'),
         get_data_path('cache'),
         get_data_path('tmp'),
-        get_data_path('ipc/cortex_commands'),
-        get_data_path('ipc/cortex_results'),
-        get_data_path('ipc/cortex_events'),
+        get_data_path('ipc'),
     ]
 
     try:
         for directory in directories:
             os.makedirs(directory, exist_ok=True)
-        return True
     except Exception as e:
         logging.error(f"Failed to create data directories: {e}")
         return False
+
+    if is_system_process():
+        _create_cortex_ipc_dirs()
+    return True
+
+
+def _create_cortex_ipc_dirs():
+    """Create the cortex IPC trio with acl_hardening's console-user DACL.
+
+    An existing directory is adopted only when SYSTEM or Administrators owns it
+    and it is not a reparse point; any other is logged and left alone.
+    """
+    aces = {os.path.normcase(entry.path): entry.aces for entry in acl_hardening.SPECS}
+    for path in (CORTEX_IPC_CMD_DIR, CORTEX_IPC_RESULT_DIR, CORTEX_IPC_EVENTS_DIR):
+        try:
+            acl_hardening.create_private_dir(path, aces[os.path.normcase(path)])
+        except acl_hardening.UntrustedDirectory as e:
+            logging.warning(
+                f"Cortex IPC: {e} (its owner is not SYSTEM or Administrators, or "
+                f"it is a reparse point); remove it so the service recreates it"
+            )
+        except Exception as e:
+            logging.error(f"Cortex IPC: could not create {path}: {e}")
 
 def get_environment():
     """'production' or 'development' from config; 'production' by default."""
@@ -1187,7 +1248,10 @@ def get_log_tail(log_name='service', lines=100):
 
 
 def initialize_logging(log_file_name, level=logging.INFO):
-    ensure_data_directories()
+    # the handler opens its file at once, so logs\ comes first; the other
+    # directories are created after it so what their creation logs (an
+    # untrusted cortex ipc directory) lands in this file, not on stderr.
+    os.makedirs(get_data_path('logs'), exist_ok=True)
 
     log_file_path = get_data_path(f'logs/{log_file_name}.log')
 
@@ -1207,6 +1271,7 @@ def initialize_logging(log_file_name, level=logging.INFO):
     logger.addHandler(log_handler)
 
     _log_startup_banner(level, log_file_path)
+    ensure_data_directories()
 
 
 def _get_windows_version_string():
@@ -1670,18 +1735,143 @@ def read_json_from_file(file_path, max_retries=3, initial_delay=0.1):
 
         return {}  # All retries exhausted
 
+# app_states.json is also replaced by user-session writers (the desktop app,
+# owlette_scout), so its dacl keeps modify for the console user. config.json
+# keeps its directory's inherited acl: the console user edits it (desktop app,
+# pairing) by replacing the file, which a read-only dacl would refuse. both are
+# the import-time paths, so a test that redirects the module constants writes
+# as it always did.
+_CONSOLE_WRITABLE_JSON = os.path.normcase(RESULT_FILE_PATH)
+_USER_EDITED_JSON = os.path.normcase(CONFIG_PATH)
+
+# files whose dacl step has already failed once; later failures log at debug.
+_json_dacl_failures = set()
+
+
+def _json_file_dacl(file_path):
+    """The protected DACL a writer gives file_path, or None to leave the file
+    its directory's inherited ACL.
+
+    A SYSTEM writer protects every file but config.json: SYSTEM and
+    Administrators full, Users read, and the console user modify on
+    app_states.json. A user-session writer protects app_states.json only, with
+    modify for itself (it is the console user), so its write does not reopen the
+    file to every local account.
+    """
+    path = os.path.normcase(file_path)
+    if path == _USER_EDITED_JSON:
+        return None
+    console_writable = path == _CONSOLE_WRITABLE_JSON
+    if is_system_process():
+        modify_sid = acl_hardening.console_user_sid() if console_writable else None
+    elif console_writable and _process_user_sid() is not None:
+        import win32security
+        modify_sid = win32security.ConvertStringSidToSid(_process_user_sid())
+    else:
+        return None
+
+    import ntsecuritycon as ntc
+    dacl = [
+        (acl_hardening.SID_SYSTEM, ntc.FILE_ALL_ACCESS, 0),
+        (acl_hardening.SID_ADMINISTRATORS, ntc.FILE_ALL_ACCESS, 0),
+        (acl_hardening.SID_USERS, ntc.FILE_GENERIC_READ, 0),
+    ]
+    if modify_sid is not None:
+        modify = (
+            ntc.FILE_GENERIC_READ | ntc.FILE_GENERIC_WRITE
+            | ntc.FILE_GENERIC_EXECUTE | ntc.DELETE
+        )
+        dacl.append((modify_sid, modify, 0))
+    return dacl
+
+
+def _write_new_file_with_dacl(path, payload, dacl):
+    """Create path, which must not exist yet, write payload and set dacl as its
+    protected DACL, all through one handle that shares nothing.
+
+    No other process can open the file between its creation and the DACL, and
+    an open handle keeps the access it was granted, so the DACL is set on this
+    handle rather than by name after the close. Raises OSError as open() would
+    when the file cannot be created, and AclApplyError when only the DACL step
+    failed (the file is written).
+    """
+    import pywintypes
+    import win32con
+    import win32file
+    import win32security
+
+    try:
+        handle = win32file.CreateFile(
+            path, win32file.GENERIC_WRITE | win32con.WRITE_DAC, 0, None,
+            win32file.CREATE_NEW, win32file.FILE_ATTRIBUTE_NORMAL, None,
+        )
+    except pywintypes.error as e:
+        # the winerror picks the OSError subclass, so a sharing violation
+        # retries like any other lock.
+        raise OSError(0, e.strerror, path, e.winerror) from e
+    try:
+        win32file.WriteFile(handle, payload)
+        try:
+            acl = win32security.ACL()
+            for sid, mask, flags in dacl:
+                acl.AddAccessAllowedAceEx(win32security.ACL_REVISION, flags, mask, sid)
+            win32security.SetSecurityInfo(
+                handle, win32security.SE_FILE_OBJECT,
+                win32security.DACL_SECURITY_INFORMATION
+                | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
+                None, None, acl, None,
+            )
+        except Exception as e:
+            raise acl_hardening.AclApplyError(
+                f"failed to apply DACL to {path}: {e}"
+            ) from e
+    finally:
+        handle.Close()
+
+
+def _write_protected_temp(temp_path, file_path, data, dacl):
+    """Write data to temp_path as a file this process creates, carrying dacl.
+
+    A leftover or planted temp file is removed first: whoever created a file
+    owns it, and its owner can rewrite any DACL set on it. A DACL failure is
+    non-fatal: the write stands with the inherited ACL, logged once per file.
+    """
+    # the bytes open(..., 'w') + json.dump write: ascii, platform line endings.
+    payload = json.dumps(data, indent=4).replace('\n', os.linesep).encode('ascii')
+    try:
+        os.remove(temp_path)
+    except FileNotFoundError:
+        pass
+    try:
+        _write_new_file_with_dacl(temp_path, payload, dacl)
+    except acl_hardening.AclApplyError as e:
+        if file_path in _json_dacl_failures:
+            logging.debug(f"{e}; {file_path} keeps its inherited permissions")
+        else:
+            _json_dacl_failures.add(file_path)
+            logging.warning(f"{e}; {file_path} keeps its inherited permissions")
+
+
 def write_json_to_file(data, file_path, max_retries=3, initial_delay=0.1):
     """Atomically write JSON (temp file + replace), retrying past file locks.
 
-    initial_delay doubles per attempt.
+    initial_delay doubles per attempt. A caller that passes max_retries=1
+    retries on its own schedule, so its lock is logged at debug, not error.
+    When _json_file_dacl gives the file a DACL, the temp file carries it before
+    the rename, so the replaced file never inherits its directory's
+    user-writable ACL.
     """
     with _CrossProcessLock(), json_lock:
         temp_path = file_path + '.tmp'
+        dacl = _json_file_dacl(file_path)
 
         for attempt in range(max_retries):
             try:
-                with open(temp_path, 'w') as f:
-                    json.dump(data, f, indent=4)
+                if dacl is None:
+                    with open(temp_path, 'w') as f:
+                        json.dump(data, f, indent=4)
+                else:
+                    _write_protected_temp(temp_path, file_path, data, dacl)
 
                 # os.replace is atomic on Windows; os.rename is not.
                 os.replace(temp_path, file_path)
@@ -1695,7 +1885,9 @@ def write_json_to_file(data, file_path, max_retries=3, initial_delay=0.1):
                     logging.warning(f"File locked, retrying in {delay}s... (attempt {attempt + 1}/{max_retries}): {e}")
                     time.sleep(delay)
                 else:
-                    logging.error(f"Failed to write after {max_retries} attempts (file locked): {e}")
+                    # a single-attempt caller tries again on its next tick.
+                    log = logging.debug if max_retries == 1 else logging.error
+                    log(f"Failed to write after {max_retries} attempts (file locked): {e}")
                     if os.path.exists(temp_path):
                         try:
                             os.remove(temp_path)
