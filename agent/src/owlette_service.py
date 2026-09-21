@@ -815,6 +815,19 @@ _FILE_MODIFY = (
     | ntsecuritycon.FILE_GENERIC_EXECUTE | ntsecuritycon.DELETE
 )
 
+# self-update stages its installer under the dacl start-up repair asserts for
+# update-staging: system and administrators only.
+_UPDATE_STAGING_ACES = next(
+    entry.aces for entry in acl_hardening.SPECS
+    if os.path.basename(entry.path) == 'update-staging')
+# users keep read: the desktop app reads the marker as the console user, so it
+# never starts the service while an update owns it.
+_UPDATE_MARKER_DACL = [
+    (acl_hardening.SID_SYSTEM, _FILE_FULL, 0),
+    (acl_hardening.SID_ADMINISTRATORS, _FILE_FULL, 0),
+    (acl_hardening.SID_USERS, ntsecuritycon.FILE_GENERIC_READ, 0),
+]
+
 # the exact shape cortex_tools._write_ipc_command writes. the service runs these
 # as system, and the id names the result file, so it must stay a bare file name.
 _CORTEX_CMD_MAX_BYTES = 64 * 1024
@@ -863,6 +876,28 @@ def _discard_untrusted_file(path, what, level=logging.WARNING):
         os.remove(path)
     except OSError as e:
         logging.log(level, f"Could not delete untrusted {what} {path}: {e}")
+
+
+def _create_update_marker(path, marker):
+    """Write the self-update marker as a new file with _UPDATE_MARKER_DACL, set
+    through the handle that creates it.
+
+    Its readers trust it only when SYSTEM or Administrators owns it, and any
+    local user can create files in logs\\, so whatever is at the path (a stale
+    marker of ours, or a planted file) is removed and the marker is created
+    exclusively: a file slipped in between fails this update instead of being
+    adopted. Raises OSError when the marker cannot be created.
+    """
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    payload = json.dumps(marker, indent=2).encode('utf-8')
+    try:
+        shared_utils._write_new_file_with_dacl(path, payload, _UPDATE_MARKER_DACL)
+    except acl_hardening.AclApplyError as e:
+        # written and owned by the service, so its readers still accept it.
+        logging.warning(f"{e}; the update marker keeps its inherited permissions")
 
 
 def _file_has_content(path):
@@ -5254,48 +5289,70 @@ class OwletteService(win32serviceutil.ServiceFramework):
                     if free_mb < 500:
                         raise Exception(f"Insufficient disk space: {free_mb:.0f} MB free, need at least 500 MB for safe update")
 
+                    # not tmp\, which every local user can write, nor WINDOWS\TEMP,
+                    # where security software blocks execution: a directory only
+                    # system and administrators can write, created fail-closed.
+                    # an existing one that is not theirs or is a link, or a dacl
+                    # that cannot be set, fails this attempt before anything is
+                    # downloaded.
+                    staging_dir = shared_utils.get_data_path('update-staging')
+                    acl_hardening.create_private_dir(staging_dir, _UPDATE_STAGING_ACES)
+                    installer_path = os.path.join(staging_dir, 'owlette-Update.exe')
+
+                    # an earlier attempt's hold would keep the file from being
+                    # replaced. the guard above lets this attempt through only
+                    # once that one has failed or is over ten minutes old.
+                    earlier_hold = getattr(self, '_update_image_handle', None)
+                    if earlier_hold is not None:
+                        self._update_image_handle = None
+                        earlier_hold.Close()
+
                     if self.firebase_client:
                         self.firebase_client.update_command_progress(cmd_id, 'downloading', deployment_id)
 
-                    # Our own temp dir, not WINDOWS\TEMP — security software blocks
-                    # execution from system temp.
-                    owlette_tmp_dir = os.path.join(os.environ.get('ProgramData', 'C:\\ProgramData'), 'owlette', 'tmp')
-                    os.makedirs(owlette_tmp_dir, exist_ok=True)
-                    temp_installer_path = os.path.join(owlette_tmp_dir, 'owlette-Update.exe')
-
                     logging.info("Downloading installer (3 retries with exponential backoff)...")
-                    download_success, actual_path = installer_utils.download_file(
+                    # strict: a locked file fails this attempt instead of moving
+                    # the download to another name, so the task runs this path.
+                    download_success, _ = installer_utils.download_file(
                         installer_url,
-                        temp_installer_path,
+                        installer_path,
                         progress_callback=None,  # Progress already tracked via Firestore status
                         max_retries=3,
                         connect_timeout=30,
-                        read_timeout=600
+                        read_timeout=600,
+                        strict_path=True,
                     )
 
                     if not download_success:
                         raise Exception(f"Failed to download installer after 3 retries from {installer_url}")
 
-                    temp_installer_path = actual_path
-                    logging.debug(f"Installer downloaded to: {temp_installer_path}")
+                    logging.debug(f"Installer downloaded to: {installer_path}")
 
                     # Sanity check - Inno Setup installer should be at least 1MB
-                    file_size = os.path.getsize(temp_installer_path)
+                    file_size = os.path.getsize(installer_path)
                     logging.debug(f"Installer file size: {file_size:,} bytes")
                     if file_size < 1_000_000:
                         raise Exception(f"Downloaded file too small ({file_size} bytes) - likely not a valid installer")
 
                     # Verify it's a valid PE executable (check MZ header)
-                    with open(temp_installer_path, 'rb') as f:
+                    with open(installer_path, 'rb') as f:
                         header = f.read(2)
                         if header != b'MZ':
                             raise Exception("Downloaded file is not a valid Windows executable")
 
-                    # SHA256 checksum verification (MANDATORY for self-updates)
+                    # SHA256 checksum verification (MANDATORY for self-updates),
+                    # read through a handle that shares read access only, so the
+                    # file cannot be changed, renamed or deleted while it is held.
+                    # it is held until this process exits, which is when the
+                    # installer stops the service: schtasks /Run returns before
+                    # the task starts the installer, so a hold released there
+                    # would protect nothing.
                     logging.info("Verifying installer checksum...")
-                    if not installer_utils.verify_checksum(temp_installer_path, expected_sha256):
-                        installer_utils.cleanup_installer(temp_installer_path, force=True)
+                    update_image = installer_utils.open_verified(installer_path, expected_sha256)
+                    if update_image is None:
+                        installer_utils.cleanup_installer(installer_path, force=True)
                         raise Exception("Checksum verification FAILED - installer may be corrupted or tampered. Update aborted.")
+                    self._update_image_handle = update_image
                     logging.info("[OK] Checksum verification passed")
 
                     logging.info("Installer verified successfully")
@@ -5307,12 +5364,11 @@ class OwletteService(win32serviceutil.ServiceFramework):
                         'old_version': shared_utils.APP_VERSION,
                         'target_version': target_version,
                         'installer_url': installer_url,
-                        'installer_path': temp_installer_path,
+                        'installer_path': installer_path,
                         'command_id': cmd_id,
                         'deployment_id': deployment_id
                     }
-                    with open(update_marker_path, 'w') as f:
-                        json.dump(update_marker, f, indent=2)
+                    _create_update_marker(update_marker_path, update_marker)
                     logging.debug(f"Update marker created: {update_marker_path}")
 
                     if self.firebase_client:
@@ -5336,7 +5392,7 @@ class OwletteService(win32serviceutil.ServiceFramework):
                         'schtasks',
                         '/Create',
                         '/TN', task_name,
-                        '/TR', f'"{temp_installer_path}" {silent_flags}',
+                        '/TR', f'"{installer_path}" {silent_flags}',
                         '/SC', 'ONCE',
                         '/ST', '00:00',
                         '/RU', 'SYSTEM',

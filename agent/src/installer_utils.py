@@ -124,7 +124,8 @@ def download_file(
     progress_callback: Optional[Callable[[int], None]] = None,
     max_retries: int = 3,
     connect_timeout: int = 30,
-    read_timeout: int = 600
+    read_timeout: int = 600,
+    strict_path: bool = False,
 ) -> tuple[bool, str]:
     """Download a URL with progress reporting and retries.
 
@@ -132,7 +133,9 @@ def download_file(
     defaults high because installers are large.
 
     Returns ``(success, actual_path)`` — the path can differ from ``dest_path``
-    when the destination was locked by another process.
+    when the destination was locked by another process. With ``strict_path`` a
+    locked destination raises PermissionError instead, so a success is always
+    ``dest_path`` itself.
     """
     logging.debug(f"Starting download from {url}")
 
@@ -143,7 +146,9 @@ def download_file(
         try:
             os.remove(dest_path)
             logging.debug("Existing file removed successfully")
-        except PermissionError as e:
+        except PermissionError:
+            if strict_path:
+                raise
             # Locked by another process — fall back to a unique filename.
             timestamp = int(time.time())
             base_name, ext = os.path.splitext(dest_path)
@@ -412,30 +417,66 @@ def _execute_as_system(
     return _finish_installer_run(exit_code, installer_name, active_processes, stderr)
 
 
+def _checksum_matches(chunks, expected_sha256: str) -> bool:
+    """SHA256 of the byte ``chunks`` against ``expected_sha256`` (case-insensitive)."""
+    sha256_hash = hashlib.sha256()
+    for chunk in chunks:
+        sha256_hash.update(chunk)
+
+    actual_hash = sha256_hash.hexdigest().lower()
+    expected_hash = expected_sha256.lower()
+
+    if actual_hash == expected_hash:
+        logging.debug(f"Checksum verification passed: {actual_hash}")
+        return True
+    else:
+        logging.error("Checksum verification FAILED!")
+        logging.error(f"Expected: {expected_hash}")
+        logging.error(f"Actual:   {actual_hash}")
+        return False
+
+
 def verify_checksum(file_path: str, expected_sha256: str) -> bool:
     """Verify a file's SHA256 against ``expected_sha256`` (case-insensitive)."""
     try:
-        sha256_hash = hashlib.sha256()
-
         with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(8192), b''):
-                sha256_hash.update(chunk)
-
-        actual_hash = sha256_hash.hexdigest().lower()
-        expected_hash = expected_sha256.lower()
-
-        if actual_hash == expected_hash:
-            logging.debug(f"Checksum verification passed: {actual_hash}")
-            return True
-        else:
-            logging.error(f"Checksum verification FAILED!")
-            logging.error(f"Expected: {expected_hash}")
-            logging.error(f"Actual:   {actual_hash}")
-            return False
-
+            return _checksum_matches(iter(lambda: f.read(8192), b''), expected_sha256)
     except Exception as e:
         logging.error(f"Error verifying checksum: {e}")
         return False
+
+
+def open_verified(file_path: str, expected_sha256: str):
+    """Open ``file_path`` sharing read access only, and return the handle when
+    the SHA256 read through it matches ``expected_sha256``; otherwise close it
+    and return None. The caller owns the handle.
+
+    While it is open no one can write, replace, rename or delete the file, so
+    the next process to open the path gets the bytes that were hashed. The
+    path's own entry is opened, never a link's target, so the hash and the hold
+    cover the same file.
+    """
+    import pywintypes
+    import win32file
+
+    try:
+        handle = win32file.CreateFile(
+            file_path, win32file.GENERIC_READ, win32file.FILE_SHARE_READ, None,
+            win32file.OPEN_EXISTING,
+            win32file.FILE_ATTRIBUTE_NORMAL | win32file.FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    except pywintypes.error as e:
+        logging.error(f"Error opening {file_path} to verify its checksum: {e}")
+        return None
+    try:
+        chunks = iter(lambda: win32file.ReadFile(handle, 64 * 1024)[1], b'')
+        if _checksum_matches(chunks, expected_sha256):
+            return handle
+    except Exception as e:
+        logging.error(f"Error verifying checksum: {e}")
+    handle.Close()
+    return None
 
 
 def verify_installation(path: str) -> bool:

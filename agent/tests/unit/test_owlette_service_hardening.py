@@ -475,6 +475,8 @@ class TestSelfUpdateGuard:
         import owlette_service
         _owned_by(monkeypatch, _SYSTEM_SID_STR if trusted else _OTHER_SID_STR)
         monkeypatch.setattr(shutil, 'disk_usage', lambda path: SimpleNamespace(free=10 * 1024 ** 3))
+        # the staging directory's creation and dacl are test_self_update_hardening's.
+        monkeypatch.setattr(owlette_service.acl_hardening, 'create_private_dir', MagicMock())
         download = MagicMock(return_value=(False, None))
         monkeypatch.setattr(owlette_service.installer_utils, 'download_file', download)
         svc = SimpleNamespace(
