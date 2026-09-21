@@ -992,10 +992,13 @@ begin
     '    Ic @($p, "/inheritance:r", "/grant:r", "$($SYS):(F)", "$($ADM):(F)", "$($USR):(RX)") $p' + #13#10 +
     '  } else { Wr("skip (absent): $p"); Wr("") }' + #13#10 +
     '}' + #13#10 +
-    '# service-owned dirs under the data root: SYSTEM + Administrators only.' + #13#10 +
+    '# service-owned dirs under the data root: owned by Administrators, then' + #13#10 +
+    '# SYSTEM + Administrators only. a dir someone else created would keep its' + #13#10 +
+    '# owner, who can rewrite its dacl, and the service refuses to use it.' + #13#10 +
     'foreach ($d in "content","update-staging") {' + #13#10 +
     '  $p = Join-Path $DataRoot $d' + #13#10 +
     '  if (Test-Path -LiteralPath $p) {' + #13#10 +
+    '    Ic @($p, "/setowner", $ADM) $null' + #13#10 +
     '    Ic @($p, "/inheritance:r", "/grant:r", "$($SYS):(OI)(CI)(F)", "$($ADM):(OI)(CI)(F)") $p' + #13#10 +
     '  } else { Wr("skip (absent): $p"); Wr("") }' + #13#10 +
     '}' + #13#10 +
