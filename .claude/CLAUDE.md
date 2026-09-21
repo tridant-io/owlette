@@ -221,6 +221,8 @@ Reviews are judged on calibration, not volume. Three accurate findings are more 
 
 The `deploy-agent.mjs` hook auto-copies edited `agent/src/*.py` files to `C:\ProgramData\Owlette\agent\src\`. Service files (`owlette_service.py`, `shared_utils.py`, `firebase_client.py`, `connection_manager.py`, `auth_manager.py`) require a restart. **Do this automatically** — don't wait for the user to ask.
 
+The hook copies unelevated, so after each agent install it needs `powershell -File scripts/bootstrap-windows.ps1 -DevGrant` from an elevated prompt (the installer resets `agent\src`), which grants only the developer's own account Modify on `agent\src` and `app` (`-RemoveDevGrant` reverts it). While the grant is in place, the service logs a DevMode warning at every start.
+
 ### Restart sequence (order matters):
 1. **Close the desktop app** (it holds the tray icon): kill the `owlette-desktop.exe` PID from `C:\ProgramData\Owlette\tmp\tray.pid` — by PID, never by image name.
 2. **Restart service**: `powershell -Command "Start-Process cmd -ArgumentList '/c net stop OwletteService && net start OwletteService' -Verb RunAs -Wait"`
