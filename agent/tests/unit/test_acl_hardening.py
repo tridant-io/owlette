@@ -1,14 +1,17 @@
 """Unit tests for acl_hardening.
 
 Every Win32 call is mocked at a module-level seam (`_native_read_dacl`,
-`_native_read_owner`, `_native_write_dacl`, `_mkdir`, `_is_reparse_point`,
+`_native_read_owner`, `_native_write_dacl`, `_mkdir`, `_is_plain_object`,
 `_read_dev_mode_value`) or by patching the public function under test, so no real
 security descriptor, registry key or interactive session is required. SID
 conversions use the real (installed) pywin32, which is a pure, side-effect-free
-operation. Mirrors test_display_manager.py's patch-the-seams style.
+operation, and the link checks read real files in tmp_path. Mirrors
+test_display_manager.py's patch-the-seams style.
 """
 
 import os
+import stat
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -184,21 +187,62 @@ class TestApply:
 # ----- is_trusted_owner -----------------------------------------------------
 
 class TestIsTrustedOwner:
-    def test_system_owner_is_trusted(self):
+    @pytest.fixture
+    def plain(self):
+        with patch.object(ah, '_is_plain_object', return_value=True):
+            yield
+
+    def test_system_owner_is_trusted(self, plain):
         with patch.object(ah, '_native_read_owner', return_value=ah.SID_SYSTEM):
             assert ah.is_trusted_owner('X') is True
 
-    def test_administrators_owner_is_trusted(self):
+    def test_administrators_owner_is_trusted(self, plain):
         with patch.object(ah, '_native_read_owner', return_value=ah.SID_ADMINISTRATORS):
             assert ah.is_trusted_owner('X') is True
 
-    def test_other_owner_is_untrusted(self):
+    def test_other_owner_is_untrusted(self, plain):
         with patch.object(ah, '_native_read_owner', return_value=_OTHER_SID):
             assert ah.is_trusted_owner('X') is False
 
-    def test_read_error_is_untrusted(self):
+    def test_the_given_user_is_trusted_and_no_one_else(self, plain):
+        with patch.object(ah, '_native_read_owner', return_value=_OTHER_SID):
+            assert ah.is_trusted_owner('X', _OTHER_SID) is True
+            assert ah.is_trusted_owner('X', _ENTRA_SID) is False
+
+    def test_read_error_is_untrusted(self, plain):
         with patch.object(ah, '_native_read_owner', side_effect=OSError('no access')):
             assert ah.is_trusted_owner('X') is False
+
+    def test_a_hard_link_to_a_system_owned_file_is_untrusted(self, tmp_path):
+        # a local user can hard-link a control-file name to a system-owned
+        # log they can write attributes on; the link carries its owner.
+        log = tmp_path / 'service.log'
+        log.write_text('log line')
+        link = tmp_path / 'stop_signal.json'
+        os.link(log, link)
+        with patch.object(ah, '_native_read_owner', return_value=ah.SID_SYSTEM):
+            assert ah.is_trusted_owner(str(link)) is False
+            assert ah.is_trusted_owner(str(link), _OTHER_SID) is False
+
+    def test_a_reparse_point_is_untrusted(self):
+        reparse = SimpleNamespace(
+            st_nlink=1, st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        with patch.object(ah.os, 'lstat', return_value=reparse), \
+             patch.object(ah, '_native_read_owner', return_value=ah.SID_SYSTEM):
+            assert ah.is_trusted_owner('X') is False
+
+    def test_plain_files_and_directories_pass_the_link_check(self, tmp_path):
+        plain_file = tmp_path / 'marker.json'
+        plain_file.write_text('{}')
+        directory = tmp_path / 'update-staging'
+        (directory / 'child').mkdir(parents=True)
+        with patch.object(ah, '_native_read_owner', return_value=ah.SID_SYSTEM):
+            assert ah.is_trusted_owner(str(plain_file)) is True
+            assert ah.is_trusted_owner(str(directory)) is True
+
+    def test_a_missing_path_is_untrusted(self, tmp_path):
+        with patch.object(ah, '_native_read_owner', return_value=ah.SID_SYSTEM):
+            assert ah.is_trusted_owner(str(tmp_path / 'absent')) is False
 
 
 # ----- create_private_dir ---------------------------------------------------
@@ -218,7 +262,6 @@ class TestCreatePrivateDir:
         spec = [(ah.SID_SYSTEM, ah._FULL, ah._INHERIT)]
         with patch.object(ah, '_mkdir', side_effect=FileExistsError), \
              patch.object(ah, 'is_trusted_owner', return_value=True), \
-             patch.object(ah, '_is_reparse_point', return_value=False), \
              patch.object(ah, 'apply') as apply_fn, \
              patch.object(ah, 'console_user_sid', return_value=None):
             ah.create_private_dir('X', spec)
@@ -227,16 +270,18 @@ class TestCreatePrivateDir:
     def test_rejects_existing_untrusted(self):
         with patch.object(ah, '_mkdir', side_effect=FileExistsError), \
              patch.object(ah, 'is_trusted_owner', return_value=False), \
-             patch.object(ah, '_is_reparse_point', return_value=False), \
              patch.object(ah, 'apply') as apply_fn:
             with pytest.raises(ah.UntrustedDirectory):
                 ah.create_private_dir('X', [(ah.SID_SYSTEM, ah._FULL, ah._INHERIT)])
         apply_fn.assert_not_called()
 
     def test_rejects_existing_reparse_point(self):
+        # system-owned, but a junction: is_trusted_owner's link check refuses it.
+        reparse = SimpleNamespace(
+            st_nlink=1, st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
         with patch.object(ah, '_mkdir', side_effect=FileExistsError), \
-             patch.object(ah, 'is_trusted_owner', return_value=True), \
-             patch.object(ah, '_is_reparse_point', return_value=True), \
+             patch.object(ah.os, 'lstat', return_value=reparse), \
+             patch.object(ah, '_native_read_owner', return_value=ah.SID_SYSTEM), \
              patch.object(ah, 'apply') as apply_fn:
             with pytest.raises(ah.UntrustedDirectory):
                 ah.create_private_dir('X', [(ah.SID_SYSTEM, ah._FULL, ah._INHERIT)])
@@ -514,6 +559,54 @@ class TestRepairAll:
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=None):
             assert ah.repair_all() == []
+
+
+class TestSessionChangeRepair:
+    """A console session change is expected to change the console-user
+    entries; anything else it finds is still drift."""
+
+    TOKEN = [(ah.SID_SYSTEM, ah._FULL, ah._NO_INHERIT),
+             (ah.CONSOLE_USER, ah._MODIFY, ah._NO_INHERIT)]
+
+    def _repair(self, entries, session_change, dev=False):
+        log = MagicMock()
+        with patch.object(ah, 'SPECS', entries), \
+             patch.object(ah, 'dev_mode_enabled', return_value=dev), \
+             patch.object(ah, 'console_user_sid', return_value=_OTHER_SID), \
+             patch.object(ah.os.path, 'exists', return_value=True), \
+             patch.object(ah, 'matches', return_value=False), \
+             patch.object(ah, 'apply'):
+            repaired = ah.repair_all(log, session_change=session_change)
+        return repaired, log
+
+    def test_a_console_user_entry_is_updated_at_info(self):
+        repaired, log = self._repair([_entry('T', self.TOKEN)], session_change=True)
+        assert repaired == ['T']
+        log.info.assert_called_once()
+        assert 'console session' in log.info.call_args[0][0]
+        log.warning.assert_not_called()
+
+    def test_a_fixed_entry_is_still_drift(self):
+        repaired, log = self._repair([_entry('P', _code_dir_spec())], session_change=True)
+        assert repaired == ['P']
+        assert 'drifted' in log.warning.call_args[0][0]
+
+    def test_start_up_keeps_the_drift_warning_for_every_entry(self):
+        repaired, log = self._repair([_entry('T', self.TOKEN)], session_change=False)
+        assert repaired == ['T']
+        assert 'drifted' in log.warning.call_args[0][0]
+        log.info.assert_not_called()
+
+    def test_the_dev_mode_warning_is_left_to_start_up(self):
+        _, at_start_up = self._repair([], session_change=False, dev=True)
+        _, at_login = self._repair([], session_change=True, dev=True)
+        assert 'DevMode' in at_start_up.warning.call_args[0][0]
+        at_login.warning.assert_not_called()
+
+
+def test_follows_console_user_marks_the_token_file_and_the_cortex_queues():
+    names = sorted(os.path.basename(e.path) for e in ah.SPECS if ah.follows_console_user(e))
+    assert names == ['.tokens.enc', 'cortex_commands', 'cortex_events', 'cortex_results']
 
 
 class TestInstalledTreeGate:

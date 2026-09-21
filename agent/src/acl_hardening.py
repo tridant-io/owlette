@@ -3,8 +3,9 @@
 Generalises the protected-DACL pattern from ``display_manager`` into a table of
 ``{path: spec}`` for the whole install tree. Two entry points:
 
-* ``repair_all(log)`` — called once at service start-up: re-asserts the intended
-  DACL on any path that has drifted, and never raises.
+* ``repair_all(log)`` — called at service start-up and after each console
+  session change: re-asserts the intended DACL on any path that has drifted,
+  and never raises.
 * ``create_private_dir(path, spec)`` — fail-closed directory creation for the
   service-owned trees (``content``, ``update-staging``, the cortex IPC trio).
 
@@ -217,15 +218,11 @@ def _mkdir(path: str) -> None:
     os.mkdir(path)
 
 
-def _is_reparse_point(path: str) -> bool:
-    """True for a symlink, junction or any other reparse point."""
-    if os.path.islink(path):
-        return True
-    try:
-        attrs = os.stat(path, follow_symlinks=False).st_file_attributes
-    except (OSError, AttributeError):  # pragma: no cover - windows-only attribute
-        return False
-    return bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+def _is_plain_object(path: str) -> bool:
+    """True when ``path`` is neither a reparse point (symlink, junction) nor
+    one of several hard links. Raises OSError when it cannot be read."""
+    st = os.lstat(path)
+    return st.st_nlink == 1 and not st.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
 
 
 def _is_installed_tree() -> bool:
@@ -297,13 +294,23 @@ def _console_user_sid_from_session_name(session_id):
         return None
 
 
-def is_trusted_owner(path: str) -> bool:
-    """True when ``path``'s owner is SYSTEM or Administrators. Fail-closed: any
-    read failure returns False so a caller treats the path as untrusted."""
+def is_trusted_owner(path: str, user_sid=None) -> bool:
+    """True when ``path``'s owner is SYSTEM or Administrators, or ``user_sid``
+    when one is given, and ``path`` is neither a reparse point nor a hard link.
+
+    In a directory local users can create entries in, an owner check alone
+    proves nothing: a hard link to a SYSTEM-owned file they can write
+    attributes on (a log), or a reparse point, carries that object's owner.
+    Fail-closed: any read failure returns False so a caller treats the path as
+    untrusted."""
     try:
-        owner_sid = _native_read_owner(path)
-        owner_str = win32security.ConvertSidToStringSid(owner_sid)
-        return owner_str in (_SID_SYSTEM_STR, _SID_ADMINISTRATORS_STR)
+        if not _is_plain_object(path):
+            return False
+        owner_str = win32security.ConvertSidToStringSid(_native_read_owner(path))
+        if owner_str in (_SID_SYSTEM_STR, _SID_ADMINISTRATORS_STR):
+            return True
+        return (user_sid is not None
+                and owner_str == win32security.ConvertSidToStringSid(user_sid))
     except Exception as e:
         logger.debug('is_trusted_owner: read failed for %s: %s', path, e)
         return False
@@ -378,13 +385,13 @@ def create_private_dir(path: str, spec: AclSpec) -> None:
     """Create ``path`` as a service-private directory and set its DACL.
 
     ``os.mkdir`` without ``exist_ok`` — an existing directory is adopted only
-    when it is owned by SYSTEM or Administrators and is not a reparse point,
-    otherwise ``UntrustedDirectory`` is raised. ``spec`` may contain a
-    CONSOLE_USER marker; it is resolved here."""
+    when ``is_trusted_owner`` holds for it (owned by SYSTEM or Administrators,
+    not a reparse point), otherwise ``UntrustedDirectory`` is raised. ``spec``
+    may contain a CONSOLE_USER marker; it is resolved here."""
     try:
         _mkdir(path)
     except FileExistsError:
-        if not (is_trusted_owner(path) and not _is_reparse_point(path)):
+        if not is_trusted_owner(path):
             raise UntrustedDirectory(
                 f'refusing to use existing untrusted directory: {path}'
             )
@@ -419,7 +426,13 @@ def _safe_log(log, level: str, msg: str, *args) -> None:
         pass
 
 
-def repair_all(log=None) -> List[str]:
+def follows_console_user(entry) -> bool:
+    """True for a SPECS entry that grants whoever is at the console: its DACL
+    changes with every login and logoff, which is not drift."""
+    return any(sid is CONSOLE_USER for sid, _mask, _flags in entry.aces)
+
+
+def repair_all(log=None, session_change=False) -> List[str]:
     """Re-assert the intended DACL on every path in SPECS that has drifted.
 
     Returns the list of repaired paths. Never raises. Absent paths are skipped
@@ -428,7 +441,12 @@ def repair_all(log=None) -> List[str]:
     present), so a run from a source checkout never touches the checkout. In
     DevMode one extra Modify ACE for the current interactive account is
     tolerated on ``app``; ``agent\\src`` is never re-asserted here because it is
-    a child of ``agent``."""
+    a child of ``agent``.
+
+    ``session_change`` marks a run started by a console session change: the
+    console-user entries are expected to change then, so their repairs log at
+    info, and the DevMode warning is left to the start-up run. A fixed entry
+    repaired then is still drift and still warns."""
     _log = log if log is not None else logger
     repaired: List[str] = []
 
@@ -464,10 +482,16 @@ def repair_all(log=None) -> List[str]:
                 continue
             apply(path, spec)
             repaired.append(path)
-            _safe_log(
-                _log, 'warning',
-                'acl hardening: repaired drifted permissions on %s', path,
-            )
+            if session_change and follows_console_user(entry):
+                _safe_log(
+                    _log, 'info',
+                    'acl hardening: updated %s for the console session', path,
+                )
+            else:
+                _safe_log(
+                    _log, 'warning',
+                    'acl hardening: repaired drifted permissions on %s', path,
+                )
         except Exception as e:
             _safe_log(
                 _log, 'warning',
@@ -475,7 +499,7 @@ def repair_all(log=None) -> List[str]:
             )
             continue
 
-    if dev:
+    if dev and not session_change:
         _safe_log(
             _log, 'warning',
             'acl hardening: DevMode is enabled; the install tree carries a '

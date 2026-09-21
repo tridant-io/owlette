@@ -277,6 +277,7 @@ def test_schedule_window_stop_terminates_out_of_window_process(
     for stub in ('_enable_privileges', '_try_launch_tray',
                  '_check_update_status', '_migrate_legacy_roost_cache',
                  '_sweep_legacy_launch_tasks', '_classify_startup_session',
+                 '_repair_install_acls', '_sweep_stale_update_installers',
                  '_detect_reboot_success_on_startup',
                  'start_local_config_watcher', '_try_launch_cortex',
                  '_process_cortex_ipc_commands', '_diff_and_apply_launch_modes',
