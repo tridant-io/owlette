@@ -25,11 +25,61 @@ from typing import Optional
 from cryptography.fernet import Fernet
 import base64
 import hashlib
+import acl_hardening
 import shared_utils
 
 logger = logging.getLogger(__name__)
 
 TOKEN_FILE_NAME = ".tokens.enc"  # Hidden file in config directory
+
+
+def _writer_user_sid():
+    """This process's account SID, or None when the process runs as SYSTEM or
+    its token cannot be read."""
+    try:
+        import win32api
+        import win32security
+        token = win32security.OpenProcessToken(
+            win32api.GetCurrentProcess(), win32security.TOKEN_QUERY
+        )
+        try:
+            sid = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+        finally:
+            token.Close()
+        if win32security.ConvertSidToStringSid(sid) == 'S-1-5-18':
+            return None
+        return sid
+    except Exception as e:
+        logger.debug(f"Could not read this process's account SID: {e}")
+        return None
+
+
+def _token_file_spec() -> list:
+    """The token file's DACL: SYSTEM and Administrators full control, and
+    modify for the writing account when that is a user, otherwise for the
+    active console user, or for no one when there is none.
+
+    The ACEs come from the ``.tokens.enc`` entry of ``acl_hardening.SPECS``, the
+    table the service's start-up repair uses. A user writer grants itself
+    because pairing saves three times in a row and, from an RDP session, finds
+    no console user: granting anyone else would lock it out after the first
+    save. That never exceeds what the writer could grant itself, since setting
+    a DACL needs WRITE_DAC on the file.
+    """
+    template = next(
+        entry.aces for entry in acl_hardening.SPECS
+        if os.path.basename(entry.path) == TOKEN_FILE_NAME
+    )
+    grantee = _writer_user_sid()
+    if grantee is None:
+        grantee = acl_hardening.console_user_sid()
+    if grantee is None:
+        logger.debug(
+            "No console user session: the token file DACL is SYSTEM and "
+            "Administrators only until the service adds the console user at "
+            "its next start"
+        )
+    return acl_hardening._resolve_spec(template, grantee)
 
 
 class SecureStorage:
@@ -151,6 +201,7 @@ class SecureStorage:
                 FILE_ATTRIBUTE_ARCHIVE = 0x20
                 # +archive keeps the file writable next time.
                 ctypes.windll.kernel32.SetFileAttributesW(str(self.token_file), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE)
+                self._restrict_token_file()
 
             logger.debug("Token data saved successfully")
             return True
@@ -160,6 +211,22 @@ class SecureStorage:
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return False
+
+    def _restrict_token_file(self) -> None:
+        """Set the token file's DACL (``_token_file_spec``) unless it is
+        already in place.
+
+        Never fails the write before it: a user rewriting a file it does not
+        own cannot change the DACL, so the file keeps the one it had, and the
+        service's own writes set the intended one.
+        """
+        try:
+            path = str(self.token_file)
+            spec = _token_file_spec()
+            if not acl_hardening.matches(path, spec):
+                acl_hardening.apply(path, spec)
+        except Exception as e:
+            logger.warning(f"Could not set token file permissions: {e}")
 
     def save_refresh_token(self, token: str) -> bool:
         """
