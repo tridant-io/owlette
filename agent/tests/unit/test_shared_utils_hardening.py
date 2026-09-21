@@ -357,6 +357,23 @@ class TestWriteNewFileWithDacl:
 
         assert path.read_text() == 'planted'
 
+    def test_real_create_refuses_a_link_and_creates_nothing_at_its_target(self, tmp_path):
+        me = _REAL_PROCESS_USER_SID()
+        path = tmp_path / 'probe.json'
+        target = tmp_path / 'elsewhere.json'
+        try:
+            os.symlink(target, path)
+        except OSError:
+            pytest.skip('this account cannot create symbolic links')
+
+        with pytest.raises(FileExistsError):
+            shared_utils._write_new_file_with_dacl(
+                str(path), b'{}', [(ws.ConvertStringSidToSid(me), FULL, 0)],
+            )
+
+        assert not target.exists()
+        assert os.path.islink(path)
+
     def test_sharing_violation_raises_permission_error(self, monkeypatch):
         def busy(*args):
             raise pywintypes.error(32, 'CreateFile', 'The file is in use.')

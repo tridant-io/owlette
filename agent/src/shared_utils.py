@@ -1791,9 +1791,10 @@ def _write_new_file_with_dacl(path, payload, dacl):
 
     No other process can open the file between its creation and the DACL, and
     an open handle keeps the access it was granted, so the DACL is set on this
-    handle rather than by name after the close. Raises OSError as open() would
-    when the file cannot be created, and AclApplyError when only the DACL step
-    failed (the file is written).
+    handle rather than by name after the close. A link at path counts as an
+    existing file, so nothing is ever created where a link points. Raises
+    OSError as open() would when the file cannot be created, and AclApplyError
+    when only the DACL step failed (the file is written).
     """
     import pywintypes
     import win32con
@@ -1803,7 +1804,9 @@ def _write_new_file_with_dacl(path, payload, dacl):
     try:
         handle = win32file.CreateFile(
             path, win32file.GENERIC_WRITE | win32con.WRITE_DAC, 0, None,
-            win32file.CREATE_NEW, win32file.FILE_ATTRIBUTE_NORMAL, None,
+            win32file.CREATE_NEW,
+            win32file.FILE_ATTRIBUTE_NORMAL | win32file.FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
         )
     except pywintypes.error as e:
         # the winerror picks the OSError subclass, so a sharing violation
