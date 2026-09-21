@@ -6,6 +6,7 @@ CCD calls (`_SetDisplayConfig`, `_query_active_paths_safe`, `_snapshot_live_conf
 
 import json
 import os
+import sys
 import threading
 import time
 from unittest.mock import patch, MagicMock
@@ -1882,3 +1883,27 @@ class TestEnumerationWatchdog:
         # returned after ~30s rather than ~0.2s. A green here without it would
         # only prove that an exception was raised, not that it was raised in time.
         assert elapsed < 5, f'watchdog blocked on the hung worker for {elapsed:.1f}s'
+
+
+class TestIpcDirAcl:
+    """account names are localized ("Administratoren" on german windows), so the
+    display IPC DACL must take SYSTEM and Administrators from their well-known SIDs."""
+
+    @pytest.mark.skipif(os.name != 'nt', reason='windows ACL test')
+    def test_well_known_accounts_come_from_sids(self, monkeypatch, tmp_path):
+        ws = MagicMock()
+        ws.ConvertStringSidToSid.side_effect = lambda sid: f'sid:{sid}'
+        # a non-english box: the english account names do not resolve
+        ws.LookupAccountName.side_effect = Exception('no mapping for account name')
+        monkeypatch.setattr(dm, '_active_console_user_sid', lambda _ws: 'sid:console')
+        monkeypatch.setattr(dm, '_ipc_dir_dacl_matches', lambda *_args: False)
+
+        with patch.dict(sys.modules, {'win32security': ws}):
+            dm._ensure_ipc_dir_acl(str(tmp_path))
+
+        ws.LookupAccountName.assert_not_called()
+        aces = ws.ACL.return_value.AddAccessAllowedAceEx.call_args_list
+        assert [c.args[-1] for c in aces] == [
+            'sid:S-1-5-18', 'sid:S-1-5-32-544', 'sid:console',
+        ]
+        ws.SetNamedSecurityInfo.assert_called_once()

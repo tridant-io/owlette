@@ -661,8 +661,10 @@ def _harden_acl(path_str: str) -> None:
     try:
         # fresh exclusive DACL — everyone not listed is implicitly denied.
         dacl = ws.ACL()
-        system_sid, _, _ = ws.LookupAccountName('', 'SYSTEM')
-        admins_sid, _, _ = ws.LookupAccountName('', 'Administrators')
+        # well-known sids, not names: account names are localized, so a name
+        # lookup fails on non-english windows ("Administratoren").
+        system_sid = ws.ConvertStringSidToSid('S-1-5-18')
+        admins_sid = ws.ConvertStringSidToSid('S-1-5-32-544')
         dacl.AddAccessAllowedAce(ws.ACL_REVISION, ntcon.GENERIC_ALL, system_sid)
         dacl.AddAccessAllowedAce(ws.ACL_REVISION, ntcon.GENERIC_ALL, admins_sid)
 

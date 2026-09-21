@@ -9,6 +9,8 @@ import pytest
 
 from destination_allowlist import DestinationAllowlist, DestinationNotAllowedError
 from sync_assembler import AssembleError, AssembleResult, assemble_all
+# bound at import: conftest.py stubs sync_assembler._harden_acl out of every test.
+from sync_assembler import _harden_acl as _real_harden_acl
 from sync_downloader import chunk_path
 from sync_version import VersionChunk, VersionFile
 from sync_state import SyncState
@@ -323,27 +325,28 @@ def test_assembles_file_at_long_path(tmp_path):
 
 
 def test_harden_acl_no_op_on_posix():
-    """on POSIX, _harden_acl returns silently without doing anything."""
-    import os
-    from unittest.mock import patch
-    from sync_assembler import _harden_acl
-    if os.name == 'nt':
-        pytest.skip('this test asserts POSIX behavior')
-    # should not raise even on a path that doesn't exist
-    _harden_acl('/nonexistent/path/file.toe')
+    """off windows, _harden_acl returns before touching win32security."""
+    import sys
+    from unittest.mock import MagicMock, patch
+    ws = MagicMock()
+    with patch.dict(sys.modules, {'win32security': ws}), \
+            patch('sync_assembler.os.name', 'posix'):
+        _real_harden_acl('/nonexistent/path/file.toe')
+    assert ws.mock_calls == []
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='windows ACL test')
 def test_harden_acl_silent_when_pywin32_missing():
-    """when pywin32 is unimportable, _harden_acl skips silently — no exception."""
+    """when pywin32 is unimportable, _harden_acl returns without raising, logging
+    or applying anything."""
     import sys
     from unittest.mock import patch
-    from sync_assembler import _harden_acl
-    if __import__('os').name != 'nt':
-        pytest.skip('this test exercises the windows path')
-    # simulate pywin32 missing
-    with patch.dict(sys.modules, {'win32security': None, 'ntsecuritycon': None}):
-        # None is not a module → ImportError → except branch
-        _harden_acl('C:\\anywhere\\file.toe')
+    # None in sys.modules makes the import raise ImportError
+    with patch.dict(sys.modules, {'win32security': None, 'ntsecuritycon': None}), \
+            patch('sync_assembler.logger') as log:
+        _real_harden_acl('C:\\anywhere\\file.toe')
+    # without pywin32, any attempt at the DACL can only end in the warning branch
+    assert log.mock_calls == []
 
 
 @pytest.mark.skipif(__import__('os').name != 'nt', reason='windows ACL test')
@@ -376,6 +379,34 @@ def test_assemble_calls_harden_acl_on_target(tmp_path):
         assert 'a.toe' in called_with
     finally:
         state.close()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='windows ACL test')
+def test_harden_acl_takes_well_known_accounts_from_sids():
+    """account names are localized ("Administratoren" on german windows): only the
+    operator's own account may be looked up by name, never SYSTEM or Administrators."""
+    import sys
+    from unittest.mock import MagicMock, call, patch
+
+    def localized_lookup(_system, name):
+        # a non-english box: the english well-known names do not resolve
+        if name == 'operator':
+            return 'sid:operator', 'KIOSK', 1
+        raise Exception(f'no mapping for {name!r}')
+
+    ws = MagicMock()
+    ws.ConvertStringSidToSid.side_effect = lambda sid: f'sid:{sid}'
+    ws.LookupAccountName.side_effect = localized_lookup
+    with patch.dict(sys.modules, {'win32security': ws}), \
+            patch('sync_assembler.get_interactive_username', return_value='operator'):
+        _real_harden_acl('C:\\anywhere\\file.toe')
+
+    assert ws.LookupAccountName.call_args_list == [call('', 'operator')]
+    aces = ws.ACL.return_value.AddAccessAllowedAce.call_args_list
+    assert [c.args[-1] for c in aces] == [
+        'sid:S-1-5-18', 'sid:S-1-5-32-544', 'sid:operator',
+    ]
+    ws.SetFileSecurity.assert_called_once()
 
 
 def test_cancel_event_stops_after_current_file(tmp_path):
