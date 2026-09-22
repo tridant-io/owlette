@@ -90,6 +90,11 @@ corrected.
   development server.** It takes `https://owlette.app/api` or
   `https://dev.owlette.app/api` and nothing else, so an agent can no longer be
   pointed at a development API running on the machine.
+- **Known limitation — re-pairing from a remote session.** After the service's
+  permission repair, only the account signed in at the machine's console holds
+  write access to the credential file, so re-pairing from a Remote Desktop
+  session run as a standard user fails. Re-pair from the console, or from an
+  elevated prompt in the remote session; 3.4.0 removes the need.
 
 ### changed — a developer grant, and a record when permissions are repaired
 
