@@ -9,7 +9,8 @@
 #   * icacls shows no BUILTIN\Users (S-1-5-32-545) write bit (W, M, F, WD, AD) on
 #     any code dir, service-owned dir, the uninstaller, or the app-root payload
 #     docs the candidate now locks down;
-#   * .tokens.enc, if present, carries no BUILTIN\Users ACE at all;
+#   * .tokens.enc and its pre-migration copy .tokens.enc.v1, if present, carry
+#     no BUILTIN\Users ACE at all;
 #   * OwletteService is Running;
 #   * the console-user and cloud paths that the lockdown could have broken still
 #     work (pairing helper, cortex IPC round trip, screenshot, config.json edit,
@@ -381,11 +382,21 @@ $SB_AclCheck = {
   if (Test-Path $tok) {
     $tokStatus = if ((Get-UsersAces $tok).Count -gt 0) { 'users-present' } else { 'clean' }
   }
+  # .tokens.enc.v1: the copy the key-derivation migration keeps beside the
+  # store is a credential store too, and carries the same restricted DACL.
+  # Present only on a machine that paired before the migration and upgraded
+  # across it.
+  $tokV1 = Join-Path $root '.tokens.enc.v1'
+  $tokV1Status = 'absent'
+  if (Test-Path $tokV1) {
+    $tokV1Status = if ((Get-UsersAces $tokV1).Count -gt 0) { 'users-present' } else { 'clean' }
+  }
 
   [PSCustomObject]@{
     Offenders = $offenders
     Missing   = $missing
     Token     = $tokStatus
+    TokenV1   = $tokV1Status
   }
 }
 
@@ -761,6 +772,11 @@ try {
         'clean'         { Add-Row $v "acl: .tokens.enc" "PASS" "no BUILTIN\Users ACE" }
         'users-present' { Add-Row $v "acl: .tokens.enc" "FAIL" "a BUILTIN\Users ACE is present" }
         default         { Add-Row $v "acl: .tokens.enc" "SKIP" "not present (machine unpaired)" }
+      }
+      switch ($acl.TokenV1) {
+        'clean'         { Add-Row $v "acl: .tokens.enc.v1" "PASS" "no BUILTIN\Users ACE" }
+        'users-present' { Add-Row $v "acl: .tokens.enc.v1" "FAIL" "a BUILTIN\Users ACE is present" }
+        default         { Add-Row $v "acl: .tokens.enc.v1" "SKIP" "not present (no pre-migration copy)" }
       }
 
       # 8. Candidate service Running.
