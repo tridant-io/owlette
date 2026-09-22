@@ -10,6 +10,7 @@ import json
 import logging
 import plistlib
 import subprocess
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch, mock_open, MagicMock
@@ -835,6 +836,84 @@ class TestWmiProbesOffWindows:
         # per tick and the ModuleNotFoundError lands on logging.warning.
         assert pools == []
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+# a raw read of firebase.api_base that skips get_configured_api_base
+_RAW_API_BASE_READ = re.compile(
+    r"""\.get\(\s*['"]api_base['"]"""
+    r"""|['"]firebase['"]\s*,\s*['"]api_base['"]"""
+    r"""|\[\s*['"]api_base['"]\s*\](?!\s*=)"""
+)
+
+
+class TestConfiguredApiBase:
+    """config.json is writable by local users, so firebase.api_base must never
+    send this machine's credentials anywhere but the two owlette API bases."""
+
+    @pytest.mark.parametrize('api_base', [
+        'https://owlette.app/api',
+        'https://dev.owlette.app/api',
+    ])
+    def test_an_owlette_api_base_is_used_as_configured(self, api_base):
+        config = {'environment': 'production', 'firebase': {'api_base': api_base}}
+        assert shared_utils.is_owlette_api_base(api_base)
+        assert shared_utils.get_configured_api_base(config) == api_base
+
+    @pytest.mark.parametrize('api_base, expected', [
+        ('https://owlette.app/api/', 'https://owlette.app/api'),
+        ('https://dev.owlette.app/api/', 'https://dev.owlette.app/api'),
+    ])
+    def test_one_trailing_slash_names_the_same_base(self, api_base, expected, caplog):
+        config = {'environment': 'production', 'firebase': {'api_base': api_base}}
+
+        with caplog.at_level(logging.WARNING):
+            resolved = shared_utils.get_configured_api_base(config)
+
+        assert shared_utils.is_owlette_api_base(api_base)
+        # the slash is dropped, so a caller's f'{base}/machines' stays one slash
+        assert resolved == expected
+        assert caplog.text == ''
+
+    @pytest.mark.parametrize('api_base', [
+        'https://attacker.example/api',
+        'https://owlette.app.attacker.example/api',
+        'https://owlette.app@attacker.example/api',
+        'https://owlette.app:8443/api',
+        'http://owlette.app/api',
+        'http://localhost:3000/api',
+        'https://owlette.app/api//',
+        'https://owlette.app/api/v2',
+    ])
+    def test_any_other_value_is_replaced_by_the_environment_base(self, api_base, caplog):
+        config = {'environment': 'development', 'firebase': {'api_base': api_base}}
+
+        with caplog.at_level(logging.WARNING):
+            resolved = shared_utils.get_configured_api_base(config)
+
+        assert not shared_utils.is_owlette_api_base(api_base)
+        assert resolved == 'https://dev.owlette.app/api'
+        assert api_base in caplog.text
+
+    def test_a_missing_api_base_is_the_environment_base_without_a_warning(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            resolved = shared_utils.get_configured_api_base({'environment': 'production', 'firebase': {}})
+
+        assert resolved == 'https://owlette.app/api'
+        assert caplog.text == ''
+
+    def test_reads_the_config_on_disk_by_default(self):
+        config = {'environment': 'production', 'firebase': {'api_base': 'https://attacker.example/api'}}
+        with patch.object(shared_utils, 'read_config', return_value=config):
+            assert shared_utils.get_configured_api_base() == 'https://owlette.app/api'
+
+    def test_no_other_module_reads_firebase_api_base_itself(self):
+        # a raw read would bypass the check above; configure_site's write is allowed
+        src = Path(shared_utils.__file__).parent
+        offenders = [
+            f"{path.name}:{lineno}"
+            for path in sorted(src.glob('*.py')) if path.name != 'shared_utils.py'
+            for lineno, line in enumerate(path.read_text(encoding='utf-8').splitlines(), start=1)
+            if _RAW_API_BASE_READ.search(line)
+        ]
+        assert offenders == []
 
 
 # ─── external log rotation ───────────────────────────────────────────
@@ -1217,3 +1296,64 @@ def _sleeping_child():
 def _stop(child):
     child.terminate()
     child.wait(10)
+# windows-only: the lock under test is a handle opened without delete sharing,
+# which has no posix analogue; the class body imports win32file.
+@pytest.mark.windows(reason='delete-sharing locks are windows semantics')
+class TestWriteJsonToFileLocks:
+    """A target held open without delete sharing cannot be replaced. A
+    single-attempt caller (the service's 5-second status write) tries again on
+    its own next tick, so that lock is debug; a multi-attempt call still
+    reports it at error once its retries run out."""
+
+    @staticmethod
+    def _hold(path):
+        import win32file
+        return win32file.CreateFile(
+            str(path), win32file.GENERIC_READ,
+            win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE,
+            None, win32file.OPEN_EXISTING, 0, None)
+
+    @staticmethod
+    def _lock_records(caplog):
+        return [r for r in caplog.records if 'ile locked' in r.getMessage()]
+
+    def test_a_single_attempt_lock_logs_debug_and_never_error(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        target = tmp_path / 'service_status.json'
+        target.write_text('{}')
+        sleeps = []
+        monkeypatch.setattr(shared_utils.time, 'sleep', sleeps.append)
+
+        held = self._hold(target)
+        try:
+            with caplog.at_level(logging.DEBUG):
+                shared_utils.write_json_to_file({'a': 1}, str(target), max_retries=1)
+        finally:
+            held.Close()
+
+        assert [r.levelno for r in self._lock_records(caplog)] == [logging.DEBUG]
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert sleeps == []
+        assert json.loads(target.read_text()) == {}
+        assert not (tmp_path / 'service_status.json.tmp').exists()
+
+    def test_a_multi_attempt_lock_still_logs_error_after_the_last_retry(
+            self, tmp_path, monkeypatch, caplog):
+        import logging
+        target = tmp_path / 'app_states.json'
+        target.write_text('{}')
+        sleeps = []
+        monkeypatch.setattr(shared_utils.time, 'sleep', sleeps.append)
+
+        held = self._hold(target)
+        try:
+            with caplog.at_level(logging.DEBUG):
+                shared_utils.write_json_to_file({'a': 1}, str(target))
+        finally:
+            held.Close()
+
+        assert [r.levelno for r in self._lock_records(caplog)] == [
+            logging.WARNING, logging.WARNING, logging.ERROR]
+        assert sleeps == [0.1, 0.2]
+        assert json.loads(target.read_text()) == {}

@@ -274,6 +274,9 @@ class TestScmStopWatcher:
         """Point the stop sentinel at a temp file, never the live install."""
         path = str(tmp_path / 'stop_signal.json')
         monkeypatch.setattr(owlette_service, 'STOP_SENTINEL_PATH', path)
+        # the runner, not system, owns these files; the owner gate is pinned
+        # in test_owlette_service_hardening.py.
+        monkeypatch.setattr(owlette_service.acl_hardening, 'is_trusted_owner', lambda *a: True)
         return path
 
     def test_reads_the_live_service_without_elevation(self):
@@ -634,7 +637,7 @@ def test_the_hosted_instance_carries_every_shutdown_attribute(attribute, monkeyp
         owlette_service.shared_utils, 'read_config', lambda *a, **kw: {})
     monkeypatch.setattr(
         owlette_service.shared_utils, 'get_api_base_url',
-        lambda: 'https://example.invalid/api')
+        lambda environment=None: 'https://example.invalid/api')
 
     service = object.__new__(owlette_service.OwletteService)
     service._init_state()
@@ -651,7 +654,7 @@ def test_the_auth_manager_comes_from_the_cloud_client(monkeypatch):
         owlette_service.shared_utils, 'read_config', lambda *a, **kw: {})
     monkeypatch.setattr(
         owlette_service.shared_utils, 'get_api_base_url',
-        lambda: 'https://example.invalid/api')
+        lambda environment=None: 'https://example.invalid/api')
 
     service = object.__new__(owlette_service.OwletteService)
     service._init_state()

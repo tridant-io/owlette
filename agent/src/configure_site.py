@@ -9,7 +9,8 @@ api_base into config.json.
 Usage:
     python configure_site.py [--url URL] [--server {dev,prod}] [--add PHRASE] [--no-browser]
 
-    --url URL        Override the API base URL. Requires --server.
+    --url URL        The API base URL: https://owlette.app/api or
+                     https://dev.owlette.app/api, nothing else. Requires --server.
     --server NAME    Which owlette server to pair with (dev or prod). Required
                      whenever --url is given; otherwise the machine keeps the
                      environment its config is already bound to.
@@ -214,7 +215,8 @@ def run_pairing_flow(api_base: str = None, environment: str = None,
     - Installer (Inno Setup), which also goes through main()
 
     Args:
-        api_base: API base URL (defaults to the resolved environment's)
+        api_base: API base URL, one of the two owlette API bases (defaults to
+            the resolved environment's)
         environment: 'development' or 'production'. Anything else (including
             None) falls back to the environment this machine's config is bound
             to. The caller normalises the operator's --server token exactly once,
@@ -259,6 +261,15 @@ def run_pairing_flow(api_base: str = None, environment: str = None,
         print(f"  environment: {BOLD}{env_color}{env_label}{RESET}")
         print(f"  {DIM}api: {api_base}{RESET}")
         print()
+
+    # --url is the only way to name another host, and the phrase and the tokens go to it
+    if not shared_utils.is_owlette_api_base(api_base):
+        message = (f"{api_base} is not an owlette API base: use "
+                   f"{shared_utils.get_api_base_url('production')} or "
+                   f"{shared_utils.get_api_base_url('development')}")
+        if show_prompts:
+            print(f"  {RED}{message}{RESET}")
+        return (False, message, None)
 
     if show_prompts and not add_phrase and CONFIG_PATH.exists():
         try:
@@ -665,7 +676,7 @@ def run_leave_site() -> int:
     firebase_cfg = config.get('firebase') or {}
     site_id = firebase_cfg.get('site_id', '')
     project_id = firebase_cfg.get('project_id', '')
-    api_base = firebase_cfg.get('api_base') or shared_utils.get_api_base_url()
+    api_base = shared_utils.get_configured_api_base(config)
 
     if not site_id:
         _emit('error', 'this machine is not paired with a site')
@@ -778,8 +789,7 @@ def submit_report(data: dict) -> None:
     import requests as http_requests
     from auth_manager import AuthManager
 
-    config = shared_utils.read_config()
-    api_base = config.get('firebase', {}).get('api_base') or shared_utils.get_api_base_url()
+    api_base = shared_utils.get_configured_api_base()
 
     auth_manager = AuthManager(api_base=api_base)
     if not auth_manager.is_authenticated():
@@ -923,7 +933,7 @@ def run_dismiss_reboot() -> int:
     firebase_cfg = config.get('firebase', {})
     site_id = firebase_cfg.get('site_id', '')
     project_id = firebase_cfg.get('project_id', '')
-    api_base = firebase_cfg.get('api_base') or shared_utils.get_api_base_url()
+    api_base = shared_utils.get_configured_api_base(config)
 
     if not site_id:
         # Nothing to clear on an unpaired machine; never fail the dismissal over it.
@@ -1696,7 +1706,8 @@ def main():
     """Entry point for device code pairing flow."""
     parser = argparse.ArgumentParser(description='owlette Site Configuration')
     parser.add_argument('--url', type=str, default=None,
-                        help='API base URL (auto-detected if not specified)')
+                        help='API base URL, https://owlette.app/api or https://dev.owlette.app/api '
+                             '(auto-detected if not specified)')
     parser.add_argument('--server', choices=['dev', 'prod'], default=None,
                         help='Which owlette server to pair with. Required whenever --url is '
                              'given; otherwise the machine keeps the environment its config '

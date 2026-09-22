@@ -536,7 +536,7 @@ async def main():
 
     # Auth manager + Firestore client, as in firebase_client.py.
     from auth_manager import AuthManager
-    api_base = config.get('firebase', {}).get('api_base') or shared_utils.get_api_base_url()
+    api_base = shared_utils.get_configured_api_base(config)
     auth_manager = AuthManager(api_base=api_base)
 
     if not auth_manager.is_authenticated():

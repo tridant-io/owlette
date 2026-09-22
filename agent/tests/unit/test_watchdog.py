@@ -191,13 +191,19 @@ class TestMergeConfig:
         assert merged2['thresholds']['failure_seconds'] == WATCHDOG_DEFAULTS['thresholds']['failure_seconds']
 
 
+def _registry_value_absent():
+    raise FileNotFoundError('WatchdogDisabled')
+
+
 class TestEmergencyKill:
-    def test_neither_signal_returns_false(self, monkeypatch, tmp_path):
+    @pytest.fixture(autouse=True)
+    def _off_switch_absent(self, monkeypatch):
+        # never read the real registry: a dev box may have the switch set.
+        monkeypatch.setattr('connection_manager._read_watchdog_disabled_value',
+                            _registry_value_absent)
+
+    def test_neither_signal_returns_false(self, monkeypatch):
         monkeypatch.delenv("OWLETTE_DISABLE_WATCHDOG_RESTART", raising=False)
-        # Point the sentinel at a file that doesn't exist
-        from connection_manager import _EMERGENCY_SENTINEL_PATH
-        monkeypatch.setattr('connection_manager._EMERGENCY_SENTINEL_PATH',
-                            str(tmp_path / 'nope'))
         assert _emergency_kill_active() is False
 
     def test_env_var_set_returns_true(self, monkeypatch):
@@ -208,11 +214,9 @@ class TestEmergencyKill:
         monkeypatch.setenv("OWLETTE_DISABLE_WATCHDOG_RESTART", "0")
         assert _emergency_kill_active() is False
 
-    def test_sentinel_file_present_returns_true(self, monkeypatch, tmp_path):
+    def test_registry_value_one_returns_true(self, monkeypatch):
         monkeypatch.delenv("OWLETTE_DISABLE_WATCHDOG_RESTART", raising=False)
-        sentinel = tmp_path / 'watchdog_disabled'
-        sentinel.write_text('')
-        monkeypatch.setattr('connection_manager._EMERGENCY_SENTINEL_PATH', str(sentinel))
+        monkeypatch.setattr('connection_manager._read_watchdog_disabled_value', lambda: 1)
         assert _emergency_kill_active() is True
 
 

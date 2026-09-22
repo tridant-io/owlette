@@ -250,12 +250,14 @@ def test_a_short_write_is_finished_rather_than_reported_as_a_rewrite(
     assert secure_storage.SecureStorage(data_root).get_site_id() == 'site-1'
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='the Windows writer replaces the store '
+                    'atomically; a failed rewrite leaves it whole under the previous key')
 def test_a_rewrite_that_fails_mid_write_says_what_is_on_disk(
         data_root, machine_binding, monkeypatch, caplog):
-    """`_write_token_file` truncates at the open, so a write that fails after it
-    leaves the store short — not "left under the previous key", which reads as
-    no action needed. A restart before the next save then comes up
-    unauthenticated with nothing in the log that pointed at the copy."""
+    """Off Windows `_write_token_file` truncates at the open, so a write that
+    fails after it leaves the store short — not "left under the previous key",
+    which reads as no action needed. A restart before the next save then comes
+    up unauthenticated with nothing in the log that pointed at the copy."""
     token_file = data_root / secure_storage.TOKEN_FILE_NAME
     original = _pre_migration_blob({'refresh_token': 'refresh-abc', 'site_id': 'site-1'})
     token_file.write_bytes(original)
@@ -419,8 +421,8 @@ def test_a_store_that_cannot_be_retained_stays_on_the_previous_key(
 
 def test_a_half_written_retained_copy_is_not_mistaken_for_one(
         data_root, machine_binding, monkeypatch):
-    """`_write_token_file` truncates before it writes, so a write that dies
-    part way leaves a file behind. A store under the new key with only that
+    """Off Windows `_write_token_file` truncates before it writes, so a write
+    that dies part way leaves a file behind. A store under the new key with only that
     beside it is a machine the hotfix rollback has nothing to rename, so the
     unusable copy is dropped and the store stays on the previous key."""
     token_file = data_root / secure_storage.TOKEN_FILE_NAME

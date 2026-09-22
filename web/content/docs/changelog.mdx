@@ -25,6 +25,90 @@ keeping a CPU's or GPU's percent and temperature on their sides. Throughput
 scales now step evenly, so both sides line up with the gridlines, and their
 labels no longer wrap onto two lines.
 
+## [3.3.6] - 2026-09-21
+
+### security — the install folder is no longer writable by every local account
+
+owlette keeps its program files and its data under one folder,
+`C:\ProgramData\Owlette`, whose permissions let any standard Windows account on
+the machine modify what was inside it. Two things followed from that: the
+agent's program files — which the service runs with full system privileges —
+could be replaced by an account that has none, and the encrypted file holding
+the machine's owlette credentials could be read by any local account rather
+than only the person using the machine. A machine whose only accounts are
+administrators was never exposed; a machine anyone else can sign in to was.
+Upgrade every machine — 3.3.6 corrects the permissions and keeps them
+corrected.
+
+- The program folders (`agent`, `python`, `tools`, `app`, `scripts`), the
+  documents in the install root and the uninstaller are readable and runnable
+  by standard users, and writable only by the system account and
+  administrators.
+- The installer applies this on every install and upgrade, and the service
+  re-checks it and repairs any drift when it starts and when someone signs in,
+  so a machine whose permissions have been changed corrects itself without a
+  reinstall.
+- The machine's credential file is limited to the system account,
+  administrators and the signed-in user. Each save now writes a new protected
+  file and swaps it over the store in one step instead of rewriting it in
+  place, so there is no moment at which it sits there half-written.
+- A self-update downloads into a folder only the service can write, and the
+  installer's checksum is taken from the same open file the service hands to
+  Windows to run: the file that was verified is the file that runs.
+- The service confirms who created a file before it acts on it — its stop
+  signal, the update marker, the Cortex/hoot command queue and the result a
+  process launch reports back. A file written by an account it cannot vouch
+  for is logged and ignored.
+- The recovery watchdog can be switched off only through a registry value an
+  administrator sets, `HKLM\SOFTWARE\Owlette\WatchdogDisabled`. The old
+  `tmp\watchdog_disabled` file has no effect.
+- The agent sends its credentials only to the owlette.app API hosts. Any other
+  configured address is refused rather than used.
+- Permission checks identify the Windows built-in accounts by their fixed
+  identifiers instead of their English names, so they work on a non-English
+  Windows.
+- **Known limitation — the person signed in at the machine can still read its
+  credentials.** Pairing runs as that user, so the credential file stays
+  readable by the account at the console; 3.4.0 moves pairing and credential
+  storage behind the service and ends it. Every other local account has lost
+  the access.
+- **Known limitation — re-pair machines that had untrusted local accounts.**
+  3.3.6 changes who can read the credential file; it does not invalidate a copy
+  taken before the upgrade. On any machine where an account you do not trust
+  could sign in, re-pair the machine after upgrading so it runs on fresh
+  credentials.
+- **Known limitation — the upgrade onto 3.3.6 is carried out by the agent
+  already on the machine.** A self-update runs from the version installed, so
+  this one download still uses the old, unprotected staging folder; the
+  protected folder applies to every update from 3.3.6 onwards. Running the
+  3.3.6 installer yourself skips that last step.
+- **Known limitation — the desktop app resets one file's permissions.** The
+  tray app writes `tmp\app_states.json` itself, and its write drops the
+  protected permissions the service had set on it; the service restores them on
+  its next write.
+- **Known limitation — `configure_site.py --url` no longer accepts a local
+  development server.** It takes `https://owlette.app/api` or
+  `https://dev.owlette.app/api` and nothing else, so an agent can no longer be
+  pointed at a development API running on the machine.
+- **Known limitation — re-pairing from a remote session.** After the service's
+  permission repair, only the account signed in at the machine's console holds
+  write access to the credential file, so re-pairing from a Remote Desktop
+  session run as a standard user fails. Re-pair from the console, or from an
+  elevated prompt in the remote session; 3.4.0 removes the need.
+
+### changed — a developer grant, and a record when permissions are repaired
+
+- **`-DevGrant` for developers who deploy into an installed agent.** Run from
+  an elevated prompt, `scripts/bootstrap-windows.ps1 -DevGrant` gives the
+  developer's own account — never every user — write access to the installed
+  `agent\src` and `app` folders, so a local deploy hook keeps working against a
+  hardened tree. `-RemoveDevGrant` reverts it. An agent install resets those
+  folders, so the grant is re-run afterwards.
+- **A repaired machine says so.** When the service finds and fixes drifted
+  install permissions at start-up, it records an `install_permissions_repaired`
+  event naming the paths it corrected, rather than only noting it in the local
+  log.
+
 ## [3.3.5] - 2026-09-15
 
 ### changed — the agent's libraries are current again
