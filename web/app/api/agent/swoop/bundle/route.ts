@@ -63,8 +63,10 @@ function rawPublicKey(value: string): string | null {
  * Current key plus the previous one — PROTOCOL.md §11 rotates with a two-key
  * overlap, so a token signed before the flip still verifies. `swoopJwtPublicKeys()`
  * returns the current pair only; the previous slot is read from the environment
- * here because `scripts/env-manifest.json` has no row for it yet, and its
- * absence simply means one active key.
+ * here (`SWOOP_JWT_KID_PREVIOUS` / `SWOOP_JWT_PUBLIC_KEY_PREVIOUS`, registered in
+ * `scripts/env-manifest.json` as config on every target and set to the empty
+ * string outside a rotation window), and an empty value simply means one
+ * active key.
  */
 function bundleJwtKeys(): SwoopJwtKeyEntry[] {
   const keys = swoopJwtPublicKeys();

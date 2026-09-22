@@ -69,15 +69,11 @@ locally they come from `.dev.vars`, which is gitignored. in an environment they 
 
 ### key rotation runbook
 
-**this runbook cannot be executed today.** step 3 has nowhere to put the outgoing key: `PROTOCOL.md` §11
-requires every bundle to carry **both** the current and the previous public key with their `kid`s, and
-`scripts/env-manifest.json` has no `SWOOP_JWT_PUBLIC_KEY_PREVIOUS` / `SWOOP_JWT_KID_PREVIOUS` rows for
-`railway-dev`, `railway-prod` or `vercel-prod` — only the singular `SWOOP_JWT_PUBLIC_KEY` / `SWOOP_JWT_KID`
-(`:112-114`). the worker half of the overlap exists (`SWOOP_JWT_KID_PREV` / `SWOOP_JWT_PUBLIC_KEY_PREV`); the
-api half does not. until those two rows are registered and set on all three targets, a rotation is a flag day
-for every streamer holding a bundle minted under the old key, which is exactly what the two-key design is for.
-**PENDING [human]** — register the rows (class `config`, all three targets, same class as the singular pair
-they mirror), then delete this paragraph.
+both halves of the overlap exist: the worker's `SWOOP_JWT_KID_PREV` / `SWOOP_JWT_PUBLIC_KEY_PREV` (secrets,
+`_PREV`) and the api's `SWOOP_JWT_KID_PREVIOUS` / `SWOOP_JWT_PUBLIC_KEY_PREVIOUS` (`scripts/env-manifest.json`,
+class `config`, all three targets, `_PREVIOUS`). outside a rotation window the api pair is set to the
+**empty string** on every target — not left unset — so `sync-env.mjs check` stays clean; the bundle route
+treats an empty value as "one active key".
 
 order matters: the worker learns the new key **before** the api starts minting with it, or every token 401s.
 
@@ -153,7 +149,9 @@ therefore cannot lose them — but a *new* environment starts with none, and a w
 ### first-time setup — **PENDING [human]**. copy-paste protocol
 
 none of this can be done from an agent session: it needs the owner's cloudflare account and the repository's
-settings. nothing below has been executed, and **the workflow has never run**.
+settings. the workflow itself has run (on `dev`, most recently 2026-09-19, which created
+`signal-dev.owlette.app`); **the prod steps below have not been executed**, and the prod deploy is a
+deliberate dispatch (see [deploy](#deploy)) that must wait for them.
 
 1. **the api token.** cloudflare dashboard → my profile → api tokens → create token → custom token.
    permissions: `account` → `workers scripts` → `edit`, `account` → `workers durable objects` → `edit`,
