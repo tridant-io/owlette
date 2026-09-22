@@ -11,24 +11,6 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
-### added — pin a metric to read it on its own
-
-Clicking a stat card under a machine's metrics chart pins it: its line stays
-highlighted, the other cards dim, and the readout under the cursor lists only
-that metric while you scrub along the line. Click the card again to unpin.
-
-### fixed — every line on a metrics chart has a scale you can read
-
-Temperature lines now read off their own °C scale instead of the percent
-labels, and a chart showing only network or disk throughput puts its scale on
-the left rather than beside an empty percent column. Each side of the chart
-carries at most one scale, and it always belongs to what you're looking at: a
-pinned or hovered card shows only its own unit, and with usage, temperature
-and throughput on one chart the labels follow the device under the cursor,
-keeping a CPU's or GPU's percent and temperature on their sides. Throughput
-scales now step evenly, so both sides line up with the gridlines, and their
-labels no longer wrap onto two lines.
-
 ## [3.3.6] - 2026-09-21
 
 ### security — the install folder is no longer writable by every local account
@@ -112,6 +94,81 @@ corrected.
   install permissions at start-up, it records an `install_permissions_repaired`
   event naming the paths it corrected, rather than only noting it in the local
   log.
+
+### added — swoop, the remote screen, ships switched off
+
+The dashboard gains swoop: watch a machine's screen live and, with a second
+factor, take its keyboard and mouse. It is off for every site until a site
+admin turns it on, and it has its own release to come; nothing changes for a
+site that leaves it off.
+
+### added — machines report their operating system
+
+Each machine now reports its operating system and version. The machine card
+shows it under the hostname, and the machine list carries it as a second line.
+
+### added — filter the logs by several actions at once
+
+The action filter on the logs page is a searchable list of checkboxes, so you
+can show, say, every start and stop together, and find an action by the name
+you see in a row. The filters sit on one row, with the custom date range
+joining it instead of opening a second one.
+
+### added — pin a metric to read it on its own
+
+Clicking a stat card under a machine's metrics chart pins it: its line stays
+highlighted, the other cards dim, and the readout under the cursor lists only
+that metric while you scrub along the line. Click the card again to unpin.
+
+### changed — machine cards are easier to read
+
+The metrics row lines up the same metric at the same place on every card,
+healthy temperatures are no longer coloured so colour only marks a crossed
+threshold, the online pill is a dot that shares the "last seen" tooltip, and
+the ping cell now shows whether the network interface is up.
+
+### changed — docs search returns a usable number of results
+
+A search of the docs now returns a bounded, ranked list instead of every
+matching section, and the pages carry keywords for the words you type that
+the prose never uses.
+
+### changed — groundwork for the agent on macOS and Linux
+
+The agent's code now runs on all three operating systems and is tested on
+each in every build. Nothing changes on Windows, and there is no macOS or
+Linux installer yet; those ship with their own release.
+
+### changed — you can no longer demote or remove yourself
+
+A site owner or admin who tries to change or delete their own membership now
+gets a refusal instead of locking themselves out, whatever the platform's
+capability enforcement switch is set to.
+
+### changed — the capability enforcement switch no longer covers swoop
+
+Turning capability enforcement off, the break-glass step during an
+authorization misfire, no longer opens swoop's viewing, control and settings
+capabilities: during a misfire swoop stays locked rather than open.
+
+### fixed — every line on a metrics chart has a scale you can read
+
+Temperature lines now read off their own °C scale instead of the percent
+labels, and a chart showing only network or disk throughput puts its scale on
+the left rather than beside an empty percent column. Each side of the chart
+carries at most one scale, and it always belongs to what you're looking at: a
+pinned or hovered card shows only its own unit, and with usage, temperature
+and throughput on one chart the labels follow the device under the cursor,
+keeping a CPU's or GPU's percent and temperature on their sides. Throughput
+scales now step evenly, so both sides line up with the gridlines, and their
+labels no longer wrap onto two lines.
+
+### fixed — a restart-pending banner on an unreachable machine can be dismissed
+
+A machine that crashed a process and never came back carried its
+restart-pending banner indefinitely, and dismissing it did nothing because it
+only queued a command the offline machine never collected. Dismiss now clears
+the flag in the cloud and relays the command to the agent as a courtesy.
 
 ## [3.3.5] - 2026-09-15
 

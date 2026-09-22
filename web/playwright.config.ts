@@ -37,6 +37,12 @@ const THIRD_PARTY_CREDENTIALS = [
   'SWOOP_SIGNAL_URL',
   'SWOOP_SIGNAL_RING_SECRET',
   'STRIPE_SECRET_KEY_TEST',
+  // reach cloudflare (TURN credential minting) and the R2 object store.
+  'CLOUDFLARE_TURN_KEY_API_TOKEN',
+  'R2_S3_SECRET_ACCESS_KEY',
+  // local tooling (terraform, wrangler), never read by web/; blanked so a
+  // developer's .env.local copied from .env.example still starts the suite.
+  'CLOUDFLARE_API_TOKEN',
 ];
 
 /**

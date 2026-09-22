@@ -1,5 +1,5 @@
 # forward-merge `release/3.3.6` into `dev` — Tasks
-**Progress**: 13/14 complete
+**Progress**: 14/14 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and the sections of
 [research/conflicts.md](research/conflicts.md) your task names — nothing else. Line and symbol references were
@@ -491,7 +491,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
     directory, and the Log says so explicitly.
   - Depends on: 5.2.
 
-- [ ] **Task 5.4: push, open the PR, watch CI, close #173** `[agent+human]`
+- [x] **Task 5.4: push, open the PR, watch CI, close #173** `[agent+human]`
   - Files: none in the repo — the PR body and the `#173` closing comment.
   - Do:
     1. `git -C <wt> push -u origin merge/3.3.6-into-dev`. Never push to `dev` or `main`.
@@ -730,3 +730,39 @@ _Append an entry per task: what was done, the numbers, and anything the research
   (3.3.6 leg, `agent\` re-granted Users Modify): **FAIL=1 — `acl: no Users write — agent [M]`**, everything else
   as above, harness exit 1 as required. Full output: scratchpad `matrix2.log`. Not proven here: the credential
   files' DACLs (unpaired) and the junction guard on a real machine (no probe in the harness yet).
+- 2026-09-22 — Task 5.4 in progress. `merge/3.3.6-into-dev` pushed (`f4d681ae`); **draft PR #174 → dev**
+  opened with the body from the plan (five resolutions, gate results, VM table, `-DevGrant` note, no-upload
+  statement). CI runs being watched: agent tests (windows / macos-15 / ubuntu-24.04 + roost minio), playwright
+  e2e, rust build, CodeQL, actions security; the quick gates (dependency review, token-log scan, firebase-admin
+  guard, live-vulnerability check) already green. Marking ready for review and the merge itself are the owner's;
+  #173 is closed after the merge; worktree/junction removal asked for, not done unasked.
+- 2026-09-22 — Task 5.4, CI iterations on #174. Push 1 (`f4d681ae`): macos-15 and ubuntu-24.04 legs failed at
+  collection — the five 3.3.6 test modules import pywin32 at module scope (the simulated-POSIX proxy in 5.1 had
+  only covered `agent/src`, not the tests). Fix `310adc1b`: each `importorskip`s pywin32 right after `import
+  pytest`, so the leg reports a skip; a second proxy (`scratchpad/posix_collect_tests.py`, collect-only under a
+  finder that raises ModuleNotFoundError for pywin32) now collects 1972 items / 0 errors / 7 module skips. Push
+  2: both legs then ran the suite — ubuntu 1188 passed / 1 failed (3.3.6's `TestWriteJsonToFileLocks` imports
+  `win32file` in-body → `@pytest.mark.windows` on the class, `4588676b`); macos 1184 passed / 1 failed on dev's
+  own `TestIdentityPathNormalisation::test_a_recorded_row_still_matches_after_a_restart` (`identity_matches`
+  False with identical row values; the merge touched none of the identity helpers; dev's last three macOS legs
+  passed it) — watching push 3 to tell a runner flake from a regression before digging.
+- 2026-09-22 — Push 3 (`4588676b`): macos passed the identity test (push 2's failure was a runner flake); both
+  POSIX legs then failed one dev test, `test_the_artifact_is_staged_where_only_root_can_write`, which called
+  `_update_staging_dir()` without the os family 4.1 added → `7099d269` passes `'linux'`. Push 4 (`7099d269`):
+  **agent tests green on windows-latest, macos-15, ubuntu-24.04 and the roost/minio job — the authoritative
+  POSIX proof.** Remaining watchers: playwright e2e, rust build, CodeQL, actions security, security preflight.
+- 2026-09-22 — Push 4 (`7099d269`): **every check on #174 green** — agent tests (3 OS + minio), playwright e2e
+  (emulator suite, lint/types/unit, rules), rust build, CodeQL (js + python), zizmor, security preflight,
+  dependency review, token-log scan, firebase-admin guard, line-count. PR marked **ready for review**. Left for
+  the owner: approve + merge (dev auto-deploys); then close #173 with the pointer comment; remove the worktree
+  and junction; delete the remote branch. Follow-ups restated: a `-AuthorizePairing` matrix run to prove the two
+  credential-file rows; the 3.3.7 question for the fielded 3.3.6 (review C1) and its advisory wording; a
+  creator-identity check for the POSIX cortex/IPC channel (plan D7's obligation, now explicit in
+  `_read_cortex_command`'s docstring); dev's cortex kill switch means an unpaired dev-built agent never drains
+  the cortex queue — expected, documented in the harness.
+- 2026-09-22 — Task 5.4 done. Owner said "Go": **#174 merged into `dev` as `23c42e1e`** (merge commit, 21:25 UTC).
+  GitHub marked #173 merged by itself (its commits arrived through #174); a pointer comment is on it. Remote
+  branch `merge/3.3.6-into-dev` deleted. dev's push-triggered CI (agent tests, e2e, rust, CodeQL, security) and
+  the Railway deploy of dev.owlette.app being watched. Worktree `Owlette-merge` + junction and the release
+  worktree `Owlette-3.3.6` are still on disk — removal is a recursive delete and waits for the owner's ok on the
+  exact command. Step 2 (promotion) starts from `dev` @ `23c42e1e`.
