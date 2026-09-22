@@ -250,24 +250,43 @@ $SB_StartInstaller = {
 
 # Host side: wait for the detached installer's exit-code file, reconnecting
 # for every look so a session the installer severed costs one retry, not the row.
-function Wait-GuestInstall($vmName, $cred, [int]$timeout) {
+# -StopPairingPoll: a fielded installer on a machine with no config runs the
+# interactive pairing flow (configure_site.py, QR + poll) and, with nobody to
+# authorise, sits in it far past the server's 600 s code lifetime (2.12.21 and
+# 3.0.1 both outlasted 30 minutes here). A real fielded box was paired long ago
+# and never enters that step, so the harness stops that one process by pid once
+# it has clearly been polling; the installer then finishes on its own.
+function Wait-GuestInstall($vmName, $cred, [int]$timeout, [switch]$StopPairingPoll) {
   $deadline = (Get-Date).AddSeconds($timeout)
+  $stopped = ""
   while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 10
     $s2 = $null
     try {
       $s2 = New-PSSession -VMName $vmName -Credential $cred -ErrorAction Stop
-      $code = Invoke-Command -Session $s2 -ScriptBlock {
-        if (Test-Path 'C:\owlette-install.exit') { (Get-Content 'C:\owlette-install.exit' -Raw).Trim() } else { $null }
+      $r = Invoke-Command -Session $s2 -ArgumentList $StopPairingPoll.IsPresent -ScriptBlock {
+        param($stopPoll)
+        $note = ""
+        if ($stopPoll) {
+          Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'configure_site\.py' } | ForEach-Object {
+            if (((Get-Date) - $_.CreationDate).TotalSeconds -gt 90) {
+              Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+              $note = "pairing poll (pid $($_.ProcessId)) stopped after $([int]((Get-Date) - $_.CreationDate).TotalSeconds)s; "
+            }
+          }
+        }
+        $code = if (Test-Path 'C:\owlette-install.exit') { (Get-Content 'C:\owlette-install.exit' -Raw).Trim() } else { $null }
+        [PSCustomObject]@{ Code = $code; Note = $note }
       }
-      if ($null -ne $code -and "$code" -ne '') {
-        return [PSCustomObject]@{ Ok = ("$code" -eq '0'); Detail = "exit $code"; ExitCode = [int]$code }
+      if ($r.Note) { $stopped = $r.Note }
+      if ($null -ne $r.Code -and "$($r.Code)" -ne '') {
+        return [PSCustomObject]@{ Ok = ("$($r.Code)" -eq '0'); Detail = "${stopped}exit $($r.Code)"; ExitCode = [int]$r.Code }
       }
     }
     catch { }
     finally { if ($s2) { Remove-PSSession $s2 -ErrorAction SilentlyContinue } }
   }
-  [PSCustomObject]@{ Ok = $false; Detail = "installer did not finish within ${timeout}s"; ExitCode = -1 }
+  [PSCustomObject]@{ Ok = $false; Detail = "${stopped}installer did not finish within ${timeout}s"; ExitCode = -1 }
 }
 
 $SB_WaitService = {
@@ -649,7 +668,7 @@ try {
       if (-not $st.Ok) { Add-Row $v "from-install $v" "FAIL" $st.Detail; continue }
       # the session is closed while the installer runs (see $SB_StartInstaller)
       Remove-PSSession $s -ErrorAction SilentlyContinue; $s = $null
-      $fi = Wait-GuestInstall $Name $cred $FromInstallTimeoutSec
+      $fi = Wait-GuestInstall $Name $cred $FromInstallTimeoutSec -StopPairingPoll
       $s = Connect-Guest $Name $cred
       if (-not $fi.Ok) { Add-Row $v "from-install $v" "FAIL" $fi.Detail; continue }
       Add-Row $v "from-install $v" "PASS" $fi.Detail
