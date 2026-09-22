@@ -1,5 +1,5 @@
 # forward-merge `release/3.3.6` into `dev` — Tasks
-**Progress**: 9/14 complete
+**Progress**: 13/14 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and the sections of
 [research/conflicts.md](research/conflicts.md) your task names — nothing else. Line and symbol references were
@@ -359,7 +359,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
 
 ## Wave 4: the merge commit, then self-update
 
-- [ ] **Task 4.1: dev's split self-update takes on 3.3.6's hardened staging semantics** `[agent]`
+- [x] **Task 4.1: dev's split self-update takes on 3.3.6's hardened staging semantics** `[agent]`
   - Files: `agent/src/owlette_service.py` (via the junction), `agent/tests/unit/test_self_update_hardening.py`
   - Do: read research §3.3 in full — this is the merge's single largest correctness risk, and the only resolution
     that is a rewrite rather than a choice. `dev` split `update_owlette` out of `handle_firebase_command` into
@@ -416,7 +416,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
 
 ## Wave 5: gates, review, VM, PR — **this wave runs in order**
 
-- [ ] **Task 5.1: the local gate run** `[agent]`
+- [x] **Task 5.1: the local gate run** `[agent]`
   - Files: none by default. Fix-forward is allowed for small, obvious breakage in files earlier waves resolved;
     anything structural in `acl_hardening.py`, `secure_storage.py`, `owlette_service.py` or
     `owlette_installer.iss` **stops and logs** instead.
@@ -447,7 +447,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
     any fix-forward is its own commit with the gate it unblocked named in the message.
   - Depends on: 4.1.
 
-- [ ] **Task 5.2: adversarial review of the four security surfaces** `[agent]`
+- [x] **Task 5.2: adversarial review of the four security surfaces** `[agent]`
   - Files: writes `dev/active/forward-merge-3.3.6/review.md` (**untracked** — same hold as
     `research/conflicts.md`, plan.md D12). No source changes in this task; findings become fix commits only after
     they are triaged in the Log.
@@ -464,7 +464,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
     the fixes are committed and Task 5.1's agent suite re-run green after them.
   - Depends on: 5.1.
 
-- [ ] **Task 5.3: the VM upgrade matrix against a build from the merge branch** `[agent+human]`
+- [x] **Task 5.3: the VM upgrade matrix against a build from the merge branch** `[agent+human]`
   - Files: `scripts/vm/18b-verify-upgrade.ps1` (the new assertion row)
   - Do: **this is verification of a merge, not a release** (plan.md D11). No installer from this build is
     uploaded, finalised or set as latest, and no `installer_metadata` id moves.
@@ -657,3 +657,76 @@ _Append an entry per task: what was done, the numbers, and anything the research
   `test_owlette_service_hardening` **162 passed, 3 failed** — the three are `TestSelfUpdateGuard` (the
   trusted-owner check in `_update_already_in_progress`), which is 4.1's self-update rewrite. Staged; patch
   `task-3.2.patch`. **`git diff --diff-filter=U --name-only` is empty — the merge has no unresolved path.**
+- 2026-09-22 — Task 4.1 done, as four commits on `merge/3.3.6-into-dev`: **`b7b17d7b` the merge commit**
+  (parents `c1bc8d89` = dev's tip + plan commit, `6201fd1f` = 3.3.6's tip; body names the five resolutions, the
+  follow-up self-update commit, the label, and the `-DevGrant` consequence), **`6d4ce917`** (a POSIX regression
+  the research did not predict: `acl_hardening.is_trusted_owner` answers False wherever pywin32 is absent, and
+  3.2's clean hunks called it unconditionally in `_read_cortex_command` and `_check_update_status` — off Windows
+  every queued cortex command and every update marker would have been refused; both gated on `os.name == 'nt'`,
+  test `test_the_owner_checks_are_windows_only` red first — pytest could not even format the failure with
+  `os.name` patched, the assertion fired inside `_read_cortex_command` — then `2 passed`; `_read_stop_sentinel`
+  needs no gate, its watcher is Windows-only), **`69fe4a02` the self-update port** — red first: the rewritten
+  `test_self_update_hardening.py` gave `10 failed, 4 passed`; after: `82 passed` together with the hardening
+  file. Windows arm of `_run_self_update`: `_update_staging_dir('windows')` = `update-staging` via
+  `create_private_dir(staging, _update_staging_aces())` (call-time table lookup, raises if the row is absent);
+  earlier hold released before the download; `strict_path=(os_family == 'windows')`; checksum through
+  `installer_utils.open_verified`, handle on `self._update_image_handle`, nothing reopens the path before
+  `_start_windows_update` runs it by the same path; `_write_update_marker` → `_create_update_marker` on Windows
+  (POSIX keeps the plain write), and it now runs **before** the download too (dev's design — the guard
+  brackets the whole operation), so a planted file at the marker path fails the update before anything is
+  downloaded rather than after; `_update_already_in_progress` trusts only a marker this service wrote
+  (Windows); POSIX arm untouched (`cache/update` + 0o700, calls no Windows helper — tested).
+  `_pid_descends_from` (task item 5) already guards the launcher result in `launch_process_as_user` (3.2's clean
+  hunk); the self-update path has no launcher result. **`f73a3d65` a second clean-but-wrong merge found by the full
+  suite:** both sides defined `_check_console_session` (dev: swoop's session-change notifier on the 5-second
+  loop; 3.3.6: the ACL session repair on the local-config-watcher tick) — Python kept the later definition, so
+  swoop would never have heard of a session change. 3.3.6's is `_check_console_session_acls` now, called from the
+  watcher as before. Six tests adjusted for merged shapes (`test_service_shutdown` api-base stub arity,
+  `test_update_artifact_guard` stubs the Windows owner check on its POSIX-lane double, `test_recover_identity`
+  imports `owlette_service`, `test_configure_site_headless` patches dev's `_service_control`,
+  `test_config_sync_client`/hardening tests use the new name). **Full suite: `2074 passed, 319 skipped, 0
+  failed`** (dev baseline 1821/319/0; release/3.3.6 1432/5). Patches `commit-a.patch`, `task-4.1.patch`,
+  `commit-c.patch`.
+- 2026-09-22 — Task 5.1 done (all from the worktree root, on `698e0d9d`). (1) full agent suite: **2076 passed,
+  319 skipped, 0 failed** (dev baseline 1821/319/0; release/3.3.6 1432/5); the one new skip is
+  `test_machine_identity.py:253` (POSIX truncate-then-write shape, explained in 3.1). (2) `test_no_platform_imports`
+  4 passed; `import firebase_client, owlette_service, configure_site` ok. (3) simulated POSIX collection
+  (`scratchpad/posix_collect.py`: a meta_path finder refusing `win32*`, `pywintypes`, `pythoncom`, `ntsecuritycon`,
+  `winreg`, `wmi`, data root on a temp tree): all three modules import cleanly — a local proxy only; **the
+  authoritative POSIX proof is CI's macos-15 / ubuntu-24.04 legs on the PR.** (4) swoop/roost pytest set: 137
+  passed, 2 skipped; `cargo test` in `agent/swoop`: every suite `ok`. (5) `cargo check --locked` in `agent/host`
+  and `desktop/src-tauri`: both resolve; `cd desktop && npm test`: 32 files, 489 passed. (6) web: `npm run lint` 0
+  errors (9 pre-existing warnings, all present on dev); `tsc --noEmit` clean; jest 302 suites, 6021 passed, 1
+  skipped; local Playwright e2e **400 passed** (13 min); `test:rules` running at the time of writing (result
+  appended below). (7) `node scripts/check-security-alerts.mjs`: `RESULT: CLEAR` (1 previously acknowledged
+  blocker, 27 warnings; code-scanning acks report UNKNOWN because SAST has not run on this ref — re-check on dev).
+- 2026-09-22 — Task 5.2 done. Fresh Opus reviewer, scope as specified; report at
+  `dev/active/forward-merge-3.3.6/review.md` (untracked, two copies). Verdict: **Q1 — nothing 3.3.6 protected is
+  lost; Q2 — one Low; plus one High carried from shipped 3.3.6, not caused by the merge.** F1 (Low): the
+  migration's writer contract is OSError and the Windows writer could raise other types → fixed `2ecf5458`
+  (test red `assert None == 'dummy-refresh-token'`, then green). C1 (High, pre-existing in the fielded 3.3.6; the mechanism stays in the untracked review.md): the
+  guarantee that the permission repair and the installer act only on plain files and directories at table paths
+  is now explicit → fixed `4831ff3a` (`repair_all` skips a link or reparse point and logs it; the generated
+  script gains a `Plain` guard before every `icacls` call; test with a real junction red, then green; generated
+  PowerShell reconstructed and parse-checked). Suite after both: 2076/319/0. **Owner decision owed:** a 3.3.7 patch for the fielded 3.3.6
+  and whether the advisory (release Task 4.3) names it. The reviewer's "checked and found sound" list is in the
+  report with the line each guarantee was verified at.
+- 2026-09-22 — Task 5.1 addendum: `npm run test:rules` → Test Suites: 5 passed, 5 total Tests:       139 passed, 139 total  exit 0. Every 5.1 gate is green.
+- 2026-09-22 — Task 5.3 done, run from this box (it is the Hyper-V host; `owlette-e2e`, PowerShell Direct).
+  Candidate built from the worktree at `9b928cdd`'s tree minus the harness commits (code identical): `agent/build/installer_output/Owlette-Installer-v3.3.6.exe`,
+  copied aside as `Owlette-Installer-merge-candidate.exe` — **45,923,378 bytes, sha256
+  `36977243ecb903a2b26a4992fca5188ed5b963701ad668cfb04e2d158eb1083a`**. **No installer left the build directory or
+  the VM host; nothing was uploaded, finalised or set as latest; no `installer_metadata` id moved.** Harness changes
+  (committed): the `.tokens.enc.v1` row (`698e0d9d`) and the cortex smoke turning `cortex.enabled` on first
+  (`9b928cdd`) — the first pass failed that smoke on both legs because dev's service drains the cortex queue only
+  while the hoot switch is on (dev's deliberate kill switch, absent on 3.3.6; not a merge regression). Second pass,
+  `-FromVersion 3.3.4,3.3.6`: **PASS=24 FAIL=0 SKIP=8 — UPGRADE VERIFY OK**. Per leg (3.3.4 and 3.3.6 identical):
+  clean image PASS · from-install PASS (service Running) · candidate push PASS (size + sha verified in guest) ·
+  candidate install PASS · acl: paths present PASS · acl: no Users write PASS · acl: .tokens.enc SKIP (unpaired) ·
+  acl: .tokens.enc.v1 SKIP (no pre-migration copy — needs a machine paired before the migration, i.e. a
+  `-AuthorizePairing` run with the owner) · service running PASS · pairing phrase PASS · pairing authorize SKIP ·
+  cortex round trip PASS (switch turned on first) · screenshot SKIP (unpaired) · config.json edit PASS · app_states
+  read PASS · self-update dry run PASS (staged + hashed + read-shared in update-staging). Negative control
+  (3.3.6 leg, `agent\` re-granted Users Modify): **FAIL=1 — `acl: no Users write — agent [M]`**, everything else
+  as above, harness exit 1 as required. Full output: scratchpad `matrix2.log`. Not proven here: the credential
+  files' DACLs (unpaired) and the junction guard on a real machine (no probe in the harness yet).
