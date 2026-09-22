@@ -259,6 +259,7 @@ $SB_StartInstaller = {
 function Wait-GuestInstall($vmName, $cred, [int]$timeout, [switch]$StopPairingPoll) {
   $deadline = (Get-Date).AddSeconds($timeout)
   $stopped = ""
+  $boxedOnce = $false
   while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 10
     $s2 = $null
@@ -267,6 +268,7 @@ function Wait-GuestInstall($vmName, $cred, [int]$timeout, [switch]$StopPairingPo
       $r = Invoke-Command -Session $s2 -ArgumentList $StopPairingPoll.IsPresent -ScriptBlock {
         param($stopPoll)
         $note = ""
+        $boxed = $false
         if ($stopPoll) {
           Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'configure_site\.py' } | ForEach-Object {
             if (((Get-Date) - $_.CreationDate).TotalSeconds -gt 90) {
@@ -274,12 +276,30 @@ function Wait-GuestInstall($vmName, $cred, [int]$timeout, [switch]$StopPairingPo
               $note = "pairing poll (pid $($_.ProcessId)) stopped after $([int]((Get-Date) - $_.CreationDate).TotalSeconds)s; "
             }
           }
+          # With the poll gone, 2.12.21/3.0.x call plain MsgBox("pairing was not
+          # completed"), which Inno does not suppress under /SUPPRESSMSGBOXES
+          # (only SuppressibleMsgBox is). In this non-interactive session the box
+          # is invisible and blocks forever. The file tree is complete by then
+          # (the box sits in ssPostInstall, after the uninstall log; the service
+          # install it skips is a NOTE for these versions anyway), so end the
+          # setup process by pid and let cmd write the exit code.
+          $log = 'C:\owlette-install.log'
+          if ((Test-Path $log) -and ((Get-Content $log -Tail 6) -match 'Pairing failed - skipping service install')) {
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'Owlette-from-*.tmp' } | ForEach-Object {
+              Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+              $boxed = $true
+            }
+          }
         }
         $code = if (Test-Path 'C:\owlette-install.exit') { (Get-Content 'C:\owlette-install.exit' -Raw).Trim() } else { $null }
-        [PSCustomObject]@{ Code = $code; Note = $note }
+        [PSCustomObject]@{ Code = $code; Note = $note; Boxed = $boxed; Tree = (Test-Path 'C:\ProgramData\Owlette\agent\src') }
       }
       if ($r.Note) { $stopped = $r.Note }
+      if ($r.Boxed) { $boxedOnce = $true }
       if ($null -ne $r.Code -and "$($r.Code)" -ne '') {
+        if ($boxedOnce -and $r.Tree) {
+          return [PSCustomObject]@{ Ok = $true; Detail = "${stopped}setup ended at its unsuppressed pairing box after the files were installed (service not registered, as for any unpaired silent install of this version)"; ExitCode = 0 }
+        }
         return [PSCustomObject]@{ Ok = ("$($r.Code)" -eq '0'); Detail = "${stopped}exit $($r.Code)"; ExitCode = [int]$r.Code }
       }
     }
