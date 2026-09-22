@@ -121,16 +121,20 @@ dev costs nothing and a mistake on prod ends every live session.
 two environments, one worker script each, and no third: `wrangler.toml` declares `env.dev` and `env.prod`, and
 a bare `wrangler deploy` with no `-e` would publish a *fourth*, unenvironmented script — never run one.
 
-| branch | command | script | serves |
+| trigger | command | script | serves |
 |---|---|---|---|
-| `dev` | `wrangler deploy -e dev` | `swoop-signal-dev` | dev.owlette.app's `SWOOP_SIGNAL_URL` |
-| `main` | `wrangler deploy -e prod` | `swoop-signal-prod` | owlette.app's `SWOOP_SIGNAL_URL`, both origins |
+| push to `dev` | `wrangler deploy -e dev` | `swoop-signal-dev` | dev.owlette.app's `SWOOP_SIGNAL_URL` |
+| `gh workflow run swoop-signal-deploy.yml --ref main -f environment=prod` | `wrangler deploy -e prod` | `swoop-signal-prod` | owlette.app's `SWOOP_SIGNAL_URL`, both origins |
 
 [`.github/workflows/swoop-signal-deploy.yml`](../../.github/workflows/swoop-signal-deploy.yml) does it: path
 filters on `infra/swoop-signal/**` and the workflow itself, the vitest suite first on every pull request and
-every push, then the deploy on a push to `dev` or `main`, then `GET /health` against the deployed origin with
-a non-200 failing the job. concurrency is `cancel-in-progress: false` — a cancelled deploy leaves whichever
-version cloudflare last accepted.
+every push, then the deploy on a push to `dev` or on a `workflow_dispatch`, then `GET /health` against the
+deployed origin with a non-200 failing the job. **a push to `main` deploys nothing**: the prod worker is a
+deliberate dispatch with `environment=prod`, and the dispatch input defaults to `dev` so a mis-click lands on
+dev. never run it before the three prod secrets are set — a worker missing `SWOOP_SIGNAL_RING_SECRET`
+answers every ring `500 ring_secret_unconfigured` while `/health` still returns 200, and the smoke step
+deliberately sends no secret. concurrency is `cancel-in-progress: false` — a cancelled deploy leaves
+whichever version cloudflare last accepted.
 
 ### what the workflow needs, and what it must never hold
 
