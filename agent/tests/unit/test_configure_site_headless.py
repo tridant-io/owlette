@@ -415,6 +415,23 @@ class TestLeaveSite:
             'owlette-dev-3838a', 'https://dev.owlette.app/api', 'default_site',
         )
 
+    def test_a_foreign_api_base_is_replaced_by_the_environment_base(self, capsys):
+        # config.json is user-writable; the machine's credentials must stay on owlette.app
+        config = json.loads(json.dumps(self.CONFIG))
+        config['firebase']['api_base'] = 'https://attacker.example/api'
+        with patch.object(configure_site.shared_utils, 'load_config', return_value=config), \
+             patch.object(configure_site.shared_utils, 'save_config'), \
+             patch.object(configure_site.shared_utils, 'get_data_path', return_value='cache.json'), \
+             patch.object(configure_site.os.path, 'exists', return_value=False), \
+             patch.object(configure_site, '_machine_document',
+                          return_value=(MagicMock(), MagicMock())) as resolve, \
+             patch.object(configure_site, '_host_service', return_value=True), \
+             patch.object(configure_site.time, 'sleep'):
+            configure_site.run_leave_site()
+
+        capsys.readouterr()
+        assert resolve.call_args.args[1] == 'https://dev.owlette.app/api'
+
     def test_deletes_the_cached_cloud_config(self, capsys):
         _code, _events_, _config, _document, _host, remove, _client = self._run(capsys)
         remove.assert_called_once()

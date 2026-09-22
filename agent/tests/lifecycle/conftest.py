@@ -25,7 +25,11 @@ This conftest builds three things and documents the honesty contract of each.
    (exe_path, then file_path as its single argument), pid delivered through
    the real pid-file handshake, so launch_process_as_user's own validation,
    pid-file polling, app_states row write and return value all run REAL, and
-   the returned PID is a real live process.
+   the returned PID is a real live process. The handoff's trust checks run
+   REAL too: the runner plays the helper (the shim returns its pid, and it
+   is the decoy's parent) and the double holds the runner's own token, so the
+   pid file is granted to the helper's user as in production (the runner,
+   playing the service as well, is also its owner).
      Two documented deviations, both properties of the decoy runner and not
    of the code under test:
      - an entry with an empty file_path gets a default idle-script argument
@@ -431,6 +435,8 @@ def service_factory(monkeypatch, decoy_env):
     Multiple doubles per test are the point: a fresh double with the state
     files preserved IS the simulated service restart.
     """
+    import win32api
+    import win32security
     import shared_utils
     import win32process
     from owlette_service import OwletteService
@@ -464,8 +470,9 @@ def service_factory(monkeypatch, decoy_env):
             _register(popen.pid, -1.0, popen, 'service')
         with open(launch_args['pid_file'], 'w') as f:
             json.dump({'pid': popen.pid}, f)
-        # (hProcess, hThread, dwProcessId, dwThreadId) of the helper.
-        return None, None, popen.pid, 0
+        # (hProcess, hThread, dwProcessId, dwThreadId) of the helper, which is
+        # the runner here: it spawned the decoy.
+        return None, None, os.getpid(), 0
 
     monkeypatch.setattr(win32process, 'CreateProcessAsUser',
                         _fake_create_process_as_user)
@@ -497,7 +504,9 @@ def service_factory(monkeypatch, decoy_env):
             _command_rate_limits={},
             COMMAND_RATE_LIMIT_SECONDS=OwletteService.COMMAND_RATE_LIMIT_SECONDS,
             HANG_CONFIRM_SECONDS=OwletteService.HANG_CONFIRM_SECONDS,
-            console_user_token=object(),  # truthy: a user session exists
+            # a user session exists; the runner is the helper's user.
+            console_user_token=win32security.OpenProcessToken(
+                win32api.GetCurrentProcess(), win32security.TOKEN_QUERY),
             environment=None,
             _restart_exit_code=0,
             _shutdown_trigger=None,

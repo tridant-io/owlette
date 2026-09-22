@@ -48,7 +48,8 @@ def test_ensure_data_directories_builds_under_the_override(relocated):
     assert sorted(p.name for p in relocated.iterdir()) == [
         'cache', 'config', 'ipc', 'logs', 'tmp',
     ]
-    assert (relocated / 'ipc' / 'cortex_commands').is_dir()
+    # the cortex trio is service-owned on windows: only a SYSTEM process creates it
+    assert (relocated / 'ipc' / 'cortex_commands').is_dir() is (os.name != 'nt')
 
 
 @pytest.mark.parametrize('leaf, resolve', sorted(SYNC_DEFAULTS.items()))

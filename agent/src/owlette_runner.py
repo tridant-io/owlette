@@ -158,7 +158,7 @@ if __name__ == '__main__':
                 try:
                     site_id = shared_utils.read_config(['firebase', 'site_id'])
                     project_id = shared_utils.read_config(['firebase', 'project_id'])
-                    api_base = shared_utils.read_config(['firebase', 'api_base'])
+                    api_base = shared_utils.get_configured_api_base()
                     cache_path = shared_utils.get_data_path('cache/firebase_cache.json')
 
                     logging.info(f"Firebase config - site_id: {site_id}, project_id: {project_id}")

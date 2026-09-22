@@ -274,6 +274,9 @@ class TestScmStopWatcher:
         """Point the stop sentinel at a temp file, never the live install."""
         path = str(tmp_path / 'stop_signal.json')
         monkeypatch.setattr(owlette_service, 'STOP_SENTINEL_PATH', path)
+        # the runner, not system, owns these files; the owner gate is pinned
+        # in test_owlette_service_hardening.py.
+        monkeypatch.setattr(owlette_service.acl_hardening, 'is_trusted_owner', lambda *a: True)
         return path
 
     def test_reads_the_live_service_without_elevation(self):

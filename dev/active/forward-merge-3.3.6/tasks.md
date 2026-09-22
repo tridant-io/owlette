@@ -1,5 +1,5 @@
 # forward-merge `release/3.3.6` into `dev` — Tasks
-**Progress**: 0/14 complete
+**Progress**: 9/14 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and the sections of
 [research/conflicts.md](research/conflicts.md) your task names — nothing else. Line and symbol references were
@@ -68,7 +68,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
 
 ## Wave 0: set up and start the merge
 
-- [ ] **Task 0.1: worktree, junction, baseline, merge left in progress** `[agent]`
+- [x] **Task 0.1: worktree, junction, baseline, merge left in progress** `[agent]`
   - Files: creates `C:\Users\admin\Documents\Git-restored\Owlette-merge` (worktree) and
     `C:\Users\admin\Documents\Git-restored\Owlette-merge-agentsrc` (junction); copies
     `dev/active/forward-merge-3.3.6/{plan.md,tasks.md,research/conflicts.md}` into the worktree; commits
@@ -101,7 +101,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
 
 ## Wave 1: mechanical resolutions, the lazy table, the web label
 
-- [ ] **Task 1.1: the eight mechanical hunks, the installer's two `Step 0c` blocks, and the credentials loop** `[agent]`
+- [x] **Task 1.1: the eight mechanical hunks, the installer's two `Step 0c` blocks, and the credentials loop** `[agent]`
   - Files: `agent/host/Cargo.lock`, `desktop/src-tauri/Cargo.lock`, `agent/tests/unit/test_shared_utils.py`,
     `agent/src/installer_utils.py` (via the junction), `agent/src/owlette_runner.py` (via the junction),
     `agent/owlette_installer.iss`
@@ -131,7 +131,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
     token paths; the six files are staged (`git -C <wt> add`) and the patch is saved to the scratchpad.
   - Depends on: 0.1.
 
-- [ ] **Task 1.2: `acl_hardening` and `connection_manager` go lazy** `[agent]`
+- [x] **Task 1.2: `acl_hardening` and `connection_manager` go lazy** `[agent]`
   - Files: `agent/src/acl_hardening.py` (via the junction), `agent/src/connection_manager.py` (via the
     junction), `agent/tests/unit/test_acl_hardening.py`
   - Do: read research §2.4 and §3.1 and plan.md D4. `acl_hardening.py` merged clean and is wrong on `dev` as it
@@ -163,7 +163,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
     lists only files Waves 2–4 own, and those files are named in `## Log` as the handover; staged, patch saved.
   - Depends on: 0.1.
 
-- [ ] **Task 1.3: a web label for `install_permissions_repaired`** `[agent]`
+- [x] **Task 1.3: a web label for `install_permissions_repaired`** `[agent]`
   - Files: `web/app/logs/page.tsx`
   - Do: the agent emits an `install_permissions_repaired` machine event when the service repaired drifted install
     permissions (research §3.8). Nothing under `web/` names it, so `actionLabel` (`web/app/logs/page.tsx:235`)
@@ -182,7 +182,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
 
 ## Wave 2: `shared_utils`, the api-base allowlist, version hygiene
 
-- [ ] **Task 2.1: resolve `shared_utils.py`** `[agent]`
+- [x] **Task 2.1: resolve `shared_utils.py`** `[agent]`
   - Files: `agent/src/shared_utils.py` (via the junction), `agent/tests/unit/test_shared_utils_hardening.py`
   - Do: read research §2.2 and §3.6. Six conflict hunks, resolved per that table:
     - imports: keep **both** `import osadapter` and `import acl_hardening`.
@@ -212,7 +212,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
     `_create_cortex_ipc_dirs` and nowhere else; staged, patch saved.
   - Depends on: 1.2 (the `specs()` accessor).
 
-- [ ] **Task 2.2: `auth_manager` keeps both intents; the runner's api-base read goes through the accessor** `[agent]`
+- [x] **Task 2.2: `auth_manager` keeps both intents; the runner's api-base read goes through the accessor** `[agent]`
   - Files: `agent/src/auth_manager.py` (via the junction), `agent/src/owlette_runner.py` (via the junction)
   - Do: read research §2.5 and §3.4.
     - `auth_manager.py` has one conflict hunk where both sides rewrote the same two lines. Keep **both intents**:
@@ -232,7 +232,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
     unresolved module that caused it; staged.
   - Depends on: 1.1 (the runner's conflict), 2.1 is **not** required — `get_configured_api_base` auto-merged.
 
-- [ ] **Task 2.3: version files and both changelogs audited** `[agent]`
+- [x] **Task 2.3: version files and both changelogs audited** `[agent]`
   - Files: read-only unless something is wrong — `VERSION`, `agent/VERSION`, `web/package.json`,
     `docs/changelog.md`, `web/content/docs/changelog.mdx`, `docs/internal/version-management.md`,
     `.claude/CLAUDE.md`, `agent/host/Cargo.toml`, `desktop/src-tauri/Cargo.toml`,
@@ -261,7 +261,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
 
 ## Wave 3: the credential store and the service file
 
-- [ ] **Task 3.1: `secure_storage` keeps one write choke point, and the pre-migration copy is protected** `[agent]`
+- [x] **Task 3.1: `secure_storage` keeps one write choke point, and the pre-migration copy is protected** `[agent]`
   - Files: `agent/src/secure_storage.py` (via the junction), `agent/src/acl_hardening.py` (via the junction),
     `agent/tests/unit/test_secure_storage.py`
   - Do: read research §2.1 and §3.2 and plan.md D5/D6. Five conflict hunks, and the resolution is a design, not
@@ -300,7 +300,7 @@ if a line has drifted. `dev/active/` is gitignored, so search this directory wit
     succeeds; staged, patch saved.
   - Depends on: 1.2, 2.1.
 
-- [ ] **Task 3.2: resolve `owlette_service.py` — everything except self-update** `[agent]`
+- [x] **Task 3.2: resolve `owlette_service.py` — everything except self-update** `[agent]`
   - Files: `agent/src/owlette_service.py` (via the junction), `agent/tests/unit/test_owlette_service_hardening.py`
   - Do: read research §2.3, §3.4 and §3.5. Five conflict hunks, 22 hunks that merged **without** a marker into a
     file whose structure changed underneath them, and one invariant to honour.
@@ -527,3 +527,133 @@ _Append an entry per task: what was done, the numbers, and anything the research
 - 2026-09-22 — plan and tasks written. Baselines to beat, to be filled by Task 0.1: `release/3.3.6` reported
   1432 passed / 5 skipped; `dev`'s own count is unmeasured. Open drift checks for Task 0.1: `dev` was at
   `bbdbbebf` and `VERSION` `3.3.5` when the research was done; the conflict inventory is 10 files / 25 hunks.
+- 2026-09-22 — Task 0.1 done. Worktree `Owlette-merge` on `merge/3.3.6-into-dev` from `origin/dev` @ `723fc344`
+  (one commit past the research's `bbdbbebf`: `test: every internal docs link and anchor resolves`, touches only
+  `web/e2e/specs/public/docs-links.spec.ts` — no merge anchor moved). Junction resolves. Plan commit `c1bc8d89`
+  (plan.md + tasks.md; research/conflicts.md untracked, two on-disk copies). `dev` baseline: **1821 passed /
+  319 skipped / 0 failed** (64 s). Merge of `6201fd1f` in progress, MERGE_HEAD verified. Inventory = research
+  exactly: 10 files / 25 hunks — shared_utils 6, owlette_service 5, secure_storage 5, test_shared_utils 3,
+  installer.iss 1, auth_manager 1, installer_utils 1, owlette_runner 1, host Cargo.lock 1, desktop Cargo.lock 1.
+  No drift.
+- 2026-09-22 — Task 1.1 done. Both `Cargo.lock`s → 3.3.6 (= `VERSION`, both `Cargo.toml`s). `test_shared_utils.py`:
+  both import lines and every class from both sides kept (the raw-api-base scan guard stays red until 2.2/3.2).
+  `installer_utils.py`: dev's artifact-family block then 3.3.6's `open_verified`. `owlette_runner.py`: dev's side
+  (no `MockService`; the three api-base edits go to `_init_state` in 3.2). `.iss`: `HardenInstallTree()` is Step 0c,
+  dev's swoop `icacls` pass is now Step 0d with a comment on why the sets are disjoint; the credentials stanza
+  loops over `.tokens.enc` and `.tokens.enc.v1`. Not predicted by the research: the `.iss` has always carried
+  UTF-8 arrows in comments on every branch (64–71 lines), so "ASCII-only" was applied to the additions only.
+  `py_compile` clean; no markers; six files staged; patch `task-1.1.patch`.
+- 2026-09-22 — Task 1.2 done. `acl_hardening.py`: no Windows import at module scope (each lives in the function
+  that uses it; `console_user_sid`/`dev_mode_enabled`/`_build_specs` gate on `os.name`); `specs()` is an
+  `lru_cache(maxsize=1)` accessor over the unchanged `_build_specs()` builder (kept uncached because
+  `TestInstalledTreeGate` builds a table under patched roots); the three well-known SIDs resolve lazily through
+  a module `__getattr__` (PEP 562) backed by an `lru_cache`d `_sid()`, so every existing `acl_hardening.SID_*`
+  read keeps working unchanged; the access masks are the ntsecuritycon literals (`0x1F01FF`, `0x1301BF`,
+  `0x1200A9`, inherit `0x03`) that the tests already assert; D7 comment sits beside the table.
+  `connection_manager._read_watchdog_disabled_value` imports `winreg` in its body. Tests: 14 `patch.object(ah,
+  'SPECS', …)` → `patch.object(ah, 'specs', return_value=…)`, 3 reads → `ah.specs()`, and the two
+  `TestConsoleUserSid` cases patch `sys.modules` instead of module attributes. Checks: `specs()` → 18 rows;
+  targeted guard call names neither file (the three rule-3 lines it prints are an artefact of passing it two
+  files); `test_acl_hardening.py` **71 passed** — run with `--noconftest` + `PYTHONPATH=agent/src`, because the
+  autouse `_invalidate_shared_utils_caches` fixture imports `shared_utils`, which still carries markers (rerun
+  under conftest belongs to 5.1). Handover — remaining `acl_hardening.SPECS` readers: `shared_utils.py:1408` and
+  `test_shared_utils_hardening.py:541` (2.1), `secure_storage.py:158,169` (3.1), `owlette_service.py:773,786`
+  and `test_owlette_service_hardening.py:91-92` (3.2). Staged; patch `task-1.2.patch`.
+- 2026-09-22 — Task 1.3 done. `install_permissions_repaired` → "install permissions repaired" in the `agent`
+  group; the video spec's range comment was already stale on dev (`133-211` vs an array ending at 226) and now
+  reads `137-227`. eslint: 0 errors (two pre-existing `<img>` warnings at 427/1218, both present on dev); `tsc
+  --noEmit` clean after `npm ci` in the worktree's `web/`. Staged; patch `task-1.3.patch`.
+- 2026-09-22 — Task 2.2 done. `auth_manager.__init__`: 3.3.6's `is_owlette_api_base` gate kept, dev's
+  `get_machine_id()` kept, docstring says both. `owlette_runner.py`: the raw read is at line 161 on the merged
+  tree (not 339 — `MockService` is gone) and now calls `get_configured_api_base()`. Handover to 3.2 — the one
+  raw read left: `owlette_service.py:1011: self._api_base = shared_utils.read_config(['firebase', 'api_base'])
+  or shared_utils.get_api_base_url()`. `py_compile` clean. `test_auth_manager.py` cannot run yet: it skips
+  itself with "auth_manager import failed: invalid syntax (secure_storage.py, line 25)" — deferred to 5.1.
+  Staged; patch `task-2.2.patch`.
+- 2026-09-22 — Task 2.3 done. `origin/dev:VERSION` is 3.3.5, so 3.3.6 wins everywhere (D8 rule 1). Seen:
+  `VERSION`/`agent/VERSION` 3.3.6; `web/package.json`, `tauri.conf.json`, both `Cargo.toml`s 3.3.6; both
+  changelogs `[Unreleased]` (pin-a-metric, chart-scale) → `[3.3.6] - 2026-09-21` → `[3.3.5] - 2026-09-15`; the
+  3.3.6 entry byte-identical in both files, no internal links (only the two literal API URLs in prose);
+  `.claude/CLAUDE.md` `**Version**: 3.3.6` + the `-DevGrant` paragraph; `version-management.md` 3.3.6 ×3.
+  **Finding the research missed:** `node scripts/sync-versions.js 3.3.6` was *not* a no-op — `agent/swoop/Cargo.toml`
+  sat at 3.3.5 (the swoop crate exists only on dev, so 3.3.6's bump never touched it), and
+  `scripts/sync-versions.js:28` records that the streamer refuses to run when its version differs from the
+  agent's — the naive merge would have stranded swoop on every machine. Kept that bump (D8 direction) and made the
+  matching one-line change in `agent/swoop/Cargo.lock` (CI runs `cargo test --locked`); `cargo metadata --locked`
+  resolves at 3.3.6. Discarded the script's other output: `Last Updated` date stamps in two docs and CRLF-only
+  rewrites of five version files. Staged; patch `task-2.3.patch`.
+- 2026-09-22 — Task 2.1 done. Six hunks resolved per research §2.2 (both imports; merged docstring; dev's four
+  `ipc/*` rows kept, the three `cortex_*` rows and dev's duplicate `logs/swoop` row dropped; `_IS_WINDOWS` /
+  else arms with dev's `grant_data_group` between them; both helper blocks verbatim; the three-way
+  `write_json_to_file` branch). §3.6 guards: `_create_cortex_ipc_dirs` returns off Windows and reads
+  `acl_hardening.specs()`; the token-user warning is gated on `_IS_WINDOWS`. **Two things the research did not
+  predict, decided by the coordinator (both preserve dev's behaviour, neither weakens a 3.3.6 guarantee):**
+  (a) dev's tri-platform tests (`test_data_root.py:51`, `test_osadapter_contract.py:1303`) expect
+  `ensure_data_directories()` to create `ipc/cortex_*` on POSIX with mode 0o770, while 3.3.6 makes
+  `_create_cortex_ipc_dirs` the trio's only creator — resolved as: off Windows the trio stays in the makedirs
+  list exactly as on dev; on Windows only a SYSTEM process creates it. `test_data_root.py:51` now asserts the
+  trio exists *iff* not Windows (a user process must not create it there). (b) `acl_hardening._DATA_ROOT`
+  ignored dev's `OWLETTE_DATA_ROOT` override (`osadapter.DATA_ROOT_ENV`), so its table and shared_utils'
+  `CORTEX_IPC_*_DIR` pointed at different trees whenever the root is relocated (the tests' sandbox, and any
+  operator using the override on Windows: `repair_all` would ACL `%PROGRAMDATA%\Owlette` while the agent lived
+  elsewhere). `acl_hardening` now reads the override first (`import osadapter` — its package `__init__` is
+  stdlib-only, no cycle); `test_shared_utils_hardening::test_directory_creation_logs_reach_the_log_file`
+  relocates through the override instead of `PROGRAMDATA`. Handover: three more 3.3.6 tests still set
+  `PROGRAMDATA` — `test_owlette_service_hardening.py:485,861` (3.2) and `test_self_update_hardening.py:156`
+  (4.1) — expect the same fix. Also updated `_base_dirs()` in the hardening test for dev's rows and its
+  `acl_hardening.SPECS` read. Results: guard clean for the three lazy modules; `test_shared_utils_hardening`,
+  `test_shared_utils`, `test_data_root`, `test_osadapter_contract`, `test_acl_hardening` → **271 passed, 1
+  failed** — the one is `TestConfiguredApiBase::test_no_other_module_reads_firebase_api_base_itself`, whose
+  survivor is `owlette_service.py:1011` (3.2). Staged; patches `task-2.1.patch`, `task-1.2.patch` refreshed.
+- 2026-09-22 — Task 3.1 done. Red first: `TestPreMigrationCopy::test_the_copy_and_the_store_are_written_alike`
+  failed with `AssertionError: the copy and the store, both through the writer — assert 0 == 2 (recorder.calls
+  == [])`, and `::test_the_repair_table_carries_the_copy_with_the_stores_aces` with `KeyError: '.tokens.enc.v1'`
+  (phase A: hunks resolved, dev's writer untouched — 17 failed / 27 passed, the other 15 being 3.3.6's
+  protected-path tests, which is the naive merge's loss made visible). Then: `_write_token_file(path, blob)`
+  stays the single writer and routes `os.name == 'nt'` to a module-level `_replace_token_file(path, payload)`
+  (random `<path>.<hex8>.tmp`, DACL before first byte via `shared_utils._write_new_file_with_dacl(...,
+  dacl_first=True)`, attributes set before `os.replace`); POSIX keeps dev's `os.open`/`O_NOFOLLOW`/0600 body.
+  dev's Windows-only bits in that body (`_set_windows_attributes`, the three `_FILE_ATTRIBUTE_*`) are gone —
+  dead once the Windows path is the replace. `_load_data` = plain-file check then dev's body; `_save_data`
+  keeps `_writer_fernet()`; `encrypt_value`/`decrypt_value` kept; `clear_tokens` had already auto-merged both
+  bodies. `_token_file_spec` reads `specs()`. `.tokens.enc.v1` row added beside `.tokens.enc` with the same
+  ACEs (table now 19 rows). Tests: `test_secure_storage.py` fixtures moved off the removed `_get_machine_guid`
+  onto the `osadapter._adapter` binding (dev's pattern), `SPECS` patch → `specs`; `test_machine_identity.py`:
+  `test_a_rewrite_that_fails_mid_write_says_what_is_on_disk` is now `skipif` on Windows (it asserts the POSIX
+  truncate-then-write shape; on Windows a failed rewrite leaves the store whole, covered by
+  `test_a_failed_re_encrypt_leaves_the_original_store_intact`); the two console-user row lists
+  (`test_acl_hardening.py`, `test_owlette_service_hardening.py:144`) include `.tokens.enc.v1`. Green:
+  `test_secure_storage` + `test_machine_identity` + `test_acl_hardening` + `test_shared_utils_hardening` →
+  **156 passed, 2 skipped**. `_write_token_file(` = one def + three callers; `import secure_storage` ok; no
+  markers. Staged; patches `task-3.1.patch`, `task-1.2.patch` refreshed.
+- 2026-09-22 — Task 3.2 done. Hunk 1: dev's side (no module-scope pywin32). Hunk 2: both blocks; the four
+  import-time constants are gone — `_FILE_FULL`/`_FILE_MODIFY`/`_FILE_READ` are the ntsecuritycon literals,
+  `_console_user_acl_paths()` and `_update_marker_dacl()` read the table at call time, `_UPDATE_STAGING_ACES`
+  is **not** carried (its only consumer was the dropped monolithic block; 4.1 defines its call-time form),
+  `_console_session`/`_token_user_sid` import `win32ts`/`win32security` in-body. Hunk 3: dev's `_init_state`
+  with `self._api_base = shared_utils.get_configured_api_base()`. Hunk 4: dev's property. Hunk 5: dev's
+  dispatch — **3.3.6's hardened monolithic `update_owlette` block is dropped here and handed to 4.1**
+  (readable at `git show origin/release/3.3.6:agent/src/owlette_service.py`, the `update_owlette` branch of
+  `handle_firebase_command`). The 22 clean hunks, checked against dev's structure, all landed correctly:
+  `_write_service_status_early` (`write_json_to_file`), `_write_service_status` (`_file_id` before/after
+  guard), `_read_stop_sentinel` (trusted-owner check + `_discard_untrusted_file`),
+  `_drain_cortex_ipc_commands` (`console_user_sid` + `_read_cortex_command` + `_cortex_command_refusal`),
+  `_refresh_user_token` (session-repair trigger), new `_start_session_acl_repair` / `_check_console_session`,
+  `launch_process_as_user` (pid-file ACL, exclusive create, `win32file` args handle — **fixed**: added the
+  function-local `import win32file` beside dev's `win32con`/`win32process`), the local-config-watcher tick
+  (`_check_console_session()`), `_check_update_status` (trusted-owner check on the marker), new
+  `_repair_install_acls` (now reads `_console_user_acl_paths()`) / `_sweep_stale_update_installers`, and
+  `main()` (repair, `harden_existing_json`, sweep). §3.5 invariant: `_init_state` now declares
+  `_acl_repair_lock`, `_acl_console`, `_acl_startup_repaired`, `_update_image_handle`, `console_user_token`;
+  `main()` keeps doing the work and no longer re-creates the lock (a second Lock object would orphan a holder);
+  `_untrusted_sentinel_logged` and `_pending_anomaly_event` stay exempt with the comment. Tests
+  (`test_owlette_service_hardening.py`): pywin32 patches target the real modules (`win32ts`, `win32profile`,
+  `win32process`) since the service imports them in-body; `_CONSOLE_USER_ACL_PATHS`/`SPECS` reads →
+  accessors; the two `PROGRAMDATA` fixtures relocate through `osadapter.DATA_ROOT_ENV`; the main() test holds
+  the lock across the call instead of expecting main() to create it; the launch-handoff fake service gained
+  dev's `_record_launch` tail. Checks: `python -c "import firebase_client, owlette_service, configure_site"`
+  ok; `git grep "read_config(\['firebase', 'api_base'\])"` empty; no module-scope `next(`; `test_no_platform_imports`
+  and `test_shared_utils` (incl. `TestConfiguredApiBase`) green with no exemption added;
+  `test_owlette_service_hardening` **162 passed, 3 failed** — the three are `TestSelfUpdateGuard` (the
+  trusted-owner check in `_update_already_in_progress`), which is 4.1's self-update rewrite. Staged; patch
+  `task-3.2.patch`. **`git diff --diff-filter=U --name-only` is empty — the merge has no unresolved path.**

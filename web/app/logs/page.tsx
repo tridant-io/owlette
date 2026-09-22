@@ -146,6 +146,7 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
       { value: 'watchdog_restart', label: 'watchdog restart' },
       { value: 'watchdog_budget_exhausted', label: 'watchdog budget exhausted' },
       { value: 'unexpected_service_restart', label: 'unexpected service restart' },
+      { value: 'install_permissions_repaired', label: 'install permissions repaired' },
     ],
   },
   {
