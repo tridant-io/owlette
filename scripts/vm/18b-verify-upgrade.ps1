@@ -1,6 +1,7 @@
 # Upgrade harness: prove the 3.3.6 candidate hardens the install tree when it is
 # laid down OVER an already-fielded version, not only on a clean install. Run
-# ELEVATED on the Hyper-V host used by the rest of scripts/vm.
+# on the Hyper-V host used by the rest of scripts/vm, elevated or as a member of
+# Hyper-V Administrators (PowerShell Direct and the VM operations need no more).
 #
 # For each -FromVersion it reverts to golden-empty, installs THAT fielded
 # installer, checkpoints golden-<v>-installed, installs the candidate over it,
@@ -47,7 +48,6 @@
 # ASCII ONLY: PowerShell 5.1 decodes a .ps1 as the system ANSI codepage unless
 # the file carries a UTF-8 BOM.
 
-#Requires -RunAsAdministrator
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'CredFile',
   Justification = 'Path to a DPAPI-encrypted PSCredential file, not a credential.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'ApiKey',
@@ -94,6 +94,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Reverting, checkpointing and PowerShell Direct need Hyper-V rights, which a
+# member of Hyper-V Administrators (S-1-5-32-578) holds without elevation; an
+# elevated administrator has them too. Either is enough.
+$__id = [Security.Principal.WindowsIdentity]::GetCurrent()
+$__pr = New-Object Security.Principal.WindowsPrincipal($__id)
+$__hv = [bool]($__id.Groups | Where-Object { $_.Value -eq 'S-1-5-32-578' })
+if (-not ($__hv -or $__pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))) {
+  throw "run this elevated, or as a member of Hyper-V Administrators"
+}
+
 try { Stop-Transcript | Out-Null } catch { }
 $log = Join-Path $env:TEMP ("owlette-vm-upgrade-{0}-{1}.log" -f $PID, (Get-Date -Format 'HHmmss'))
 try { Start-Transcript -Path $log -Force | Out-Null; Write-Host "transcript: $log" -ForegroundColor Cyan }
@@ -628,6 +639,10 @@ try {
         Add-Row $v "checkpoint" "NOTE" "golden-$v-installed"
       }
       catch { Add-Row $v "checkpoint" "NOTE" "could not checkpoint: $($_.Exception.Message)" }
+      # A checkpoint pauses the guest and leaves the PowerShell Direct session
+      # Broken; every later step needs a fresh one.
+      Remove-PSSession $s -ErrorAction SilentlyContinue
+      $s = Connect-Guest $Name $cred
 
       # 5. Install the candidate over it.
       if ($CandidateUrl) {
@@ -739,6 +754,11 @@ try {
       $su = Invoke-Command -Session $s -ScriptBlock $SB_SelfUpdateDryRun
       if ($su.Ok) { Add-Row $v "smoke: self-update dry run" "PASS" $su.Detail }
       else { Add-Row $v "smoke: self-update dry run" "FAIL" $su.Detail }
+    }
+    catch {
+      # an unexpected error is this row's FAIL, not the end of the matrix: the
+      # remaining rows still run and the table still prints.
+      Add-Row $v "unexpected error" "FAIL" $_.Exception.Message
     }
     finally {
       if ($s) { Remove-PSSession $s -ErrorAction SilentlyContinue }
