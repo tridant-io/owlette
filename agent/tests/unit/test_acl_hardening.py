@@ -10,6 +10,7 @@ operation, and the link checks read real files in tmp_path. Mirrors
 test_display_manager.py's patch-the-seams style.
 """
 
+import _winapi
 import os
 import stat
 import sys
@@ -385,6 +386,7 @@ class TestRepairAll:
         entry = _entry('A', _code_dir_spec())
         log = MagicMock()
         with patch.object(ah, 'specs', return_value=[entry]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=None), \
              patch.object(ah.os.path, 'exists', return_value=True), \
@@ -396,9 +398,31 @@ class TestRepairAll:
         assert apply_fn.call_args[0][0] == 'A'
         log.warning.assert_called()
 
+    def test_a_junction_at_a_table_path_is_left_alone(self, tmp_path):
+        """A junction or symlink planted where a table path is absent must not
+        carry the repair's DACL onto whatever it points at: the real link check
+        runs, and neither the comparison nor the write reaches the target."""
+        target = tmp_path / 'elsewhere'
+        target.mkdir()
+        link = tmp_path / 'content'
+        _winapi.CreateJunction(str(target), str(link))
+        entry = _entry(str(link), _code_dir_spec())
+        log = MagicMock()
+        with patch.object(ah, 'specs', return_value=[entry]), \
+             patch.object(ah, 'dev_mode_enabled', return_value=False), \
+             patch.object(ah, 'console_user_sid', return_value=None), \
+             patch.object(ah, 'matches') as matches_fn, \
+             patch.object(ah, 'apply') as apply_fn:
+            repaired = ah.repair_all(log)
+        assert repaired == []
+        matches_fn.assert_not_called()
+        apply_fn.assert_not_called()
+        assert 'reparse point' in log.warning.call_args[0][0]
+
     def test_skips_paths_already_matching(self):
         entry = _entry('A', _code_dir_spec())
         with patch.object(ah, 'specs', return_value=[entry]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=None), \
              patch.object(ah.os.path, 'exists', return_value=True), \
@@ -410,6 +434,7 @@ class TestRepairAll:
     def test_skips_absent_paths_silently(self):
         entry = _entry('A', _code_dir_spec())
         with patch.object(ah, 'specs', return_value=[entry]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=None), \
              patch.object(ah.os.path, 'exists', return_value=False), \
@@ -423,6 +448,7 @@ class TestRepairAll:
         entry = _entry('A', _code_dir_spec())
         log = MagicMock()
         with patch.object(ah, 'specs', return_value=[entry]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=None), \
              patch.object(ah.os.path, 'exists', return_value=True), \
@@ -435,6 +461,7 @@ class TestRepairAll:
     def test_never_raises_on_unexpected_error(self):
         entry = _entry('A', _code_dir_spec())
         with patch.object(ah, 'specs', return_value=[entry]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=None), \
              patch.object(ah.os.path, 'exists', return_value=True), \
@@ -452,6 +479,7 @@ class TestRepairAll:
             return len(spec) == 4
 
         with patch.object(ah, 'specs', return_value=specs), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, '_is_installed_tree', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=True), \
              patch.object(ah, 'console_user_sid', return_value=_ENTRA_SID), \
@@ -474,6 +502,7 @@ class TestRepairAll:
             return len(spec) == 4  # accept the augmented variant
 
         with patch.object(ah, 'specs', return_value=[_entry(app_path, _code_dir_spec(), app_root=True)]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, '_is_installed_tree', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=True), \
              patch.object(ah, 'console_user_sid', return_value=_ENTRA_SID), \
@@ -496,6 +525,7 @@ class TestRepairAll:
             return len(spec) == 4
 
         with patch.object(ah, 'specs', return_value=[_entry(app_path, _code_dir_spec(), app_root=True)]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, '_is_installed_tree', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=True), \
              patch.object(ah, 'console_user_sid', return_value=None), \
@@ -514,6 +544,7 @@ class TestRepairAll:
             return len(spec) == 4
 
         with patch.object(ah, 'specs', return_value=[_entry(app_path, _code_dir_spec(), app_root=True)]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, '_is_installed_tree', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=_ENTRA_SID), \
@@ -530,6 +561,7 @@ class TestRepairAll:
                       (ah.SID_ADMINISTRATORS, ah._FULL, ah._NO_INHERIT),
                       (ah.CONSOLE_USER, ah._MODIFY, ah._NO_INHERIT)]
         with patch.object(ah, 'specs', return_value=[_entry(token_path, token_spec)]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=_OTHER_SID), \
              patch.object(ah.os.path, 'exists', return_value=True), \
@@ -546,6 +578,7 @@ class TestRepairAll:
         token_spec = [(ah.SID_SYSTEM, ah._FULL, ah._NO_INHERIT),
                       (ah.CONSOLE_USER, ah._MODIFY, ah._NO_INHERIT)]
         with patch.object(ah, 'specs', return_value=[_entry(token_path, token_spec)]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=None), \
              patch.object(ah.os.path, 'exists', return_value=True), \
@@ -557,6 +590,7 @@ class TestRepairAll:
 
     def test_accepts_none_logger(self):
         with patch.object(ah, 'specs', return_value=[]), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=None):
             assert ah.repair_all() == []
@@ -572,6 +606,7 @@ class TestSessionChangeRepair:
     def _repair(self, entries, session_change, dev=False):
         log = MagicMock()
         with patch.object(ah, 'specs', return_value=entries), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=dev), \
              patch.object(ah, 'console_user_sid', return_value=_OTHER_SID), \
              patch.object(ah.os.path, 'exists', return_value=True), \
@@ -633,6 +668,7 @@ class TestInstalledTreeGate:
     def _run(self, repo, specs):
         with patch.object(ah, '_APP_ROOT', str(repo)), \
              patch.object(ah, 'specs', return_value=specs), \
+             patch.object(ah, '_is_plain_object', return_value=True), \
              patch.object(ah, 'dev_mode_enabled', return_value=False), \
              patch.object(ah, 'console_user_sid', return_value=None), \
              patch.object(ah, 'matches', return_value=False) as matches_fn, \

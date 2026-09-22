@@ -967,6 +967,12 @@ begin
     '  }' + #13#10 +
     '  Wr("")' + #13#10 +
     '}' + #13#10 +
+    '# a junction or symlink planted at a table path is never operated on:' + #13#10 +
+    '# icacls would set the dacl on whatever it points at.' + #13#10 +
+    'function Plain($p) {' + #13#10 +
+    '  try { -not ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) }' + #13#10 +
+    '  catch { $false }' + #13#10 +
+    '}' + #13#10 +
     '$ts = Get-Date -Format s' + #13#10 +
     'Wr("=== owlette acl hardening @ $ts ===")' + #13#10 +
     'Wr("app root:  $AppRoot")' + #13#10 +
@@ -987,39 +993,39 @@ begin
     '# itself would revert the protected dacl set the line before.' + #13#10 +
     'foreach ($d in "agent","python","tools","app","scripts") {' + #13#10 +
     '  $p = Join-Path $AppRoot $d' + #13#10 +
-    '  if (Test-Path -LiteralPath $p) {' + #13#10 +
+    '  if ((Test-Path -LiteralPath $p) -and (Plain $p)) {' + #13#10 +
     '    Ic @($p, "/inheritance:r", "/grant:r", "$($SYS):(OI)(CI)(F)", "$($ADM):(OI)(CI)(F)", "$($USR):(OI)(CI)(RX)") $p' + #13#10 +
     '    Ic @("$p\*", "/reset", "/T", "/C", "/Q") $null' + #13#10 +
-    '  } else { Wr("skip (absent): $p"); Wr("") }' + #13#10 +
+    '  } else { Wr("skip (absent or reparse point): $p"); Wr("") }' + #13#10 +
     '}' + #13#10 +
     '# root-level files under {app}: the uninstaller and the payload docs.' + #13#10 +
     'foreach ($f in "unins000.exe","unins000.dat","README.md","LICENSE","CLAUDE.md","THIRD_PARTY_NOTICES.md","LGPL-2.1.txt") {' + #13#10 +
     '  $p = Join-Path $AppRoot $f' + #13#10 +
-    '  if (Test-Path -LiteralPath $p) {' + #13#10 +
+    '  if ((Test-Path -LiteralPath $p) -and (Plain $p)) {' + #13#10 +
     '    Ic @($p, "/inheritance:r", "/grant:r", "$($SYS):(F)", "$($ADM):(F)", "$($USR):(RX)") $p' + #13#10 +
-    '  } else { Wr("skip (absent): $p"); Wr("") }' + #13#10 +
+    '  } else { Wr("skip (absent or reparse point): $p"); Wr("") }' + #13#10 +
     '}' + #13#10 +
     '# service-owned dirs under the data root: owned by Administrators, then' + #13#10 +
     '# SYSTEM + Administrators only. a dir someone else created would keep its' + #13#10 +
     '# owner, who can rewrite its dacl, and the service refuses to use it.' + #13#10 +
     'foreach ($d in "content","update-staging") {' + #13#10 +
     '  $p = Join-Path $DataRoot $d' + #13#10 +
-    '  if (Test-Path -LiteralPath $p) {' + #13#10 +
+    '  if ((Test-Path -LiteralPath $p) -and (Plain $p)) {' + #13#10 +
     '    Ic @($p, "/setowner", $ADM) $null' + #13#10 +
     '    Ic @($p, "/inheritance:r", "/grant:r", "$($SYS):(OI)(CI)(F)", "$($ADM):(OI)(CI)(F)") $p' + #13#10 +
-    '  } else { Wr("skip (absent): $p"); Wr("") }' + #13#10 +
+    '  } else { Wr("skip (absent or reparse point): $p"); Wr("") }' + #13#10 +
     '}' + #13#10 +
     '# credentials (.tokens.enc.v1 is the pre-migration copy, hardened alike):' + #13#10 +
     '# add the console user (Modify) only when a session exists.' + #13#10 +
     'foreach ($f in ".tokens.enc",".tokens.enc.v1") {' + #13#10 +
     '  $tok = Join-Path $DataRoot $f' + #13#10 +
-    '  if (Test-Path -LiteralPath $tok) {' + #13#10 +
+    '  if ((Test-Path -LiteralPath $tok) -and (Plain $tok)) {' + #13#10 +
     '    if ($consoleSid) {' + #13#10 +
     '      Ic @($tok, "/inheritance:r", "/grant:r", "$($SYS):(F)", "$($ADM):(F)", "*$($consoleSid):(M)") $tok' + #13#10 +
     '    } else {' + #13#10 +
     '      Ic @($tok, "/inheritance:r", "/grant:r", "$($SYS):(F)", "$($ADM):(F)") $tok' + #13#10 +
     '    }' + #13#10 +
-    '  } else { Wr("skip (absent): $tok"); Wr("") }' + #13#10 +
+    '  } else { Wr("skip (absent or reparse point): $tok"); Wr("") }' + #13#10 +
     '}' + #13#10 +
     'Wr("=== done ===")' + #13#10;
 

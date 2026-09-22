@@ -457,7 +457,8 @@ def repair_all(log=None, session_change=False) -> List[str]:
     """Re-assert the intended DACL on every path in specs() that has drifted.
 
     Returns the list of repaired paths. Never raises. Absent paths are skipped
-    silently; ``create_private_dir`` owns service-directory creation. App-root
+    silently, and a link or reparse point at a path is never followed;
+    ``create_private_dir`` owns service-directory creation. App-root
     entries are skipped unless {app} is an installed tree (the uninstaller is
     present), so a run from a source checkout never touches the checkout. In
     DevMode one extra Modify ACE for the current interactive account is
@@ -493,6 +494,15 @@ def repair_all(log=None, session_change=False) -> List[str]:
             if entry.app_root and not installed:
                 continue
             if not os.path.exists(path):
+                continue
+            # a junction or symlink planted where a table path is absent would
+            # carry the repair's dacl onto whatever it points at.
+            if not _is_plain_object(path):
+                _safe_log(
+                    _log, 'warning',
+                    'acl hardening: %s is a link or reparse point; leaving it alone',
+                    path,
+                )
                 continue
             spec = _resolve_spec(entry.aces, console_sid)
             variants = [spec]
