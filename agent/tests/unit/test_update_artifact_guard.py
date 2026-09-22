@@ -469,7 +469,7 @@ def test_the_artifact_is_staged_where_only_root_can_write(update_service):
     """
     from osadapter import posix
 
-    staging = update_service._update_staging_dir()
+    staging = update_service._update_staging_dir('linux')
 
     assert stat.S_IMODE(os.stat(staging).st_mode) == 0o700
     parent = os.path.relpath(
