@@ -30,6 +30,9 @@ from unittest.mock import MagicMock
 
 import psutil
 import pytest
+
+# windows-only: skipped, not failed, on the macos and linux legs.
+pytest.importorskip('win32security', reason='windows-only: pywin32 session, token and process seams')
 import win32process
 import win32profile
 import win32security as ws

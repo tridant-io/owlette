@@ -10,7 +10,6 @@ operation, and the link checks read real files in tmp_path. Mirrors
 test_display_manager.py's patch-the-seams style.
 """
 
-import _winapi
 import os
 import stat
 import sys
@@ -18,6 +17,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# windows-only: skipped, not failed, on the macos and linux legs.
+pytest.importorskip('win32security', reason='windows-only: pywin32 dacl seams and sid conversions')
+
+import _winapi  # noqa: E402
 import win32security as ws
 
 import acl_hardening as ah

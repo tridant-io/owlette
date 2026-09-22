@@ -47,6 +47,9 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# windows-only: skipped, not failed, on the macos and linux legs.
+pytest.importorskip('win32security', reason='windows-only: the protected token writer is the windows arm')
 import win32security as ws
 from cryptography.fernet import Fernet
 

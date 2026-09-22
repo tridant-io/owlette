@@ -25,8 +25,12 @@ import shutil
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import _winapi
 import pytest
+
+# windows-only: skipped, not failed, on the macos and linux legs.
+pytest.importorskip('win32security', reason='windows-only: the windows staging hold and junction checks')
+
+import _winapi  # noqa: E402
 import win32file
 import win32security as ws
 

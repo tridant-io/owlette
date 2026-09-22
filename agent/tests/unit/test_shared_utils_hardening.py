@@ -15,6 +15,9 @@ import logging
 import os
 
 import pytest
+
+# windows-only: skipped, not failed, on the macos and linux legs.
+pytest.importorskip('win32security', reason='windows-only: the protected json writer is the windows arm')
 import pywintypes
 import win32file
 import win32security as ws
