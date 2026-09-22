@@ -1805,7 +1805,7 @@ def _json_file_dacl(file_path):
     return dacl
 
 
-def _write_new_file_with_dacl(path, payload, dacl):
+def _write_new_file_with_dacl(path, payload, dacl, dacl_first=False):
     """Create path, which must not exist yet, write payload and set dacl as its
     protected DACL, all through one handle that shares nothing.
 
@@ -1814,7 +1814,12 @@ def _write_new_file_with_dacl(path, payload, dacl):
     handle rather than by name after the close. A link at path counts as an
     existing file, so nothing is ever created where a link points. Raises
     OSError as open() would when the file cannot be created, and AclApplyError
-    when only the DACL step failed (the file is written).
+    when only the DACL step failed (the file exists either way).
+
+    dacl_first sets the DACL before the first byte, so a DACL failure leaves an
+    empty file and the payload nowhere on disk — what the token store needs.
+    Without it the payload stands and only the DACL step is reported, which is
+    what the status files need: their write must not depend on it.
     """
     import pywintypes
     import win32con
@@ -1833,7 +1838,8 @@ def _write_new_file_with_dacl(path, payload, dacl):
         # retries like any other lock.
         raise OSError(0, e.strerror, path, e.winerror) from e
     try:
-        win32file.WriteFile(handle, payload)
+        if not dacl_first:
+            win32file.WriteFile(handle, payload)
         try:
             acl = win32security.ACL()
             for sid, mask, flags in dacl:
@@ -1848,6 +1854,8 @@ def _write_new_file_with_dacl(path, payload, dacl):
             raise acl_hardening.AclApplyError(
                 f"failed to apply DACL to {path}: {e}"
             ) from e
+        if dacl_first:
+            win32file.WriteFile(handle, payload)
     finally:
         handle.Close()
 

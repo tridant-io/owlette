@@ -7,7 +7,8 @@ Tokens are encrypted with a machine-specific key and stored in config directory.
 Security Features:
 - Tokens encrypted using Fernet symmetric encryption
 - Encryption key derived from machine UUID (machine-specific)
-- Stored in hidden config file with restrictive permissions
+- Stored in a hidden file that every save creates anew, carrying a protected
+  DACL set before its first byte, and puts in place with one atomic replace
 - Automatic cleanup of expired tokens
 
 Usage:
@@ -20,6 +21,7 @@ Usage:
 import os
 import json
 import logging
+import stat
 from pathlib import Path
 from typing import Optional
 from cryptography.fernet import Fernet
@@ -31,6 +33,9 @@ import shared_utils
 logger = logging.getLogger(__name__)
 
 TOKEN_FILE_NAME = ".tokens.enc"  # Hidden file in config directory
+
+FILE_ATTRIBUTE_HIDDEN = 0x02
+FILE_ATTRIBUTE_ARCHIVE = 0x20
 
 
 def _writer_user_sid():
@@ -65,11 +70,19 @@ def _token_file_spec() -> list:
     no console user: granting anyone else would lock it out after the first
     save. That never exceeds what the writer could grant itself, since setting
     a DACL needs WRITE_DAC on the file.
+
+    Raises ``AclApplyError`` when the table holds no entry for the token file,
+    so a save that has no DACL to write writes nothing.
     """
     template = next(
-        entry.aces for entry in acl_hardening.SPECS
-        if os.path.basename(entry.path) == TOKEN_FILE_NAME
+        (entry.aces for entry in acl_hardening.SPECS
+         if os.path.basename(entry.path) == TOKEN_FILE_NAME),
+        None,
     )
+    if template is None:
+        raise acl_hardening.AclApplyError(
+            f"the hardening table holds no {TOKEN_FILE_NAME} entry"
+        )
     grantee = _writer_user_sid()
     if grantee is None:
         grantee = acl_hardening.console_user_sid()
@@ -80,6 +93,24 @@ def _token_file_spec() -> list:
             "its next start"
         )
     return acl_hardening._resolve_spec(template, grantee)
+
+
+def _set_token_attributes(path: str) -> None:
+    """Give ``path`` the attributes the token file carries: hidden, and archive
+    so a backup still sees it change.
+
+    Set before the replace, because a rename gives the new file the attributes
+    of the file being renamed, not of the one it lands on. Non-fatal: the DACL
+    is what limits the store to the principals in its spec, and a save that
+    reached this point has already written a file carrying it.
+    """
+    import ctypes
+    if not ctypes.windll.kernel32.SetFileAttributesW(
+        str(path), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE,
+    ):
+        logger.warning(
+            f"Could not set the token file's attributes: {ctypes.WinError()}"
+        )
 
 
 class SecureStorage:
@@ -157,9 +188,37 @@ class SecureStorage:
         logger.warning("Falling back to uuid.getnode() for encryption key")
         return str(uuid.getnode())
 
+    @property
+    def _temp_file(self) -> str:
+        """The file a save writes before it replaces the store."""
+        return str(self.token_file) + '.tmp'
+
+    def _is_plain_token_file(self) -> bool:
+        """True when the token path holds a plain file.
+
+        A directory, or a symlink or junction standing in for the file, is not
+        followed and not opened: the path is read as holding no store. The type
+        comes from ``os.lstat``, which reports the path itself.
+        """
+        try:
+            st = os.lstat(self.token_file)
+        except (FileNotFoundError, NotADirectoryError):
+            return False
+        except OSError as e:
+            logger.warning(f"Could not read the token file's type: {e}")
+            return False
+
+        reparse = getattr(st, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        if stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode) or reparse:
+            logger.warning(
+                f"{self.token_file} is not a plain file; reading no stored tokens"
+            )
+            return False
+        return True
+
     def _load_data(self) -> dict:
         """Load and decrypt token data from file."""
-        if not self.token_file.exists():
+        if not self._is_plain_token_file():
             return {}
 
         try:
@@ -182,51 +241,59 @@ class SecureStorage:
             self.config_dir.mkdir(parents=True, exist_ok=True)
             logger.debug(f"Saving token data to {self.token_file}")
 
-            # Hidden files cannot be overwritten in place.
-            if os.name == 'nt' and self.token_file.exists():
-                import ctypes
-                FILE_ATTRIBUTE_NORMAL = 0x80
-                ctypes.windll.kernel32.SetFileAttributesW(str(self.token_file), FILE_ATTRIBUTE_NORMAL)
-
             json_data = json.dumps(data).encode('utf-8')
             encrypted_data = self._fernet.encrypt(json_data)
             logger.debug(f"Data encrypted, size: {len(encrypted_data)} bytes")
 
-            with open(self.token_file, 'wb') as f:
-                f.write(encrypted_data)
-
             if os.name == 'nt':
-                import ctypes
-                FILE_ATTRIBUTE_HIDDEN = 0x02
-                FILE_ATTRIBUTE_ARCHIVE = 0x20
-                # +archive keeps the file writable next time.
-                ctypes.windll.kernel32.SetFileAttributesW(str(self.token_file), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE)
-                self._restrict_token_file()
+                self._replace_token_file(encrypted_data)
+            else:
+                with open(self.token_file, 'wb') as f:
+                    f.write(encrypted_data)
 
             logger.debug("Token data saved successfully")
             return True
 
         except Exception as e:
             logger.error(f"Failed to save token data: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.debug("Token save failed", exc_info=True)
             return False
 
-    def _restrict_token_file(self) -> None:
-        """Set the token file's DACL (``_token_file_spec``) unless it is
-        already in place.
+    def _replace_token_file(self, payload: bytes) -> None:
+        """Write ``payload`` to a file this call creates, then make that file
+        the token store.
 
-        Never fails the write before it: a user rewriting a file it does not
-        own cannot change the DACL, so the file keeps the one it had, and the
-        service's own writes set the intended one.
+        The bytes only ever land in a file created by this call through
+        ``shared_utils``' protected writer: created new in the store's own
+        directory, so nothing already at the temp path is written into or
+        through; its DACL (``_token_file_spec``) set on the creating handle
+        before the first byte; and nothing shared while that handle is open.
+        ``os.replace`` then makes it the store in one step, carrying its
+        attributes and its DACL, so a reader sees either the previous store or
+        this one. A failure to create the file or to set its DACL raises with
+        the temp file removed and the previous store untouched.
         """
+        spec = _token_file_spec()
+        temp_path = self._temp_file
+        # whoever creates a file owns it and can rewrite a DACL set on it
+        # afterwards, so a file already at the temp path is removed, not reused.
         try:
-            path = str(self.token_file)
-            spec = _token_file_spec()
-            if not acl_hardening.matches(path, spec):
-                acl_hardening.apply(path, spec)
-        except Exception as e:
-            logger.warning(f"Could not set token file permissions: {e}")
+            os.remove(temp_path)
+        except FileNotFoundError:
+            pass
+
+        try:
+            shared_utils._write_new_file_with_dacl(
+                temp_path, payload, spec, dacl_first=True,
+            )
+            _set_token_attributes(temp_path)
+            os.replace(temp_path, self.token_file)
+        except Exception:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            raise
 
     def save_refresh_token(self, token: str) -> bool:
         """
@@ -382,6 +449,12 @@ class SecureStorage:
             if self.token_file.exists():
                 self.token_file.unlink()
                 logger.info("All tokens cleared from encrypted file")
+            # a save stopped between its write and its replace leaves the temp
+            # file behind; clearing the store clears that copy of it too.
+            try:
+                os.remove(self._temp_file)
+            except FileNotFoundError:
+                pass
             return True
 
         except Exception as e:
