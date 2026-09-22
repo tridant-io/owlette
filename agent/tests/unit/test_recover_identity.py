@@ -266,6 +266,7 @@ def launch_service(tmp_path, monkeypatch, state_file):
     """
     import sys
     import win32process
+    import owlette_service
     from owlette_service import OwletteService
 
     # Everything get_data_path() resolves must land in the sandbox.

@@ -303,7 +303,7 @@ class TestConsoleWatch:
     @staticmethod
     def _watcher(console_at_start_up):
         svc = SimpleNamespace(_acl_console=console_at_start_up, _start_session_acl_repair=MagicMock())
-        svc.check = _bind(svc, '_check_console_session')
+        svc.check = _bind(svc, '_check_console_session_acls')
         return svc
 
     def test_a_login_with_no_launch_still_repairs(self, monkeypatch):
@@ -322,7 +322,7 @@ class TestConsoleWatch:
         monkeypatch.setattr(owlette_service, '_console_session', lambda: console['now'])
         svc = SimpleNamespace(_acl_console=(1, ''), _acl_repair_lock=threading.Lock())
         svc._start_session_acl_repair = _bind(svc, '_start_session_acl_repair')
-        check = _bind(svc, '_check_console_session')
+        check = _bind(svc, '_check_console_session_acls')
 
         check()
         assert not done.wait(0.2)
@@ -366,7 +366,7 @@ class TestConsoleWatch:
             if len(ticks) == 3:
                 svc.is_alive = False
 
-        svc._check_console_session = check
+        svc._check_console_session_acls = check
 
         _bind(svc, 'start_local_config_watcher')().join(timeout=5)
 

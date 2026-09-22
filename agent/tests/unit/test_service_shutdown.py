@@ -637,7 +637,7 @@ def test_the_hosted_instance_carries_every_shutdown_attribute(attribute, monkeyp
         owlette_service.shared_utils, 'read_config', lambda *a, **kw: {})
     monkeypatch.setattr(
         owlette_service.shared_utils, 'get_api_base_url',
-        lambda: 'https://example.invalid/api')
+        lambda environment=None: 'https://example.invalid/api')
 
     service = object.__new__(owlette_service.OwletteService)
     service._init_state()
@@ -654,7 +654,7 @@ def test_the_auth_manager_comes_from_the_cloud_client(monkeypatch):
         owlette_service.shared_utils, 'read_config', lambda *a, **kw: {})
     monkeypatch.setattr(
         owlette_service.shared_utils, 'get_api_base_url',
-        lambda: 'https://example.invalid/api')
+        lambda environment=None: 'https://example.invalid/api')
 
     service = object.__new__(owlette_service.OwletteService)
     service._init_state()

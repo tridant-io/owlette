@@ -425,7 +425,7 @@ class TestLeaveSite:
              patch.object(configure_site.os.path, 'exists', return_value=False), \
              patch.object(configure_site, '_machine_document',
                           return_value=(MagicMock(), MagicMock())) as resolve, \
-             patch.object(configure_site, '_host_service', return_value=True), \
+             patch.object(configure_site, '_service_control', return_value=True), \
              patch.object(configure_site.time, 'sleep'):
             configure_site.run_leave_site()
 

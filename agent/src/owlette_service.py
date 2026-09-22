@@ -3197,7 +3197,7 @@ class OwletteService:
         except Exception as e:
             logging.warning(f"Could not start the session ACL repair (non-fatal): {e}")
 
-    def _check_console_session(self):
+    def _check_console_session_acls(self):
         """Start a session ACL repair when the console session or its user has
         changed since the last look. Called on every local config watcher tick,
         so a login is noticed even when the service launches nothing (a desktop
@@ -4753,7 +4753,7 @@ class OwletteService:
         assumes a single invoker — single-flight dispatch, the mtime baseline
         CAS — so the main loop must not call it as well.
 
-        Each tick also looks at the console session (_check_console_session),
+        Each tick also looks at the console session (_check_console_session_acls),
         which never raises.
 
         Runs on its own daemon thread, like the SCM stop watcher, and stops with
@@ -4775,7 +4775,7 @@ class OwletteService:
                             f"Local config watcher tick failed "
                             f"({consecutive_errors}): {e}"
                         )
-                self._check_console_session()
+                self._check_console_session_acls()
                 time.sleep(LOCAL_CONFIG_POLL_INTERVAL)
 
         thread = threading.Thread(

@@ -366,6 +366,10 @@ def update_service(tmp_path, monkeypatch):
     (tmp_path / 'Owlette' / 'logs').mkdir(parents=True)
     monkeypatch.setattr(
         shared_utils, 'get_os_family_arch', lambda: ('linux', 'x64'))
+    # the marker's owner check is windows' and this double is the posix lane
+    # on a windows box; its own coverage is test_owlette_service_hardening.py.
+    import acl_hardening
+    monkeypatch.setattr(acl_hardening, 'is_trusted_owner', lambda *a, **k: True)
 
     svc = SimpleNamespace(
         firebase_client=_FakeFirebase(),
