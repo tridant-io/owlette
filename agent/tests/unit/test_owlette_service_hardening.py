@@ -533,7 +533,7 @@ class TestSelfUpdateGuard:
         svc = SimpleNamespace(
             _command_rate_limits={}, COMMAND_RATE_LIMIT_SECONDS=0,
             _command_router=SimpleNamespace(has_handler=lambda cmd_type: False),
-            firebase_client=None)
+            firebase_client=None, _update_image_handle=None)
         result = _bind(svc, 'handle_firebase_command')('cmd-1', {
             'type': 'update_owlette',
             'installer_url': 'https://example.invalid/Owlette-Installer-v9.9.9.exe',
@@ -964,3 +964,34 @@ class TestLaunchHandoff:
 
         handoff.svc._find_running_process_by_exe.assert_called_once()
         assert not handoff.app_states.exists()
+
+
+# ----- posix legs -----------------------------------------------------------
+
+def test_the_owner_checks_are_windows_only(tmp_path, monkeypatch):
+    """Off Windows the mode table guards the data root and a creator check is
+    the tri-platform arm's to write; the Windows one, which answers False
+    there, must not refuse every cortex command and update marker."""
+    import acl_hardening
+    import owlette_service
+
+    def never(*args, **kwargs):
+        raise AssertionError('is_trusted_owner is a windows check')
+
+    monkeypatch.setattr(acl_hardening, 'is_trusted_owner', never)
+    monkeypatch.setattr(owlette_service.os, 'name', 'posix')
+
+    command = tmp_path / 'cmd-1.json'
+    command.write_text(json.dumps({
+        'id': 'cmd-1', 'tool_name': 'kill_process',
+        'tool_params': {'process_name': 'x'}, 'timestamp': 1,
+    }))
+    assert owlette_service._read_cortex_command(str(command), None)['id'] == 'cmd-1'
+
+    marker = tmp_path / 'update_in_progress.json'
+    marker.write_text(json.dumps({'started_at': time.strftime('%Y-%m-%d %H:%M:%S')}))
+    monkeypatch.setattr(owlette_service.shared_utils, 'get_data_path',
+                        lambda sub=None: str(marker))
+    refusal = _bind(SimpleNamespace(), '_update_already_in_progress')()
+    assert refusal.startswith('Update already in progress')
+    assert marker.exists()

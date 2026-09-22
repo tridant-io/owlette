@@ -900,9 +900,11 @@ def _read_cortex_command(path, console_sid):
     """Load one queued Cortex command.
 
     Raises ValueError unless the file is owned by SYSTEM, Administrators or the
-    console user, is at most 64 KiB, and holds a JSON object with a bare-name id.
+    console user (a Windows check: off Windows the data root's mode table
+    guards the channel), is at most 64 KiB, and holds a JSON object with a
+    bare-name id.
     """
-    if not acl_hardening.is_trusted_owner(path, console_sid):
+    if os.name == 'nt' and not acl_hardening.is_trusted_owner(path, console_sid):
         raise ValueError('refused: not a single-link file owned by SYSTEM, '
                          'Administrators or the console user')
     with open(path, 'rb') as f:
@@ -8381,8 +8383,9 @@ class OwletteService:
                 return  # No update was in progress
 
             # its command and deployment ids are reported to the cloud as
-            # completed or failed, so only a marker this service wrote counts.
-            if not acl_hardening.is_trusted_owner(update_marker_path):
+            # completed or failed, so only a marker this service wrote counts
+            # (a windows check; off windows logs\ is the daemon's own).
+            if os.name == 'nt' and not acl_hardening.is_trusted_owner(update_marker_path):
                 _discard_untrusted_file(update_marker_path, 'update marker')
                 return
 
