@@ -480,13 +480,33 @@ $SB_PairedState = {
 # ipc/cortex_commands as the console user (proving the console-user DACL the
 # service applies to that trio) and waits for the service (SYSTEM) to drain it and
 # write a result. An unknown process name still yields a result file, which is all
-# the round trip needs to prove.
+# the round trip needs to prove. Since 3.4 the service drains the queue only while
+# cortex.enabled is true (the hoot kill switch), so the switch is turned on first,
+# as the console user, through the same config.json edit smoke S1 proves.
 $SB_CortexRoundTrip = {
   param($waitSec)
   $cmdDir = 'C:\ProgramData\Owlette\ipc\cortex_commands'
   $resDir = 'C:\ProgramData\Owlette\ipc\cortex_results'
   if (-not (Test-Path $cmdDir)) {
     return [PSCustomObject]@{ Ok = $false; Detail = 'ipc\cortex_commands does not exist (service should create it fail-closed)' }
+  }
+  $cfgPath = 'C:\ProgramData\Owlette\config\config.json'
+  $switched = ''
+  try {
+    $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+    if (-not $cfg.PSObject.Properties['cortex']) {
+      $cfg | Add-Member -NotePropertyName cortex -NotePropertyValue ([PSCustomObject]@{})
+    }
+    if (-not $cfg.cortex.enabled) {
+      if ($cfg.cortex.PSObject.Properties['enabled']) { $cfg.cortex.enabled = $true }
+      else { $cfg.cortex | Add-Member -NotePropertyName enabled -NotePropertyValue $true }
+      # ascii, no bom: the service reads config.json as plain utf-8 json.
+      ($cfg | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $cfgPath -Encoding ASCII
+      $switched = '; cortex.enabled turned on first'
+    }
+  }
+  catch {
+    return [PSCustomObject]@{ Ok = $false; Detail = "could not turn cortex on in config.json: $($_.Exception.Message)" }
   }
   $id = "harness_$([int](Get-Date -UFormat %s))_$([guid]::NewGuid().ToString('N').Substring(0,6))"
   $cmd = @{ id = $id; tool_name = 'restart_process'; tool_params = @{ process_name = 'harness-nonexistent' }; timestamp = [double](Get-Date -UFormat %s) }
@@ -513,7 +533,7 @@ $SB_CortexRoundTrip = {
   }
   [PSCustomObject]@{
     Ok     = ($seen -and $consumed)
-    Detail = if ($seen -and $consumed) { "result written, command consumed" }
+    Detail = if ($seen -and $consumed) { "result written, command consumed$switched" }
              elseif ($seen) { "result written but command not consumed" }
              else { "no result within ${waitSec}s (service running? cortex dir writable?)" }
   }
