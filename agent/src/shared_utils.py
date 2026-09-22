@@ -871,7 +871,8 @@ def _create_cortex_ipc_dirs():
         except acl_hardening.UntrustedDirectory as e:
             logging.warning(
                 f"Cortex IPC: {e} (its owner is not SYSTEM or Administrators, or "
-                f"it is a reparse point); remove it so the service recreates it"
+                f"it is a reparse point); the service's start-up repair sets the "
+                f"DACL either way, but a directory keeps the owner that created it"
             )
         except Exception as e:
             logging.error(f"Cortex IPC: could not create {path}: {e}")
@@ -893,9 +894,18 @@ def get_api_base_url(environment=None):
     else:
         return 'https://owlette.app/api'
 
+def _without_trailing_slash(api_base):
+    """api_base with one trailing slash dropped; anything else unchanged."""
+    if isinstance(api_base, str) and api_base.endswith('/'):
+        return api_base[:-1]
+    return api_base
+
 def is_owlette_api_base(api_base):
-    """True only for the production and dev API bases, the hosts this agent sends credentials to."""
-    return api_base in (get_api_base_url('production'), get_api_base_url('development'))
+    """True only for the production and dev API bases, the hosts this agent sends
+    credentials to. One trailing slash names the same base."""
+    return _without_trailing_slash(api_base) in (
+        get_api_base_url('production'), get_api_base_url('development'),
+    )
 
 def get_configured_api_base(config=None):
     """firebase.api_base when it is an owlette API base, else the environment's.
@@ -907,7 +917,8 @@ def get_configured_api_base(config=None):
         config = read_config()
     configured = (config.get('firebase') or {}).get('api_base')
     if is_owlette_api_base(configured):
-        return configured
+        # canonical form, so a caller's f'{base}/machines' keeps one slash.
+        return _without_trailing_slash(configured)
     api_base = get_api_base_url(config.get('environment'))
     if configured:
         logging.warning(f"Ignoring firebase.api_base {configured!r}: not an owlette API base, using {api_base}")

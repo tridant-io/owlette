@@ -34,6 +34,7 @@ import builtins
 import ctypes
 import logging
 import os
+import re
 import stat
 from collections import namedtuple
 from contextlib import contextmanager
@@ -120,8 +121,12 @@ def storage(tmp_path):
         return secure_storage.SecureStorage(config_dir=tmp_path)
 
 
-def _temp_path(storage):
-    return str(storage.token_file) + '.tmp'
+def _temp_names(storage, recorder):
+    """The paths the writer was given, each checked for the random temp shape."""
+    shape = re.compile(re.escape(str(storage.token_file)) + r'\.[0-9a-f]{8}\.tmp$')
+    for call in recorder.calls:
+        assert shape.match(call.path), call.path
+    return [call.path for call in recorder.calls]
 
 
 @contextmanager
@@ -157,21 +162,20 @@ class TestProtectedWritePath:
         target = str(storage.token_file)
         assert [mode for path, mode in opens if path == target] == []
         call = recorder.one
-        assert call.path == _temp_path(storage)
+        assert _temp_names(storage, recorder) == [call.path]
         assert call.dacl_first is True
         assert not os.path.exists(call.path)
         assert storage.get_refresh_token() == _SECRET
 
-    def test_the_temp_file_is_created_fresh_not_reused(self, storage):
-        # the recorder creates with 'xb', so a reused file would raise here.
-        with open(_temp_path(storage), 'wb') as f:
-            f.write(b'planted')
-
+    def test_each_save_names_its_temp_file_at_random(self, storage):
         with _writer(writer=_sid(_CONSOLE)) as recorder:
+            assert storage.save_refresh_token(_SECRET) is True
             assert storage.save_site_id('dummy-site') is True
 
-        assert len(recorder.calls) == 1
-        assert storage.get_site_id() == 'dummy-site'
+        names = _temp_names(storage, recorder)
+        assert len(set(names)) == 2
+        assert storage._leftover_temp_files() == []
+        assert storage.is_configured() is True
 
     def test_every_pairing_save_goes_through_the_writer(self, storage):
         with _writer(writer=_sid(_CONSOLE)) as recorder:
@@ -180,14 +184,14 @@ class TestProtectedWritePath:
             assert storage.save_site_id('dummy-site') is True
             assert storage.is_configured() is True
 
-        assert [call.path for call in recorder.calls] == [_temp_path(storage)] * 3
+        assert len(set(_temp_names(storage, recorder))) == 3
         assert all(len(call.payload) > 0 for call in recorder.calls)
 
-    def test_clearing_the_store_clears_an_interrupted_save(self, storage, tmp_path):
+    def test_clearing_the_store_clears_the_temp_files_saves_left(self, storage, tmp_path):
         with _writer(writer=_sid(_CONSOLE)):
             assert storage.save_refresh_token(_SECRET) is True
-        with open(_temp_path(storage), 'wb') as f:
-            f.write(b'interrupted-save')
+        for name in ('.tokens.enc.0011aabb.tmp', '.tokens.enc.ffeedd99.tmp'):
+            (tmp_path / name).write_bytes(b'interrupted-save')
 
         assert storage.clear_tokens() is True
         assert list(tmp_path.iterdir()) == []
@@ -266,26 +270,20 @@ class TestFailClosed:
 
         assert storage.token_file.read_bytes() == kept
         assert storage.get_refresh_token() == _SECRET
-        assert not os.path.exists(_temp_path(storage))
+        assert storage._leftover_temp_files() == []
 
-    def test_a_create_failure_writes_nothing(self, storage, tmp_path, caplog):
-        locked = PermissionError(13, 'The file is in use.', _temp_path(storage))
-        with _writer(writer=_sid(_CONSOLE), create_error=locked):
+    @pytest.mark.parametrize('error, wanted', [
+        (PermissionError(13, 'The file is in use.'), 'in use'),
+        # create-new is the guard on the temp name: a name already taken fails.
+        (FileExistsError(17, 'The file exists.'), 'exists'),
+    ])
+    def test_a_create_failure_writes_nothing(self, storage, tmp_path, caplog,
+                                             error, wanted):
+        with _writer(writer=_sid(_CONSOLE), create_error=error):
             assert storage.save_refresh_token(_SECRET) is False
 
         assert list(tmp_path.iterdir()) == []
-        assert 'in use' in self._failure(caplog)
-
-    def test_an_undeletable_temp_path_writes_nothing(self, storage, tmp_path, caplog):
-        # a directory there: os.remove refuses it, and nothing is written into it.
-        os.mkdir(_temp_path(storage))
-        with _writer(writer=_sid(_CONSOLE)) as recorder:
-            assert storage.save_refresh_token(_SECRET) is False
-
-        assert recorder.calls == []
-        assert not storage.token_file.exists()
-        assert list(os.listdir(_temp_path(storage))) == []
-        self._failure(caplog)
+        assert wanted in self._failure(caplog)
 
     def test_a_missing_spec_table_writes_nothing(self, storage, tmp_path, caplog):
         # no pywin32: acl_hardening builds an empty table, so there is no spec

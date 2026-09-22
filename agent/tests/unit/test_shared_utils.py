@@ -282,6 +282,21 @@ class TestConfiguredApiBase:
         assert shared_utils.is_owlette_api_base(api_base)
         assert shared_utils.get_configured_api_base(config) == api_base
 
+    @pytest.mark.parametrize('api_base, expected', [
+        ('https://owlette.app/api/', 'https://owlette.app/api'),
+        ('https://dev.owlette.app/api/', 'https://dev.owlette.app/api'),
+    ])
+    def test_one_trailing_slash_names_the_same_base(self, api_base, expected, caplog):
+        config = {'environment': 'production', 'firebase': {'api_base': api_base}}
+
+        with caplog.at_level(logging.WARNING):
+            resolved = shared_utils.get_configured_api_base(config)
+
+        assert shared_utils.is_owlette_api_base(api_base)
+        # the slash is dropped, so a caller's f'{base}/machines' stays one slash
+        assert resolved == expected
+        assert caplog.text == ''
+
     @pytest.mark.parametrize('api_base', [
         'https://attacker.example/api',
         'https://owlette.app.attacker.example/api',
@@ -289,6 +304,8 @@ class TestConfiguredApiBase:
         'https://owlette.app:8443/api',
         'http://owlette.app/api',
         'http://localhost:3000/api',
+        'https://owlette.app/api//',
+        'https://owlette.app/api/v2',
     ])
     def test_any_other_value_is_replaced_by_the_environment_base(self, api_base, caplog):
         config = {'environment': 'development', 'firebase': {'api_base': api_base}}

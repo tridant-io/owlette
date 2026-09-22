@@ -19,8 +19,10 @@ Usage:
 """
 
 import os
+import glob
 import json
 import logging
+import secrets
 import stat
 from pathlib import Path
 from typing import Optional
@@ -188,10 +190,17 @@ class SecureStorage:
         logger.warning("Falling back to uuid.getnode() for encryption key")
         return str(uuid.getnode())
 
-    @property
-    def _temp_file(self) -> str:
-        """The file a save writes before it replaces the store."""
-        return str(self.token_file) + '.tmp'
+    def _new_temp_file(self) -> str:
+        """A name for the file a save writes before it replaces the store.
+
+        Random per save, so the name a save is about to create is not one
+        anything could be holding already.
+        """
+        return f"{self.token_file}.{secrets.token_hex(4)}.tmp"
+
+    def _leftover_temp_files(self) -> list:
+        """The temp files saves have left behind, by the shape of their names."""
+        return glob.glob(glob.escape(str(self.token_file)) + '.*.tmp')
 
     def _is_plain_token_file(self) -> bool:
         """True when the token path holds a plain file.
@@ -264,23 +273,17 @@ class SecureStorage:
         the token store.
 
         The bytes only ever land in a file created by this call through
-        ``shared_utils``' protected writer: created new in the store's own
-        directory, so nothing already at the temp path is written into or
-        through; its DACL (``_token_file_spec``) set on the creating handle
-        before the first byte; and nothing shared while that handle is open.
-        ``os.replace`` then makes it the store in one step, carrying its
+        ``shared_utils``' protected writer: created new, under a name of this
+        save's own, in the store's own directory, so the file is never one
+        something else made; its DACL (``_token_file_spec``) set on the creating
+        handle before the first byte; and nothing shared while that handle is
+        open. ``os.replace`` then makes it the store in one step, carrying its
         attributes and its DACL, so a reader sees either the previous store or
         this one. A failure to create the file or to set its DACL raises with
         the temp file removed and the previous store untouched.
         """
         spec = _token_file_spec()
-        temp_path = self._temp_file
-        # whoever creates a file owns it and can rewrite a DACL set on it
-        # afterwards, so a file already at the temp path is removed, not reused.
-        try:
-            os.remove(temp_path)
-        except FileNotFoundError:
-            pass
+        temp_path = self._new_temp_file()
 
         try:
             shared_utils._write_new_file_with_dacl(
@@ -449,12 +452,10 @@ class SecureStorage:
             if self.token_file.exists():
                 self.token_file.unlink()
                 logger.info("All tokens cleared from encrypted file")
-            # a save stopped between its write and its replace leaves the temp
-            # file behind; clearing the store clears that copy of it too.
-            try:
-                os.remove(self._temp_file)
-            except FileNotFoundError:
-                pass
+            # a save stopped between its write and its replace leaves its temp
+            # file behind; clearing the store clears those copies of it too.
+            for leftover in self._leftover_temp_files():
+                os.remove(leftover)
             return True
 
         except Exception as e:
