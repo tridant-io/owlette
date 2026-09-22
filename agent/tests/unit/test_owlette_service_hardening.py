@@ -171,6 +171,8 @@ def test_main_snapshots_the_console_then_repairs_after_the_classifier(monkeypatc
     monkeypatch.setattr(owlette_service, '_console_session', _console)
     svc._sweep_stale_update_installers.side_effect = _sweep
     monkeypatch.setattr(
+        owlette_service.shared_utils, 'harden_existing_json', lambda path: None)
+    monkeypatch.setattr(
         owlette_service.shared_utils, 'log_startup_system_snapshot', lambda: None)
     monkeypatch.setattr(
         owlette_service.shared_utils, 'log_startup_config_summary', lambda: None)
@@ -181,6 +183,46 @@ def test_main_snapshots_the_console_then_repairs_after_the_classifier(monkeypatc
     assert order == ['classify', 'console', 'repair', ('sweep', True)]
     assert svc._acl_console == (1, 'alice')
     assert isinstance(svc._acl_repair_lock, type(threading.Lock()))
+
+
+def test_main_checks_app_states_permissions_after_the_repair(monkeypatch):
+    """An upgrade leaves tmp\\app_states.json with the ACL it was created under,
+    and an idle machine never rewrites it. main() checks it once, after the
+    start-up repair, and a failure there does not stop the start-up."""
+    import owlette_service
+
+    class _Stop(BaseException):
+        """Not an Exception, so main()'s non-fatal wrappers let it through."""
+
+    order = []
+    svc = MagicMock()
+    svc._repair_install_acls.side_effect = lambda: order.append('repair')
+
+    def _harden(path):
+        order.append(('harden', path))
+        raise RuntimeError('denied')
+
+    def _sweep():
+        order.append('sweep')
+        raise _Stop()
+
+    svc._sweep_stale_update_installers.side_effect = _sweep
+    monkeypatch.setattr(owlette_service, '_console_session', lambda: (1, 'alice'))
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'harden_existing_json', _harden)
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'log_startup_system_snapshot', lambda: None)
+    monkeypatch.setattr(
+        owlette_service.shared_utils, 'log_startup_config_summary', lambda: None)
+
+    with pytest.raises(_Stop):
+        _bind(svc, 'main')()
+
+    assert order == [
+        'repair',
+        ('harden', owlette_service.shared_utils.RESULT_FILE_PATH),
+        'sweep',
+    ]
 
 
 # ----- session-change repair -------------------------------------------------

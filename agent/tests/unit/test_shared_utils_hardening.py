@@ -327,6 +327,130 @@ class TestWriteJsonToFile:
         assert json.loads(target.read_text()) == DATA
 
 
+# ----- harden_existing_json -------------------------------------------------
+
+class TestHardenExistingJson:
+    """A file an earlier version created carries its directory's inherited ACL
+    until something writes it, which on an idle machine may be never."""
+
+    @pytest.fixture
+    def applied(self, monkeypatch):
+        """Records acl_hardening.apply. The owner reads as SYSTEM, so the real
+        is_trusted_owner runs with its link checks, and matches() reports the
+        DACL as not in place."""
+        calls = []
+        monkeypatch.setattr(acl_hardening, 'apply',
+                            lambda path, dacl: calls.append((path, _described(dacl))))
+        monkeypatch.setattr(acl_hardening, 'matches', lambda path, dacl: False)
+        monkeypatch.setattr(acl_hardening, '_native_read_owner',
+                            lambda path: ws.ConvertStringSidToSid('S-1-5-18'))
+        return calls
+
+    @staticmethod
+    def _existing(sandbox, name='app_states.json'):
+        path = sandbox / name
+        path.write_text(json.dumps(DATA))
+        return path
+
+    def test_it_applies_the_dacl_a_system_write_would_give(
+            self, sandbox, applied, monkeypatch, caplog):
+        _run_as(monkeypatch, 'S-1-5-18')
+        _console_user(monkeypatch, CONSOLE)
+        target = self._existing(sandbox)
+
+        with caplog.at_level(logging.INFO):
+            shared_utils.harden_existing_json(str(target))
+
+        assert applied == [(str(target), BASE + [(CONSOLE_STR, MODIFY, 0)])]
+        assert json.loads(target.read_text()) == DATA
+        assert len([r for r in caplog.records if r.levelno == logging.INFO]) == 1
+
+    def test_a_file_already_carrying_it_is_left_alone(
+            self, sandbox, applied, monkeypatch, caplog):
+        _run_as(monkeypatch, 'S-1-5-18')
+        _console_user(monkeypatch, CONSOLE)
+        monkeypatch.setattr(acl_hardening, 'matches', lambda path, dacl: True)
+        target = self._existing(sandbox)
+
+        with caplog.at_level(logging.INFO):
+            shared_utils.harden_existing_json(str(target))
+
+        assert applied == []
+        assert caplog.records == []
+
+    def test_a_missing_file_does_nothing(self, sandbox, applied, monkeypatch, caplog):
+        _run_as(monkeypatch, 'S-1-5-18')
+
+        shared_utils.harden_existing_json(str(sandbox / 'app_states.json'))
+
+        assert applied == []
+        assert caplog.records == []
+
+    def test_a_file_something_else_owns_is_left_alone(
+            self, sandbox, applied, monkeypatch, caplog):
+        _run_as(monkeypatch, 'S-1-5-18')
+        _console_user(monkeypatch, CONSOLE)
+        monkeypatch.setattr(acl_hardening, '_native_read_owner',
+                            lambda path: ws.ConvertStringSidToSid(OTHER_USER_STR))
+        target = self._existing(sandbox)
+
+        shared_utils.harden_existing_json(str(target))
+
+        assert applied == []
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+    def test_a_link_is_left_alone(self, sandbox, applied, monkeypatch, caplog):
+        _run_as(monkeypatch, 'S-1-5-18')
+        _console_user(monkeypatch, CONSOLE)
+        target = sandbox / 'app_states.json'
+        try:
+            os.symlink(self._existing(sandbox, 'elsewhere.json'), target)
+        except OSError:
+            pytest.skip('this account cannot create symbolic links')
+
+        shared_utils.harden_existing_json(str(target))
+
+        assert applied == []
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+    def test_a_user_session_process_does_nothing(
+            self, sandbox, applied, monkeypatch, caplog):
+        _run_as(monkeypatch, CONSOLE_STR)
+        target = self._existing(sandbox)
+
+        shared_utils.harden_existing_json(str(target))
+
+        assert applied == []
+        assert caplog.records == []
+
+    def test_a_file_with_no_dacl_of_its_own_is_left_alone(
+            self, sandbox, applied, monkeypatch, caplog):
+        _run_as(monkeypatch, 'S-1-5-18')
+        target = self._existing(sandbox, 'config.json')
+
+        shared_utils.harden_existing_json(str(target))
+
+        assert applied == []
+        assert caplog.records == []
+
+    def test_a_failure_is_logged_once_and_never_raised(
+            self, sandbox, applied, monkeypatch, caplog):
+        _run_as(monkeypatch, 'S-1-5-18')
+        _console_user(monkeypatch, CONSOLE)
+
+        def denied(path, dacl):
+            raise acl_hardening.AclApplyError(f'failed to apply DACL to {path}: denied')
+
+        monkeypatch.setattr(acl_hardening, 'apply', denied)
+        target = self._existing(sandbox)
+
+        shared_utils.harden_existing_json(str(target))
+
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1
+        assert 'denied' in warnings[0].getMessage()
+
+
 # ----- the native seam ------------------------------------------------------
 
 class TestWriteNewFileWithDacl:

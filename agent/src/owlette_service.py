@@ -8155,6 +8155,14 @@ class OwletteService(win32serviceutil.ServiceFramework):
             logging.warning(f"ACL hardening errored (non-fatal): {e}")
         self._acl_startup_repaired = True
 
+        # an upgrade leaves tmp\app_states.json with the ACL it was created
+        # under: SPECS covers directories and the token file, not this file, and
+        # an idle machine may not write it for days.
+        try:
+            shared_utils.harden_existing_json(shared_utils.RESULT_FILE_PATH)
+        except Exception as e:
+            logging.warning(f"app_states.json ACL check errored (non-fatal): {e}")
+
         try:
             self._sweep_stale_update_installers()
         except Exception as e:

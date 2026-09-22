@@ -1946,6 +1946,37 @@ def write_json_to_file(data, file_path, max_retries=3, initial_delay=0.1):
                 logging.error(f"An error occurred while writing to the file: {e}")
                 break
 
+
+def harden_existing_json(file_path):
+    """Give a file that already exists the DACL a SYSTEM write would give it,
+    without touching its contents.
+
+    A file an earlier version created carries the ACL it was created under until
+    something writes it, and on an idle machine that can be never. Only a SYSTEM
+    process does this, only for a file whose DACL the writer would set, and only
+    when acl_hardening.is_trusted_owner accepts it — SYSTEM or Administrators
+    owns it, and it is neither a link nor a reparse point. Never raises: a
+    failure is logged and the caller carries on.
+    """
+    try:
+        if not is_system_process() or not os.path.exists(file_path):
+            return
+        dacl = _json_file_dacl(file_path)
+        if dacl is None:
+            return
+        if not acl_hardening.is_trusted_owner(file_path):
+            logging.warning(
+                f"Leaving the permissions on {file_path} alone: it is not owned "
+                f"by SYSTEM or Administrators, or it is a link"
+            )
+            return
+        if acl_hardening.matches(file_path, dacl):
+            return
+        acl_hardening.apply(file_path, dacl)
+        logging.info(f"Re-asserted the permissions on {file_path}")
+    except Exception as e:
+        logging.warning(f"Could not re-assert the permissions on {file_path}: {e}")
+
 # Default config, optionally merged into an existing one.
 def generate_config_file(existing_config=None):
     # Carry the firebase section across — losing it unregisters the agent.
