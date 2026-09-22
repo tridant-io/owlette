@@ -219,37 +219,55 @@ $SB_CleanCheck = {
   }
 }
 
-# Download an installer in-guest, verify its sha256, install it silently.
-$SB_DownloadInstall = {
-  param($url, $exe, $sha, $timeout)
+# Download an installer in-guest and verify its sha256. Returns the path.
+$SB_DownloadOnly = {
+  param($url, $exe, $sha)
   $dest = Join-Path ([Environment]::GetFolderPath('Desktop')) $exe
   if (Test-Path $dest) { Remove-Item $dest -Force }
   $ProgressPreference = 'SilentlyContinue'
   Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 600
   $got = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLower()
   if ($sha -and $got -ne $sha.ToLower()) {
-    return [PSCustomObject]@{ Ok = $false; Detail = "checksum mismatch: got $got"; ExitCode = -1 }
+    return [PSCustomObject]@{ Ok = $false; Detail = "checksum mismatch: got $got"; Dest = $dest }
   }
-  $args = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=C:\owlette-install.log'
-  $p = Start-Process -FilePath $dest -ArgumentList $args -PassThru
-  if (-not $p.WaitForExit($timeout * 1000)) {
-    try { $p.Kill() } catch { }
-    return [PSCustomObject]@{ Ok = $false; Detail = "installer did not finish within ${timeout}s"; ExitCode = -1 }
-  }
-  [PSCustomObject]@{ Ok = ($p.ExitCode -eq 0); Detail = "exit $($p.ExitCode)"; ExitCode = $p.ExitCode }
+  [PSCustomObject]@{ Ok = $true; Detail = "downloaded, checksum verified"; Dest = $dest }
 }
 
-# Install an already-present (pushed) installer silently.
-$SB_InstallLocal = {
-  param($path, $timeout)
-  if (-not (Test-Path $path)) { return [PSCustomObject]@{ Ok = $false; Detail = "not found: $path"; ExitCode = -1 } }
-  $args = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LOG=C:\owlette-install.log'
-  $p = Start-Process -FilePath $path -ArgumentList $args -PassThru
-  if (-not $p.WaitForExit($timeout * 1000)) {
-    try { $p.Kill() } catch { }
-    return [PSCustomObject]@{ Ok = $false; Detail = "installer did not finish within ${timeout}s"; ExitCode = -1 }
+# Start an installer DETACHED inside the guest. An installer's own stop/kill
+# pass can take the PowerShell Direct session with it, and a session that dies
+# mid-Invoke-Command is a runspace-fatal error no catch block sees (the 2.12.21
+# row killed the whole matrix that way). So nothing waits inside the session:
+# cmd runs the installer and writes its exit code to a file, and the host polls
+# for that file with fresh short sessions (Wait-GuestInstall).
+$SB_StartInstaller = {
+  param($path)
+  if (-not (Test-Path $path)) { return [PSCustomObject]@{ Ok = $false; Detail = "not found: $path" } }
+  Remove-Item 'C:\owlette-install.exit' -Force -ErrorAction SilentlyContinue
+  $inner = "`"$path`" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=C:\owlette-install.log & echo !ERRORLEVEL! > C:\owlette-install.exit"
+  Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList "/v:on /c `"$inner`"" -WindowStyle Hidden | Out-Null
+  [PSCustomObject]@{ Ok = $true; Detail = 'started' }
+}
+
+# Host side: wait for the detached installer's exit-code file, reconnecting
+# for every look so a session the installer severed costs one retry, not the row.
+function Wait-GuestInstall($vmName, $cred, [int]$timeout) {
+  $deadline = (Get-Date).AddSeconds($timeout)
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 10
+    $s2 = $null
+    try {
+      $s2 = New-PSSession -VMName $vmName -Credential $cred -ErrorAction Stop
+      $code = Invoke-Command -Session $s2 -ScriptBlock {
+        if (Test-Path 'C:\owlette-install.exit') { (Get-Content 'C:\owlette-install.exit' -Raw).Trim() } else { $null }
+      }
+      if ($null -ne $code -and "$code" -ne '') {
+        return [PSCustomObject]@{ Ok = ("$code" -eq '0'); Detail = "exit $code"; ExitCode = [int]$code }
+      }
+    }
+    catch { }
+    finally { if ($s2) { Remove-PSSession $s2 -ErrorAction SilentlyContinue } }
   }
-  [PSCustomObject]@{ Ok = ($p.ExitCode -eq 0); Detail = "exit $($p.ExitCode)"; ExitCode = $p.ExitCode }
+  [PSCustomObject]@{ Ok = $false; Detail = "installer did not finish within ${timeout}s"; ExitCode = -1 }
 }
 
 $SB_WaitService = {
@@ -624,8 +642,15 @@ try {
       #    a gate: 2.12.x/3.0.0 silent installs gate the service on a pairing poll
       #    that has no phrase here, so they legitimately leave it uninstalled - the
       #    candidate installs it unconditionally in step 6.
-      $fi = Invoke-Command -Session $s -ScriptBlock $SB_DownloadInstall `
-        -ArgumentList $from.Url, ("Owlette-from-$v.exe"), $from.Sha256, $FromInstallTimeoutSec
+      $dl = Invoke-Command -Session $s -ScriptBlock $SB_DownloadOnly `
+        -ArgumentList $from.Url, ("Owlette-from-$v.exe"), $from.Sha256
+      if (-not $dl.Ok) { Add-Row $v "from-install $v" "FAIL" $dl.Detail; continue }
+      $st = Invoke-Command -Session $s -ScriptBlock $SB_StartInstaller -ArgumentList $dl.Dest
+      if (-not $st.Ok) { Add-Row $v "from-install $v" "FAIL" $st.Detail; continue }
+      # the session is closed while the installer runs (see $SB_StartInstaller)
+      Remove-PSSession $s -ErrorAction SilentlyContinue; $s = $null
+      $fi = Wait-GuestInstall $Name $cred $FromInstallTimeoutSec
+      $s = Connect-Guest $Name $cred
       if (-not $fi.Ok) { Add-Row $v "from-install $v" "FAIL" $fi.Detail; continue }
       Add-Row $v "from-install $v" "PASS" $fi.Detail
       $fsvc = Invoke-Command -Session $s -ScriptBlock $SB_WaitService -ArgumentList 60
@@ -646,8 +671,10 @@ try {
 
       # 5. Install the candidate over it.
       if ($CandidateUrl) {
-        $ci = Invoke-Command -Session $s -ScriptBlock $SB_DownloadInstall `
-          -ArgumentList $CandidateUrl, $CandidateExeName, $CandidateSha256, $InstallTimeoutSec
+        $dl = Invoke-Command -Session $s -ScriptBlock $SB_DownloadOnly `
+          -ArgumentList $CandidateUrl, $CandidateExeName, $CandidateSha256
+        if (-not $dl.Ok) { Add-Row $v "candidate install" "FAIL" $dl.Detail; continue }
+        $dest = $dl.Dest
       }
       else {
         # Copy-Item -ToSession cannot land a 43 MB exe: Defender in the guest opens
@@ -666,8 +693,12 @@ try {
         } -ArgumentList $dest, $CandidateSha256
         if (-not $pushed.Ok) { Add-Row $v "candidate push" "FAIL" "checksum mismatch in the guest: got $($pushed.Sha)"; continue }
         Add-Row $v "candidate push" "PASS" "$($pushed.Bytes) bytes, checksum verified in the guest"
-        $ci = Invoke-Command -Session $s -ScriptBlock $SB_InstallLocal -ArgumentList $dest, $InstallTimeoutSec
       }
+      $st = Invoke-Command -Session $s -ScriptBlock $SB_StartInstaller -ArgumentList $dest
+      if (-not $st.Ok) { Add-Row $v "candidate install" "FAIL" $st.Detail; continue }
+      Remove-PSSession $s -ErrorAction SilentlyContinue; $s = $null
+      $ci = Wait-GuestInstall $Name $cred $InstallTimeoutSec
+      $s = Connect-Guest $Name $cred
       if (-not $ci.Ok) { Add-Row $v "candidate install" "FAIL" $ci.Detail; continue }
       Add-Row $v "candidate install" "PASS" $ci.Detail
 
