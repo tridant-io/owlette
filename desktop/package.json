@@ -1,7 +1,7 @@
 {
   "name": "@owlette/desktop",
   "private": true,
-  "version": "3.3.5",
+  "version": "3.3.6",
   "description": "owlette desktop app (tauri 2 + vite + react)",
   "license": "FSL-1.1-Apache-2.0",
   "type": "module",
