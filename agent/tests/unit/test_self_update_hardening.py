@@ -1,11 +1,14 @@
-"""Self-update staging hardening (agent 3.3.6).
+"""Self-update staging hardening (agent 3.3.6), on the split self-update.
 
-update_owlette downloads the installer into update-staging\\, which the service
-creates fail-closed and only SYSTEM and Administrators can write; the
-rename-on-lock fallback is off for that download; the SHA-256 is read through a
-handle that shares read access only, still held after the schtasks calls; the
-scheduled task runs the fixed staging path; and the update marker is created
-new, with a protected DACL, once the hold is in place.
+The Windows arm of _run_self_update downloads the installer into
+update-staging\\, which the service creates fail-closed and only SYSTEM and
+Administrators can write; the rename-on-lock fallback is off for that download;
+the SHA-256 is read through a handle that shares read access only, still held
+after the schtasks calls; the scheduled task runs the fixed staging path; and
+the update marker is created new, with a protected DACL - once before the
+download, so the guard brackets the whole operation, and again once the hold is
+in place. The POSIX arm keeps its own staging directory and calls no Windows
+helper.
 
 No security descriptor is written (acl_hardening.apply and shared_utils'
 _write_new_file_with_dacl are recorders, owners come from a mocked
@@ -28,6 +31,7 @@ import win32file
 import win32security as ws
 
 import installer_utils
+import osadapter
 
 
 _SYSTEM = 'S-1-5-18'
@@ -44,6 +48,11 @@ _PAYLOAD = b'MZ' + b'\0' * 1_000_000
 _SHA256 = hashlib.sha256(_PAYLOAD).hexdigest()
 
 _OK = 'Self-update initiated via Task Scheduler'
+_COMMAND = {
+    'installer_url': 'https://example.invalid/Owlette-Installer-v9.9.9.exe',
+    'checksum_sha256': _SHA256,
+    'deployment_id': 'deploy-1',
+}
 
 
 def _described(spec):
@@ -59,17 +68,25 @@ def _owned_by(monkeypatch, sid_str):
 
 
 def _writable(path):
-    """True when another open of path for writing succeeds right now."""
+    """True when another open of path for writing succeeds right now, None when
+    there is no file there yet."""
     try:
         with open(path, 'r+b'):
             return True
     except PermissionError:
         return False
+    except FileNotFoundError:
+        return None
 
 
-def _bind(svc, name):
+def _service():
+    """An OwletteService with only the state the update path reads (what
+    _init_state declares for it); nothing else is constructed."""
     from owlette_service import OwletteService
-    return getattr(OwletteService, name).__get__(svc, OwletteService)
+    svc = object.__new__(OwletteService)
+    svc.firebase_client = None
+    svc._update_image_handle = None
+    return svc
 
 
 # ----- installer_utils ------------------------------------------------------
@@ -147,14 +164,14 @@ class TestOpenVerified:
 
 @pytest.fixture
 def update(tmp_path, monkeypatch):
-    """handle_firebase_command('update_owlette') in a sandboxed ProgramData, with
+    """_handle_update_owlette on the Windows arm, in a sandboxed data root, with
     the DACL writes, the download, schtasks and Popen replaced by recorders."""
     import acl_hardening
     import owlette_service
     import shared_utils
 
-    monkeypatch.setenv('PROGRAMDATA', str(tmp_path))
     root = tmp_path / 'Owlette'
+    monkeypatch.setenv(osadapter.DATA_ROOT_ENV, str(root))
     (root / 'logs').mkdir(parents=True)
     staging = root / 'update-staging'
     assert shared_utils.get_data_path('update-staging') == str(staging)
@@ -203,21 +220,13 @@ def update(tmp_path, monkeypatch):
     monkeypatch.setattr(owlette_service.subprocess, 'run', fake_run)
     monkeypatch.setattr(owlette_service.subprocess, 'Popen', MagicMock())
 
-    svc = SimpleNamespace(
-        _command_rate_limits={}, COMMAND_RATE_LIMIT_SECONDS=0,
-        _command_router=SimpleNamespace(has_handler=lambda cmd_type: False),
-        firebase_client=None)
+    svc = _service()
     state.svc = svc
-    state.run = lambda sha256=_SHA256: _bind(svc, 'handle_firebase_command')('cmd-1', {
-        'type': 'update_owlette',
-        'installer_url': 'https://example.invalid/Owlette-Installer-v9.9.9.exe',
-        'checksum_sha256': sha256,
-        'deployment_id': 'deploy-1',
-    })
+    state.run = lambda sha256=_SHA256: svc._handle_update_owlette(
+        'cmd-1', {**_COMMAND, 'checksum_sha256': sha256})
     yield state
-    held = getattr(svc, '_update_image_handle', None)
-    if held is not None:
-        held.Close()
+    if svc._update_image_handle is not None:
+        svc._update_image_handle.Close()
 
 
 def _stale_marker(update, **fields):
@@ -234,9 +243,12 @@ class TestStagingDirectory:
         [(path, kwargs)] = update.downloads
         assert path == update.installer
         assert kwargs['strict_path'] is True
-        assert update.events == ['staging dacl', 'download', 'marker']
-        # nothing is staged in the user-writable tmp\ any more.
+        # the guard's marker brackets the whole operation; the second names the
+        # verified installer.
+        assert update.events == ['marker', 'staging dacl', 'download', 'marker']
+        # nothing is staged in the user-writable tmp\ or the posix cache\.
         assert not (update.root / 'tmp').exists()
+        assert not (update.root / 'cache').exists()
 
     def test_a_directory_another_account_owns_aborts_before_the_download_and_marker(
             self, update, monkeypatch):
@@ -245,9 +257,9 @@ class TestStagingDirectory:
 
         result = update.run()
 
-        assert result.startswith('Error initiating update')
+        assert result.startswith('Error:')
         assert 'untrusted directory' in result
-        assert update.events == []
+        assert update.events == ['marker']
         assert not update.marker.exists()
         assert update.runs == []
 
@@ -262,10 +274,27 @@ class TestStagingDirectory:
             os.rmdir(update.staging)  # removes the junction, not its target
 
         assert 'untrusted directory' in result
-        assert update.events == []
+        assert update.events == ['marker']
         assert list(target.iterdir()) == []
         assert not update.marker.exists()
         assert update.runs == []
+
+    def test_the_posix_arm_keeps_its_own_staging_and_calls_no_windows_helper(
+            self, update, monkeypatch):
+        import acl_hardening
+        import shared_utils
+
+        def never(*args, **kwargs):
+            raise AssertionError('create_private_dir is the windows arm')
+
+        monkeypatch.setattr(acl_hardening, 'create_private_dir', never)
+
+        staging = update.svc._update_staging_dir('linux')
+
+        assert staging == shared_utils.get_data_path('cache/update')
+        assert os.path.isdir(staging)
+        assert update.applied == []
+        assert not update.staging.exists()
 
 
 class TestHeldImage:
@@ -300,8 +329,10 @@ class TestHeldImage:
 
         assert 'Checksum verification FAILED' in result
         assert not os.path.exists(update.installer)
-        assert getattr(update.svc, '_update_image_handle', None) is None
-        assert update.markers == []
+        assert update.svc._update_image_handle is None
+        # only the guard's marker was written, and the failure cleared it.
+        assert len(update.markers) == 1
+        assert not update.marker.exists()
         assert update.runs == []
 
 
@@ -309,7 +340,8 @@ class TestUpdateMarker:
     def test_it_is_created_new_with_a_protected_dacl_once_the_image_is_held(self, update):
         assert update.run() == _OK
 
-        [(path, dacl, installer_writable)] = update.markers
+        [(_, _, before_download), (path, dacl, installer_writable)] = update.markers
+        assert before_download is None
         assert os.path.normcase(path) == os.path.normcase(str(update.marker))
         # users keep read: the desktop app reads the marker.
         assert dacl == [(_SYSTEM, _FULL, 0), (_ADMINS, _FULL, 0), (_USERS, _READ, 0)]
@@ -323,7 +355,7 @@ class TestUpdateMarker:
 
         assert update.run() == _OK
 
-        assert len(update.markers) == 1
+        assert len(update.markers) == 2
         assert json.loads(update.marker.read_text())['command_id'] == 'cmd-1'
 
     def test_a_file_planted_between_the_remove_and_the_create_fails_the_update(
@@ -341,7 +373,8 @@ class TestUpdateMarker:
 
         result = update.run()
 
-        assert result.startswith('Error initiating update')
+        assert result.startswith('Error:')
         assert 'update_in_progress.json' in result
-        assert update.events == ['staging dacl', 'download']
+        assert update.events == []
+        assert not update.staging.exists()
         assert update.runs == []

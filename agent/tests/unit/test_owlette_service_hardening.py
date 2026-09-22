@@ -530,11 +530,15 @@ class TestSelfUpdateGuard:
         monkeypatch.setattr(owlette_service.acl_hardening, 'create_private_dir', MagicMock())
         download = MagicMock(return_value=(False, None))
         monkeypatch.setattr(owlette_service.installer_utils, 'download_file', download)
-        svc = SimpleNamespace(
-            _command_rate_limits={}, COMMAND_RATE_LIMIT_SECONDS=0,
-            _command_router=SimpleNamespace(has_handler=lambda cmd_type: False),
-            firebase_client=None, _update_image_handle=None)
-        result = _bind(svc, 'handle_firebase_command')('cmd-1', {
+        # a real service with only the state the update path reads: the
+        # dispatcher calls the split's sibling methods.
+        svc = object.__new__(owlette_service.OwletteService)
+        svc._command_rate_limits = {}
+        svc.COMMAND_RATE_LIMIT_SECONDS = 0
+        svc._command_router = SimpleNamespace(has_handler=lambda cmd_type: False)
+        svc.firebase_client = None
+        svc._update_image_handle = None
+        result = svc.handle_firebase_command('cmd-1', {
             'type': 'update_owlette',
             'installer_url': 'https://example.invalid/Owlette-Installer-v9.9.9.exe',
             'checksum_sha256': 'a' * 64,
@@ -562,8 +566,13 @@ class TestSelfUpdateGuard:
 
         result, download = self._update(monkeypatch, trusted=False)
 
+        # not adopted: the guard lets the update through, and the marker this
+        # service then creates (before the download, so the guard brackets
+        # the whole operation) fails on the file it could not remove.
         assert 'already in progress' not in result
-        download.assert_called_once()
+        assert result.startswith('Error:')
+        assert 'update_in_progress.json' in result
+        download.assert_not_called()
 
     def test_the_service_s_own_marker_still_blocks_a_second_update(self, marker, monkeypatch):
         result, download = self._update(monkeypatch, trusted=True)

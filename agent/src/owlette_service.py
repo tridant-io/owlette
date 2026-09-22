@@ -782,6 +782,17 @@ def _update_marker_dacl():
         (acl_hardening.SID_USERS, _FILE_READ, 0),
     ]
 
+
+def _update_staging_aces():
+    """The ACEs the start-up repair asserts for update-staging (SYSTEM and
+    Administrators only); self-update stages its installer under them. Raises
+    AclApplyError when the table has no such row, so a staging directory
+    without a DACL to give it is never created."""
+    for entry in acl_hardening.specs():
+        if os.path.basename(entry.path) == 'update-staging':
+            return entry.aces
+    raise acl_hardening.AclApplyError('the hardening table holds no update-staging entry')
+
 # the exact shape cortex_tools._write_ipc_command writes. the service runs these
 # as system, and the id names the result file, so it must stay a bare file name.
 _CORTEX_CMD_MAX_BYTES = 64 * 1024
@@ -8055,7 +8066,12 @@ class OwletteService:
         # released the moment this returns, so a marker written once the
         # installer is on disk would leave the guard above covering nothing
         # for the minutes a download takes.
-        self._write_update_marker(cmd_id, cmd_data, target_version)
+        try:
+            self._write_update_marker(cmd_id, cmd_data, target_version)
+        except OSError as e:
+            # a file slipped in where the marker goes fails this update rather
+            # than being adopted.
+            return f"Error: initiating update failed: {e}"
 
         if os_family == 'windows':
             return self._run_self_update(cmd_id, cmd_data, target_version, os_family)
@@ -8076,6 +8092,14 @@ class OwletteService:
         """
         marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
         if not os.path.exists(marker_path):
+            return None
+
+        # only this service writes the marker; one any local user can write
+        # would hold off every self-update for as long as it stays fresh, so
+        # it is ignored even when it cannot be deleted (a windows check; off
+        # windows logs\ is the daemon's own).
+        if os.name == 'nt' and not acl_hardening.is_trusted_owner(marker_path):
+            _discard_untrusted_file(marker_path, 'update marker')
             return None
 
         try:
@@ -8137,8 +8161,14 @@ class OwletteService:
             # family's extension: apt-get refuses a package that is not
             # called `.deb`.
             temp_installer_path = os.path.join(
-                self._update_staging_dir(),
+                self._update_staging_dir(os_family),
                 installer_utils.UPDATE_ARTIFACT_NAMES[os_family])
+
+            if os_family == 'windows':
+                # an earlier attempt's hold would keep the file from being
+                # replaced. the guard above lets this attempt through only
+                # once that one has failed or is over ten minutes old.
+                self._release_update_image()
 
             logging.info("Downloading installer (3 retries with exponential backoff)...")
             download_success, actual_path = installer_utils.download_file(
@@ -8147,7 +8177,11 @@ class OwletteService:
                 progress_callback=None,  # Progress already tracked via Firestore status
                 max_retries=3,
                 connect_timeout=30,
-                read_timeout=600
+                read_timeout=600,
+                # windows: a locked file fails this attempt instead of moving
+                # the download to another name, so the task runs the path
+                # that was verified.
+                strict_path=(os_family == 'windows'),
             )
 
             if not download_success:
@@ -8164,7 +8198,19 @@ class OwletteService:
 
             # SHA256 checksum verification (MANDATORY for self-updates)
             logging.info("Verifying installer checksum...")
-            if not installer_utils.verify_checksum(temp_installer_path, expected_sha256):
+            if os_family == 'windows':
+                # read through a handle that shares read access only, so the
+                # file cannot be changed, renamed or deleted while it is held.
+                # it is held until this process exits, which is when the
+                # installer stops the service: schtasks /Run returns before
+                # the task starts the installer, so a hold released there
+                # would protect nothing. nothing below reopens the path.
+                update_image = installer_utils.open_verified(temp_installer_path, expected_sha256)
+                if update_image is None:
+                    installer_utils.cleanup_installer(temp_installer_path, force=True)
+                    raise Exception("Checksum verification FAILED - installer may be corrupted or tampered. Update aborted.")
+                self._update_image_handle = update_image
+            elif not installer_utils.verify_checksum(temp_installer_path, expected_sha256):
                 installer_utils.cleanup_installer(temp_installer_path, force=True)
                 raise Exception("Checksum verification FAILED - installer may be corrupted or tampered. Update aborted.")
             logging.info("[OK] Checksum verification passed")
@@ -8217,19 +8263,46 @@ class OwletteService:
             marker['installer_path'] = installer_path
 
         marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
-        with open(marker_path, 'w') as f:
-            json.dump(marker, f, indent=2)
+        if os.name == 'nt':
+            # created new under the marker dacl; whatever sits at the path is
+            # removed first, so only a marker this service wrote is read back.
+            try:
+                _create_update_marker(marker_path, marker)
+            except OSError as e:
+                raise OSError(f"could not create {marker_path}: {e}") from e
+        else:
+            with open(marker_path, 'w') as f:
+                json.dump(marker, f, indent=2)
         logging.debug(f"Update marker written: {marker_path}")
 
-    def _update_staging_dir(self):
+    def _release_update_image(self):
+        """Drop the hold an earlier attempt left on its installer image, so this
+        attempt's download can replace the file."""
+        held = self._update_image_handle
+        if held is not None:
+            self._update_image_handle = None
+            held.Close()
+
+    def _update_staging_dir(self, os_family):
         """Where the update artifact is downloaded, verified and installed from.
 
-        Under `cache/`, which decision 4's mode table keeps closed to the
-        agent's group, and not the 0770 `tmp/` the desktop app shares: the
-        package is checked by name and then handed to a root install by name,
-        so anything that can write that directory - or rename it aside - can
-        swap the artifact between the checksum and the install.
+        Windows: `update-staging`, the directory the start-up repair and the
+        installer harden - not tmp\\, which every local user can write, nor
+        WINDOWS\\TEMP, where security software blocks execution. Created
+        fail-closed: an existing one that is not SYSTEM's or Administrators',
+        or is a link, or a DACL that cannot be set, fails this attempt before
+        anything is downloaded.
+
+        POSIX: under `cache/`, which decision 4's mode table keeps closed to
+        the agent's group, and not the 0770 `tmp/` the desktop app shares:
+        the package is checked by name and then handed to a root install by
+        name, so anything that can write that directory - or rename it aside
+        - can swap the artifact between the checksum and the install.
         """
+        if os_family == 'windows':
+            staging = shared_utils.get_data_path('update-staging')
+            acl_hardening.create_private_dir(staging, _update_staging_aces())
+            return staging
         staging = shared_utils.get_data_path('cache/update')
         os.makedirs(staging, exist_ok=True)
         os.chmod(staging, 0o700)
