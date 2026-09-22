@@ -344,6 +344,21 @@ class TestPreMigrationCopy:
         assert not os.path.exists(copy.path) and not os.path.exists(store.path)
         assert storage._leftover_temp_files() == []
 
+    def test_a_dacl_failure_on_the_copy_leaves_the_store_on_the_previous_key(self, storage):
+        """The migration's writer contract is OSError: a copy that cannot carry
+        its DACL is a copy that could not be kept, so the store stays readable to
+        a pre-migration agent and no exception escapes the read."""
+        original = _pre_migration_blob({'refresh_token': _SECRET})
+        storage.token_file.write_bytes(original)
+        denied = acl_hardening.AclApplyError('failed to apply DACL to x: denied')
+
+        with _writer(writer=_sid(_CONSOLE), dacl_error=denied):
+            assert storage.get_refresh_token() == _SECRET
+
+        assert storage.token_file.read_bytes() == original
+        assert not storage._retained_file().exists()
+        assert storage._leftover_temp_files() == []
+
     def test_the_repair_table_carries_the_copy_with_the_stores_aces(self):
         rows = {os.path.basename(e.path): e for e in acl_hardening.specs()}
         store = rows[secure_storage.TOKEN_FILE_NAME]

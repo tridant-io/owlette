@@ -90,7 +90,14 @@ def _write_token_file(path: Path, blob: bytes) -> None:
     reaches it.
     """
     if os.name == 'nt':
-        _replace_token_file(path, blob)
+        try:
+            _replace_token_file(path, blob)
+        except OSError:
+            raise
+        except Exception as e:
+            # a dacl or write failure is a failed write to the callers, which
+            # retry or keep the previous store on an OSError alone.
+            raise OSError(f"{path.name}: {e}") from e
         return
 
     fd = os.open(str(path), _TOKEN_FILE_FLAGS, _TOKEN_FILE_MODE)
