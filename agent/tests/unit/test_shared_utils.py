@@ -1296,6 +1296,9 @@ def _sleeping_child():
 def _stop(child):
     child.terminate()
     child.wait(10)
+# windows-only: the lock under test is a handle opened without delete sharing,
+# which has no posix analogue; the class body imports win32file.
+@pytest.mark.windows(reason='delete-sharing locks are windows semantics')
 class TestWriteJsonToFileLocks:
     """A target held open without delete sharing cannot be replaced. A
     single-attempt caller (the service's 5-second status write) tries again on
