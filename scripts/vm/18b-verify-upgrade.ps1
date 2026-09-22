@@ -650,9 +650,22 @@ try {
           -ArgumentList $CandidateUrl, $CandidateExeName, $CandidateSha256, $InstallTimeoutSec
       }
       else {
+        # Copy-Item -ToSession cannot land a 43 MB exe: Defender in the guest opens
+        # it for scanning mid-stream and the copy dies, leaving a stub (see
+        # 10-stage-installer.ps1). Copy-VMFile writes it through the Guest Service
+        # Interface in one go, and the guest verifies the bytes before running them.
+        $gsi = Get-VMIntegrationService -VMName $Name -Name 'Guest Service Interface'
+        if (-not $gsi.Enabled) { Enable-VMIntegrationService -VMName $Name -Name 'Guest Service Interface'; Start-Sleep -Seconds 5 }
         $dest = Invoke-Command -Session $s -ScriptBlock { Join-Path ([Environment]::GetFolderPath('Desktop')) $args[0] } -ArgumentList $CandidateExeName
-        Copy-Item -Path $CandidatePath -Destination $dest -ToSession $s -Force
-        Invoke-Command -Session $s -ScriptBlock { Unblock-File -LiteralPath $args[0] -ErrorAction SilentlyContinue } -ArgumentList $dest
+        Copy-VMFile -Name $Name -SourcePath $CandidatePath -DestinationPath $dest -FileSource Host -CreateFullPath -Force
+        $pushed = Invoke-Command -Session $s -ScriptBlock {
+          param($p, $sha)
+          Unblock-File -LiteralPath $p -ErrorAction SilentlyContinue
+          $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLower()
+          [PSCustomObject]@{ Bytes = (Get-Item -LiteralPath $p).Length; Sha = $got; Ok = (-not $sha -or $got -eq $sha.ToLower()) }
+        } -ArgumentList $dest, $CandidateSha256
+        if (-not $pushed.Ok) { Add-Row $v "candidate push" "FAIL" "checksum mismatch in the guest: got $($pushed.Sha)"; continue }
+        Add-Row $v "candidate push" "PASS" "$($pushed.Bytes) bytes, checksum verified in the guest"
         $ci = Invoke-Command -Session $s -ScriptBlock $SB_InstallLocal -ArgumentList $dest, $InstallTimeoutSec
       }
       if (-not $ci.Ok) { Add-Row $v "candidate install" "FAIL" $ci.Detail; continue }
