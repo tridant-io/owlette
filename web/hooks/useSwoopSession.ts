@@ -121,6 +121,8 @@ export interface UseSwoopSession {
   stepUp: SwoopStepUpControls;
   /** end the session and stop the streamer. */
   end: () => void;
+  /** a fresh session to the same machine, from the ended or failed state. */
+  reconnect: () => void;
 }
 
 interface SessionGrant {
@@ -237,6 +239,21 @@ export function useSwoopSession(
     stoppedRef.current = true;
     setStepUpRequired(false);
     setState('ended');
+  }, []);
+
+  /**
+   * a fresh session to the same machine from the ended or failed state. the
+   * effect below keys on `attempt`, so bumping it tears the old run down and
+   * starts a new one; the step-up proof is not reused (a new session is a new
+   * ceremony if the window has closed).
+   */
+  const reconnect = useCallback(() => {
+    stoppedRef.current = false;
+    proofRef.current = null;
+    setError(null);
+    setStepUpRequired(false);
+    setState('connecting');
+    setAttempt((n) => n + 1);
   }, []);
 
   const end = useCallback(() => {
@@ -581,5 +598,5 @@ export function useSwoopSession(
     [stepUpRequired, enrolled, submitProof, cancel],
   );
 
-  return { state, error, stats, session, videoRef, stageRef, stepUp, end };
+  return { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect };
 }

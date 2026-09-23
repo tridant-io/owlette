@@ -1967,7 +1967,9 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
 - 2026-09-23 — **UI finding (owner, 5.2 follow-up):** the ended and failed states are dead ends. Wanted: in
   `ended` / `failed` the toolbar offers **reconnect** (a fresh session, same machine) — no "back to
   dashboard", swoop opens in its own tab (owner); "end session" in the failed state resets the page instead
-  of doing nothing. Small web task, after the pacer fix.
+  of doing nothing. **Done 2026-09-23 (`swoop/reconnect`):** `useSwoopSession.reconnect()` bumps the attempt
+  from a clean slate (proof dropped, error cleared) and the toolbar shows **reconnect** instead of "end
+  session" in `ended` / `error`; RTL test on the bar.
 - 2026-09-23 — **keyboard menu shipped (6.1's web half, owner's ask):** the toolbar's keyboard-lock sentence
   is gone; the fullscreen button carries a tooltip that says what fullscreen captures in this browser; a
   keyboard button beside settings sends ctrl+alt+del (the `sas` control message), windows key, alt+tab,
