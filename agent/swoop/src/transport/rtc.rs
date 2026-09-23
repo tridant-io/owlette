@@ -688,31 +688,43 @@ impl RtcPeer {
     ) -> Result<()> {
         events.extend(self.pending_events.drain(..));
         self.drain_out(events);
-        // Before `poll_output`, so a frame queued this turn leaves on this
-        // turn rather than waiting for the next one.
-        #[cfg(feature = "audio-opus")]
-        self.drain_audio(now);
 
+        // str0m takes one `write` per `poll_output` round — a second write
+        // before the outputs are drained is refused ("Consecutive calls to
+        // write() without poll_output() in between"), which is what dropped
+        // every audio frame but the first per tick until 2026-09-23. So the
+        // rounds interleave: one audio frame, drain, the next frame, drain,
+        // until the audio queue is empty.
         let deadline = loop {
-            match self.rtc.poll_output().context("poll_output")? {
-                Output::Timeout(t) => break t,
-                Output::Transmit(t) => {
-                    let len = t.contents.len();
-                    let destination = t.destination;
-                    // RFC 7983's demultiplexer: 0..=3 is STUN, which goes to
-                    // every pair still being checked. Everything above it —
-                    // DTLS, SRTP, SCTP — goes only to the pair ICE nominated,
-                    // which is what makes its destination a pair report.
-                    let nominated = t.contents.first().is_some_and(|first| *first > 3);
-                    if !send_datagram(&self.socket, &mut self.stats, &t.contents, destination) {
-                        continue;
+            #[cfg(feature = "audio-opus")]
+            let wrote_audio = self.drain_audio(now);
+            #[cfg(not(feature = "audio-opus"))]
+            let wrote_audio = false;
+
+            let deadline = loop {
+                match self.rtc.poll_output().context("poll_output")? {
+                    Output::Timeout(t) => break t,
+                    Output::Transmit(t) => {
+                        let len = t.contents.len();
+                        let destination = t.destination;
+                        // RFC 7983's demultiplexer: 0..=3 is STUN, which goes to
+                        // every pair still being checked. Everything above it —
+                        // DTLS, SRTP, SCTP — goes only to the pair ICE nominated,
+                        // which is what makes its destination a pair report.
+                        let nominated = t.contents.first().is_some_and(|first| *first > 3);
+                        if !send_datagram(&self.socket, &mut self.stats, &t.contents, destination) {
+                            continue;
+                        }
+                        self.pacer.record_sent(now, len);
+                        if nominated {
+                            self.on_send_addr(destination, events);
+                        }
                     }
-                    self.pacer.record_sent(now, len);
-                    if nominated {
-                        self.on_send_addr(destination, events);
-                    }
+                    Output::Event(e) => self.handle_event(e, events),
                 }
-                Output::Event(e) => self.handle_event(e, events),
+            };
+            if !wrote_audio {
+                break deadline;
             }
         };
 
@@ -909,30 +921,34 @@ impl RtcPeer {
     /// Write whatever audio is waiting. Straight to str0m, never through the
     /// pacer — see the module doc.
     #[cfg(feature = "audio-opus")]
-    fn drain_audio(&mut self, now: Instant) {
+    /// Write ONE queued audio frame, and say whether it did: the caller runs
+    /// a `poll_output` round between writes, which is the transport's rule.
+    fn drain_audio(&mut self, now: Instant) -> bool {
         if self.state != PeerState::Connected {
-            return;
+            return false;
         }
         let (Some(mid), Some(pt), Some(track)) =
             (self.audio.mid, self.audio.pt, self.audio.track.clone())
         else {
-            return;
+            return false;
         };
-        while let Some(packet) = track.try_recv() {
-            let Some(writer) = self.rtc.writer(mid) else {
-                return;
-            };
-            // The capture clock's own timestamp, contiguous across every
-            // device gap because `audio::opus::Timeline` filled the holes.
-            let time = MediaTime::new(packet.rtp_48k, str0m::media::Frequency::FORTY_EIGHT_KHZ);
-            if let Err(e) = writer.write(pt, now, time, packet.payload.as_slice()) {
-                // One bad write is not a dead session: the next frame is 10 ms
-                // away and the timeline does not depend on this one landing.
-                ::log::warn!("swoop: audio frame at {} not written: {e}", packet.rtp_48k);
-                return;
-            }
-            self.stats.audio_packets_written += 1;
+        let Some(packet) = track.try_recv() else {
+            return false;
+        };
+        let Some(writer) = self.rtc.writer(mid) else {
+            return false;
+        };
+        // The capture clock's own timestamp, contiguous across every
+        // device gap because `audio::opus::Timeline` filled the holes.
+        let time = MediaTime::new(packet.rtp_48k, str0m::media::Frequency::FORTY_EIGHT_KHZ);
+        if let Err(e) = writer.write(pt, now, time, packet.payload.as_slice()) {
+            // One bad write is not a dead session: the next frame is 10 ms
+            // away and the timeline does not depend on this one landing.
+            ::log::warn!("swoop: audio frame at {} not written: {e}", packet.rtp_48k);
+            return false;
         }
+        self.stats.audio_packets_written += 1;
+        true
     }
 
     /// 90 kHz media time for one frame, from the capture clock the front half

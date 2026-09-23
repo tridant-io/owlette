@@ -44,6 +44,12 @@
 
 use std::time::{Duration, Instant};
 
+/// How many frame intervals the bucket holds: the burst a screen change or an
+/// encoder overshoot may spend before pacing bites. Two is one frame of
+/// queueing at worst, and it is what turned one refusal in a hundred into none
+/// on a wired lan.
+const BURST_INTERVALS: f64 = 2.0;
+
 /// Never let the bucket be so small that a single MTU cannot pass, whatever
 /// ceiling the governor sets — a gate that refuses everything is a stall, not
 /// a rate limit.
@@ -102,9 +108,12 @@ pub struct SendPacer {
 
 impl SendPacer {
     /// `ceiling_bps` is the encoder's own target unless a governor has moved
-    /// it; `fps` sets the burst window. A bucket one frame interval deep is
-    /// the pacing rule this can express: one frame may go out at once, the
-    /// next one waits for the interval to refill it.
+    /// it; `fps` sets the burst window. The bucket is [`BURST_INTERVALS`] frame
+    /// intervals deep: two frames may go out at once, the third waits for the
+    /// interval to refill it. One interval was the rule until 2026-09-23, and
+    /// on a wired lan it refused one delta in a hundred — the encoder's normal
+    /// overshoot on a screen change, not congestion — and every refusal was a
+    /// smear until the next keyframe.
     pub fn new(now: Instant, ceiling_bps: u64, fps: u32) -> Self {
         let interval = Duration::from_secs_f64(1.0 / f64::from(fps.max(1)));
         let mut pacer = Self {
@@ -123,10 +132,11 @@ impl SendPacer {
         pacer
     }
 
-    /// Bytes the bucket holds when full: one frame interval at the ceiling.
+    /// Bytes the bucket holds when full: [`BURST_INTERVALS`] frame intervals at
+    /// the ceiling.
     pub fn capacity(&self) -> f64 {
         let per_second = self.ceiling_bps as f64 / 8.0;
-        (per_second * self.interval.as_secs_f64()).max(MIN_CAPACITY_BYTES)
+        (per_second * self.interval.as_secs_f64() * BURST_INTERVALS).max(MIN_CAPACITY_BYTES)
     }
 
     pub fn ceiling_bps(&self) -> u64 {
@@ -161,10 +171,12 @@ impl SendPacer {
         }
         // Keyframes are exempt: dropping one costs every frame after it until
         // the next IRAP, which is the opposite of what a rate limit is for.
-        // The debt it runs up is floored at one interval so an IRAP far larger
-        // than the ceiling stalls the stream for one frame and then forces the
-        // governor's hand, instead of blacking it out for seconds.
-        self.tokens = (self.tokens - cost).max(-self.capacity());
+        // And it leaves no debt: the deltas right behind a recovery point are
+        // the recovery, and refusing them (the rule until 2026-09-23) asked
+        // the viewer for another keyframe, whose deltas were refused in turn.
+        // An IRAP is rare and requested, so the bytes it spends above the
+        // bucket are the ceiling's to absorb, not the next frames'.
+        self.tokens = (self.tokens - cost).max(0.0);
         self.stats.irap_exemptions += 1;
         self.stats.admitted += 1;
         self.stats.admitted_bytes += bytes as u64;
@@ -207,7 +219,8 @@ impl SendPacer {
 mod tests {
     use super::*;
 
-    /// 8 Mbps at 60 fps: 16.67 ms of interval, ~16,667 bytes of bucket.
+    /// 8 Mbps at 60 fps: 16.67 ms of interval, ~16,667 bytes per interval and
+    /// a bucket two intervals deep.
     const CEILING: u64 = 8_000_000;
     const FPS: u32 = 60;
     const INTERVAL: Duration = Duration::from_nanos(16_666_667);
@@ -217,30 +230,31 @@ mod tests {
     }
 
     #[test]
-    fn the_bucket_is_one_frame_interval_deep_at_the_ceiling() {
+    fn the_bucket_is_two_frame_intervals_deep_at_the_ceiling() {
         let pacer = pacer(Instant::now());
-        // 8 Mbps / 8 / 60 = 16,666.7 bytes.
+        // 8 Mbps / 8 / 60 = 16,666.7 bytes per interval, twice over.
         assert!(
-            (pacer.capacity() - 16_666.7).abs() < 1.0,
+            (pacer.capacity() - 33_333.3).abs() < 1.0,
             "{}",
             pacer.capacity()
         );
     }
 
     #[test]
-    fn a_frame_at_the_ceiling_goes_and_the_next_one_waits_for_the_interval() {
-        // This is the pacing spread, at the granularity arm B leaves us: a
-        // frame's worth of bytes may burst, a second frame's worth may not
-        // until the interval has earned it back.
+    fn two_frames_at_the_ceiling_go_and_the_third_waits_for_the_interval() {
+        // This is the pacing spread, at the granularity arm B leaves us: two
+        // frames' worth of bytes may burst (an overshoot on a screen change),
+        // a third may not until the interval has earned it back.
         let t0 = Instant::now();
         let mut pacer = pacer(t0);
         let frame = 16_000;
 
         assert_eq!(pacer.admit(t0, frame, false), Admission::Send);
+        assert_eq!(pacer.admit(t0, frame, false), Admission::Send);
         assert_eq!(
             pacer.admit(t0, frame, false),
             Admission::DropOverBudget,
-            "two frames in the same instant is a burst, not pacing"
+            "three frames in the same instant is a burst past the room, not pacing"
         );
         // Half an interval is not enough for a whole frame either.
         assert_eq!(
@@ -255,6 +269,7 @@ mod tests {
         let t0 = Instant::now();
         let mut pacer = pacer(t0);
         assert_eq!(pacer.admit(t0, 16_000, false), Admission::Send);
+        assert_eq!(pacer.admit(t0, 16_000, false), Admission::Send);
         assert_eq!(pacer.admit(t0, 16_000, false), Admission::DropOverBudget);
 
         assert_eq!(
@@ -264,25 +279,26 @@ mod tests {
         );
         let stats = pacer.stats();
         assert_eq!(stats.irap_exemptions, 1);
-        assert_eq!(stats.admitted, 2);
+        assert_eq!(stats.admitted, 3);
         assert_eq!(stats.dropped_over_budget, 1);
         assert_eq!(stats.dropped_bytes, 16_000);
     }
 
     #[test]
-    fn a_keyframe_far_over_the_ceiling_costs_one_interval_not_seconds() {
+    fn a_keyframe_far_over_the_ceiling_leaves_no_debt_for_the_deltas_behind_it() {
         let t0 = Instant::now();
         let mut pacer = pacer(t0);
-        // 2 MB at an 8 Mbps ceiling is two seconds of debt if it is not floored.
+        // 2 MB at an 8 Mbps ceiling would be two seconds of debt; it is none.
         assert_eq!(pacer.admit(t0, 2_000_000, true), Admission::Send);
         assert_eq!(
-            pacer.admit(t0 + INTERVAL, 16_000, false),
+            pacer.admit(t0, 16_000, false),
             Admission::DropOverBudget,
-            "the interval after an oversized irap pays the debt off"
+            "the bucket is empty in the same instant, as after any full frame"
         );
         assert_eq!(
-            pacer.admit(t0 + INTERVAL * 2, 16_000, false),
-            Admission::Send
+            pacer.admit(t0 + INTERVAL, 16_000, false),
+            Admission::Send,
+            "one interval later the recovery point's own deltas go"
         );
     }
 
@@ -290,6 +306,7 @@ mod tests {
     fn raising_the_ceiling_does_not_mint_the_tokens_the_old_rate_never_earned() {
         let t0 = Instant::now();
         let mut pacer = pacer(t0);
+        assert_eq!(pacer.admit(t0, 16_000, false), Admission::Send);
         assert_eq!(pacer.admit(t0, 16_000, false), Admission::Send);
 
         pacer.set_ceiling(t0, CEILING * 4);

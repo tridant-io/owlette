@@ -1964,6 +1964,17 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   the top rung, not the rate in force. Candidate fixes, to be chosen on the counters: a pacer bucket 1.5–2
   frames deep with the encoder's one-frame VBV untouched (absorbs NVENC's overshoot at ≤ 1 frame of queue),
   and a refill to full after an IRAP exemption so the recovery point's own deltas are not the next casualty.
+- 2026-09-23 — **B4A debug log read (two sessions, both connected in < 150 ms):** ~35 `pacer refused frame`
+  lines over ~55 s at 17–39 KB each, in clusters right after keyframes, under a 50 mbps cap — so the rate in
+  force was ~15 mbps: the governor cut on its own refusals (`on_report` treated `dropped_over_budget` as
+  congestion) and again on the viewer's `framesDropped` rise those same refusals caused. Plus, with audio
+  on, every audio frame but the first per tick was refused by str0m ("Consecutive calls to write() without
+  poll_output() in between"). **Fixed on `swoop/pacer-loop`:** the governor counts refusals but never cuts on
+  them and matches viewer gaps against them before calling a gap the path's; the pacer bucket is two frame
+  intervals deep and an IRAP leaves no debt; audio writes one frame per `poll_output` round, interleaved.
+  Crate 352 passed, clippy clean, both feature sets. Ships as 3.3.9 to dev for B4A. The two connect failures
+  after 3.3.8 remain unexplained by the host (its debug log shows instant connects); most likely the browser
+  flag was back at default for those — owner to confirm.
 - 2026-09-23 — **UI finding (owner, 5.2 follow-up):** the ended and failed states are dead ends. Wanted: in
   `ended` / `failed` the toolbar offers **reconnect** (a fresh session, same machine) — no "back to
   dashboard", swoop opens in its own tab (owner); "end session" in the failed state resets the page instead
