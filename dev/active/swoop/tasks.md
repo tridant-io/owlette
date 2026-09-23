@@ -1910,3 +1910,18 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   log): Inno turns `{{` into `{` but a `}` is literal already, so the `}}` I wrote reached PowerShell doubled
   and the whole command failed to parse. Single closing braces now, and the harness waits for the
   uninstaller's temp copy (`_iu*.tmp`) rather than for `unins000.exe`, which exits at once.
+- 2026-09-23 16:43 UTC — **first A4D → B4A session on dev: black picture, "the connection to this machine
+  failed" (= `ice_failed`, `peer.ts:705`).** Evidence: session `f9256ae5…` under TEC-B4A stayed `pending`;
+  dev logs show `turn mint failed; offering stun only` (TURN not configured) and the host's bundle minted one
+  second later, so the streamer ran and answered — the header's "connected" is `onTrack`, i.e. the answer was
+  applied, not media flowing. ICE then found no pair: STUN-only on one LAN. Both machines run the catalog 3.3.7
+  (no Wave A wiring, so no `Owlette swoop` firewall rules on B4A). Two candidates, in order: (1) B4A cannot
+  resolve A4D's `.local` mDNS candidates (the host resolves through the Windows DNS client; a Public network
+  profile blocks inbound 5353) so the only pairs were srflx↔srflx behind one NAT; (2) inbound UDP to
+  `owlette-swoop.exe` blocked on B4A. Discriminator requested from the owner: retry with the browser's
+  mDNS obfuscation off (`#enable-webrtc-hide-local-ips-with-mdns` = Disabled). G2 memo not yet writable.
+- 2026-09-23 17:1x UTC — **G2 met: first picture over a real network** (A4D → B4A on dev, keyboard and mouse
+  worked) once the viewer's browser stopped hiding its LAN address behind mDNS — which confirms the 16:43
+  failure was the host failing to resolve `.local` candidates. Connect took 10–15 s by hand. Memo:
+  `spikes/g2-first-picture.md`. **Wave B opens with two findings:** host-side mDNS resolution (un-defer the
+  UDP 5353 rule and/or query mDNS from the streamer instead of the OS resolver) and the connect budget.
