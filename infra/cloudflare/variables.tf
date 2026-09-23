@@ -14,6 +14,12 @@ variable "app_host" {
   default     = "owlette.app"
 }
 
+variable "lb_host" {
+  type        = string
+  description = "Hostname the load balancer is created on. Empty (the default) means app_host. Set it to a throwaway name such as lbtest.owlette.app to rehearse failover against the real origins and Host headers without touching app_host."
+  default     = ""
+}
+
 variable "railway_origin" {
   type        = string
   description = "Railway origin hostname (PRIMARY pool), e.g. owlette-prod-xxxx.up.railway.app — hostname only, no scheme."

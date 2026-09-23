@@ -80,7 +80,7 @@ resource "cloudflare_load_balancer_pool" "vercel" {
 
 resource "cloudflare_load_balancer" "owlette" {
   zone_id         = var.zone_id
-  name            = var.app_host
+  name            = coalesce(var.lb_host, var.app_host)
   proxied         = true
   steering_policy = "off"
   description     = "owlette.app failover: railway primary, vercel standby"

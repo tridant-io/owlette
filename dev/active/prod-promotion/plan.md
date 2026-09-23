@@ -1,3 +1,5 @@
+**Promotion base: `fdcf86d1` (`dev`, frozen 2026-09-22 after #175).**
+
 # prod promotion — Plan
 **Created**: 2026-09-22 | **Status**: Awaiting owner sign-off on [Owner decisions](#owner-decisions)
 
