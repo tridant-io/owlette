@@ -502,7 +502,9 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cd web && npx jest __tests__/api/swoop/agent-routes.test.ts` is green with named cases: machine A's token requesting machine B's bundle → 404; a `sid` minted for another machine → 404; a session-cookie (non-agent) caller → 404/403; a doorbell-token request for a site with swoop disabled → 403 `swoop_disabled`; a host denial event writes an `audit_log` row with `outcome: 'deny'`. A test greps the three route sources and asserts neither `requireAgentOrSiteScope` nor `requireAgentOrSiteAuthAndScope` appears. `npx eslint` clean on all three routes.
   - Depends on: 1.3, 2.4
 
-- [ ] **Task 3.4: Worker deploy pipeline** `[agent+human]`
+- [x] **Task 3.4: Worker deploy pipeline** `[agent+human]` — closed 2026-09-23: zizmor green on every PR (the
+  CI job scans all workflows; #187), the dev push deploy on `1ebf3585` green with `/health` 200, prod deploys only
+  by dispatch (`3deb0bb6`), and the rollback rehearsed both ways on dev (README "rollback").
   - Files: `.github/workflows/swoop-signal-deploy.yml`, `infra/swoop-signal/README.md`
   - Do: Write the deploy workflow using `.github/workflows/agent-tests.yml` as the template — actions pinned to SHAs with a trailing `# vN` comment, `permissions: contents: read`, a `concurrency` group, `timeout-minutes`, `persist-credentials: false`, and path filters on `infra/swoop-signal/**` plus the workflow itself. Push to `dev` deploys `wrangler deploy --env dev`; push to `main` deploys `--env prod`; both run the Worker's vitest suite first and then smoke-check `GET /health` on the deployed URL, failing the job on a non-200. Repo secrets are `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; Worker secrets (`SWOOP_JWT_PUBLIC_KEY`, `SWOOP_JWT_KID`, `SWOOP_SIGNAL_RING_SECRET`) are set with `wrangler secret put` and never committed. The README documents both environments, every secret and where it comes from, the rollback procedure (`wrangler deployments list` → `wrangler rollback`), and the key-rotation overlap window in which the Worker verifies against two public keys. The `[human]` half: create the scoped Cloudflare API token (Workers Scripts Edit + Durable Objects), add the two repo secrets, and run the first `--env dev` deploy by hand.
   - Done when: `zizmor .github/workflows/swoop-signal-deploy.yml` reports no findings; a push to `dev` touching `infra/swoop-signal/**` runs the workflow green and `curl https://<dev worker>/health` returns 200; the README's rollback steps have been executed once on dev and the result noted in the file.
@@ -1878,3 +1880,33 @@ rules were created by hand (task 7.7's, since `set_enabled()` has no caller), sw
 `default_site` in **dev firestore**, and `shared_utils.py` is patched to point at localhost
 (original at `.predev`). `web/lib/versionUtils.ts` is patched to 3.3.5 and **must be reverted** —
 the real value is 3.4.0 and the pre-commit hook catches it.
+
+### 2026-09-23 — resumed after the 3.3.6/3.3.7 releases and the prod promotion
+
+Gap analysis in `research/resume-2026-09-23.md` (status per wave, all 18 open tasks, every Log follow-up).
+Headline: the bundle route enforces `SWOOP_MIN_AGENT_VERSION` (`bundle/route.ts:128`) and it read 3.4.0, so no
+fielded 3.3.7 agent could be served a session; the 09-19 live session ran on a box-local patch. Owner rulings
+recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A starts: 1.3 follow-up (floor =
+3.3.7, comments corrected, test that 3.3.7 is admitted), 7.7 agent half, 7.5 follow-ups, 3.4 close-out, G2 memo.
+- 2026-09-23 — Wave A progress. **1.3 follow-up done** (floor 3.3.7, `6869ae7d`). **7.7 agent half done**
+  (`f6dbafa6`): the doorbell reports the mint's 200 / 403 as the enable bit, on change only, and the service
+  hands it to `SwoopManager.set_enabled`; the `[UninstallRun]` half is next, with the owner's rulings (uninstall
+  removes all swoop logs; mDNS rule deferred). **7.5 follow-up, half:** a refused `send_to` is now counted
+  (`PeerStats.datagrams_send_failed`) and survived instead of ending the peer. The other half — treating
+  str0m's ICE `Disconnected` as recoverable with a give-up deadline — is deferred to Wave B: the viewer-side
+  policy (`session/mod.rs:2281` RestartIce) and the give-up length need the LAN measurement to size, and
+  loopback cannot exercise a real ICE disconnect. Recorded here so it is not read as done.
+- 2026-09-23 — **7.7 installer half done** (owner acked the `.iss` edit): `[UninstallRun]` gains one PowerShell
+  step after the host uninstall that removes both firewall rules by group and restores `SoftwareSASGeneration`
+  from `tmp\swoop_side_effects.json` (`absent` → value deleted, 0..3 → set, else untouched; always exit 0);
+  `usPostUninstall` removes `{app}\swoop`, `logs\swoop`, `ipc\swoop` and the record regardless of the
+  keep-user-data answer (ruling: remove all swoop logs). The mDNS rule is deferred, so nothing creates it and
+  the group removal still covers it. Quick build compiles; the generated PowerShell parses. VM proof of the
+  uninstall path is next.
+- 2026-09-23 — **7.7 uninstall path proven on the e2e VM** (`scripts/vm/18c-verify-swoop-uninstall.ps1`, 20/20):
+  two rounds, a record saying the SAS policy was absent (value deleted after uninstall) and one saying 1 (value
+  reads 1), both rules gone by group, `{app}\swoop`, `logs\swoop`, `ipc\swoop` and the record gone, the rest
+  of `logs\` kept. The first two runs failed on the uninstaller's PowerShell step (exit code 1 in the uninstall
+  log): Inno turns `{{` into `{` but a `}` is literal already, so the `}}` I wrote reached PowerShell doubled
+  and the whole command failed to parse. Single closing braces now, and the harness waits for the
+  uninstaller's temp copy (`_iu*.tmp`) rather than for `unins000.exe`, which exits at once.

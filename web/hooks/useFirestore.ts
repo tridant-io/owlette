@@ -269,7 +269,8 @@ export interface Machine {
    * Agent capability handshake, written as dotted paths by the heartbeat
    * (`firebase_client.py`). Absent on every agent that predates a key, so each
    * one gates off when missing. `swoop === 1` is the ONLY gate for the swoop
-   * entry — SWOOP_MIN_AGENT_VERSION in lib/versionUtils.ts is advisory copy.
+   * entry here; SWOOP_MIN_AGENT_VERSION in lib/versionUtils.ts is enforced
+   * later, by the session bundle route, not by the dashboard.
    */
   capabilities?: {
     swoop?: number;

@@ -2837,6 +2837,10 @@ class OwletteService:
                 get_agent_token=self.firebase_client.auth_manager.get_valid_token,
                 shutdown_event=self._swoop_shutdown,
                 is_connected=self.firebase_client.is_connected,
+                # the mint's 200 / 403 is the enable bit for the firewall and
+                # SAS side effects; set_enabled hands the work to the manager's
+                # own thread, so the doorbell never waits on it.
+                on_enabled=lambda enabled: self.swoop_manager.set_enabled(enabled),
             )
             self.swoop_manager = SwoopManager(
                 firebase_client=self.firebase_client,
