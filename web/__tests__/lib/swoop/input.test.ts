@@ -262,6 +262,21 @@ describe('cmd mapping', () => {
     expect(h.sent().map((m) => (m.t === 'k' ? m.code : m.t))).toEqual(['MetaLeft', 'MetaRight']);
   });
 
+  it('presses a chord in order and releases it in reverse, inside the one sequence', () => {
+    const h = harness();
+    h.capture.pressChord(['AltLeft', 'Tab']);
+
+    const keys = h.sent().filter((m) => m.t === 'k');
+    expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual([
+      'AltLeft:down',
+      'Tab:down',
+      'Tab:up',
+      'AltLeft:up',
+    ]);
+    const seqs = keys.map((m) => m.seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+  });
+
   it('releases what is held before the mapping changes under it', () => {
     const h = harness({ cmdMapping: 'win' });
     h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
