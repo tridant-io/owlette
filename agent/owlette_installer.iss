@@ -470,6 +470,13 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Com
 ; registration. `uninstall` succeeds on a machine where the service is already
 ; gone, so this is safe to run twice.
 Filename: "{app}\tools\owlette-host.exe"; Parameters: "uninstall"; Flags: runhidden waituntilterminated
+; swoop's machine-wide side effects (swoop_manager.py, task 7.7): the two
+; firewall rules go by group, and the SoftwareSASGeneration policy goes back to
+; what the agent recorded before it set 3 — 'absent' deletes the value, 0..3
+; sets it, anything else is left alone. The service is stopped by now, so the
+; agent cannot undo them itself; the uninstaller is already elevated, so no
+; runas. Always exits 0: a machine that never enabled swoop has nothing to undo.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$r = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'; $f = '{commonappdata}\Owlette\tmp\swoop_side_effects.json'; Remove-NetFirewallRule -Group 'Owlette swoop' -ErrorAction SilentlyContinue; if (Test-Path $f) {{ $p = (Get-Content $f -Raw | ConvertFrom-Json).sasPrior; if ($p -eq 'absent') {{ Remove-ItemProperty -Path $r -Name SoftwareSASGeneration -ErrorAction SilentlyContinue }} elseif (($p -is [int] -or $p -is [long]) -and $p -ge 0 -and $p -le 3) {{ Set-ItemProperty -Path $r -Name SoftwareSASGeneration -Value ([int]$p) -Type DWord }} }}; exit 0"""; Flags: runhidden waituntilterminated
 ; Retire the legacy WinRing0 kernel services on machines that never took a
 ; PawnIO-era upgrade (current versions never register them). The service is
 ; stopped by now, so the driver can unload and CurUninstallStepChanged's
@@ -1202,6 +1209,15 @@ begin
       DelTree(InstallDir + '\app', True, True, True);
       DelTree(InstallDir + '\tools', True, True, True);
       DelTree(InstallDir + '\scripts', True, True, True);
+      DelTree(InstallDir + '\swoop', True, True, True);
+      // swoop's runtime leftovers go with it whatever the user-data answer
+      // below: its logs are session transcripts nobody reads after the
+      // streamer is gone (owner ruling 2026-09-23), ipc\swoop is the
+      // service's own scratch, and the side-effect record was consumed by
+      // the [UninstallRun] step that restored the SAS policy.
+      DelTree(DataDir + '\logs\swoop', True, True, True);
+      DelTree(DataDir + '\ipc\swoop', True, True, True);
+      DeleteFile(DataDir + '\tmp\swoop_side_effects.json');
       // Remove installed doc files (but not user data files)
       DeleteFile(InstallDir + '\README.md');
       DeleteFile(InstallDir + '\LICENSE');

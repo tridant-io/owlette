@@ -1894,3 +1894,10 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   str0m's ICE `Disconnected` as recoverable with a give-up deadline — is deferred to Wave B: the viewer-side
   policy (`session/mod.rs:2281` RestartIce) and the give-up length need the LAN measurement to size, and
   loopback cannot exercise a real ICE disconnect. Recorded here so it is not read as done.
+- 2026-09-23 — **7.7 installer half done** (owner acked the `.iss` edit): `[UninstallRun]` gains one PowerShell
+  step after the host uninstall that removes both firewall rules by group and restores `SoftwareSASGeneration`
+  from `tmp\swoop_side_effects.json` (`absent` → value deleted, 0..3 → set, else untouched; always exit 0);
+  `usPostUninstall` removes `{app}\swoop`, `logs\swoop`, `ipc\swoop` and the record regardless of the
+  keep-user-data answer (ruling: remove all swoop logs). The mDNS rule is deferred, so nothing creates it and
+  the group removal still covers it. Quick build compiles; the generated PowerShell parses. VM proof of the
+  uninstall path is next.
