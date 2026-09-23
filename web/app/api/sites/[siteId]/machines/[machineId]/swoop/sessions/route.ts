@@ -11,8 +11,7 @@
  * neither one failing withholds a session the caller is entitled to.
  */
 
-import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
   problem,
@@ -433,16 +432,33 @@ export async function POST(
   request: NextRequest,
   routeContext: { params: Promise<SwoopRouteParams> },
 ): Promise<NextResponse> {
-  // Peek on a CLONE so the chosen handler still gets an unconsumed body.
-  // Anything that is not an explicit `control: true` takes the watch bar, and
-  // the core handler re-derives the intent from the body it parses itself.
-  let control = false;
+  // One read of the body. Peeking on a clone and letting the handler read the
+  // original again is two reads of one streamed body, which failed now and
+  // then in production ("could not read request body", 2026-09-23). The bytes
+  // are read here once and handed on in a fresh request; anything that is not
+  // an explicit `control: true` takes the watch bar, and the core handler
+  // re-derives the intent from the body it parses itself.
+  let raw: string | null = null;
   try {
-    const peek = (await request.clone().json()) as { control?: unknown };
-    control = peek?.control === true;
+    raw = await request.text();
   } catch {
-    // An unparseable body is a watch request as far as the bar goes; the core
-    // handler emits the validation error.
+    // Unreadable here is unreadable there: let the handler report it.
   }
-  return (control ? controlHandler : viewHandler)(request, routeContext);
+  let control = false;
+  if (raw !== null) {
+    try {
+      control = (JSON.parse(raw) as { control?: unknown })?.control === true;
+    } catch {
+      // An unparseable body is a watch request as far as the bar goes; the
+      // core handler emits the validation error.
+    }
+  }
+  const handler = control ? controlHandler : viewHandler;
+  if (raw === null) return handler(request, routeContext);
+  const replay = new NextRequest(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: raw,
+  });
+  return handler(replay, routeContext);
 }

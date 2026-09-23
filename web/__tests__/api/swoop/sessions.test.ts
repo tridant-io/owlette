@@ -318,6 +318,34 @@ describe('POST swoop/sessions', () => {
     expect(mockRing).not.toHaveBeenCalled();
   });
 
+  it('reads the request body exactly once and never through a clone', async () => {
+    // production saw "could not read request body" now and then: the route
+    // peeked at `control` on a clone and the handler read the original again,
+    // two reads of one streamed body. a request that refuses to be cloned and
+    // counts its reads is the contract.
+    openWindow(ADMIN);
+    const request = createMockRequest(url(), {
+      method: 'POST',
+      body: { control: true, fp: FP, clientCaps: { codecs: ['h264'] } },
+    });
+    let reads = 0;
+    const text = request.text.bind(request);
+    request.text = async () => {
+      reads += 1;
+      return text();
+    };
+    request.clone = () => {
+      throw new Error('cloned');
+    };
+
+    const res = await POST(request, routeContext());
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(201);
+    expect(reads).toBe(1);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+  });
+
   it('creates a control session, rings the sid alone and returns k but never K_session', async () => {
     openWindow(ADMIN);
 
