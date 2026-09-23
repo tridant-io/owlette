@@ -207,11 +207,16 @@ describe('the list row hostname cell', () => {
     renderRow(machine({ osVersion: 'Ubuntu 24.04.5 LTS' }));
 
     const osLine = screen.getByTestId('machine-os-version');
+    // jsdom lays nothing out (scrollWidth and clientWidth are both 0), so the
+    // full form fits and is what renders; the abbreviation ladder is covered
+    // by lib/osLabel's own test and the list-os-label e2e.
     expect(osLine).toHaveTextContent('Ubuntu 24.04.5 LTS');
-    // The muted figure style the ram/disk columns use and nothing else: an
-    // indent here costs 20px of a 130px column, which truncates both of the
-    // strings the fleet actually reports.
-    expect(osLine.className).toBe('text-muted-foreground text-xs truncate');
+    expect(osLine).toHaveAttribute('title', 'Ubuntu 24.04.5 LTS');
+    // The muted figure style the ram/disk columns use, indented past the icon
+    // button (pl-10) so it starts under the hostname's first letter.
+    for (const cls of ['pl-10', 'text-muted-foreground', 'text-xs', 'truncate']) {
+      expect(osLine.classList.contains(cls)).toBe(true);
+    }
   });
 
   it('renders nothing when the agent reports no OS, keeping the row height', () => {
