@@ -11,6 +11,39 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [3.3.8] - 2026-09-23
+
+### fixed — a swoop session no longer ends at the five-minute mark
+
+The host's signaling credential lives five minutes, and the streamer had no
+way to renew it, so every session froze at that point with no message. The
+agent now renews it ahead of time and the session carries on for as long
+as its cap allows.
+
+### fixed — a swoop session survives a network path it cannot use
+
+A viewer's browser offers every address its machine has, VPN and virtual
+adapters included. One the host could not reach used to end the whole
+session; it is now skipped, and connecting is faster for it.
+
+### changed — swoop's firewall rule and policy follow the site switch
+
+Turning swoop on for a site now creates the host's inbound firewall rule
+and the secure-attention policy on each machine; turning it off removes
+them, and uninstalling the agent removes them along with swoop's logs.
+
+### changed — the machine list's OS line sits under the hostname
+
+In list view the operating system now starts under the hostname's first
+letter, and when the column is narrow it abbreviates rather than hiding
+behind a hover: "Win 11 Pro 23H2" then "Win 11 Pro", "Ubuntu 24.04.5" then
+"Ubuntu 24.04" then "Ubuntu 24". The full name stays in the tooltip.
+
+### added — a diagnostic log level for the swoop streamer
+
+Setting `swoop.logLevel` to `debug` in the agent's config turns on the
+streamer's per-frame counters for a support investigation.
+
 ## [3.3.7] - 2026-09-23
 
 ### security — a hardening fix for the install folder's permission repair
