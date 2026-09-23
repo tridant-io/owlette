@@ -125,7 +125,9 @@ that metric while you scrub along the line. Click the card again to unpin.
 The metrics row lines up the same metric at the same place on every card,
 healthy temperatures are no longer coloured so colour only marks a crossed
 threshold, the online pill is a dot that shares the "last seen" tooltip, and
-the ping cell now shows whether the network interface is up.
+the ping cell now shows whether the network interface is up. The labels in
+that row start at the same left edge as the display and process rows below
+it, instead of floating towards the middle of their cells on a wide card.
 
 ### changed — docs search returns a usable number of results
 
