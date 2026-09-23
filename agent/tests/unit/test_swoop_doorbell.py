@@ -213,7 +213,8 @@ class Harness:
 
 
 def build(behaviour='open', mint_behaviour=None, online=True, seed=20260917,
-          on_ring=None, get_agent_token=None, rng=None, wait=True):
+          on_ring=None, get_agent_token=None, rng=None, wait=True,
+          on_enabled=None):
     clock = Clock()
     waiter = Waiter(clock)
     factory = FakeFactory(behaviour)
@@ -233,6 +234,7 @@ def build(behaviour='open', mint_behaviour=None, online=True, seed=20260917,
         monotonic=clock.monotonic,
         wait=waiter if wait else None,
         rng=rng or random.Random(seed),
+        on_enabled=on_enabled,
     )
     return Harness(doorbell, clock, waiter, factory, mint, rings, gate)
 
@@ -921,3 +923,50 @@ def test_the_rooms_refusal_of_our_own_bye_is_not_a_rejection():
 
     assert harness.doorbell._rejects == 0
     assert harness.doorbell._close_reason == sd.VERSION_MISMATCH_REASON
+
+
+# -- the enable bit ---------------------------------------------------------
+# The mint is where the agent learns whether swoop is on for this machine, so
+# its outcome drives the machine-wide side effects (task 7.7's firewall and
+# SAS work), once per change.
+
+def test_a_200_mint_reports_enabled_once_until_it_changes():
+    reports = []
+    harness = build(on_enabled=reports.append)
+    assert harness.doorbell._mint() == sd._OK
+    assert harness.doorbell._mint() == sd._OK
+    assert reports == [True]
+
+
+def test_a_403_mint_reports_disabled_and_a_later_200_re_enables():
+    reports = []
+    responses = [
+        FakeResponse(403, {'error': 'swoop_disabled'}),
+        FakeResponse(403, {'error': 'swoop_disabled'}),
+        FakeResponse(200, {'token': TOKEN, 'kid': 'k1', 'expiresIn': EXPIRES_IN,
+                           'signalUrl': SIGNAL_URL}),
+    ]
+    harness = build(mint_behaviour=lambda n: responses[min(n, len(responses)) - 1],
+                    on_enabled=reports.append)
+    assert harness.doorbell._mint() == sd._DISABLED
+    assert harness.doorbell._mint() == sd._DISABLED
+    assert harness.doorbell._mint() == sd._OK
+    assert reports == [False, True]
+
+
+def test_a_failed_or_refused_mint_says_nothing_about_the_enable_bit():
+    reports = []
+    harness = build(mint_behaviour=lambda n: FakeResponse(500, {}), on_enabled=reports.append)
+    assert harness.doorbell._mint() == sd._FAILED
+    # a 401 is the agent's own token going bad, not swoop being switched off
+    harness = build(mint_behaviour=lambda n: FakeResponse(401, {}), on_enabled=reports.append)
+    assert harness.doorbell._mint() == sd._DISABLED
+    assert reports == []
+
+
+def test_a_raising_enable_callback_costs_the_mint_nothing():
+    def explode(_enabled):
+        raise RuntimeError('netsh is on fire')
+    harness = build(on_enabled=explode)
+    assert harness.doorbell._mint() == sd._OK
+    assert harness.doorbell._token == TOKEN

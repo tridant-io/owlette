@@ -189,10 +189,17 @@ class SwoopDoorbell:
 
     def __init__(self, on_ring, get_agent_token, shutdown_event,
                  is_connected=None, logger=None, socket_factory=None,
-                 http_post=None, monotonic=None, wait=None, rng=None):
+                 http_post=None, monotonic=None, wait=None, rng=None,
+                 on_enabled=None):
         self._on_ring = on_ring
         self._get_agent_token = get_agent_token
         self._shutdown = shutdown_event
+        # The mint is the one place the agent learns whether swoop is on for
+        # this machine (200) or off (403), so it is where the machine-wide side
+        # effects get their switch. Reported on change only: a routine re-mint
+        # must not re-run them.
+        self._on_enabled = on_enabled
+        self._reported_enabled = None
         # Two different questions share a name: the INJECTED is_connected is the
         # machine's Firestore link (the gate on dialling), the METHOD below is
         # this socket. The gate never tears a warm socket down.
@@ -462,6 +469,7 @@ class SwoopDoorbell:
         if status == 403:
             self._forget_token()
             self._log_once('mint-403', "[SWOOP-DOORBELL] swoop disabled here; slow retry")
+            self._report_enabled(False)
             return _DISABLED
         if 400 <= status < 500:
             # A 401 here means the AGENT's own Firebase token is bad, and
@@ -482,7 +490,26 @@ class SwoopDoorbell:
             self.logger.warning(
                 f"[SWOOP-DOORBELL] mint response unreadable ({type(error).__name__})")
             return _FAILED
-        return self._store_token(payload)
+        outcome = self._store_token(payload)
+        if outcome == _OK:
+            self._report_enabled(True)
+        return outcome
+
+    def _report_enabled(self, enabled):
+        """Tell the owner of the side effects that swoop is on or off here.
+
+        Only a change is reported, and a callback that raises costs the mint
+        nothing: the token is already stored (or forgotten) by the time this
+        runs, and the side effects are the manager's problem, not the socket's.
+        """
+        if self._on_enabled is None or enabled == self._reported_enabled:
+            return
+        self._reported_enabled = enabled
+        try:
+            self._on_enabled(enabled)
+        except Exception as error:
+            self.logger.warning(
+                f"[SWOOP-DOORBELL] enabled callback failed ({type(error).__name__})")
 
     def _store_token(self, payload):
         if not isinstance(payload, dict):
