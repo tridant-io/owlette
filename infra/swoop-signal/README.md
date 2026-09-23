@@ -136,7 +136,7 @@ whichever version cloudflare last accepted.
 
 | kind | name | |
 |---|---|---|
-| repo secret | `CLOUDFLARE_API_TOKEN` | scoped: **workers scripts: edit** + **workers durable objects: edit** (account-level), nothing else. not a global api key |
+| repo secret | `CLOUDFLARE_API_TOKEN` | scoped: **workers scripts: edit** (account-level, which also covers the durable objects the script binds — there is no separate durable-objects permission in the token editor) + **workers routes: edit** on the zone, nothing else. not a global api key |
 | repo secret | `CLOUDFLARE_ACCOUNT_ID` | a secret here purely so it stays out of a public repo's logs; it is an account identifier, not a credential |
 | repo variable | `SWOOP_SIGNAL_DEV_URL` / `SWOOP_SIGNAL_PROD_URL` | the origin `/health` is fetched from: `https://signal-dev.owlette.app` and `https://signal.owlette.app`. a **variable** rather than a literal in the workflow so the hostname is settable without a code change, and so a rename is one dashboard edit rather than a pull request |
 
@@ -154,8 +154,8 @@ settings. the workflow itself has run (on `dev`, most recently 2026-09-19, which
 deliberate dispatch (see [deploy](#deploy)) that must wait for them.
 
 1. **the api token.** cloudflare dashboard → my profile → api tokens → create token → custom token.
-   permissions: `account` → `workers scripts` → `edit`, `account` → `workers durable objects` → `edit`,
-   **and `zone` → `workers routes` → `edit` on the `owlette.app` zone** — `wrangler.toml` declares a custom
+   permissions: `account` → `workers scripts` → `edit` (durable objects ride on it; the token editor
+   has no durable-objects permission to add), **and `zone` → `workers routes` → `edit` on the `owlette.app` zone** — `wrangler.toml` declares a custom
    domain per environment, and without the zone permission the deploy fails at the route, after the script
    has already uploaded. account resources: this account only; zone resources: `owlette.app` only.
 2. **the repository secrets.** github → settings → secrets and variables → actions → new repository secret,

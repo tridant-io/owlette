@@ -7,6 +7,12 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### fixed — docs search puts the page named for your query first
+
+Searching the docs for a word that is a page's title, such as "roost", now lists
+that page first. It used to lose to pages that repeat the word in short code
+samples, and could fall off the end of the list altogether.
+
 ## [3.3.6] - 2026-09-21
 
 ### security — the install folder is no longer writable by every local account
