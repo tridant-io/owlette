@@ -18,16 +18,15 @@ from typing import Dict, Any, Callable, Optional
 from datetime import datetime
 
 import shared_utils
-import registry_utils
 import hardware_profile
-import display_manager
-import nvapi_display
 import config_sync
+import swoop_capability
 
 # OAuth REST modules — deliberately not firebase_admin
 from auth_manager import AuthManager, AuthenticationError, TokenRefreshError
 from firestore_rest_client import FirestoreRestClient, SERVER_TIMESTAMP, DELETE_FIELD, timestamp_to_ms
 
+from command_router import COMMAND_DEFERRED
 from connection_manager import ConnectionManager, ConnectionState, ConnectionEvent
 
 # Per-request cap once shutdown starts. Windows gives roughly 5s at OS shutdown,
@@ -127,6 +126,21 @@ def _discard_pending_sync_cancel(registration) -> None:
     discard_pending_sync(site_id, roost_id, version_id, cancel_event)
 
 
+def _os_identity() -> Dict[str, str]:
+    """The machine document's OS fields: osFamily, arch, osVersion.
+
+    `get_os_version_string()` caches the probe behind it — the Windows arm
+    reads the registry — so this builds a dict per heartbeat, never a platform
+    probe. The dashboard reads an absent osFamily as windows.
+    """
+    family, arch = shared_utils.get_os_family_arch()
+    return {
+        'osFamily': family,
+        'arch': arch,
+        'osVersion': shared_utils.get_os_version_string(),
+    }
+
+
 class FirebaseClient:
     """
     Main Firebase client for Owlette agent.
@@ -149,7 +163,7 @@ class FirebaseClient:
         self.auth_manager = auth_manager
         self.project_id = project_id
         self.site_id = site_id
-        self.machine_id = shared_utils.get_hostname()
+        self.machine_id = shared_utils.get_machine_id()
         self.config_cache_path = config_cache_path
 
         self.db: Optional[FirestoreRestClient] = None
@@ -336,8 +350,8 @@ class FirebaseClient:
 
         try:
             # PRESENCE FIRST — it needs no hardware data. Everything below is a
-            # round trip or (in _ensure_profile) tens of seconds of WMI +
-            # nvidia-smi, so this keeps time-to-online = connect time. Mirrored
+            # round trip or (in _ensure_profile) tens of seconds of WMI and
+            # sensor work, so this keeps time-to-online = connect time. Mirrored
             # in start(); do not reorder.
             self._update_presence(True)
             self.logger.debug("Heartbeat sent after connection")
@@ -577,7 +591,7 @@ class FirebaseClient:
         return self.connection_manager.is_connected
 
     def get_machine_id(self) -> str:
-        """Get the machine ID (hostname)."""
+        """Get the persisted machine identity — this machine's document id."""
         return self.machine_id
 
     def get_site_id(self) -> str:
@@ -606,7 +620,7 @@ class FirebaseClient:
 
         # ORDER IS LOAD-BEARING: _update_presence needs no hardware data, so it
         # must precede the first _upload_metrics (whose _ensure_profile() does slow
-        # WMI + nvidia-smi work). Mirrored in _on_connected().
+        # WMI and sensor work). Mirrored in _on_connected().
         if self.connected:
             try:
                 self._update_presence(True)
@@ -1053,7 +1067,11 @@ class FirebaseClient:
                 'online': online,
                 'lastHeartbeat': SERVER_TIMESTAMP,
                 'machineId': self.machine_id,
-                'siteId': self.site_id
+                'siteId': self.site_id,
+                # Registration: the first write of this machine's document on a
+                # fresh install carries its OS, so the dashboard can label it
+                # before the first metrics upload lands.
+                **_os_identity(),
             }, merge=True)
 
             if online:
@@ -1217,6 +1235,8 @@ class FirebaseClient:
 
             {'ok': False, 'error': str, 'code': DisplayErrorCode}
         """
+        import display_manager
+
         # Kill switch, same check as `_ensure_display_profile`.
         try:
             if shared_utils.read_config(['displays', 'enabled']) is False:
@@ -1381,6 +1401,18 @@ class FirebaseClient:
         except Exception:
             pass
 
+        # Behind the kill switch and inside a try, like every other lazy
+        # display import: the module is Windows-only and never ported, so
+        # importing it above the switch takes the heartbeat down elsewhere.
+        # Not ImportError - display_manager asserts the Windows x64 ABI while
+        # it builds its structures, so off Windows it is an AssertionError.
+        try:
+            import display_manager
+            import nvapi_display
+        except Exception as e:
+            self.logger.debug(f"Display enumeration is not available here: {e}")
+            return self._cached_display_profile
+
         now = time.monotonic()
         if not force and self._cached_display_profile is not None and (now - self._last_display_check) < self._DISPLAY_CHECK_INTERVAL:
             return self._cached_display_profile
@@ -1508,6 +1540,8 @@ class FirebaseClient:
             # On every heartbeat so list/card views can draw the drift dot without
             # each opening its own assigned-layout subscription.
             try:
+                import display_manager
+
                 live_monitors = (
                     self._cached_display_profile.get('monitors')
                     if isinstance(self._cached_display_profile, dict) else None
@@ -1532,10 +1566,14 @@ class FirebaseClient:
                 'machine_timezone_iana': shared_utils.get_machine_timezone_iana(),
                 'machineId': self.machine_id,
                 'siteId': self.site_id,
+                **_os_identity(),
                 # Capability handshake: the dashboard disables remote apply when
                 # this is missing or < 1. Bump on helper IPC contract changes only
                 # — unrelated to agent_version.
                 'capabilities.displayRemoteApply': 1,
+                # Swoop: binary presence only, so it costs one stat per beat.
+                # capabilities.swoop == 1 is the gate the dashboard reads.
+                'capabilities.swoop': swoop_capability.swoop_capability_value(),
                 'metrics.schemaVersion': 2,
                 'metrics.profileHash': profile_hash,
                 'metrics.timestamp': SERVER_TIMESTAMP,
@@ -1567,7 +1605,12 @@ class FirebaseClient:
     # Fast (<30s) and concurrency-safe. The two cancel_* interrupts MUST stay on
     # this lane or they serialise behind the work they are meant to stop (OWL-06).
     # Heavy roost work (sync_pull, rollback) stays on the slow lane.
-    _FAST_COMMAND_TYPES = frozenset({'mcp_tool_call', 'capture_screenshot', 'cancel_sync', 'cancel_mcp_tool'})
+    # The three swoop types belong here too: on the slow lane they would queue
+    # behind an in-flight install, which would make the kill switch minutes late.
+    _FAST_COMMAND_TYPES = frozenset({
+        'mcp_tool_call', 'capture_screenshot', 'cancel_sync', 'cancel_mcp_tool',
+        'swoop_session_requested', 'swoop_kill', 'swoop_refresh',
+    })
 
     def _process_command(self, cmd_id: str, cmd_data: Dict[str, Any]):
         """Dispatch a command to its execution lane.
@@ -1622,42 +1665,13 @@ class FirebaseClient:
             if self.command_callback:
                 result = self.command_callback(cmd_id, cmd_data)
 
-                is_error = isinstance(result, str) and result.startswith("Error:")
+                if result is COMMAND_DEFERRED:
+                    # The handler's own thread is still working and owns the
+                    # terminal write; marking the command here would put a
+                    # completed status in front of the progress that follows.
+                    return
 
-                if cmd_id in self._cancelled_commands:
-                    # cancel_mcp_tool already wrote the terminal 'cancelled' entry
-                    # — re-assert it, don't clobber it with the dead subprocess's
-                    # completed/failed result.
-                    self._cancelled_commands.discard(cmd_id)
-                    self._mark_command_cancelled(cmd_id, 'cancelled by user', deployment_id, cmd_type)
-                elif cmd_type == 'cancel_installation':
-                    self._mark_command_cancelled(cmd_id, result, deployment_id, cmd_type)
-                elif is_error:
-                    self._mark_command_failed(cmd_id, result, deployment_id, cmd_type)
-                else:
-                    self._mark_command_completed(cmd_id, result, deployment_id, cmd_type)
-
-                # Deployment lifecycle → site logs (audit trail)
-                deployment_cmd_types = ('install_software', 'uninstall_software', 'update_owlette')
-                if cmd_type in deployment_cmd_types and deployment_id:
-                    software_name = cmd_data.get('installer_name') or cmd_data.get('software_name') or cmd_type
-                    if cmd_type == 'cancel_installation':
-                        self.log_event('deployment_cancelled', 'warning', software_name,
-                                       f"Deployment {deployment_id} cancelled: {result}")
-                    elif is_error:
-                        self.log_event('deployment_failed', 'error', software_name,
-                                       f"Deployment {deployment_id} failed: {result}")
-                    else:
-                        self.log_event('deployment_completed', 'info', software_name,
-                                       f"Deployment {deployment_id}: {result}")
-
-                # Push metrics now so the dashboard reflects the state change
-                try:
-                    metrics = shared_utils.get_system_metrics()
-                    self._upload_metrics(metrics)
-                    self.logger.debug(f"Immediate metrics push after command {cmd_id}")
-                except Exception as me:
-                    self.logger.warning(f"Post-command metrics push failed: {me}")
+                self.finish_command(cmd_id, cmd_data, result)
             else:
                 self.logger.warning(f"No command callback registered, ignoring command {cmd_id}")
 
@@ -1676,6 +1690,53 @@ class FirebaseClient:
                 software_name = cmd_data.get('installer_name') or cmd_data.get('software_name') or cmd_type
                 self.log_event('deployment_failed', 'error', software_name,
                                f"Deployment {dep_id} failed: {e}")
+
+    def finish_command(self, cmd_id: str, cmd_data: Dict[str, Any], result: Any):
+        """Write a command's terminal status, its audit row and a fresh metric.
+
+        The end of _execute_command, reachable on its own so a handler that
+        returned COMMAND_DEFERRED can call it from the thread that finishes the
+        work - the self-update off Windows, which hands the install to the init
+        system minutes after the lane was released.
+        """
+        cmd_type = cmd_data.get('type')
+        deployment_id = cmd_data.get('deployment_id')
+        is_error = isinstance(result, str) and result.startswith("Error:")
+
+        if cmd_id in self._cancelled_commands:
+            # cancel_mcp_tool already wrote the terminal 'cancelled' entry
+            # — re-assert it, don't clobber it with the dead subprocess's
+            # completed/failed result.
+            self._cancelled_commands.discard(cmd_id)
+            self._mark_command_cancelled(cmd_id, 'cancelled by user', deployment_id, cmd_type)
+        elif cmd_type == 'cancel_installation':
+            self._mark_command_cancelled(cmd_id, result, deployment_id, cmd_type)
+        elif is_error:
+            self._mark_command_failed(cmd_id, result, deployment_id, cmd_type)
+        else:
+            self._mark_command_completed(cmd_id, result, deployment_id, cmd_type)
+
+        # Deployment lifecycle → site logs (audit trail)
+        deployment_cmd_types = ('install_software', 'uninstall_software', 'update_owlette')
+        if cmd_type in deployment_cmd_types and deployment_id:
+            software_name = cmd_data.get('installer_name') or cmd_data.get('software_name') or cmd_type
+            if cmd_type == 'cancel_installation':
+                self.log_event('deployment_cancelled', 'warning', software_name,
+                               f"Deployment {deployment_id} cancelled: {result}")
+            elif is_error:
+                self.log_event('deployment_failed', 'error', software_name,
+                               f"Deployment {deployment_id} failed: {result}")
+            else:
+                self.log_event('deployment_completed', 'info', software_name,
+                               f"Deployment {deployment_id}: {result}")
+
+        # Push metrics now so the dashboard reflects the state change
+        try:
+            metrics = shared_utils.get_system_metrics()
+            self._upload_metrics(metrics)
+            self.logger.debug(f"Immediate metrics push after command {cmd_id}")
+        except Exception as me:
+            self.logger.warning(f"Post-command metrics push failed: {me}")
 
     def _handle_cancel_mcp_tool(self, cmd_data: Dict[str, Any]) -> str:
         """Cancel an in-flight mcp_tool_call subprocess (Cortex cancel button).
@@ -2342,9 +2403,15 @@ class FirebaseClient:
         )
 
     def set_reboot_pending(self, process_name, reason, timestamp):
-        """Write a reboot_pending object to the machine document when relaunch limit is exceeded."""
+        """Write a reboot_pending object to the machine document when relaunch limit is exceeded.
+
+        True when the row reached Firestore. Off Windows the relaunch gate
+        the escalation arms is cleared by a dashboard dismiss and nothing
+        else, so a caller that armed it on an unwritten row froze every
+        relaunch on the machine with nothing on screen to clear it.
+        """
         if not self.connected or not self.db:
-            return
+            return False
 
         try:
             machine_ref = self.db.collection('sites').document(self.site_id)\
@@ -2359,8 +2426,10 @@ class FirebaseClient:
                 }
             }, merge=True)
             self.logger.info(f"[FLAG] Reboot pending set for process: {process_name}")
+            return True
         except Exception as e:
             self.logger.error(f"Failed to set reboot pending: {e}")
+            return False
 
     def clear_reboot_pending(self):
         """Clear the reboot_pending flag on the machine document."""
@@ -2451,7 +2520,7 @@ class FirebaseClient:
                 'action': action,
                 'level': level,
                 'machineId': self.machine_id,
-                'machineName': self.machine_id,
+                'machineName': shared_utils.get_hostname(),
             }
 
             if process_name:
@@ -2719,16 +2788,18 @@ class FirebaseClient:
 
     def _sync_software_inventory(self, force=False):
         """
-        Upload registry-detected software to
+        Upload the platform's installed-software inventory to
         sites/{site_id}/machines/{machine_id}/installed_software.
 
         force=True syncs even when the hash is unchanged (on-demand refresh).
         """
+        import osadapter
+
         if not self.connected or not self.db:
             return
 
         try:
-            installed_software = registry_utils.get_installed_software()
+            installed_software = osadapter.installed_software()
 
             if not installed_software:
                 self.logger.debug("No installed software detected")
@@ -2821,57 +2892,3 @@ class FirebaseClient:
             self.logger.error(f"Failed to sync software inventory: {e}")
             self.logger.exception("Software inventory sync error details:")
             self.connection_manager.report_error(e, "Software inventory sync")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    from auth_manager import AuthManager
-    auth_manager = AuthManager(api_base="https://owlette.app/api")
-
-    client = FirebaseClient(
-        auth_manager=auth_manager,
-        project_id="owlette-dev-3838a",
-        site_id="test_site_001"
-    )
-
-    def handle_command(cmd_id, cmd_data):
-        cmd_type = cmd_data.get('type')
-        print(f"Received command: {cmd_type}")
-
-        if cmd_type == 'restart_process':
-            process_name = cmd_data.get('process_name')
-            print(f"Restarting process: {process_name}")
-            return f"Process {process_name} restarted"
-
-        elif cmd_type == 'kill_process':
-            process_name = cmd_data.get('process_name')
-            print(f"Killing process: {process_name}")
-            return f"Process {process_name} killed"
-
-        return "Command executed"
-
-    client.register_command_callback(handle_command)
-    client.start()
-
-    test_config = {
-        "version": "2.0.3",
-        "processes": [
-            {
-                "name": "TouchDesigner",
-                "exe_path": "C:\\TouchDesigner\\bin\\TouchDesigner.exe"
-            }
-        ]
-    }
-    client.upload_config(test_config)
-
-    try:
-        print("Firebase client running... Press Ctrl+C to stop")
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nStopping...")
-        client.stop()

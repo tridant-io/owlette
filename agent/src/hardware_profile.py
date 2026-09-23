@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import socket
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Optional
@@ -16,8 +17,10 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
+_IS_WINDOWS = sys.platform == 'win32'
+
 # GPU temperature cache (used only when multiple GPUs are present to avoid
-# repeated nvidia-smi / sensor reads inside a single metrics tick).
+# repeated sensor reads inside a single metrics tick).
 _gpu_temp_cache: dict = {}
 _gpu_temp_cache_time: float = 0.0
 _GPU_TEMP_TTL = 5.0
@@ -32,37 +35,40 @@ def _agent_version() -> str:
 
 def _collect_cpus() -> list:
     cpus = []
-    try:
-        # WMI uses COM; background threads must register with the COM runtime
-        # before making calls. Idempotent on threads that already initialized.
+    # Socket topology is WMI's; off Windows the query can only fail, and its
+    # fallback log is a warning on every profile rebuild.
+    if _IS_WINDOWS:
         try:
-            import pythoncom
-            pythoncom.CoInitialize()
-        except Exception:
-            pass
-        import wmi
-        c = wmi.WMI()
-        for idx, proc in enumerate(c.Win32_Processor()):
+            # WMI uses COM; background threads must register with the COM runtime
+            # before making calls. Idempotent on threads that already initialized.
             try:
-                physical = int(getattr(proc, 'NumberOfCores', 0) or 0)
-            except (TypeError, ValueError):
-                physical = 0
-            try:
-                logical = int(getattr(proc, 'NumberOfLogicalProcessors', 0) or 0)
-            except (TypeError, ValueError):
-                logical = 0
-            name = (getattr(proc, 'Name', '') or '').strip() or 'Unknown CPU'
-            cpus.append({
-                'id': 'CPU{0}'.format(idx),
-                'model': name,
-                'physicalCores': physical,
-                'logicalCores': logical,
-                'socketIndex': idx,
-            })
-        if cpus:
-            return cpus
-    except Exception as e:
-        logger.warning('WMI Win32_Processor query failed, falling back: %s', e)
+                import pythoncom
+                pythoncom.CoInitialize()
+            except Exception:
+                pass
+            import wmi
+            c = wmi.WMI()
+            for idx, proc in enumerate(c.Win32_Processor()):
+                try:
+                    physical = int(getattr(proc, 'NumberOfCores', 0) or 0)
+                except (TypeError, ValueError):
+                    physical = 0
+                try:
+                    logical = int(getattr(proc, 'NumberOfLogicalProcessors', 0) or 0)
+                except (TypeError, ValueError):
+                    logical = 0
+                name = (getattr(proc, 'Name', '') or '').strip() or 'Unknown CPU'
+                cpus.append({
+                    'id': 'CPU{0}'.format(idx),
+                    'model': name,
+                    'physicalCores': physical,
+                    'logicalCores': logical,
+                    'socketIndex': idx,
+                })
+            if cpus:
+                return cpus
+        except Exception as e:
+            logger.warning('WMI Win32_Processor query failed, falling back: %s', e)
 
     # Fallback: single-socket inference from psutil + registry.
     try:
@@ -132,16 +138,7 @@ def _collect_disks() -> list:
 
 def _collect_gpus() -> list:
     gpus = []
-    gputil = shared_utils._get_gputil()
-    if gputil is None:
-        return gpus
-    try:
-        handles = gputil.getGPUs()
-    except Exception as e:
-        logger.warning('GPUtil.getGPUs() failed: %s', e)
-        return gpus
-
-    for idx, gpu in enumerate(handles):
+    for idx, gpu in enumerate(shared_utils.get_gpus()):
         name = getattr(gpu, 'name', '') or 'Unknown GPU'
         uuid = getattr(gpu, 'uuid', None)
         if uuid:
@@ -284,7 +281,14 @@ def collect_dynamic_metrics(profile: dict) -> dict:
         disk_id = entry.get('id')
         if not disk_id:
             continue
-        mount = disk_id if disk_id.endswith('\\') or disk_id.endswith('/') else disk_id + '\\'
+        # A POSIX id is the mount point itself ('/', '/home'); a drive letter
+        # is stored without its separator and psutil needs it back. Appending
+        # one to a POSIX path drops that volume out of the payload, which is
+        # every volume on the machine but the root filesystem.
+        mount = (
+            disk_id if disk_id.startswith('/') or disk_id.endswith(('\\', '/'))
+            else disk_id + '\\'
+        )
         usage = _disk_usage_with_timeout(mount)
         if usage is None:
             continue
@@ -297,14 +301,10 @@ def collect_dynamic_metrics(profile: dict) -> dict:
     gpus_out = {}
     profile_gpus = profile.get('gpus', []) or []
     multi_gpu = len(profile_gpus) > 1
-    gputil = shared_utils._get_gputil()
-    live_gpus = []
-    if gputil is not None:
-        try:
-            live_gpus = gputil.getGPUs() or []
-        except Exception as e:
-            logger.warning('GPUtil.getGPUs() failed in metrics: %s', e)
-            live_gpus = []
+    # Joined on the profile's GPU id (the NVML uuid _collect_gpus stored): a
+    # device NVML cannot read is missing from the live list, which would shift a
+    # positional join onto the wrong GPU.
+    live_by_id = {g.uuid: g for g in shared_utils.get_gpus() if g.uuid}
 
     temps = _gpu_temps_cached(multi_gpu)
     temp_by_index = {t['index']: t['temperature'] for t in temps if isinstance(t, dict) and 'index' in t}
@@ -315,8 +315,8 @@ def collect_dynamic_metrics(profile: dict) -> dict:
             continue
         usage_pct = 0.0
         vram_used_gb = 0.0
-        if idx < len(live_gpus):
-            g = live_gpus[idx]
+        g = live_by_id.get(gpu_id)
+        if g is not None:
             try:
                 usage_pct = round(float(g.load) * 100.0, 1)
             except (TypeError, ValueError, AttributeError):

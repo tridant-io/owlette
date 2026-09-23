@@ -109,6 +109,14 @@ function readLastMachineIds(raw: unknown): Record<string, LastMachineSelection> 
 // Frozen because it is shared by the default context value and initial state.
 const NO_MFA_FACTORS: MfaFactorInventory = Object.freeze({ totp: false, passkeys: 0 });
 
+// The projection before access has resolved: no site list yet, and nothing to
+// count as a fallback. One shared instance so `fallbacks` keeps its identity
+// across renders and the fallback-metric effect doesn't re-run on it.
+const UNRESOLVED_MEMBERSHIP: { sites: undefined; fallbacks: readonly string[] } = Object.freeze({
+  sites: undefined,
+  fallbacks: Object.freeze([]),
+});
+
 /**
  * Read the second-factor tally off a user document. `users/{uid}.mfaFactors` is
  * written only by `lib/mfaFactors.server.ts`, transactionally with the
@@ -352,7 +360,15 @@ interface AuthContextType {
   administersAnySite: boolean;
   /** Owner of this site. Gates SITE_DELETE, the one owner-only capability. */
   isSiteOwner: (siteId: string) => boolean;
-  userSites: string[]; // Sites the user has access to
+  /**
+   * Sites the user has access to, or `undefined` until access has RESOLVED: the
+   * user doc (role, legacy `sites[]`, `lastSiteId`) and the membership listener
+   * have both delivered for the signed-in uid. Before that the projection is a
+   * half-read — membership rows can land while `role` is still null, so a
+   * superadmin looks like a member of a few sites — and anything that picks a
+   * default site from it picks the wrong one. `useSites` waits on `undefined`.
+   */
+  userSites: string[] | undefined;
   lastSiteId: string | null; // Last active site (synced to Firestore)
   lastMachineIds: Record<string, LastMachineSelection>; // Last hoot target per site (synced to Firestore)
   requiresMfaSetup: boolean; // Whether user needs to complete 2FA setup
@@ -438,6 +454,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signUpBootstrapRef = useRef<Promise<{ alreadyExists: boolean }> | null>(null);
   const [lastSiteId, setLastSiteId] = useState<string | null>(null);
   const [lastMachineIds, setLastMachineIds] = useState<Record<string, LastMachineSelection>>({});
+  // The uid whose user doc the listener has settled — delivered, or failed for
+  // good. Not `!loading`: a sign-in without a reload never re-arms `loading`, so
+  // it would read "resolved" before the new user's doc has arrived.
+  const [userDocUid, setUserDocUid] = useState<string | null>(null);
 
   const sendUserCreatedNotification = async (
     email: string,
@@ -626,6 +646,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   };
                 });
 
+                setUserDocUid(user.uid);
                 setLoading(false);
               } else {
                 if (!(await shouldListenerBootstrap(signUpBootstrapRef.current))) {
@@ -654,6 +675,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   console.error('Error message:', err?.message);
                   setRole(null);
                   setLegacySites([]);
+                  setUserDocUid(user.uid);
                   setLoading(false);
                 }
               }
@@ -662,12 +684,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               console.error('Error listening to user document:', error);
               setRole(null);
               setLegacySites([]);
+              setUserDocUid(user.uid);
               setLoading(false);
             }
           );
         } else {
           setRole(null);
           setLegacySites([]);
+          setUserDocUid(user.uid);
           setLoading(false);
         }
       } else {
@@ -677,6 +701,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         destroySessionCookie();
         setRole(null);
         setLegacySites([]);
+        setUserDocUid(null);
         setLoading(false);
         if (involuntary) {
           toast.error('Session Expired', {
@@ -1157,7 +1182,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Per-site membership — THE source of site access from here on. One
   // collectionGroup listener replaces reading `users/{uid}.sites[]`.
-  const { roleMap, error: membershipError } = useSiteMemberships(user?.uid);
+  const { roleMap, loading: membershipLoading, error: membershipError } = useSiteMemberships(user?.uid);
 
   // A listener that is not running degrades every user to the legacy array. The
   // union hides that today, so without this it stays silent right up until wave
@@ -1170,9 +1195,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // `userSites` is now a PROJECTION, not a second source of truth. The legacy
   // array is unioned in for exactly one release so a user whose backfill has not
   // landed keeps working; wave 6.1 drops the union and the projection together.
+  //
+  // Withheld until BOTH inputs have delivered for this uid. The two listeners
+  // race, and publishing whichever half landed first is not a smaller answer,
+  // it is a wrong one: membership-first hands a superadmin (role still null) a
+  // member's handful of sites, and the dashboard latched `sites[0]` of that
+  // instead of `lastSiteId`. Doc-first counts every legacy site as a fallback.
+  const accessResolved = user != null && userDocUid === user.uid && !membershipLoading;
   const { sites: userSites, fallbacks } = useMemo(
-    () => unionMembership(roleMap, legacySites),
-    [roleMap, legacySites]
+    () => (accessResolved ? unionMembership(roleMap, legacySites) : UNRESOLVED_MEMBERSHIP),
+    [accessResolved, roleMap, legacySites]
   );
 
   // Every site the legacy array grants and membership does not. This counter

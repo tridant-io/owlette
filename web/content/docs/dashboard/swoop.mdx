@@ -1,0 +1,99 @@
+---
+title: "swoop"
+description: "swoop is the dashboard's remote desktop: a live, interactive view of a machine's screen, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
+keywords: ["remote control", "screen sharing", "kvm", "vnc", "rdp", "take over a screen"]
+---
+
+swoop puts a machine's screen in your browser, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
+
+two things are true of every session and worth knowing before you turn it on:
+
+- **control asks for a second factor, every time the window lapses.** watching does not.
+- **an API key can never start a session.** swoop is a human-in-the-loop surface; the session routes refuse a key outright with `api_key_not_permitted`.
+
+---
+
+## turning it on
+
+swoop is **off** until a site turns it on — that is the default, and it is per site.
+
+a site admin flips it in **manage sites** → the site's **swoop** switch. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
+
+once a site is on, the rest of the policy is available over the API (`PATCH /api/sites/{siteId}/swoop-settings`) rather than the dashboard:
+
+| setting | default | what it does |
+|---|---|---|
+| `enabled` | `false` | the site-wide switch, the one the dashboard exposes |
+| `membersMayWatch` | `true` | whether a plain site member may watch. control always needs more than membership |
+| `excludedMachineIds` | `[]` | machines swoop may never reach, whatever the rest of the policy says |
+| `indicator` | `banner` | what the machine shows while a session is live: `banner`, `tray`, or `none` |
+
+---
+
+## starting a session
+
+the **swoop** entry appears in a machine's context menu once that machine's agent reports it can stream. on a machine that cannot, the old live-view entry stays instead — exactly one of the two is ever offered.
+
+the viewer opens at `/swoop/<siteId>/<machineId>`. you can also get there from a terminal with [`owlette swoop`](/docs/cli/reference/swoop), which only opens the page — the session still starts in the browser.
+
+a session needs the machine to be online. swoop cannot reach a machine that has not dialled in, and the request is refused with `machine_offline` rather than queued.
+
+---
+
+## watching versus control
+
+| | who | what it takes |
+|---|---|---|
+| watch | any site member, when `membersMayWatch` is on | site membership |
+| control | site admins and owners | the machine remote-control capability **and** a live second factor |
+
+control is gated on a **step-up**: a fresh second-factor check, prompted in the viewer, which opens a 10-minute window. a remembered device or an old sign-in does not count — the window is bound to the login session it was opened from, so there is a real ceremony behind every controlled session.
+
+a viewer that started watch-only stays watch-only. renewing its lease cannot promote it.
+
+---
+
+## in the viewer
+
+the toolbar carries the session state, an **end** button, and:
+
+- **fullscreen with keyboard and mouse capture** — takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so
+- **latency stats** — an overlay, off by default because it covers the picture
+- **display picker** — which of the machine's monitors you are looking at
+- **quality ceiling** — bandwidth (auto, or 5 to 50 mbps), resolution (native, 1440p, 1080p, 720p) and frame rate (60 or 30)
+- **audio** — off unless you ask for it
+- **special keys** — the combinations the browser will not let through
+- **presence** — who else is in the session
+
+a watch-only session is labelled **view only**.
+
+---
+
+## how long a session lasts
+
+- a viewer holds a **5-minute lease**, renewed silently while you are there
+- a session is capped at **12 hours** from the moment it starts. renewals do not move that cap
+- the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
+
+---
+
+## ending and killing
+
+ending your own session is the **end** button in the toolbar — anyone who may be in the room may leave it.
+
+a site admin can also stop **whatever anyone is running** on a machine (`POST …/swoop/kill`). that one is deliberately not gated on the site's swoop settings: stopping a stream has to work after the feature has been switched off, which is exactly when an operator wants it most.
+
+---
+
+## what is recorded
+
+every session start, every refusal and every end is written to the session's own audit trail, with the actor, the machine and whether control was held. a session whose audit row cannot be written is not started.
+
+---
+
+## notes
+
+- **refusal codes** you may see, in the viewer or from the API: `api_key_not_permitted`, `swoop_disabled`, `machine_excluded`, `capability_missing`, `members_may_not_watch`, `step_up_required`, `session_cap_reached`, `machine_offline`
+- **nothing secret travels in a URL.** the viewer url names a site and a machine; the signalling url names a room. tokens and keys are only ever in a response body
+- **agent version**: the machine must be running an agent that ships the swoop streamer. older agents keep live view
+- **related**: [`owlette swoop`](/docs/cli/reference/swoop) (open the viewer from a terminal), [machine monitoring](/docs/dashboard/machine-monitoring) (the machine cards the entry lives on), [errors](/docs/api/errors) (the problem envelope the codes above arrive in)

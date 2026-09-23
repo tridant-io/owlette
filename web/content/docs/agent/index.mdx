@@ -103,18 +103,17 @@ The classifier depends only on `shared_utils` and stdlib — no Firebase, no log
 
 ### shutdown
 
-Every operator-initiated stop — console control handler, SCM stop watcher, or `SvcStop` — funnels through one shared path, and whichever trigger arrives first does the work:
+Every operator-initiated stop — console control handler or SCM stop watcher — funnels through one shared path, and whichever trigger arrives first does the work:
 
 1. Record the stop locally as a clean external stop, before anything that can touch the network — this local record is what keeps the next startup classifier from reporting `unexpected_reboot`
 2. Cap the remaining Firestore request timeouts at 3 seconds, so a stalled call cannot eat the whole shutdown window
 3. Log the `agent_stopped` event
 4. Stop the Firebase client — this is the write that marks the machine offline, and it stops the background threads afterwards (offline first, or the write has no transport left)
 5. Write the final status file saying the service is down
-6. Close any open agent windows, then terminate the hoot process
 
 The desktop app is deliberately left running — its footer is where the operator finds `start service` to bring the agent back.
 
-Source: `agent/src/owlette_service.py` → `graceful_shutdown()` and `SvcStop`.
+Source: `agent/src/owlette_service.py` → `graceful_shutdown()`, reached from `agent/src/owlette_runner.py`'s signal handler or the SCM stop watcher.
 
 ---
 

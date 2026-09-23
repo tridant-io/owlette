@@ -45,10 +45,19 @@ jest.mock('@/lib/rateLimit.server', () => ({
   rateLimitHeaders: jest.fn(() => ({})),
 }));
 
+/**
+ * Flippable, because the interesting escalation is the one that only exists
+ * while the operator break-glass is ON: `capability_enforcement === false`
+ * skips the capability check for everything outside BYPASS_EXEMPT_CAPABILITIES,
+ * and SITE_MEMBER_MANAGE is outside it. Every block below leaves this `true`
+ * (reset in `beforeEach`) except the one that says otherwise.
+ */
+let mockCapabilityEnforcement = true;
+
 jest.mock('@/lib/securityConfig.server', () => ({
   securityConfig: {
     read: jest.fn(async () => ({
-      capability_enforcement: true,
+      capability_enforcement: mockCapabilityEnforcement,
       rate_limit_enforcement: true,
     })),
   },
@@ -272,6 +281,7 @@ import { POST as uninstallPOST } from '@/app/api/sites/[siteId]/deployments/[dep
 const SITE = 'site-alpha';
 const OWNER = 'uid_owner';
 const ADMIN = 'uid_admin';
+const MEMBER = 'uid_member';
 const OUTSIDER = 'uid_outsider';
 
 function seedUser(uid: string, data: Record<string, unknown> = {}): void {
@@ -309,6 +319,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   docs.clear();
   versions.clear();
+  mockCapabilityEnforcement = true;
 
   docs.set(`sites/${SITE}`, { owner: OWNER, name: 'Alpha' });
   // The owner is a self-serve owner: GLOBAL role `member`, which is the shape
@@ -317,11 +328,18 @@ beforeEach(() => {
   seedMemberRow(OWNER, 'owner');
   seedUser(ADMIN, { role: 'admin', sites: [SITE] });
   seedMemberRow(ADMIN, 'admin');
+  // A plain read-only member, and the target every "someone ELSE's row" control
+  // below acts on — self-targeting is refused outright now (block 10).
+  seedUser(MEMBER, { role: 'member', sites: [SITE] });
+  seedMemberRow(MEMBER, 'member');
   seedUser(OUTSIDER, { role: 'member', sites: [] });
 });
 
 describe('1. a site admin cannot promote THEMSELVES to owner', () => {
-  it('refuses PATCH role=owner', async () => {
+  it('refuses PATCH role=owner on their own row', async () => {
+    // 403 where this once asserted 400: the self-guard (block 10) is the first
+    // line in the handler and fires before role validation. Both refusals are
+    // correct and the assertion that matters is unchanged — nothing moved.
     authAs(ADMIN);
     const res = await memberPATCH(
       createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
@@ -331,19 +349,39 @@ describe('1. a site admin cannot promote THEMSELVES to owner', () => {
       params({ uid: ADMIN }),
     );
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('cannot_modify_own_membership');
     expect((docs.get(`sites/${SITE}/members/${ADMIN}`) as { role: string }).role).toBe('admin');
     expect((docs.get(`sites/${SITE}`) as { owner: string }).owner).toBe(OWNER);
   });
 
-  it('POSITIVE CONTROL: the same admin CAN set a legal role', async () => {
+  it("refuses role=owner on someone ELSE's row too", async () => {
+    // The ASSIGNABLE_ROLES ceiling itself, on the only kind of target that still
+    // reaches it. Without this the self-guard would be the only thing tested and
+    // `'owner'` could quietly become assignable.
     authAs(ADMIN);
     const res = await memberPATCH(
-      createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
         method: 'PATCH',
-        body: { role: 'member' },
+        body: { role: 'owner' },
       }),
-      params({ uid: ADMIN }),
+      params({ uid: MEMBER }),
+    );
+
+    expect(res.status).toBe(400);
+    expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { role: string }).role).toBe('member');
+    expect((docs.get(`sites/${SITE}`) as { owner: string }).owner).toBe(OWNER);
+  });
+
+  it('POSITIVE CONTROL: the same admin CAN set a legal role', async () => {
+    // On another member's row: an admin has no legal way to change their own.
+    authAs(ADMIN);
+    const res = await memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
+        method: 'PATCH',
+        body: { role: 'admin' },
+      }),
+      params({ uid: MEMBER }),
     );
     expect(res.status).toBe(200);
   });
@@ -483,31 +521,38 @@ describe('5. the site owner cannot be removed', () => {
   });
 });
 
+/**
+ * Every call here targets MEMBER, not the key owner's own row. It used to target
+ * the key owner, which now trips the self-guard (block 10) and would have made
+ * the positive control unreachable and the refusals ambiguous — a 403 from the
+ * scope check and a 403 from the self-guard are indistinguishable at the status
+ * line. Targeting someone else keeps these about the scope TIER, as titled.
+ */
 describe('6. an api-key caller cannot reach a role change without site admin scope', () => {
   it('refuses a site=*:write key on PATCH', async () => {
     // A `write` key is the interesting case: enough for most mutations on the
     // site, and a natural thing to hand a CI job.
     authAsKey(ADMIN, ['write']);
     const res = await memberPATCH(
-      createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
         method: 'PATCH',
-        body: { role: 'member' },
+        body: { role: 'admin' },
       }),
-      params({ uid: ADMIN }),
+      params({ uid: MEMBER }),
     );
 
     expect(res.status).toBe(403);
-    expect((docs.get(`sites/${SITE}/members/${ADMIN}`) as { role: string }).role).toBe('admin');
+    expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { role: string }).role).toBe('member');
   });
 
   it('refuses a read-only key', async () => {
     authAsKey(ADMIN, ['read']);
     const res = await memberPATCH(
-      createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
         method: 'PATCH',
-        body: { role: 'member' },
+        body: { role: 'admin' },
       }),
-      params({ uid: ADMIN }),
+      params({ uid: MEMBER }),
     );
     expect(res.status).toBe(403);
   });
@@ -519,11 +564,11 @@ describe('6. an api-key caller cannot reach a role change without site admin sco
     // the outer. Wave 1 task 1.4 collapses these — change this test deliberately.
     authAsKey(ADMIN, ['admin']);
     const res = await memberPATCH(
-      createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
         method: 'PATCH',
-        body: { role: 'member' },
+        body: { role: 'admin' },
       }),
-      params({ uid: ADMIN }),
+      params({ uid: MEMBER }),
     );
     expect(res.status).toBe(403);
   });
@@ -532,13 +577,14 @@ describe('6. an api-key caller cannot reach a role change without site admin sco
     // Proves the refusals above are about the scope TIER, not a blanket api-key denial.
     authAsKey(ADMIN, ['write', 'admin']);
     const res = await memberPATCH(
-      createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
         method: 'PATCH',
-        body: { role: 'member' },
+        body: { role: 'admin' },
       }),
-      params({ uid: ADMIN }),
+      params({ uid: MEMBER }),
     );
     expect(res.status).toBe(200);
+    expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { role: string }).role).toBe('admin');
   });
 });
 
@@ -638,5 +684,317 @@ describe('9. privileged-scope contracts, with the REAL wrapper', () => {
       params(),
     );
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * 10. NOBODY may act on their OWN membership row.
+ *
+ * The escalation this closes: with `capability_enforcement === false` — the 4h
+ * operator break-glass in `global/security_config` — the capability check is
+ * skipped for every capability outside BYPASS_EXEMPT_CAPABILITIES, and
+ * SITE_MEMBER_MANAGE is outside it. Browser sessions never reach `requireScope`
+ * at all, so nothing else stood between a plain site `member` and
+ * `PATCH /members/{ownUid} {"role":"admin"}`. `changeRole` refuses only an OWNER
+ * as a target, and `'admin'` is an accepted value, so the write landed.
+ *
+ * What made that more than a capability bypass: the caller ends up holding
+ * MACHINE_REMOTE_CONTROL and MACHINE_REMOTE_VIEW ON MERIT, so every swoop
+ * exemption then passes legitimately. Those exemptions exist so breaking glass
+ * cannot GRANT screen access; this route went around them by changing what the
+ * caller is. Hence a guard that does not consult the kill switch at all.
+ *
+ * NEGATIVE CONTROL RUN 2026-09-19: deleting `refuseSelfMembershipChange`'s two
+ * call sites reddens this block (the member PATCH returns 200 and the row
+ * becomes `admin`). Unlike blocks 1 and 5 this path is guarded ONCE, so the
+ * guard is the only thing holding it.
+ */
+describe('10. a caller cannot modify their own membership row', () => {
+  describe('with the kill switch OFF — the case that was reachable', () => {
+    beforeEach(() => {
+      mockCapabilityEnforcement = false;
+    });
+
+    it('refuses a plain member promoting THEMSELVES to admin', async () => {
+      authAs(MEMBER);
+      const res = await memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
+          method: 'PATCH',
+          body: { role: 'admin' },
+        }),
+        params({ uid: MEMBER }),
+      );
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('cannot_modify_own_membership');
+      expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { role: string }).role).toBe('member');
+    });
+
+    it('refuses a plain member removing their own row', async () => {
+      authAs(MEMBER);
+      const res = await memberDELETE(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
+          method: 'DELETE',
+        }),
+        params({ uid: MEMBER }),
+      );
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('cannot_modify_own_membership');
+      expect(docs.has(`sites/${SITE}/members/${MEMBER}`)).toBe(true);
+      expect((docs.get(`users/${MEMBER}`) as { sites: string[] }).sites).toContain(SITE);
+    });
+
+    it("POSITIVE CONTROL: break-glass reach is intact on someone ELSE's row", async () => {
+      // The reason the fix is a self-guard rather than adding SITE_MEMBER_MANAGE
+      // to BYPASS_EXEMPT_CAPABILITIES: an operator who broke the glass on purpose
+      // still administers the site. Only the caller's own row is off limits.
+      authAs(ADMIN);
+      const res = await memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
+          method: 'PATCH',
+          body: { role: 'admin' },
+        }),
+        params({ uid: MEMBER }),
+      );
+
+      expect(res.status).toBe(200);
+      expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { role: string }).role).toBe('admin');
+    });
+  });
+
+  describe('with the kill switch ON — the same rule, not a kill-switch patch', () => {
+    it('refuses an admin changing their own role', async () => {
+      authAs(ADMIN);
+      const res = await memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+          method: 'PATCH',
+          body: { role: 'member' },
+        }),
+        params({ uid: ADMIN }),
+      );
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('cannot_modify_own_membership');
+      expect((docs.get(`sites/${SITE}/members/${ADMIN}`) as { role: string }).role).toBe('admin');
+    });
+
+    it('refuses an admin removing their own row', async () => {
+      // The server half of the UI's existing "cannot remove yourself" pre-flight.
+      authAs(ADMIN);
+      const res = await memberDELETE(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+          method: 'DELETE',
+        }),
+        params({ uid: ADMIN }),
+      );
+
+      expect(res.status).toBe(403);
+      expect(docs.has(`sites/${SITE}/members/${ADMIN}`)).toBe(true);
+      expect((docs.get(`users/${ADMIN}`) as { sites: string[] }).sites).toContain(SITE);
+    });
+
+    it('refuses the OWNER on their own row — stepping down is transfer-ownership', async () => {
+      // Nothing is lost: `changeRole` already refused an owner as a target, so
+      // the owner never had a way to demote themselves here. They now get the
+      // self-refusal first, and ownership still moves only through
+      // POST /api/sites/{siteId}/transfer-ownership.
+      authAs(OWNER);
+      const res = await memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${OWNER}`, {
+          method: 'PATCH',
+          body: { role: 'member' },
+        }),
+        params({ uid: OWNER }),
+      );
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('cannot_modify_own_membership');
+      expect((docs.get(`sites/${SITE}/members/${OWNER}`) as { role: string }).role).toBe('owner');
+      expect((docs.get(`sites/${SITE}`) as { owner: string }).owner).toBe(OWNER);
+    });
+
+    it('refuses an api key on its OWN owner\'s row, scopes notwithstanding', async () => {
+      // A key is the user's credential; it must not reach what their session
+      // cannot. Block 6's positive control proves this exact key succeeds on
+      // another member's row, so this 403 is the self-guard and not the scope.
+      authAsKey(ADMIN, ['write', 'admin']);
+      const res = await memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+          method: 'PATCH',
+          body: { role: 'member' },
+        }),
+        params({ uid: ADMIN }),
+      );
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('cannot_modify_own_membership');
+      expect((docs.get(`sites/${SITE}/members/${ADMIN}`) as { role: string }).role).toBe('admin');
+    });
+  });
+});
+
+/**
+ * 11. POST /members cannot mint an admin while the break-glass is open.
+ *
+ * The sibling of block 10, and the worse half. Block 10's guard is keyed on the
+ * caller's OWN row, so it does nothing here: the target is someone else.
+ *
+ * With `capability_enforcement === false` a plain site `member` on a browser
+ * session reached this handler — SITE_MEMBER_MANAGE is outside
+ * BYPASS_EXEMPT_CAPABILITIES and sessions never reach `requireScope`. Nothing in
+ * the handler stopped them. Its owner guard only refuses the OWNER as a target,
+ * and `addMember`'s `create()` only refuses a target that already HAS a row —
+ * neither compares the requested role against the caller's standing. So the
+ * member adds a second account they control (one is a `POST /api/users/bootstrap`
+ * away: per-IP rate limit and Turnstile, no invite) at `role: 'admin'`.
+ *
+ * What makes this worse than a bypass is PERSISTENCE. The alt is a site admin ON
+ * MERIT, so the grant survives the switch being turned back on, and from the alt
+ * the original account is promoted through `PATCH /members/{uid}` with
+ * enforcement fully ON. A 4h break-glass window becomes permanent site admin,
+ * including MACHINE_REMOTE_CONTROL and SWOOP_SETTINGS_MANAGE — two of the three
+ * capabilities the exempt set exists to keep the kill switch from handing out.
+ *
+ * NEGATIVE CONTROL RUN 2026-09-19: removing the `hasCapability` call in the POST
+ * handler reddens this block (the member's add returns 200 and the alt's row is
+ * written as `admin`). It is the only thing holding this path.
+ */
+describe('11. POST /members cannot mint an admin for a third party', () => {
+  /** An ordinary bootstrapped account with no row on this site — the "alt". */
+  const ALT = OUTSIDER;
+
+  describe('with the kill switch OFF — the case that was reachable', () => {
+    beforeEach(() => {
+      mockCapabilityEnforcement = false;
+    });
+
+    it('refuses a plain member adding an alt account as admin', async () => {
+      authAs(MEMBER);
+      const res = await membersPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'esc-alt-admin' },
+          body: { uid: ALT, role: 'admin' },
+        }),
+        params(),
+      );
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('site_member_manage_required');
+      expect(docs.has(`sites/${SITE}/members/${ALT}`)).toBe(false);
+      expect((docs.get(`users/${ALT}`) as { sites: string[] }).sites).not.toContain(SITE);
+    });
+
+    it('refuses a plain member adding an alt at role=member too', async () => {
+      // Not a rule about the ROLE — a read-only member has no business writing
+      // membership at all, and a plain member row is a foothold that also
+      // outlives the window.
+      authAs(MEMBER);
+      const res = await membersPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'esc-alt-member' },
+          body: { uid: ALT, role: 'member' },
+        }),
+        params(),
+      );
+
+      expect(res.status).toBe(403);
+      expect(docs.has(`sites/${SITE}/members/${ALT}`)).toBe(false);
+    });
+
+    it('POSITIVE CONTROL: an admin with the switch off still adds members', async () => {
+      // Break-glass reach is intact for whoever legitimately holds the
+      // capability — the same argument as block 10's positive control.
+      authAs(ADMIN);
+      const res = await membersPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'esc-alt-ok' },
+          body: { uid: ALT, role: 'admin' },
+        }),
+        params(),
+      );
+
+      expect(res.status).toBe(200);
+      expect((docs.get(`sites/${SITE}/members/${ALT}`) as { role: string }).role).toBe('admin');
+    });
+  });
+
+  it('CONTROL: with the switch ON the wrapper already refused the member', async () => {
+    // Pins that the handler check is a SECOND line and not a replacement: with
+    // enforcement on, the denial comes from the wrapper, without a problem code.
+    authAs(MEMBER);
+    const res = await membersPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'esc-alt-enforced' },
+        body: { uid: ALT, role: 'admin' },
+      }),
+      params(),
+    );
+
+    expect(res.status).toBe(403);
+    expect(docs.has(`sites/${SITE}/members/${ALT}`)).toBe(false);
+  });
+});
+
+/**
+ * 12. `roleHonored` reports what happened to the ROW.
+ *
+ * It was hardcoded `true`. `addMember` uses `create()`, so adding someone who is
+ * ALREADY a member writes nothing and leaves their existing role alone — and the
+ * route still answers 200, deliberately, because it is documented idempotent.
+ * With `roleHonored` pinned true, that no-op was indistinguishable from a real
+ * promotion in the response, in the dashboard toast and in the audit row — which
+ * is the row someone reads after a break-glass to find out what was granted.
+ */
+describe('12. roleHonored reports what happened to the row', () => {
+  it('reports false when the member already existed and nothing was written', async () => {
+    authAs(ADMIN);
+    const res = await membersPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'esc-honored-noop' },
+        body: { uid: MEMBER, role: 'admin' },
+      }),
+      params(),
+    );
+
+    // Still 200: clients rely on the idempotent add, and nothing was clobbered.
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.requestedRole).toBe('admin');
+    expect(body.roleHonored).toBe(false);
+    // The row is the proof: it kept the role it had.
+    expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { role: string }).role).toBe('member');
+    expect(mockEmitMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'site_member_mutated',
+        targetId: MEMBER,
+        attributes: expect.objectContaining({
+          verb: 'member_added',
+          requestedRole: 'admin',
+          roleHonored: false,
+        }),
+      }),
+    );
+  });
+
+  it('POSITIVE CONTROL: reports true when the row was really created', async () => {
+    authAs(ADMIN);
+    const res = await membersPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'esc-honored-real' },
+        body: { uid: OUTSIDER, role: 'admin' },
+      }),
+      params(),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).roleHonored).toBe(true);
+    expect((docs.get(`sites/${SITE}/members/${OUTSIDER}`) as { role: string }).role).toBe('admin');
   });
 });

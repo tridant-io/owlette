@@ -114,6 +114,24 @@ export const uploadRateLimit = redis
     })
   : null;
 
+/**
+ * Screenshot upload urls: 1000/hr per machine. Keyed on the machine, never the
+ * client ip — behind Cloudflare every machine at a site shares the site's NAT
+ * egress address. Talon visual checks run at up to one per five seconds per
+ * machine (720/hr, `lib/talons/visualCheck.server.ts`) and the fielded agent
+ * raises on a 429 with no retry, so the ceiling sits above the fastest
+ * legitimate cadence with headroom, and still bounds a stuck capture loop or a
+ * leaked machine credential.
+ */
+export const screenshotUploadRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(1000, '1 h'),
+      prefix: 'screenshot-upload',
+      analytics: true,
+    })
+  : null;
+
 /** API key consumers: 300/hr per IP — headroom for CI. */
 export const apiRateLimit = redis
   ? new Ratelimit({

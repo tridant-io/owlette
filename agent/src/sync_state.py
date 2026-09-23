@@ -4,8 +4,7 @@ sync_state — crash-safe local state for roost (project distribution v2).
 per-roost sync progress in SQLite with WAL journaling, so a crash, power loss
 or service restart never loses state; on startup the agent resumes pending ops.
 
-- one DB per install: %PROGRAMDATA%\Owlette\sync-state.db, or
-  $XDG_DATA_HOME/owlette/sync-state.db on POSIX. deliberately outside the
+- one DB per install: <data root>/sync-state.db, deliberately outside the
   user's Documents tree so the cache cannot mix with assembled files.
 - WAL: atomic writes plus concurrent readers (cortex MCP reads without
   blocking the worker thread).
@@ -29,6 +28,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator, List, Optional, Set
 
+import shared_utils
+
 logger = logging.getLogger(__name__)
 
 # stamped into PRAGMA user_version. _create_schema() builds a FRESH DB at the
@@ -43,28 +44,18 @@ def _default_state_db_path() -> str:
     """
     resolve the default state DB path.
 
-    windows: %PROGRAMDATA%\\Owlette\\sync-state.db  (typically C:\\ProgramData\\Owlette\\...)
-    POSIX:   $XDG_DATA_HOME/owlette/sync-state.db, else ~/.local/share/owlette/sync-state.db
+    `sync-state.db` under the agent's data root (on windows
+    %PROGRAMDATA%\\Owlette\\sync-state.db).
 
     rationale: the agent runs as LocalSystem on windows. `~` expands to
     `C:\\Windows\\System32\\config\\systemprofile` under that account, which
     is not an appropriate place for a rebuildable cache — operators can't
-    see or clean it up without elevation. ProgramData is the canonical
+    see or clean it up without elevation. the data root is the canonical
     machine-wide application-data location and LocalSystem has write access
-    without tricks. on POSIX (test environments only) we follow XDG.
+    without tricks.
     """
-    if os.name == 'nt':
-        program_data = os.environ.get('PROGRAMDATA', 'C:\\ProgramData')
-        return os.path.join(program_data, 'Owlette', 'sync-state.db')
-    xdg = os.environ.get('XDG_DATA_HOME')
-    if xdg:
-        return os.path.join(xdg, 'owlette', 'sync-state.db')
-    return os.path.join(os.path.expanduser('~'), '.local', 'share', 'owlette', 'sync-state.db')
+    return shared_utils.get_data_path('sync-state.db')
 
-
-# computed lazily so a test-time XDG_DATA_HOME override takes effect — call
-# _default_state_db_path(), not DEFAULT_STATE_DB_PATH.
-DEFAULT_STATE_DB_PATH = _default_state_db_path()
 
 # in-flight states — the content-store reaper must not touch their blobs.
 # 'committed' / 'failed' / 'cancelled' are terminal; no resume from those.

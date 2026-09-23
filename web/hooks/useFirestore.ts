@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { logger } from '@/lib/logger';
+import { isMachineOsFamily, type MachineOsFamily } from '@/lib/machineOs';
 
 /** Every shape a Firestore timestamp field arrives in on the client. parseFirestoreSeconds handles all of them. */
 export type FirestoreTs =
@@ -254,7 +255,26 @@ export interface Machine {
   online: boolean;
   agent_version?: string;  // Agent version for update detection (e.g., "2.0.0")
   machineTimezone?: string;  // IANA tz from the agent's tzlocal lookup; undefined on pre-IANA agent builds.
+  /**
+   * The machine's operating system, written on every heartbeat by the agents
+   * that report it. All three are undefined on agents that don't: an absent
+   * `osFamily` reads as windows, and an absent `osVersion` leaves both machine
+   * views showing exactly what they showed before.
+   */
+  osFamily?: MachineOsFamily;
+  arch?: string;           // 'x64' | 'arm64' — the agent's normalised spelling
+  osVersion?: string;      // operator-facing, e.g. "Windows 11 Pro 24H2" / "Ubuntu 24.04.5 LTS"
   cortexEnabled?: boolean;  // kill switch for Hoot tool-call delivery; undefined = enabled.
+  /**
+   * Agent capability handshake, written as dotted paths by the heartbeat
+   * (`firebase_client.py`). Absent on every agent that predates a key, so each
+   * one gates off when missing. `swoop === 1` is the ONLY gate for the swoop
+   * entry — SWOOP_MIN_AGENT_VERSION in lib/versionUtils.ts is advisory copy.
+   */
+  capabilities?: {
+    swoop?: number;
+    displayRemoteApply?: number;
+  };
   // `reboot*` are agent-written wire contracts; the legacy spelling is deliberate (UI says "restart").
   rebooting?: boolean;
   shuttingDown?: boolean;
@@ -711,15 +731,18 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
       return;
     }
 
-    // wait for user data
+    // Wait for access to resolve. AuthContext publishes `userSites` as undefined
+    // until the user doc AND membership listener have both delivered — before
+    // that `isSuperadmin` can still be a not-yet-read `false`.
     if (userSites === undefined || isSuperadmin === undefined || userId === undefined) {
       setLoading(true);
       return;
     }
 
-    // Do NOT remove: AuthContext renders one frame with `user` set but `userSites`
-    // still at its default `[]`, and without this reset the empty branch below
-    // latches loading=false — the "create your first site" flicker on reload.
+    // Do NOT remove: re-arms loading when access changes after it first
+    // resolves (a role change swaps branches, a membership adds a site), so the
+    // empty branch below can't latch loading=false over a list still arriving —
+    // the "create your first site" flicker.
     setLoading(true);
 
     try {
@@ -763,8 +786,17 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
       // the Firestore rules use get(), which rules can't evaluate for queries.
       const unsubscribes: (() => void)[] = [];
       const siteDataMap = new Map<string, Site>();
+      // Sites whose listener has answered at least once (data, absence, or error),
+      // against the distinct ids asked for — a repeated id must not hold it open.
+      const reported = new Set<string>();
+      const expected = new Set(userSites).size;
 
+      // Nothing is published until EVERY listener has answered. The snapshots
+      // land in any order, and a partial list with loading=false reads as the
+      // whole list: callers resolved their default site against it, missed
+      // `lastSiteId` because its snapshot hadn't arrived, and took `sites[0]`.
       const updateStateFromMap = () => {
+        if (reported.size < expected) return;
         const siteArray = Array.from(siteDataMap.values());
         siteArray.sort((a, b) => a.name.localeCompare(b.name));
         setSites(siteArray);
@@ -801,6 +833,7 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
               console.warn(`Site "${siteId}" not found in Firestore`);
             }
 
+            reported.add(siteId);
             updateStateFromMap();
           },
           (err) => {
@@ -810,7 +843,10 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
             // sites keep their own listeners; this reports the one that failed.
             console.error(`Error fetching site ${siteId}:`, err);
             setError(`site ${siteId}: ${err.message}`);
-            setLoading(false);
+            // A failed listener has answered too — without this one bad site
+            // would hold the whole list at loading forever.
+            reported.add(siteId);
+            updateStateFromMap();
           }
         );
         unsubscribes.push(unsubscribe);
@@ -1288,9 +1324,13 @@ export function useMachines(siteId: string) {
               online: isOnline,
               agent_version: data.agent_version,
               machineTimezone: typeof data.machine_timezone_iana === 'string' ? data.machine_timezone_iana : undefined,
+              osFamily: isMachineOsFamily(data.osFamily) ? data.osFamily : undefined,
+              arch: typeof data.arch === 'string' ? data.arch : undefined,
+              osVersion: typeof data.osVersion === 'string' ? data.osVersion : undefined,
               // only an explicit false disables hoot — absent means enabled, matching
               // the server's `isHootEnabled` (hoot-utils.server.ts)
               cortexEnabled: data.cortexEnabled !== false,
+              capabilities: data.capabilities,
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
               rebootScheduledAt: restartScheduledAt,
@@ -1716,9 +1756,19 @@ export function useMachines(siteId: string) {
     await sendMachineCommand(machineId, 'cancel_reboot');
   };
 
-  const dismissRestartPending = async (machineId: string, processName: string) => {
-    // 'dismiss_reboot_pending' is the agent's wire verb — keep it.
-    await sendMachineCommand(machineId, 'dismiss_reboot_pending', { process_name: processName });
+  /**
+   * Clears the cloud `rebootPending` flag. It used to queue the agent command
+   * and nothing else, so an offline machine could never be dismissed — the flag
+   * is cloud state the dashboard is responsible for. The route still relays the
+   * command so a reachable agent resets its local counters, and reads the
+   * flag's own `processName` — often null — rather than taking it from here.
+   */
+  const dismissRestartPending = async (machineId: string) => {
+    if (!db || !siteId) throw new Error('Firebase not configured');
+    await apiJson(
+      `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/reboot-pending`,
+      { method: 'DELETE' },
+    );
   };
 
   const captureScreenshot = async (machineId: string) => {

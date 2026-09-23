@@ -286,3 +286,104 @@ def test_every_sync_pull_failure_return_is_error_prefixed():
     source = Path(sync_commands.__file__).read_text(encoding='utf-8')
     bad = re.findall(r'return f?"(?:sync_pull|rollback)[^"]*fail[^"]*"', source)
     assert bad == [], f"failure returns bypassing _failure(): {bad}"
+
+
+# the legacy default extract root
+
+
+@pytest.fixture(autouse=True)
+def _reset_substitution_notice():
+    """the substitution logs once per process; each test starts from unlogged."""
+    import sync_commands
+    sync_commands._legacy_root_substitution_logged = False
+    yield
+    sync_commands._legacy_root_substitution_logged = False
+
+
+@pytest.mark.parametrize('family,expected', [
+    ('windows', '~/Documents/Owlette'),
+    ('macos', '/Users/Shared/Owlette'),
+    ('linux', '/var/lib/owlette/projects'),
+])
+@pytest.mark.parametrize('sent', [
+    '~/Documents/Owlette',
+    '~/Documents/Owlette/',
+    '~\\Documents\\Owlette',
+])
+def test_the_legacy_default_root_becomes_this_os_default(
+        family, expected, sent, monkeypatch):
+    """
+    the fanout has no idea what the target runs, so every roost with no
+    explicit extractPath arrives carrying the windows default. a POSIX agent
+    lands it under its own default root instead of refusing the deploy;
+    windows keeps the literal it was sent.
+    """
+    import destination_allowlist
+    import sync_commands
+
+    monkeypatch.setattr(destination_allowlist, '_os_family', lambda: family)
+    assert sync_commands._substitute_legacy_default_root(sent) == (
+        sent if family == 'windows' else expected
+    )
+
+
+@pytest.mark.parametrize('family', ['windows', 'macos', 'linux'])
+@pytest.mark.parametrize('chosen', [
+    '/opt/exhibit',
+    '~/Documents/show1',
+    '~/Documents/OwletteOther',
+    'C:\\render',
+])
+def test_a_root_the_operator_chose_is_passed_through(family, chosen, monkeypatch):
+    """negative control: only the one legacy literal is substituted."""
+    import destination_allowlist
+    import sync_commands
+
+    monkeypatch.setattr(destination_allowlist, '_os_family', lambda: family)
+    assert sync_commands._substitute_legacy_default_root(chosen) == chosen
+
+
+def test_the_substitution_is_logged_once_per_process(caplog, monkeypatch):
+    import logging
+
+    import destination_allowlist
+    import sync_commands
+
+    monkeypatch.setattr(destination_allowlist, '_os_family', lambda: 'linux')
+    with caplog.at_level(logging.INFO, logger='sync_commands'):
+        for _ in range(3):
+            sync_commands._substitute_legacy_default_root('~/Documents/Owlette')
+
+    lines = [r for r in caplog.records if 'is the windows' in r.message]
+    assert len(lines) == 1, [r.message for r in caplog.records]
+
+
+def test_the_handler_validates_the_substituted_root(tmp_path, monkeypatch):
+    """the substitution happens before the allowlist check, so the refusal
+    names the root the agent would actually have written to."""
+    import destination_allowlist
+    import sync_commands
+    from destination_allowlist import DestinationAllowlist
+    from sync_state import SyncState
+
+    allowed = tmp_path / 'allowed'
+    allowed.mkdir()
+    state = SyncState(':memory:')
+    service = _RecordingService(state, DestinationAllowlist([str(allowed)]))
+    monkeypatch.setattr(destination_allowlist, '_os_family', lambda: 'linux')
+
+    def _explode(*a, **kw):  # pragma: no cover - must never run
+        raise AssertionError('network access attempted after a refused destination')
+
+    monkeypatch.setattr(sync_commands, 'fetch_version', _explode)
+
+    try:
+        result = sync_commands._handle_sync_pull(
+            _sync_pull_cmd('~/Documents/Owlette'), 'cmd-1', service,
+        )
+    finally:
+        state.close()
+
+    assert result.startswith('Error:'), result
+    assert '/var/lib/owlette/projects' in result
+    assert 'Documents' not in result

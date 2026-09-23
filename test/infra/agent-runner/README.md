@@ -2,8 +2,7 @@
 
 This runner builds a Python 3.11 Linux container that imports and tests the
 roost agent sync modules without a Windows host. It copies the existing agent
-source and tests, prepends lightweight Windows API stubs to `PYTHONPATH`, and
-runs pytest against the sync unit modules.
+source and tests and runs pytest against the sync unit modules.
 
 The runner is intentionally scoped to the sync engine:
 
@@ -35,12 +34,6 @@ initialiser before running pytest. The agent container sees MinIO at:
 http://minio:9000
 ```
 
-The current smoke output is captured at:
-
-```text
-test/infra/agent-runner/smoke-output.log
-```
-
 ## Adding test modules
 
 The default test command lives in `test/infra/agent-runner/Dockerfile` as the
@@ -66,13 +59,10 @@ docker compose -f test/infra/docker-compose.yml up --build agent-runner
 
 - The repo does not currently contain `agent/src/sync_pull.py`; `sync_pull` is
   implemented as `_handle_sync_pull` in `agent/src/sync_commands.py`.
-- The pywin32 stubs are import shims, not Windows emulators. Runtime calls to
-  service control, registry enumeration, window management, ACL editing, or
-  session APIs either no-op for harmless lock paths or raise clearly.
-- `firebase_client.py` is not imported by the entrypoint. It imports
-  `display_manager.py`, which binds Windows CCD APIs and assumes Windows ABI
-  ctypes structure sizes at module load. Fake-service tests should call
-  `sync_commands` directly and provide in-memory Firestore/R2 URL providers.
+- `firebase_client.py` is not a runner entrypoint target, but it does import on
+  Linux: it pulls in `shared_utils`, `hardware_profile` and `config_sync` at
+  module load and reaches `display_manager`, `nvapi_display` and
+  `registry_utils` only inside the display and hardware methods that use them.
 - `test_sync_pipeline_minio.py` uses MinIO for manifest/chunk HTTP fetches and
   mocks Firestore at the Python level. The existing sync modules do not need a
   live Firestore emulator until the CI suite tests web-issued commands or
@@ -81,12 +71,30 @@ docker compose -f test/infra/docker-compose.yml up --build agent-runner
 
 ## CI consumption
 
-Wave 4c.5 can use this service in GitHub Actions by checking out the repo,
-starting the compose stack, and letting the runner entrypoint decide pass/fail:
+CI does not build this image. `.github/workflows/agent-tests.yml` runs the same
+module set as the `CMD` above on its ubuntu runner directly —
+`agent/requirements.txt` installs on Linux unmodified now, which was the whole
+reason this rig existed — and uses `test/infra/docker-compose.yml` for MinIO
+alone:
 
 ```bash
-docker compose -f test/infra/docker-compose.yml up --build --exit-code-from agent-runner agent-runner
+docker compose -f test/infra/docker-compose.yml up -d --wait minio
+docker compose -f test/infra/docker-compose.yml run --rm init-buckets
+
+export PYTHONPATH=agent/src
+export OWLETTE_DATA_ROOT=/tmp/owlette-data
+export OWLETTE_R2_ENDPOINT=http://localhost:9000
+python -m pytest \
+  agent/tests/unit/test_sync_state.py \
+  agent/tests/unit/test_sync_version.py \
+  agent/tests/unit/test_sync_downloader.py \
+  agent/tests/unit/test_sync_assembler.py \
+  agent/tests/unit/test_sync_commands.py \
+  test/infra/agent-runner/tests/test_sync_pipeline_minio.py -q
 ```
 
-That command returns pytest's exit code, so CI fails if the container cannot
-import the sync modules or if the selected sync tests fail.
+The remaining `OWLETTE_R2_*` values match the test module defaults, so those
+three exports are the whole local setup. The container stays the reproducible
+rig: it pins the interpreter and the dependency set, so `up --build
+agent-runner` reproduces a clean Linux run without touching the developer
+machine's environment.

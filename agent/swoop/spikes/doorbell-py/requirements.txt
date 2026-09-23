@@ -1,0 +1,11 @@
+# Spike 0.4 only — this venv is not agent/.venv and this file is not
+# agent/requirements.txt. Task 2.3 is what adds the dependency to the agent.
+#
+# websocket-client is the approved doorbell client (plan.md, "Approved new
+# dependencies"): the agent needs one persistent WebSocket on its own daemon
+# thread, and this is the only maintained pure-python client that does protocol
+# PING frames from run_forever() without dragging asyncio into a threaded service.
+# Pinned exactly, like every line in agent/requirements.txt.
+# Exit condition: unpin when the agent gains an asyncio loop of its own, or when
+# a protocol change needs per-frame control this client does not expose.
+websocket-client==1.9.2

@@ -30,10 +30,10 @@ export default function AddMachinePage() {
   const [machineId, setMachineId] = useState<string | null>(null);
   /**
    * Whether the selection was auto-made (single-site convenience) rather than
-   * chosen. `user` settles before `role`, so the first pass takes the narrower
-   * membership branch; if that held one site it auto-selected, and the wider
-   * superadmin list arriving after used to leave the stale pick in place —
-   * authorizing against a site nobody chose. A deliberate choice is never withdrawn.
+   * chosen. The first pass no longer races `role` — the fetch waits for
+   * `userSites` to resolve — but the list can still change live under an
+   * auto-selection (a membership granted or revoked), and a stale pick would
+   * authorize against a site nobody chose. A deliberate choice is never withdrawn.
    */
   const autoSelectedRef = useRef(false);
   /**
@@ -62,6 +62,10 @@ export default function AddMachinePage() {
         setLoading(false);
         return;
       }
+      // Access still resolving, and `isSuperadmin` with it: fetching now would
+      // take the narrower membership branch for a superadmin. `loading` stays
+      // up, and the effect re-runs when `userSites` lands.
+      if (userSites === undefined) return;
 
       try {
         // `userSites` from AuthContext, NOT `users/{uid}.sites[]` read directly.

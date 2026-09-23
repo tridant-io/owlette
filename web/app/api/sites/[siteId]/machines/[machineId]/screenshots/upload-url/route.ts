@@ -9,6 +9,15 @@
  * Auth: `machine=<id>:write` (api-key) or site membership; the agent's own Firebase ID token
  * carries uid + site_id and resolves through `requireMachineAuthAndScope` like any caller.
  * Idempotency deliberately not required — every call mints a fresh single-use url and path.
+ * Rate limited per machine, inside the handler once auth has resolved the machine: every
+ * agent screenshot — on-demand, crash and live view — is minted here, so an agent stuck in a
+ * capture loop, or a leaked machine credential, cannot drive it unbounded. Not per client ip:
+ * behind Cloudflare that is the site's NAT egress address, shared by every machine at the
+ * site, so a per-ip budget was a per-site one. The ceiling (`screenshotUploadRateLimit`,
+ * 1000/hr) sits above the talon visual-check cadence of one per five seconds per machine
+ * (720/hr): the fielded agent raises on a 429 with no retry, so a normal fleet must never
+ * reach it. Unauthenticated floods are bounded by the 401 in `requireMachineAuthAndScope`,
+ * which signs nothing and touches no storage.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -21,6 +30,8 @@ import {
   requireMachineAuthAndScope,
 } from '../../../../../../_shared';
 import { issueScreenshotUploadUrl } from '@/lib/screenshotStorage.server';
+import { checkRateLimit, screenshotUploadRateLimit } from '@/lib/rateLimit';
+import { applyRateLimitCounters, rateLimitedResponse } from '@/lib/withRateLimit';
 
 interface RouteParams {
   params: Promise<{ siteId: string; machineId: string }>;
@@ -32,12 +43,19 @@ interface UploadUrlBody {
   contentType?: unknown;
 }
 
-export async function POST(request: NextRequest, { params }: RouteParams) {
+async function handlePost(request: NextRequest, { params }: RouteParams) {
   try {
     const { siteId, machineId } = await params;
 
     const auth = await requireMachineAuthAndScope(request, siteId, machineId, 'write');
     if (!auth.ok) return auth.response;
+
+    const rateLimitKey = `screenshot_upload:${siteId}:${machineId}`;
+    const rateResult = await checkRateLimit(screenshotUploadRateLimit, rateLimitKey);
+    if (!rateResult.success) {
+      console.warn(`[screenshots/upload-url] rate limited: ${rateLimitKey}`);
+      return rateLimitedResponse(rateResult, 'endpoint-rate');
+    }
 
     // Body is optional and only `contentType` is honored, but still parsed so a malformed
     // payload 400s instead of being silently ignored.
@@ -69,17 +87,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     const issued = await issueScreenshotUploadUrl(siteId, machineId, contentType);
 
-    return applyAuthDeprecations(
-      NextResponse.json({
-        ok: true,
-        data: {
-          uploadUrl: issued.uploadUrl,
-          storagePath: issued.storagePath,
-          contentType,
-          expiresAt: issued.expiresAt,
-        },
-      }),
-      auth.scopeCheck,
+    return applyRateLimitCounters(
+      applyAuthDeprecations(
+        NextResponse.json({
+          ok: true,
+          data: {
+            uploadUrl: issued.uploadUrl,
+            storagePath: issued.storagePath,
+            contentType,
+            expiresAt: issued.expiresAt,
+          },
+        }),
+        auth.scopeCheck,
+      ),
+      rateResult,
     );
   } catch (err) {
     return problemFromError(
@@ -88,3 +109,5 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     );
   }
 }
+
+export const POST = handlePost;

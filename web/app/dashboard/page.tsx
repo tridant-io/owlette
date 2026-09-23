@@ -686,6 +686,12 @@ export default function DashboardPage() {
   // Saved site from Firestore (cross-browser) or localStorage (same-browser fallback).
   // setState-in-effect is deliberate: `sites` + `lastSiteId` load async, so a lazy
   // initializer can't see them at mount.
+  //
+  // This picks ONCE, so it is only as good as the list it first sees settle. That
+  // is safe because `useSites` can't settle before access has resolved — user doc
+  // (so `lastSiteId`) and memberships both in — nor on a partial per-site list.
+  // Before that, a reload could latch `sites[0]` of a half-read list instead of
+  // the last viewed site.
   useEffect(() => {
     if (!sitesLoading && sites.length > 0 && !currentSiteId) {
       const savedSite = lastSiteId || localStorage.getItem('owlette_current_site');
@@ -720,6 +726,17 @@ export default function DashboardPage() {
     () => machines.map((m) => ({ machineId: m.machineId, online: m.online })),
     [machines],
   );
+
+  // Its own window, never an iframe or a dialog: the stage grabs the keyboard and
+  // pointer, and a session must survive navigating the dashboard. No token in the
+  // URL — the page authorizes itself against the session-create route.
+  const openSwoop = (machineId: string) => {
+    window.open(
+      `/swoop/${encodeURIComponent(currentSiteId)}/${encodeURIComponent(machineId)}`,
+      '_blank',
+      'noopener',
+    );
+  };
 
   // A click SWAPS the panel selection (overwrites this machine's graphTabs) rather than
   // merging, so clicking cells behaves like switching tabs, not accumulating them.
@@ -945,6 +962,7 @@ export default function DashboardPage() {
                   machineId={heldDetailPanel.machineId}
                   machineName={heldDetailPanel.machineName}
                   siteId={currentSiteId}
+                  capabilities={machines.find((m) => m.machineId === heldDetailPanel.machineId)?.capabilities}
                   onClose={handleCloseDetailPanel}
                 />
               ) : (
@@ -1091,6 +1109,7 @@ export default function DashboardPage() {
                     setLiveViewTarget({ machineId, machineName: machineId });
                     setLiveViewOpen(true);
                   }}
+                  onSwoop={openSwoop}
                 />
               </div>
             )}
@@ -1144,6 +1163,7 @@ export default function DashboardPage() {
                           setLiveViewTarget({ machineId: machine.machineId, machineName: machine.machineId });
                           setLiveViewOpen(true);
                         }}
+                        onSwoop={() => openSwoop(machine.machineId)}
                       />
                     ))}
                   </TableBody>

@@ -3,7 +3,6 @@
  * with controls. Always used on mobile; toggleable with list view on desktop.
  */
 
-import { useMinuteTick } from '@/hooks/useMinuteTick';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,11 +14,13 @@ import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { toast } from '@/lib/toast';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
 import { formatHeartbeatTime, formatMachineLocalClock, formatTimezoneShortName, getDisplayTimezone } from '@/lib/timeUtils';
 import { machineClockTooltip } from '@/lib/scheduleClockCopy';
-import { formatThroughput } from '@/lib/networkUtils';
+import { useMinuteTick } from '@/hooks/useMinuteTick';
+import { formatThroughput, formatThroughputShort } from '@/lib/networkUtils';
 import { DISK_IO_COLORS, formatDiskIO } from '@/lib/diskIOUtils';
 import { useAllSparklineData } from '@/hooks/useSparklineData';
 import { useDevicePrefs, type DeviceKind } from '@/hooks/useDevicePrefs';
@@ -61,9 +62,10 @@ interface MachineCardViewProps {
   onRestart?: (machineId: string) => Promise<void>;
   onShutdown?: (machineId: string) => Promise<void>;
   onCancelRestart?: (machineId: string) => Promise<void>;
-  onDismissRestartPending?: (machineId: string, processName: string) => Promise<void>;
+  onDismissRestartPending?: (machineId: string) => Promise<void>;
   onScreenshot?: (machineId: string) => void;
   onLiveView?: (machineId: string) => void;
+  onSwoop?: (machineId: string) => void;
 }
 
 /** Split out of the map so it can use hooks. */
@@ -95,9 +97,10 @@ interface MachineCardProps {
   onRestart?: () => Promise<void>;
   onShutdown?: () => Promise<void>;
   onCancelRestart?: () => Promise<void>;
-  onDismissRestartPending?: (processName: string) => Promise<void>;
+  onDismissRestartPending?: () => Promise<void>;
   onScreenshot?: () => void;
   onLiveView?: () => void;
+  onSwoop?: () => void;
   showLocalClock?: boolean;
 }
 
@@ -132,6 +135,7 @@ function MachineCard({
   onDismissRestartPending,
   onScreenshot,
   onLiveView,
+  onSwoop,
   showLocalClock,
 }: MachineCardProps) {
   const isDemo = !!useDemoContext();
@@ -179,6 +183,16 @@ function MachineCard({
         agentVersion: machine.agent_version,
       })
     : null;
+  // The line under the hostname. The OS takes it when the agent reports one —
+  // the clock it replaces is already beside the online pill, whose tooltip
+  // names the timezone so the city is not lost. Whichever string it shows, the
+  // line keeps the clock tooltip: its schedule copy is the only place a card
+  // says which clock launch windows run on.
+  const subtitle = machine.osVersion
+    ? machine.osVersion
+    : showLocalClock && localClock
+      ? `${localTzShort}, ${localClock} local`
+      : null;
 
   // Resolve per-card device selection (user pref → primary → first).
   const primary = machine.metrics?.primary;
@@ -278,11 +292,14 @@ function MachineCard({
                 {machine.machineId}
                 {isMuted && <span title="alerts muted"><BellOff className="h-3.5 w-3.5 text-muted-foreground" /></span>}
               </CardTitle>
-              {showLocalClock && clockTooltip && localClock && (
+              {subtitle && (showLocalClock && clockTooltip ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="text-xs text-muted-foreground mt-0.5 cursor-help select-none">
-                      {localTzShort}, {localClock} local
+                    <span
+                      data-testid={machine.osVersion ? 'machine-os-version' : undefined}
+                      className="text-xs text-muted-foreground mt-0.5 cursor-help select-none"
+                    >
+                      {subtitle}
                     </span>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -295,7 +312,14 @@ function MachineCard({
                     )}
                   </TooltipContent>
                 </Tooltip>
-              )}
+              ) : (
+                <span
+                  data-testid="machine-os-version"
+                  className="text-xs text-muted-foreground mt-0.5"
+                >
+                  {subtitle}
+                </span>
+              ))}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -311,7 +335,7 @@ function MachineCard({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
-                  className={`text-xs flex items-center gap-1 select-none cursor-help ${heartbeat.isStale ? 'text-red-400' : 'text-muted-foreground'}`}
+                  className={`text-xs tabular-nums flex items-center gap-1 select-none cursor-help ${heartbeat.isStale ? 'text-red-400' : 'text-foreground/80'}`}
                 >
                   <Clock className="h-3 w-3" />
                   {heartbeat.display}
@@ -319,6 +343,11 @@ function MachineCard({
               </TooltipTrigger>
               <TooltipContent>
                 <p>{heartbeat.tooltip}</p>
+                {/* The machine's own zone, still within reach on the cards
+                    whose subtitle now shows the OS instead of the clock. */}
+                {machine.machineTimezone && (
+                  <p className="mt-1">machine timezone: {localTzShort}</p>
+                )}
               </TooltipContent>
             </Tooltip>
             {!isDemo && (
@@ -337,6 +366,8 @@ function MachineCard({
                 onCancelRestart={onCancelRestart}
                 onScreenshot={onScreenshot}
                 onLiveView={onLiveView}
+                swoopCapable={machine.capabilities?.swoop === 1}
+                onSwoop={onSwoop}
                 onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}
                 rebootSchedule={machine.rebootSchedule}
               />
@@ -344,33 +375,55 @@ function MachineCard({
           </div>
         </div>
       </CardHeader>
-      {/* Restart Pending Banner */}
+      {/* Restart Pending Banner. The flag is agent-written and only the agent's
+          next service start clears it locally, so it outlives an unreachable
+          machine — still worth showing (the operator wants to know it is set),
+          but not as a live alarm. `machine.online` is the derived flag from
+          `isMachineOnline`: the same 5-minute heartbeat rule as
+          `isHeartbeatStale`, plus the agent's own flag. */}
       {machine.rebootPending?.active && (
-        <div className="mx-4 mb-2 p-3 rounded-lg border border-amber-600/30 bg-amber-950/20">
+        <div
+          data-testid="reboot-pending-banner"
+          className={`mx-4 mb-2 p-3 rounded-lg border ${
+            machine.online ? 'border-amber-600/30 bg-amber-950/20' : 'border-border/60 bg-muted/20'
+          }`}
+        >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0" />
-              <span className="text-sm text-amber-300 truncate">
+              <AlertTriangle className={`h-4 w-4 flex-shrink-0 ${machine.online ? 'text-amber-400' : 'text-muted-foreground'}`} />
+              <span className={`text-sm truncate ${machine.online ? 'text-amber-300' : 'text-muted-foreground'}`}>
                 restart pending: {machine.rebootPending.reason || 'process crashed'}
+                {!machine.online && ' — machine offline, cannot restart'}
               </span>
             </div>
             {isSiteAdmin && (
               <div className="flex items-center gap-1.5 flex-shrink-0">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  data-testid="reboot-pending-approve"
-                  className="h-7 px-2.5 text-xs bg-amber-600 hover:bg-amber-700 text-white cursor-pointer"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    if (onRestart) {
-                      try { await onRestart(); } catch {}
-                    }
-                  }}
-                >
-                  <RotateCcw className="h-3 w-3 mr-1" />
-                  approve
-                </Button>
+                {/* No approve while offline: the command would 409 machine_offline. */}
+                {machine.online && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    data-testid="reboot-pending-approve"
+                    className="h-7 px-2.5 text-xs bg-amber-600 hover:bg-amber-700 text-white cursor-pointer"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!onRestart) return;
+                      try {
+                        await onRestart();
+                        toast.success('restart approved');
+                      } catch (error: unknown) {
+                        toast.error('could not send the restart command', {
+                          description: error instanceof Error ? error.message : 'unknown error',
+                        });
+                      }
+                    }}
+                  >
+                    <RotateCcw className="h-3 w-3 mr-1" />
+                    approve
+                  </Button>
+                )}
+                {/* Always offered: dismissing clears a cloud field through the
+                    api, so it does not need the machine to be reachable. */}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -378,8 +431,14 @@ function MachineCard({
                   className="h-7 px-2.5 text-xs text-muted-foreground hover:text-white hover:bg-accent cursor-pointer"
                   onClick={async (e) => {
                     e.stopPropagation();
-                    if (onDismissRestartPending && machine.rebootPending?.processName) {
-                      try { await onDismissRestartPending(machine.rebootPending.processName); } catch {}
+                    if (!onDismissRestartPending) return;
+                    try {
+                      await onDismissRestartPending();
+                      toast.success('restart pending dismissed');
+                    } catch (error: unknown) {
+                      toast.error('could not dismiss the pending restart', {
+                        description: error instanceof Error ? error.message : 'unknown error',
+                      });
                     }
                   }}
                 >
@@ -398,69 +457,69 @@ function MachineCard({
             <CollapsibleTrigger asChild>
               <Button variant="ghost" className="w-full border-t border-border/50 rounded-none cursor-pointer px-4 py-2.5 h-auto">
                 <div className="flex items-center gap-2 w-full select-none">
-                  <ChevronDown className="h-4 w-4 text-foreground/70 flex-shrink-0" />
-                  <div className="flex items-center gap-2.5 text-sm text-muted-foreground overflow-hidden">
-                    {cpuDevice && cpuDevice.percent != null && (
-                      <span className="tabular-nums">cpu <span className="text-foreground font-medium">{cpuDevice.percent}%</span>
-                        {cpuDevice.temperature != null && (
-                          <span className={`ml-1 ${getTemperatureColorClass(cpuDevice.temperature)}`}>
-                            {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit)}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                    {memory?.percent != null && (
-                      <>
-                        <span className="text-border">|</span>
-                        <span className="tabular-nums">mem <span className="text-foreground font-medium">{memory.percent}%</span></span>
-                      </>
-                    )}
-                    {diskDevice && diskDevice.percent != null && (() => {
-                      const io = machine.metrics?.diskio?.[diskDevice.id];
-                      return (
-                        <>
-                          <span className="text-border">|</span>
-                          <span className="tabular-nums">disk <span className="text-foreground font-medium">{diskDevice.percent}%</span>
+                  <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  {/* fixed five cells, absent metrics included: the same metric
+                      lands at the same x on every card, so the dashboard reads
+                      as columns rather than five different ragged rows.
+                      text-left: this is a button's content, and a button centres
+                      its text, which floated each label to the middle of its cell */}
+                  <div className="grid grid-cols-5 gap-x-2 flex-1 min-w-0 text-left text-sm text-muted-foreground/70">
+                    <span className="min-w-0 truncate tabular-nums">
+                      {cpuDevice && cpuDevice.percent != null && (
+                        <>cpu <span className="text-foreground font-medium">{Math.round(cpuDevice.percent)}%</span>
+                          {cpuDevice.temperature != null && (
+                            <span className={`ml-1 ${getTemperatureColorClass(cpuDevice.temperature)}`}>
+                              {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit, 0)}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </span>
+                    <span className="min-w-0 truncate tabular-nums">
+                      {memory?.percent != null && (
+                        <>mem <span className="text-foreground font-medium">{Math.round(memory.percent)}%</span></>
+                      )}
+                    </span>
+                    <span className="min-w-0 truncate tabular-nums">
+                      {diskDevice && diskDevice.percent != null && (() => {
+                        const io = machine.metrics?.diskio?.[diskDevice.id];
+                        return (
+                          <>disk <span className="text-foreground font-medium">{Math.round(diskDevice.percent)}%</span>
                             {io && io.readBps > 0 && (
-                              <span className="ml-1 font-medium" style={{ color: DISK_IO_COLORS.read }}>
-                                r {formatDiskIO(io.readBps)}
+                              <span className="ml-1" style={{ color: DISK_IO_COLORS.read }}>
+                                r {formatThroughputShort(io.readBps)}
                               </span>
                             )}
                             {io && io.writeBps > 0 && (
-                              <span className="ml-1 font-medium" style={{ color: DISK_IO_COLORS.write }}>
-                                w {formatDiskIO(io.writeBps)}
+                              <span className="ml-1" style={{ color: DISK_IO_COLORS.write }}>
+                                w {formatThroughputShort(io.writeBps)}
                               </span>
                             )}
-                          </span>
-                        </>
-                      );
-                    })()}
-                    {gpuDevice && gpuDevice.usagePercent != null && (
-                      <>
-                        <span className="text-border">|</span>
-                        <span className="tabular-nums">gpu <span className="text-foreground font-medium">{gpuDevice.usagePercent}%</span>
+                          </>
+                        );
+                      })()}
+                    </span>
+                    <span className="min-w-0 truncate tabular-nums">
+                      {gpuDevice && gpuDevice.usagePercent != null && (
+                        <>gpu <span className="text-foreground font-medium">{Math.round(gpuDevice.usagePercent)}%</span>
                           {gpuDevice.temperature != null && (
                             <span className={`ml-1 ${getTemperatureColorClass(gpuDevice.temperature)}`}>
-                              {formatTemperature(gpuDevice.temperature, userPreferences.temperatureUnit)}
+                              {formatTemperature(gpuDevice.temperature, userPreferences.temperatureUnit, 0)}
                             </span>
                           )}
-                        </span>
-                      </>
-                    )}
-                    {machine.metrics.network?.latencyMs != null && (
-                      <>
-                        <span className="text-border">|</span>
-                        <span className="tabular-nums">ping <span className={`font-medium ${
-                          machine.metrics.network.latencyMs > 100 ? 'text-red-400' :
-                          machine.metrics.network.latencyMs > 50 ? 'text-yellow-400' :
-                          'text-foreground'
-                        }`}>{Math.round(machine.metrics.network.latencyMs)}ms</span>
-                          {(machine.metrics.network.packetLossPct ?? 0) > 0 && (
-                            <span className="ml-1 text-red-400">{machine.metrics.network.packetLossPct}% loss</span>
+                        </>
+                      )}
+                    </span>
+                    <span className="min-w-0 truncate tabular-nums">
+                      {nicDevice && nicDevice.txBps != null && nicDevice.rxBps != null && (
+                        <>net <span className="text-orange-400">{'\u2191 '}{formatThroughputShort(nicDevice.txBps)}</span>
+                          <span className="ml-1 text-green-400">{'\u2193 '}{formatThroughputShort(nicDevice.rxBps)}</span>
+                          {(machine.metrics.network?.packetLossPct ?? 0) > 0 && (
+                            <span className="ml-1 text-red-400">{Math.round(machine.metrics.network?.packetLossPct ?? 0)}% loss</span>
                           )}
-                        </span>
-                      </>
-                    )}
+                        </>
+                      )}
+                    </span>
                   </div>
                 </div>
               </Button>
@@ -471,7 +530,7 @@ function MachineCard({
           <div className="border-t border-border/50 relative cursor-pointer group">
             <div className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
             <div className="relative flex items-center px-4 py-1.5 select-none">
-              <ChevronUp className="h-4 w-4 text-foreground/50 group-hover:text-foreground/70 transition-colors flex-shrink-0" />
+              <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
             </div>
           </div>
         </CollapsibleTrigger>
@@ -677,13 +736,13 @@ function MachineCard({
           <CollapsibleTrigger asChild>
             <Button variant="ghost" className="w-full border-t border-border/50 rounded-none cursor-pointer px-4 py-2.5 h-auto">
               <div className="flex items-center gap-2 w-full select-none">
-                <ChevronDown className="h-4 w-4 text-foreground/70 flex-shrink-0" />
+                <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 {displayMonitors.length > 0 ? (
-                  <div className="flex items-center gap-2.5 text-sm text-muted-foreground overflow-hidden min-w-0">
+                  <div className="flex items-center gap-2.5 text-sm text-muted-foreground/70 overflow-hidden min-w-0">
                     <span className="tabular-nums flex-shrink-0">
                       <span className="text-foreground font-medium">{displayMonitors.length}</span> display{displayMonitors.length === 1 ? '' : 's'}
                     </span>
-                    <span className="text-border flex-shrink-0">|</span>
+                    <span className="text-border/60 flex-shrink-0">|</span>
                     <span className="truncate tabular-nums">
                       {displayMonitors.map((m, i) => {
                         const rotated = m.rotation === 90 || m.rotation === 270;
@@ -691,7 +750,7 @@ function MachineCard({
                         const h = rotated ? m.resolution.width : m.resolution.height;
                         return (
                           <span key={m.id}>
-                            {i > 0 && <span className="mx-1.5 text-border">·</span>}
+                            {i > 0 && <span className="mx-1.5 text-border/60">·</span>}
                             <span className={m.primary ? 'text-foreground font-medium' : ''}>{w}x{h}</span>
                           </span>
                         );
@@ -726,7 +785,7 @@ function MachineCard({
             <div className="border-t border-border/50 relative cursor-pointer group">
               <div className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
               <div className="relative flex items-center px-4 py-1.5 select-none">
-                <ChevronUp className="h-4 w-4 text-foreground/50 group-hover:text-foreground/70 transition-colors flex-shrink-0" />
+                <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
               </div>
             </div>
           </CollapsibleTrigger>
@@ -781,24 +840,26 @@ function MachineCard({
           {!processesExpanded && (
             <CollapsibleTrigger asChild>
               <Button variant="ghost" className="w-full border-t border-border/50 rounded-none cursor-pointer px-4 py-2.5 h-auto">
-                <div className="flex items-center gap-2.5 w-full select-none overflow-hidden">
-                  <ChevronDown className="h-4 w-4 text-foreground/70 flex-shrink-0" />
-                  <span className="text-sm flex-shrink-0 text-muted-foreground">
+                {/* gap-2 after the chevron like the metrics and displays rows, so
+                    the three labels share a left edge */}
+                <div className="flex items-center gap-2 w-full select-none overflow-hidden">
+                  <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  <span className="text-sm flex-shrink-0 text-muted-foreground/70">
                     <span className="text-foreground font-medium">{machine.processes.length}</span> process{machine.processes.length > 1 ? 'es' : ''}
                   </span>
-                  <span className="text-border flex-shrink-0">|</span>
+                  <span className="text-border/60 flex-shrink-0">|</span>
                   <div className="flex items-center overflow-hidden min-w-0">
                     {machine.processes.map((proc, i) => (
                       <span key={proc.id} className="flex items-center flex-shrink-0">
-                        {i > 0 && <span className="mx-1.5 text-border">·</span>}
-                        <span className="text-sm text-muted-foreground truncate max-w-[100px]">{proc.name}</span>
-                        <span className={`ml-1 inline-block w-2 h-2 rounded-full flex-shrink-0 ${
+                        {i > 0 && <span className="mx-1.5 text-border/60">·</span>}
+                        <span className={`mr-1.5 inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                           !machine.online ? 'bg-muted-foreground/40' :
                           proc.status === 'RUNNING' ? 'bg-green-500' :
                           proc.status === 'INACTIVE' ? 'bg-slate-500' :
                           proc.status === 'LAUNCH_FAILED' || proc.status === 'STOPPED' || proc.status === 'KILLED' ? 'bg-red-500' :
                           'bg-yellow-500'
                         }`} />
+                        <span className="text-sm text-muted-foreground truncate max-w-[160px]" title={proc.name}>{proc.name}</span>
                       </span>
                     ))}
                   </div>
@@ -811,7 +872,7 @@ function MachineCard({
               <div className="border-t border-border/50 relative cursor-pointer group">
                 <div className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                 <div className="relative flex items-center px-4 py-2 select-none">
-                  <ChevronUp className="h-4 w-4 text-foreground/50 group-hover:text-foreground/70 transition-colors flex-shrink-0" />
+                  <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
                 </div>
               </div>
             </CollapsibleTrigger>
@@ -1005,12 +1066,12 @@ function MachineCard({
 
       {/* add process button for machines with no processes — admin-only */}
       {isSiteAdmin && (!machine.processes || machine.processes.length === 0) && (
-        <div className="border-t border-border/50 p-4">
+        <div className="border-t border-border/50 flex justify-center p-3">
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
             onClick={onCreateProcess}
-            className="w-full bg-card border-border/50 text-accent-cyan hover:bg-accent-cyan/20 hover:border-accent-cyan/40 cursor-pointer"
+            className="bg-card border border-border/50 text-accent-cyan hover:bg-accent-cyan/15 hover:text-accent-cyan"
           >
             <Plus className="h-3 w-3 mr-1" />
             add process
@@ -1032,7 +1093,6 @@ export function MachineCardView({
   currentSiteId,
   siteTimezone = 'UTC',
   siteTimeFormat = '12h',
-  schedulesFollowSiteTime,
   onEditProcess,
   onDuplicateProcess,
   onCreateProcess,
@@ -1048,6 +1108,8 @@ export function MachineCardView({
   onDismissRestartPending,
   onScreenshot,
   onLiveView,
+  onSwoop,
+  schedulesFollowSiteTime,
 }: MachineCardViewProps) {
   const { userPreferences, isSiteAdmin } = useAuth();
   const canSiteAdmin = isSiteAdmin(currentSiteId);
@@ -1074,7 +1136,6 @@ export function MachineCardView({
           currentSiteId={currentSiteId}
           siteTimezone={siteTimezone}
           siteTimeFormat={siteTimeFormat}
-          schedulesFollowSiteTime={schedulesFollowSiteTime}
           userPreferences={userPreferences}
           isSiteAdmin={canSiteAdmin}
           cardPref={prefs.cardView[machine.machineId] ?? {}}
@@ -1096,9 +1157,11 @@ export function MachineCardView({
           onRestart={onRestart ? () => onRestart(machine.machineId) : undefined}
           onShutdown={onShutdown ? () => onShutdown(machine.machineId) : undefined}
           onCancelRestart={onCancelRestart ? () => onCancelRestart(machine.machineId) : undefined}
-          onDismissRestartPending={onDismissRestartPending ? (processName) => onDismissRestartPending(machine.machineId, processName) : undefined}
+          onDismissRestartPending={onDismissRestartPending ? () => onDismissRestartPending(machine.machineId) : undefined}
           onScreenshot={onScreenshot ? () => onScreenshot(machine.machineId) : undefined}
           onLiveView={onLiveView ? () => onLiveView(machine.machineId) : undefined}
+          onSwoop={onSwoop ? () => onSwoop(machine.machineId) : undefined}
+          schedulesFollowSiteTime={schedulesFollowSiteTime}
           showLocalClock={showLocalClock}
         />
       ))}

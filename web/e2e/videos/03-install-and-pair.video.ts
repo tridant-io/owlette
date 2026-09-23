@@ -349,8 +349,8 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
         // agent's first write, `_update_presence(True)` — exactly these four
         // fields, merged (agent/src/firebase_client.py:1036-1041). Order is
         // load-bearing in the agent too (:591-593): presence first, because it
-        // needs no hardware data; metrics second, after the slow WMI/nvidia-smi
-        // profile build. That two-step is what is staged here.
+        // needs no hardware data; metrics second, after the slow WMI and sensor
+        // work of the profile build. That two-step is what is staged here.
         //
         // `lastHeartbeat` is a plain number, NOT serverTimestamp: recordScene
         // freezes the page's Date at FIXED_NOW_MS, so a real server timestamp

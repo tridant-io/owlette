@@ -82,6 +82,9 @@ This bumps:
 - `/VERSION`
 - `/agent/VERSION`
 - `/web/package.json`
+- `/desktop/package.json` and `/desktop/src-tauri/tauri.conf.json`
+- `/desktop/src-tauri/Cargo.toml` and `/agent/host/Cargo.toml` (the lockfiles follow on the next build)
+- the version strings in `README.md`, `.claude/CLAUDE.md`, and `docs/internal/version-management.md`
 
 4. Commit and push.
 
@@ -89,10 +92,13 @@ Commit the changelog and version changes, then push to `dev` or the appropriate 
 
 5. Build the installer.
 
-```bash
-cd agent
-powershell -Command "& './build_installer_full.bat'"
+`build_installer_full.bat` ends with `pause` and pauses on every error branch, so run it with stdin redirected from `NUL` and invoke it by full path, or it hangs a non-interactive shell:
+
+```powershell
+cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
 ```
+
+Exit code 0 means the `.exe` was built; read the log on failure. Do not use `powershell -Command "& './build_installer_full.bat'"`, which hangs on the trailing `pause`.
 
 Expected runtime is about 5 minutes.
 
@@ -102,10 +108,11 @@ Expected output:
 agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe
 ```
 
-Wave 1 made tool discovery more forgiving:
+Tool discovery:
 
 - Inno Setup respects `%ISCC%`, checks `PATH`, then falls back to the default install path.
-- Python 3.11 respects `%PYTHON311_ROOT%`, checks discoverable paths, then falls back to expected install paths.
+- No system Python is used: the build downloads the Python 3.11.8 embeddable zip into `agent/downloads/` and verifies its SHA-256 before extracting it.
+- Cargo is found through `%USERPROFILE%\.cargo\bin`, which the build prepends to `PATH`.
 
 6. Compute sha256.
 
@@ -189,7 +196,7 @@ Triggers:
 
 Jobs:
 
-- `build`: Windows runner; installs Inno Setup 6.2.2 with Chocolatey; pins Python 3.11; runs `build_installer_full.bat`; computes sha256 in hex and base64; uploads artifact `owlette-installer`; retains it for 7 days.
+- `build`: Windows runner; uses the runner's preinstalled Inno Setup 6 (installing it with Chocolatey only if absent); pins Python 3.11 with `setup-python`; runs `build_installer_full.bat`; computes sha256 in hex and base64; uploads artifact `owlette-installer`; retains it for 7 days.
 - `provenance`: uses `slsa-framework/slsa-github-generator`; creates an in-toto attestation; signs with Sigstore keyless signing; uploads the attestation as a GitHub Release asset on tag pushes.
 - `release`, tag-only: uses `softprops/action-gh-release@v2` and attaches the `.exe` to the GitHub Release.
 - `verify`, tag-only: downloads the installer and provenance, then runs `slsa-verifier verify-artifact`.
@@ -350,9 +357,8 @@ If omitted, the server computes the checksum.
 - [ ] Step 3 uses `PUT /api/installer/upload`.
 - [ ] Step 3 has a different unique `Idempotency-Key`.
 - [ ] Step 3 supplies `checksum_sha256` when possible.
-- [ ] MockService and OwletteService constructor state are in parity.
-- [ ] Any new `self.*` attribute is added to both classes.
-- [ ] `agent/src/owlette_runner.py` hosted startup path still works with MockService.
+- [ ] Any new `self.*` attribute is set in `OwletteService._init_state()`.
+- [ ] `agent/tests/unit/test_service_shutdown.py::test_the_hosted_instance_carries_every_shutdown_attribute` passes.
 - [ ] `service.log` will be tailed for at least 30 seconds after restart.
 - [ ] No blocking IO was added to the 10-second main service loop at `agent/src/owlette_service.py:6557`.
 - [ ] ConnectionManager backoff remains `BACKOFF_BASE=30s`.
@@ -367,7 +373,7 @@ If omitted, the server computes the checksum.
 - [ ] If using CI artifact, it was downloaded from the GitHub Release.
 - [ ] If using local artifact, no checksum match with CI is expected.
 - [ ] A Windows test machine is ready for smoke testing.
-- [ ] `installer_metadata/cortex_cli` exists in the target environment and pins the CLI version the shipped SDK expects (`claude_agent_sdk/_cli_version.py`). Since 3.0.0 the installer no longer bundles `claude.exe`; a missing or stale pin leaves Cortex dead on every fresh install. See `/docs/internal/cortex-cli-provisioning.md`.
+- [ ] The cortex CLI pin the shipped agent actually reads exists in the target environment and pins the CLI version the shipped SDK expects (`claude_agent_sdk/_cli_version.py`). A 3.4+ agent reads `installer_metadata/cortex_cli_<osFamily>_<arch>` — `cortex_cli_windows_x64` for a Windows installer — and never the unsuffixed `installer_metadata/cortex_cli`, which every pre-3.4 agent in the field still reads and which must stay current alongside it until the fleet floor is 3.4. Since 3.0.0 the installer no longer bundles `claude.exe`; a missing or stale pin leaves Cortex dead on every fresh install. See `/docs/internal/cortex-cli-provisioning.md`.
 
 ## post-release smoke
 
@@ -376,7 +382,7 @@ If omitted, the server computes the checksum.
 3. Pair a controlled Windows test machine using the new installer.
 4. Watch `service.log` for at least 30 seconds after restart.
 5. Look for `AttributeError`, crash-loop entries in `logs\service_host.log`, startup failures, connection failures, and update loop failures.
-6. Treat log stability as a release gate because MockService and OwletteService parity has caused repeated crash loops before.
+6. Treat log stability as a release gate because missing service state has caused repeated crash loops before.
 7. Confirm the dashboard shows the agent online.
 8. Confirm the dashboard shows the released version.
 9. Confirm normal service traffic works.

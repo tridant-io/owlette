@@ -40,11 +40,13 @@ export default function WebhooksSettingsPage() {
   // inline rather than synced via a useEffect to avoid the cascading-render
   // lint and extra re-renders when auth data arrives.
   const [userPickedSite, setUserPickedSite] = useState<string>('');
+  // Empty while access resolves, so nothing is selected until the real list is in.
+  const siteIds = userSites ?? [];
   const selectedSite = userPickedSite
     ? userPickedSite
-    : lastSiteId && userSites.includes(lastSiteId)
+    : lastSiteId && siteIds.includes(lastSiteId)
       ? lastSiteId
-      : (userSites[0] ?? '');
+      : (siteIds[0] ?? '');
   // Mutating `/api/webhooks/**` routes require WEBHOOK_MANAGE, which the server
   // grants to superadmins, site admins — and, via an explicit short-circuit, the
   // site's owner (self-serve owners carry global role `member`). `isSiteAdmin`
@@ -145,13 +147,13 @@ export default function WebhooksSettingsPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {userSites.length > 1 && (
+              {siteIds.length > 1 && (
                 <Select value={selectedSite} onValueChange={setUserPickedSite}>
                   <SelectTrigger className="w-48 bg-card border-border text-white">
                     <SelectValue placeholder="pick a site" />
                   </SelectTrigger>
                   <SelectContent>
-                    {userSites.map((s) => (
+                    {siteIds.map((s) => (
                       <SelectItem key={s} value={s}>
                         {s}
                       </SelectItem>

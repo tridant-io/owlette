@@ -7,17 +7,32 @@ Reports required and optional Windows development tools, their detected versions
 and where to fix gaps. This script is read-mostly and does not install system
 dependencies or modify PATH. The optional -InstallWebDeps switch runs npm ci
 and Playwright browser setup in the repo's web directory after required checks
-pass.
+pass. The optional -InstallAgentDeps switch creates the agent venv
+(agent\.venv, Python 3.11) and installs agent\requirements.txt and
+agent\requirements-dev.txt into it; the build hooks run agent checks with that
+interpreter. The optional -DevGrant switch runs on its own, from an elevated
+prompt, instead of the checks: it sets HKLM\SOFTWARE\Owlette\DevMode and grants
+the current account Modify on the installed agent\src and app directories, so
+the deploy hook can copy into them. -RemoveDevGrant reverts both.
 
 .EXAMPLE
 .\scripts\bootstrap-windows.ps1 -Detailed
 
 .EXAMPLE
-.\scripts\bootstrap-windows.ps1 -InstallWebDeps
+.\scripts\bootstrap-windows.ps1 -InstallWebDeps -InstallAgentDeps
+
+.EXAMPLE
+.\scripts\bootstrap-windows.ps1 -DevGrant
+
+.EXAMPLE
+.\scripts\bootstrap-windows.ps1 -RemoveDevGrant
 #>
 param(
     [switch]$InstallWebDeps,
-    [switch]$Detailed
+    [switch]$InstallAgentDeps,
+    [switch]$Detailed,
+    [switch]$DevGrant,
+    [switch]$RemoveDevGrant
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,6 +48,19 @@ $script:FailSymbol = [char]0x2717
 $script:InfoSymbol = [char]0x2139
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$agentVenvPath = Join-Path $repoRoot 'agent\.venv'
+$agentVenvPython = Join-Path $agentVenvPath 'Scripts\python.exe'
+
+$programData = $env:ProgramData
+if ([string]::IsNullOrWhiteSpace($programData)) {
+    $programData = 'C:\ProgramData'
+}
+
+$devGrantDirs = @(
+    (Join-Path $programData 'Owlette\agent\src'),
+    (Join-Path $programData 'Owlette\app')
+)
+$devModeKeyPath = 'SOFTWARE\Owlette'
 
 function Write-Pass {
     param([string]$Message)
@@ -226,6 +254,131 @@ function Complete-Script {
     exit 1
 }
 
+function Get-DevGrantAccount {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]$identity
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'needs an elevated prompt; open PowerShell with "Run as administrator" and run this command again'
+    }
+
+    # the token user is an account, never a group, and elevation keeps it the
+    # developer's own. IsAccountSid refuses SYSTEM, service accounts and every
+    # built-in SID; S-1-12-1 is an Entra ID user, which it does not recognise
+    $sid = $identity.User
+    if (-not ($sid.IsAccountSid() -or $sid.Value -like 'S-1-12-1-*')) {
+        throw "$($identity.Name) ($sid) is not a user account; run this from your own account"
+    }
+
+    return $identity
+}
+
+function Open-DevModeKey {
+    param([switch]$Create)
+
+    # the 64-bit view is the one the service reads, even from a 32-bit shell
+    $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+    if ($Create) {
+        return $hklm.CreateSubKey($devModeKeyPath)
+    }
+
+    return $hklm.OpenSubKey($devModeKeyPath, $true)
+}
+
+function Grant-DevAccess {
+    param([Security.Principal.WindowsIdentity]$Account)
+
+    foreach ($dir in $devGrantDirs) {
+        $item = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+        # the grant belongs on the installed directory itself, not on a link
+        if ($null -eq $item -or -not $item.PSIsContainer -or $item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+            throw "$dir is missing or not a plain directory; install the agent first"
+        }
+    }
+
+    # DevMode goes first: the service's start-up check tolerates the grant only while it is set
+    $key = Open-DevModeKey -Create
+    $key.SetValue('DevMode', 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+    $key.Close()
+    Write-Pass "dev grant: DevMode = 1 in HKLM\$devModeKeyPath"
+
+    foreach ($dir in $devGrantDirs) {
+        # /grant merges into an existing ACE with the same flags, so a rerun still leaves one
+        $grantResult = Invoke-Native -FilePath 'icacls.exe' -ArgumentList @($dir, '/grant', "*$($Account.User.Value):(OI)(CI)M")
+        if ($grantResult.ExitCode -ne 0) {
+            throw "icacls /grant on $dir failed: $(Get-FirstLine $grantResult.Output)"
+        }
+
+        Write-Pass "dev grant: Modify for $($Account.Name) ($($Account.User)) on $dir"
+    }
+
+    Write-Warn 'dev grant: this machine is now dev-tainted; the service logs a DevMode warning at every start'
+    Write-Info 'dev grant: revert from an elevated prompt with .\scripts\bootstrap-windows.ps1 -RemoveDevGrant (icacls /remove on both directories, then deletes DevMode)'
+}
+
+function Revoke-DevAccess {
+    param([Security.Principal.WindowsIdentity]$Account)
+
+    # the grants go before DevMode, so a failure part way leaves DevMode covering what remains
+    foreach ($dir in $devGrantDirs) {
+        $granted = $false
+        if (Test-Path -LiteralPath $dir -PathType Container) {
+            $explicitRules = (Get-Acl -LiteralPath $dir).GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])
+            $granted = $null -ne ($explicitRules | Where-Object { $_.IdentityReference -eq $Account.User -and $_.AccessControlType -eq 'Allow' })
+        }
+
+        if (-not $granted) {
+            Write-Info "dev grant: none for $($Account.Name) on $dir"
+            continue
+        }
+
+        $removeResult = Invoke-Native -FilePath 'icacls.exe' -ArgumentList @($dir, '/remove:g', "*$($Account.User.Value)")
+        if ($removeResult.ExitCode -ne 0) {
+            throw "icacls /remove on $dir failed: $(Get-FirstLine $removeResult.Output)"
+        }
+
+        Write-Pass "dev grant: removed $($Account.Name) from $dir"
+    }
+
+    $key = Open-DevModeKey
+    if ($null -ne $key -and $null -ne $key.GetValue('DevMode')) {
+        $key.DeleteValue('DevMode')
+        Write-Pass "dev grant: DevMode removed from HKLM\$devModeKeyPath"
+    }
+    else {
+        Write-Info 'dev grant: DevMode is not set'
+    }
+
+    if ($null -ne $key) {
+        $key.Close()
+    }
+
+    Write-Info 'dev grant: files created under agent\src while the grant was in place stay owned by this account; reinstall the agent for a clean tree'
+}
+
+# the dev grant changes the installed agent rather than checking the toolchain,
+# so it runs on its own
+if ($DevGrant -or $RemoveDevGrant) {
+    try {
+        if ($DevGrant -and $RemoveDevGrant) {
+            throw 'pass -DevGrant or -RemoveDevGrant, not both'
+        }
+
+        $devAccount = Get-DevGrantAccount
+        if ($DevGrant) {
+            Grant-DevAccess -Account $devAccount
+        }
+        else {
+            Revoke-DevAccess -Account $devAccount
+        }
+    }
+    catch {
+        Write-Fail "dev grant: $($_.Exception.Message)"
+        exit 1
+    }
+
+    exit 0
+}
+
 Write-Host 'CORE' -ForegroundColor Cyan
 
 Invoke-Check -Name 'Windows 10+ 64-bit' -OnError Fail -ScriptBlock {
@@ -390,6 +543,27 @@ Invoke-Check -Name 'Python 3.11' -OnError Fail -ScriptBlock {
     }
 }
 
+# A warn, not a fail: a missing venv is what -InstallAgentDeps creates, and that
+# step is skipped whenever any required check has failed.
+Invoke-Check -Name 'agent venv' -OnError Warn -ScriptBlock {
+    if (-not (Test-Path -LiteralPath $agentVenvPython -PathType Leaf)) {
+        Write-Warn 'agent venv: missing; run with -InstallAgentDeps (the commit hook runs pytest with it)'
+        return
+    }
+
+    $venvResult = Invoke-Native -FilePath $agentVenvPython -ArgumentList @('--version')
+    $venvVersion = Get-FirstLine $venvResult.Output
+
+    if ($venvResult.ExitCode -eq 0 -and $venvVersion -match 'Python 3\.11') {
+        Write-Pass "agent venv: $venvVersion"
+    }
+    else {
+        Write-Warn "agent venv: $venvVersion is not Python 3.11 or does not run; recreate agent\.venv with -InstallAgentDeps"
+    }
+
+    Write-Detail "agent venv detail: path $agentVenvPython"
+}
+
 # The desktop app replaced the tkinter GUI in 3.0.0 and owlette-host replaced
 # NSSM, so the installer build now needs a Rust toolchain instead of a system
 # Python with Tk. Fatal, not a warn: without cargo the full build stops at step
@@ -461,11 +635,6 @@ Invoke-Check -Name 'Inno Setup 6' -OnError Warn -ScriptBlock {
 # reports whether THIS machine is running a host-registered service yet, which
 # is the first thing to check when a local agent behaves oddly after an upgrade.
 Invoke-Check -Name 'Service host' -OnError Info -ScriptBlock {
-    $programData = $env:ProgramData
-    if ([string]::IsNullOrWhiteSpace($programData)) {
-        $programData = 'C:\ProgramData'
-    }
-
     $hostPath = Join-Path $programData 'Owlette\tools\owlette-host.exe'
 
     if (Test-Path -LiteralPath $hostPath -PathType Leaf) {
@@ -592,6 +761,53 @@ if ($InstallWebDeps) {
 }
 else {
     Write-Host 'tip: run with -InstallWebDeps to install web dev dependencies after fixing any failures.' -ForegroundColor Cyan
+}
+
+if ($InstallAgentDeps) {
+    if ($script:failed -ne 0) {
+        Write-Info 'agent dependencies: skipped because required checks failed'
+        Complete-Script
+    }
+
+    $agentPath = Join-Path $repoRoot 'agent'
+
+    # An existing 3.11 venv is reused: pip install -r is idempotent, so a rerun
+    # brings it up to the current pins. One on any other interpreter stops the
+    # install instead of being rebuilt, because rebuilding means deleting the
+    # directory, and that is left to the person running the script.
+    if (Test-Path -LiteralPath $agentVenvPython -PathType Leaf) {
+        $existingResult = Invoke-Native -FilePath $agentVenvPython -ArgumentList @('--version')
+        $existingVersion = Get-FirstLine $existingResult.Output
+        if ($existingResult.ExitCode -ne 0 -or $existingVersion -notmatch 'Python 3\.11') {
+            Write-Fail "agent dependencies: $agentVenvPath is not a working Python 3.11 venv ($existingVersion); delete it and rerun"
+            Complete-Script
+        }
+    }
+    else {
+        Write-Info "agent dependencies: creating venv at $agentVenvPath"
+        & py -3.11 -m venv $agentVenvPath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail 'agent dependencies: py -3.11 -m venv failed'
+            Complete-Script
+        }
+    }
+
+    Write-Info 'agent dependencies: upgrading pip'
+    & $agentVenvPython -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail 'agent dependencies: pip upgrade failed'
+        Complete-Script
+    }
+
+    Write-Info 'agent dependencies: installing requirements.txt and requirements-dev.txt'
+    & $agentVenvPython -m pip install -r (Join-Path $agentPath 'requirements.txt') -r (Join-Path $agentPath 'requirements-dev.txt')
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail 'agent dependencies: pip install failed'
+        Complete-Script
+    }
+}
+else {
+    Write-Host 'tip: run with -InstallAgentDeps to create the agent venv after fixing any failures.' -ForegroundColor Cyan
 }
 
 Complete-Script

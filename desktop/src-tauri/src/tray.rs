@@ -118,16 +118,35 @@ struct TrayView {
   status: String,
   /// Health-probe message, when there is one.
   health: Option<String>,
+  /// Live swoop session, when one is capturing.
+  swoop: Option<SwoopView>,
   start_on_login: bool,
 }
 
+/// The swoop row, when capture is running. `None` — no row at all — is the
+/// normal state: a permanent "swoop: idle" line would train the operator to
+/// stop reading it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SwoopView {
+  /// The menu and tooltip row.
+  line: String,
+  /// Unix seconds capture started. The toast's identity, so one session raises
+  /// one toast however the document flickers.
+  since: u64,
+  /// `tray` is the only indicator policy that asks for a toast: `banner` puts
+  /// the streamer's own badge on the screen instead, and `none` is a site that
+  /// turned the local signal off.
+  toast: bool,
+}
+
 /// Live menu, kept so the common case is a text update. Rebuilt only when the
-/// health row appears or disappears — muda cannot hide an item in place.
+/// health or swoop row appears or disappears — muda cannot hide an item in place.
 struct TrayMenu {
   menu: Menu<Wry>,
   service: MenuItem<Wry>,
   status: MenuItem<Wry>,
   health: Option<MenuItem<Wry>>,
+  swoop: Option<MenuItem<Wry>>,
   start_on_login: CheckMenuItem<Wry>,
 }
 
@@ -327,6 +346,8 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     service: seed.service,
     status: seed.status,
     health: seed.health,
+    // The seed is a placeholder read; the monitor's first tick fills this in.
+    swoop: None,
     start_on_login: startup_link::is_enabled(),
   };
 
@@ -477,6 +498,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
   let mut flash_dim = false;
   let mut degraded_since: Option<Instant> = None;
   let mut degraded_notified = false;
+  let mut swoop_toasted: Option<u64> = None;
   let mut paint = PaintState::new(started);
   let mut wanted_tooltip: Option<String> = None;
 
@@ -510,6 +532,9 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
         service: text.service,
         status: text.status,
         health: text.health,
+        // Text, so the live document: a badge smoothed over a read that caught
+        // a rename would outlive the capture it claims.
+        swoop: swoop_view(&live, scm_running),
         start_on_login: startup_link::is_enabled(),
       };
 
@@ -554,6 +579,23 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
             degraded_notified = true;
             let (title, body) = degraded_notification(&view);
             notify(&app, title, body);
+          }
+        }
+      }
+
+      // One toast per session, keyed on when capture started, so a torn read
+      // that drops the row for a tick cannot raise a second one.
+      if let Some(swoop) = &view.swoop {
+        if swoop_toasted != Some(swoop.since) {
+          swoop_toasted = Some(swoop.since);
+          // A session already running when this app started is not news — the
+          // grace window is what tells that from a session starting now.
+          if swoop.toast && now.duration_since(started) > NOTIFY_GRACE {
+            notify(
+              &app,
+              "owlette — swoop session started",
+              "someone is viewing this screen.".to_string(),
+            );
           }
         }
       }
@@ -602,7 +644,9 @@ fn apply_menu(app: &AppHandle, view: &TrayView) {
 
   match state.menu.lock() {
     Ok(mut menu) => {
-      if menu.health.is_some() != view.health.is_some() {
+      if menu.health.is_some() != view.health.is_some()
+        || menu.swoop.is_some() != view.swoop.is_some()
+      {
         match build_menu(app, view) {
           Ok(rebuilt) => {
             if let Err(error) = tray.set_menu(Some(rebuilt.menu.clone())) {
@@ -617,6 +661,9 @@ fn apply_menu(app: &AppHandle, view: &TrayView) {
         let _ = menu.status.set_text(&view.status);
         if let (Some(item), Some(text)) = (&menu.health, &view.health) {
           let _ = item.set_text(text);
+        }
+        if let (Some(item), Some(swoop)) = (&menu.swoop, &view.swoop) {
+          let _ = item.set_text(&swoop.line);
         }
         let _ = menu.start_on_login.set_checked(view.start_on_login);
       }
@@ -867,6 +914,47 @@ fn determine_status(doc: &StatusDoc, service_running: bool) -> Status {
   }
 }
 
+/// The status document's `swoop` block, as the tray shows it.
+///
+/// Only `active` lights the row, and `active` is capture — the streamer stays
+/// alive for a minute after the last viewer leaves, and a badge that outlives
+/// the capture is the one thing the indicator promises never happens. An SCM
+/// that says stopped outranks the document here as it does everywhere else.
+fn swoop_view(doc: &StatusDoc, service_running: bool) -> Option<SwoopView> {
+  if !service_running {
+    return None;
+  }
+  let StatusDoc::Fresh(data) = doc else {
+    return None;
+  };
+  let swoop = data.get("swoop")?;
+  if !swoop.get("active").and_then(Value::as_bool).unwrap_or(false) {
+    return None;
+  }
+
+  Some(SwoopView {
+    line: swoop_line(
+      swoop.get("viewers").and_then(Value::as_u64).unwrap_or(0),
+      swoop.get("controllers").and_then(Value::as_u64).unwrap_or(0),
+    ),
+    since: swoop.get("since").and_then(Value::as_u64).unwrap_or(0),
+    toast: swoop.get("indicator").and_then(Value::as_str) == Some("tray"),
+  })
+}
+
+fn swoop_line(viewers: u64, controllers: u64) -> String {
+  if viewers == 0 {
+    // Capture running with nobody counted: say the part that matters.
+    return "swoop: capture active".to_string();
+  }
+  let noun = if viewers == 1 { "viewer" } else { "viewers" };
+  if controllers > 0 {
+    format!("swoop: {viewers} {noun} watching, {controllers} in control")
+  } else {
+    format!("swoop: {viewers} {noun} watching")
+  }
+}
+
 /// Title and body for a degraded-state toast.
 fn degraded_notification(view: &TrayView) -> (&'static str, String) {
   if view.code == StatusCode::Warning {
@@ -934,6 +1022,16 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
     Some(text) => Some(MenuItem::with_id(app, "health", text, false, None::<&str>)?),
     None => None,
   };
+  let swoop = match &view.swoop {
+    Some(swoop) => Some(MenuItem::with_id(
+      app,
+      "swoop",
+      &swoop.line,
+      false,
+      None::<&str>,
+    )?),
+    None => None,
+  };
 
   let separator = PredefinedMenuItem::separator(app)?;
   let open = MenuItem::with_id(app, ID_OPEN, "open owlette", true, None::<&str>)?;
@@ -953,6 +1051,9 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   if let Some(health) = &health {
     items.push(health);
   }
+  if let Some(swoop) = &swoop {
+    items.push(swoop);
+  }
   items.extend([
     &separator as &dyn tauri::menu::IsMenuItem<Wry>,
     &open,
@@ -968,18 +1069,24 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
     service,
     status,
     health,
+    swoop,
     start_on_login,
   })
 }
 
 fn tooltip(root: &Path, view: &TrayView) -> String {
-  format!(
+  let mut text = format!(
     "owlette v{}\nhostname: {}\n{}\n{}",
     agent_version(root),
     hostname(),
     view.service,
     view.status
-  )
+  );
+  if let Some(swoop) = &view.swoop {
+    text.push('\n');
+    text.push_str(&swoop.line);
+  }
+  text
 }
 
 /// Version of the agent this app sits alongside — that, not this crate's, is
@@ -1729,6 +1836,7 @@ mod tests {
       service: "service: running".to_string(),
       status: "status: disconnected from TEC".to_string(),
       health: None,
+      swoop: None,
       start_on_login: false,
     };
     let (title, _) = degraded_notification(&view);
@@ -1782,6 +1890,7 @@ mod tests {
       service: "service: error".to_string(),
       status: status.to_string(),
       health: None,
+      swoop: None,
       start_on_login: false,
     };
 
@@ -1841,5 +1950,88 @@ mod tests {
     assert_eq!(agent_version(&dir), "2.12.21");
 
     let _ = fs::remove_dir_all(&dir);
+  }
+
+  /// `swoop`, as `owlette_service._write_service_status` publishes it.
+  fn swoop_doc(active: bool, viewers: u64, controllers: u64, indicator: &str) -> StatusDoc {
+    fresh(json!({
+      "service": { "running": true },
+      "firebase": { "enabled": true, "connected": true, "site_id": "hq" },
+      "health": { "status": "ok" },
+      "swoop": {
+        "active": active, "viewers": viewers, "controllers": controllers,
+        "since": 1_786_680_000_u64, "indicator": indicator
+      }
+    }))
+  }
+
+  #[test]
+  fn a_live_session_names_who_is_watching() {
+    let view = swoop_view(&swoop_doc(true, 2, 1, "tray"), RUNNING).expect("a swoop row");
+    assert_eq!(view.line, "swoop: 2 viewers watching, 1 in control");
+    assert_eq!(view.since, 1_786_680_000);
+  }
+
+  #[test]
+  fn one_viewer_reads_as_one_viewer() {
+    let view = swoop_view(&swoop_doc(true, 1, 0, "none"), RUNNING).expect("a swoop row");
+    assert_eq!(view.line, "swoop: 1 viewer watching");
+  }
+
+  #[test]
+  fn the_sixty_second_linger_does_not_keep_the_badge_lit() {
+    // The last viewer has left: the streamer is still alive for the linger,
+    // but capture stopped at the departure and the row must go with it.
+    assert!(swoop_view(&swoop_doc(false, 0, 0, "tray"), RUNNING).is_none());
+  }
+
+  #[test]
+  fn an_agent_that_publishes_no_swoop_block_shows_no_row() {
+    let data = fresh(json!({
+      "service": { "running": true },
+      "firebase": { "enabled": true, "connected": true, "site_id": "hq" }
+    }));
+    assert!(swoop_view(&data, RUNNING).is_none());
+  }
+
+  #[test]
+  fn a_stopped_service_shows_no_swoop_row_whatever_the_document_claims() {
+    // Same precedence as `determine_status`: nothing published can outrank the
+    // SCM, and a service that is down is capturing nothing.
+    assert!(swoop_view(&swoop_doc(true, 1, 0, "tray"), STOPPED).is_none());
+  }
+
+  #[test]
+  fn a_stale_or_missing_document_shows_no_swoop_row() {
+    assert!(swoop_view(&StatusDoc::Stale, RUNNING).is_none());
+    assert!(swoop_view(&StatusDoc::Missing, RUNNING).is_none());
+    assert!(swoop_view(&StatusDoc::Unreadable, RUNNING).is_none());
+  }
+
+  #[test]
+  fn only_the_tray_policy_asks_for_a_toast() {
+    // `banner` is the streamer's own on-screen badge and `none` is a site that
+    // turned the local signal off; neither wants a second announcement.
+    for (indicator, wanted) in [("tray", true), ("banner", false), ("none", false)] {
+      let view = swoop_view(&swoop_doc(true, 1, 0, indicator), RUNNING).expect("a swoop row");
+      assert_eq!(view.toast, wanted, "indicator: {indicator}");
+    }
+  }
+
+  #[test]
+  fn the_tooltip_carries_the_swoop_row_and_drops_it_again() {
+    let dir = std::env::temp_dir().join(format!("owlette-tray-swoop-{}", std::process::id()));
+    let mut view = TrayView {
+      code: StatusCode::Normal,
+      service: "service: running".to_string(),
+      status: "status: connected to TEC".to_string(),
+      health: None,
+      swoop: swoop_view(&swoop_doc(true, 1, 1, "tray"), RUNNING),
+      start_on_login: false,
+    };
+    assert!(tooltip(&dir, &view).ends_with("swoop: 1 viewer watching, 1 in control"));
+
+    view.swoop = None;
+    assert!(tooltip(&dir, &view).ends_with("status: connected to TEC"));
   }
 }

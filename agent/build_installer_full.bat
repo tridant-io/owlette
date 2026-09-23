@@ -139,13 +139,11 @@ echo Pip installed successfully!
 :: Step 5: Install dependencies
 :: ============================================================================
 echo [5/9] Installing dependencies (this may take a few minutes)...
-:: Wheels only, so no package runs arbitrary setup.py code at build time. GPUtil
-:: is the sole exception - it has never published a wheel - and is named here
-:: explicitly. It used to be handled by a blanket "retry with source builds"
-:: fallback, which meant the --only-binary pass failed on EVERY build and the
-:: real install was the unconstrained retry, permitting source builds for all
-:: 77 packages. Naming the exception keeps the guarantee for the other 76: a
-:: missing wheel for anything else now fails the build instead of widening it.
+:: Wheels only, so no package runs arbitrary setup.py code at build time, with
+:: no exceptions - a missing wheel fails the build instead of widening the rule.
+:: This used to be a blanket "retry with source builds" fallback, which meant the
+:: --only-binary pass failed on EVERY build and the real install was the
+:: unconstrained retry, permitting source builds for all 77 packages.
 ::
 :: Deliberately NOT --ignore-installed. get-pip (step 4) bootstraps its own
 :: setuptools/packaging/wheel, and --ignore-installed skips pip's uninstall
@@ -154,7 +152,7 @@ echo [5/9] Installing dependencies (this may take a few minutes)...
 :: packaging metadata dirs; importlib.metadata then resolved by directory scan
 :: order, so a scanner on a fleet machine read the newer (patched) version
 :: while the older (vulnerable) code was what actually executed.
-"%~dp0build\python\python.exe" -m pip install --no-warn-script-location --only-binary=:all: --no-binary=GPUtil -r "%~dp0requirements.txt"
+"%~dp0build\python\python.exe" -m pip install --no-warn-script-location --only-binary=:all: -r "%~dp0requirements.txt"
 if errorlevel 1 (
     echo ERROR: Failed to install dependencies
     pause
@@ -259,7 +257,7 @@ if not exist "%DESKTOP_EXE%" (
 echo Desktop app built OK
 
 :: ============================================================================
-:: Step 7: Build the service host (Rust)
+:: Step 7: Build the Rust binaries (service host + swoop streamer)
 :: ============================================================================
 :: Replaces "acquire NSSM". 3.0.0 hosts OwletteService in our own supervisor
 :: (agent\host) instead of NSSM 2.24 - a 2014 binary, the last stable release
@@ -269,7 +267,8 @@ echo Desktop app built OK
 :: The host is ~320 KB, has one dependency (windows-service, the same crate the
 :: desktop app already drives the SCM with), and is built from source here, so
 :: the build no longer depends on nssm.cc being up either.
-echo [7/9] Building the service host ^(Rust, release^)...
+:: Both crates are built in this one step so the [n/9] labels stay put.
+echo [7/9] Building the Rust binaries ^(service host + swoop streamer, release^)...
 mkdir build\tools 2>nul
 
 set "HOST_DIR=%~dp0host"
@@ -313,6 +312,60 @@ if errorlevel 1 (
 )
 echo Service host built OK
 
+:: The swoop streamer - owlette-swoop.exe, the remote-session binary the service
+:: spawns. Step 8 copies it straight from the cargo target directory, the same
+:: way it takes the desktop app. cargo runs with agent\swoop as the working
+:: directory and never --manifest-path: that is the only form under which the
+:: crate's .cargo\config.toml applies, and +crt-static lives there.
+echo Building the swoop streamer...
+set "SWOOP_DIR=%~dp0swoop"
+if not exist "%SWOOP_DIR%\Cargo.toml" (
+    echo ERROR: Swoop streamer sources not found at "%SWOOP_DIR%"
+    pause
+    exit /b 1
+)
+
+:: audio-opus is NOT a default feature, so a bare `cargo build --release`
+:: ships a streamer with no audio -- which is not the binary anything was
+:: validated against. audiopus_sys vendors libopus and builds it with cmake:
+:: present on github windows runners, but usually only inside visual studio
+:: locally, so find it before cargo does and fails less clearly.
+where cmake >nul 2>&1
+if errorlevel 1 (
+    set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+    call :locate_cmake
+)
+where cmake >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: cmake not found on PATH and not found in the Visual Studio install.
+    echo        The swoop streamer builds libopus from source ^(audio-opus feature^).
+    echo        Install CMake, or add the one under Visual Studio to PATH.
+    pause
+    exit /b 1
+)
+
+:: the vendored opus declares cmake_minimum_required(3.1) and cmake 4.0 refuses
+:: anything below 3.5. harmless on an older cmake, required on a new one.
+set "CMAKE_POLICY_VERSION_MINIMUM=3.5"
+
+pushd "%SWOOP_DIR%"
+call cargo build --release --features audio-opus
+if errorlevel 1 (
+    echo ERROR: cargo build failed in "%SWOOP_DIR%"
+    popd
+    pause
+    exit /b 1
+)
+popd
+
+set "SWOOP_EXE=%SWOOP_DIR%\target\release\owlette-swoop.exe"
+if not exist "%SWOOP_EXE%" (
+    echo ERROR: cargo reported success but "%SWOOP_EXE%" is missing
+    pause
+    exit /b 1
+)
+echo Swoop streamer built OK
+
 :: ============================================================================
 :: Step 8: Create installer package structure
 :: ============================================================================
@@ -324,6 +377,7 @@ mkdir build\installer_package\agent\src 2>nul
 mkdir build\installer_package\agent\icons 2>nul
 mkdir build\installer_package\app 2>nul
 mkdir build\installer_package\tools 2>nul
+mkdir build\installer_package\swoop 2>nul
 mkdir build\installer_package\scripts 2>nul
 
 :: Note: config, logs, cache, tmp directories are now created in ProgramData by the installer
@@ -381,6 +435,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: Copy the swoop streamer. Lands at {app}\swoop\owlette-swoop.exe on the
+:: target - the exact path shared_utils.get_swoop_exe_path() resolves.
+echo Copying swoop streamer...
+copy /Y "%SWOOP_EXE%" build\installer_package\swoop\ >nul
+if errorlevel 1 (
+    echo ERROR: Failed to copy "%SWOOP_EXE%"
+    pause
+    exit /b 1
+)
+
 :: Copy installation scripts. The launch_gui.bat / launch_tray.bat hops are gone
 :: with the python UI - the Start-menu and startup shortcuts now point straight
 :: at the desktop exe.
@@ -418,10 +482,19 @@ mkdir build\installer_output 2>nul
 :: The host binary is what an AV false positive removes mid-build (2026-09-08:
 :: Defender ML quarantined it between the copy and the compile). Re-check right
 :: before ISCC so a missing payload fails HERE with a reason, not inside Inno.
+:: owlette-swoop.exe is the same shape of binary and carries the same release
+:: profile, so it gets the same check.
 if not exist "build\installer_package\tools\owlette-host.exe" (
     echo ERROR: build\installer_package\tools\owlette-host.exe is missing.
     echo It was copied earlier in this build, so something removed it since.
     echo Check Windows Security protection history for owlette-host.exe.
+    pause
+    exit /b 1
+)
+if not exist "build\installer_package\swoop\owlette-swoop.exe" (
+    echo ERROR: build\installer_package\swoop\owlette-swoop.exe is missing.
+    echo It was copied earlier in this build, so something removed it since.
+    echo Check Windows Security protection history for owlette-swoop.exe.
     pause
     exit /b 1
 )
@@ -467,3 +540,19 @@ echo already installed, which is how the docs went three versions stale.
 echo.
 
 pause
+
+:: the script ends here. batch falls through a label, so the subroutine
+:: below must never be reached by the normal path.
+exit /b 0
+
+:locate_cmake
+:: vswhere knows where visual studio put cmake. via a temp file rather than a
+:: for/f backquote command: nested quotes inside one, inside an if block, is
+:: what cmd gets wrong.
+if not exist "%VSWHERE%" goto :eof
+"%VSWHERE%" -latest -products * -find "**\CMake\bin\cmake.exe" > "%TEMP%\owlette_cmake_path.txt" 2>nul
+for /f "usebackq delims=" %%I in ("%TEMP%\owlette_cmake_path.txt") do (
+    if exist "%%I" set "PATH=%%~dpI;%PATH%"
+)
+del "%TEMP%\owlette_cmake_path.txt" >nul 2>&1
+goto :eof

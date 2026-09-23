@@ -1,8 +1,7 @@
-pywin32==312  # >=311 required by mcp 2.x (see the claude-agent-sdk note below)
-psutil==5.9.5
-email-validator==2.0.0
-GPUtil==1.4.0
-cryptography==50.0.0
+pywin32==312 ; sys_platform == "win32"  # >=311 required by mcp 2.x (see the claude-agent-sdk note below)
+psutil==7.2.2
+email-validator==2.3.0
+cryptography==50.0.1
 # Pillow is a DIRECT dependency: screenshot_capture + owlette_service compress
 # captures to JPEG with it. It used to arrive transitively through pystray, which
 # 3.0.0 dropped along with the rest of the python UI (customtkinter, CTkListbox,
@@ -10,9 +9,9 @@ cryptography==50.0.0
 # to be pinned here or the screenshot path breaks on the next clean build.
 Pillow==12.3.0
 packaging==24.2  # >=24.0 required by the wheel that get-pip bootstraps
-setuptools==83.0.0  # >=78.1.1 fixes PackageIndex.download path traversal (CVE-2025-47273)
+setuptools==84.0.0  # >=78.1.1 fixes PackageIndex.download path traversal (CVE-2025-47273)
 requests==2.34.2  # >=2.32.0/.4/2.33.0 CVE fixes; 2.34.0 also fixes greedy no_proxy matching
-tzlocal==5.2  # Convert Windows registry tz names to IANA (e.g. "Pacific Standard Time" -> "America/Los_Angeles") for dashboard timezone display
+tzlocal==5.4.4  # Convert Windows registry tz names to IANA (e.g. "Pacific Standard Time" -> "America/Los_Angeles") for dashboard timezone display
 # DIRECT dependency (R5). Windows ships no IANA database, so zoneinfo.ZoneInfo
 # can only resolve "America/Los_Angeles" out of this package. It arrived
 # transitively through tzlocal's Windows marker — a coincidence, not a contract:
@@ -29,10 +28,22 @@ mss==9.0.2  # Fast cross-platform screenshot library
 # HardwareMonitor wraps LibreHardwareMonitorLib 0.9.6, which uses the signed
 # PawnIO driver the installer deploys — replaced WinTmp, whose bundled LHM
 # still extracted the blocklisted WinRing0 driver at runtime (python.sys).
-HardwareMonitor==1.2.1
-pythonnet==3.1.0  # HardwareMonitor's CLR bridge (was transitive via WinTmp) — pinned like everything else
-wmi==1.5.1  # DIRECT dependency (hardware_profile + shared_utils disk/BIOS probes); used to arrive transitively through WinTmp
-nvidia-ml-py==12.560.30  # NVIDIA GPU fallback (NVML bindings); also used directly by mcp_tools
+HardwareMonitor==1.2.1 ; sys_platform == "win32"
+pythonnet==3.1.0 ; sys_platform == "win32"  # HardwareMonitor's CLR bridge (was transitive via WinTmp) — pinned like everything else
+wmi==1.5.1 ; sys_platform == "win32"  # DIRECT dependency (hardware_profile + shared_utils disk/BIOS probes); used to arrive transitively through WinTmp
+nvidia-ml-py==13.610.43  # NVML bindings — the GPU load/VRAM/temperature source (shared_utils, mcp_tools)
+
+# swoop doorbell — the one persistent WebSocket the agent holds to the signalling
+# room (swoop_doorbell.py). Approved in plan.md, "Approved new dependencies".
+# Reason for the pin: the agent is a threaded Windows service with no asyncio
+# loop, and this is the maintained pure-python client that drives protocol PING
+# frames from run_forever() on a plain daemon thread — the asyncio clients would
+# drag an event loop into the service for one socket. Pinned exactly like every
+# other line here, because this ships to the fleet.
+# Exit condition: unpin when the agent gains an event loop of its own, or when
+# the pin blocks a security fix, or when the protocol needs per-frame control
+# this client does not expose.
+websocket-client==1.9.2
 
 # hoot (cortex on the wire) — the local Claude Code agent behind hoot turns.
 # Unblocked 2026-09-12: pywin32 306 -> 312 lifts the freeze this pin sat under
@@ -58,7 +69,7 @@ claude-agent-sdk==0.2.152
 mcp==2.2.0
 
 # Error monitoring (optional — only active when DSN configured in config.json)
-sentry-sdk==2.66.1
+sentry-sdk==2.68.1
 
 # Firebase integration - now using REST API with OAuth tokens (no Admin SDK needed)
 # firebase-admin==6.4.0  # REMOVED - replaced with REST API client

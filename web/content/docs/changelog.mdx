@@ -5,6 +5,201 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ---
 
+## [Unreleased]
+
+## [3.3.6] - 2026-09-21
+
+### security — the install folder is no longer writable by every local account
+
+owlette keeps its program files and its data under one folder,
+`C:\ProgramData\Owlette`, whose permissions let any standard Windows account on
+the machine modify what was inside it. Two things followed from that: the
+agent's program files — which the service runs with full system privileges —
+could be replaced by an account that has none, and the encrypted file holding
+the machine's owlette credentials could be read by any local account rather
+than only the person using the machine. A machine whose only accounts are
+administrators was never exposed; a machine anyone else can sign in to was.
+Upgrade every machine — 3.3.6 corrects the permissions and keeps them
+corrected.
+
+- The program folders (`agent`, `python`, `tools`, `app`, `scripts`), the
+  documents in the install root and the uninstaller are readable and runnable
+  by standard users, and writable only by the system account and
+  administrators.
+- The installer applies this on every install and upgrade, and the service
+  re-checks it and repairs any drift when it starts and when someone signs in,
+  so a machine whose permissions have been changed corrects itself without a
+  reinstall.
+- The machine's credential file is limited to the system account,
+  administrators and the signed-in user. Each save now writes a new protected
+  file and swaps it over the store in one step instead of rewriting it in
+  place, so there is no moment at which it sits there half-written.
+- A self-update downloads into a folder only the service can write, and the
+  installer's checksum is taken from the same open file the service hands to
+  Windows to run: the file that was verified is the file that runs.
+- The service confirms who created a file before it acts on it — its stop
+  signal, the update marker, the Cortex/hoot command queue and the result a
+  process launch reports back. A file written by an account it cannot vouch
+  for is logged and ignored.
+- The recovery watchdog can be switched off only through a registry value an
+  administrator sets, `HKLM\SOFTWARE\Owlette\WatchdogDisabled`. The old
+  `tmp\watchdog_disabled` file has no effect.
+- The agent sends its credentials only to the owlette.app API hosts. Any other
+  configured address is refused rather than used.
+- Permission checks identify the Windows built-in accounts by their fixed
+  identifiers instead of their English names, so they work on a non-English
+  Windows.
+- **Known limitation — the person signed in at the machine can still read its
+  credentials.** Pairing runs as that user, so the credential file stays
+  readable by the account at the console; 3.4.0 moves pairing and credential
+  storage behind the service and ends it. Every other local account has lost
+  the access.
+- **Known limitation — re-pair machines that had untrusted local accounts.**
+  3.3.6 changes who can read the credential file; it does not invalidate a copy
+  taken before the upgrade. On any machine where an account you do not trust
+  could sign in, re-pair the machine after upgrading so it runs on fresh
+  credentials.
+- **Known limitation — the upgrade onto 3.3.6 is carried out by the agent
+  already on the machine.** A self-update runs from the version installed, so
+  this one download still uses the old, unprotected staging folder; the
+  protected folder applies to every update from 3.3.6 onwards. Running the
+  3.3.6 installer yourself skips that last step.
+- **Known limitation — the desktop app resets one file's permissions.** The
+  tray app writes `tmp\app_states.json` itself, and its write drops the
+  protected permissions the service had set on it; the service restores them on
+  its next write.
+- **Known limitation — `configure_site.py --url` no longer accepts a local
+  development server.** It takes `https://owlette.app/api` or
+  `https://dev.owlette.app/api` and nothing else, so an agent can no longer be
+  pointed at a development API running on the machine.
+- **Known limitation — re-pairing from a remote session.** After the service's
+  permission repair, only the account signed in at the machine's console holds
+  write access to the credential file, so re-pairing from a Remote Desktop
+  session run as a standard user fails. Re-pair from the console, or from an
+  elevated prompt in the remote session; 3.4.0 removes the need.
+
+### changed — a developer grant, and a record when permissions are repaired
+
+- **`-DevGrant` for developers who deploy into an installed agent.** Run from
+  an elevated prompt, `scripts/bootstrap-windows.ps1 -DevGrant` gives the
+  developer's own account — never every user — write access to the installed
+  `agent\src` and `app` folders, so a local deploy hook keeps working against a
+  hardened tree. `-RemoveDevGrant` reverts it. An agent install resets those
+  folders, so the grant is re-run afterwards.
+- **A repaired machine says so.** When the service finds and fixes drifted
+  install permissions at start-up, it records an `install_permissions_repaired`
+  event naming the paths it corrected, rather than only noting it in the local
+  log.
+
+### added — swoop, the remote screen, ships switched off
+
+The dashboard gains swoop: watch a machine's screen live and, with a second
+factor, take its keyboard and mouse. It is off for every site until a site
+admin turns it on, and it has its own release to come; nothing changes for a
+site that leaves it off.
+
+### added — machines report their operating system
+
+Each machine now reports its operating system and version. The machine card
+shows it under the hostname, and the machine list carries it as a second line.
+
+### added — filter the logs by several actions at once
+
+The action filter on the logs page is a searchable list of checkboxes, so you
+can show, say, every start and stop together, and find an action by the name
+you see in a row. The filters sit on one row, with the custom date range
+joining it instead of opening a second one.
+
+### added — pin a metric to read it on its own
+
+Clicking a stat card under a machine's metrics chart pins it: its line stays
+highlighted, the other cards dim, and the readout under the cursor lists only
+that metric while you scrub along the line. Click the card again to unpin.
+
+### changed — machine cards are easier to read
+
+The metrics row lines up the same metric at the same place on every card,
+healthy temperatures are no longer coloured so colour only marks a crossed
+threshold, the online pill is a dot that shares the "last seen" tooltip, and
+the ping cell now shows whether the network interface is up. The labels in
+that row start at the same left edge as the display and process rows below
+it, instead of floating towards the middle of their cells on a wide card.
+
+### changed — docs search returns a usable number of results
+
+A search of the docs now returns a bounded, ranked list instead of every
+matching section, and the pages carry keywords for the words you type that
+the prose never uses.
+
+### changed — groundwork for the agent on macOS and Linux
+
+The agent's code now runs on all three operating systems and is tested on
+each in every build. Nothing changes on Windows, and there is no macOS or
+Linux installer yet; those ship with their own release.
+
+### changed — you can no longer demote or remove yourself
+
+A site owner or admin who tries to change or delete their own membership now
+gets a refusal instead of locking themselves out, whatever the platform's
+capability enforcement switch is set to.
+
+### changed — the capability enforcement switch no longer covers swoop
+
+Turning capability enforcement off, the break-glass step during an
+authorization misfire, no longer opens swoop's viewing, control and settings
+capabilities: during a misfire swoop stays locked rather than open.
+
+### fixed — every line on a metrics chart has a scale you can read
+
+Temperature lines now read off their own °C scale instead of the percent
+labels, and a chart showing only network or disk throughput puts its scale on
+the left rather than beside an empty percent column. Each side of the chart
+carries at most one scale, and it always belongs to what you're looking at: a
+pinned or hovered card shows only its own unit, and with usage, temperature
+and throughput on one chart the labels follow the device under the cursor,
+keeping a CPU's or GPU's percent and temperature on their sides. Throughput
+scales now step evenly, so both sides line up with the gridlines, and their
+labels no longer wrap onto two lines.
+
+### fixed — a restart-pending banner on an unreachable machine can be dismissed
+
+A machine that crashed a process and never came back carried its
+restart-pending banner indefinitely, and dismissing it did nothing because it
+only queued a command the offline machine never collected. Dismiss now clears
+the flag in the cloud and relays the command to the agent as a courtesy.
+
+## [3.3.5] - 2026-09-15
+
+### changed — the agent's libraries are current again
+
+The libraries the agent uses to watch processes and read GPU state had fallen
+years behind: the process library was from 2023 and the NVIDIA bindings were a
+major version old. This release brings both current (psutil 7, nvidia-ml-py 13)
+together with the crypto, error-reporting and timezone libraries, and the
+desktop app's Windows and Tauri crates. Nothing the agent does has changed; the
+installer simply ships the versions their authors maintain today. Every one of
+these was proven with a full installer build and a check against a real GPU and
+process table before it was tagged.
+
+On the web side, the Next.js framework carries two critical security patches
+and a set of routine library updates.
+
+### changed — one support address
+
+Support is now support@tridant.io everywhere: the dashboard footer, the docs,
+the terms and privacy pages, and the security policy. The old owlette.app
+mailboxes are retired.
+
+### fixed — the dashboard opens where you left it
+
+Reloading the dashboard could land on a half-loaded site list instead of the
+site you were viewing. It now reopens the last viewed site.
+
+### fixed — two layout glitches
+
+Between 1024 and 1065 pixels wide the machine list scrolled sideways, and a
+roost row's timestamp could sit under its action menu. Both are corrected.
+
 ## [3.3.4] - 2026-09-12
 
 ### changed — hoot runs on a current Claude Code CLI again

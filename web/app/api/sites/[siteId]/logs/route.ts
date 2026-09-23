@@ -45,6 +45,7 @@ const VALID_LEVELS = new Set(['debug', 'info', 'warning', 'error', 'critical']);
 
 interface DeleteBody {
   action?: unknown;
+  actions?: unknown;
   machineId?: unknown;
   level?: unknown;
   since?: unknown;
@@ -78,6 +79,26 @@ function normalizeOptionalString(
     });
   }
   return value;
+}
+
+/** A non-empty list of non-empty strings, or a 400. Used for `actions`. */
+function normalizeOptionalStringArray(
+  body: DeleteBody,
+  field: 'actions',
+): string[] | undefined | NextResponse {
+  const value = body[field];
+  if (value === undefined || value === null) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((entry) => typeof entry !== 'string' || entry.trim() === '')
+  ) {
+    return problemValidation(
+      `field \`${field}\` must be a non-empty array of non-empty strings when provided`,
+      { [`body.${field}`]: ['must be a non-empty array of non-empty strings'] },
+    );
+  }
+  return value as string[];
 }
 
 function normalizeOptionalQueryString(
@@ -269,6 +290,13 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
 
     const action = normalizeOptionalString(body, 'action');
     if (action instanceof NextResponse) return action;
+    const actions = normalizeOptionalStringArray(body, 'actions');
+    if (actions instanceof NextResponse) return actions;
+    if (action !== undefined && actions !== undefined) {
+      return problemValidation('provide either `action` or `actions`, not both', {
+        'body.actions': ['omit when `action` is provided'],
+      });
+    }
     const machineId = normalizeOptionalString(body, 'machineId');
     if (machineId instanceof NextResponse) return machineId;
     const level = normalizeOptionalString(body, 'level');
@@ -284,6 +312,7 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
     }
     const hasFilter =
       action !== undefined ||
+      actions !== undefined ||
       machineId !== undefined ||
       level !== undefined ||
       sinceMs !== undefined ||
@@ -300,7 +329,9 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
     }
     if (hasFilter && body.all === true) {
       return problemValidation('body.all must be omitted when filters are provided', {
-        'body.all': ['omit when any filter (action, machineId, level, since, until) is provided'],
+        'body.all': [
+          'omit when any filter (action, actions, machineId, level, since, until) is provided',
+        ],
       });
     }
 
@@ -317,6 +348,7 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
             { siteId: ctx.siteId, auditActor: siteAuditActor(ctx) },
             {
               action,
+              actions,
               machineId,
               level,
               sinceMs,

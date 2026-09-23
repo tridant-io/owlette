@@ -4,13 +4,17 @@
     "index",
     "getting-started",
     "machine-monitoring",
+    "restart-schedules",
+    "displays",
     "process-management",
     "deployments",
     "roost",
+    "swoop",
     "hoot",
     "talons",
     "activity-logs",
     "timezones",
+    "account-settings",
     "admin"
   ]
 }

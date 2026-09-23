@@ -288,19 +288,6 @@ export function setDetailSection(section: DetailSectionKey, open: boolean): Prom
   return invoke<boolean>('set_detail_section', { section, open })
 }
 
-/**
- * The executable's Windows icon as a `data:` URL, or null.
- *
- * Resolves (not rejects) for every ordinary miss — blank path, missing file, no
- * icon — because the list draws the same fallback glyph for all of them. Host
- * failures reject; callers treat those as a miss too. The host caches by path +
- * mtime, so per-row calls cost a hash lookup after the first extraction.
- */
-export async function exeIcon(path: string): Promise<string | null> {
-  const encoded = await invoke<string | null>('exe_icon', { path })
-  return encoded ? `data:image/png;base64,${encoded}` : null
-}
-
 /** Severity accepted by {@link logEvent}; anything else is recorded as info. */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 

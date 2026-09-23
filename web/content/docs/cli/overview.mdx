@@ -1,6 +1,7 @@
 ---
 title: "owlette cli — overview"
 description: "owlette is the command-line client for the owlette.app api. It runs on macOS, linux, and windows and lets you authenticate, push roosts, manage sites and machines, mint api keys, and inspect audit logs from your terminal or ci pipeline."
+keywords: ["command line", "terminal", "npx", "shell"]
 ---
 
 This page is the 15-minute onboarding: install → log in → push your first roost. For per-command reference, start with [auth](/docs/cli/reference/auth), [roost](/docs/cli/reference/roost), [machine](/docs/cli/reference/machine), [listen](/docs/cli/reference/listen), or [trigger](/docs/cli/reference/trigger). For route/stub/deferred status across the whole CLI, see the [readiness matrix](/docs/cli/readiness).
@@ -162,7 +163,8 @@ Every command lives under one of these top-level groups. **`[ready]`** verbs hit
 |---|---|---|---|
 | [`roost`](/docs/cli/reference/roost) | ready | `push` `list` `get` `diff` `versions` `deploy` | content-addressed project distribution |
 | [`machine`](/docs/cli/reference/machine) | ready | `list` `get` `deployments` `reboot` `shutdown` `screenshot` | manage windows machines |
-| [`machine live-view`](/docs/cli/reference/machine) | stub | — | streaming desktop feed; deferred as `live-view-webrtc` outside the MVP |
+| [`machine live-view`](/docs/cli/reference/machine) | stub | — | streaming desktop feed; remote desktop ships as swoop, so the stub points at `owlette swoop` |
+| [`swoop`](/docs/cli/reference/swoop) | ready | — | open the remote-desktop viewer for a machine in your browser |
 | [`audit-log`](/docs/cli/reference/audit-log) | ready | `list` `get` | site audit log + hash-chain verification |
 | [`quota`](/docs/cli/reference/quota) | ready | `show` `history` | site storage + bandwidth usage |
 | [`chat`](/docs/cli/reference/chat) | ready | `new` `list` `send` `delete` `rename` | hoot ai chat |
@@ -231,7 +233,7 @@ When a command surfaces API problem+json details, stable `code` values match the
 
 **stub (exit 3 only)**
 ```json
-{ "ok": false, "stub": true, "noun": "machine", "reason": "live-view streaming is being reframed as a webrtc-native feature; resume when prioritized", "dashboard_url": "https://owlette.app/dashboard", "future_plan": "public-api deferred: live-view-webrtc" }
+{ "ok": false, "stub": true, "noun": "machine", "reason": "remote desktop is shipping as swoop; this verb lands with it", "dashboard_url": "https://owlette.app/dashboard", "future_plan": "public-api deferred: swoop" }
 ```
 
 ---

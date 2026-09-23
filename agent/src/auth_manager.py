@@ -132,11 +132,14 @@ class AuthManager:
         machine_id: Optional[str] = None,
         storage: Optional[SecureStorage] = None,
     ):
-        """api_base is required; machine_id defaults to the hostname, storage to the singleton."""
+        """api_base must be an owlette API base; machine_id defaults to the persisted id, storage to the singleton."""
         if not api_base:
             raise ValueError("api_base is required for AuthManager initialization")
         self.api_base = api_base.rstrip('/')
-        self.machine_id = machine_id or shared_utils.get_hostname()
+        # every token request goes to api_base
+        if not shared_utils.is_owlette_api_base(self.api_base):
+            raise ValueError(f"api_base {self.api_base!r} is not an owlette API base")
+        self.machine_id = machine_id or shared_utils.get_machine_id()
         self.storage = storage or get_storage()
 
         self._access_token: Optional[str] = None
@@ -406,7 +409,7 @@ class AuthManager:
                     'machineId': self.machine_id,
                 },
                 headers={
-                    'User-Agent': f'Owlette-Agent/{shared_utils.APP_VERSION} (Windows; {self.machine_id})',
+                    'User-Agent': f'Owlette-Agent/{shared_utils.APP_VERSION} ({shared_utils.get_os_family_arch()[0]}; {self.machine_id})',
                     'X-Owlette-Agent-Version': shared_utils.APP_VERSION,
                     'Content-Type': 'application/json',
                 },
@@ -619,28 +622,3 @@ class AuthManager:
             'machine_id': self.machine_id,
             'api_base': self.api_base,
         }
-
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    auth = AuthManager(api_base="https://dev.owlette.app/api")
-
-    registration_code = "test_code_12345"  # normally supplied by the installer
-    try:
-        auth.exchange_registration_code(registration_code)
-        print("Authentication successful!")
-    except AuthenticationError as e:
-        print(f"Authentication failed: {e}")
-
-    try:
-        token = auth.get_valid_token()
-        print("Got valid token successfully")
-    except (AuthenticationError, TokenRefreshError) as e:
-        print(f"Failed to get token: {e}")
-
-    info = auth.get_token_info()
-    print(f"Token info: {info}")

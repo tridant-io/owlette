@@ -1,0 +1,92 @@
+name: security preflight
+
+# Dependabot raises SECURITY alerts and PRs against the default branch (`main`),
+# and `target-branch` in .github/dependabot.yml does not apply to them. `main`
+# trails `dev` by hundreds of commits, so the alert list silently mixes "still
+# shipping" with "fixed on dev weeks ago". By 2026-09-12 that mix had reached 39
+# open alerts hiding two unauthenticated-RCE criticals in Next.js, open for a
+# day, unnoticed.
+#
+# This job resolves every open alert against the lockfiles of the branch it runs
+# on, so `dev` is graded on `dev`. It runs daily because a new advisory lands on
+# a schedule nobody controls, and on every push to dev/main so a release never
+# ships past a live one.
+on:
+  schedule:
+    # 13:10 UTC daily — a fixed offset, not :00, to dodge the cron stampede.
+    # NOTE: `schedule` only ever fires from the DEFAULT branch's copy of this
+    # file, and would therefore grade `main` — which trails `dev`. The job
+    # checks out `dev` explicitly for scheduled runs so the daily sweep looks at
+    # the branch the code actually lives on.
+    - cron: '10 13 * * *'
+  push:
+    branches: [main, dev]
+  pull_request:
+    paths:
+      - '**/package-lock.json'
+      - '**/Cargo.lock'
+      - '**/requirements*.txt'
+      - '**/pyproject.toml'
+      - 'scripts/check-security-alerts.mjs'
+      - '.github/workflows/security-preflight.yml'
+      - '.github/dependabot.yml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: branch to grade
+        required: false
+        default: ''
+
+# A scheduled run and a push to the same ref must not cancel each other: a
+# cancelled run reads as neither pass nor fail, which is the one outcome a gate
+# must never produce.
+concurrency:
+  group: security-preflight-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  vulnerability-alerts: read  # Dependabot alerts (GITHUB_TOKEN gained this 2026-09)
+  security-events: read       # code-scanning + secret-scanning alerts
+  pull-requests: read         # the Dependabot PR backlog
+
+jobs:
+  scan:
+    name: no live vulnerability on this branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # A fork PR's token cannot read this repo's alerts. Without this guard every
+    # outside contributor's PR goes red on a permission error — or, if the token
+    # ever could read them, the job would print the whole open-alert list into a
+    # publicly readable log. Neither is acceptable; skip instead.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'dev') || '' }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+
+      # Same discipline as the other guards here: a checker that cannot fail is
+      # worth nothing. This asserts both directions — a vulnerable lockfile is
+      # caught, an unreadable one throws rather than reading as safe, and the
+      # same alert against a patched lockfile does not fire.
+      - name: self-test the checker
+        run: node scripts/check-security-alerts.mjs --test
+
+      - name: resolve open alerts against this checkout
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A scheduled run checks out `dev`, so the code-scanning feed must be
+          # asked about `dev` too — GITHUB_REF would still say `main` here.
+          GITHUB_REF: >-
+            ${{ github.event_name == 'schedule' && 'refs/heads/dev'
+                || (inputs.ref && format('refs/heads/{0}', inputs.ref))
+                || github.ref }}
+        # Standing waivers (currently just the Linux-only glib transitive) live
+        # in .github/security-acks.json, where they are reviewable in a PR and
+        # expire on a date. The script reads that file itself.
+        run: node scripts/check-security-alerts.mjs

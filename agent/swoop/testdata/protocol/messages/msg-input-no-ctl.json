@@ -1,0 +1,16 @@
+{
+  "channel": "swoop-input",
+  "viewer": {
+    "id": "viewer_0000000002",
+    "ctl": false
+  },
+  "messages": [
+    {
+      "t": "k",
+      "code": "Delete",
+      "down": true,
+      "seq": 1,
+      "tsUs": 5000000
+    }
+  ]
+}

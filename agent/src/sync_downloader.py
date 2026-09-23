@@ -2,8 +2,7 @@
 sync_downloader — parallel chunk fetcher for roost (project distribution v2).
 
 downloads content-addressed chunks (4 MiB each) from R2 signed URLs into
-the local content store at %PROGRAMDATA%\Owlette\content\{hash[0:2]}\{hash}
-on windows (or $XDG_DATA_HOME/owlette/content/... on POSIX). the content
+the local content store at <data root>/content/{hash[0:2]}/{hash}. the content
 store is a rebuildable cache — it lives OUTSIDE the user's Documents tree
 so operators never see it mixed with assembled files, and so LocalSystem
 doesn't have to stash it under `C:\Windows\System32\config\systemprofile\`.
@@ -45,6 +44,7 @@ from typing import Callable, Dict, Iterable, List, Optional
 import requests
 import threading as _threading_for_lock  # alias to avoid shadowing param `threading.Event`
 
+import shared_utils
 from sync_state import SyncState
 
 logger = logging.getLogger(__name__)
@@ -53,21 +53,12 @@ logger = logging.getLogger(__name__)
 # dedup is automatic. sync_assembler and sync_scrub import this resolver.
 def _default_content_store() -> str:
     """
-    default content-store path.
-
-    windows: %PROGRAMDATA%\\Owlette\\content
-    POSIX:   $XDG_DATA_HOME/owlette/content, else ~/.local/share/owlette/content
+    default content-store path: `content` under the agent's data root.
 
     Same rationale as sync_state._default_state_db_path(): cache data belongs
     neither in the user's Documents nor in System32 under LocalSystem.
     """
-    if os.name == 'nt':
-        program_data = os.environ.get('PROGRAMDATA', 'C:\\ProgramData')
-        return os.path.join(program_data, 'Owlette', 'content')
-    xdg = os.environ.get('XDG_DATA_HOME')
-    if xdg:
-        return os.path.join(xdg, 'owlette', 'content')
-    return os.path.join(os.path.expanduser('~'), '.local', 'share', 'owlette', 'content')
+    return shared_utils.get_data_path('content')
 
 
 # tuning constants

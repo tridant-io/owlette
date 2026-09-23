@@ -377,7 +377,10 @@ def _make_exec_client(monkeypatch, **overrides):
     )
     for key, value in overrides.items():
         setattr(svc, key, value)
+    # Both halves of the dispatch are real: _execute_command decides whether
+    # the command is finished here at all, finish_command is what marks it.
     svc._execute_command = FirebaseClient._execute_command.__get__(svc, FirebaseClient)
+    svc.finish_command = FirebaseClient.finish_command.__get__(svc, FirebaseClient)
     return svc
 
 

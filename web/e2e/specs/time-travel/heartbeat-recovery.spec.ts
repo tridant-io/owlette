@@ -23,8 +23,8 @@ test('stale machine recovers to online when the agent writes a fresh heartbeat',
   const realNow = Date.now();
   await page.clock.install({ time: realNow });
 
-  // online=true but heartbeat 320s old: the pill renders green from
-  // `data.online`, then the interval's first tick flips it offline.
+  // online=true but heartbeat 320s old: the green dot renders from
+  // `data.online`, then the interval's first tick flips it to the offline pill.
   await seedMachine(SITE_ID, MACHINE_ID, { heartbeatOffsetSec: 320 });
 
   await page.goto('/dashboard');
@@ -55,6 +55,6 @@ test('stale machine recovers to online when the agent writes a fresh heartbeat',
 
   // Proves the snapshot overwrites the local offline-flip; without
   // setMachines' wholesale replace the pill would stay stuck offline.
-  await expect(card.getByText('online', { exact: true })).toBeVisible();
+  await expect(card.getByRole('img', { name: 'online' })).toBeVisible();
   await expect(card.getByText('offline', { exact: true })).toHaveCount(0);
 });

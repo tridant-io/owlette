@@ -157,18 +157,18 @@ describe('computeNiceByteTicks', () => {
     // 500 KB = 512 000 bytes, rough = 128 000, step = 250 KB (256 000).
     const result = computeNiceByteTicks(512_000);
     expect(result).toEqual({
-      domainMax: 512_000,
-      ticks: [0, 256_000, 512_000],
+      domainMax: 1_024_000,
+      ticks: [0, 256_000, 512_000, 768_000, 1_024_000],
     });
-    expect(result!.ticks.map(formatDiskIO)).toEqual(['0 B/s', '250 KB/s', '500 KB/s']);
+    expect(result!.ticks.map(formatDiskIO)).toEqual(['0 B/s', '250 KB/s', '500 KB/s', '750 KB/s', '1 MB/s']);
   });
 
   it('picks 500 KB/s steps for a ~1.1 MB/s peak', () => {
     // The regression case from the bug report.
     const result = computeNiceByteTicks(1_153_434);
     expect(result).toEqual({
-      domainMax: 1_536_000,
-      ticks: [0, 512_000, 1_024_000, 1_536_000],
+      domainMax: 2_048_000,
+      ticks: [0, 512_000, 1_024_000, 1_536_000, 2_048_000],
     });
   });
 
@@ -177,28 +177,30 @@ describe('computeNiceByteTicks', () => {
     // step 500 KB (512 000) is too small.
     const result = computeNiceByteTicks(3_145_728);
     expect(result).toEqual({
-      domainMax: 3_145_728,
-      ticks: [0, 1_048_576, 2_097_152, 3_145_728],
+      domainMax: 4_194_304,
+      ticks: [0, 1_048_576, 2_097_152, 3_145_728, 4_194_304],
     });
     expect(result!.ticks.map(formatDiskIO)).toEqual([
       '0 B/s',
       '1 MB/s',
       '2 MB/s',
       '3 MB/s',
+      '4 MB/s',
     ]);
   });
 
   it('picks 2 MB/s steps for a ~5 MB/s peak', () => {
     const result = computeNiceByteTicks(5_000_000);
     expect(result).toEqual({
-      domainMax: 6_291_456,
-      ticks: [0, 2_097_152, 4_194_304, 6_291_456],
+      domainMax: 8_388_608,
+      ticks: [0, 2_097_152, 4_194_304, 6_291_456, 8_388_608],
     });
     expect(result!.ticks.map(formatDiskIO)).toEqual([
       '0 B/s',
       '2 MB/s',
       '4 MB/s',
       '6 MB/s',
+      '8 MB/s',
     ]);
   });
 
@@ -206,18 +208,20 @@ describe('computeNiceByteTicks', () => {
     const result = computeNiceByteTicks(300);
     // rough = 75, smallest nice mantissa ≥ 75 is 100.
     expect(result).toEqual({
-      domainMax: 300,
-      ticks: [0, 100, 200, 300],
+      domainMax: 400,
+      ticks: [0, 100, 200, 300, 400],
     });
   });
 
-  it('domain max always covers the input', () => {
-    for (const v of [1, 999, 100_000, 1_234_567, 987_654_321]) {
+  it('covers the input on four even steps', () => {
+    // 5e12 is past every candidate step and exercises the multiple-of-largest fallback.
+    for (const v of [1, 999, 100_000, 1_234_567, 987_654_321, 5e12]) {
       const result = computeNiceByteTicks(v);
       expect(result).not.toBeNull();
+      const step = result!.ticks[1];
+      expect(result!.ticks).toEqual([0, step, step * 2, step * 3, step * 4]);
+      expect(result!.domainMax).toBe(step * 4);
       expect(result!.domainMax).toBeGreaterThanOrEqual(v);
-      expect(result!.ticks[0]).toBe(0);
-      expect(result!.ticks[result!.ticks.length - 1]).toBe(result!.domainMax);
     }
   });
 });

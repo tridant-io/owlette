@@ -1,2 +1,2 @@
-pytest>=8.0,<9.0
+pytest==9.1.1  # one pin with agent/requirements-dev.txt and the agent-tests workflow
 boto3>=1.34,<2.0

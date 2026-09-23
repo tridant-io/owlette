@@ -27,7 +27,7 @@ export interface SignedReadUrlResult {
   expiresAt: string;
 }
 
-/** Same resolution order as `/api/agent/screenshot`, so both pick one bucket. */
+/** Bucket for signed screenshot URLs: NEXT_PUBLIC_ first, FIREBASE_STORAGE_BUCKET as fallback. */
 function resolveBucketName(): string {
   const explicit =
     process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET ||

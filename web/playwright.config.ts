@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { defineConfig, devices } from '@playwright/test';
 
 /**
@@ -16,6 +19,101 @@ const STORAGE_EMULATOR_HOST =
 const NEXT_DIST_DIR = process.env.OWLETTE_NEXT_DIST_DIR || '.next-e2e';
 const OUTPUT_DIR = process.env.E2E_OUTPUT_DIR || './e2e/.output/results';
 const REPORT_DIR = process.env.E2E_REPORT_DIR || './e2e/.output/report';
+
+/**
+ * Credentials that reach a THIRD PARTY. Always blanked for the e2e web server.
+ *
+ * The server loads the developer's .env.local, so anything not blanked here runs
+ * live. RESEND_API_KEY did exactly that: /api/auth/forgot-password built a real
+ * Resend client and tried to mail password-reset-test@e2e.test from the
+ * production account on every local run, while CI — which has no .env.local, so
+ * no key — stayed green on the same commit. Blank is the CI shape.
+ *
+ * A spec that genuinely needs one of these sets it back in its own fixture.
+ */
+const THIRD_PARTY_CREDENTIALS = [
+  'RESEND_API_KEY',
+  'INSTATUS_API_KEY',
+  'SWOOP_SIGNAL_URL',
+  'SWOOP_SIGNAL_RING_SECRET',
+  'STRIPE_SECRET_KEY_TEST',
+  // reach cloudflare (TURN credential minting) and the R2 object store.
+  'CLOUDFLARE_TURN_KEY_API_TOKEN',
+  'R2_S3_SECRET_ACCESS_KEY',
+  // local tooling (terraform, wrangler), never read by web/; blanked so a
+  // developer's .env.local copied from .env.example still starts the suite.
+  'CLOUDFLARE_API_TOKEN',
+];
+
+/**
+ * Secret-shaped names that are NOT third-party reach-out: internal signing and
+ * encryption material, or values this config already overrides. Listed so the
+ * audit below can tell "classified as safe" from "nobody has looked at it".
+ */
+const INTERNAL_OR_OVERRIDDEN_SECRETS = [
+  'SESSION_SECRET',
+  'MFA_ENCRYPTION_KEY',
+  'TURNSTILE_SECRET',
+  'UPSTASH_REDIS_REST_TOKEN',
+  'NEXT_PUBLIC_SENTRY_DSN',
+  'NEXT_PUBLIC_FIREBASE_API_KEY',
+  'FIREBASE_PRIVATE_KEY',
+  'CRON_SECRET',
+  'CORTEX_INTERNAL_SECRET',
+  'LLM_ENCRYPTION_KEY',
+  'SWOOP_JWT_PRIVATE_KEY',
+  'SWOOP_JWT_PUBLIC_KEY',
+  'SWOOP_SESSION_MASTER_KEY',
+];
+
+const SECRET_SHAPED = /(_KEY|_SECRET|_TOKEN|_DSN)$/;
+
+/**
+ * Deny by default. Reads .env.local for key NAMES only — never values — and
+ * refuses to start when a secret-shaped one appears in neither list above.
+ *
+ * Enumerating credentials one at a time means finding each the way Resend was
+ * found: after it fires. This turns "someone must remember" into a failed run
+ * naming the key, at the moment it is added.
+ */
+function auditEnvLocalForUnclassifiedSecrets(): void {
+  let contents: string;
+  try {
+    contents = readFileSync(resolve(__dirname, '.env.local'), 'utf8');
+  } catch {
+    return; // no .env.local (CI) — nothing to inherit, nothing to audit
+  }
+
+  const classified = new Set([
+    ...THIRD_PARTY_CREDENTIALS,
+    ...INTERNAL_OR_OVERRIDDEN_SECRETS,
+  ]);
+  const unclassified = [
+    ...new Set(
+      contents
+        .split(/\r?\n/)
+        .map((line) => /^\s*([A-Z][A-Z0-9_]*)\s*=\s*\S/.exec(line)?.[1])
+        .filter((name): name is string => !!name)
+        .filter((name) => SECRET_SHAPED.test(name) && !classified.has(name)),
+    ),
+  ];
+
+  if (unclassified.length > 0) {
+    throw new Error(
+      `playwright.config.ts: ${unclassified.length} unclassified secret(s) in web/.env.local: ` +
+        `${unclassified.join(', ')}. The e2e web server inherits .env.local, so an ` +
+        `unclassified credential runs LIVE against a real service while CI stays green. ` +
+        `Add each to THIRD_PARTY_CREDENTIALS (blanked) or INTERNAL_OR_OVERRIDDEN_SECRETS ` +
+        `(internal/already-overridden) in playwright.config.ts.`,
+    );
+  }
+}
+
+auditEnvLocalForUnclassifiedSecrets();
+
+const neutralisedThirdPartyCredentials = Object.fromEntries(
+  THIRD_PARTY_CREDENTIALS.map((name) => [name, '']),
+);
 
 export default defineConfig({
   testDir: './e2e/specs',
@@ -107,6 +205,9 @@ export default defineConfig({
     stdout: 'pipe',
     stderr: 'pipe',
     env: {
+      // Deny by default: every third-party credential blanked before the explicit
+      // overrides below, which win where the two overlap.
+      ...neutralisedThirdPartyCredentials,
       // client-side: gates connectXEmulator() in web/lib/firebase.ts
       NEXT_PUBLIC_USE_FIREBASE_EMULATOR: 'true',
       NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'demo-playwright-e2e',

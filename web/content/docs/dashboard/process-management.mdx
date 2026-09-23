@@ -1,6 +1,7 @@
 ---
 title: "process management"
 description: "Add, configure, and control processes from the web dashboard. Changes sync to the agent within ~1-2 seconds."
+keywords: ["copy a process", "clone a process", "crash loop", "stop a process"]
 ---
 
 ---
@@ -49,6 +50,7 @@ From the process row, machine card, or edit dialog, the dashboard exposes these 
 | **launch mode** | Set `off`, `always`, or `scheduled`. Enabling `always` or `scheduled` requires an executable path. | `MACHINE_CONFIG_WRITE` |
 | **configure schedule** | Edit schedule blocks, days, time ranges, and overnight windows. Available in every launch mode; editing from `off` or `always` saves the blocks without changing the mode. | `MACHINE_CONFIG_WRITE` |
 | **edit** | Open the process dialog and update paths, priority, visibility, timing, relaunch attempts, or schedule settings. | `MACHINE_CONFIG_WRITE` |
+| **duplicate** | Copy the process on the same machine. Every setting is carried over except the name, which gains a ` (copy)` suffix, and the launch mode, which is forced to `off` so the copy cannot start a second instance of the same executable behind your back. | `MACHINE_CONFIG_WRITE` |
 | **restart** | Queue a `restart_process` command. The dashboard enables this for `RUNNING`, `LAUNCHING`, or `STALLED` processes. | `MACHINE_EXEC_COMMAND` |
 | **kill** | Queue a `kill_process` command. The dashboard enables this for `RUNNING`, `LAUNCHING`, or `STALLED` processes. | `MACHINE_EXEC_COMMAND` |
 | **delete** | Remove the process from the machine configuration. | `MACHINE_CONFIG_WRITE` |
@@ -60,6 +62,18 @@ Restart and kill actions send commands to the agent. Create, edit, delete, launc
 When a process is changed from `off` to `scheduled`, the agent clears stale killed/cooldown markers immediately. If the current time is outside the schedule window, the process stays stopped until the next matching window, then launches normally.
 
 If the configured executable path no longer exists, the agent aborts the launch and the process shows as `STOPPED` (`INACTIVE` means launch mode is `off`, not a missing file), and the dashboard shows an error toast. When the agent finds likely sibling executable paths, the toast lists up to two suggestions and the **use path** action opens the edit dialog with that path pre-filled.
+
+---
+
+## schedules
+
+A process in `scheduled` launch mode runs inside **blocks**: a set of days plus one or more start/stop ranges. A range whose stop time is earlier than its start is an overnight window and carries into the next day.
+
+The editor previews the whole week as a **seven-day bar** — one column per day, with a coloured segment for every range. Each block keeps its own colour, so a process with a morning block and an evening block reads at a glance, and a pattern that accidentally covers only four days is obvious before you save. The same bar appears on the process row and on the schedule preset list.
+
+Rather than rebuild a common pattern on every machine, save it once as a [schedule preset](/docs/dashboard/admin/schedule-presets) and apply it. Four presets are built in, including `business hours` and `24/7`.
+
+Windows are wall-clock rules, not absolute instants. Which clock they are read against depends on the site — see [timezones](/docs/dashboard/timezones#process-schedules).
 
 ---
 

@@ -9,6 +9,8 @@ import pytest
 
 from destination_allowlist import DestinationAllowlist, DestinationNotAllowedError
 from sync_assembler import AssembleError, AssembleResult, assemble_all
+# bound at import: conftest.py stubs sync_assembler._harden_acl out of every test.
+from sync_assembler import _harden_acl as _real_harden_acl
 from sync_downloader import chunk_path
 from sync_version import VersionChunk, VersionFile
 from sync_state import SyncState
@@ -281,7 +283,7 @@ def test_long_path_helper_pure_function():
     assert _long_path(unc_long).startswith('\\\\?\\UNC\\')
 
 
-@pytest.mark.skipif(__import__('os').name != 'nt', reason='windows long-path test')
+@pytest.mark.windows(reason='windows long-path test')
 def test_assembles_file_at_long_path(tmp_path):
     """assemble a file whose final path exceeds MAX_PATH (260). win32 must accept `\\\\?\\` prefix."""
     state = SyncState(str(tmp_path / 'state.db'))
@@ -323,30 +325,31 @@ def test_assembles_file_at_long_path(tmp_path):
 
 
 def test_harden_acl_no_op_on_posix():
-    """on POSIX, _harden_acl returns silently without doing anything."""
-    import os
-    from unittest.mock import patch
-    from sync_assembler import _harden_acl
-    if os.name == 'nt':
-        pytest.skip('this test asserts POSIX behavior')
-    # should not raise even on a path that doesn't exist
-    _harden_acl('/nonexistent/path/file.toe')
+    """off windows, _harden_acl returns before touching win32security."""
+    import sys
+    from unittest.mock import MagicMock, patch
+    ws = MagicMock()
+    with patch.dict(sys.modules, {'win32security': ws}), \
+            patch('sync_assembler.os.name', 'posix'):
+        _real_harden_acl('/nonexistent/path/file.toe')
+    assert ws.mock_calls == []
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='windows ACL test')
 def test_harden_acl_silent_when_pywin32_missing():
-    """when pywin32 is unimportable, _harden_acl skips silently — no exception."""
+    """when pywin32 is unimportable, _harden_acl returns without raising, logging
+    or applying anything."""
     import sys
     from unittest.mock import patch
-    from sync_assembler import _harden_acl
-    if __import__('os').name != 'nt':
-        pytest.skip('this test exercises the windows path')
-    # simulate pywin32 missing
-    with patch.dict(sys.modules, {'win32security': None, 'ntsecuritycon': None}):
-        # None is not a module → ImportError → except branch
-        _harden_acl('C:\\anywhere\\file.toe')
+    # None in sys.modules makes the import raise ImportError
+    with patch.dict(sys.modules, {'win32security': None, 'ntsecuritycon': None}), \
+            patch('sync_assembler.logger') as log:
+        _real_harden_acl('C:\\anywhere\\file.toe')
+    # without pywin32, any attempt at the DACL can only end in the warning branch
+    assert log.mock_calls == []
 
 
-@pytest.mark.skipif(__import__('os').name != 'nt', reason='windows ACL test')
+@pytest.mark.windows(reason='windows ACL test')
 def test_assemble_calls_harden_acl_on_target(tmp_path):
     """end-to-end: assembling a file invokes _harden_acl with the target path."""
     from unittest.mock import patch
@@ -376,6 +379,34 @@ def test_assemble_calls_harden_acl_on_target(tmp_path):
         assert 'a.toe' in called_with
     finally:
         state.close()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='windows ACL test')
+def test_harden_acl_takes_well_known_accounts_from_sids():
+    """account names are localized ("Administratoren" on german windows): only the
+    operator's own account may be looked up by name, never SYSTEM or Administrators."""
+    import sys
+    from unittest.mock import MagicMock, call, patch
+
+    def localized_lookup(_system, name):
+        # a non-english box: the english well-known names do not resolve
+        if name == 'operator':
+            return 'sid:operator', 'KIOSK', 1
+        raise Exception(f'no mapping for {name!r}')
+
+    ws = MagicMock()
+    ws.ConvertStringSidToSid.side_effect = lambda sid: f'sid:{sid}'
+    ws.LookupAccountName.side_effect = localized_lookup
+    with patch.dict(sys.modules, {'win32security': ws}), \
+            patch('sync_assembler.get_interactive_username', return_value='operator'):
+        _real_harden_acl('C:\\anywhere\\file.toe')
+
+    assert ws.LookupAccountName.call_args_list == [call('', 'operator')]
+    aces = ws.ACL.return_value.AddAccessAllowedAce.call_args_list
+    assert [c.args[-1] for c in aces] == [
+        'sid:S-1-5-18', 'sid:S-1-5-32-544', 'sid:operator',
+    ]
+    ws.SetFileSecurity.assert_called_once()
 
 
 def test_cancel_event_stops_after_current_file(tmp_path):
@@ -936,5 +967,367 @@ def test_prune_skipped_for_rows_without_an_extract_root(tmp_path):
 
         assert result.pruned == 0
         assert legacy.exists()
+    finally:
+        state.close()
+
+
+# file modes (POSIX, best-effort)
+
+
+@pytest.mark.parametrize('head', [
+    b'#!/bin/sh\nexit 0\n',
+    b'\x7fELF\x02\x01\x01\x00',
+    b'\xcf\xfa\xed\xfe\x0c\x00\x00\x01',   # Mach-O 64, little-endian
+    b'\xfe\xed\xfa\xce\x00\x00\x00\x12',   # Mach-O 32, big-endian
+    b'\xca\xfe\xba\xbe\x00\x00\x00\x02',   # a universal binary
+])
+def test_an_assembled_program_gets_its_execute_bit(head, monkeypatch, tmp_path):
+    """the .partial sidecar is opened 0644 and os.replace carries that mode
+    across, so without this a synced binary or script arrives unable to run.
+    the v1 version schema has no mode field -- the browser uploader has none to
+    send -- so the content is the only signal there is."""
+    import sync_assembler
+    monkeypatch.setattr(sync_assembler, '_HAS_FILE_MODES', True)
+    target = tmp_path / 'program'
+    target.write_bytes(head)
+
+    modes = _record_fchmod(monkeypatch)
+    sync_assembler._apply_file_mode(str(target))
+
+    assert modes == [0o755]
+
+
+@pytest.mark.parametrize('head', [b'\x89PNG\r\n\x1a\n', b'TOE\x00', b''])
+def test_an_assembled_document_is_not_made_executable(head, monkeypatch, tmp_path):
+    """negative control: a project file that arrived 0666 under a loose umask
+    is brought back to 0644, and nothing that is not a program is 0755."""
+    import sync_assembler
+    monkeypatch.setattr(sync_assembler, '_HAS_FILE_MODES', True)
+    target = tmp_path / 'show.toe'
+    target.write_bytes(head)
+
+    modes = _record_fchmod(monkeypatch)
+    sync_assembler._apply_file_mode(str(target))
+
+    assert modes == [0o644]
+
+
+def test_windows_leaves_the_mode_alone(monkeypatch, tmp_path):
+    """what a file may do on windows is its DACL, which _harden_acl sets;
+    a chmod there would only toggle the read-only bit."""
+    import sync_assembler
+    monkeypatch.setattr(sync_assembler, '_HAS_FILE_MODES', False)
+    target = tmp_path / 'program'
+    target.write_bytes(b'#!/bin/sh\n')
+
+    modes = _record_fchmod(monkeypatch)
+    sync_assembler._apply_file_mode(str(target))
+
+    assert modes == []
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fifos and O_NONBLOCK are POSIX')
+def test_a_fifo_at_the_target_is_not_chmodded(monkeypatch, tmp_path):
+    """negative control for the flags: the folder belongs to the kiosk user by
+    the time the mode is set, so a fifo swapped in over the renamed file would
+    otherwise block the sync thread in the open for good."""
+    import signal
+
+    import sync_assembler
+    monkeypatch.setattr(sync_assembler, '_HAS_FILE_MODES', True)
+    target = tmp_path / 'program'
+    os.mkfifo(target)
+
+    modes = _record_fchmod(monkeypatch)
+
+    def _blocked(signum, frame):
+        raise AssertionError('setting the mode blocked on the fifo')
+
+    previous = signal.signal(signal.SIGALRM, _blocked)
+    signal.alarm(3)
+    try:
+        sync_assembler._apply_file_mode(str(target))
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+    assert modes == []
+
+
+def _record_fchmod(monkeypatch):
+    """The modes _apply_file_mode sets, from either platform.
+
+    os.fchmod does not exist on windows at all, which is why the injected
+    platform has to be answered rather than run for real.
+    """
+    import sync_assembler
+    modes = []
+    monkeypatch.setattr(
+        sync_assembler.os, 'fchmod', lambda fd, mode: modes.append(mode),
+        raising=False,
+    )
+    return modes
+
+
+def test_assemble_sets_the_mode_of_what_it_wrote(tmp_path):
+    """end-to-end: the mode is applied to the target after the rename, not to
+    the sidecar that no longer exists."""
+    from unittest.mock import patch
+    state = SyncState(str(tmp_path / 'state.db'))
+    try:
+        content = tmp_path / 'content'
+        extract = tmp_path / 'extract'
+        extract.mkdir()
+        allowlist = DestinationAllowlist([str(extract)])
+
+        data = b'#!/bin/sh\nexit 0\n'
+        _put_chunk(content, data)
+        f = _mk_version_file('run.sh', [data])
+
+        dist_id = state.start_distribution(
+            site_id='s', roost_id='f', version_id='m', version_url='u',
+            files=[{'path': f.path, 'size': f.size}], chunks=[],
+        )
+        with patch('sync_assembler._apply_file_mode') as mock_mode:
+            assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+
+        assert mock_mode.call_count == 1
+        assert mock_mode.call_args[0][0].endswith('run.sh')
+    finally:
+        state.close()
+
+
+def test_a_resync_reapplies_the_mode_of_a_file_it_skipped(tmp_path):
+    """the mode is best-effort, so one that did not take is repaired the way a
+    stale owner and a stale DACL are — by syncing again, which skips the file
+    on its size and re-hardens it."""
+    from unittest.mock import patch
+    state = SyncState(str(tmp_path / 'state.db'))
+    try:
+        content = tmp_path / 'content'
+        extract = tmp_path / 'extract'
+        extract.mkdir()
+        allowlist = DestinationAllowlist([str(extract)])
+
+        data = b'#!/bin/sh\nexit 0\n'
+        _put_chunk(content, data)
+        f = _mk_version_file('run.sh', [data])
+        dist_id = _register(state, 'v1', [f], extract)
+
+        assemble_all(
+            distribution_id=dist_id, files=[f], extract_root=str(extract),
+            state=state, allowlist=allowlist, content_store=str(content),
+        )
+        with patch('sync_assembler._apply_file_mode') as mock_mode:
+            result = assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+
+        assert result.skipped == 1
+        assert mock_mode.call_count == 1
+        assert mock_mode.call_args[0][0].endswith('run.sh')
+    finally:
+        state.close()
+
+
+# file ownership (POSIX, best-effort)
+
+
+def test_chown_is_a_no_op_without_a_console_user(monkeypatch):
+    """None ids — windows, an unprivileged agent, or nobody logged in — must not
+    reach os.chown, which does not exist on windows at all."""
+    import sync_assembler
+    calls = []
+    monkeypatch.setattr(sync_assembler, 'get_interactive_user_ids', lambda: None)
+    monkeypatch.setattr(
+        sync_assembler.os, 'chown', lambda *a, **kw: calls.append((a, kw)), raising=False
+    )
+    sync_assembler._chown_to_interactive_user('/var/lib/owlette/projects/a.toe')
+    assert calls == []
+
+
+def test_chown_gives_the_file_to_the_console_user(monkeypatch):
+    """the daemon is root, so without this the kiosk user cannot open what roost
+    just wrote. follow_symlinks=False: the kiosk user owns the folder this path
+    sits in, so a link left at it would hand a root-owned file away."""
+    import sync_assembler
+    calls = []
+    monkeypatch.setattr(sync_assembler, 'get_interactive_user_ids', lambda: (1001, 1002))
+    monkeypatch.setattr(
+        sync_assembler.os, 'chown', lambda *a, **kw: calls.append((a, kw)), raising=False
+    )
+    sync_assembler._chown_to_interactive_user('/var/lib/owlette/projects/a.toe')
+    assert calls == [
+        (('/var/lib/owlette/projects/a.toe', 1001, 1002), {'follow_symlinks': False})
+    ]
+
+
+def test_chown_failure_never_fails_the_assembly(monkeypatch):
+    """ownership is best-effort, exactly like the windows DACL — including the
+    NotImplementedError a platform without lchown raises."""
+    import sync_assembler
+
+    def boom(*_args, **_kwargs):
+        raise OSError(1, 'Operation not permitted')
+
+    def unsupported(*_args, **_kwargs):
+        raise NotImplementedError('follow_symlinks is unavailable on this platform')
+
+    monkeypatch.setattr(sync_assembler, 'get_interactive_user_ids', lambda: (1001, 1002))
+    monkeypatch.setattr(sync_assembler.os, 'chown', boom, raising=False)
+    sync_assembler._chown_to_interactive_user('/var/lib/owlette/projects/a.toe')
+
+    monkeypatch.setattr(sync_assembler.os, 'chown', unsupported, raising=False)
+    sync_assembler._chown_to_interactive_user('/var/lib/owlette/projects/a.toe')
+
+
+def test_assemble_chowns_the_target(tmp_path):
+    """end-to-end: both the fresh write and the idempotent skip hand the file to
+    the console user."""
+    from unittest.mock import patch
+    state = SyncState(str(tmp_path / 'state.db'))
+    try:
+        content = tmp_path / 'content'
+        extract = tmp_path / 'extract'
+        extract.mkdir()
+        allowlist = DestinationAllowlist([str(extract)])
+
+        data = b'chown test'
+        _put_chunk(content, data)
+        f = _mk_version_file('a.toe', [data])
+
+        dist_id = state.start_distribution(
+            site_id='s', roost_id='f', version_id='m', version_url='u',
+            files=[{'path': f.path, 'size': f.size}], chunks=[],
+        )
+        with patch('sync_assembler._chown_to_interactive_user') as mock_chown:
+            assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+            assert mock_chown.call_count == 1
+            assert 'a.toe' in mock_chown.call_args[0][0]
+
+            # re-sync: the skip path re-applies ownership rather than leaving a
+            # file that an older build wrote as root.
+            mock_chown.reset_mock()
+            assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+            assert mock_chown.call_count == 1
+    finally:
+        state.close()
+
+
+def test_assemble_chowns_the_directories_under_the_extract_root(tmp_path):
+    """
+    a root-owned project folder is readable but not writable by the kiosk user,
+    so the app cannot save a Backup/ or a lock file beside the file roost just
+    wrote. the extract root itself is pre-existing and must not be touched.
+    """
+    from unittest.mock import patch
+    state = SyncState(str(tmp_path / 'state.db'))
+    try:
+        content = tmp_path / 'content'
+        extract = tmp_path / 'extract'
+        extract.mkdir()
+        allowlist = DestinationAllowlist([str(extract)])
+
+        data = b'nested chown test'
+        _put_chunk(content, data)
+        f = _mk_version_file('show1/assets/a.toe', [data])
+
+        dist_id = state.start_distribution(
+            site_id='s', roost_id='f', version_id='m', version_url='u',
+            files=[{'path': f.path, 'size': f.size}], chunks=[],
+        )
+        # the console user the POSIX daemon would resolve; None on windows,
+        # where ownership is a DACL and the directory pass is skipped.
+        with patch('sync_assembler.get_interactive_user_ids', return_value=(1001, 1002)), \
+                patch('sync_assembler._chown_to_interactive_user') as mock_chown:
+            assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+            owned = [call.args[0] for call in mock_chown.call_args_list]
+
+            # a run that found nobody logged in left these root-owned; the
+            # re-sync that skips every file is what repairs them.
+            mock_chown.reset_mock()
+            assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+            re_owned = [call.args[0] for call in mock_chown.call_args_list]
+
+        # with nobody at the machine there is nothing to hand the folders to,
+        # and the ancestor walk is not paid per file.
+        with patch('sync_assembler.get_interactive_user_ids', return_value=None), \
+                patch('sync_assembler._chown_to_interactive_user') as no_user_chown:
+            assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+            assert str(extract / 'show1') not in [
+                call.args[0] for call in no_user_chown.call_args_list
+            ]
+
+        for expected in [
+            str(extract / 'show1'),
+            str(extract / 'show1' / 'assets'),
+            str(extract / 'show1' / 'assets' / 'a.toe'),
+        ]:
+            assert expected in owned
+            assert expected in re_owned
+        for untouched in [str(extract), str(tmp_path)]:
+            assert untouched not in owned
+            assert untouched not in re_owned
+    finally:
+        state.close()
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='windows has no O_NOFOLLOW')
+def test_a_symlink_at_the_partial_path_is_refused(tmp_path):
+    """
+    the `.partial` sidecar is derived from the target string and never goes
+    through the allowlist, and on POSIX the folder around it is handed to the
+    kiosk user — so a link planted there would have the root daemon write roost
+    bytes wherever it points. O_NOFOLLOW refuses it; the file outside stays as
+    it was and the assembly fails rather than following the link.
+    """
+    state = SyncState(str(tmp_path / 'state.db'))
+    try:
+        content = tmp_path / 'content'
+        extract = tmp_path / 'extract'
+        extract.mkdir()
+        outside = tmp_path / 'outside.conf'
+        outside.write_bytes(b'do not touch')
+        allowlist = DestinationAllowlist([str(extract)])
+
+        data = b'roost bytes'
+        _put_chunk(content, data)
+        f = _mk_version_file('a.toe', [data])
+
+        try:
+            os.symlink(str(outside), str(extract / 'a.toe.partial'))
+        except (OSError, NotImplementedError):
+            pytest.skip('symlink creation not permitted on this host')
+
+        dist_id = state.start_distribution(
+            site_id='s', roost_id='f', version_id='m', version_url='u',
+            files=[{'path': f.path, 'size': f.size}], chunks=[],
+        )
+        with pytest.raises(AssembleError):
+            assemble_all(
+                distribution_id=dist_id, files=[f], extract_root=str(extract),
+                state=state, allowlist=allowlist, content_store=str(content),
+            )
+        assert outside.read_bytes() == b'do not touch'
+        assert not (extract / 'a.toe').exists()
     finally:
         state.close()

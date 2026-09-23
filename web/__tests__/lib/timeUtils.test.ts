@@ -7,7 +7,7 @@
  * which is the whole point of the helper.
  */
 
-import { zonedTimeToUtcMs } from '@/lib/timeUtils';
+import { formatHeartbeatTime, zonedTimeToUtcMs } from '@/lib/timeUtils';
 
 describe('zonedTimeToUtcMs', () => {
   it('treats UTC components as UTC', () => {
@@ -64,5 +64,16 @@ describe('zonedTimeToUtcMs', () => {
     expect(zonedTimeToUtcMs(2026, 4, 25, 0, 0, 0, 0, 'Not/AZone')).toBe(
       Date.UTC(2026, 4, 25, 0, 0, 0, 0),
     );
+  });
+});
+
+describe('formatHeartbeatTime tooltip', () => {
+  it('labels a real heartbeat as last seen', () => {
+    const { tooltip } = formatHeartbeatTime(Math.floor(Date.now() / 1000) - 30, 'UTC', '24h');
+    expect(tooltip).toMatch(/^last seen /);
+  });
+
+  it('says so when no heartbeat was ever received', () => {
+    expect(formatHeartbeatTime(0).tooltip).toBe('no heartbeat received');
   });
 });

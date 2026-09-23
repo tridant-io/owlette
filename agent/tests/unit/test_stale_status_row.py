@@ -73,6 +73,12 @@ class FakeProc:
     def exe(self):
         return self._exe
 
+    def status(self):
+        # Util.is_pid_running reads this off Windows to tell a live process
+        # from a zombie the daemon has not reaped yet; a double without it
+        # makes every identity check raise there and nowhere else.
+        return psutil.STATUS_RUNNING
+
 
 def install_process_table(monkeypatch, table):
     """Replace the live process view with `table` ({pid: FakeProc})."""
@@ -147,6 +153,10 @@ def make_service(results, *, shutting_down=False):
         current_time=datetime.datetime(2026, 9, 12, 1, 36),
         firebase_client=None,
         results=results,
+        # Somebody is at the machine, so every death here is the crash it
+        # looks like: off Windows the seat is what tells a crash apart from
+        # an operator's logout taking the session's apps with it.
+        _seat_absent=lambda: False,
         _write_cortex_event=lambda *a, **k: None,
         _capture_crash_screenshot=lambda: None,
     )
@@ -164,6 +174,7 @@ def make_cleanup_service(results):
         active_installations={},
         manual_overrides={},
         _skip_launch_delay=set(),
+        _seatless_entries=set(),
         results=results,
     )
     svc.cleanup_stale_tracking_data = (

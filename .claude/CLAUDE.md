@@ -2,7 +2,7 @@
 
 Owlette is a cloud-connected Windows process management and remote deployment system for managing TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python Windows service (agent) + Next.js web dashboard (web) + Firebase/Firestore backend.
 
-**Version**: 3.3.4 | **License**: FSL-1.1-Apache-2.0
+**Version**: 3.3.6 | **License**: FSL-1.1-Apache-2.0
 
 ---
 
@@ -68,8 +68,9 @@ cd web && npm run e2e                    # Playwright E2E suite (requires JDK 21
 cd web && npm run lint                   # Lint
 
 # Agent
-cd agent && pip install -r requirements.txt
-cd agent/src && python owlette_service.py debug   # Debug mode (requires admin)
+powershell -File scripts/bootstrap-windows.ps1 -InstallAgentDeps   # agent/.venv (Python 3.11) + requirements*.txt
+agent/.venv/Scripts/python -m pytest agent/tests/                  # Agent tests (what the commit hook runs)
+cd agent/src && ../.venv/Scripts/python owlette_runner.py --debug  # Debug mode (requires admin)
 cd agent && build_installer_full.bat              # Full build (~5-10 min)
 cd agent && build_installer_quick.bat             # Quick build (~30 sec)
 
@@ -97,6 +98,8 @@ Version files: `/VERSION`, `agent/VERSION`, `web/package.json`, `firestore.rules
 - All changes must be self-contained and fully functional — never commit something that "works but will need a follow-up fix"
 
 **Lint as you go — don't let errors accumulate.** After editing any web file, run `npx eslint <file>` on that file (or `npm run lint` for a broader change) and fix every error and warning you introduced before moving on. Never commit new lint errors, and never rationalise them as "pre-existing" if your edit touched the same file. The repo has historical lint debt — your job is to not add to it, and to clean up any issues in lines you modified. Same principle for TypeScript: if `tsc` / IDE diagnostics flag your change, fix it before the next edit, not at commit time.
+
+**Security alerts are a release gate, not a notification.** Run `node scripts/check-security-alerts.mjs` before any release build and as part of `/preflight`. It resolves every open GitHub alert against *this branch's* lockfiles, because Dependabot files security alerts and PRs against `main` (`target-branch` does not apply to them) and `main` trails `dev` — so the raw alert list mixes live vulnerabilities with ones fixed on `dev` weeks ago. Exit 1 means a vulnerable version is still pinned here: fix it, dismiss it on GitHub with a written reason, or get explicit user acceptance and re-run with `--ack "<key>=<why>"` — every ack needs a written reason, `verify:*` keys are refused outright (a check that could not run must be fixed, not waived), and acked items go in the release commit body so the decision is on record. Never ack on your own judgment. The `security preflight` workflow runs the same check daily and on every push to `dev`/`main`. Security PRs land on `dev` by hand; a Dependabot PR open past 30 days is itself a blocker.
 
 **E2E verification (two layers).** The `playwright e2e` GitHub Action ([.github/workflows/e2e.yml](../.github/workflows/e2e.yml)) gates pushes to `dev`/`main` that touch `web/**`, `firestore.rules`, or `firebase.json`.
 - **Proactive (preferred):** before pushing such changes, run `/preflight` — it runs lint, typecheck, unit tests, and the local e2e suite (the exact mirror of CI, ~45s steady-state). Fix reds locally; don't ship them to a branch that auto-deploys.
@@ -175,7 +178,7 @@ that stops being true.
 
 | if you bump | you must also |
 | --- | --- |
-| `claude-agent-sdk` | re-run `scripts/upload-cortex-cli.mjs` for **dev AND prod** — the SDK vendors the Claude CLI, the pin in `installer_metadata/cortex_cli` moves with it, and agents keep fetching the old CLI until you do |
+| `claude-agent-sdk` | re-run `scripts/upload-cortex-cli.mjs` once per environment, for **dev AND prod**, passing every platform's binary in the one run — the SDK vendors the Claude CLI and the per-platform pins in `installer_metadata/cortex_cli_<osfamily>_<arch>` move with it. That run also rewrites the legacy `installer_metadata/cortex_cli`, the only id a pre-3.4 agent reads; keep it until the fleet floor is 3.4. Agents keep fetching the old CLI until you do |
 | `mcp` to 2.x | `pywin32>=311` (mcp 1.11.0+ already needs `>=310`) |
 | `ai` / `@ai-sdk/*` | re-check the hoot test fixtures — `ai>=6.0.280` runs tools only on `finishReason.unified`, and string mock chunks silently skip tool calls |
 | `pywin32` | full agent suite **and** a real machine test — it is how the agent does services and COM, not an incidental dep |
@@ -217,6 +220,8 @@ Reviews are judged on calibration, not volume. Three accurate findings are more 
 ## Agent Dev Testing Workflow
 
 The `deploy-agent.mjs` hook auto-copies edited `agent/src/*.py` files to `C:\ProgramData\Owlette\agent\src\`. Service files (`owlette_service.py`, `shared_utils.py`, `firebase_client.py`, `connection_manager.py`, `auth_manager.py`) require a restart. **Do this automatically** — don't wait for the user to ask.
+
+The hook copies unelevated, so after each agent install it needs `powershell -File scripts/bootstrap-windows.ps1 -DevGrant` from an elevated prompt (the installer resets `agent\src`), which grants only the developer's own account Modify on `agent\src` and `app` (`-RemoveDevGrant` reverts it). While the grant is in place, the service logs a DevMode warning at every start.
 
 ### Restart sequence (order matters):
 1. **Close the desktop app** (it holds the tray icon): kill the `owlette-desktop.exe` PID from `C:\ProgramData\Owlette\tmp\tray.pid` — by PID, never by image name.
@@ -267,4 +272,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-09-13
+**Last Updated**: 2026-09-21

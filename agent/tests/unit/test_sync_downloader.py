@@ -1,7 +1,6 @@
 """tests for sync_downloader — chunk fetcher with range-resume + verify."""
 
 import hashlib
-import os
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -38,22 +37,10 @@ def _put_chunk(store: Path, data: bytes) -> str:
 # default content store resolution
 
 
-def test_default_content_store_windows(monkeypatch):
-    """on windows the default content store lives under %PROGRAMDATA%\\Owlette\\content."""
-    if os.name != 'nt':
-        pytest.skip('windows-only default path test')
-    monkeypatch.setenv('PROGRAMDATA', 'C:\\FakeProgramData')
-    got = _default_content_store()
-    assert got == os.path.join('C:\\FakeProgramData', 'Owlette', 'content')
-
-
-def test_default_content_store_posix_xdg(monkeypatch):
-    """on POSIX with XDG_DATA_HOME set, honor it."""
-    if os.name == 'nt':
-        pytest.skip('POSIX-only default path test')
-    monkeypatch.setenv('XDG_DATA_HOME', '/tmp/fake-xdg')
-    got = _default_content_store()
-    assert got == '/tmp/fake-xdg/owlette/content'
+def test_default_content_store_follows_the_data_root(tmp_path, monkeypatch):
+    """the content store is `content` under whatever OWLETTE_DATA_ROOT names."""
+    monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path))
+    assert _default_content_store() == str(tmp_path / 'content')
 
 
 def test_default_content_store_not_under_documents():

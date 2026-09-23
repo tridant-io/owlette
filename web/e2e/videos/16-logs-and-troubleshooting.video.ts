@@ -16,7 +16,7 @@
  * `control-process-restarting` seeds processes but not logs, so this scene
  * seeds its own entries inline; the shape matches the LogEvent interface in
  * app/logs/page.tsx and every `action` value below is one the filter actually
- * offers (ACTION_TYPE_GROUPS, page.tsx:133-211).
+ * offers (ACTION_TYPE_GROUPS, page.tsx:137-227).
  *
  * Run:  cd web && npm run videos -- --grep "episode 16"
  * Out:  dev/video-tutorials/footage/web/16-logs-and-troubleshooting.mp4

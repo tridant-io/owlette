@@ -6,6 +6,7 @@
     "user-management",
     "installer-management",
     "system-presets",
+    "schedule-presets",
     "token-management",
     "email-alerts",
     "webhooks"

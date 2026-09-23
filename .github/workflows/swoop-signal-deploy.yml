@@ -1,0 +1,150 @@
+name: swoop signal deploy
+
+# the signaling worker's only route to an environment. infra/swoop-signal is not
+# part of web/, so railway's auto-deploy never sees it: without this workflow a
+# merged worker change sits in git and nothing runs it.
+#
+#   push to dev          -> wrangler deploy -e dev  -> swoop-signal-dev
+#   workflow_dispatch    -> wrangler deploy -e <environment input> (default dev)
+#   pull request         -> the suite, and nothing else
+#
+# a push to main deploys nothing: the prod worker is created and updated only by
+# a deliberate dispatch with environment=prod, after its three secrets are set
+# (infra/swoop-signal/README.md, first-time setup). a promotion merge into main
+# therefore cannot stand up an unconfigured prod worker on its own.
+#
+# CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are repository secrets and are
+# referenced by name only. the worker's OWN secrets (SWOOP_JWT_PUBLIC_KEY,
+# SWOOP_JWT_KID, SWOOP_SIGNAL_RING_SECRET, and the _PREV pair during a rotation
+# overlap) never appear here: they are set out of band with `wrangler secret put`
+# and `wrangler deploy` leaves them untouched. setup, rotation and rollback are in
+# infra/swoop-signal/README.md.
+
+on:
+  pull_request:
+    paths:
+      - 'infra/swoop-signal/**'
+      - '.github/workflows/swoop-signal-deploy.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'infra/swoop-signal/**'
+      - '.github/workflows/swoop-signal-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'environment to deploy (prod is a deliberate act, never a push)'
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+# deploys queue, they do not cancel: a cancelled `wrangler deploy` leaves whatever
+# version cloudflare last accepted, and the next push would be racing it.
+concurrency:
+  group: swoop-signal-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+# least-privilege default: both jobs only read the repo. the deploy authenticates
+# to cloudflare with its own scoped token, never with GITHUB_TOKEN.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: worker suite
+    runs-on: ubuntu-latest
+    # the suite boots one `wrangler dev` (workerd out of node_modules, no call to
+    # cloudflare) and takes ~1 min; the rest of the budget is a cold npm ci.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      # node 22 is the workers runtime line that @types/node tracks in
+      # infra/swoop-signal/package.json.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/swoop-signal/package-lock.json
+
+      - name: install
+        working-directory: infra/swoop-signal
+        run: npm ci
+
+      # no cloudflare credentials reach this job at all: `wrangler dev` is local,
+      # and the suite mints its tokens from the published test-only seeds in
+      # agent/swoop/testdata/protocol/keys.test-only.json.
+      - name: test
+        working-directory: infra/swoop-signal
+        run: npm test
+
+  deploy:
+    name: deploy
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # prod only from a dispatch that asks for it. the `a && b || c` idiom falls
+      # through to c whenever b is empty, and here c is dev: a push (no inputs)
+      # and a dispatch with an empty input both land on dev, the safe direction.
+      WRANGLER_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+      # the origin to smoke-check is a repository *variable*, not a literal in
+      # this file: the repository is public and a worker hostname carries either
+      # the account's workers.dev subdomain or the zone it is routed on. both are
+      # passed and the step picks — `a && vars.X || vars.Y` would fall through to
+      # the dev origin whenever the prod one is unset, i.e. smoke-check dev after
+      # deploying prod.
+      DEV_ORIGIN: ${{ vars.SWOOP_SIGNAL_DEV_URL }}
+      PROD_ORIGIN: ${{ vars.SWOOP_SIGNAL_PROD_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      # deliberately no `cache: npm` here. the cache is writable from pull-request
+      # runs, and a deploy job must not install from anything a pr could have
+      # populated.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+
+      - name: install
+        working-directory: infra/swoop-signal
+        run: npm ci
+
+      - name: deploy
+        working-directory: infra/swoop-signal
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # --no-install pins this to the wrangler npm ci just installed rather than
+        # letting npx fetch a floating one.
+        run: npx --no-install wrangler deploy -e "$WRANGLER_ENV"
+
+      # a deploy cloudflare accepted is not yet a worker that answers: a failed
+      # durable-object migration, an unset secret and a missing route all look
+      # like success in `wrangler deploy`'s output and fail here.
+      - name: smoke check GET /health
+        run: |
+          if [ "$WRANGLER_ENV" = "prod" ]; then origin="$PROD_ORIGIN"; else origin="$DEV_ORIGIN"; fi
+          if [ -z "$origin" ]; then
+            echo "repository variable SWOOP_SIGNAL_DEV_URL / SWOOP_SIGNAL_PROD_URL is unset - see infra/swoop-signal/README.md" >&2
+            exit 1
+          fi
+          # --retry-all-errors covers connection refused too, which is what a
+          # freshly routed hostname looks like for a few seconds.
+          code=$(curl -sS -o "$RUNNER_TEMP/health.json" -w '%{http_code}' --max-time 10 \
+            --retry 5 --retry-delay 3 --retry-all-errors "${origin%/}/health")
+          cat "$RUNNER_TEMP/health.json"
+          if [ "$code" != "200" ]; then
+            echo "health returned $code" >&2
+            exit 1
+          fi
+          # the unauthenticated body is fixed, so anything else means the route is
+          # answering from something that is not this worker. no secret is sent:
+          # the kid-reporting variant of /health needs the ring secret and this
+          # check deliberately does not carry it.
+          grep -q '"service":"swoop-signal"' "$RUNNER_TEMP/health.json"

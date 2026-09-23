@@ -20,7 +20,12 @@ import { FolderDropzone } from '@/components/FolderDropzone';
 import { PreUploadSummary } from '@/components/PreUploadSummary';
 import type { NamedBlob } from '@/lib/chunking';
 import { summariseVersion } from '@/lib/chunking';
-import { resolveExtractPath, isLikelyAllowed } from '@/lib/extractPath';
+import {
+  resolveExtractPath,
+  isLikelyAllowed,
+  isPosixPathOnWindowsTargets,
+} from '@/lib/extractPath';
+import type { MachineOsFamily } from '@/lib/machineOs';
 import {
   formatBytes,
   summariseRawFiles,
@@ -96,6 +101,15 @@ function formatDurationShort(seconds: number): string {
   const rm = m - h * 60;
   return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
 }
+
+/**
+ * Which allowlist the extract-path warning is measured against. Machines do now
+ * report `osFamily` (absent still means windows), but the warning stays
+ * windows-only on purpose: its copy below names windows outright, so measuring
+ * a mixed site against each machine's own family is a copy decision, not a
+ * one-line swap of this set.
+ */
+const TARGET_OS_FAMILIES: ReadonlySet<MachineOsFamily> = new Set(['windows']);
 
 /** Stable key for detecting whether current form matches a preset's config. */
 function presetConfigKey(extractPath: string | undefined): string {
@@ -959,32 +973,50 @@ export default function ProjectDistributionDialog({
               {extractPath.trim() ? 'resolves to' : 'default'}:{' '}
               <span className="font-mono text-accent-cyan">{resolveExtractPath(extractPath)}</span>
             </p>
-            {!isLikelyAllowed(extractPath) && (
+            {!isLikelyAllowed(extractPath, TARGET_OS_FAMILIES) && (
               <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-400/90 space-y-1.5">
-                <p className="font-medium">
-                  absolute path — agent needs to be told this is OK to write to
-                </p>
-                <p className="text-amber-400/75">
-                  the agent runs as SYSTEM on the target machine, so by default we
-                  only allow writes under <code className="font-mono">~/Documents/</code>.
-                  to write to <code className="font-mono">{resolveExtractPath(extractPath)}</code>,
-                  add it to the allowlist on that machine:
-                </p>
-                <ol className="list-decimal list-inside space-y-0.5 pt-0.5 text-amber-400/75">
-                  <li>open <code className="font-mono">C:\ProgramData\Owlette\config\config.json</code> as admin</li>
-                  <li>
-                    add (or append to) the <code className="font-mono">agent_config</code> block:
-                    <pre className="mt-1 ml-4 p-2 rounded bg-background/60 text-[10px] leading-snug overflow-x-auto">
+                {isPosixPathOnWindowsTargets(extractPath, TARGET_OS_FAMILIES) ? (
+                  <>
+                    <p className="font-medium">
+                      not a path a windows machine can use
+                    </p>
+                    <p className="text-amber-400/75">
+                      these machines run windows, where{' '}
+                      <code className="font-mono">{resolveExtractPath(extractPath)}</code>{' '}
+                      isn&apos;t an absolute path at all — the agent refuses it before it
+                      looks at any allowlist. start with a drive letter
+                      (<code className="font-mono">C:\render</code>), or leave the field
+                      empty for the default.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium">
+                      absolute path — agent needs to be told this is OK to write to
+                    </p>
+                    <p className="text-amber-400/75">
+                      the agent runs as SYSTEM on the target machine, so by default we
+                      only allow writes under <code className="font-mono">~/Documents/</code>.
+                      to write to <code className="font-mono">{resolveExtractPath(extractPath)}</code>,
+                      add it to the allowlist on that machine:
+                    </p>
+                    <ol className="list-decimal list-inside space-y-0.5 pt-0.5 text-amber-400/75">
+                      <li>open <code className="font-mono">C:\ProgramData\Owlette\config\config.json</code> as admin</li>
+                      <li>
+                        add (or append to) the <code className="font-mono">agent_config</code> block:
+                        <pre className="mt-1 ml-4 p-2 rounded bg-background/60 text-[10px] leading-snug overflow-x-auto">
 {`"agent_config": {
 "allowed_extract_roots": [
 "~/Documents",
 "${resolveExtractPath(extractPath).replace(/\\/g, '\\\\')}"
   ]
 }`}
-                    </pre>
-                  </li>
-                  <li>right-click the owlette tray icon and pick <em>restart</em></li>
-                </ol>
+                        </pre>
+                      </li>
+                      <li>right-click the owlette tray icon and pick <em>restart</em></li>
+                    </ol>
+                  </>
+                )}
               </div>
             )}
           </div>

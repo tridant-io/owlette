@@ -43,7 +43,9 @@ import shared_utils
 ENTRY = {'id': 'proc-1', 'name': 'Demo App', 'exe_path': 'C:\\apps\\demo.exe',
          'launch_mode': 'always'}
 
-EXE_NORMALISED = 'c:\\apps\\demo.exe'
+# Through the normaliser, not spelled out: the fold is the Windows comparison,
+# and off Windows a path is stored exactly as it is read.
+EXE_NORMALISED = shared_utils.normalize_exe_path(ENTRY['exe_path'])
 
 INHERIT_FIELDS = {'create_time': 1111.5, 'exe': EXE_NORMALISED,
                   'managed': True, 'origin': 'inherited'}
@@ -65,6 +67,12 @@ class FakeProc:
 
     def exe(self):
         return self._exe
+
+    def status(self):
+        # Util.is_pid_running reads this off Windows to tell a live process
+        # from a zombie the daemon has not reaped yet; a double without it
+        # makes every identity check raise there and nowhere else.
+        return psutil.STATUS_RUNNING
 
 
 def install_process_table(monkeypatch, table):
@@ -281,15 +289,16 @@ def timeout_launch_service(tmp_path, monkeypatch, state_file):
     The scan seam returns pid 4242; no process is ever created.
     """
     import sys
+    import win32process
     import owlette_service
     from owlette_service import OwletteService
 
     # Everything get_data_path() resolves must land in the sandbox.
-    monkeypatch.setenv('PROGRAMDATA', str(tmp_path))
+    monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path / 'Owlette'))
     (tmp_path / 'Owlette' / 'tmp').mkdir(parents=True)
     monkeypatch.setattr(shared_utils, 'get_python_exe_path',
                         lambda: sys.executable)
-    monkeypatch.setattr(owlette_service.win32process, 'CreateProcessAsUser',
+    monkeypatch.setattr(win32process, 'CreateProcessAsUser',
                         lambda *a, **k: (None, None, 9999, 0))
     # The pid-file poll is pure waiting for a file that will never appear;
     # a no-op sleep keeps the 5s timeout out of the test's wall clock.
@@ -306,11 +315,14 @@ def timeout_launch_service(tmp_path, monkeypatch, state_file):
     )
     svc.launch_process_as_user = (
         OwletteService.launch_process_as_user.__get__(svc, OwletteService))
+    svc._record_launch = (
+        OwletteService._record_launch.__get__(svc, OwletteService))
     svc._validate_path = OwletteService._validate_path
     svc._find_running_process_by_exe = MagicMock(return_value=4242)
     return SimpleNamespace(svc=svc, exe=str(exe))
 
 
+@pytest.mark.windows(reason='CreateProcessAsUser is the Windows launch seam')
 def test_fallback_scan_inherits_with_record(
         timeout_launch_service, state_file, monkeypatch):
     """An unambiguous fallback-scan hit is an inherit: the pid never came
@@ -327,12 +339,13 @@ def test_fallback_scan_inherits_with_record(
         'id': 'proc-x',
         'status': 'LAUNCHING',
         'create_time': 987.5,
-        'exe': exe.replace('/', '\\').lower(),
+        'exe': shared_utils.normalize_exe_path(exe),
         'managed': True,
         'origin': 'inherited',
     }
 
 
+@pytest.mark.windows(reason='CreateProcessAsUser is the Windows launch seam')
 def test_fallback_scan_declines_bind_when_process_died(
         timeout_launch_service, state_file, monkeypatch):
     """Match-then-death at the fallback site reports launch failure instead

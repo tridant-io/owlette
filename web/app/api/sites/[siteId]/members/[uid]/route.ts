@@ -14,7 +14,8 @@
  * else's automations is worse than an orphan the operator was told about.
  *
  * Idempotent: a non-member returns 200 with `wasMember: false`.
- * Auth: `requireSiteAuthAndScope(req, siteId, 'admin')`.
+ * Auth: `requireSiteAuthAndScope(req, siteId, 'admin')`, plus the self-guard in
+ * `refuseSelfMembershipChange` — a caller cannot remove their own row.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -42,6 +43,7 @@ import {
   readAndParseJsonBody,
 } from '../../../../_shared';
 import { changeRole, removeMember } from '@/lib/membership.server';
+import { revokeSwoopSessionsForUser } from '@/lib/swoop/revokeViewerSessions.server';
 
 // The talon store pulls in `node:crypto` for webhook secret minting.
 export const runtime = 'nodejs';
@@ -49,6 +51,51 @@ export const runtime = 'nodejs';
 const UID_REGEX = /^[A-Za-z0-9_-]{1,128}$/;
 
 type RouteParams = { siteId: string; uid: string };
+
+/**
+ * A caller may never act on their OWN membership row, at any role.
+ *
+ * That row is what decides what the caller may do, so it is the one membership
+ * mutation that can hand them rights they did not have. The capability gating
+ * this route, SITE_MEMBER_MANAGE, is NOT in BYPASS_EXEMPT_CAPABILITIES — so
+ * while `capability_enforcement` is off (the 4h break-glass in
+ * `global/security_config`) a plain site `member` on a browser session reaches
+ * this handler, and `PATCH {role:'admin'}` on their own uid made them a site
+ * admin. From there MACHINE_REMOTE_CONTROL is held ON MERIT and every
+ * kill-switch exemption passes legitimately — the switch could not grant screen
+ * control, but it could grant the role that carries it. This guard lives in the
+ * handler, before any write, precisely so it holds whether or not the switch is
+ * on, and so it costs a real break-glass nothing.
+ *
+ * The OWNER is covered too, and loses nothing: their role moves only through
+ * POST /api/sites/{siteId}/transfer-ownership, and `changeRole`/`removeMember`
+ * refuse an owner outright either way. No self-service flow breaks — there is no
+ * "leave site", and the members UI already refuses "remove yourself"
+ * client-side (`app/admin/members/page.tsx`); this is that rule's missing server
+ * half, matching the self-guard on `users/{uid}/mfa-reset`.
+ *
+ * Api-key callers are refused on the KEY OWNER's row for the same reason: a key
+ * is the user's credential and must not reach what their session cannot.
+ */
+function refuseSelfMembershipChange(
+  ctx: SiteHandlerContext,
+  siteId: string,
+  uid: string,
+  action: 'change' | 'remove',
+): NextResponse | null {
+  if (uid !== ctx.actor.userId) return null;
+  return problem({
+    type: ProblemType.Forbidden,
+    title: 'cannot modify your own membership',
+    status: 403,
+    detail:
+      action === 'remove'
+        ? 'you cannot remove your own membership; ask another admin on this site to remove your access'
+        : 'you cannot change your own role on this site; ask another admin on this site',
+    instance: `/api/sites/${siteId}/members/${uid}`,
+    code: 'cannot_modify_own_membership',
+  });
+}
 
 export const DELETE = authorizedSiteHandler<RouteParams>({
   capability: 'SITE_MEMBER_MANAGE',
@@ -71,6 +118,12 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
         'path.uid': ['letters, digits, underscore, hyphen only'],
       });
     }
+
+    // Before the body read and before `withIdempotency`: the refusal depends on
+    // nothing but caller and target, and a 403 must never be recorded under an
+    // idempotency key and replayed at a legitimate later call.
+    const selfRefusal = refuseSelfMembershipChange(ctx, siteId, uid, 'remove');
+    if (selfRefusal) return selfRefusal;
 
     const talonSuccessorUid = request.nextUrl.searchParams.get('talonSuccessorUid');
     if (talonSuccessorUid !== null && !UID_REGEX.test(talonSuccessorUid)) {
@@ -207,6 +260,20 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
               return problemNotFound(`site ${siteId} not found`);
             }
           }
+          // After the membership write and only when it landed, outside its
+          // transaction, and never awaited into the response: the lease already
+          // ends their sessions within five minutes (PROTOCOL.md §10) and this
+          // only closes that window to the kill path's two seconds.
+          if (removal.ok) {
+            void revokeSwoopSessionsForUser({
+              siteId,
+              uid,
+              actor: ctx.actor,
+              auditActor: auditActorIdentifier(ctx.auth),
+              reason: 'member_removed',
+              ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
+            });
+          }
         }
 
         emitMutation({
@@ -263,6 +330,9 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
  * an admin can neither promote themselves into ownership nor demote the owner
  * out of it. Both halves are enforced inside the transaction that writes.
  *
+ * Neither of those covered `member` → `admin` on the caller's OWN row, which is
+ * what `refuseSelfMembershipChange` closes.
+ *
  * Auth: `requireSiteAuthAndScope(req, siteId, 'admin')`, capability
  * SITE_MEMBER_MANAGE — the same gate the sibling DELETE takes.
  */
@@ -284,6 +354,10 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
       });
     }
 
+    // Same placement as the sibling DELETE, and for the same reasons.
+    const selfRefusal = refuseSelfMembershipChange(ctx, siteId, uid, 'change');
+    if (selfRefusal) return selfRefusal;
+
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
 
@@ -304,6 +378,21 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
       parsed.raw,
       async () => {
         const result = await changeRole({ siteId, uid, role });
+
+        // A demotion to `member` loses MACHINE_REMOTE_CONTROL, so any session
+        // in which they hold control has to end — but a watch they are still
+        // entitled to survives, which is why this is `controlOnly`.
+        if (result.ok && role === 'member') {
+          void revokeSwoopSessionsForUser({
+            siteId,
+            uid,
+            actor: ctx.actor,
+            auditActor: auditActorIdentifier(ctx.auth),
+            reason: 'role_changed',
+            controlOnly: true,
+            ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
+          });
+        }
 
         if (!result.ok) {
           if (result.failure.kind === 'is_owner') {

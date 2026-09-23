@@ -40,6 +40,41 @@ Version → `OWLETTE_VERSION` env var → Inno Setup reads it → installer file
 
 ## Agent Installer Release (build + upload to Firebase)
 
+### Step 0 (blocking): no live vulnerability ships
+
+Run this BEFORE the version bump, and again right before the upload:
+
+```bash
+node scripts/check-security-alerts.mjs
+```
+
+It resolves every open GitHub alert against **this branch's** lockfiles, which
+is the only way to read Owlette's alert list: Dependabot files security alerts
+and PRs against `main`, `main` trails `dev` by hundreds of commits, and
+`target-branch` in `.github/dependabot.yml` does not apply to security updates.
+So the raw list mixes "still shipping" with "fixed on dev weeks ago".
+
+- **BLOCKING:** an alert whose vulnerable version is still pinned here (`LIVE`),
+  an alert this checkout cannot resolve (`UNRESOLVED`), any open code-scanning
+  or secret-scanning alert, a draft/triage advisory, or a Dependabot PR left
+  open past 30 days. A check that cannot run is itself a blocker.
+- **Exit 1 = STOP.** Each blocker gets fixed, dismissed on GitHub with a written
+  reason, or explicitly accepted by the user — then re-run with
+  `--ack "<key>=<why>"` using only the keys the user named. Every ack requires a
+  reason; `verify:*` keys are refused (a check that could not run must be fixed,
+  never waived). Never ack on your own judgment.
+- **List every acked item in the release commit body**, with its reason, so the
+  waiver is auditable in `git log` rather than evaporating with the shell.
+- **Report the warnings too.** `fixed here, still open on the default branch` is
+  the expected steady state for `dev`; it clears when `dev` reaches `main`.
+
+Why: on 2026-09-12 the repo carried 39 open alerts, two of them an
+unauthenticated RCE in Next.js (GHSA via 16.3.3), and the noise from ~30 stale
+alerts that were already fixed on `dev` is what made nobody look. The
+`security preflight` workflow runs the same check daily and on every push to
+`dev`/`main`.
+
+
 **IMPORTANT: Always version up AND update the changelog BEFORE building the installer.** Bump with `node scripts/sync-versions.js X.Y.Z` and commit BEFORE running `build_installer_full.bat` — the installer bakes the version into the exe filename and binary.
 
 **IMPORTANT: the changelog MUST be updated before every installer build.** Add a new `## [X.Y.Z] - YYYY-MM-DD` section summarising all changes since the last release. Never build or upload an installer without a matching changelog entry.
@@ -135,6 +170,21 @@ curl -s -X PUT "$BASE_URL/api/installer/upload" \
 # checksum_sha256 is optional — server computes it if omitted, but providing it gets a 412 `checksum_mismatch` on corruption.
 ```
 
+### Cortex CLI pins — one document per platform, per environment
+
+`scripts/upload-cortex-cli.mjs` publishes the Claude Code CLI the hoot runtime drives, pinned by sha256 in `installer_metadata/cortex_cli_<osFamily>_<arch>`: `windows_x64`, `macos_universal` (one universal2 build), `linux_x64`, `linux_arm64`. `agent/src/cortex_cli_fetch.py` resolves its own id from `(osFamily, arch)`, so a platform whose pin is missing fails closed and hoot never starts there. The macOS payload must be a `lipo -create` universal2 binary — the SDK's wheels are per-arch and both Macs read the one id — and the script rejects a thin Mach-O.
+
+- **One run per environment publishes every platform** — the script loops the table, so an SDK bump is one command per environment, not four:
+  ```bash
+  node scripts/upload-cortex-cli.mjs --env=dev \
+    --windows-x64="<claude.exe>" --macos-universal="<claude>" \
+    --linux-x64="<claude>" --linux-arm64="<claude>"
+  ```
+  The version is read from `<binary> -v` on whichever file runs on the invoking host; pass `--version=X.Y.Z` when none does. `--dry-run` hashes locally and touches nothing.
+- **`windows_x64` also rewrites the unsuffixed `installer_metadata/cortex_cli`.** That is the only id a pre-3.4 agent reads, and it is what the whole fielded fleet fetches from. Drop `legacyDoc` from the platform table only once the fleet floor is 3.4 — until then, removing it strands every fielded agent on the previous CLI the next time the SDK moves.
+- **Publish every per-platform pin into an environment before promoting a 3.4+ installer there.** A 3.4 agent reads only its own `cortex_cli_<osFamily>_<arch>` id, so a green legacy `cortex_cli` says nothing about it: hoot is dead on every fresh install of a platform whose pin is missing.
+- dev and prod are separate Firebase projects with separate pins: publish to both, or Cortex is dead on fresh installs in the one you skipped.
+
 ---
 
 ## Critical Rules
@@ -142,7 +192,7 @@ curl -s -X PUT "$BASE_URL/api/installer/upload" \
 ### Do
 - Run full build first before quick build (creates Python runtime + deps)
 - Use `build_installer_quick.bat` for source-only changes during development
-- Test with `python owlette_service.py debug` before building installer
+- Test with `python owlette_runner.py --debug` before building installer
 - Check `agent/VERSION` matches `/VERSION` before release
 
 ### Don't

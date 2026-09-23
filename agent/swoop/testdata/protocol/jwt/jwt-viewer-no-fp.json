@@ -1,0 +1,30 @@
+{
+  "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3Qta2lkLTEifQ.eyJpc3MiOiJvd2xldHRlLWFwaSIsImF1ZCI6InN3b29wLWhvc3QiLCJyb2xlIjoidmlld2VyIiwidWlkIjoidWlkX2dvbGRlbnZlY3RvciIsInNpdGUiOiJzaXRlX2dvbGRlbnZlY3RvciIsIm1hY2hpbmUiOiJtYWNoaW5lX2dvbGRlbnZlY3RvciIsInNpZCI6InNpZF8wMDAwMDAwMDAwMDAwMDAxIiwidmlld2VyIjoidmlld2VyXzAwMDAwMDAwMDEiLCJjdGwiOnRydWUsImlhdCI6MTc4OTY4OTYwMCwiZXhwIjoxNzg5Njg5NjYwLCJqdGkiOiJqdGlfMDAwMDAwMDAwMDAwMDAwMSJ9.Kk5NX-KNyBq6Rz5UEuKfm_ldqVAsfZ2LVkCwHV5eAzN8ylm5Qwxh8jhDCPihVdB6AUU0Ed5G5vAMWXRcGfOWDQ",
+  "verifier": {
+    "aud": "swoop-host",
+    "site": "site_goldenvector",
+    "machine": "machine_goldenvector",
+    "sid": "sid_0000000000000001",
+    "anchorNow": 1789689600,
+    "elapsedSeconds": 2,
+    "offerFingerprint": "sha-256 11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00",
+    "keys": [
+      "test-kid-1",
+      "test-kid-2"
+    ]
+  },
+  "claims": {
+    "iss": "owlette-api",
+    "aud": "swoop-host",
+    "role": "viewer",
+    "uid": "uid_goldenvector",
+    "site": "site_goldenvector",
+    "machine": "machine_goldenvector",
+    "sid": "sid_0000000000000001",
+    "viewer": "viewer_0000000001",
+    "ctl": true,
+    "iat": 1789689600,
+    "exp": 1789689660,
+    "jti": "jti_0000000000000001"
+  }
+}

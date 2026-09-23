@@ -9,8 +9,9 @@
  *   4. api-key scope — ALWAYS runs, never bypassed: it is the resilient line
  *      against a downgraded key gaining rights while capability enforcement
  *      is off.
- *   5. capability — skipped when `capability_enforcement === false`; bypass
- *      recorded in the audit row so the trail survives the kill switch.
+ *   5. capability — skipped when `capability_enforcement === false`, EXCEPT for
+ *      BYPASS_EXEMPT_CAPABILITIES; bypass recorded in the audit row so the
+ *      trail survives the kill switch.
  *   6. rate limit — skipped when `rate_limit_enforcement === false`, logged
  *      the same way.
  *   7. allow audit — BLOCKING: an uncommittable row means 503 and no handler
@@ -51,7 +52,7 @@ import {
 } from '@/lib/apiErrors';
 import {
   type Actor,
-  type Capability,
+  Capability,
   type Role,
   type SiteRole,
   type UserActor,
@@ -78,6 +79,33 @@ import { emitSecurityBoundaryMetric } from '@/lib/securityBoundaryMetrics.server
 
 /** Source of `siteId`. `'body'` is deliberately absent — using it won't compile. */
 export type SiteIdSource = 'path' | 'query';
+
+/**
+ * Capabilities the `capability_enforcement` kill switch does NOT turn off.
+ *
+ * That switch exists so an authorization misfire cannot lock operators out of
+ * their own fleet — it fails towards availability. Handing every site member
+ * live control of a machine's keyboard, or its screen and system audio, is the
+ * wrong direction to fail in, so swoop's capabilities keep running
+ * `hasCapability` while the switch is off. Everything else still bypasses and
+ * still records `enforcement_bypassed` in its allow audit.
+ *
+ * SWOOP_SETTINGS_MANAGE is in here for the same reason as the two it guards,
+ * not as an afterthought: a member holds MACHINE_REMOTE_VIEW on merit, so if
+ * the switch that turns swoop ON for a site were bypassable they could enable
+ * it themselves — members may watch, no machine excluded, indicator off — and
+ * then be granted the stream by the very check that was exempted. An exemption
+ * on the watch capability is worth nothing while its own enabling route is
+ * weaker than it is. That is also why swoop settings do not ride on
+ * MACHINE_CONFIG_WRITE, which cannot join this set: it gates process,
+ * schedule, display and reboot config across the fleet, which is exactly what
+ * the kill switch exists to keep reachable.
+ */
+export const BYPASS_EXEMPT_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
+  Capability.MACHINE_REMOTE_CONTROL,
+  Capability.MACHINE_REMOTE_VIEW,
+  Capability.SWOOP_SETTINGS_MANAGE,
+]);
 
 export interface SiteHandlerContext {
   actor: UserActor;
@@ -606,11 +634,11 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         throw err;
       }
 
-      // 7. Capability check — bypassable.
-      const enforcementBypassed: 'capability' | 'rate_limit' | undefined = !config.capability_enforcement
-        ? 'capability'
-        : undefined;
-      if (config.capability_enforcement) {
+      // 7. Capability check — bypassable, except for BYPASS_EXEMPT_CAPABILITIES.
+      const capabilityExempt = BYPASS_EXEMPT_CAPABILITIES.has(options.capability);
+      const enforcementBypassed: 'capability' | 'rate_limit' | undefined =
+        !config.capability_enforcement && !capabilityExempt ? 'capability' : undefined;
+      if (config.capability_enforcement || capabilityExempt) {
         // No ownership short-circuit. It existed because self-serve owners are
         // created with global role `member` (lib/actions/bootstrapUser.server.ts),
         // so a matrix keyed on the GLOBAL role locked an owner out of their own

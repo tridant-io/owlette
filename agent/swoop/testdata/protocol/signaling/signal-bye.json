@@ -1,0 +1,13 @@
+{
+  "sender": {
+    "role": "viewer",
+    "id": "viewer_0000000001"
+  },
+  "message": {
+    "type": "bye",
+    "from": "viewer_0000000001",
+    "fromRole": "viewer",
+    "reason": "closed",
+    "serverTimeMs": 1789689600000
+  }
+}

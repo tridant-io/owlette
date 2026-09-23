@@ -24,14 +24,15 @@ updates:
 
   # Node dependencies. Each of these has its own package-lock.json: the repo
   # root (an npm workspace that also owns cli/ and sdks/node/), the desktop
-  # shell's frontend, the Cloud Functions, and the web app. Minor/patch bumps
-  # are grouped; majors open their own PR.
+  # shell's frontend, the Cloud Functions, the web app, and the swoop signaling
+  # Cloudflare Worker. Minor/patch bumps are grouped; majors open their own PR.
   - package-ecosystem: npm
     directories:
       - /
       - /desktop
       - /functions
       - /web
+      - /infra/swoop-signal
     target-branch: dev
     schedule:
       interval: weekly
@@ -44,12 +45,31 @@ updates:
           - patch
     commit-message:
       prefix: deps
+    # Majors declined on purpose (owner decision 2026-09-14). Each rule names its exit
+    # condition; re-check them every release cycle and delete the rule when it is met.
+    ignore:
+      # @types/node follows the runtime major. Everything runs Node 22 (engines, .nvmrc,
+      # CI, Cloud Functions). Exit: the runtime moves to a new LTS; bump the types in the
+      # same PR that moves the runtime.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 is the native (Go) compiler. Exit: Next.js, typescript-eslint and
+      # fumadocs each declare 7.x support; then remove this rule and take the PR.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # commander 15 is ESM-only with a Node >=22.12 floor; the cli is CommonJS and supports
+      # Node >=20, so it stays on 14 (the last dual CJS/ESM major). Exit: the cli moves to ESM
+      # or raises its engines floor to >=22.12, then delete this rule and take the PR.
+      - dependency-name: "commander"
+        update-types: ["version-update:semver-major"]
 
-  # Rust crates: the owlette-host service wrapper and the Tauri desktop app.
+  # Rust crates: the owlette-host service wrapper, the Tauri desktop app, and
+  # the swoop remote-desktop host crate.
   - package-ecosystem: cargo
     directories:
       - /agent/host
       - /desktop/src-tauri
+      - /agent/swoop
     target-branch: dev
     schedule:
       interval: weekly

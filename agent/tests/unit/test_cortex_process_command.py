@@ -81,10 +81,8 @@ class TestProvisionCortexKey:
         import owlette_service
         from owlette_service import OwletteService
 
-        fernet = MagicMock()
-        fernet.encrypt.return_value = b'encrypted-blob'
         storage = MagicMock()
-        storage._fernet = fernet
+        storage.encrypt_value.return_value = 'encrypted-blob'
         monkeypatch.setitem(
             __import__('sys').modules, 'secure_storage',
             SimpleNamespace(get_storage=lambda: storage),

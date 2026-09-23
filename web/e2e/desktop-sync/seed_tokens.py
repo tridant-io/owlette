@@ -3,8 +3,8 @@
 Invoked by `e2e/desktop-sync/agentToken.ts` with PROGRAMDATA pointed at the
 scratch tree FOR THIS INVOCATION ONLY. Uses the agent's own SecureStorage so the
 file is written exactly the way the agent will read it — the Fernet key derives
-from MachineGuid + hostname, not from the directory, so a sandbox on this machine
-decrypts fine while the bundle stays useless anywhere else.
+from the machine binding (MachineGuid here), not from the directory, so a sandbox
+on this machine decrypts fine while the bundle stays useless anywhere else.
 
 Reads one JSON object on stdin (never argv — argv is world-readable in the
 process table) with keys: access_token, expiry, site_id, refresh_token.

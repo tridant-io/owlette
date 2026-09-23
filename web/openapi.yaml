@@ -1042,8 +1042,8 @@ paths:
       summary: Clear site logs
       description: |
         Deletes log entries from `sites/{siteId}/logs`. Optional filters
-        match the current logs view: action, machineId, level, and a
-        `since`/`until` timestamp window. Whole-site clearing (no filters)
+        match the current logs view: action (or `actions` for several),
+        machineId, level, and a `since`/`until` timestamp window. Whole-site clearing (no filters)
         requires explicit `all: true`. Note: full-text search is client-side
         and does NOT scope deletion. API-key callers must hold
         `site=<siteId>:admin`; session callers need the site-log management
@@ -1066,6 +1066,15 @@ paths:
                   description: Required and true when clearing all logs without filters.
                 action:
                   type: string
+                  description: Match one action value exactly. Mutually exclusive with `actions`.
+                actions:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                  description: |
+                    Match any one of these action values, mirroring a multi-select
+                    logs view. Mutually exclusive with `action`.
                 machineId:
                   type: string
                 level:
@@ -5812,6 +5821,32 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
 
+  /api/sites/{siteId}/machines/{machineId}/reboot-pending:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+    delete:
+      operationId: dismissMachineRebootPending
+      tags: [Machines]
+      summary: dismiss a machine's pending-restart flag
+      description: >
+        Clears `rebootPending` on the machine status doc and relays
+        `dismiss_reboot_pending` to the agent best-effort. Succeeds on an offline
+        machine — `data.commandId` is then null, because the flag is cloud state
+        and the agent resets its own local counters when it next starts.
+        Requires `machine=<machineId>:write`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      responses:
+        '200': { description: Pending-restart flag cleared. }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
   /api/sites/{siteId}/machines/{machineId}/reboot-schedule:
     parameters:
       - $ref: '#/components/parameters/SiteIdPath'
@@ -5907,6 +5942,487 @@ paths:
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
+        '422': { $ref: '#/components/responses/Problem422' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
+  /api/sites/{siteId}/machines/{machineId}/swoop/sessions:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+    post:
+      operationId: startSwoopSession
+      tags: [Machines]
+      summary: start a swoop remote-desktop session
+      description: |
+        Starts a swoop session on the machine and returns everything the
+        browser needs to connect: the session id, a viewer JWT, that viewer's
+        own key, the ICE servers to try, and the signalling room URL. The
+        session key is never returned, and no secret is ever placed in a URL —
+        the room URL names a room and nothing else.
+
+        `control: true` asks for input control, which additionally requires an
+        open step-up window. Send a live second-factor `mfaProof` in the same
+        request to open one; a `401` with `code: step_up_required` is the
+        refusal that asks for it. Anything other than `control: true` is a
+        watch-only session.
+
+        **API keys cannot call this operation.** Every swoop session route
+        refuses a key with `403` and `code: api_key_not_permitted`, ahead of
+        any read: swoop is a human-in-the-loop surface, and a key has no
+        second factor to present.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fp]
+              properties:
+                fp:
+                  type: string
+                  description: |
+                    The browser's DTLS certificate fingerprint, as
+                    `<hash-func> <HEX:WITH:COLONS>`. Bound into the viewer JWT
+                    and re-checked by the host against the established DTLS
+                    session.
+                control:
+                  type: boolean
+                  description: Request input control rather than watch-only.
+                clientCaps:
+                  type: object
+                  additionalProperties: true
+                  description: Result of the browser's decode-capability probe.
+                mfaProof:
+                  type: object
+                  additionalProperties: true
+                  description: |
+                    A live second-factor proof, used to open the step-up window
+                    in the same request. Only meaningful with `control: true`.
+      responses:
+        '201':
+          description: Session started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      sid: { type: string, description: Opaque session id. }
+                      viewerId: { type: string, description: Opaque id for this viewer within the session. }
+                      ctl: { type: boolean, description: Whether this viewer holds input control. }
+                      viewerJwt: { type: string, description: Short-lived viewer token, spent once at connect. }
+                      k: { type: string, description: This viewer's own key. Never the session key. }
+                      iceServers:
+                        type: array
+                        description: STUN, plus relays when a TURN credential mint succeeded.
+                        items:
+                          type: object
+                          properties:
+                            urls:
+                              type: array
+                              items: { type: string }
+                            username: { type: string }
+                            credential: { type: string }
+                      signalUrl: { type: string, description: Signalling room URL. Carries no token or key. }
+                      expiresAt:
+                        type: integer
+                        description: |
+                          Epoch milliseconds at which the lease must have been
+                          renewed — not the JWT expiry.
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401':
+          description: |
+            Unauthenticated, or `code: step_up_required` — control needs a live
+            second factor, sent as `mfaProof`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '403':
+          description: |
+            Refused by swoop policy. `code` is the branchable half:
+            `api_key_not_permitted` (an api key called this route),
+            `swoop_disabled`, `machine_excluded`, `capability_missing`,
+            `members_may_not_watch`, or `session_cap_reached`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '409':
+          description: '`code: machine_offline` — swoop cannot reach the machine until it reconnects.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '422': { $ref: '#/components/responses/Problem422' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503':
+          description: |
+            `code: swoop_not_configured` when the deployment has no signalling
+            worker, or `code: audit_unavailable` when the session's audit row
+            could not be written — a session that cannot be evidenced is not
+            started.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+  /api/sites/{siteId}/machines/{machineId}/swoop/sessions/{sessionId}:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+        description: The session id (`sid`) returned when the session started.
+    get:
+      operationId: getSwoopSession
+      tags: [Machines]
+      summary: read a swoop session
+      description: |
+        Returns the live state of one session and its viewers. The session
+        record holds no key material by construction.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: Session state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      sid: { type: string }
+                      state: { type: string, enum: [live, ended] }
+                      createdBy: { type: string }
+                      startedAt: { type: integer, description: Epoch milliseconds. }
+                      absoluteExpiresAt:
+                        type: integer
+                        description: Epoch milliseconds; the 12-hour cap, which no renewal moves.
+                      viewers:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            viewerId: { type: string }
+                            uid: { type: string }
+                            ctl: { type: boolean }
+                            joinedAt: { type: integer }
+                            leaseExpiresAt: { type: integer }
+                      endReason: { type: string }
+                      endedAt: { type: integer }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            Refused by swoop policy — `code: api_key_not_permitted` when the
+            caller used an api key, otherwise the policy code that denied it.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '422': { $ref: '#/components/responses/Problem422' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+    delete:
+      operationId: endSwoopSession
+      tags: [Machines]
+      summary: end a swoop session
+      description: |
+        Ends the session record and stops the streamer over two independent
+        paths — the signalling broadcast and a polled command. Neither failing
+        withholds the `200`: the record is already ended, and a streamer that
+        survives both is stopped by its own lease.
+
+        `endReason` is optional and may only be one a caller may claim:
+        `closed` (the default), `killed`, or `revoked`. The machine-side
+        reasons are recorded by the host and are rejected here.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                endReason:
+                  type: string
+                  enum: [closed, killed, revoked]
+      responses:
+        '200':
+          description: Session ended.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      sid: { type: string }
+                      state: { type: string, enum: [ended] }
+                      endReason: { type: string }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            Refused by swoop policy — `code: api_key_not_permitted` when the
+            caller used an api key, otherwise the policy code that denied it.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '422': { $ref: '#/components/responses/Problem422' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+  /api/sites/{siteId}/machines/{machineId}/swoop/sessions/{sessionId}/lease:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+        description: The session id (`sid`) the lease belongs to.
+    post:
+      operationId: renewSwoopLease
+      tags: [Machines]
+      summary: renew a swoop viewer lease
+      description: |
+        Renews one viewer's 5-minute lease and returns a fresh viewer JWT. The
+        point of the lease is that authorisation is re-checked while the
+        session runs: a removed member, a site that turns swoop off, an
+        excluded machine or a revoked capability all take effect within one
+        lease. The 12-hour session cap is absolute and is not moved by a
+        renewal.
+
+        Control is re-applied from the viewer's stored state, so a watch-only
+        viewer cannot renew itself into control. Step-up is deliberately not
+        re-run — the window covers it.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [viewerId, fp]
+              properties:
+                viewerId:
+                  type: string
+                  description: The viewer id the session was created with.
+                fp:
+                  type: string
+                  description: |
+                    The browser's DTLS fingerprint, as
+                    `<hash-func> <HEX:WITH:COLONS>`. Mandatory on every mint,
+                    renewals included.
+      responses:
+        '200':
+          description: Lease renewed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      sid: { type: string }
+                      viewerJwt: { type: string }
+                      expiresAt: { type: integer, description: Epoch milliseconds for the new lease. }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            Refused by swoop policy — `code: api_key_not_permitted` when the
+            caller used an api key, `session_cap_reached` once the 12-hour cap
+            is reached, otherwise the policy code that denied it.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404':
+          description: |
+            No such live session, or no viewer row of the caller's on it —
+            whose viewers a session holds is not the caller's business, so both
+            answer alike.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '422': { $ref: '#/components/responses/Problem422' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+  /api/sites/{siteId}/machines/{machineId}/swoop/kill:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+    post:
+      operationId: killSwoopOnMachine
+      tags: [Machines]
+      summary: stop whatever swoop is streaming on a machine
+      description: |
+        Ending your own session is the `DELETE` above; this one ends whatever
+        anyone is running on the machine, so it takes the machine
+        remote-control capability. Omit `sid` to mean "kill whatever is
+        running", which is what a revocation wants when it does not know the
+        live session.
+
+        Deliberately not gated on the site's swoop settings: stopping a stream
+        has to work after the feature has been switched off, which is exactly
+        when an operator wants it most.
+
+        `via` says which path landed it — `signal` is the authoritative
+        broadcast, `command` the polled fallback, which is queued even for an
+        offline machine.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sid:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,64}$'
+                  description: Kill only this session. Omit to kill whatever is running.
+      responses:
+        '200':
+          description: Kill delivered.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      machineId: { type: string }
+                      sid: { type: string }
+                      via: { type: string, enum: [signal, command] }
+                      commandId: { type: string, description: Present when `via` is `command`. }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code: api_key_not_permitted` when the caller used an api key, or
+            the machine remote-control capability is missing.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404':
+          description: Neither path delivered the kill and the machine is unknown.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '409':
+          description: Neither path delivered the kill; retry.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '422': { $ref: '#/components/responses/Problem422' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+  /api/sites/{siteId}/swoop-settings:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+    get:
+      operationId: getSwoopSettings
+      tags: [Sites]
+      summary: read a site's swoop policy
+      description: |
+        swoop is off until a site turns it on. Site-admin surface: requires
+        `site=<siteId>:read` and the swoop-settings capability.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`. This route is the switch the session routes
+        stand behind, so it refuses a key for the same reason they do.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: Current settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data: { $ref: '#/components/schemas/SwoopSiteSettings' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+    patch:
+      operationId: setSwoopSettings
+      tags: [Sites]
+      summary: change a site's swoop policy
+      description: |
+        Changes any subset of the policy. Requires `site=<siteId>:write` and
+        the swoop-settings capability.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+
+        Turning swoop off also reaches machines that are already connected:
+        `refreshed` counts the machines the change was fanned out to.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SwoopSiteSettings' }
+      responses:
+        '200':
+          description: Settings updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      settings: { $ref: '#/components/schemas/SwoopSiteSettings' }
+                      refreshed:
+                        type: integer
+                        description: How many machines the change was fanned out to.
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
         '422': { $ref: '#/components/responses/Problem422' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -7060,9 +7576,14 @@ paths:
 
         The role is PER SITE. `role: 'admin'` makes them an admin of this
         site and nothing else; their account role is untouched and they
-        gain nothing on any other site. It is always honoured, so
-        `roleHonored` is always `true` — retained only for response-shape
-        stability.
+        gain nothing on any other site.
+
+        `roleHonored` says whether the row was actually written at the
+        requested role. Adding someone who is ALREADY a member is a 200
+        no-op — nothing is overwritten and their existing role stands — and
+        answers `roleHonored: false`. Use
+        `PATCH /api/sites/{siteId}/members/{uid}` to change an existing
+        member's role.
 
         Identify the target by **exactly one** of `uid` or `email`.
         `email` is trimmed and lowercased, then resolved to a uid through
@@ -7095,10 +7616,10 @@ paths:
                 - required: [uid]
                 - required: [email]
       responses:
-        '200': { description: Member added }
+        '200': { description: "Member added, or already a member (`roleHonored: false`)" }
         '400': { description: Validation failure }
         '401': { description: Unauthorized }
-        '403': { description: Forbidden (not site admin) }
+        '403': { description: "Forbidden (not site admin — `site_member_manage_required`)" }
         '404': { description: User or site not found }
 
   /api/sites/{siteId}/transfer-ownership:
@@ -7188,6 +7709,11 @@ paths:
         (`409 cannot_change_owner_role`). Both are enforced inside the
         transaction that performs the write.
 
+        A caller may never change their OWN row
+        (`403 cannot_modify_own_membership`), whatever their role and whatever
+        the platform's `capability_enforcement` setting: the row is what decides
+        what they may do. Ask another admin on the site.
+
         Requires `site=<siteId>:admin` scope or session/id-token from an admin
         of this site.
       security:
@@ -7207,7 +7733,7 @@ paths:
         '200': { description: Role changed }
         '400': { description: Validation failure (including role=owner) }
         '401': { description: Unauthorized }
-        '403': { description: Forbidden (not site admin) }
+        '403': { description: "Forbidden (not site admin, or the target is the caller's own row — `cannot_modify_own_membership`)" }
         '404': { description: User is not a member of this site }
         '409': { description: Target is the site owner }
     delete:
@@ -7231,6 +7757,10 @@ paths:
 
         True-idempotent: removing a non-member returns 200 with
         `wasMember: false`.
+
+        A caller may never remove their OWN row
+        (`403 cannot_modify_own_membership`), whatever their role — ask another
+        admin on the site. Same rule as the sibling `PATCH`.
 
         Requires `site=<siteId>:admin` scope or session/id-token from an
         admin of this site. Reassignment additionally requires `TALON_MANAGE`.
@@ -7265,7 +7795,7 @@ paths:
                     items: { type: string }
         '400': { description: Malformed or refused talonSuccessorUid }
         '401': { description: Unauthorized }
-        '403': { description: Forbidden (not site admin, or lacks TALON_MANAGE) }
+        '403': { description: "Forbidden (not site admin, lacks TALON_MANAGE, or the target is the caller's own row — `cannot_modify_own_membership`)" }
         '404': { description: User or site not found }
         '409': { description: Cannot remove site owner }
 
@@ -8752,6 +9282,26 @@ components:
           type: string
           enum: [capture, set_auto_restore, reset_breaker, set_remote_apply]
 
+    SwoopSiteSettings:
+      type: object
+      description: |
+        A site's swoop policy. swoop is off until a site turns it on; once it
+        is on, members may watch unless `membersMayWatch` says otherwise.
+      properties:
+        enabled:
+          type: boolean
+          description: Whether swoop is on for this site.
+        excludedMachineIds:
+          type: array
+          items: { type: string }
+          description: Machines swoop may never reach, whatever the rest of the policy says.
+        membersMayWatch:
+          type: boolean
+          description: Whether a plain site member may watch. Control always requires more.
+        indicator:
+          type: string
+          enum: [banner, tray, none]
+          description: What the machine shows while a session is live.
     ProblemDetails:
       type: object
       description: |
@@ -9657,6 +10207,14 @@ components:
               items:
                 type: object
                 additionalProperties: true
+            capabilities:
+              description: |
+                Feature flags the agent reports on its heartbeat, computed
+                from what is installed on the machine. `1` means available.
+                Absent or null on an agent too old to report them.
+              type: object
+              nullable: true
+              additionalProperties: true
     MachineDeployment:
       description: Current state for one roost that targets a machine.
       type: object

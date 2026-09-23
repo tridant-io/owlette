@@ -5,8 +5,8 @@ A version is the JSON document (docs/internal/manifest-format.md) listing every
 file in a roost with its chunk hashes. Fetched from R2, cached locally, diffed
 against the previous version to decide what to download.
 
-Cache lives under %PROGRAMDATA%\Owlette\versions (XDG equivalent on POSIX),
-deliberately NOT in the user's Documents tree beside assembled files.
+Cache lives under <data root>/versions, deliberately NOT in the user's
+Documents tree beside assembled files.
 
 Fail-loud on `schemaVersion != 2`: forward-compat goes through mediaType, not
 schema bumps.
@@ -28,26 +28,19 @@ from typing import Any, Iterable, List, Optional, Set
 
 import requests
 
+import shared_utils
+
 logger = logging.getLogger(__name__)
 
 def _default_cache_dir() -> str:
     """
-    default cache dir: %PROGRAMDATA%\\Owlette\\versions on windows,
-    $XDG_DATA_HOME/owlette/versions (else ~/.local/share/...) on POSIX.
+    default cache dir: `versions` under the agent's data root.
 
     See sync_state._default_state_db_path() for why `~/Documents/` is avoided
     under LocalSystem.
     """
-    if os.name == 'nt':
-        program_data = os.environ.get('PROGRAMDATA', 'C:\\ProgramData')
-        return os.path.join(program_data, 'Owlette', 'versions')
-    xdg = os.environ.get('XDG_DATA_HOME')
-    if xdg:
-        return os.path.join(xdg, 'owlette', 'versions')
-    return os.path.join(os.path.expanduser('~'), '.local', 'share', 'owlette', 'versions')
+    return shared_utils.get_data_path('versions')
 
-
-DEFAULT_CACHE_DIR = _default_cache_dir()
 
 VERSION_MEDIA_TYPE = 'application/vnd.owlette.version.v1+json'
 VERSION_SCHEMA_VERSION = 2

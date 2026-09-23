@@ -21,7 +21,7 @@ import time
 import psutil
 import pytest
 
-pytestmark = pytest.mark.skipif(os.name != 'nt', reason='windows-only process semantics')
+pytestmark = pytest.mark.windows(reason='windows-only process semantics')
 
 
 def _make_script(tmpdir):

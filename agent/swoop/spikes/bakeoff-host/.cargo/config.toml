@@ -1,0 +1,5 @@
+# Mirrors agent/host/.cargo/config.toml so the spike links the way the product
+# streamer will. Applies only when cargo runs with this directory as the working
+# directory - `--manifest-path` from elsewhere drops it silently.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -255,6 +255,7 @@ interface MachineRowProps {
   onCancelRestart?: () => Promise<void>;
   onScreenshot?: () => void;
   onLiveView?: () => void;
+  onSwoop?: () => void;
   showLocalClock?: boolean;
   /** Column-dropdown selection (cpu/disk/gpu/nic). Unset kinds fall back to the machine's
    * reported primary device, which is also what "auto (most active)" selects. */
@@ -285,6 +286,7 @@ export function MachineRow({
   onCancelRestart,
   onScreenshot,
   onLiveView,
+  onSwoop,
   showLocalClock,
   listPref,
 }: MachineRowProps) {
@@ -438,6 +440,21 @@ export function MachineRow({
               <span className="truncate">{machine.machineId}</span>
               {isMuted && <span title="alerts muted"><BellOff className="h-3 w-3 text-muted-foreground flex-shrink-0" /></span>}
             </div>
+            {/* The muted figure style the ram and disk columns use, and flush
+                to the cell rather than indented to the clock line: the hostname
+                column is a fixed 130px, so every pixel of indent is a pixel of
+                OS string that would need a hover to read. Nothing renders at
+                all for an agent that reports no osVersion — the row keeps its
+                height. */}
+            {machine.osVersion && (
+              <span
+                data-testid="machine-os-version"
+                className="text-muted-foreground text-xs truncate"
+                title={machine.osVersion}
+              >
+                {machine.osVersion}
+              </span>
+            )}
             {showLocalClock && clockTooltip && localClock && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -673,6 +690,8 @@ export function MachineRow({
               onCancelRestart={onCancelRestart}
               onScreenshot={onScreenshot}
               onLiveView={onLiveView}
+              swoopCapable={machine.capabilities?.swoop === 1}
+              onSwoop={onSwoop}
               onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}
               rebootSchedule={machine.rebootSchedule}
             />

@@ -14,7 +14,13 @@ assert the refusal that Wave 3 introduced, not a fixture accident.
 
 import logging
 
+import pytest
+
 import shared_utils
+
+# Windows image-name matching over drive-letter fixtures: `D:\other\x.exe` has no
+# basename on POSIX, so the ladder's refusal branches never fire there.
+pytestmark = pytest.mark.windows
 
 
 class FakeProc:

@@ -25,7 +25,7 @@ const reported = new Set<string>();
  * and an un-backfilled user would otherwise emit on every render, drowning the
  * signal in its own repetition.
  */
-export function emitMembershipFallback(uid: string, siteIds: string[]): void {
+export function emitMembershipFallback(uid: string, siteIds: readonly string[]): void {
   for (const siteId of siteIds) {
     const key = `${siteId}|${uid}`;
     if (reported.has(key)) continue;

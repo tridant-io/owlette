@@ -12,6 +12,9 @@
  *
  * Auth: `machine=<id>:write` or agent ID-token, as on /screenshots/upload-url.
  * Naturally idempotent apart from the history append, which pruning absorbs.
+ * Not separately rate limited: every call needs a storagePath minted by an already-counted
+ * /screenshots/upload-url request, so billing both legs would halve the machine's screenshot
+ * budget.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -34,8 +37,7 @@ interface RouteParams {
 
 const ALLOWED_CONTENT_TYPES = new Set(['image/png', 'image/jpeg']);
 
-// Matches the legacy /api/agent/screenshot MAX_HISTORY so the sidebar behaves
-// identically across the patch window.
+// Screenshot history kept per machine; older entries are pruned on finalize.
 const MAX_HISTORY = 20;
 
 // Bound on the ADVISORY agent-reported size; object metadata below is

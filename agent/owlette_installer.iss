@@ -179,6 +179,13 @@ Source: "vendor\PawnIO_setup.exe"; Flags: dontcopy
 ; Tools — owlette-host.exe, the Windows service host (replaced NSSM in 3.0.0)
 Source: "build\installer_package\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion
 
+; swoop — owlette-swoop.exe, the remote-session streamer the service spawns.
+; shared_utils.get_swoop_exe_path() resolves exactly this path, so the directory
+; name is a contract with the service, not a preference, and the installer is
+; the only thing that creates it. Its ACL is set in [Code] at ssPostInstall —
+; [Dirs]' Permissions: parameter cannot express it (see CurStepChanged).
+Source: "build\installer_package\swoop\*"; DestDir: "{app}\swoop"; Flags: ignoreversion
+
 ; Scripts
 Source: "build\installer_package\scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
@@ -201,6 +208,14 @@ Name: "{commonappdata}\Owlette\config"; Permissions: users-modify
 Name: "{commonappdata}\Owlette\logs"; Permissions: users-modify
 Name: "{commonappdata}\Owlette\cache"; Permissions: users-modify
 Name: "{commonappdata}\Owlette\tmp"; Permissions: users-modify
+; ipc keeps users-modify: the console user writes the cortex command queue, and
+; the service tightens the cortex_* trio to a protected DACL at start-up.
+Name: "{commonappdata}\Owlette\ipc"; Permissions: users-modify
+; content and update-staging are service-owned. No users-modify here:
+; HardenInstallTree() (see [Code]) strips inheritance and grants SYSTEM +
+; Administrators only at ssPostInstall.
+Name: "{commonappdata}\Owlette\content"
+Name: "{commonappdata}\Owlette\update-staging"
 
 [InstallDelete]
 ; Dead log files from the deleted python UI (owlette_gui/owlette_tray/
@@ -902,10 +917,139 @@ begin
     Log('Pairing was not completed (exit code ' + IntToStr(ResultCode) + ')');
 end;
 
+// Re-ACL the install tree after [Files], [Dirs] and [Run] have all run, so
+// nothing Inno does afterwards can loosen it (ssPostInstall is the last window;
+// Inno's [Dirs] Permissions: parameter only ADDS access entries and cannot mark
+// a DACL as not inheriting). Guarantees, using well-known SIDs only (localized
+// account names do not resolve on a non-English Windows):
+//   S-1-5-18 SYSTEM, S-1-5-32-544 Administrators, S-1-5-32-545 Users
+//   - code dirs + uninstaller/payload files -> SYSTEM + Administrators Full,
+//     Users read+execute only;
+//   - content, update-staging -> SYSTEM + Administrators only;
+//   - .tokens.enc and .tokens.enc.v1 -> SYSTEM + Administrators, plus the interactive console user
+//     (Modify) when a session exists, else SYSTEM + Administrators only.
+// Each path is hardened under the root that actually holds it: the code dirs and
+// the root-level files under {app}, the service dirs and .tokens.enc under the
+// data root ({commonappdata}\Owlette). The two coincide unless /DIR= split them,
+// so a path is only ever touched once. Runs on every install and upgrade — the
+// installer is the only new code that runs on a machine mid-self-update. Never
+// fatal: on any failure the service re-applies the same ACLs at start-up. Every
+// command, its exit code and the re-read icacls output go to
+// logs\acl_hardening.log. The work is a generated PowerShell script (console-SID
+// resolution, per-root path selection and logging are awkward as bare Exec
+// calls); it is written to {tmp} and run once.
+procedure HardenInstallTree();
+var
+  PS, PsFile, AppRoot, DataRoot, Params: String;
+  ResultCode: Integer;
+begin
+  AppRoot := ExpandConstant('{app}');
+  DataRoot := ExpandConstant('{commonappdata}\Owlette');
+
+  // built with double quotes throughout so this Pascal literal needs no escaping
+  PS :=
+    'param([string]$AppRoot, [string]$DataRoot)' + #13#10 +
+    '$ErrorActionPreference = "Continue"' + #13#10 +
+    '$logDir = Join-Path $DataRoot "logs"' + #13#10 +
+    'if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }' + #13#10 +
+    '$log = Join-Path $logDir "acl_hardening.log"' + #13#10 +
+    'function Wr($m) { Add-Content -LiteralPath $log -Value $m }' + #13#10 +
+    'function Ic($argList, $readBack) {' + #13#10 +
+    '  $joined = $argList -join " "' + #13#10 +
+    '  Wr(">>> icacls $joined")' + #13#10 +
+    '  $o = & icacls.exe @argList 2>&1' + #13#10 +
+    '  Wr((($o) | Out-String).TrimEnd())' + #13#10 +
+    '  Wr("exit=$LASTEXITCODE")' + #13#10 +
+    '  if ($readBack -and (Test-Path -LiteralPath $readBack)) {' + #13#10 +
+    '    $r = & icacls.exe $readBack 2>&1' + #13#10 +
+    '    Wr("--- re-read: $readBack ---")' + #13#10 +
+    '    Wr((($r) | Out-String).TrimEnd())' + #13#10 +
+    '  }' + #13#10 +
+    '  Wr("")' + #13#10 +
+    '}' + #13#10 +
+    '# a junction or symlink planted at a table path is never operated on:' + #13#10 +
+    '# icacls would set the dacl on whatever it points at.' + #13#10 +
+    'function Plain($p) {' + #13#10 +
+    '  try { -not ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) }' + #13#10 +
+    '  catch { $false }' + #13#10 +
+    '}' + #13#10 +
+    '$ts = Get-Date -Format s' + #13#10 +
+    'Wr("=== owlette acl hardening @ $ts ===")' + #13#10 +
+    'Wr("app root:  $AppRoot")' + #13#10 +
+    'Wr("data root: $DataRoot")' + #13#10 +
+    '$consoleSid = $null' + #13#10 +
+    'try {' + #13#10 +
+    '  $u = (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName' + #13#10 +
+    '  if ($u) { $consoleSid = (New-Object System.Security.Principal.NTAccount($u)).Translate([System.Security.Principal.SecurityIdentifier]).Value }' + #13#10 +
+    '} catch { $consoleSid = $null }' + #13#10 +
+    '$sidDesc = "(none - system + administrators only)"' + #13#10 +
+    'if ($consoleSid) { $sidDesc = $consoleSid }' + #13#10 +
+    'Wr("console user sid: $sidDesc")' + #13#10 +
+    '$SYS = "*S-1-5-18"' + #13#10 +
+    '$ADM = "*S-1-5-32-544"' + #13#10 +
+    '$USR = "*S-1-5-32-545"' + #13#10 +
+    '# code dirs under {app}: SYSTEM/Administrators Full, Users read+execute, then' + #13#10 +
+    '# re-inherit onto the payload. the \* is load-bearing - /reset /T on the dir' + #13#10 +
+    '# itself would revert the protected dacl set the line before.' + #13#10 +
+    'foreach ($d in "agent","python","tools","app","scripts") {' + #13#10 +
+    '  $p = Join-Path $AppRoot $d' + #13#10 +
+    '  if ((Test-Path -LiteralPath $p) -and (Plain $p)) {' + #13#10 +
+    '    Ic @($p, "/inheritance:r", "/grant:r", "$($SYS):(OI)(CI)(F)", "$($ADM):(OI)(CI)(F)", "$($USR):(OI)(CI)(RX)") $p' + #13#10 +
+    '    Ic @("$p\*", "/reset", "/T", "/C", "/Q") $null' + #13#10 +
+    '  } else { Wr("skip (absent or reparse point): $p"); Wr("") }' + #13#10 +
+    '}' + #13#10 +
+    '# root-level files under {app}: the uninstaller and the payload docs.' + #13#10 +
+    'foreach ($f in "unins000.exe","unins000.dat","README.md","LICENSE","CLAUDE.md","THIRD_PARTY_NOTICES.md","LGPL-2.1.txt") {' + #13#10 +
+    '  $p = Join-Path $AppRoot $f' + #13#10 +
+    '  if ((Test-Path -LiteralPath $p) -and (Plain $p)) {' + #13#10 +
+    '    Ic @($p, "/inheritance:r", "/grant:r", "$($SYS):(F)", "$($ADM):(F)", "$($USR):(RX)") $p' + #13#10 +
+    '  } else { Wr("skip (absent or reparse point): $p"); Wr("") }' + #13#10 +
+    '}' + #13#10 +
+    '# service-owned dirs under the data root: owned by Administrators, then' + #13#10 +
+    '# SYSTEM + Administrators only. a dir someone else created would keep its' + #13#10 +
+    '# owner, who can rewrite its dacl, and the service refuses to use it.' + #13#10 +
+    'foreach ($d in "content","update-staging") {' + #13#10 +
+    '  $p = Join-Path $DataRoot $d' + #13#10 +
+    '  if ((Test-Path -LiteralPath $p) -and (Plain $p)) {' + #13#10 +
+    '    Ic @($p, "/setowner", $ADM) $null' + #13#10 +
+    '    Ic @($p, "/inheritance:r", "/grant:r", "$($SYS):(OI)(CI)(F)", "$($ADM):(OI)(CI)(F)") $p' + #13#10 +
+    '  } else { Wr("skip (absent or reparse point): $p"); Wr("") }' + #13#10 +
+    '}' + #13#10 +
+    '# credentials (.tokens.enc.v1 is the pre-migration copy, hardened alike):' + #13#10 +
+    '# add the console user (Modify) only when a session exists.' + #13#10 +
+    'foreach ($f in ".tokens.enc",".tokens.enc.v1") {' + #13#10 +
+    '  $tok = Join-Path $DataRoot $f' + #13#10 +
+    '  if ((Test-Path -LiteralPath $tok) -and (Plain $tok)) {' + #13#10 +
+    '    if ($consoleSid) {' + #13#10 +
+    '      Ic @($tok, "/inheritance:r", "/grant:r", "$($SYS):(F)", "$($ADM):(F)", "*$($consoleSid):(M)") $tok' + #13#10 +
+    '    } else {' + #13#10 +
+    '      Ic @($tok, "/inheritance:r", "/grant:r", "$($SYS):(F)", "$($ADM):(F)") $tok' + #13#10 +
+    '    }' + #13#10 +
+    '  } else { Wr("skip (absent or reparse point): $tok"); Wr("") }' + #13#10 +
+    '}' + #13#10 +
+    'Wr("=== done ===")' + #13#10;
+
+  PsFile := ExpandConstant('{tmp}\owlette-acl-hardening.ps1');
+  if SaveStringToFile(PsFile, PS, False) then
+  begin
+    Params := '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"' +
+      ' -AppRoot "' + AppRoot + '" -DataRoot "' + DataRoot + '"';
+    if Exec('powershell.exe', Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      Log('acl hardening: powershell exit ' + IntToStr(ResultCode) +
+          ' (see ' + DataRoot + '\logs\acl_hardening.log)')
+    else
+      Log('acl hardening: could not start powershell (' + SysErrorMessage(ResultCode) +
+          ') - service will repair at start-up');
+  end
+  else
+    Log('acl hardening: could not write ' + PsFile + ' - service will repair at start-up');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
   InstallBat: String;
+  SwoopDir: String;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -917,8 +1061,52 @@ begin
     // first heartbeat can already read CPU temperatures. Never fatal.
     EnsurePawnIO();
 
+    // Step 0c: harden the install tree's permissions, BEFORE the service starts.
+    // Never fatal (the service repairs at start-up); see HardenInstallTree.
+    HardenInstallTree();
+
+    // Step 0d: set the ACL on {app}\swoop. It is not in HardenInstallTree's list
+    // (nor in the service's repair table): the path sets are disjoint and the
+    // service verifies this directory itself before spawning the streamer.
+    // ssPostInstall is where this belongs:
+    // [Files] and [Dirs] have both already run, so Inno's own permission pass
+    // cannot overwrite it afterwards. It is an icacls shell-out rather than a
+    // [Dirs] entry because Inno's Permissions: parameter only adds access
+    // entries — it cannot mark the ACL as not inheriting.
+    //
+    // Well-known SIDs, never account names: "Administrators" and "Users" are
+    // localized and do not resolve on a non-English Windows, which would leave
+    // the directory unreadable to the console session.
+    //   S-1-5-18     NT AUTHORITY\SYSTEM       full
+    //   S-1-5-32-544 BUILTIN\Administrators    full
+    //   S-1-5-32-545 BUILTIN\Users             read + execute
+    //
+    // Runs unconditionally on every install AND every upgrade, so a machine
+    // arriving from any older version is brought to this state by the installer
+    // alone — the only new code that runs on it during a self-update.
+    //
+    // Never fatal. The service verifies this ACL before it spawns the streamer,
+    // so a failure here costs the swoop feature on this machine and never the
+    // install.
+    SwoopDir := ExpandConstant('{app}\swoop');
+    Log('Setting permissions on ' + SwoopDir);
+    Exec('icacls.exe',
+      '"' + SwoopDir + '" /inheritance:r ' +
+      '/grant:r "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)"',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Log('Swoop directory permissions returned: ' + IntToStr(ResultCode));
+
+    // The payload [Files] just wrote still carries the entries the directory had
+    // at copy time; this re-applies the new ones to it. The \* is load-bearing —
+    // icacls on the directory itself with /reset /T undoes the command above.
+    // /C /Q keeps an empty directory silent and non-fatal.
+    Exec('icacls.exe',
+      '"' + SwoopDir + '\*" /reset /T /C /Q',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Log('Swoop payload permission reset returned: ' + IntToStr(ResultCode));
+
     // Step 1: pairing handoff, BEFORE the service install. The order is
-    // load-bearing: install.bat starts the service, OwletteService.__init__
+    // load-bearing: install.bat starts the service, OwletteService.main()
     // calls _try_launch_tray(), and a --tray instance holding the
     // single-instance lock would turn the --pair launch into a FORWARDED second
     // instance whose app.emit is dropped when the webview has not yet
@@ -1153,6 +1341,22 @@ begin
     'Stop-Process -Force -ErrorAction SilentlyContinue"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Log('Service host kill returned: ' + IntToStr(ResultCode));
+
+  // Kill any orphaned swoop streamer. It is a child of the service's job object
+  // and normally exits with the service stopped above, so this covers the one
+  // that outlived it. It must run before the file copy: a live streamer holds
+  // its own image open, and a miss costs a DELAY_UNTIL_REBOOT replacement that
+  // nobody sees in silent mode (see the note below). Scoped by exe path so a
+  // same-named process elsewhere is never touched, and by name, never by PID —
+  // a PID read from a status file can be stale or recycled.
+  Log('Killing any orphaned Owlette swoop streamer...');
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command ' +
+    '"Get-Process -Name owlette-swoop -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Path -like ''*\Owlette\*'' } | ' +
+    'Stop-Process -Force -ErrorAction SilentlyContinue"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Swoop streamer kill returned: ' + IntToStr(ResultCode));
 
   // Kill ALL Owlette Python processes to release DLL locks before file overwrite.
   // Must run BEFORE Inno Setup's file copy phase — if any python.exe or pythonw.exe

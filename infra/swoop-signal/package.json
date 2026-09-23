@@ -1,0 +1,20 @@
+{
+  "name": "swoop-signal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "swoop signaling worker: one durable object per machine on the websocket hibernation api. contract is agent/swoop/PROTOCOL.md.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc -p test --noEmit",
+    "dryrun": "wrangler deploy --dry-run --outdir dist -e dev && wrangler deploy --dry-run --outdir dist -e prod"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260918.1",
+    "@types/node": "^22.20.3",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.1",
+    "wrangler": "^4.134.0"
+  }
+}
