@@ -200,8 +200,8 @@ a deploy is a version; rolling back publishes an earlier one. it does **not** to
 
 ```
 cd infra/swoop-signal
-npx wrangler deployments list -e dev      # newest first; copy the version id to go back to
-npx wrangler rollback <version-id> -e dev # prompts for a reason, then publishes it
+npx wrangler deployments list -e dev      # oldest first: the current deployment is the LAST entry
+npx wrangler rollback <version-id> -e dev -y --message "<why>"   # -y and --message keep it non-interactive
 curl -sS -o /dev/null -w '%{http_code}\n' https://<dev origin>/health
 ```
 
@@ -209,9 +209,12 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://<dev origin>/health
 check — a human decides between rolling back and rolling forward, because a red `/health` is as often a
 missing secret or a missing route as it is bad code.
 
-**PENDING [human]** — these steps have never been executed on dev. task 3.4's done-when requires one rehearsal
-(roll back to the previous version, `/health` 200, roll forward again); note the date, the two version ids and
-the result here when it is done.
+**rehearsed 2026-09-23 on dev** with the token in `.claude/.env.local` (workers scripts edit is enough): rolled
+back from `34fcfe4b` (the 2026-09-23 08:22 deploy) to `cf2cab25` (2026-09-22 21:58), `/health` 200 within
+5 s; rolled forward to `34fcfe4b`, `/health` 200 again; `deployments list` shows `34fcfe4b` at 100%. both were
+workflow deploys of the same worker code, so nothing user-visible moved. a `versions list` on this worker
+starts with four 2026-09-18 entries whose source is "Secret Change": those carry no code and are not rollback
+targets.
 
 ## limits
 
