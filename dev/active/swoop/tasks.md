@@ -1955,3 +1955,12 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   Tests: 4 manager tests (refresh lands, kill cancels, no-time failure logs, retry recovers), ipc parse test
   (token never printed), client replay-window test; agent suite 1996 passed, crate 351 passed, clippy clean.
   Proof on a real session (> 5 min without a freeze) comes with 3.3.8 on B4A.
+- 2026-09-23 — **pacer hypothesis for the smearing (from the code; unconfirmed until 3.3.8's debug counters):**
+  `pacer.rs` holds a bucket exactly one frame interval deep at the ceiling in force; an IRAP is admitted on
+  an exemption that leaves the bucket empty (`KEYFRAME_VBV_SCALE = 4`, so it is 4 frames' worth); the deltas
+  right behind it are refused as over budget (`dropped_over_budget`), each refusal is a gap at the viewer,
+  the viewer's PLI asks for another IRAP, and the loop never lets the picture clean. The governor only ever
+  descends on gaps (`governor.rs:15`), which shrinks the bucket and feeds the loop; the overlay's "cap" is
+  the top rung, not the rate in force. Candidate fixes, to be chosen on the counters: a pacer bucket 1.5–2
+  frames deep with the encoder's one-frame VBV untouched (absorbs NVENC's overshoot at ≤ 1 frame of queue),
+  and a refill to full after an IRAP exemption so the recovery point's own deltas are not the next casualty.
