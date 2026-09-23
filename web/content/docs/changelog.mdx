@@ -7,6 +7,32 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+## [3.3.9] - 2026-09-23
+
+### fixed — swoop keeps its picture clean and its bitrate up
+
+The streamer was cutting its own bitrate every time it held a frame back,
+and again when the viewer noticed the gap, so a 50 mbps session ran at a
+fraction of that and every held frame smeared until the next keyframe. It
+no longer cuts on its own doing, allows a short burst on a screen change,
+and a keyframe no longer costs the frames behind it.
+
+### fixed — swoop audio no longer drops most of its frames
+
+Only the first audio frame per tick was reaching the viewer; all of them do
+now.
+
+### added — a keyboard menu in the swoop toolbar
+
+Ctrl+Alt+Del, the Windows key, Alt+Tab and the other shortcuts your browser
+keeps for itself can be sent from a menu beside the settings. The keyboard
+lock notice is gone; the fullscreen button explains what it captures.
+
+### added — reconnect from an ended or failed swoop session
+
+The toolbar offers reconnect in place of end session once a session has
+ended or failed.
+
 ### changed — the swoop streamer follows the agent's logging level
 
 The separate `swoop.logLevel` key that 3.3.8 introduced is gone; setting the
