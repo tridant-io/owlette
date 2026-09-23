@@ -11,6 +11,11 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — the swoop streamer follows the agent's logging level
+
+The separate `swoop.logLevel` key that 3.3.8 introduced is gone; setting the
+agent's `logging.level` to `debug` turns the streamer's counters on too.
+
 ## [3.3.8] - 2026-09-23
 
 ### fixed — a swoop session no longer ends at the five-minute mark
