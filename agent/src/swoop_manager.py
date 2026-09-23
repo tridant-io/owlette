@@ -93,6 +93,16 @@ SIDE_EFFECT_STATE_PATH = shared_utils.get_data_path('tmp/swoop_side_effects.json
 # and this never runs on the service's loop.
 POWERSHELL_TIMEOUT_S = 60
 
+# the host's room token lives 300 s (PROTOCOL.md section 8) and the streamer
+# holds no credential to mint its own, so a session used to end at the five
+# minute mark: the service mints a fresh one a minute ahead and writes it to the
+# streamer's stdin, which re-dials the room. the lifetime is the protocol's
+# constant, not a bundle field -- the fielded streamer refuses a bundle with a
+# key it does not know. a failed mint is retried while the token still lives.
+TOKEN_TTL_DEFAULT_S = 300
+TOKEN_REFRESH_LEAD_S = 60
+TOKEN_REFRESH_RETRY_S = 20
+
 
 class SwoopManager:
     """Runs and ends the swoop streamer. Every method returns immediately."""
@@ -117,6 +127,8 @@ class SwoopManager:
         self._last_refusal = None
         self._last_exit = None
         self._end_logged = True
+        self._token_timer = None
+        self._token_expires_at = 0.0
 
         self._backoff_s = 0
         self._retry_after = 0.0
@@ -209,6 +221,8 @@ class SwoopManager:
                     self._do_kill(payload)
                 elif action == 'side_effects':
                     self._do_side_effects(payload)
+                elif action == 'token':
+                    self._do_token(payload)
             except Exception as e:
                 logger.error('swoop: %s failed: %s', action, e)
 
@@ -286,6 +300,65 @@ class SwoopManager:
             self._reader.start()
 
         self._log_event('swoop_session_start', 'info', f'sid={sid} pid={proc.pid}')
+        self._schedule_token_refresh(sid, TOKEN_TTL_DEFAULT_S)
+
+    # host token refresh
+
+    def _schedule_token_refresh(self, sid, ttl_s, delay=None):
+        """Arm the timer that re-mints the host token ahead of its expiry.
+
+        ``ttl_s`` is how long the token now in the streamer's hands lives;
+        ``delay`` overrides the lead for a retry without moving the expiry.
+        """
+        with self._lock:
+            if self._token_timer is not None:
+                self._token_timer.cancel()
+            self._token_expires_at = time.monotonic() + ttl_s
+            wait = max(1.0, ttl_s - TOKEN_REFRESH_LEAD_S) if delay is None else delay
+            self._token_timer = threading.Timer(wait, self._submit, args=(('token', sid),))
+            self._token_timer.daemon = True
+            self._token_timer.start()
+
+    def _cancel_token_refresh(self):
+        with self._lock:
+            if self._token_timer is not None:
+                self._token_timer.cancel()
+                self._token_timer = None
+
+    def _do_token(self, sid):
+        with self._lock:
+            proc = self._proc
+            live = proc is not None and self._sid == sid
+            expires_at = self._token_expires_at
+        if not live:
+            return
+        try:
+            bundle = self._spawn.fetch_bundle(
+                sid, self._site_id(), self._machine_id(), self._auth_manager(),
+            )
+            try:
+                fresh = json.loads(bytes(bundle))
+            finally:
+                bundle[:] = b'\x00' * len(bundle)
+            token = fresh.get('hostToken') if isinstance(fresh, dict) else None
+            if not isinstance(token, str) or not token:
+                raise ValueError('bundle carried no hostToken')
+            proc.write_line({'type': 'token', 'host_token': token})
+        except Exception as e:
+            remaining = expires_at - time.monotonic()
+            if remaining > TOKEN_REFRESH_RETRY_S:
+                logger.warning('swoop: host token refresh failed (%s); retrying in %ss',
+                               type(e).__name__, TOKEN_REFRESH_RETRY_S)
+                self._schedule_token_refresh(sid, remaining, delay=TOKEN_REFRESH_RETRY_S)
+            else:
+                self._log_event('swoop_token_refresh_failed', 'warning',
+                                f'sid={sid} error={type(e).__name__}')
+            return
+        finally:
+            token = None
+            fresh = None
+        self._log_event('swoop_token_refreshed', 'info', f'sid={sid}')
+        self._schedule_token_refresh(sid, TOKEN_TTL_DEFAULT_S)
 
     def _spawn_gate(self):
         """Backoff and rate ceiling. Returns a refusal reason, or None."""
@@ -337,6 +410,7 @@ class SwoopManager:
         self._finish_session(proc, sid, reason, code)
 
     def _finish_session(self, proc, sid, reason, code):
+        self._cancel_token_refresh()
         with self._lock:
             if self._proc is proc:
                 self._proc = None

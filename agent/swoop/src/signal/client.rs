@@ -120,6 +120,9 @@ pub struct SignalClient {
     /// The last `error` code the room sent, so a close can be read together
     /// with the frame that preceded it.
     last_error: Option<String>,
+    /// While set, a join for a viewer already on the roster is the room
+    /// replaying it to a host that just re-dialed, not a second join.
+    replay_until: Option<Instant>,
 }
 
 impl SignalClient {
@@ -137,7 +140,15 @@ impl SignalClient {
             viewers: BTreeMap::new(),
             host_fingerprint: None,
             last_error: None,
+            replay_until: None,
         })
+    }
+
+    /// The host re-dialed the room (a token refresh): until `until`, the joins
+    /// the room replays for viewers still present are swallowed rather than
+    /// counted against admission or allowed to reset a verified `ctl`.
+    pub fn expect_replay(&mut self, until: Instant) {
+        self.replay_until = Some(until);
     }
 
     pub fn sid(&self) -> &str {
@@ -278,6 +289,14 @@ impl SignalClient {
         };
         if sid != self.sid {
             return vec![Effect::Refused(Refusal::RoomMismatch)];
+        }
+        // a host that re-dialed the room (a token refresh) is replayed every
+        // viewer still present. inside that window those are not joins:
+        // counting them would spend the admission budget twice, and
+        // re-inserting them would reset the ctl a step-up already verified.
+        // outside it a repeat join is what the rate guard below is for.
+        if self.replay_until.is_some_and(|until| now <= until) && self.viewers.contains_key(&viewer) {
+            return Vec::new();
         }
         if let Err(denial) = self.admission.admit(&viewer, now) {
             let reason = denial.reason.reason();
@@ -968,6 +987,27 @@ pub(crate) mod tests {
         assert_eq!(sent["type"], "bye");
         assert_eq!(sent["to"], "viewer_0000000001");
         assert_eq!(sent["reason"], "join_too_soon");
+    }
+
+    /// After a re-dial the room replays the joins of every viewer still
+    /// present; inside the window they are swallowed, and the viewer keeps
+    /// what it had. Past the window a repeat join is a repeat join again.
+    #[test]
+    fn a_replayed_join_after_a_redial_is_swallowed() {
+        let mut client = client();
+        let join = read("signaling/signal-viewer-join.json");
+        let frame = join["message"].to_string();
+        let start = Instant::now();
+        assert!(matches!(client.handle_at(&frame, start)[..], [Effect::Admitted { .. }]));
+        let before = client.viewer_count();
+
+        client.expect_replay(start + Duration::from_secs(5));
+        assert!(client.handle_at(&frame, start + Duration::from_millis(100)).is_empty());
+        assert_eq!(client.viewer_count(), before);
+
+        // the window has passed: a repeat join is handled as it always was
+        let effects = client.handle_at(&frame, start + Duration::from_secs(6));
+        assert!(matches!(effects[..], [Effect::Admitted { .. }]));
     }
 
     /// A join for a session this streamer is not serving is a room mismatch,

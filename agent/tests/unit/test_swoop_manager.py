@@ -69,12 +69,16 @@ class FakeSpawn:
     """Injected ``spawn_backend``: the three calls SwoopManager makes."""
 
     def __init__(self, proc=None, verify_error=None, bundle_error=None, delay=0.0,
-                 post_error=None):
+                 post_error=None, bundle_error_after=None):
         self.proc = proc or FakeProc()
         self.verify_error = verify_error
         self.bundle_error = bundle_error
+        # raise `bundle_error` only from this fetch count on: the spawn's own
+        # fetch succeeds and a later refresh fails
+        self.bundle_error_after = bundle_error_after
         self.delay = delay
         self.spawned = 0
+        self.fetched = 0
         self.post_error = post_error
         self.posted = []
         self.post_attempts = 0
@@ -87,9 +91,14 @@ class FakeSpawn:
         return r'C:\x\swoop\owlette-swoop.exe'
 
     def fetch_bundle(self, sid, site_id, machine_id, auth_manager):
-        if self.bundle_error:
+        self.fetched += 1
+        if self.bundle_error and (self.bundle_error_after is None
+                                  or self.fetched >= self.bundle_error_after):
             raise self.bundle_error
-        return bytearray(json.dumps({'sid': sid, 'sessionKey': BUNDLE_SECRET}).encode())
+        return bytearray(json.dumps({
+            'sid': sid, 'sessionKey': BUNDLE_SECRET,
+            'hostToken': f'host-token-{self.fetched}',
+        }).encode())
 
     def spawn(self, exe_path, log_dir=None):
         self.spawned += 1
@@ -453,3 +462,60 @@ class TestSpawnCleanup:
         assert wait_for(lambda: 'close' in proc.ops)
         assert manager.status()['state'] == swoop_manager.STATE_IDLE
         assert manager.status()['lastRefusal'] == swoop_spawn.REFUSAL_SPAWN_FAILED
+
+
+class TestHostTokenRefresh:
+    """The host's room token lives 300 s and the streamer cannot mint one: the
+    manager re-mints a minute ahead and hands it over on stdin."""
+
+    def _fast(self, monkeypatch, ttl=2, lead=1, retry=20):
+        import swoop_manager
+        monkeypatch.setattr(swoop_manager, 'TOKEN_TTL_DEFAULT_S', ttl)
+        monkeypatch.setattr(swoop_manager, 'TOKEN_REFRESH_LEAD_S', lead)
+        monkeypatch.setattr(swoop_manager, 'TOKEN_REFRESH_RETRY_S', retry)
+
+    def test_a_fresh_token_reaches_the_streamer_ahead_of_expiry(self, firebase, monkeypatch):
+        self._fast(monkeypatch)
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: any(w.get('type') == 'token' for w in backend.proc.written))
+        line = next(w for w in backend.proc.written if w.get('type') == 'token')
+        # the second mint's token, not the one the bundle carried
+        assert line == {'type': 'token', 'host_token': 'host-token-2'}
+        actions = [call.args[0] for call in firebase.log_event.call_args_list]
+        assert 'swoop_token_refreshed' in actions
+        manager.kill()
+
+    def test_a_kill_cancels_the_refresh(self, firebase, monkeypatch):
+        self._fast(monkeypatch)
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+        manager.kill()
+        assert wait_for(lambda: manager.status()['state'] == 'idle')
+        time.sleep(1.5)
+        assert backend.fetched == 1
+        assert not any(w.get('type') == 'token' for w in backend.proc.written)
+
+    def test_a_failed_mint_with_no_time_left_is_logged_not_retried_forever(self, firebase, monkeypatch):
+        self._fast(monkeypatch, ttl=2, lead=1, retry=20)
+        backend = FakeSpawn(bundle_error=RuntimeError('api down'), bundle_error_after=2)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: any(
+            call.args[0] == 'swoop_token_refresh_failed' for call in firebase.log_event.call_args_list))
+        assert not any(w.get('type') == 'token' for w in backend.proc.written)
+        manager.kill()
+
+    def test_a_failed_mint_with_time_left_retries(self, firebase, monkeypatch):
+        self._fast(monkeypatch, ttl=4, lead=3, retry=1)
+        backend = FakeSpawn(bundle_error=RuntimeError('blip'), bundle_error_after=2)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.fetched >= 2)
+        # the second fetch failed; let it recover for the third
+        backend.bundle_error = None
+        assert wait_for(lambda: any(w.get('type') == 'token' for w in backend.proc.written), timeout=4.0)
+        manager.kill()
