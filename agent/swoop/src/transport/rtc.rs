@@ -237,12 +237,49 @@ pub enum PeerEvent {
     },
 }
 
+/// Put one datagram on the socket. A refusal is counted, logged sparingly and
+/// survived: before nomination str0m tries every candidate pair, and a
+/// destination this host has no route to (a viewer's vpn address, an address
+/// family the socket does not carry) is one pair failing its check, which ICE
+/// handles by never nominating it. Ending the peer for it — what `?` did here
+/// until 2026-09-23 — took a live session down for a candidate that was never
+/// going to carry it.
+fn send_datagram(
+    socket: &UdpSocket,
+    stats: &mut PeerStats,
+    contents: &[u8],
+    destination: SocketAddr,
+) -> bool {
+    match socket.send_to(contents, destination) {
+        Ok(_) => {
+            stats.datagrams_sent += 1;
+            true
+        }
+        Err(error) => {
+            stats.datagrams_send_failed += 1;
+            // the first few and then one in a hundred: enough to see a pair
+            // that never worked, not a log line per retry
+            if stats.datagrams_send_failed <= 3 || stats.datagrams_send_failed.is_multiple_of(100) {
+                ::log::debug!(
+                    "swoop: send_to {destination} refused ({error}); {} refused so far",
+                    stats.datagrams_send_failed
+                );
+            }
+            false
+        }
+    }
+}
+
 /// One peer's counters, which is what a governor reads.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PeerStats {
     pub pacer: PacerStats,
     /// Datagrams this peer put on the socket.
     pub datagrams_sent: u64,
+    /// Datagrams the socket refused: one unreachable candidate (a vpn address
+    /// answering WSAENETUNREACH) is a fact about that pair, not the peer, and
+    /// ICE drops the pair itself when nothing answers on it.
+    pub datagrams_send_failed: u64,
     /// Access units handed to str0m's packetizer.
     pub frames_written: u64,
     pub channel_writes: u64,
@@ -667,10 +704,9 @@ impl RtcPeer {
                     // DTLS, SRTP, SCTP — goes only to the pair ICE nominated,
                     // which is what makes its destination a pair report.
                     let nominated = t.contents.first().is_some_and(|first| *first > 3);
-                    self.socket
-                        .send_to(&t.contents, destination)
-                        .with_context(|| format!("send_to {destination}"))?;
-                    self.stats.datagrams_sent += 1;
+                    if !send_datagram(&self.socket, &mut self.stats, &t.contents, destination) {
+                        continue;
+                    }
                     self.pacer.record_sent(now, len);
                     if nominated {
                         self.on_send_addr(destination, events);
@@ -1058,6 +1094,21 @@ pub fn qpc_hz() -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_refused_send_is_counted_and_survived() {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind");
+        let mut stats = super::PeerStats::default();
+        // an address family the socket does not carry: refused synchronously
+        let unreachable: std::net::SocketAddr = "[::1]:9".parse().expect("addr");
+        assert!(!super::send_datagram(&socket, &mut stats, b"", unreachable));
+        assert_eq!(stats.datagrams_send_failed, 1);
+        assert_eq!(stats.datagrams_sent, 0);
+        // and a reachable one still counts as sent
+        let reachable = socket.local_addr().expect("local");
+        assert!(super::send_datagram(&socket, &mut stats, b"", reachable));
+        assert_eq!(stats.datagrams_sent, 1);
+    }
+
     use super::*;
 
     fn events() -> Vec<PeerEvent> {

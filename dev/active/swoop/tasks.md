@@ -1886,3 +1886,11 @@ Headline: the bundle route enforces `SWOOP_MIN_AGENT_VERSION` (`bundle/route.ts:
 fielded 3.3.7 agent could be served a session; the 09-19 live session ran on a box-local patch. Owner rulings
 recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A starts: 1.3 follow-up (floor =
 3.3.7, comments corrected, test that 3.3.7 is admitted), 7.7 agent half, 7.5 follow-ups, 3.4 close-out, G2 memo.
+- 2026-09-23 — Wave A progress. **1.3 follow-up done** (floor 3.3.7, `6869ae7d`). **7.7 agent half done**
+  (`f6dbafa6`): the doorbell reports the mint's 200 / 403 as the enable bit, on change only, and the service
+  hands it to `SwoopManager.set_enabled`; the `[UninstallRun]` half is next, with the owner's rulings (uninstall
+  removes all swoop logs; mDNS rule deferred). **7.5 follow-up, half:** a refused `send_to` is now counted
+  (`PeerStats.datagrams_send_failed`) and survived instead of ending the peer. The other half — treating
+  str0m's ICE `Disconnected` as recoverable with a give-up deadline — is deferred to Wave B: the viewer-side
+  policy (`session/mod.rs:2281` RestartIce) and the give-up length need the LAN measurement to size, and
+  loopback cannot exercise a real ICE disconnect. Recorded here so it is not read as done.
