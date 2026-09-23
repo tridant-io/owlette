@@ -32,7 +32,7 @@ export default function SwoopPage({
   params: Promise<{ siteId: string; machineId: string }>;
 }) {
   const { siteId, machineId } = use(params);
-  const { state, error, stats, session, videoRef, stageRef, stepUp, end } = useSwoopSession(
+  const { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect } = useSwoopSession(
     siteId,
     machineId,
   );
@@ -48,6 +48,7 @@ export default function SwoopPage({
         state={state}
         error={error}
         onEnd={end}
+        onReconnect={reconnect}
         statsOpen={statsOpen}
         onToggleStats={() => setStatsOpen((open) => !open)}
       >

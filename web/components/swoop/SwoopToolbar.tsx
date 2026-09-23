@@ -29,6 +29,7 @@ import {
   Maximize,
   Minimize,
   PowerOff,
+  RotateCcw,
   TriangleAlert,
   Wifi,
   WifiOff,
@@ -80,6 +81,8 @@ export interface SwoopToolbarProps {
   state: SwoopSessionState;
   error: string | null;
   onEnd: () => void;
+  /** a fresh session to the same machine, offered in the ended and failed states. */
+  onReconnect: () => void;
   /** whether the latency overlay is showing; the page owns the flag. */
   statsOpen: boolean;
   onToggleStats: () => void;
@@ -91,6 +94,7 @@ export function SwoopToolbar({
   machineId,
   state,
   onEnd,
+  onReconnect,
   statsOpen,
   onToggleStats,
   children,
@@ -215,10 +219,19 @@ export function SwoopToolbar({
           </TooltipContent>
         </Tooltip>
 
-        <Button variant="destructive" size="sm" onClick={onEnd}>
-          <PowerOff aria-hidden />
-          end session
-        </Button>
+        {/* swoop runs in its own tab, so the only way on from an ended or failed
+            session is another one; "end" has nothing left to end there. */}
+        {state === 'ended' || state === 'error' ? (
+          <Button variant="outline" size="sm" onClick={onReconnect}>
+            <RotateCcw aria-hidden />
+            reconnect
+          </Button>
+        ) : (
+          <Button variant="destructive" size="sm" onClick={onEnd}>
+            <PowerOff aria-hidden />
+            end session
+          </Button>
+        )}
       </div>
     </div>
   );
