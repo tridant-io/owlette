@@ -416,6 +416,12 @@ pub struct Governor {
     last_offset_us: Option<i64>,
     last_frames_dropped: Option<u32>,
     last_dropped_over_budget: u64,
+    /// Viewer-reported gaps since the last report, not yet judged.
+    pending_gap_rise: u64,
+    /// Refusals the pacer made that no viewer gap has been matched to yet.
+    /// A refused frame is a gap at the viewer a moment later, and that gap is
+    /// the host's own doing — not the path's.
+    unmatched_refusals: u64,
     /// Set by anything degrading between reports, cleared by each evaluation.
     degraded: bool,
     hold_until: Option<Instant>,
@@ -452,6 +458,8 @@ impl Governor {
             last_offset_us: None,
             last_frames_dropped: None,
             last_dropped_over_budget: 0,
+            pending_gap_rise: 0,
+            unmatched_refusals: 0,
             degraded: false,
             hold_until: None,
             rungs,
@@ -639,10 +647,12 @@ impl Governor {
             Feedback::Stats { frames_dropped, .. } => {
                 let previous = self.last_frames_dropped.replace(frames_dropped);
                 // Only a rise counts: the counter is cumulative, and a viewer
-                // that reconnected starts a new one.
-                if previous.is_some_and(|prev| frames_dropped > prev) {
-                    self.stats.frame_gaps += 1;
-                    self.degraded = true;
+                // that reconnected starts a new one. Judged at the next
+                // report, against the frames the host itself refused.
+                if let Some(prev) = previous {
+                    if frames_dropped > prev {
+                        self.pending_gap_rise += u64::from(frames_dropped - prev);
+                    }
                 }
             }
             Feedback::Ping { .. } | Feedback::Pong { .. } => {}
@@ -653,11 +663,27 @@ impl Governor {
     /// did not move. `pacer` is the peer's current counters — the delta in
     /// [`PacerStats::dropped_over_budget`] is the host's own congestion signal.
     pub fn on_report(&mut self, now: Instant, pacer: PacerStats) -> Option<u32> {
+        // A refusal is the pacer doing its job on an encoder overshoot, not a
+        // path signal: counted, never a cut. Until 2026-09-23 it was one, and
+        // with the viewer reporting the same refused frame as a gap the target
+        // was cut twice per overshoot — a loop that took a 50 mbps cap on a
+        // wired lan down to a bucket too small for an ordinary delta.
         if pacer.dropped_over_budget > self.last_dropped_over_budget {
-            self.stats.local_refusals += pacer.dropped_over_budget - self.last_dropped_over_budget;
-            self.degraded = true;
+            let refused = pacer.dropped_over_budget - self.last_dropped_over_budget;
+            self.stats.local_refusals += refused;
+            self.unmatched_refusals = self.unmatched_refusals.saturating_add(refused);
         }
         self.last_dropped_over_budget = pacer.dropped_over_budget;
+
+        // A gap the host's own refusals explain is not the path's gap. What is
+        // left over after the match is.
+        let rise = std::mem::take(&mut self.pending_gap_rise);
+        let explained = rise.min(self.unmatched_refusals);
+        self.unmatched_refusals -= explained;
+        if rise > explained {
+            self.stats.frame_gaps += 1;
+            self.degraded = true;
+        }
 
         let degraded = std::mem::take(&mut self.degraded);
         // Counted on every report, the held ones included: the quiet run the
@@ -1088,16 +1114,40 @@ mod tests {
     }
 
     #[test]
-    fn the_hosts_own_admission_refusal_counts_as_congestion() {
+    fn the_hosts_own_admission_refusal_is_counted_and_is_not_congestion() {
         let mut f = Fixture::new();
         f.report(GOOD);
         f.pacer.dropped_over_budget += 2;
-        assert_eq!(f.report(GOOD), Some(16_000_000));
+        assert_eq!(f.report(GOOD), None, "a refusal is the pacer's doing, not the path's");
         assert_eq!(f.governor.stats().local_refusals, 2);
-        // The counter is cumulative: the same value next window is not a new
-        // refusal, or the governor would cut forever off one drop.
-        f.now += HOLD;
-        assert_eq!(f.report(GOOD), Some(16_800_000));
+        assert_eq!(f.governor.stats().cuts, 0);
+    }
+
+    #[test]
+    fn a_gap_the_hosts_own_refusals_explain_is_not_a_gap_but_the_rest_is() {
+        let mut f = Fixture::new();
+        f.report(GOOD);
+        let stats = |frames_dropped| Feedback::Stats {
+            decode_queue: 0,
+            frames_dropped,
+            jitter_ms: 0.0,
+            rtt_ms: 7.0,
+            width_css: 1920,
+            height_css: 1080,
+        };
+        f.governor.on_feedback(f.now, &stats(0));
+        f.report(GOOD);
+
+        // two refusals, then the viewer reports two frames missing: explained.
+        f.pacer.dropped_over_budget += 2;
+        f.governor.on_feedback(f.now, &stats(2));
+        assert_eq!(f.report(GOOD), None);
+        assert_eq!(f.governor.stats().frame_gaps, 0);
+
+        // three more missing with nothing refused: the path lost them.
+        f.governor.on_feedback(f.now, &stats(5));
+        assert_eq!(f.report(GOOD), Some(16_000_000));
+        assert_eq!(f.governor.stats().frame_gaps, 1);
     }
 
     #[test]
