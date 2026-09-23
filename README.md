@@ -6,7 +6,7 @@
 
 ### ai-powered fleet management for Windows applications
 
-[![Version](https://img.shields.io/badge/version-3.3.6-blue)](https://github.com/tridant-io/owlette/releases)
+[![Version](https://img.shields.io/badge/version-3.3.7-blue)](https://github.com/tridant-io/owlette/releases)
 [![License](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](https://owlette.app)
 
