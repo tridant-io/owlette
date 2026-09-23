@@ -25,7 +25,6 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import {
   Eye,
   Gauge,
-  Keyboard,
   Loader2,
   Maximize,
   Minimize,
@@ -35,6 +34,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import type { SwoopSessionState } from '@/hooks/useSwoopSession';
 
@@ -170,13 +170,6 @@ export function SwoopToolbar({
         </span>
       )}
 
-      {!lockSupported && (
-        <span className="flex items-center gap-1 text-xs text-muted-foreground">
-          <Keyboard className="size-3.5" aria-hidden />
-          keyboard lock is unavailable in this browser; browser shortcuts stay with the browser
-        </span>
-      )}
-
       {notice && <span className="text-xs text-muted-foreground">{notice}</span>}
 
       {/* the bar is off screen once fullscreen holds, so the way out is said here first. */}
@@ -197,16 +190,30 @@ export function SwoopToolbar({
           <Gauge aria-hidden />
         </Button>
 
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!live}
-          aria-label={fullscreen ? 'exit fullscreen' : 'fullscreen with keyboard and mouse capture'}
-          onClick={() => void engage()}
-        >
-          {fullscreen ? <Minimize aria-hidden /> : <Maximize aria-hidden />}
-          {fullscreen ? 'exit fullscreen' : 'fullscreen'}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!live}
+              aria-label={fullscreen ? 'exit fullscreen' : 'fullscreen with keyboard and mouse capture'}
+              onClick={() => void engage()}
+            >
+              {fullscreen ? <Minimize aria-hidden /> : <Maximize aria-hidden />}
+              {fullscreen ? 'exit fullscreen' : 'fullscreen'}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {/* keyboard lock is chromium-only and brave ships with it off: the
+                tooltip says which case this browser is, and the keyboard menu
+                covers the rest either way. */}
+            <p className="max-w-xs">
+              {lockSupported
+                ? 'fullscreen captures the keyboard and mouse: shortcuts like alt+tab go to the machine.'
+                : 'fullscreen captures the mouse; this browser keeps its own shortcuts (alt+tab, ctrl+w). the keyboard menu sends those.'}
+            </p>
+          </TooltipContent>
+        </Tooltip>
 
         <Button variant="destructive" size="sm" onClick={onEnd}>
           <PowerOff aria-hidden />

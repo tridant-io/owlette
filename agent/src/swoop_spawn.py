@@ -383,12 +383,14 @@ def _console_session_token():
 
 
 def _configured_log_level():
-    """``swoop.logLevel`` from config.json, for a diagnosis. Only the two
-    levels the streamer knows; anything else leaves it at info."""
+    """The streamer follows the agent's own ``logging.level`` in config.json:
+    one switch for a diagnosis, no key of its own. Only the two levels the
+    streamer knows; anything else leaves it at info."""
     try:
-        level = (shared_utils.load_config() or {}).get('swoop', {}).get('logLevel')
+        level = (shared_utils.load_config() or {}).get('logging', {}).get('level')
     except Exception:
         return None
+    level = level.lower() if isinstance(level, str) else None
     return level if level in ('debug', 'trace') else None
 
 

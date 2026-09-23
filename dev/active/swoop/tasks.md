@@ -1975,3 +1975,13 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   Crate 352 passed, clippy clean, both feature sets. Ships as 3.3.9 to dev for B4A. The two connect failures
   after 3.3.8 remain unexplained by the host (its debug log shows instant connects); most likely the browser
   flag was back at default for those — owner to confirm.
+- 2026-09-23 — **UI finding (owner, 5.2 follow-up):** the ended and failed states are dead ends. Wanted: in
+  `ended` / `failed` the toolbar offers **reconnect** (a fresh session, same machine) — no "back to
+  dashboard", swoop opens in its own tab (owner); "end session" in the failed state resets the page instead
+  of doing nothing. Small web task, after the pacer fix.
+- 2026-09-23 — **keyboard menu shipped (6.1's web half, owner's ask):** the toolbar's keyboard-lock sentence
+  is gone; the fullscreen button carries a tooltip that says what fullscreen captures in this browser; a
+  keyboard button beside settings sends ctrl+alt+del (the `sas` control message), windows key, alt+tab,
+  alt+f4, win+d, win+l, ctrl+esc, ctrl+shift+esc, print screen and esc as chords through the input capture's
+  own sequence (`InputCapture.pressChord`), with a two-line explainer and the sas refusal surfaced. Needs
+  `ctl`; disabled for a view-only session.

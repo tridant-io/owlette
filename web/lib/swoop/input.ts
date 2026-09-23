@@ -106,6 +106,12 @@ export interface InputCapture {
   flush(): void;
   /** release everything held. idempotent. */
   releaseAll(): void;
+  /**
+   * a combination the browser would keep for itself, pressed in order and
+   * released in reverse, through the same queue as a typed key so it takes
+   * its place in the channel's sequence.
+   */
+  pressChord(codes: readonly string[]): void;
   detach(): void;
 }
 
@@ -212,6 +218,13 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     for (const code of heldKeys) enqueue({ t: 'k', code, down: false, tsUs });
     heldKeys.clear();
     releaseButtons();
+    flush();
+  };
+
+  const pressChord = (codes: readonly string[]): void => {
+    const tsUs = nowUs();
+    for (const code of codes) enqueue({ t: 'k', code, down: true, tsUs });
+    for (let i = codes.length - 1; i >= 0; i -= 1) enqueue({ t: 'k', code: codes[i], down: false, tsUs });
     flush();
   };
 
@@ -405,6 +418,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
 
     flush,
     releaseAll,
+    pressChord,
 
     detach(): void {
       if (detached) return;
