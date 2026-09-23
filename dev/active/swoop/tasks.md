@@ -1910,3 +1910,48 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   log): Inno turns `{{` into `{` but a `}` is literal already, so the `}}` I wrote reached PowerShell doubled
   and the whole command failed to parse. Single closing braces now, and the harness waits for the
   uninstaller's temp copy (`_iu*.tmp`) rather than for `unins000.exe`, which exits at once.
+- 2026-09-23 16:43 UTC — **first A4D → B4A session on dev: black picture, "the connection to this machine
+  failed" (= `ice_failed`, `peer.ts:705`).** Evidence: session `f9256ae5…` under TEC-B4A stayed `pending`;
+  dev logs show `turn mint failed; offering stun only` (TURN not configured) and the host's bundle minted one
+  second later, so the streamer ran and answered — the header's "connected" is `onTrack`, i.e. the answer was
+  applied, not media flowing. ICE then found no pair: STUN-only on one LAN. Both machines run the catalog 3.3.7
+  (no Wave A wiring, so no `Owlette swoop` firewall rules on B4A). Two candidates, in order: (1) B4A cannot
+  resolve A4D's `.local` mDNS candidates (the host resolves through the Windows DNS client; a Public network
+  profile blocks inbound 5353) so the only pairs were srflx↔srflx behind one NAT; (2) inbound UDP to
+  `owlette-swoop.exe` blocked on B4A. Discriminator requested from the owner: retry with the browser's
+  mDNS obfuscation off (`#enable-webrtc-hide-local-ips-with-mdns` = Disabled). G2 memo not yet writable.
+- 2026-09-23 17:1x UTC — **G2 met: first picture over a real network** (A4D → B4A on dev, keyboard and mouse
+  worked) once the viewer's browser stopped hiding its LAN address behind mDNS — which confirms the 16:43
+  failure was the host failing to resolve `.local` candidates. Connect took 10–15 s by hand. Memo:
+  `spikes/g2-first-picture.md`. **Wave B opens with two findings:** host-side mDNS resolution (un-defer the
+  UDP 5353 rule and/or query mDNS from the streamer instead of the OS resolver) and the connect budget.
+- 2026-09-23 17:2x UTC — **second A4D → B4A session (host log read on B4A, both machines wired):** streamer up
+  and encoding on nvenc 135 ms after spawn; `peer connected` **17.5 s** later (all of it ICE, STUN-only);
+  overlay: capture→display 113.5 ms of which send→arrive 63.5 ms with app RTT 0.8 ms, delay rise 60 ms,
+  **gaps 2834**, direct path, cap 50 mbps / 60 fps; heavy smearing at 50 and at 30 mbps. Wired both ends, so
+  the gaps are host-side frame refusals (the pacer), not the network. **At +348 s the host logged "lease
+  lapsed past the grace, dropping it", then `room error token_expired (Remint(TokenExpired))`, socket closed,
+  exit 14 SignalLost:** the host token's 300 s TTL expired, the streamer exited by design ("holds no
+  credential to re-mint with"), and the page froze with no message. First session's peer had died at +31 s
+  with `peer poll failed: poll_output`. Wave B order is now: (1) sessions must survive the host token TTL,
+  (2) the pacer refusals / smearing, (3) the 17 s connect, (4) mDNS resolution on the host.
+- 2026-09-23 17:3x UTC — **third session: `ice_failed` again with the mDNS flag off.** Root cause, fits all
+  three: the viewer (A4D) has nine IPv4 interfaces (Ethernet ×2, three virtual, OpenVPN DCO, Tailscale, Wi-Fi,
+  Hyper-V default switch) and advertises a host candidate for each; the host binds one address and walks the
+  pairs; the fielded 3.3.7 streamer ends the peer on the first `send_to` to an unroutable address (session 1's
+  `peer poll failed` at +31 s, session 3's failure), and session 2's 17.5 s connect was the walk through dead
+  pairs before the Ethernet pair. The wave A fix (`265369eb`, a refused send is counted and survived) is on dev
+  and not on B4A. The host gathers no srflx at all (no STUN client), which is fine on the LAN and fatal off it
+  without TURN. mDNS remains a real second cause for a viewer without the flag off.
+- 2026-09-23 — **Wave B item 1 done: sessions survive the host token's lifetime.** 5.1 / 2.4 follow-up. The
+  service arms a timer at spawn (TTL 300 s from PROTOCOL §8, lead 60 s; not a bundle field, because the
+  fielded streamer's bundle parser is `deny_unknown_fields`), re-mints through the bundle route (allowed for
+  any non-ended sid), and writes `{"type":"token","host_token":…}` to the streamer's stdin; a failed mint
+  retries every 20 s while the token lives, then logs `swoop_token_refresh_failed`. The streamer re-dials the
+  room with the new token and swaps the socket (the room announces nothing for a host that goes; viewers
+  keep their peers), and swallows the joins the room replays for present viewers inside a 5 s window so
+  admission is not charged twice and a verified `ctl` is not reset. Also: `OWLETTE_SWOOP_LOG=debug|trace`
+  from `config.json` `swoop.logLevel` turns the streamer's per-frame counters on for the pacer diagnosis.
+  Tests: 4 manager tests (refresh lands, kill cancels, no-time failure logs, retry recovers), ipc parse test
+  (token never printed), client replay-window test; agent suite 1996 passed, crate 351 passed, clippy clean.
+  Proof on a real session (> 5 min without a freeze) comes with 3.3.8 on B4A.

@@ -376,7 +376,20 @@ def _console_session_token():
         ctypes.sizeof(ctypes.c_ulong),
     )
     environment = win32profile.CreateEnvironmentBlock(token, False)
+    level = _configured_log_level()
+    if level:
+        environment['OWLETTE_SWOOP_LOG'] = level
     return token, environment
+
+
+def _configured_log_level():
+    """``swoop.logLevel`` from config.json, for a diagnosis. Only the two
+    levels the streamer knows; anything else leaves it at info."""
+    try:
+        level = (shared_utils.load_config() or {}).get('swoop', {}).get('logLevel')
+    except Exception:
+        return None
+    return level if level in ('debug', 'trace') else None
 
 
 def _open_stderr_handle(log_dir, sa):

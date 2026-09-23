@@ -10,7 +10,7 @@ use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::bundle::Indicator;
+use crate::bundle::{Indicator, Secret};
 
 /// Process exit codes. These are the plan's names registry, and the agent
 /// reports on them, so they are contract: add, never renumber.
@@ -184,6 +184,12 @@ pub enum Control {
     /// The answer to a `sas_request`. The service, not the streamer, calls
     /// `SendSAS`.
     SasResult { ok: bool },
+    /// A fresh host token for the room, minted by the service a minute before
+    /// the running one expires (PROTOCOL.md §8: host tokens live 300 s, and the
+    /// streamer holds no credential to mint its own). The streamer re-dials the
+    /// room with it; every viewer keeps its peer and its picture, because the
+    /// room announces nothing when a host socket goes.
+    Token { host_token: Secret },
 }
 
 /// stdout, streamer → service. One object per line, drained on a daemon thread
@@ -361,6 +367,14 @@ mod tests {
             serde_json::to_string(&control).expect("it serialises"),
             r#"{"type":"kill"}"#
         );
+    }
+
+    #[test]
+    fn a_token_line_parses_and_never_prints_the_token() {
+        let control = parse_control(r#"{"type":"token","host_token":"eyJ.refresh.sig"}"#).expect("a token line");
+        let Control::Token { host_token } = &control else { panic!("not a token line") };
+        assert_eq!(host_token.expose(), "eyJ.refresh.sig");
+        assert!(!format!("{control:?}").contains("refresh"));
     }
 
     #[test]

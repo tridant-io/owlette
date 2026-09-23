@@ -295,6 +295,8 @@ Full task text: [tasks.md](tasks.md).
 - **G1** (after 0.2): video path and transport library chosen by measurement; memo signed off by the owner.
   Task 1.1 and every transport task are written against the winner.
 - **G2** (after Wave 4): a frame from this dev box reaches a canvas through the real API and signaling service.
+  **MET 2026-09-23** over the LAN, A4D viewer → B4A host, with the viewer's mDNS obfuscation off as a workaround:
+  `spikes/g2-first-picture.md`.
 - **G3** (after Wave 5): a measured interactive LAN session meets the latency criteria → unsigned internal pilot
   on the owner's machines (NVIDIA, logged-in desktop).
 - **G4** (Task 10.1): every success criterion below is met; builds are signed; the install-directory security

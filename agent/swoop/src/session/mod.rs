@@ -796,6 +796,7 @@ mod host {
     use crate::ipc::{
         self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, LeftReason, MediaPath,
     };
+    use crate::bundle::Secret;
     use crate::signal::client::{Effect, SignalTransport};
     use crate::signal::messages::channel::{
         self, Channel, Control as ControlMessage, Feedback, Input as InputMessage,
@@ -1318,6 +1319,9 @@ mod host {
             session_cap: Duration::from_secs(bundle.enablement.session_cap_seconds),
             client,
             socket,
+            signal_url: bundle.signal_url.clone(),
+            site: bundle.site.clone(),
+            machine: bundle.machine.clone(),
             out: io::stdout(),
             viewers: Vec::new(),
             roster: Roster::new(bundle.ctl),
@@ -1407,6 +1411,11 @@ mod host {
         session_cap: Duration,
         client: SignalClient,
         socket: RoomSocket,
+        /// For a re-dial with a fresh token (`Control::Token`): the room does
+        /// not move, only the credential does.
+        signal_url: String,
+        site: String,
+        machine: String,
         out: io::Stdout,
         /// Every viewer's peer and its own rate control, in join order.
         viewers: Vec<Viewer>,
@@ -1592,6 +1601,40 @@ mod host {
             }
         }
 
+        /// How long after a re-dial the room's replayed joins are expected.
+        const REPLAY_WINDOW: Duration = Duration::from_secs(5);
+
+        /// A fresh host token from the service: dial the room again with it and
+        /// swap the socket. The old one closes on drop, and the room announces
+        /// nothing for a host that goes, so every viewer keeps its peer and its
+        /// picture; the room replays their joins, which the client already
+        /// knows. A failed dial keeps the old socket — it works until its token
+        /// expires, and the service retries the mint before then.
+        fn redial(&mut self, host_token: &Secret) {
+            let handshake = match Handshake::with_token(
+                &self.signal_url,
+                &self.site,
+                &self.machine,
+                host_token.expose(),
+            ) {
+                Ok(handshake) => handshake,
+                Err(e) => {
+                    ::log::warn!("swoop: token refresh refused, room unchanged ({e})");
+                    return;
+                }
+            };
+            match RoomSocket::dial(&handshake) {
+                Ok(socket) => {
+                    self.socket = socket;
+                    self.client.expect_replay(Instant::now() + Self::REPLAY_WINDOW);
+                    ::log::info!("swoop: room re-dialed with a fresh host token");
+                }
+                Err(e) => {
+                    ::log::warn!("swoop: re-dial with the fresh token failed ({e}); keeping the old socket");
+                }
+            }
+        }
+
         /// stdin. EOF is the service going away, which §6 makes a clean exit.
         fn pump_service(&mut self) -> Option<(Exit, ExitReason)> {
             loop {
@@ -1604,6 +1647,9 @@ mod host {
                     }
                     Ok(FromService::Control(Control::SasResult { ok })) => {
                         self.on_sas_result(ok);
+                    }
+                    Ok(FromService::Control(Control::Token { host_token })) => {
+                        self.redial(&host_token);
                     }
                     Ok(FromService::Eof) | Err(TryRecvError::Disconnected) => {
                         ::log::info!("swoop: stdin closed, the service is gone");
