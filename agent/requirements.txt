@@ -19,7 +19,7 @@ tzlocal==5.4.4  # Convert Windows registry tz names to IANA (e.g. "Pacific Stand
 # SILENTLY evaluating every site-time schedule against the machine's local clock
 # (the `except ... falling back to local time` branch), which is a wrong-hours
 # bug with no error to chase. Pinned directly so it can never be dropped.
-tzdata==2026.3
+tzdata==2026.4
 
 # Screenshot capture
 mss==9.0.2  # Fast cross-platform screenshot library
@@ -65,11 +65,11 @@ websocket-client==1.9.2
 # Bumping this MOVES THAT PIN: 0.1.69 carried CLI 2.1.121, 0.2.152 carries
 # 2.1.259 — re-run scripts/upload-cortex-cli.mjs for dev AND prod after this
 # lands, or hoot keeps fetching the old CLI.
-claude-agent-sdk==0.2.152
+claude-agent-sdk==0.2.153
 mcp==2.2.0
 
 # Error monitoring (optional — only active when DSN configured in config.json)
-sentry-sdk==2.68.1
+sentry-sdk==2.69.2
 
 # Firebase integration - now using REST API with OAuth tokens (no Admin SDK needed)
 # firebase-admin==6.4.0  # REMOVED - replaced with REST API client
