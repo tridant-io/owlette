@@ -1903,3 +1903,10 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   keep-user-data answer (ruling: remove all swoop logs). The mDNS rule is deferred, so nothing creates it and
   the group removal still covers it. Quick build compiles; the generated PowerShell parses. VM proof of the
   uninstall path is next.
+- 2026-09-23 — **7.7 uninstall path proven on the e2e VM** (`scripts/vm/18c-verify-swoop-uninstall.ps1`, 20/20):
+  two rounds, a record saying the SAS policy was absent (value deleted after uninstall) and one saying 1 (value
+  reads 1), both rules gone by group, `{app}\swoop`, `logs\swoop`, `ipc\swoop` and the record gone, the rest
+  of `logs\` kept. The first two runs failed on the uninstaller's PowerShell step (exit code 1 in the uninstall
+  log): Inno turns `{{` into `{` but a `}` is literal already, so the `}}` I wrote reached PowerShell doubled
+  and the whole command failed to parse. Single closing braces now, and the harness waits for the
+  uninstaller's temp copy (`_iu*.tmp`) rather than for `unins000.exe`, which exits at once.
