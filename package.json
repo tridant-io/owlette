@@ -24,6 +24,7 @@
   "scripts": {
     "build": "npm run build --workspaces",
     "test": "npm test --workspaces",
+    "test:scripts": "node --test scripts/__tests__/*.test.mjs",
     "build:cli": "npm run build --workspace @owlette/cli",
     "test:cli": "npm test --workspace @owlette/cli",
     "build:sdk": "npm run build --workspace @owlette/sdk",

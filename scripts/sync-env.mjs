@@ -180,9 +180,19 @@ function readRailwayValues(target) {
   return JSON.parse(out);
 }
 
-function pushVercel(key, value, sensitive, vercelTarget) {
+// the value travels on stdin so it never shows in a process listing. an EMPTY
+// value is the exception: vercel reads empty stdin as "no value given" and
+// refuses, so it goes as an explicit `--value ""` — nothing to hide there. the
+// quotes are literal because SHELL joins the args into one command line, where
+// a bare empty string would vanish.
+export function vercelAddArgs(key, value, sensitive, vercelTarget) {
   const flag = sensitive ? '--sensitive' : '--no-sensitive';
-  const res = spawnSync('vercel', ['env', 'add', key, vercelTarget, '--force', flag], {
+  const args = ['env', 'add', key, vercelTarget, '--force', flag];
+  return value === '' ? [...args, '--value', '""'] : args;
+}
+
+function pushVercel(key, value, sensitive, vercelTarget) {
+  const res = spawnSync('vercel', vercelAddArgs(key, value, sensitive, vercelTarget), {
     cwd: WEB_DIR,
     input: value,
     encoding: 'utf8',
@@ -266,4 +276,7 @@ function main() {
   }
 }
 
-main();
+// importable for its own tests; runs only as the entry point
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
