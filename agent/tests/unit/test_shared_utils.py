@@ -1290,12 +1290,23 @@ class TestAppStateWrites:
 
 
 def _sleeping_child():
-    return subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+    # wait for the interpreter to say it is up before handing the pid back:
+    # the macos framework python's bin/python3.11 is a stub that re-execs
+    # Python.app's binary, so an identity read taken during that window
+    # records the stub as `exe` and the live read after it disagrees.
+    child = subprocess.Popen(
+        [sys.executable, '-c',
+         'import time; print("up", flush=True); time.sleep(30)'],
+        stdout=subprocess.PIPE)
+    child.stdout.readline()
+    return child
 
 
 def _stop(child):
     child.terminate()
     child.wait(10)
+    if child.stdout is not None:
+        child.stdout.close()
 # windows-only: the lock under test is a handle opened without delete sharing,
 # which has no posix analogue; the class body imports win32file.
 @pytest.mark.windows(reason='delete-sharing locks are windows semantics')
