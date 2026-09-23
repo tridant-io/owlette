@@ -1878,3 +1878,11 @@ rules were created by hand (task 7.7's, since `set_enabled()` has no caller), sw
 `default_site` in **dev firestore**, and `shared_utils.py` is patched to point at localhost
 (original at `.predev`). `web/lib/versionUtils.ts` is patched to 3.3.5 and **must be reverted** —
 the real value is 3.4.0 and the pre-commit hook catches it.
+
+### 2026-09-23 — resumed after the 3.3.6/3.3.7 releases and the prod promotion
+
+Gap analysis in `research/resume-2026-09-23.md` (status per wave, all 18 open tasks, every Log follow-up).
+Headline: the bundle route enforces `SWOOP_MIN_AGENT_VERSION` (`bundle/route.ts:128`) and it read 3.4.0, so no
+fielded 3.3.7 agent could be served a session; the 09-19 live session ran on a box-local patch. Owner rulings
+recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A starts: 1.3 follow-up (floor =
+3.3.7, comments corrected, test that 3.3.7 is admitted), 7.7 agent half, 7.5 follow-ups, 3.4 close-out, G2 memo.

@@ -312,6 +312,14 @@ describe('POST /api/agent/swoop/bundle', () => {
     expect(response.status).toBe(403);
     expect((await response.json()).code).toBe('agent_too_old');
   });
+
+  it('serves a 3.3.7 agent, the first installer that ships the streamer', async () => {
+    // the literal, not the constant: the other bundle tests send the constant
+    // itself, which is how a floor above the fielded agents passed unnoticed.
+    agentToken();
+    const response = await bundlePOST(bundleRequest({ agentVersion: '3.3.7' }));
+    expect(response.status).toBe(200);
+  });
 });
 
 describe('POST /api/agent/swoop/events', () => {

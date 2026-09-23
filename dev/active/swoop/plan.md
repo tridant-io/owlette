@@ -46,6 +46,16 @@ and the TURN fallback. It replaces the dashboard's "live view" for every machine
   GA on that release.
 - The plan lives in `dev/active/swoop/`, force-added to git.
 
+**Rulings on resume (2026-09-23, after the 3.3.6/3.3.7 releases and the dev → prod promotion):**
+- Agent floor: `SWOOP_MIN_AGENT_VERSION = 3.3.7` — the first installer that ships the streamer. The bundle route
+  enforces it; the constant is not copy.
+- The pilot runs on **dev**: the owner swoops into **TEC-B4A from TEC-A4D**. Prod stays off.
+- G3 passes on the renderer's own timings; a camera photon row comes later (not a G3 gate).
+- Task 7.7: the installer's `[UninstallRun]` edit is approved; the mDNS firewall rule is deferred; uninstall
+  removes **all** swoop logs.
+- Long-lead items start now, owner-driven: Azure signing validation, the Cloudflare TURN key. Hardware for
+  6.7: C3A, B4A, A4D and the MacBook Air.
+
 ## Contracts recovered from the lost plan (keep stable — `dev/active/tri-platform-agent` references them)
 
 - Crate `agent/swoop`, binary `owlette-swoop.exe`, no cargo workspace, own `.cargo/config.toml` with
