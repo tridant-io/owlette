@@ -69,6 +69,13 @@ param(
   [string]$CandidateExeName = "Owlette-Installer-candidate.exe",
   [string]$CandidateSha256 = "",
 
+  # Which owlette server both installs point the guest at: the installer's
+  # /SERVER switch, prod when empty (the installer's own default). Pass 'dev' to
+  # pair a candidate that is not a released build with dev.owlette.app, never
+  # with the prod fleet.
+  [ValidateSet('', 'prod', 'dev')]
+  [string]$Server = "",
+
   # API key resolution for the installer list route. Never printed.
   [string]$ApiKey = "",
   [string]$ApiKeyEnv = "OWLETTE_API_KEY_PROD",
@@ -241,10 +248,10 @@ $SB_DownloadOnly = {
 # cmd runs the installer and writes its exit code to a file, and the host polls
 # for that file with fresh short sessions (Wait-GuestInstall).
 $SB_StartInstaller = {
-  param($path)
+  param($path, $serverFlag)
   if (-not (Test-Path $path)) { return [PSCustomObject]@{ Ok = $false; Detail = "not found: $path" } }
   Remove-Item 'C:\owlette-install.exit' -Force -ErrorAction SilentlyContinue
-  $inner = "`"$path`" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=C:\owlette-install.log & echo !ERRORLEVEL! > C:\owlette-install.exit"
+  $inner = "`"$path`" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART$serverFlag /LOG=C:\owlette-install.log & echo !ERRORLEVEL! > C:\owlette-install.exit"
   Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList "/v:on /c `"$inner`"" -WindowStyle Hidden | Out-Null
   [PSCustomObject]@{ Ok = $true; Detail = 'started' }
 }
@@ -670,6 +677,8 @@ try {
     throw "pass -CandidateUrl (fetched in-guest) or -CandidatePath (pushed over the VM bus)"
   }
   if ($CandidatePath -and -not (Test-Path $CandidatePath)) { throw "candidate not found: $CandidatePath" }
+  $serverFlag = if ($Server) { " /SERVER=$Server" } else { '' }
+  if ($Server) { Write-Host "server: $Server (both installs pass /SERVER=$Server)" }
 
   $vm = Get-VM -Name $Name -ErrorAction Stop
   $cred = Import-Clixml -Path $CredFile
@@ -715,7 +724,7 @@ try {
       $dl = Invoke-Command -Session $s -ScriptBlock $SB_DownloadOnly `
         -ArgumentList $from.Url, ("Owlette-from-$v.exe"), $from.Sha256
       if (-not $dl.Ok) { Add-Row $v "from-install $v" "FAIL" $dl.Detail; continue }
-      $st = Invoke-Command -Session $s -ScriptBlock $SB_StartInstaller -ArgumentList $dl.Dest
+      $st = Invoke-Command -Session $s -ScriptBlock $SB_StartInstaller -ArgumentList $dl.Dest, $serverFlag
       if (-not $st.Ok) { Add-Row $v "from-install $v" "FAIL" $st.Detail; continue }
       # the session is closed while the installer runs (see $SB_StartInstaller)
       Remove-PSSession $s -ErrorAction SilentlyContinue; $s = $null
@@ -764,7 +773,7 @@ try {
         if (-not $pushed.Ok) { Add-Row $v "candidate push" "FAIL" "checksum mismatch in the guest: got $($pushed.Sha)"; continue }
         Add-Row $v "candidate push" "PASS" "$($pushed.Bytes) bytes, checksum verified in the guest"
       }
-      $st = Invoke-Command -Session $s -ScriptBlock $SB_StartInstaller -ArgumentList $dest
+      $st = Invoke-Command -Session $s -ScriptBlock $SB_StartInstaller -ArgumentList $dest, $serverFlag
       if (-not $st.Ok) { Add-Row $v "candidate install" "FAIL" $st.Detail; continue }
       Remove-PSSession $s -ErrorAction SilentlyContinue; $s = $null
       $ci = Wait-GuestInstall $Name $cred $InstallTimeoutSec
