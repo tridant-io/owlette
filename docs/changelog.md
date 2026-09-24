@@ -11,6 +11,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [3.3.11] - 2026-09-24
+
+### fixed — swoop connects from a host that has a VPN up
+
+The streamer offered the one address on its internet route, which with a
+VPN connected is the tunnel's, unreachable from the LAN. It now offers the
+address that actually routes to the viewer.
+
 ## [3.3.10] - 2026-09-23
 
 ### changed — the swoop streamer's diagnostic log covers the connection itself
