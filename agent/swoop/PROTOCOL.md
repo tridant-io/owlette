@@ -339,6 +339,7 @@ loop.
 | `viewer_joined` | `sid`, `viewer`, `ctl`, `codec` |
 | `viewer_left` | `sid`, `viewer`, `reason` (`bye` \| `timeout` \| `lease_expired` \| `kill`) |
 | `sas_request` | `sid`, `viewer` |
+| `token_needed` | `sid` — the signaling socket closed under a live session; the service answers with a `token` line and the streamer redials. repeated every 20 s while the room stays unreachable; a session with no live viewer exits `SignalLost` instead |
 | `host_event` | `sid`, `kind`, `viewer` (optional), `reason` (optional) |
 | `status` | `sid`, `viewers`, `controllers`, `indicator`, `bitrateKbps`, `fps`, `path` (`direct` \| `relay`), `display`, `uptimeS`, and the optional fields below |
 | `exiting` | `sid`, `code`, `reason` (`idle` \| `kill` \| `signal_lost` \| `session_cap` \| `error`) |

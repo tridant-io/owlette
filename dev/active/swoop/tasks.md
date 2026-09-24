@@ -2065,3 +2065,9 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   (`presentLease(token)`); tests in lease.test.ts and peer.test.ts. Owner also reports the fullscreen
   cursor overlay is too small and vanishes over dark text (an I-beam): scale with the picture and add a
   contrast halo — next.
+- 2026-09-24 ~08:xx UTC — **host half of "stays up": `swoop/host-signal-redial`.** The streamer exited
+  `SignalLost` the moment its room socket closed, ending a live p2p session that did not need the room.
+  Now a closed socket with a live viewer keeps the session and emits a new stdout event `token_needed`
+  (`ipc.rs`, PROTOCOL §6) every 20 s; the service answers with the same `token` control line a scheduled
+  refresh uses (`_on_token_needed`, floored at 5 s) and the host redials; a viewerless session still exits
+  as before. Rust 364/364 + clippy clean; python 31/31. Ships in 3.3.12 with the audio fix.

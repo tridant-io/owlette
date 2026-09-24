@@ -288,6 +288,7 @@ class TestStdoutEvents:
             '{"type":"viewer_joined","sid":"s","viewer":"v2","ctl":false}',
             '{"type":"status","sid":"s","viewers":2,"fps":60,"path":"direct"}',
             '{"type":"sas_request","sid":"s","viewer":"v1"}',
+            '{"type":"token_needed","sid":"s"}',
             '{"type":"host_event","sid":"s","kind":"input_not_permitted","viewer":"v2"}',
             '{"type":"viewer_left","sid":"s","viewer":"v2","reason":"bye"}',
             '{"type":"exiting","sid":"s","code":0,"reason":"idle"}',
@@ -298,7 +299,7 @@ class TestStdoutEvents:
         events = manager.drain_events()
         assert [e['type'] for e in events] == [
             'ready', 'viewer_joined', 'viewer_joined', 'status',
-            'sas_request', 'host_event', 'viewer_left', 'exiting',
+            'sas_request', 'token_needed', 'host_event', 'viewer_left', 'exiting',
         ]
         status = manager.status()
         assert status['viewers'] == 1
@@ -485,6 +486,35 @@ class TestHostTokenRefresh:
         assert line == {'type': 'token', 'host_token': 'host-token-2'}
         actions = [call.args[0] for call in firebase.log_event.call_args_list]
         assert 'swoop_token_refreshed' in actions
+        manager.kill()
+
+    def test_a_token_needed_from_the_streamer_mints_at_once_and_is_floored(self, firebase, monkeypatch):
+        # the scheduled refresh is far away; the streamer lost its room and asks.
+        self._fast(monkeypatch, ttl=300, lead=60, retry=20)
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+        import swoop_manager
+        monkeypatch.setattr(swoop_manager, 'TOKEN_ASK_MIN_INTERVAL_S', 0.5)
+
+        manager._handle_line('{"type":"token_needed","sid":"sid_1"}')
+        assert wait_for(lambda: any(w.get('type') == 'token' for w in backend.proc.written))
+        written = [w for w in backend.proc.written if w.get('type') == 'token']
+        assert written == [{'type': 'token', 'host_token': 'host-token-2'}]
+
+        # a second ask inside the floor is dropped; one after it mints again.
+        manager._handle_line('{"type":"token_needed","sid":"sid_1"}')
+        time.sleep(0.2)
+        assert len([w for w in backend.proc.written if w.get('type') == 'token']) == 1
+        time.sleep(0.5)
+        manager._handle_line('{"type":"token_needed","sid":"sid_1"}')
+        assert wait_for(lambda: len([w for w in backend.proc.written if w.get('type') == 'token']) == 2)
+
+        # an ask for a session that is not the live one is ignored.
+        manager._handle_line('{"type":"token_needed","sid":"sid_other"}')
+        time.sleep(0.2)
+        assert len([w for w in backend.proc.written if w.get('type') == 'token']) == 2
         manager.kill()
 
     def test_a_kill_cancels_the_refresh(self, firebase, monkeypatch):
