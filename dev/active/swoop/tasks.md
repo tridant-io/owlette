@@ -1997,3 +1997,15 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   the `tracing` crate's `log` feature is turned on (already in the tree via str0m; no new package), so every
   ICE and DTLS event lands in the host log at debug. Ships as 3.3.10 to dev; the next failed attempt then
   names the pair.
+- 2026-09-23 ~23:0x UTC — **3.3.10 on the dev catalog** (sha256 `e44a2117…45e7`, dev `353cd9c5`, PR #198; VM
+  12/0/4 + 20/20), both machines updated by `update_owlette`. Carries #196 (str0m's ICE/DTLS events in the
+  host log at debug). Web on dev also has #197 (esc hint on the stage only when fullscreen captures the
+  keyboard) and #195 (sessions route reads its body once). Next: one session attempt; a failure now leaves
+  the pair-level trace in B4A's log.
+- 2026-09-24 — **connect failures persist with one viewer interface (brave "default public interface only")
+  and the mDNS flag off**, so the viewer is cleared; the host's single bound address is the remaining
+  suspect: `local_bind_addr()` takes the interface on the internet route, which with a full-tunnel vpn up
+  on B4A is the tunnel, and a tunnel host candidate is unreachable from the lan. `swoop/bind-toward-viewer`:
+  the peer binds the interface the os routes to the viewer's first host (then srflx) candidate from the
+  offer, logged at info per viewer; an offer with no candidate keeps the session-wide address. Multi-
+  interface gathering (7.5) remains the full answer. Owner asked whether a vpn is up on B4A.
