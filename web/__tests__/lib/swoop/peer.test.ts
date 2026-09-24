@@ -377,6 +377,20 @@ describe('swoop peer — offer', () => {
     expect(h.state.offers).toHaveLength(1);
   });
 
+  it('does not re-send the offer on a host-ready that lands while the answer is being applied', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+    // the host answers the offer and, on our join, sends host-ready; the two
+    // cross, and the answer is mid-verification when host-ready arrives.
+    const applying = h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+    await h.peer.handleSignal({ type: 'host-ready', sid: SID, to: VIEWER_ID });
+    await applying;
+
+    expect(h.sent.map((m) => m.type)).toEqual(['offer']);
+    expect(h.state.remoteDescriptions).toHaveLength(1);
+    expect(h.errors).toEqual([]);
+  });
+
   it('presents the viewer token as the first frame on swoop-control', async () => {
     const h = peerHarness();
     await h.peer.start();
@@ -468,6 +482,29 @@ describe('swoop peer — the host fingerprint mac', () => {
     await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
 
     expect(h.state.remoteDescriptions).toEqual([{ type: 'answer', sdp: answerSdp() }]);
+    expect(h.errors).toEqual([]);
+    expect(h.peer.diagnostics().answered).toBe(true);
+  });
+
+  it('a second copy of the answer, arriving while the first is still being verified, is inert', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    // the host answered a re-sent copy of the offer too; the copies arrive a
+    // couple of ms apart, while the browser is still applying the first.
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+    const apply = pc.setRemoteDescription.bind(pc);
+    pc.setRemoteDescription = async (description: unknown) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await apply(description);
+    };
+    const answer = { type: 'answer' as const, to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC };
+    const first = h.peer.handleSignal(answer);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await h.peer.handleSignal(answer);
+    await first;
+
+    expect(h.state.remoteDescriptions).toHaveLength(1);
     expect(h.errors).toEqual([]);
     expect(h.peer.diagnostics().answered).toBe(true);
   });
