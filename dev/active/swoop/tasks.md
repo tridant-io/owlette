@@ -2065,7 +2065,6 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   (`presentLease(token)`); tests in lease.test.ts and peer.test.ts. Owner also reports the fullscreen
   cursor overlay is too small and vanishes over dark text (an I-beam): scale with the picture and add a
   contrast halo — next.
-<<<<<<< HEAD
 - 2026-09-24 ~07:xx UTC — **owner ruling (going to bed): "sessions should stay active on swoop indefinitely, at
   all costs"; keep auditing/fixing/testing unattended; tri-platform and swoop both priorities; playwright
   multi-user.** `swoop/session-resilience` (web only): (1) `signaling.ts` ladder has no top — redials
@@ -2079,11 +2078,34 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   `lease_refused` vs `lease_expired`. Playwright: yamon blocks parallel subagents this week (82 % budget),
   so everything runs inline. Real B4A/MBA sessions cannot be driven by playwright (api keys are refused on
   the mint route by design; step-up is a passkey ceremony), so multi-user coverage will be emulator e2e.
-=======
 - 2026-09-24 ~08:xx UTC — **host half of "stays up": `swoop/host-signal-redial`.** The streamer exited
   `SignalLost` the moment its room socket closed, ending a live p2p session that did not need the room.
   Now a closed socket with a live viewer keeps the session and emits a new stdout event `token_needed`
   (`ipc.rs`, PROTOCOL §6) every 20 s; the service answers with the same `token` control line a scheduled
   refresh uses (`_on_token_needed`, floored at 5 s) and the host redials; a viewerless session still exits
   as before. Rust 364/364 + clippy clean; python 31/31. Ships in 3.3.12 with the audio fix.
->>>>>>> origin/dev
+- 2026-09-24 ~09:5x UTC — **3.3.12 on the dev catalog** (sha256 `8b9b4eae…895a`, release PR #209; VM upgrade
+  from the fielded 3.3.7 12/0/4, swoop uninstall proof 20/20), `update_owlette` queued to B4A and A4D. Carries
+  #203 (audio packetised per poll round) and #208 (host keeps a live session without its room). Docs
+  screenshots not refreshed (desktop app unchanged; last capture 3.3.7). E2E: `specs/swoop/session.spec.ts`
+  — 2/4 green on the first real run; the two mint-dependent tests need the e2e web server to carry swoop
+  signalling env (`SWOOP_SIGNAL_URL` is blanked as a third-party credential, so the mint route refuses with
+  `signal_not_configured`); fixing by giving the e2e server an unreachable signal origin plus generated jwt
+  keys. Also learned: the api refuses a replayed totp, so a step-up right after the sign-in that spent this
+  period's code waits for the next period.
+- 2026-09-24 ~07:48 UTC — **B4A and A4D on 3.3.12, online** (self-update via `update_owlette`, A4D log
+  `[SUCCESS] Self-update completed successfully!`). The `GET /machines/TEC-A4D` 401 every 20–40 s is a Google
+  Cloud Monitoring uptime check aimed at an authenticated route (`clientUa` GoogleStackdriverMonitoring); owner:
+  re-point it at `/api/health` in the dev GCP project.
+- 2026-09-24 ~08:0x UTC — **#207 (session resilience) and #209 (release 3.3.12) merged to dev (`cecbaa75`).**
+  Dev web now carries every overnight fix; the fleet (B4A, A4D) runs 3.3.12. Next: the swoop e2e spec to
+  green, the page's watch fallback for members (`controlRefusedForCapability`), then tri-platform.
+- 2026-09-24 ~10:xx UTC — **swoop e2e green (4/4) and the page's watch fallback.** `web/e2e/specs/swoop/session.spec.ts`:
+  step-up dialog + totp opens a control session and the record follows it to its end; a member is refused
+  control by the route's capability gate and the page now asks for a watch session instead
+  (`lib/swoop/intent.ts` `controlRefusedForCapability`, once, for that refusal only); site switch and
+  exclusion list refuse before any ceremony; over the api two viewers hold leases of their own, the token
+  carries the fingerprint presented (the host enforces it), an offline machine is 409, a watcher cannot
+  kill, one kill ends every session. The e2e web server now carries an unreachable swoop signal origin and
+  per-run ed25519 keys (`playwright.config.ts`). Learned the hard way: the mint answers 201; `problemDetail`
+  consumes the body; a waiter on "contains /swoop/sessions + 200" catches the lease renewal.

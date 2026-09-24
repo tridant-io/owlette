@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -67,6 +68,16 @@ const INTERNAL_OR_OVERRIDDEN_SECRETS = [
 ];
 
 const SECRET_SHAPED = /(_KEY|_SECRET|_TOKEN|_DSN)$/;
+
+/** an ed25519 pair for the e2e server's swoop tokens: raw 32-byte halves, base64url, the shape the bundle carries. */
+function swoopE2eKeys(): { priv: string; pub: string } {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  return {
+    priv: privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(16).toString('base64url'),
+    pub: publicKey.export({ format: 'der', type: 'spki' }).subarray(12).toString('base64url'),
+  };
+}
+const SWOOP_E2E_KEYS = swoopE2eKeys();
 
 /**
  * Deny by default. Reads .env.local for key NAMES only — never values — and
@@ -227,6 +238,18 @@ export default defineConfig({
       OWLETTE_NEXT_DIST_DIR: NEXT_DIST_DIR,
       // iron-session needs 32+ chars
       SESSION_SECRET: 'demo-session-secret-for-emulator-playwright-tests-32chars',
+      // swoop's mint route refuses outright with `signal_not_configured` when the
+      // signal origin is blank, and the blanked third-party value above is the
+      // real worker's. an unreachable origin keeps every session in the emulator:
+      // the ring fails, the polled command is queued, the page's dial never
+      // lands. the jwt keys are generated per run — nothing is committed, and
+      // no spec verifies a token — and the master key only has to be non-empty.
+      SWOOP_SIGNAL_URL: 'https://swoop-signal.e2e.invalid',
+      SWOOP_SIGNAL_RING_SECRET: 'e2e-ring-secret-never-a-real-worker',
+      SWOOP_JWT_KID: 'e2e-swoop-kid',
+      SWOOP_JWT_PRIVATE_KEY: SWOOP_E2E_KEYS.priv,
+      SWOOP_JWT_PUBLIC_KEY: SWOOP_E2E_KEYS.pub,
+      SWOOP_SESSION_MASTER_KEY: 'e2e-swoop-session-master-key-for-playwright-only',
       MFA_ENCRYPTION_KEY: 'demo-mfa-encryption-secret-for-playwright-only',
       NEXT_PUBLIC_SENTRY_DSN: '',
       // Empty strings short-circuit the init block in web/lib/rateLimit.ts. Without

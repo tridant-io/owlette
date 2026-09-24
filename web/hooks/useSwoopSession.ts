@@ -44,6 +44,7 @@ import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
 import { SwoopLeaseRefused } from '@/lib/swoop/lease';
 import { createSwoopIdentity, createSwoopPeer, type SwoopPeer } from '@/lib/swoop/peer';
 import { backoffDelayMs, isTransientEnd } from '@/lib/swoop/backoff';
+import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import {
   base64UrlDecode,
@@ -207,10 +208,6 @@ async function problemDetail(res: Response, fallback: string): Promise<string> {
   return body.detail || body.error || fallback;
 }
 
-async function problemCode(res: Response): Promise<string | null> {
-  const body = (await res.clone().json().catch(() => ({}))) as { code?: string };
-  return typeof body.code === 'string' ? body.code : null;
-}
 
 export function useSwoopSession(
   siteId: string,
@@ -440,7 +437,7 @@ export function useSwoopSession(
       return (await renewLease(fp)).viewerJwt;
     };
 
-    const createSession = async (fp: string): Promise<SessionGrant | null> => {
+    const createSession = async (fp: string, wantControl = control): Promise<SessionGrant | null> => {
       const clientCaps = await probeClientCaps();
       // a proof only ever belongs to the run the ceremony asked for; the first
       // attempt cannot have one.
@@ -454,7 +451,7 @@ export function useSwoopSession(
           headers: { 'Content-Type': 'application/json' },
           // the proof crosses exactly as the ceremony produced it.
           body: JSON.stringify({
-            control,
+            control: wantControl,
             fp,
             clientCaps,
             ...(proof ? { mfaProof: proof } : {}),
@@ -462,7 +459,18 @@ export function useSwoopSession(
         },
       );
       if (!res.ok) {
-        if (res.status === 401 && (await problemCode(res)) === 'step_up_required') {
+        // one read of the body: `problemDetail` consumes it, and every branch
+        // below wants both the code and the sentence.
+        const problem = (await res.json().catch(() => ({}))) as { code?: string; detail?: string; error?: string };
+        const code = typeof problem.code === 'string' ? problem.code : null;
+        const detail = problem.detail || problem.error || 'this swoop session could not be started.';
+        // a member holds the view capability only: the control ask is refused
+        // before swoop's own gate, and the watch ask is the one to make. once,
+        // and only for that refusal.
+        if (wantControl && controlRefusedForCapability(res.status, code, detail)) {
+          return createSession(fp, false);
+        }
+        if (res.status === 401 && code === 'step_up_required') {
           if (!disposed) {
             setStepUpRequired(true);
             setState('authorizing');
@@ -470,7 +478,7 @@ export function useSwoopSession(
           return null;
         }
         // a 5xx or a 429 is the api having a bad moment; a 4xx is its answer.
-        fail(await problemDetail(res, 'this swoop session could not be started.'), res.status >= 500 || res.status === 429);
+        fail(detail, res.status >= 500 || res.status === 429);
         return null;
       }
       const body = (await res.json()) as { data: SessionGrant };
