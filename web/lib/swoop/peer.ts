@@ -414,8 +414,10 @@ export class SwoopPeer {
         if (message.sid !== this.options.sid) return;
         if (!this.answered) {
           // the host may have booted after we offered, and an offer sent into
-          // an empty room was dropped by the relay. re-send the one we have.
-          if (this.offerSdp) this.options.send({ type: 'offer', sdp: this.offerSdp });
+          // an empty room was dropped by the relay. re-send the one we have —
+          // unless its answer is already here and being applied, in which case
+          // a re-send only earns a second answer.
+          if (this.awaitingAnswer && this.offerSdp) this.options.send({ type: 'offer', sdp: this.offerSdp });
           return;
         }
         // after the answer it is the host's ice policy asking for a restart:
@@ -522,6 +524,24 @@ export class SwoopPeer {
     // makes a duplicate or a replayed one inert.
     if (!this.awaitingAnswer) return;
 
+    const ufrag = extractIceUfrag(sdp);
+    if (this.answered && (ufrag === null || ufrag === this.iceUfrag)) {
+      // an answered ice restart carries new ice credentials (rfc 8445 §9), so
+      // an answer offering the ones already in force is the previous answer
+      // replayed — its mac verifies and applying it would put the session back
+      // on the dead pair. ignored rather than aborted: the real answer to the
+      // outstanding offer may still be in flight.
+      return;
+    }
+    // this offer is answered from here on. the host answers every copy of an
+    // offer it receives, and the `host-ready` it sends on our join re-sends
+    // ours when it lands before the answer does, so a second copy of this
+    // answer arrives while the mac below is still being verified. taken before
+    // the first await, so that copy is inert; applying it too is what the
+    // browser refuses, and that refusal read as the connection failing
+    // (b4a, 2026-09-24).
+    this.awaitingAnswer = false;
+
     // an absent mac is a mismatch, not a lesser case.
     if (!mac) return this.abort('host_mac_mismatch');
 
@@ -539,16 +559,6 @@ export class SwoopPeer {
 
     if (!playoutDelayNegotiated(sdp)) return this.abort('playout_delay_not_negotiated');
 
-    const ufrag = extractIceUfrag(sdp);
-    if (this.answered && (ufrag === null || ufrag === this.iceUfrag)) {
-      // an answered ice restart carries new ice credentials (rfc 8445 §9), so
-      // an answer offering the ones already in force is the previous answer
-      // replayed — its mac verifies and applying it would put the session back
-      // on the dead pair. ignored rather than aborted: the real answer to the
-      // outstanding offer may still be in flight.
-      return;
-    }
-
     try {
       await this.pc.setRemoteDescription({ type: 'answer', sdp });
     } catch {
@@ -558,7 +568,6 @@ export class SwoopPeer {
       // the host presented. named, so it ends the session instead.
       return this.abort('answer_not_applied');
     }
-    this.awaitingAnswer = false;
     this.answered = true;
     this.iceUfrag = ufrag;
 

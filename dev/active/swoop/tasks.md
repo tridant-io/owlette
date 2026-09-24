@@ -2042,3 +2042,18 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   next audio frame. Loopback test feeds 5 audio frames per poll over 40 polls: 140/200 written before,
   200/200 after. Host change → ships in 3.3.12. The black square on the same attempt is a separate stage:
   ICE + DTLS came up (the host was writing media); waiting on the non-audio lines of that log.
+- 2026-09-24 ~06:0x UTC — **B4A black square, debug log in hand: not ICE, not the firewall, not the bind.**
+  At 05:57 UTC ICE completed in 25 ms (host 192.168.88.20:57309 ↔ browser prflx 192.168.88.10:63485,
+  nominated), the browser sent its DTLS hello, the host answered flight 4 and resent it four times into
+  silence. Two lines earlier: `Accept offer` / `Create answer` TWICE, 2 ms apart. The host sends a per-viewer
+  `host-ready` on every viewer join (`session/mod.rs:1752`); the page re-sends its standing offer on
+  `host-ready` whenever no answer has been applied; when the first offer already got through, the host
+  answers both copies, and the second answer lands inside the first one's async mac verification
+  (`acceptAnswer` only cleared `awaitingAnswer` after `setRemoteDescription`), so the page applies both,
+  the browser refuses the second (`InvalidStateError` in stable) → `abort('answer_not_applied')` → "the
+  connection to this machine failed", and the torn-down peer never answers DTLS. Timing-dependent, which
+  is why 03:04 connected and 04:25/05:57 did not. Firewall rules on B4A are enabled on every profile, both
+  adapters Private. `swoop/double-answer` (web only): `awaitingAnswer` is consumed before the first await
+  (the replay check moved ahead of it), and `host-ready` re-sends only while the offer is unanswered. Two
+  peer tests reproduce it (slow apply + a second copy 2 ms later; host-ready mid-apply), both fail on the
+  old code. The 03:04 session's end — "lease lapsed past the grace" at 03:10 — is the next item.
