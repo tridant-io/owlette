@@ -47,6 +47,7 @@ pub enum TerminateMethod {
   /// The PID was already gone.
   NotFound,
   /// The process exited on its own after `WM_CLOSE`.
+  #[cfg(windows)]
   WmClose,
   /// The process had to be terminated.
   Terminated,

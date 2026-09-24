@@ -18,6 +18,7 @@ use std::io::{ErrorKind, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -83,6 +84,7 @@ pub enum LockOutcome {
   Acquired,
   /// Previous owner died without releasing. We own it and must release, as Python's
   /// `WAIT_ABANDONED` branch does.
+  #[cfg(windows)]
   Abandoned,
   /// 2 s budget elapsed. Proceeds unlocked, matching Python: the write is still atomic, so the
   /// worst case is a lost update, never a torn file.
@@ -365,7 +367,7 @@ fn acquire_lock() -> LockGuard {
 
   let started = Instant::now();
   let path = crate::paths::data_root().join(JSON_LOCK_REL);
-  let file = match fs::OpenOptions::new().read(true).write(true).create(true).mode(0o660).open(&path) {
+  let file = match fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o660).open(&path) {
     Ok(file) => file,
     Err(error) => {
       log::error!("could not open the owlette json lock {} ({error}) — json access will proceed unlocked", path.display());
@@ -391,7 +393,8 @@ fn acquire_lock() -> LockGuard {
       };
     }
     let error = std::io::Error::last_os_error();
-    let contended = matches!(error.raw_os_error(), Some(libc::EWOULDBLOCK) | Some(libc::EAGAIN));
+    // EWOULDBLOCK and EAGAIN are one value on linux and two on macos.
+    let contended = matches!(error.raw_os_error(), Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN);
     if !contended {
       log::error!("could not lock {} ({error}) — json access will proceed unlocked", path.display());
       return LockGuard {

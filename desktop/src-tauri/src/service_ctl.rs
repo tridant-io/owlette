@@ -8,6 +8,7 @@
 //! Start/stop go through the SCM when this process has the rights, falling back
 //! to an elevated `net start` / `net stop` otherwise.
 
+#[cfg(windows)]
 use std::ffi::OsStr;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
