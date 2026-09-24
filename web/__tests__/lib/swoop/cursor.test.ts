@@ -60,7 +60,7 @@ describe('swoop cursor', () => {
     const h = harness();
     const store = swoopCursor(h.session)!;
     h.cursor(upload(1));
-    expect(store.get().shape).toEqual({ id: 1, hotX: 2, hotY: 3, w: 32, h: 32, png: PNG });
+    expect(store.get().shape).toEqual({ id: 1, hotX: 2, hotY: 3, w: 32, h: 32, scale: 1, png: PNG });
     h.cursor(upload(2));
     expect(store.get().shape?.id).toBe(2);
     h.cursor(repeat(1));

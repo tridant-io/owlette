@@ -601,6 +601,18 @@ describe('channel messages', () => {
     });
   });
 
+  it('a cursor shape upload carries its scale, absent meaning as captured, and never below one', () => {
+    const upload = { t: 'cshape', id: 7, hotX: 1, hotY: 2, w: 32, h: 32, png: 'AA==' };
+    const plain = decodeCursorMessage(JSON.stringify(upload));
+    expect(plain.ok && plain.value.t === 'cshape' && plain.value.scale).toBeUndefined();
+    const shrunk = decodeCursorMessage(JSON.stringify({ ...upload, scale: 2 }));
+    expect(shrunk.ok && shrunk.value.t === 'cshape' && shrunk.value.scale).toBe(2);
+    expect(verdict(decodeCursorMessage(JSON.stringify({ ...upload, scale: 0 })))).toEqual({
+      expect: 'reject',
+      reason: 'malformed_message',
+    });
+  });
+
   it('never throws on junk', () => {
     for (const decode of [decodeInputMessage, decodeCursorMessage, decodeControlMessage, decodeFeedbackMessage]) {
       expect(decode('not json').ok).toBe(false);

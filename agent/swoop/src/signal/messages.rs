@@ -353,6 +353,11 @@ pub mod channel {
             w: Option<u16>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
             h: Option<u16>,
+            /// Machine pixels per png pixel, sent only when above 1: the host
+            /// shrinks a shape past the css ceiling for the wire and the
+            /// viewer draws it back at `w * scale`.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            scale: Option<u16>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
             png: Option<String>,
         },

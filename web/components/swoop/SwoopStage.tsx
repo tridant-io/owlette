@@ -92,7 +92,7 @@ export function SwoopStage({ session, state, stageRef, videoRef, children }: Swo
       ref={stageRef}
       tabIndex={-1}
       onPointerDown={onPointerDown}
-      className="relative h-full w-full overflow-hidden bg-background outline-none"
+      className="relative h-full w-full overflow-hidden bg-background outline-none [&:fullscreen]:bg-black"
     >
       <video
         ref={videoRef}

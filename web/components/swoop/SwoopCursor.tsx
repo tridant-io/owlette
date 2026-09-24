@@ -43,8 +43,10 @@ const noCursor = () => NO_CURSOR;
 /** §5: the largest shape a css cursor can be trusted with. */
 const MAX_CSS_CURSOR_PX = 32;
 
+// a css cursor is drawn png pixel for css pixel, so a shape the host shrank
+// for the wire can only be shown at its true size as an overlay.
 const fitsCssCursor = (shape: SwoopCursorShape): boolean =>
-  shape.w <= MAX_CSS_CURSOR_PX && shape.h <= MAX_CSS_CURSOR_PX;
+  shape.scale === 1 && shape.w <= MAX_CSS_CURSOR_PX && shape.h <= MAX_CSS_CURSOR_PX;
 
 const pngUrl = (shape: SwoopCursorShape): string => `data:image/png;base64,${shape.png}`;
 
@@ -72,13 +74,20 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
   const box = useSwoopPictureBox(session);
   const overlay = locked || (state.shape !== null && !fitsCssCursor(state.shape));
 
-  // the css half: the machine's shape on the local cursor, and only there.
-  // cleared on the way out so the stage never keeps a shape from a session
-  // that has ended.
+  // the css half: one pointer, never two. outside pointer lock the local
+  // cursor is the machine's shape — or nothing at all while an overlay stands
+  // in for it, or while the machine has hidden its own (windows paints the
+  // pointer into the picture itself during a title-bar drag, and the local
+  // arrow on top of it was the second cursor). cleared on the way out so the
+  // stage never keeps a shape from a session that has ended.
   useEffect(() => {
     if (!session) return;
     const style = session.stage.style;
-    if (!overlay && state.shape) {
+    if (locked) {
+      style.removeProperty('cursor');
+    } else if (overlay || (state.shape && !state.visible)) {
+      style.setProperty('cursor', 'none');
+    } else if (state.shape) {
       style.setProperty('cursor', `url(${pngUrl(state.shape)}) ${state.shape.hotX} ${state.shape.hotY}, auto`);
     } else {
       style.removeProperty('cursor');
@@ -86,13 +95,14 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
     return () => {
       style.removeProperty('cursor');
     };
-  }, [session, overlay, state.shape]);
+  }, [session, locked, overlay, state.shape, state.visible]);
 
   if (!session || !box || !overlay || !state.visible) return null;
 
   const left = toPixel(state.x, box.left, box.width);
   const top = toPixel(state.y, box.top, box.height);
-  const scale = box.scale;
+  // css pixels per png pixel: the picture's scale times what the host shrank.
+  const scale = box.scale * (state.shape?.scale ?? 1);
   if (state.shape) {
     return (
       // eslint-disable-next-line @next/next/no-img-element -- a data url the host just sent, never optimised

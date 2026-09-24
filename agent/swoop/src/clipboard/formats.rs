@@ -248,6 +248,7 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
         height,
         hot_x: 0,
         hot_y: 0,
+        scale: 1,
         rgba,
     }))
 }

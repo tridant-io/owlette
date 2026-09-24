@@ -11,6 +11,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — the swoop cursor was drawn at half size, and twice during a title-bar drag
+
+A pointer bigger than 32 px (pointer size 2, or 200% scaling) was shrunk for
+the wire and drawn at the shrunk size. The host now says by how much it shrank a
+shape and the page draws it back at true size, as an overlay. In the windowed
+view the page also hides the local pointer whenever the machine hides its own
+(Windows paints the cursor into the picture during a title-bar drag) and
+whenever an overlay stands in for it, so there is one cursor, never two. The
+fullscreen letterbox is black rather than the theme's blue.
+
 ## [3.3.13] - 2026-09-24
 
 ### fixed — a swoop session froze for good when the transport closed a channel

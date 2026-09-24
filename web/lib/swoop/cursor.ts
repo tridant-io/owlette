@@ -24,13 +24,18 @@
 import type { SwoopDetach, SwoopSession } from '@/lib/swoop/features';
 import { decodeCursorMessage } from '@/lib/swoop/protocol';
 
-/** one of the host's bitmaps: css pixels, hotspot in the png's own pixels. */
+/** one of the host's bitmaps: png pixels, hotspot in the png's own pixels. */
 export interface SwoopCursorShape {
   id: number;
   hotX: number;
   hotY: number;
   w: number;
   h: number;
+  /**
+   * machine pixels per png pixel. 1 for a shape as captured; the host shrinks
+   * a big pointer for the wire and this is what draws it back at full size.
+   */
+  scale: number;
   /** base64 png, as it arrived. */
   png: string;
 }
@@ -78,8 +83,8 @@ export function attach(session: SwoopSession): SwoopDetach {
       return;
     }
     if (message.png !== undefined) {
-      const { id, hotX, hotY, w, h, png } = message;
-      shapes.set(id, { id, hotX: hotX ?? 0, hotY: hotY ?? 0, w: w ?? 0, h: h ?? 0, png });
+      const { id, hotX, hotY, w, h, scale, png } = message;
+      shapes.set(id, { id, hotX: hotX ?? 0, hotY: hotY ?? 0, w: w ?? 0, h: h ?? 0, scale: scale ?? 1, png });
     }
     set({ ...state, shape: shapes.get(message.id) ?? null });
   });
