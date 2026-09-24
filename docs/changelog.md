@@ -11,6 +11,28 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [3.3.12] - 2026-09-24
+
+### fixed — swoop audio was refused for the whole session
+
+The streamer packetised one queued audio frame per poll while audio arrived
+at a hundred a second, so the queue filled within a second and every frame
+after it was refused. Each poll round now packetises what is queued first.
+
+### changed — a swoop session survives the host losing its signalling socket
+
+The streamer exited the moment its room socket closed, ending a live session
+that no longer needed the room. With a viewer connected it now keeps the
+session, asks the service for a fresh token and redials.
+
+### changed — the viewer page keeps a session up
+
+The page redials the room and restarts the link for as long as it takes, and
+starts a new session after an end that was not a decision. It presents every
+renewed lease to the host, so sessions no longer end at five and a half
+minutes; a doubled answer no longer ends one either. The machine's own cursor
+is drawn in fullscreen, at the picture's scale.
+
 ## [3.3.11] - 2026-09-24
 
 ### fixed — swoop connects from a host that has a VPN up
