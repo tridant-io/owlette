@@ -2009,3 +2009,16 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   the peer binds the interface the os routes to the viewer's first host (then srflx) candidate from the
   offer, logged at info per viewer; an offer with no candidate keeps the session-wide address. Multi-
   interface gathering (7.5) remains the full answer. Owner asked whether a vpn is up on B4A.
+- 2026-09-24 — **3.3.11 on the dev catalog** (sha256 `fa78255d…49d3`, dev `4323d17d`, PR #200; VM 12/0/4 +
+  20/20), both machines updated. Carries #199 (bind toward the viewer's candidate). Next: a B4A session; the
+  host log now says which address it bound per viewer.
+- 2026-09-24 — **sessions connect on 3.3.11 ("working better"); in fullscreen the owner cannot see the cursor.**
+  Root cause: the frames never carry the pointer (desktop duplication leaves it to the adapter, 4.4's
+  `pointer_in_frame: false`), and the browser decoded `cpos`/`cshape` (`protocol.ts`) but nothing consumed
+  them — presence only reads `vpos`. Under pointer lock the browser hides the local css cursor, so nothing
+  was left on screen. `swoop/machine-cursor`: a `cursor` feature (`lib/swoop/cursor.ts`, shape cache by id,
+  lost upload → no shape) and `SwoopCursor.tsx` on the stage: outside lock the machine's shape becomes the
+  stage's css cursor (one pointer, never two); under lock, or for a shape above 32 css px, the shape is
+  overlaid at `cpos` over the picture with the hotspot on the position, plain arrow before a shape lands,
+  hidden when the machine hides it. `useSwoopPictureBox` is the picture-box measure, moved out of presence
+  and shared. Web only; no host change.
