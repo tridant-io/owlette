@@ -281,6 +281,10 @@ Lanes: `Owlette-wt-tri-w4a` and `Owlette-wt-tri-w4b`, both detached at `4a3de0cd
     the restart request through the `ipc/requests` seam (deviation 3; needs the nonce protocol from 3.7 and a tauri
     command — 4.7), relaunch-at-login proof on real boxes, and every macos runtime path (CI compiles and runs unit
     tests only).
+    **Merged as PR #212 (`0648b023`, 2026-09-24 ~19:xx UTC)** after three CI rounds (clippy imports/variants,
+    the macOS temp-dir symlink in the watcher test); all three `rust build` legs green. The PR sat `UNSTABLE`
+    on the external Vercel status only ("Account is blocked", the failover origin answers 402) — dev has no
+    required checks, so merged by hand.
 
 - [ ] **Task 4.3: the POSIX job runner**  **[verbatim: H §15]**
   - Files: `desktop/src-tauri/src/jobrunner.rs` (new), `desktop/src-tauri/src/json_io.rs`, `desktop/src-tauri/src/watchers.rs`, `desktop/src-tauri/src/lib.rs`
