@@ -2033,3 +2033,12 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   through the worker workflow on merge; the B4A room's dead viewers get evicted on the next join.
   Also seen: doorbell ring `rejected` at 03:53/03:54 (a non-4xx from the room) — one-off, ring 200 at
   04:12:27; and something on A4D polling `GET /machines/TEC-A4D` every 20–40 s with 401 since 03:52.
+- 2026-09-24 ~04:4x UTC — **3.3.11 B4A log: every audio frame refused, "Consecutive calls to write() without
+  poll_output() in between", one line per frame for the whole session.** The wording misled #193: str0m
+  packetises ONE queued write per media per `handle_input(Timeout)`, never in `poll_output`, and refuses a
+  per-media queue past 100. `RtcPeer::poll` ran one timeout per call while audio arrived at 100/s, so the
+  queue filled in about a second and stayed full. `swoop/audio-timeout`: each round in `poll` is now a
+  timeout at `now` (packetises the session's video frame and the last audio frame), the outputs, then the
+  next audio frame. Loopback test feeds 5 audio frames per poll over 40 polls: 140/200 written before,
+  200/200 after. Host change → ships in 3.3.12. The black square on the same attempt is a separate stage:
+  ICE + DTLS came up (the host was writing media); waiting on the non-audio lines of that log.
