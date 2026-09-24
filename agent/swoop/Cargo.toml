@@ -142,6 +142,13 @@ crossbeam-channel = "=0.5.17"
 # src/log.rs. No env_logger — the streamer has no console to log to. `std`
 # because `set_boxed_logger` is gated behind it.
 log = { version = "=0.4.34", features = ["std"] }
+# str0m logs its ice checks and dtls state through `tracing`, which the log
+# above never saw: a session that never connects left nothing in the host log
+# between "encoding" and "failed" (2026-09-23). the `log` feature forwards
+# every tracing event to the log facade while no tracing subscriber is set,
+# which is this binary's case for good. already in the tree via str0m; this
+# only turns the feature on.
+tracing = { version = "=0.1.44", default-features = false, features = ["std", "log"] }
 
 # Vendor DLLs (NVENC, and whatever spike 6.7 picks) are loaded by absolute path
 # at runtime, never linked. Exit condition: none — this is how the binary stays
