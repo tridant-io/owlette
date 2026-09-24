@@ -2122,3 +2122,11 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   `session.end('peer_failed')` → the hook's reconnect ladder, which is the only way to get new channels.
   Still unknown: **why** str0m closed stream 6 — need the debug log around the freeze
   (`closed|stream 6|Stream 6|DCEP|wrong state|Getting stream`). Ships in 3.3.13.
+- 2026-09-24 ~21:xx UTC — **#213 merged (`84211ba9`), 3.3.13 cut (#216).** Around it: #214 fixed the desktop
+  watcher burst test that went red on dev's ubuntu leg after #212 (asserts fewer reports than writes, not one
+  report in a window); #215 replaced MinIO in the roost CI rig with `versity/versitygw` + `amazon/aws-cli`
+  after MinIO withdrew its public images and binaries the same day (job green in 52 s). The outbox refusal
+  line now logs when the count moves, not every status tick (B4A's log was one such line every 2 s). Owner's
+  last log paste had no close/stream lines: the flood drowned them. Still wanted: the 80 lines before the
+  first `Drop ChannelData` on B4A. Vercel failover origin is down (account blocked, 402); a Tridant team
+  needs a card in the dashboard before the API will create it (`payment_method_required`).
