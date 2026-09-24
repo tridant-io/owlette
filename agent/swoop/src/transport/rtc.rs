@@ -689,18 +689,21 @@ impl RtcPeer {
         events.extend(self.pending_events.drain(..));
         self.drain_out(events);
 
-        // str0m takes one `write` per `poll_output` round — a second write
-        // before the outputs are drained is refused ("Consecutive calls to
-        // write() without poll_output() in between"), which is what dropped
-        // every audio frame but the first per tick until 2026-09-23. So the
-        // rounds interleave: one audio frame, drain, the next frame, drain,
-        // until the audio queue is empty.
+        // str0m does not packetise on `write`: a write is queued per media
+        // and ONE queued write per media is packetised by each
+        // `handle_input(Timeout)`, never by `poll_output`. A queue past 100
+        // is refused as "Consecutive calls to write() without poll_output()
+        // in between" — the wording is about polling, the rule is about
+        // timeouts. Audio arrives at 100 frames a second and this poll ran
+        // one timeout per call, so the audio queue grew until every write
+        // was refused (B4A, 2026-09-24). So each round here is: a timeout at
+        // `now` to packetise what is queued — the session's video frame and
+        // the last audio frame — then the outputs, then the next audio
+        // frame, until the audio queue is empty.
         let deadline = loop {
-            #[cfg(feature = "audio-opus")]
-            let wrote_audio = self.drain_audio(now);
-            #[cfg(not(feature = "audio-opus"))]
-            let wrote_audio = false;
-
+            self.rtc
+                .handle_input(Input::Timeout(now))
+                .context("handle_input timeout")?;
             let deadline = loop {
                 match self.rtc.poll_output().context("poll_output")? {
                     Output::Timeout(t) => break t,
@@ -723,6 +726,10 @@ impl RtcPeer {
                     Output::Event(e) => self.handle_event(e, events),
                 }
             };
+            #[cfg(feature = "audio-opus")]
+            let wrote_audio = self.drain_audio(now);
+            #[cfg(not(feature = "audio-opus"))]
+            let wrote_audio = false;
             if !wrote_audio {
                 break deadline;
             }
@@ -1625,5 +1632,137 @@ mod tests {
         );
         assert!(stats.datagrams_sent > 0);
         assert!(host.last_rtp_timestamp_90k().is_some());
+    }
+
+    /// Audio arrives faster than the session polls: five 10 ms frames per
+    /// poll here, a ratio the product sees whenever a poll waits on the
+    /// socket. str0m packetises one queued write per media per timeout and
+    /// refuses a queue past 100, so a poll that runs one timeout loses every
+    /// audio frame after the first second (B4A, 2026-09-24). Loopback.
+    #[cfg(feature = "audio-opus")]
+    #[test]
+    fn audio_queued_faster_than_the_poll_rate_is_all_written() {
+        use crate::audio::{AudioPacket, AudioTrack};
+        use str0m::media::Direction;
+
+        let mut host = RtcPeer::bind(PeerConfig {
+            bind_addr: "127.0.0.1:0".parse().expect("a literal address"),
+            codec: Codec::H264,
+            fps: 60,
+            bitrate_bps: 20_000_000,
+            qpc_hz: 10_000_000,
+            enable_bwe: false,
+        })
+        .expect("bind host");
+        let (audio_tx, track) = AudioTrack::channel();
+        host.set_audio_source(track);
+
+        let viewer_socket = UdpSocket::bind("127.0.0.1:0").expect("bind viewer");
+        viewer_socket
+            .set_read_timeout(Some(Duration::from_millis(1)))
+            .expect("read timeout");
+        let viewer_addr = viewer_socket.local_addr().expect("viewer addr");
+
+        let mut exts = ExtensionMap::standard();
+        exts.set(EXT_ID_PLAYOUT_DELAY, Extension::PlayoutDelay);
+        exts.set(EXT_ID_TWCC, Extension::TransportSequenceNumber);
+        let mut viewer = RtcConfig::new()
+            .clear_codecs()
+            .enable_h264(true)
+            .enable_opus(true)
+            .set_extension_map(exts)
+            .build(Instant::now());
+        viewer.add_local_candidate(
+            Candidate::host(viewer_addr, "udp").expect("viewer host candidate"),
+        );
+        let mut api = viewer.sdp_api();
+        api.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
+        api.add_media(MediaKind::Audio, Direction::RecvOnly, None, None, None);
+        let (offer, pending) = api.apply().expect("the offer has changes");
+        let answer = host
+            .accept_offer(&offer.to_sdp_string())
+            .expect("the host answers");
+        viewer
+            .sdp_api()
+            .accept_answer(
+                pending,
+                str0m::change::SdpAnswer::from_sdp_string(&answer).expect("parse answer"),
+            )
+            .expect("the viewer applies the answer");
+
+        const POLLS: u64 = 40;
+        const AUDIO_PER_POLL: u64 = 5;
+        let mut buf = vec![0u8; RECV_BUF_BYTES];
+        let mut ev = events();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut connected = false;
+        let mut polls_with_media = 0u64;
+        while Instant::now() < deadline {
+            host.poll(Instant::now(), Duration::from_millis(1), &mut ev)
+                .expect("host poll");
+            loop {
+                match viewer.poll_output().expect("viewer poll_output") {
+                    Output::Timeout(_) => break,
+                    Output::Transmit(t) => {
+                        viewer_socket
+                            .send_to(&t.contents, t.destination)
+                            .expect("viewer send");
+                    }
+                    Output::Event(Event::Connected) => connected = true,
+                    Output::Event(_) => {}
+                }
+            }
+            if let Ok((n, source)) = viewer_socket.recv_from(&mut buf) {
+                let contents = buf[..n].try_into().expect("a datagram");
+                viewer
+                    .handle_input(Input::Receive(
+                        Instant::now(),
+                        Receive {
+                            proto: Protocol::Udp,
+                            source,
+                            destination: viewer_addr,
+                            contents,
+                        },
+                    ))
+                    .expect("viewer handle_input");
+            } else {
+                viewer
+                    .handle_input(Input::Timeout(Instant::now()))
+                    .expect("viewer timeout");
+            }
+            if polls_with_media == POLLS {
+                break;
+            }
+            if host.state() == PeerState::Connected && connected {
+                // the product's order: the video frame between polls, with
+                // the audio that arrived meanwhile waiting on the track.
+                for i in 0..AUDIO_PER_POLL {
+                    let n = polls_with_media * AUDIO_PER_POLL + i;
+                    audio_tx
+                        .send(AudioPacket { rtp_48k: n * 480, payload: vec![0xfc; 20] })
+                        .expect("queue an audio frame");
+                }
+                host.send(&EncodedFrame {
+                    data: vec![0u8; 4_000],
+                    is_irap: polls_with_media == 0,
+                    codec: Codec::H264,
+                    width: 1920,
+                    height: 1080,
+                    frame_id: polls_with_media,
+                    captured_qpc: (polls_with_media as i64) * 166_667,
+                    encoded_qpc: (polls_with_media as i64) * 166_667,
+                })
+                .expect("write the frame");
+                polls_with_media += 1;
+            }
+        }
+        assert!(connected, "the two peers never completed ICE + DTLS");
+        let stats = host.stats();
+        assert_eq!(stats.frames_written, POLLS);
+        assert_eq!(
+            stats.audio_packets_written,
+            POLLS * AUDIO_PER_POLL,
+            "audio frames were refused once str0m's per-media queue filled"
+        );
     }
 }
