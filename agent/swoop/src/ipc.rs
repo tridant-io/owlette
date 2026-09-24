@@ -225,6 +225,14 @@ pub enum Event {
         sid: String,
         viewer: String,
     },
+    /// The signaling socket closed under a live session and the streamer
+    /// holds no credential to redial with: the service answers with a
+    /// `token` control line, which is the same road a scheduled refresh
+    /// takes. Repeated while the room stays unreachable, never faster than
+    /// the streamer's own ask interval.
+    TokenNeeded {
+        sid: String,
+    },
     /// One row for `POST /api/agent/swoop/events`. The streamer is the only
     /// place most of these can be observed at all, and the service is the only
     /// thing holding a credential to report them with.
@@ -502,6 +510,12 @@ mod tests {
             line,
             "{\"type\":\"host_event\",\"sid\":\"sid_1\",\"kind\":\"join_refused\"}"
         );
+    }
+
+    #[test]
+    fn a_token_needed_carries_the_sid_and_nothing_else() {
+        let line = serde_json::to_string(&Event::TokenNeeded { sid: "sid_1".to_owned() }).expect("serialise");
+        assert_eq!(line, r#"{"type":"token_needed","sid":"sid_1"}"#);
     }
 
     #[test]
