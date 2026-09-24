@@ -18,21 +18,32 @@ export interface PictureBox {
   top: number;
   width: number;
   height: number;
+  /** css pixels per machine pixel: how much the picture is scaled from the machine's own size. */
+  scale: number;
 }
 
 function measure(session: SwoopSession): PictureBox {
   const picture = session.contentRect();
   const stage = session.stage.getBoundingClientRect();
+  // the machine's width is the frame's; before the first frame it is 0 and the
+  // picture is taken as unscaled.
+  const machineWidth = session.video.videoWidth;
   return {
     left: picture.left - stage.left,
     top: picture.top - stage.top,
     width: picture.width,
     height: picture.height,
+    scale: machineWidth > 0 && picture.width > 0 ? picture.width / machineWidth : 1,
   };
 }
 
 const sameBox = (a: PictureBox | null, b: PictureBox): boolean =>
-  a !== null && a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
+  a !== null &&
+  a.left === b.left &&
+  a.top === b.top &&
+  a.width === b.width &&
+  a.height === b.height &&
+  a.scale === b.scale;
 
 /** a normalised coordinate to a pixel along one axis of the box. */
 export const toPixel = (normalised: number, offset: number, size: number): number =>
