@@ -1860,8 +1860,16 @@ mod host {
                 let _ = self.apply(effects);
                 return false;
             }
+            // the address to bind is the one that routes to the VIEWER, read off
+            // the offer's own candidates: with a vpn up, the internet route the
+            // session-wide address came from goes through the tunnel, and a
+            // host candidate on the tunnel is unreachable from the lan (the
+            // on-and-off connects of 2026-09-23). an offer with no candidate
+            // yet keeps the session-wide address.
+            let bind_addr = bind_addr_toward_offer(sdp).unwrap_or(self.bind_addr);
+            ::log::info!("swoop: viewer {viewer} peer binds {bind_addr}");
             let peer = match RtcPeer::bind(PeerConfig {
-                bind_addr: self.bind_addr,
+                bind_addr,
                 codec,
                 fps: TARGET_FPS,
                 bitrate_bps: self.viewers[at].governor.target_bps(),
@@ -3758,6 +3766,56 @@ mod host {
     /// One host candidate, on the interface that would reach the internet. A
     /// udp `connect` sends nothing; it only picks the route. Task 7.4/7.5 adds
     /// server-reflexive and relayed candidates through `add_local_candidate`.
+    /// The address to bind for one viewer: the interface the os routes to
+    /// the viewer's first host candidate (then its first server-reflexive
+    /// one), port 0. None when the offer carries no usable candidate.
+    fn bind_addr_toward_offer(sdp: &str) -> Option<SocketAddr> {
+        offer_candidate_ips(sdp)
+            .into_iter()
+            .find_map(|remote| bind_addr_toward(remote).map(|ip| SocketAddr::new(ip, 0)))
+    }
+
+    /// The IPv4 addresses of an offer's `a=candidate:` lines, host candidates
+    /// first, then server-reflexive, in the offer's own order. An mdns name,
+    /// an ipv6 address or a relay candidate says nothing about which of our
+    /// interfaces faces the viewer, so they are left out.
+    fn offer_candidate_ips(sdp: &str) -> Vec<IpAddr> {
+        let mut host = Vec::new();
+        let mut srflx = Vec::new();
+        for line in sdp.lines() {
+            let line = line.trim_end();
+            let Some(rest) = line.strip_prefix("a=candidate:") else { continue };
+            // foundation component transport priority address port typ <type> ...
+            let fields: Vec<&str> = rest.split_whitespace().collect();
+            if fields.len() < 8 || !fields[2].eq_ignore_ascii_case("udp") || fields[6] != "typ" {
+                continue;
+            }
+            let Ok(ip) = fields[4].parse::<Ipv4Addr>() else { continue };
+            // loopback stays: the same-box session offers it, and toward it
+            // the right interface is loopback.
+            if ip.is_unspecified() {
+                continue;
+            }
+            match fields[7] {
+                "host" => host.push(IpAddr::V4(ip)),
+                "srflx" => srflx.push(IpAddr::V4(ip)),
+                _ => {}
+            }
+        }
+        host.extend(srflx);
+        host
+    }
+
+    /// The local address the os would send from to reach `remote`: a connected
+    /// udp socket's own address, no packet sent. A lan peer resolves to the lan
+    /// interface even while a full-tunnel vpn holds the default route.
+    fn bind_addr_toward(remote: IpAddr) -> Option<IpAddr> {
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+        socket.connect((remote, 9)).ok()?;
+        let ip = socket.local_addr().ok()?.ip();
+        (!ip.is_unspecified()).then_some(ip)
+    }
+
     fn local_bind_addr() -> SocketAddr {
         let found = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
             .and_then(|socket| {
@@ -3789,6 +3847,38 @@ mod host {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        const OFFER_WITH_CANDIDATES: &str = "v=0\r\n\
+            a=candidate:1 1 udp 2122260223 192.168.1.44 51234 typ host generation 0\r\n\
+            a=candidate:2 1 udp 2122194687 100.101.102.103 51235 typ host generation 0\r\n\
+            a=candidate:3 1 udp 1686052607 203.0.113.9 51234 typ srflx raddr 192.168.1.44 rport 51234\r\n\
+            a=candidate:4 1 udp 2122260223 abcd-1234.local 51236 typ host\r\n\
+            a=candidate:5 1 tcp 1518280447 192.168.1.44 9 typ host tcptype active\r\n\
+            a=candidate:6 1 udp 41885439 198.51.100.7 3478 typ relay raddr 203.0.113.9 rport 51234\r\n";
+
+        #[test]
+        fn an_offers_udp_host_candidates_come_first_then_srflx_and_nothing_else() {
+            let ips = offer_candidate_ips(OFFER_WITH_CANDIDATES);
+            assert_eq!(
+                ips,
+                vec![
+                    IpAddr::V4(Ipv4Addr::new(192, 168, 1, 44)),
+                    IpAddr::V4(Ipv4Addr::new(100, 101, 102, 103)),
+                    IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)),
+                ]
+            );
+            assert!(offer_candidate_ips("v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n").is_empty());
+        }
+
+        #[test]
+        fn the_bind_address_is_the_interface_that_routes_to_the_viewer() {
+            // loopback is the one route every box has: toward 127.0.0.1 the os
+            // answers from 127.0.0.1, never from the internet-route interface.
+            assert_eq!(bind_addr_toward(IpAddr::V4(Ipv4Addr::LOCALHOST)), Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+            let offer = "a=candidate:1 1 udp 1 127.0.0.1 5000 typ host\r\n";
+            assert_eq!(bind_addr_toward_offer(offer), Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)));
+            assert_eq!(bind_addr_toward_offer("v=0\r\n"), None);
+        }
 
         /// One tier at the session's own defaults, for the hardware tests that
         /// drive the capture thread without a roster behind them.
