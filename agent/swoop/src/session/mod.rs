@@ -1352,6 +1352,8 @@ mod host {
                 }
             },
             bind_addr: local_bind_addr(),
+            signal_down_since: None,
+            token_asked_at: None,
             idle_since: Some(w.started),
             capture: CaptureGate::open(),
             denials: Denials::default(),
@@ -1414,6 +1416,13 @@ mod host {
         /// For a re-dial with a fresh token (`Control::Token`): the room does
         /// not move, only the credential does.
         signal_url: String,
+        /// When the signaling socket was found closed under a live viewer,
+        /// and when the service was last asked for the token to redial with.
+        /// The media path does not need the room — offers, candidates and
+        /// leases ride the peer's own channels once it is up — so a live
+        /// session outlives its socket and only a viewerless one exits.
+        signal_down_since: Option<Instant>,
+        token_asked_at: Option<Instant>,
         site: String,
         machine: String,
         out: io::Stdout,
@@ -1610,6 +1619,11 @@ mod host {
         /// picture; the room replays their joins, which the client already
         /// knows. A failed dial keeps the old socket — it works until its token
         /// expires, and the service retries the mint before then.
+        /// How often the service is asked again while the room stays
+        /// unreachable: the service's own retry cadence, so one ask per
+        /// attempt it would make anyway.
+        const TOKEN_ASK_INTERVAL: Duration = Duration::from_secs(20);
+
         fn redial(&mut self, host_token: &Secret) {
             let handshake = match Handshake::with_token(
                 &self.signal_url,
@@ -1627,7 +1641,14 @@ mod host {
                 Ok(socket) => {
                     self.socket = socket;
                     self.client.expect_replay(Instant::now() + Self::REPLAY_WINDOW);
-                    ::log::info!("swoop: room re-dialed with a fresh host token");
+                    match self.signal_down_since.take() {
+                        Some(since) => ::log::info!(
+                            "swoop: signaling recovered after {:.0} s without the room",
+                            since.elapsed().as_secs_f64()
+                        ),
+                        None => ::log::info!("swoop: room re-dialed with a fresh host token"),
+                    }
+                    self.token_asked_at = None;
                 }
                 Err(e) => {
                     ::log::warn!("swoop: re-dial with the fresh token failed ({e}); keeping the old socket");
@@ -1682,12 +1703,42 @@ mod host {
                 }
             }
             if !self.socket.is_open() {
+                return self.on_signal_down();
+            }
+            None
+        }
+
+        /// The socket is closed. With no viewer live there is nothing to
+        /// keep alive and the exit is the one it always was; with one, the
+        /// session stays and the service is asked for the token a redial
+        /// needs (owner ruling: a session stays up indefinitely). The lease
+        /// ledger still ends a viewer whose renewals stop, so a room that
+        /// never comes back still costs no more than one session's linger.
+        fn on_signal_down(&mut self) -> Option<(Exit, ExitReason)> {
+            let live = self.viewers.iter().filter(|v| v.peer.is_some()).count();
+            if live == 0 {
                 ::log::error!("swoop: the signaling socket closed");
                 return Some(self.teardown(
                     Exit::SignalingUnreachable,
                     ExitReason::SignalLost,
                     LeftReason::Timeout,
                 ));
+            }
+            let now = Instant::now();
+            if self.signal_down_since.is_none() {
+                ::log::error!(
+                    "swoop: the signaling socket closed with {live} viewer(s) live; keeping the session and asking for a fresh token"
+                );
+                self.signal_down_since = Some(now);
+            }
+            let ask = match self.token_asked_at {
+                None => true,
+                Some(at) => now.duration_since(at) >= Self::TOKEN_ASK_INTERVAL,
+            };
+            if ask {
+                self.token_asked_at = Some(now);
+                let event = Event::TokenNeeded { sid: self.sid.clone() };
+                self.emit(&event);
             }
             None
         }

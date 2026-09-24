@@ -101,6 +101,22 @@ describe('SwoopCursor', () => {
     h.detach();
   });
 
+  it('draws the shape at the picture scale, hotspot included', () => {
+    const h = harness();
+    // a 1000 px wide picture of a 500 px wide machine: everything is 2x.
+    Object.defineProperty(h.session.video, 'videoWidth', { configurable: true, get: () => 500 });
+    render(<SwoopCursor session={h.session} />);
+    h.cursor(shape());
+    h.cursor(cpos(0.5, 0.5));
+    h.lock(true);
+    const drawn = screen.getByTestId('machine-cursor');
+    expect(drawn.style.width).toBe('64px');
+    expect(drawn.style.height).toBe('64px');
+    expect(drawn.style.left).toBe(`${0.5 * 999 - 4 * 2}px`);
+    expect(drawn.style.top).toBe(`${81 + 0.5 * 637 - 6 * 2}px`);
+    h.detach();
+  });
+
   it('draws a plain arrow under pointer lock before a shape has arrived', () => {
     const h = harness();
     render(<SwoopCursor session={h.session} />);

@@ -33,10 +33,15 @@ EVENT_SAS_REQUEST = 'sas_request'
 EVENT_HOST_EVENT = 'host_event'
 EVENT_STATUS = 'status'
 EVENT_EXITING = 'exiting'
+EVENT_TOKEN_NEEDED = 'token_needed'
 KNOWN_EVENTS = frozenset({
     EVENT_READY, EVENT_VIEWER_JOINED, EVENT_VIEWER_LEFT,
     EVENT_SAS_REQUEST, EVENT_HOST_EVENT, EVENT_STATUS, EVENT_EXITING,
+    EVENT_TOKEN_NEEDED,
 })
+# a streamer that lost its room asks for a token every 20 s; one mint per ask
+# is plenty, and this floor keeps a chatty streamer from turning into a mint storm.
+TOKEN_ASK_MIN_INTERVAL_S = 5.0
 
 STATE_IDLE = 'idle'
 STATE_STARTING = 'starting'
@@ -129,6 +134,7 @@ class SwoopManager:
         self._end_logged = True
         self._token_timer = None
         self._token_expires_at = 0.0
+        self._token_minted_at = 0.0
 
         self._backoff_s = 0
         self._retry_after = 0.0
@@ -325,6 +331,19 @@ class SwoopManager:
                 self._token_timer.cancel()
                 self._token_timer = None
 
+    def _on_token_needed(self, sid):
+        """The streamer lost its signaling socket under a live session and
+        wants a fresh token to redial with — the same mint a scheduled
+        refresh does, brought forward. Floored so a streamer asking on every
+        tick cannot drive the bundle route."""
+        with self._lock:
+            live = self._proc is not None and self._sid == sid
+            since = time.monotonic() - self._token_minted_at
+        if not live or since < TOKEN_ASK_MIN_INTERVAL_S:
+            return
+        logger.warning('swoop: streamer asked for a fresh token (sid=%s); minting now', sid)
+        self._submit(('token', sid))
+
     def _do_token(self, sid):
         with self._lock:
             proc = self._proc
@@ -344,6 +363,8 @@ class SwoopManager:
             if not isinstance(token, str) or not token:
                 raise ValueError('bundle carried no hostToken')
             proc.write_line({'type': 'token', 'host_token': token})
+            with self._lock:
+                self._token_minted_at = time.monotonic()
         except Exception as e:
             remaining = expires_at - time.monotonic()
             if remaining > TOKEN_REFRESH_RETRY_S:
@@ -476,6 +497,8 @@ class SwoopManager:
 
         if event_type == EVENT_HOST_EVENT:
             self._queue_host_event(event)
+        elif event_type == EVENT_TOKEN_NEEDED:
+            self._on_token_needed(event.get('sid'))
 
         with self._lock:
             if event_type == EVENT_READY:
