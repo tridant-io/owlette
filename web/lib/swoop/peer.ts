@@ -453,13 +453,15 @@ export class SwoopPeer {
    * renewal keeps the session authorised afterwards — one code path, because
    * the host has one.
    */
-  async presentLease(): Promise<void> {
-    const mint = this.options.leaseToken;
+  async presentLease(token?: string): Promise<void> {
     const channel = this.channels.get('swoop-control');
-    if (!mint || !channel) return;
-    const token = await mint();
-    if (this.closed || channel.readyState !== 'open') return;
-    channel.send(encodeControlMessage({ t: 'lease', token }));
+    if (!channel) return;
+    // a token the renewer just minted is presented as it is; with none given
+    // this mints one, which at connect is the grant's own.
+    const mint = this.options.leaseToken;
+    const presented = token ?? (mint ? await mint() : null);
+    if (presented === null || this.closed || channel.readyState !== 'open') return;
+    channel.send(encodeControlMessage({ t: 'lease', token: presented }));
   }
 
   close(): void {

@@ -2057,3 +2057,11 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   (the replay check moved ahead of it), and `host-ready` re-sends only while the offer is unanswered. Two
   peer tests reproduce it (slow apply + a second copy 2 ms later; host-ready mid-apply), both fail on the
   old code. The 03:04 session's end — "lease lapsed past the grace" at 03:10 — is the next item.
+- 2026-09-24 ~06:3x UTC — **PR #204 (double answer) live on dev; B4A connects ("looks like it worked this
+  time").** Next, the 5 min 30 s drop: the browser's renewer (`lease.ts`) renewed with the api on schedule
+  but never presented the renewed token to the host — `presentLease` ran only when `swoop-control` opened —
+  so the host's ledger lapsed at 5 min and its 30 s grace dropped the viewer (03:04 → 03:10 "lease lapsed
+  past the grace"). `swoop/lease-present` (web only): every renewal is presented down the control channel
+  (`presentLease(token)`); tests in lease.test.ts and peer.test.ts. Owner also reports the fullscreen
+  cursor overlay is too small and vanishes over dark text (an I-beam): scale with the picture and add a
+  contrast halo — next.
