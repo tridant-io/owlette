@@ -2022,3 +2022,14 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   overlaid at `cpos` over the picture with the hotspot on the position, plain arrow before a shape lands,
   hidden when the machine hides it. `useSwoopPictureBox` is the picture-box measure, moved out of presence
   and shared. Web only; no host change.
+- 2026-09-24 ~04:1x UTC — **B4A stuck on "connecting": the signal room refuses every viewer join with 429
+  `room_full`.** Proven with `wrangler tail -e dev`: mint 200, ring 200, host joins, viewer joins 429 ×n;
+  the kill at 04:12:19 returned 200 and the room was still full 8 s later, so the four sockets it counts
+  are dead peers whose close never completes (earlier tabs behind the vpn / frozen sessions). The room
+  counted `getWebSockets('role:viewer')` raw. `swoop/stale-viewers`: a viewer with no frame and no
+  answered keepalive for 90 s (`LIMITS.viewerStaleMs`; browser pings every 25 s) is evicted when the room
+  is full — `departed` flag frees the slot at once, `bye reason=stale` to the host, close `stale`; kill
+  flags viewers too. Test worker runs with `SWOOP_VIEWER_STALE_MS=1500`; two new tests. Deploys to dev
+  through the worker workflow on merge; the B4A room's dead viewers get evicted on the next join.
+  Also seen: doorbell ring `rejected` at 03:53/03:54 (a non-4xx from the room) — one-off, ring 200 at
+  04:12:27; and something on A4D polling `GET /machines/TEC-A4D` every 20–40 s with 401 since 03:52.
