@@ -54,6 +54,7 @@ const RENEW_AFTER_MS = 180_000;
 interface Harness {
   session: SwoopSession;
   renewLease: jest.Mock;
+  presentLease: jest.Mock;
   end: jest.Mock;
 }
 
@@ -64,12 +65,14 @@ function harness(): Harness {
     return { viewerJwt: 'header.payload.signature', expiresAt };
   });
   const end = jest.fn();
+  const presentLease = jest.fn(async () => undefined);
   const session = {
     renewLease,
     leaseExpiresAt: () => expiresAt,
     end,
+    peer: { presentLease },
   } as unknown as SwoopSession;
-  return { session, renewLease, end };
+  return { session, renewLease, presentLease, end };
 }
 
 /** run the timer callback AND let the promise it started settle. */
@@ -96,6 +99,20 @@ describe('lease.ts — the browser renewer', () => {
     expect(renewLease).not.toHaveBeenCalled();
     await advance(1);
     expect(renewLease).toHaveBeenCalledTimes(1);
+    detach();
+  });
+
+  it('presents every renewed token to the host, whose ledger is the one that drops a viewer', async () => {
+    const { session, renewLease, presentLease } = harness();
+    renewLease
+      .mockImplementationOnce(async () => ({ viewerJwt: 'renewed.jwt.1', expiresAt: Date.now() + LEASE_MS }))
+      .mockImplementationOnce(async () => ({ viewerJwt: 'renewed.jwt.2', expiresAt: Date.now() + LEASE_MS }));
+    const detach = attach(session);
+
+    await advance(RENEW_AFTER_MS);
+    expect(presentLease).toHaveBeenCalledWith('renewed.jwt.1');
+    await advance(RENEW_AFTER_MS);
+    expect(presentLease.mock.calls.map((call) => call[0])).toEqual(['renewed.jwt.1', 'renewed.jwt.2']);
     detach();
   });
 

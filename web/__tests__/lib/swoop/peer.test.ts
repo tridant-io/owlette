@@ -418,6 +418,18 @@ describe('swoop peer — offer', () => {
     expect(control.sent.map((frame) => JSON.parse(frame).token)).toEqual(['viewer.jwt.1', 'viewer.jwt.2']);
   });
 
+  it('presents a token the renewer hands it as it is, without minting another', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+    const control = h.state.channels.find((c) => c.label === 'swoop-control')!;
+
+    control.onopen?.();
+    await settlePeer();
+    await h.peer.presentLease('renewed.jwt');
+
+    expect(control.sent.map((frame) => JSON.parse(frame).token)).toEqual(['viewer.jwt.1', 'renewed.jwt']);
+  });
+
   it('ignores a host-ready for another session', async () => {
     const h = peerHarness();
     await h.peer.start();

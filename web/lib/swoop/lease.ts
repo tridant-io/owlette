@@ -80,6 +80,11 @@ export function attach(session: SwoopSession): SwoopDetach {
     if (stopped) return;
     try {
       const lease = await session.renewLease();
+      // the api's answer is half of a renewal: the host keeps its own ledger
+      // and drops a viewer whose lease lapses past its grace, so the token is
+      // presented down the control channel too. left out, every session
+      // ended at 5 min 30 s however often the api was asked (b4a, 2026-09-24).
+      await session.peer.presentLease(lease.viewerJwt);
       arm(delayFor(lease.expiresAt, Date.now()));
     } catch (err) {
       if (stopped) return;
