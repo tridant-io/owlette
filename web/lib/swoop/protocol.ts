@@ -772,7 +772,17 @@ export const encodeInputMessage = (message: InputMessage): string => JSON.string
 
 export type CursorMessage =
   | { t: 'cpos'; x: number; y: number; visible: boolean; tsUs: number }
-  | { t: 'cshape'; id: number; hotX?: number; hotY?: number; w?: number; h?: number; png?: string };
+  | {
+      t: 'cshape';
+      id: number;
+      hotX?: number;
+      hotY?: number;
+      w?: number;
+      h?: number;
+      /** machine pixels per png pixel; the host sends it only when above 1. */
+      scale?: number;
+      png?: string;
+    };
 
 export function decodeCursorMessage(raw: unknown): SwoopResult<CursorMessage> {
   const parsed = parseJsonObject(raw);
@@ -806,7 +816,13 @@ export function decodeCursorMessage(raw: unknown): SwoopResult<CursorMessage> {
     if (hotX === undefined || hotY === undefined || w === undefined || h === undefined || png === undefined) {
       return reject('malformed_message', 'cshape upload');
     }
-    return accept({ t: 'cshape', id, hotX, hotY, w, h, png });
+    // the host shrinks a shape past the css ceiling for the wire and says by
+    // how much; absent means as captured, and stays absent so the decoded
+    // message is the wire message.
+    if (!('scale' in o)) return accept({ t: 'cshape', id, hotX, hotY, w, h, png });
+    const scale = int(o, 'scale');
+    if (scale === undefined || scale < 1) return reject('malformed_message', 'cshape scale');
+    return accept({ t: 'cshape', id, hotX, hotY, w, h, scale, png });
   }
   return reject('unknown_type', 'cursor');
 }

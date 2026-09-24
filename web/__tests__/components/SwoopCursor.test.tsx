@@ -61,7 +61,8 @@ function harness(): Harness {
 }
 
 const cpos = (x: number, y: number, visible = true) => JSON.stringify({ t: 'cpos', x, y, visible, tsUs: 1 });
-const shape = (w = 32, h = 32) => JSON.stringify({ t: 'cshape', id: 1, hotX: 4, hotY: 6, w, h, png: PNG });
+const shape = (w = 32, h = 32, scale?: number) =>
+  JSON.stringify({ t: 'cshape', id: 1, hotX: 4, hotY: 6, w, h, ...(scale === undefined ? {} : { scale }), png: PNG });
 
 afterEach(() => {
   cleanup();
@@ -128,6 +129,46 @@ describe('SwoopCursor', () => {
     h.detach();
   });
 
+  it('hides the css cursor while the machine paints its own pointer into the picture', () => {
+    const h = harness();
+    render(<SwoopCursor session={h.session} />);
+    h.cursor(shape());
+    h.cursor(cpos(0.5, 0.5, false));
+    // a title-bar drag: windows draws the pointer into the frame, so the
+    // local arrow on top of it would be a second cursor.
+    expect(h.stage.style.cursor).toBe('none');
+    h.cursor(cpos(0.5, 0.5, true));
+    expect(h.stage.style.cursor).toBe(`url(data:image/png;base64,${PNG}) 4 6, auto`);
+    h.detach();
+  });
+
+  it('hides the local pointer under a windowed overlay', () => {
+    const h = harness();
+    render(<SwoopCursor session={h.session} />);
+    h.cursor(shape(64, 64));
+    h.cursor(cpos(0.5, 0.5));
+    expect(screen.getByTestId('machine-cursor')).toBeInTheDocument();
+    expect(h.stage.style.cursor).toBe('none');
+    h.detach();
+  });
+
+  it('draws a shape the host shrank for the wire at its true size, as an overlay', () => {
+    const h = harness();
+    // a 1000 px wide picture of a 1000 px wide machine: the picture is 1x.
+    Object.defineProperty(h.session.video, 'videoWidth', { configurable: true, get: () => 1000 });
+    render(<SwoopCursor session={h.session} />);
+    // a 64 px pointer sent as 32 png pixels at scale 2.
+    h.cursor(shape(32, 32, 2));
+    h.cursor(cpos(0.5, 0.5));
+    const drawn = screen.getByTestId('machine-cursor');
+    expect(drawn.style.width).toBe('64px');
+    expect(drawn.style.height).toBe('64px');
+    expect(drawn.style.left).toBe(`${0.5 * 999 - 4 * 2}px`);
+    expect(drawn.style.top).toBe(`${81 + 0.5 * 637 - 6 * 2}px`);
+    expect(h.stage.style.cursor).toBe('none');
+    h.detach();
+  });
+
   it('hides the overlay when the machine hides its pointer', () => {
     const h = harness();
     render(<SwoopCursor session={h.session} />);
@@ -144,7 +185,8 @@ describe('SwoopCursor', () => {
     render(<SwoopCursor session={h.session} />);
     h.cursor(shape(64, 64));
     h.cursor(cpos(0.5, 0.5));
-    expect(h.stage.style.cursor).toBe('');
+    // the overlay is the pointer, so the local one goes.
+    expect(h.stage.style.cursor).toBe('none');
     expect(screen.getByTestId('machine-cursor')).toBeInTheDocument();
     h.detach();
   });

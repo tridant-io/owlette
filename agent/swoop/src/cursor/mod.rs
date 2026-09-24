@@ -179,6 +179,12 @@ pub struct CursorImage {
     pub height: u32,
     pub hot_x: u32,
     pub hot_y: u32,
+    /// Machine pixels per image pixel: 1 for a shape as captured, the factor
+    /// after [`fit_for_css`] shrank it for the wire. The viewer draws the
+    /// shape at `width * scale` machine pixels — without this a 64 px pointer
+    /// (pointer size 2, or 200% scaling) went over as 32 px and was drawn at
+    /// half its size (B4A, 2026-09-24).
+    pub scale: u32,
     pub rgba: Vec<u8>,
 }
 
@@ -329,6 +335,7 @@ pub fn decode(info: &ShapeInfo, buf: &[u8]) -> Result<CursorImage, CursorError> 
         width: info.width,
         height,
         hot_x: info.hot_x,
+        scale: 1,
         hot_y: info.hot_y,
         rgba,
     })
@@ -357,6 +364,44 @@ pub fn fit_for_css(image: CursorImage, dpi: u32) -> CursorImage {
         return image;
     }
     downscale(&image, factor)
+}
+
+#[cfg(test)]
+mod true_size_tests {
+    use super::*;
+
+    fn captured(side: u32) -> CursorImage {
+        CursorImage {
+            width: side,
+            height: side,
+            hot_x: 10,
+            hot_y: 12,
+            scale: 1,
+            rgba: vec![0xff; (side * side * 4) as usize],
+        }
+    }
+
+    #[test]
+    fn a_shape_that_fits_keeps_scale_one() {
+        let fitted = fit_for_css(captured(32), DEFAULT_DPI);
+        assert_eq!((fitted.width, fitted.scale), (32, 1));
+    }
+
+    #[test]
+    fn a_downscaled_shape_remembers_its_true_size() {
+        // pointer size 2 at 100%: 64 machine pixels that must still be drawn as 64.
+        let fitted = fit_for_css(captured(64), DEFAULT_DPI);
+        assert_eq!((fitted.width, fitted.height, fitted.scale), (32, 32, 2));
+        assert_eq!((fitted.hot_x, fitted.hot_y), (5, 6), "the hotspot moves with the pixels");
+    }
+
+    #[test]
+    fn a_hidpi_shape_is_not_shrunk_and_says_nothing() {
+        // 200% scaling delivers 64 pixels for a 32 css px pointer: the css
+        // ceiling is met as is, so the wire carries it whole at scale 1.
+        let fitted = fit_for_css(captured(64), DEFAULT_DPI * 2);
+        assert_eq!((fitted.width, fitted.scale), (64, 1));
+    }
 }
 
 /// Box filter by an integer factor, averaging in premultiplied alpha so a
@@ -394,6 +439,7 @@ fn downscale(src: &CursorImage, factor: u32) -> CursorImage {
         height,
         hot_x: src.hot_x / factor,
         hot_y: src.hot_y / factor,
+        scale: src.scale * factor,
         rgba,
     }
 }
@@ -423,6 +469,7 @@ impl CachedShape {
             hot_y: Some(self.image.hot_y as u16),
             w: Some(self.image.width as u16),
             h: Some(self.image.height as u16),
+            scale: (self.image.scale > 1).then_some(self.image.scale as u16),
             png: Some(self.png.clone()),
         }
     }
@@ -474,6 +521,7 @@ impl CursorTracker {
                 hot_y: None,
                 w: None,
                 h: None,
+                scale: None,
                 png: None,
             }));
         }
@@ -877,6 +925,7 @@ mod tests {
             height,
             hot_x: hot.0,
             hot_y: hot.1,
+            scale: 1,
             rgba: vec![255; (width * height * 4) as usize],
         }
     }
@@ -1058,6 +1107,7 @@ mod tests {
                 hot_y: None,
                 w: None,
                 h: None,
+                scale: None,
                 png: None,
             }))
         );
@@ -1126,6 +1176,7 @@ mod tests {
             height: 2,
             hot_x: 0,
             hot_y: 0,
+            scale: 1,
             rgba: expect(&["rw", ".b"]),
         };
         let png = encode_png(&image);
