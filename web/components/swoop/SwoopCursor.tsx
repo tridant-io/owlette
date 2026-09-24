@@ -19,6 +19,12 @@
  * a shape above 32 css px is overlaid in both cases: browsers silently ignore
  * large css cursors (PROTOCOL.md §5). the host downscales to 32, so that is
  * the guard, not the path.
+ *
+ * the overlay is drawn at the picture's scale, so a cursor on a 1080p machine
+ * shown on a 4k display is as big as everything else on it, and with a thin
+ * halo in both black and white: the host draws a monochrome cursor's "invert
+ * the screen" pixels as black, which is the i-beam, and over dark text that
+ * is nothing at all. the halo colours are the remote image's, not the theme's.
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
@@ -86,6 +92,7 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
 
   const left = toPixel(state.x, box.left, box.width);
   const top = toPixel(state.y, box.top, box.height);
+  const scale = box.scale;
   if (state.shape) {
     return (
       // eslint-disable-next-line @next/next/no-img-element -- a data url the host just sent, never optimised
@@ -94,10 +101,13 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
         aria-hidden
         data-testid="machine-cursor"
         src={pngUrl(state.shape)}
-        width={state.shape.w}
-        height={state.shape.h}
-        className="pointer-events-none absolute max-w-none select-none"
-        style={{ left: left - state.shape.hotX, top: top - state.shape.hotY }}
+        className="pointer-events-none absolute max-w-none select-none [image-rendering:pixelated] [filter:drop-shadow(0_0_1px_white)_drop-shadow(0_0_1px_black)]"
+        style={{
+          left: left - state.shape.hotX * scale,
+          top: top - state.shape.hotY * scale,
+          width: state.shape.w * scale,
+          height: state.shape.h * scale,
+        }}
       />
     );
   }
@@ -106,8 +116,8 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
     <MousePointer2
       aria-hidden
       data-testid="machine-cursor"
-      className="pointer-events-none absolute size-4 fill-background text-foreground"
-      style={{ left, top }}
+      className="pointer-events-none absolute fill-background text-foreground"
+      style={{ left, top, width: 16 * scale, height: 16 * scale }}
     />
   );
 }
