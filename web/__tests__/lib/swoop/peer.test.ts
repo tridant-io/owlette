@@ -811,7 +811,7 @@ describe('swoop peer — restart triggers', () => {
     expect(h.state.restarts).toBe(0);
   });
 
-  it('restarts on failed at once, and gives up on the second one', async () => {
+  it('restarts on failed at once, and keeps restarting up a ladder rather than giving up', async () => {
     jest.useFakeTimers();
     const h = await live();
     const pc = h.peer.connection as unknown as FakePeerConnection;
@@ -821,12 +821,29 @@ describe('swoop peer — restart triggers', () => {
     expect(h.state.restarts).toBe(1);
     expect(h.errors).toEqual([]);
 
-    // a second failure with no connection in between is a path that is gone.
+    // the restart is answered and fails again: the second restart waits its
+    // rung (≤ 1 s), the third ≤ 2 s, and none of them ends the session.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+      mac: HOST_MAC,
+    });
     pc.iceState('failed');
-    await jest.advanceTimersByTimeAsync(0);
-    expect(h.state.restarts).toBe(1);
-    expect(h.errors).toEqual(['ice_failed']);
-    expect(h.state.closed).toBe(1);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(h.state.restarts).toBe(2);
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'third'),
+      mac: HOST_MAC,
+    });
+    pc.iceState('failed');
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(h.state.restarts).toBe(3);
+    expect(h.peer.restartAttempts()).toBe(3);
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
   });
 
   it('earns a fresh restart once the link came back in between', async () => {

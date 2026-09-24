@@ -65,6 +65,7 @@
  * write it.
  */
 
+import { backoffDelayMs } from '@/lib/swoop/backoff';
 import {
   PLAYOUT_DELAY_URI,
   PLAYOUT_DELAY_MAX_MS,
@@ -90,6 +91,9 @@ export const RELAY_PROBE_MS = 3000;
  * kills media at 30 s, so this is deliberately early.
  */
 export const DISCONNECTED_GRACE_MS = 2000;
+/** the restart ladder: the second restart 1 s after a failure, then doubling to the cap. */
+export const RESTART_BASE_MS = 1000;
+export const RESTART_CAP_MS = 15000;
 
 export interface PlayoutDelay {
   minMs: number;
@@ -109,8 +113,7 @@ export type SwoopPeerError =
   | 'host_mac_mismatch'
   | 'host_fingerprint_missing'
   | 'playout_delay_not_negotiated'
-  | 'answer_not_applied'
-  | 'ice_failed';
+  | 'answer_not_applied';
 
 export interface SwoopIdentity {
   certificate: RTCCertificate;
@@ -313,7 +316,9 @@ export class SwoopPeer {
   private promotionUsed = false;
   private browserRelayAdded = false;
   /** spent on the restart for one down-link episode; cleared on reconnect. */
-  private recoveryUsed = false;
+  /** ice restarts since the link was last up: the rung of the restart ladder. */
+  private restartAttempt = 0;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
   /** the host trickled a `typ relay` candidate: it holds an allocation. */
   private hostRelay = false;
   private closed = false;
@@ -689,8 +694,9 @@ export class SwoopPeer {
       case 'connected':
       case 'completed':
         this.clearLinkTimer();
-        // a new episode earns its own restart.
-        this.recoveryUsed = false;
+        this.clearRestartTimer();
+        // the link is up; the next episode starts its ladder from the bottom.
+        this.restartAttempt = 0;
         return;
       case 'disconnected':
         if (this.linkTimer !== null) return;
@@ -708,15 +714,34 @@ export class SwoopPeer {
     }
   }
 
-  private async recover(from: 'disconnected' | 'failed'): Promise<void> {
-    if (this.closed) return;
-    if (this.recoveryUsed) {
-      // a second failure with no connection in between is a path that is gone,
-      // not one that is flapping.
-      if (from === 'failed') this.abort('ice_failed');
+  /**
+   * a link that failed is restarted, and restarted again: the first time at
+   * once, then up a ladder to `RESTART_CAP_MS`, for as long as the peer is
+   * open. a path that is gone for good ends the session elsewhere — the host
+   * drops a viewer whose lease lapses and says so — and until then every
+   * restart is a chance the network comes back (owner ruling: a session
+   * stays up indefinitely).
+   */
+  private async recover(_from: 'disconnected' | 'failed'): Promise<void> {
+    if (this.closed || this.restartTimer !== null) return;
+    this.restartAttempt += 1;
+    // the first restart of an episode goes out at once; the ones after it
+    // wait their rung.
+    if (this.restartAttempt === 1) {
+      await this.restart();
       return;
     }
-    this.recoveryUsed = await this.restart();
+    const delay = backoffDelayMs(this.restartAttempt - 1, { baseMs: RESTART_BASE_MS, capMs: RESTART_CAP_MS });
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      void this.restart();
+    }, delay);
+  }
+
+  private clearRestartTimer(): void {
+    if (this.restartTimer === null) return;
+    clearTimeout(this.restartTimer);
+    this.restartTimer = null;
   }
 
   /** true when a restart offer went out; false when one was already in flight. */
@@ -735,6 +760,11 @@ export class SwoopPeer {
     if (this.linkTimer === null) return;
     clearTimeout(this.linkTimer);
     this.linkTimer = null;
+  }
+
+  /** the restart ladder's rung, for the overlay and the tests. */
+  restartAttempts(): number {
+    return this.restartAttempt;
   }
 
   private abort(code: SwoopPeerError): void {

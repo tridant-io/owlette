@@ -43,6 +43,7 @@ import {
 import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
 import { SwoopLeaseRefused } from '@/lib/swoop/lease';
 import { createSwoopIdentity, createSwoopPeer, type SwoopPeer } from '@/lib/swoop/peer';
+import { backoffDelayMs, isTransientEnd } from '@/lib/swoop/backoff';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import {
   base64UrlDecode,
@@ -69,6 +70,10 @@ import {
 import type { SwoopStepUpProof } from '@/lib/swoop/stepUp';
 
 /** how far the page has got. `ended` and `error` are both terminal. */
+/** the reconnect ladder: 2 s, 4 s, … 30 s between sessions, reset after one held for `RETRY_RESET_MS`. */
+const RETRY_LADDER = { baseMs: 2000, capMs: 30000 };
+const RETRY_RESET_MS = 30000;
+
 export type SwoopSessionState =
   | 'idle'
   | 'authorizing'
@@ -123,6 +128,12 @@ export interface UseSwoopSession {
   end: () => void;
   /** a fresh session to the same machine, from the ended or failed state. */
   reconnect: () => void;
+  /**
+   * seconds until the next automatic reconnect, or null when none is due: a
+   * session that ended for a reason that was not a decision is started
+   * again on a ladder, and the operator can reconnect now instead.
+   */
+  retryIn: number | null;
 }
 
 interface SessionGrant {
@@ -220,6 +231,13 @@ export function useSwoopSession(
   const [session, setSession] = useState<SwoopSession | null>(null);
   // bumping this is what re-runs the sequence after a step-up ceremony.
   const [attempt, setAttempt] = useState(0);
+  // the automatic reconnect: when it is due, and which rung of the ladder it
+  // is on. the rung resets once a session has held for `RETRY_RESET_MS`.
+  const [retryAt, setRetryAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const retryIn = retryAt === null ? null : Math.max(0, Math.ceil((retryAt - now) / 1000));
+  const retryAttemptRef = useRef(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // the proof is held in a ref, never in state: state lands in a devtools
   // snapshot and a live second-factor proof has no business being there.
@@ -247,18 +265,63 @@ export function useSwoopSession(
    * starts a new one; the step-up proof is not reused (a new session is a new
    * ceremony if the window has closed).
    */
+  const clearRetry = useCallback(() => {
+    if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
+    setRetryAt(null);
+  }, []);
+
   const reconnect = useCallback(() => {
+    clearRetry();
     stoppedRef.current = false;
     proofRef.current = null;
     setError(null);
     setStepUpRequired(false);
     setState('connecting');
     setAttempt((n) => n + 1);
-  }, []);
+  }, [clearRetry]);
+
+  /**
+   * the end of a session that was not a decision — a lost path, a host that
+   * went away, a room that closed — is the start of the next one, after a
+   * delay that grows with each attempt. an operator who ended it, an admin
+   * who killed it, and an api that refused it are decisions, and stop here.
+   */
+  const scheduleReconnect = useCallback(() => {
+    if (stoppedRef.current || retryTimerRef.current !== null) return;
+    retryAttemptRef.current += 1;
+    const delay = backoffDelayMs(retryAttemptRef.current, RETRY_LADDER);
+    setNow(Date.now());
+    setRetryAt(Date.now() + delay);
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null;
+      setRetryAt(null);
+      reconnect();
+    }, delay);
+  }, [reconnect]);
 
   const end = useCallback(() => {
+    clearRetry();
     endRef.current('closed');
-  }, []);
+  }, [clearRetry]);
+
+  // the countdown the page shows, once a second.
+  useEffect(() => {
+    if (retryAt === null) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [retryAt]);
+
+  // a session that held for a while starts the next ladder from the bottom.
+  useEffect(() => {
+    if (state !== 'connected') return;
+    const timer = setTimeout(() => {
+      retryAttemptRef.current = 0;
+    }, RETRY_RESET_MS);
+    return () => clearTimeout(timer);
+  }, [state]);
+
+  useEffect(() => clearRetry, [clearRetry]);
 
   useEffect(() => {
     if (!siteId || !machineId) return;
@@ -283,10 +346,14 @@ export function useSwoopSession(
     const frameHandlers = new Set<(observation: FrameObservation) => void>();
     const channelHandlers = new Map<SwoopChannel, Set<(data: unknown) => void>>();
 
-    const fail = (message: string) => {
+    // `transient` is the difference between a path that may come back and a
+    // decision: the first schedules the next session, the second waits for
+    // the operator.
+    const fail = (message: string, transient: boolean) => {
       if (disposed) return;
       setError(message);
       setState('error');
+      if (transient) scheduleReconnect();
     };
 
     const sendOnChannel = (label: SwoopChannel, data: string): boolean => {
@@ -328,9 +395,11 @@ export function useSwoopSession(
     };
 
     endRef.current = (reason: string) => {
-      stoppedRef.current = true;
+      const transient = isTransientEnd(reason);
+      stoppedRef.current = !transient;
       teardown(reason);
       setState('ended');
+      if (transient) scheduleReconnect();
     };
 
     const renewLease = async (fp: string): Promise<SwoopLease> => {
@@ -400,7 +469,8 @@ export function useSwoopSession(
           }
           return null;
         }
-        fail(await problemDetail(res, 'this swoop session could not be started.'));
+        // a 5xx or a 429 is the api having a bad moment; a 4xx is its answer.
+        fail(await problemDetail(res, 'this swoop session could not be started.'), res.status >= 500 || res.status === 429);
         return null;
       }
       const body = (await res.json()) as { data: SessionGrant };
@@ -426,7 +496,7 @@ export function useSwoopSession(
 
       const viewerKey = base64UrlDecode(grant.k);
       if (!viewerKey) {
-        fail('the session key the server sent could not be read.');
+        fail('the session key the server sent could not be read.', false);
         return;
       }
 
@@ -456,12 +526,9 @@ export function useSwoopSession(
         },
         onFatal: (code: SwoopSignalFatal) => {
           if (code === 'version_mismatch') {
-            fail('this machine runs a swoop version this page cannot talk to.');
-          } else if (code === 'mint_failed') {
-            fail('this session is no longer authorised.');
+            fail('this machine runs a swoop version this page cannot talk to.', false);
           } else {
-            // close 1006 carries no reason, so neither does this sentence.
-            fail('the signalling connection closed without a reason. try again.');
+            fail('this session is no longer authorised.', false);
           }
         },
       };
@@ -473,7 +540,7 @@ export function useSwoopSession(
         // operator typed, so a url the constructor refuses is a server fault
         // they cannot retry their way out of — say so, and never echo the url
         // or the protocol back at them.
-        fail('swoop is misconfigured on this deployment: the signalling address is not a secure websocket address. an administrator has to fix it.');
+        fail('swoop is misconfigured on this deployment: the signalling address is not a secure websocket address. an administrator has to fix it.', false);
         return;
       }
 
@@ -512,11 +579,11 @@ export function useSwoopSession(
         },
         onError: (code) => {
           if (code === 'host_mac_mismatch' || code === 'host_fingerprint_missing') {
-            fail('this machine could not prove it is the one you asked for; the session was refused.');
+            fail('this machine could not prove it is the one you asked for; the session was refused.', false);
           } else if (code === 'playout_delay_not_negotiated') {
-            fail('this machine did not agree the low-latency terms swoop requires.');
+            fail('this machine did not agree the low-latency terms swoop requires.', false);
           } else {
-            fail('the connection to this machine failed.');
+            fail('the connection to this machine failed.', true);
           }
         },
         onClosed: (reason) => {
@@ -525,7 +592,10 @@ export function useSwoopSession(
             setError('this session was ended from elsewhere.');
             setState('ended');
           } else if (reason !== 'closed') {
+            // the host went away without a decision: a service restart, a
+            // streamer that exited. the next session finds it back.
             setState('ended');
+            scheduleReconnect();
           }
         },
       });
@@ -587,16 +657,16 @@ export function useSwoopSession(
     };
 
     void run().catch((err: unknown) => {
-      fail(err instanceof Error ? err.message : 'this swoop session could not be started.');
+      fail(err instanceof Error ? err.message : 'this swoop session could not be started.', true);
     });
 
     return () => teardown('unmounted');
-  }, [siteId, machineId, control, attempt]);
+  }, [siteId, machineId, control, attempt, scheduleReconnect]);
 
   const stepUp = useMemo<SwoopStepUpControls>(
     () => ({ required: stepUpRequired, enrolled, submitProof, cancel }),
     [stepUpRequired, enrolled, submitProof, cancel],
   );
 
-  return { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect };
+  return { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn };
 }

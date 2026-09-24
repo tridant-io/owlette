@@ -2065,3 +2065,16 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   (`presentLease(token)`); tests in lease.test.ts and peer.test.ts. Owner also reports the fullscreen
   cursor overlay is too small and vanishes over dark text (an I-beam): scale with the picture and add a
   contrast halo — next.
+- 2026-09-24 ~07:xx UTC — **owner ruling (going to bed): "sessions should stay active on swoop indefinitely, at
+  all costs"; keep auditing/fixing/testing unattended; tri-platform and swoop both priorities; playwright
+  multi-user.** `swoop/session-resilience` (web only): (1) `signaling.ts` ladder has no top — redials
+  forever, capped 15 s with jitter; `exhausted` fatal removed; (2) `peer.ts` ice restarts walk a ladder
+  (`RESTART_BASE_MS` 1 s → `RESTART_CAP_MS` 15 s) instead of aborting on the second failure; `ice_failed`
+  error removed; reset when the link is up; (3) the hook starts a new session after an end that was not a
+  decision (`lib/swoop/backoff.ts`: `isTransientEnd` table — lease lost, host gone, signal lost, peer
+  failed, start failed/5xx) on a 2 s → 30 s ladder that resets after 30 s connected; decisions (operator
+  end, kill, lease refused incl. the 12 h cap, mint refused, host proof failed) stop as before; the page
+  says "reconnecting in N s…" beside the error and the reconnect button reconnects now; `lease.ts` ends with
+  `lease_refused` vs `lease_expired`. Playwright: yamon blocks parallel subagents this week (82 % budget),
+  so everything runs inline. Real B4A/MBA sessions cannot be driven by playwright (api keys are refused on
+  the mint route by design; step-up is a passkey ceremony), so multi-user coverage will be emulator e2e.

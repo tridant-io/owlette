@@ -142,7 +142,7 @@ describe('lease.ts — the browser renewer', () => {
     attach(session);
 
     await advance(RENEW_AFTER_MS);
-    expect(end).toHaveBeenCalledWith('lease_expired');
+    expect(end).toHaveBeenCalledWith('lease_refused');
     expect(toastError).toHaveBeenCalledWith('you do not have permission to do this.');
 
     // terminal: nothing is armed behind it.
@@ -157,7 +157,7 @@ describe('lease.ts — the browser renewer', () => {
     attach(session);
 
     await advance(RENEW_AFTER_MS);
-    expect(end).toHaveBeenCalledWith('lease_expired');
+    expect(end).toHaveBeenCalledWith('lease_refused');
   });
 
   it('hard-stops at the 12 hour cap, in the api’s own words', async () => {
@@ -169,7 +169,7 @@ describe('lease.ts — the browser renewer', () => {
 
     await advance(RENEW_AFTER_MS);
     expect(toastError).toHaveBeenCalledWith('this session reached its 12 hour limit.');
-    expect(end).toHaveBeenCalledWith('lease_expired');
+    expect(end).toHaveBeenCalledWith('lease_refused');
   });
 
   it('retries a failure that is not a refusal, then gives up once the host’s grace is gone', async () => {

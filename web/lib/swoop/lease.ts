@@ -68,12 +68,14 @@ export function attach(session: SwoopSession): SwoopDetach {
     }, ms);
   };
 
-  const stop = (message: string) => {
+  // a refusal is a decision and ends the session for good; a lease lost to a
+  // dropped path is an end the hook starts over from.
+  const stop = (message: string, reason: 'lease_refused' | 'lease_expired') => {
     stopped = true;
     if (timer !== null) clearTimeout(timer);
     timer = null;
     toast.error(message);
-    session.end('lease_expired');
+    session.end(reason);
   };
 
   const renew = async () => {
@@ -91,13 +93,13 @@ export function attach(session: SwoopSession): SwoopDetach {
       if (err instanceof SwoopLeaseRefused) {
         // the 12 h cap arrives here too, as `session_cap_reached`: a hard stop
         // the api states in its own sentence, which is the one to show.
-        stop(err.message);
+        stop(err.message, 'lease_refused');
         return;
       }
       // past the grace the host has already dropped us, so a retry would only
       // renew a lease for a session that no longer exists.
       if (Date.now() + RETRY_DELAY_MS >= session.leaseExpiresAt() + GRACE_MS) {
-        stop('this session lost its lease and ended.');
+        stop('this session lost its lease and ended.', 'lease_expired');
         return;
       }
       arm(RETRY_DELAY_MS);
