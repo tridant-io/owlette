@@ -5,7 +5,7 @@ name = "owlette-swoop"
 # dependency table. The agent refuses to spawn a streamer whose version differs
 # from its own (plan.md D2), and build.rs stamps this into the exe's
 # VERSIONINFO, so a stale number here strands the feature on the machine.
-version = "3.3.11"
+version = "3.3.12"
 description = "owlette swoop remote-desktop streamer"
 authors = ["Tridant Inc."]
 license = "FSL-1.1-Apache-2.0"
