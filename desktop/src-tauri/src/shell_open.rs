@@ -1,8 +1,10 @@
-//! Handing a path or a URL to the Windows shell.
+//! Handing a path or a URL to the desktop's own opener.
 //!
-//! `ShellExecuteW` directly rather than a plugin: it is the API under
-//! `os.startfile` / `webbrowser.open` (what the legacy GUI's config/logs/docs
-//! items used) and is already how this crate elevates a service command.
+//! On Windows that is `ShellExecuteW` directly rather than a plugin: it is
+//! the API under `os.startfile` / `webbrowser.open` (what the legacy GUI's
+//! config/logs/docs items used) and is already how this crate elevates a
+//! service command. On macOS it is `open`, on Linux `xdg-open` — the same
+//! ternary the cli's `auth` command uses (tri-platform task 4.1).
 //!
 //! Two rules make this safe over IPC:
 //!
@@ -14,17 +16,22 @@
 
 use std::path::Path;
 
+#[cfg(windows)]
 use windows::core::{w, HSTRING, PCWSTR};
+#[cfg(windows)]
 use windows::Win32::UI::Shell::ShellExecuteW;
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 use crate::paths;
 
 /// `ShellExecuteW` returns an HINSTANCE; anything above 32 means it launched.
+#[cfg(windows)]
 const SHELL_EXECUTE_SUCCESS_FLOOR: isize = 32;
 
 /// `SE_ERR_NOASSOC` — no handler for this file type. Common on bare Windows
 /// Server, where `.json` has none.
+#[cfg(windows)]
 const SE_ERR_NOASSOC: isize = 31;
 
 /// Schemes a frontend link may use.
@@ -43,6 +50,7 @@ pub fn open_in_tree(requested: &str) -> Result<(), String> {
   open_resolved(&resolved)
 }
 
+#[cfg(windows)]
 fn open_resolved(path: &Path) -> Result<(), String> {
   match execute(w!("open"), &HSTRING::from(path.as_os_str()), PCWSTR::null()) {
     Ok(()) => Ok(()),
@@ -54,7 +62,28 @@ fn open_resolved(path: &Path) -> Result<(), String> {
   }
 }
 
+#[cfg(not(windows))]
+fn open_resolved(path: &Path) -> Result<(), String> {
+  launch(path.as_os_str())
+}
+
+/// The desktop's opener, handed one argument: `open` on macOS, `xdg-open`
+/// elsewhere. Spawned and not waited on, like the shell verb it replaces.
+#[cfg(not(windows))]
+fn launch(target: &std::ffi::OsStr) -> Result<(), String> {
+  let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+  std::process::Command::new(opener)
+    .arg(target)
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null())
+    .spawn()
+    .map(|_| ())
+    .map_err(|e| format!("{opener} could not open {}: {e}", target.to_string_lossy()))
+}
+
 /// Last resort for a file type Windows has no handler for.
+#[cfg(windows)]
 fn open_in_notepad(path: &Path) -> Result<(), String> {
   let quoted = HSTRING::from(format!("\"{}\"", path.display()));
   execute(
@@ -81,11 +110,22 @@ pub fn open_url(url: &str) -> Result<(), String> {
     return Err("refusing to open a link containing control characters".to_string());
   }
 
-  execute(w!("open"), &HSTRING::from(trimmed), PCWSTR::null())
-    .map_err(|code| format!("windows could not open {trimmed} ({code})"))
+  open_link(trimmed)
+}
+
+#[cfg(windows)]
+fn open_link(url: &str) -> Result<(), String> {
+  execute(w!("open"), &HSTRING::from(url), PCWSTR::null())
+    .map_err(|code| format!("windows could not open {url} ({code})"))
+}
+
+#[cfg(not(windows))]
+fn open_link(url: &str) -> Result<(), String> {
+  launch(std::ffi::OsStr::new(url))
 }
 
 /// Run one `ShellExecuteW`, mapping its HINSTANCE onto a result.
+#[cfg(windows)]
 fn execute(verb: PCWSTR, file: &HSTRING, parameters: PCWSTR) -> Result<(), isize> {
   // SAFETY: `file` outlives the call, and the other pointers are either null or
   // static wide strings.
@@ -135,7 +175,8 @@ mod tests {
 
   #[test]
   fn a_path_outside_the_tree_never_reaches_the_shell() {
-    let error = open_in_tree("C:\\Windows\\System32\\cmd.exe").expect_err("should refuse");
+    let outside = if cfg!(windows) { "C:\\Windows\\System32\\cmd.exe" } else { "/etc/passwd" };
+    let error = open_in_tree(outside).expect_err("should refuse");
     assert!(error.contains("escapes"), "{error}");
 
     let error = open_in_tree("config/../../Windows/notepad.exe").expect_err("should refuse");

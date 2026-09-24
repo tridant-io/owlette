@@ -354,7 +354,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
   let menu = build_menu(app, &view)?;
   let tray = TrayIconBuilder::with_id(TRAY_ID)
     .icon(icon_for(view.code))
-    .tooltip(tooltip(&root, &view))
+    .tooltip(tooltip(&paths::install_root(), &view))
     .menu(&menu.menu)
     // Windows defaults to the menu on either button; left click must open the
     // window or there is no one-click way back to it.
@@ -547,7 +547,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
           last_flash = now;
         }
         apply_menu(&app, &view);
-        wanted_tooltip = Some(tooltip(&root, &view));
+        wanted_tooltip = Some(tooltip(&paths::install_root(), &view));
       }
 
       // Only the Error tier toasts (narrowed 2026-08-14): a Warning is what
@@ -1001,11 +1001,10 @@ fn notify(app: &AppHandle, title: &str, body: String) {
 
 
 fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
-  let root = paths::data_root();
   let version = MenuItem::with_id(
     app,
     "version",
-    format!("owlette v{}", agent_version(&root)),
+    format!("owlette v{}", agent_version(&paths::install_root())),
     false,
     None::<&str>,
   )?;
@@ -1074,10 +1073,10 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   })
 }
 
-fn tooltip(root: &Path, view: &TrayView) -> String {
+fn tooltip(install_root: &Path, view: &TrayView) -> String {
   let mut text = format!(
     "owlette v{}\nhostname: {}\n{}\n{}",
-    agent_version(root),
+    agent_version(install_root),
     hostname(),
     view.service,
     view.status
@@ -1092,16 +1091,28 @@ fn tooltip(root: &Path, view: &TrayView) -> String {
 /// Version of the agent this app sits alongside — that, not this crate's, is
 /// what the fleet records. Falls back to the crate version on a standalone dev
 /// run with no agent tree.
-fn agent_version(root: &Path) -> String {
-  fs::read_to_string(root.join(AGENT_VERSION_REL))
+fn agent_version(install_root: &Path) -> String {
+  fs::read_to_string(install_root.join(AGENT_VERSION_REL))
     .map(|text| text.trim().to_string())
     .ok()
     .filter(|version| !version.is_empty())
     .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
+/// The machine's name as the fleet records it: `COMPUTERNAME` on Windows;
+/// `HOSTNAME` or `/etc/hostname` on the other two, where no environment
+/// variable is guaranteed.
 pub(crate) fn hostname() -> String {
-  std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string())
+  let from_env = if cfg!(windows) { "COMPUTERNAME" } else { "HOSTNAME" };
+  if let Some(name) = std::env::var(from_env).ok().filter(|name| !name.trim().is_empty()) {
+    return name.trim().to_string();
+  }
+  if !cfg!(windows) {
+    if let Some(name) = fs::read_to_string("/etc/hostname").ok().filter(|name| !name.trim().is_empty()) {
+      return name.trim().to_string();
+    }
+  }
+  "unknown".to_string()
 }
 
 fn truncate(text: &str, limit: usize) -> String {
