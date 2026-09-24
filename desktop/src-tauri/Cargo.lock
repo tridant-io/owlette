@@ -2529,6 +2529,7 @@ dependencies = [
 name = "owlette-desktop"
 version = "3.3.12"
 dependencies = [
+ "libc",
  "log",
  "notify",
  "serde",

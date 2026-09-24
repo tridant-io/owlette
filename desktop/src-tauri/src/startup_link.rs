@@ -12,14 +12,20 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
 use windows::core::{Interface, HSTRING, PWSTR};
+#[cfg(windows)]
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
+#[cfg(windows)]
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+#[cfg(windows)]
 use windows::Win32::System::Com::{
   CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
   CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
+#[cfg(windows)]
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+#[cfg(windows)]
 use windows::Win32::UI::Shell::{
   FOLDERID_Startup, IShellLinkW, SHGetKnownFolderPath, ShellLink, KF_FLAG_DEFAULT,
 };
@@ -30,7 +36,15 @@ use windows::Win32::UI::Shell::{
 /// Load-bearing beyond the filesystem: Windows draws a toast's attribution line
 /// from the NAME of the shortcut registering the sending app id, so any
 /// shortcut carrying [`APP_USER_MODEL_ID`] must be called "Owlette".
+#[cfg(windows)]
 pub const LINK_NAME: &str = "Owlette.lnk";
+/// The autostart entry off windows: an xdg desktop entry on linux, a per-user
+/// launch agent on macos. both relaunch the app at login with `--tray`, which
+/// is what the shortcut does on windows (tri-platform task 4.2).
+#[cfg(all(unix, not(target_os = "macos")))]
+pub const LINK_NAME: &str = "owlette-desktop.desktop";
+#[cfg(target_os = "macos")]
+pub const LINK_NAME: &str = "app.owlette.desktop.plist";
 
 /// What [`LINK_NAME`] was called through 2.x and the first 3.0.0 builds.
 ///
@@ -38,6 +52,7 @@ pub const LINK_NAME: &str = "Owlette.lnk";
 /// upgrades without running the installer (every dev box) doesn't auto-start
 /// twice, and so "off" really is off. The installer handles it via
 /// `[InstallDelete]`; this covers the other path.
+#[cfg(windows)]
 const LEGACY_LINK_NAME: &str = "Owlette Tray.lnk";
 
 /// Argument the shortcut passes, which starts the app hidden in the tray.
@@ -51,14 +66,97 @@ pub const TRAY_ARG: &str = "--tray";
 /// and the notification plugin sends under the bundle identifier. The Startup
 /// folder is inside the Start menu tree, so writing it here registers the
 /// identity without waiting for the installer.
+#[cfg(windows)]
 const APP_USER_MODEL_ID: &str = "app.owlette.desktop";
 
+/// Where the entry lives off windows: `$XDG_CONFIG_HOME/autostart` (or
+/// `~/.config/autostart`) on linux, `~/Library/LaunchAgents` on macos. the
+/// user's own tree, never a system one — a kiosk user owns its login items.
+#[cfg(unix)]
+pub fn link_path() -> Result<PathBuf, String> {
+  Ok(startup_dir()?.join(LINK_NAME))
+}
+
+#[cfg(unix)]
+fn startup_dir() -> Result<PathBuf, String> {
+  let home = std::env::var_os("HOME")
+    .filter(|value| !value.is_empty())
+    .map(PathBuf::from)
+    .ok_or_else(|| "HOME is not set, so there is no login-items directory to use".to_string())?;
+  if cfg!(target_os = "macos") {
+    return Ok(home.join("Library").join("LaunchAgents"));
+  }
+  let config = std::env::var_os("XDG_CONFIG_HOME")
+    .filter(|value| !value.is_empty())
+    .map(PathBuf::from)
+    .unwrap_or_else(|| home.join(".config"));
+  Ok(config.join("autostart"))
+}
+
+#[cfg(unix)]
+pub fn is_enabled() -> bool {
+  match link_path() {
+    Ok(path) => path.is_file(),
+    Err(error) => {
+      log::warn!("could not locate the login-items directory: {error}");
+      false
+    }
+  }
+}
+
+#[cfg(unix)]
+pub fn enable() -> Result<PathBuf, String> {
+  let path = link_path()?;
+  let exe = std::env::current_exe().map_err(|error| format!("could not locate this exe: {error}"))?;
+  if let Some(parent) = path.parent() {
+    std::fs::create_dir_all(parent)
+      .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+  }
+  std::fs::write(&path, login_item(&exe))
+    .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+  Ok(path)
+}
+
+#[cfg(unix)]
+pub fn disable() -> Result<(), String> {
+  let path = link_path()?;
+  match std::fs::remove_file(&path) {
+    Ok(()) => Ok(()),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    Err(error) => Err(format!("could not remove {}: {error}", path.display())),
+  }
+}
+
+/// The entry's text: a desktop entry or a launchd property list, both
+/// launching this exe with `--tray`.
+#[cfg(unix)]
+fn login_item(exe: &Path) -> String {
+  let exe = exe.display();
+  if cfg!(target_os = "macos") {
+    format!(
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+       <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+       <plist version=\"1.0\">\n<dict>\n\
+       \t<key>Label</key>\n\t<string>app.owlette.desktop</string>\n\
+       \t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>{exe}</string>\n\t\t<string>{TRAY_ARG}</string>\n\t</array>\n\
+       \t<key>RunAtLoad</key>\n\t<true/>\n\
+       </dict>\n</plist>\n"
+    )
+  } else {
+    format!(
+      "[Desktop Entry]\nType=Application\nName=owlette\nExec=\"{exe}\" {TRAY_ARG}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+    )
+  }
+}
+
 /// Absolute path of the shortcut in the current user's Startup folder.
+#[cfg(windows)]
 pub fn link_path() -> Result<PathBuf, String> {
   Ok(startup_dir()?.join(LINK_NAME))
 }
 
 /// Absolute path of the pre-rename shortcut, for cleanup only.
+#[cfg(windows)]
 fn legacy_link_path() -> Result<PathBuf, String> {
   Ok(startup_dir()?.join(LEGACY_LINK_NAME))
 }
@@ -69,6 +167,7 @@ fn legacy_link_path() -> Result<PathBuf, String> {
 /// python tray, but something owlette DOES launch at login, so "on" is correct
 /// and [`enable`] then replaces it. The pre-rename name counts for the same
 /// reason: reporting "off" while it sits there is a lie the toggle can't fix.
+#[cfg(windows)]
 pub fn is_enabled() -> bool {
   match (link_path(), legacy_link_path()) {
     (Ok(path), Ok(legacy)) => path.is_file() || legacy.is_file(),
@@ -81,6 +180,7 @@ pub fn is_enabled() -> bool {
 }
 
 /// Create (or replace) the startup shortcut, pointing at this executable.
+#[cfg(windows)]
 pub fn enable() -> Result<PathBuf, String> {
   let path = link_path()?;
   write_link(&path)?;
@@ -92,6 +192,7 @@ pub fn enable() -> Result<PathBuf, String> {
 
 /// Write the shortcut to an explicit path. Split out from [`enable`] so it can
 /// be exercised against a scratch file instead of the live Startup folder.
+#[cfg(windows)]
 fn write_link(path: &Path) -> Result<(), String> {
   let exe =
     std::env::current_exe().map_err(|error| format!("could not locate this exe: {error}"))?;
@@ -144,6 +245,7 @@ fn write_link(path: &Path) -> Result<(), String> {
 
 /// Remove the startup shortcut; missing is already the target state. The
 /// pre-rename name goes too, or "off" would leave it launching owlette at login.
+#[cfg(windows)]
 pub fn disable() -> Result<(), String> {
   let path = link_path()?;
   let removed = match std::fs::remove_file(&path) {
@@ -157,6 +259,7 @@ pub fn disable() -> Result<(), String> {
 
 /// Best effort: a stuck legacy shortcut is worth a log line, never a failed
 /// toggle — [`is_enabled`] and the installer act on the current name.
+#[cfg(windows)]
 fn remove_legacy_link() {
   let Ok(path) = legacy_link_path() else {
     return;
@@ -170,6 +273,7 @@ fn remove_legacy_link() {
 
 /// The current user's Startup folder, resolved through the shell rather than
 /// composed from `%APPDATA%` so a redirected profile still works.
+#[cfg(windows)]
 fn startup_dir() -> Result<PathBuf, String> {
   // SAFETY: `SHGetKnownFolderPath` allocates the string with the COM allocator
   // and we free it with `CoTaskMemFree` on both paths below.
@@ -187,8 +291,10 @@ fn startup_dir() -> Result<PathBuf, String> {
 /// Initialises COM for the calling thread, uninitialises on drop. The tray runs
 /// each menu action on its own short-lived thread, so this owns the apartment
 /// rather than assuming the caller set one up.
+#[cfg(windows)]
 struct ComGuard;
 
+#[cfg(windows)]
 impl ComGuard {
   fn new() -> Result<Self, String> {
     // SAFETY: a plain COM initialisation for this thread; paired with the
@@ -201,6 +307,7 @@ impl ComGuard {
   }
 }
 
+#[cfg(windows)]
 impl Drop for ComGuard {
   fn drop(&mut self) {
     // SAFETY: balances the `CoInitializeEx` in `new`, on the same thread.
@@ -208,7 +315,21 @@ impl Drop for ComGuard {
   }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
+mod unix_tests {
+  use super::*;
+
+  #[test]
+  fn the_entry_lives_in_the_user_login_items_and_launches_the_tray() {
+    let path = link_path().expect("a home directory");
+    assert!(path.ends_with(LINK_NAME), "{}", path.display());
+    let text = login_item(Path::new("/opt/owlette/app/owlette-desktop"));
+    assert!(text.contains("/opt/owlette/app/owlette-desktop"), "{text}");
+    assert!(text.contains(TRAY_ARG), "{text}");
+  }
+}
+
+#[cfg(all(test, windows))]
 mod tests {
   use super::*;
 

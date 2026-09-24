@@ -98,7 +98,7 @@ export interface ServiceStatus {
 
 export interface ServiceCommandOutcome {
   /** `scm` issued directly, `elevated` via a UAC prompt, `noop` already there. */
-  method: 'scm' | 'elevated' | 'noop'
+  method: 'scm' | 'elevated' | 'noop' | 'systemd'
   /**
    * State before the request. An elevated start only confirms the shell
    * accepted it, so callers poll {@link serviceStatus} for the result.
@@ -106,7 +106,7 @@ export interface ServiceCommandOutcome {
   stateBefore: ServiceState
 }
 
-export type TerminateMethod = 'not_found' | 'wm_close' | 'terminated'
+export type TerminateMethod = 'not_found' | 'wm_close' | 'terminated' | 'signaled'
 
 export interface TerminateOutcome {
   method: TerminateMethod
