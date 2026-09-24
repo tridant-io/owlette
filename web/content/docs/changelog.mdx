@@ -7,6 +7,21 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### fixed — a swoop session froze for good when the transport closed a channel
+
+The streamer's outbound channel queue stopped at the first record whose channel
+was not open, so once the transport had closed one channel under the browser
+(B4A: `swoop-feedback`, with a pong queued for it) every later cursor and meta
+record was dropped behind it and the picture, the cursor and the stats froze
+while the session stayed "live". A record for a closed channel is now dropped,
+a record for a channel that has not opened yet steps aside, and neither holds
+up the others. The overflow warning that flooded the log at sixty a second is
+now logged once and then every five hundredth, with the count.
+
+The page's feedback loop now notices a host that answered pings and then went
+silent for eight seconds and reconnects the session with fresh channels — the
+browser owns the channels, so nothing short of a new peer brings one back.
+
 ## [3.3.12] - 2026-09-24
 
 ### fixed — swoop audio was refused for the whole session

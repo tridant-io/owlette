@@ -2577,7 +2577,12 @@ mod host {
                 PeerEvent::KeyframeRequest => self.request_idr(codec),
                 PeerEvent::ChannelOpen(Channel::SwoopControl) => self.send_hello_host(viewer),
                 PeerEvent::ChannelOpen(channel) => ::log::debug!("swoop: {channel:?} open"),
-                PeerEvent::ChannelClose(channel) => ::log::debug!("swoop: {channel:?} closed"),
+                // The browser owns the five and never re-opens one it did
+                // not close, so from here the peer drops that channel's
+                // records and the viewer's pong watchdog is what recovers.
+                PeerEvent::ChannelClose(channel) => {
+                    ::log::warn!("swoop: {channel:?} closed by the transport for {viewer}")
+                }
                 PeerEvent::ChannelData {
                     channel,
                     binary,
@@ -2600,8 +2605,15 @@ mod host {
                     channel,
                     queued_bytes,
                 } => ::log::debug!("swoop: {channel:?} write refused, {queued_bytes} queued"),
-                PeerEvent::ChannelQueueOverflow { channel } => {
-                    ::log::warn!("swoop: {channel:?} queue overflowed")
+                PeerEvent::ChannelQueueOverflow { channel, overflows } => {
+                    // Once, and then every five hundredth: a starved queue
+                    // overflows sixty times a second, and the log is what the
+                    // starvation is diagnosed from.
+                    if overflows == 1 || overflows % 500 == 0 {
+                        ::log::warn!(
+                            "swoop: {channel:?} queue overflowed for {viewer} ({overflows} records dropped so far)"
+                        )
+                    }
                 }
                 // Never fires: BWE is off. Named so it is not a silent arm.
                 PeerEvent::BitrateEstimate(_) => {}

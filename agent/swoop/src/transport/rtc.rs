@@ -231,9 +231,11 @@ pub enum PeerEvent {
         queued_bytes: usize,
     },
     /// The out-queue hit its watermark and the oldest record was dropped to
-    /// make room. Never silent.
+    /// make room. Never silent, but `overflows` — the running count — lets the
+    /// session say so once in a while rather than sixty times a second.
     ChannelQueueOverflow {
         channel: Channel,
+        overflows: u64,
     },
 }
 
@@ -286,6 +288,8 @@ pub struct PeerStats {
     /// `Ok(false)` from `Channel::write`, cumulative.
     pub channel_write_refusals: u64,
     pub channel_queue_overflows: u64,
+    /// Records dropped because the transport had closed their channel.
+    pub channel_closed_drops: u64,
     pub channels_refused: u64,
     /// One for the initial offer, one more per accepted ICE restart.
     pub negotiations: u64,
@@ -303,8 +307,16 @@ enum WriteOutcome {
     Accepted,
     /// `Ok(false)`: no room inside the 128 KiB shared ceiling right now.
     NoRoom,
-    /// The channel is not open (yet, or any more).
+    /// The channel is not open yet: the browser opens the five, so a record
+    /// can be ready before its channel is. The record waits.
     NotOpen,
+    /// The channel was open and the transport has since closed it. Nothing
+    /// will ever carry the record, so it is dropped rather than left at the
+    /// head of the queue — where it starved every other channel for the rest
+    /// of a session (B4A, 2026-09-24: str0m closed `swoop-feedback` under
+    /// the browser, and every later cursor and meta record overflowed behind
+    /// the pong that was queued for it).
+    Closed,
 }
 
 #[derive(Debug)]
@@ -325,6 +337,8 @@ struct OutQueue {
     writes: u64,
     refusals: u64,
     overflows: u64,
+    /// Records dropped because their channel had closed.
+    closed_drops: u64,
 }
 
 impl OutQueue {
@@ -337,6 +351,7 @@ impl OutQueue {
             self.overflows += 1;
             events.push(PeerEvent::ChannelQueueOverflow {
                 channel: dropped.channel,
+                overflows: self.overflows,
             });
         }
         self.bytes += data.len();
@@ -348,13 +363,16 @@ impl OutQueue {
     }
 
     /// Write as much as the transport will take, stopping at the first refusal
-    /// so ordering holds. `write` is the seam the unit tests substitute a fake
-    /// channel through.
+    /// so ordering holds. A record whose channel is not open yet steps aside
+    /// and keeps its place among its own channel's records; one whose channel
+    /// has closed is dropped. Neither holds up the other channels. `write` is
+    /// the seam the unit tests substitute a fake channel through.
     fn drain(
         &mut self,
         events: &mut Vec<PeerEvent>,
         mut write: impl FnMut(Channel, bool, &[u8]) -> WriteOutcome,
     ) {
+        let mut waiting: VecDeque<Outbound> = VecDeque::new();
         while let Some(item) = self.queued.pop_front() {
             match write(item.channel, item.binary, &item.data) {
                 WriteOutcome::Accepted => {
@@ -368,15 +386,21 @@ impl OutQueue {
                         queued_bytes: self.bytes,
                     });
                     self.queued.push_front(item);
-                    return;
+                    break;
                 }
-                WriteOutcome::NotOpen => {
-                    // Not an error and not a refusal: the browser opens the
-                    // channels, so a record can be ready before its channel is.
-                    self.queued.push_front(item);
-                    return;
+                WriteOutcome::NotOpen => waiting.push_back(item),
+                WriteOutcome::Closed => {
+                    self.bytes -= item.data.len();
+                    self.closed_drops += 1;
                 }
             }
+        }
+        if !waiting.is_empty() {
+            // The waiting records go back in front of whatever the refusal
+            // left, so per-channel order is untouched: every record of a
+            // waiting channel was visited, in order, before the stop.
+            waiting.append(&mut self.queued);
+            self.queued = waiting;
         }
     }
 }
@@ -418,6 +442,11 @@ pub struct RtcPeer {
     pacer: SendPacer,
     out: OutQueue,
     channels: Vec<(ChannelId, Channel)>,
+    /// Channels the transport closed under the browser. The browser owns the
+    /// five (PROTOCOL §3) and never learns of a close it did not make, so a
+    /// closed channel stays closed for the life of this peer; its records are
+    /// dropped and the viewer's own watchdog decides what to do about it.
+    closed_channels: Vec<Channel>,
     /// The addresses of the viewer's `typ relay` candidates, which is all the
     /// pair classification below needs — the host's own candidates are host
     /// candidates until Task 7.4 allocates a relay.
@@ -506,6 +535,7 @@ impl RtcPeer {
             pacer: SendPacer::new(Instant::now(), u64::from(cfg.bitrate_bps), cfg.fps),
             out: OutQueue::default(),
             channels: Vec::new(),
+            closed_channels: Vec::new(),
             remote_relays: Vec::new(),
             sending_to: None,
             pending_events: VecDeque::new(),
@@ -531,6 +561,7 @@ impl RtcPeer {
             channel_writes: self.out.writes,
             channel_write_refusals: self.out.refusals,
             channel_queue_overflows: self.out.overflows,
+            channel_closed_drops: self.out.closed_drops,
             ..self.stats
         }
     }
@@ -782,7 +813,11 @@ impl RtcPeer {
 
     fn drain_out(&mut self, events: &mut Vec<PeerEvent>) {
         let Self {
-            out, rtc, channels, ..
+            out,
+            rtc,
+            channels,
+            closed_channels,
+            ..
         } = self;
         out.drain(events, |channel, binary, data| {
             let Some(id) = channels
@@ -790,7 +825,11 @@ impl RtcPeer {
                 .find(|(_, c)| *c == channel)
                 .map(|(id, _)| *id)
             else {
-                return WriteOutcome::NotOpen;
+                return if closed_channels.contains(&channel) {
+                    WriteOutcome::Closed
+                } else {
+                    WriteOutcome::NotOpen
+                };
             };
             let Some(mut ch) = rtc.channel(id) else {
                 return WriteOutcome::NotOpen;
@@ -829,6 +868,7 @@ impl RtcPeer {
             Event::ChannelOpen(id, label) => match channel_from_label(&label) {
                 Some(channel) => {
                     self.channels.push((id, channel));
+                    self.closed_channels.retain(|c| *c != channel);
                     events.push(PeerEvent::ChannelOpen(channel));
                 }
                 None => {
@@ -841,6 +881,7 @@ impl RtcPeer {
             Event::ChannelClose(id) => {
                 if let Some(pos) = self.channels.iter().position(|(c, _)| *c == id) {
                     let (_, channel) = self.channels.remove(pos);
+                    self.closed_channels.push(channel);
                     events.push(PeerEvent::ChannelClose(channel));
                 }
             }
@@ -1386,9 +1427,103 @@ mod tests {
         queue.drain(&mut ev, |_, _, _| WriteOutcome::NotOpen);
         assert_eq!(
             queue.refusals, 0,
-            "a closed channel is not a full transport"
+            "an unopened channel is not a full transport"
         );
         assert_eq!(queue.queued.len(), 1);
+        assert_eq!(queue.bytes, 16);
+        assert!(ev.is_empty());
+    }
+
+    #[test]
+    fn a_waiting_channel_does_not_hold_up_the_others_and_keeps_its_own_order() {
+        let mut queue = OutQueue::default();
+        let mut ev = events();
+        queue.push(Channel::SwoopFeedback, false, vec![1u8; 8], &mut ev);
+        queue.push(Channel::SwoopMeta, true, vec![2u8; 8], &mut ev);
+        queue.push(Channel::SwoopFeedback, false, vec![3u8; 8], &mut ev);
+        queue.push(Channel::SwoopCursor, false, vec![4u8; 8], &mut ev);
+
+        let mut written = Vec::new();
+        queue.drain(&mut ev, |channel, _, data| {
+            if channel == Channel::SwoopFeedback {
+                return WriteOutcome::NotOpen;
+            }
+            written.push(data[0]);
+            WriteOutcome::Accepted
+        });
+        assert_eq!(written, vec![2, 4], "the open channels went through");
+        assert_eq!(
+            queue.queued.iter().map(|i| i.data[0]).collect::<Vec<_>>(),
+            vec![1, 3],
+            "the waiting channel's records are still queued, in order"
+        );
+        assert_eq!(queue.bytes, 16);
+        assert!(ev.is_empty());
+
+        // The channel opens: its records go, oldest first.
+        written.clear();
+        queue.drain(&mut ev, |_, _, data| {
+            written.push(data[0]);
+            WriteOutcome::Accepted
+        });
+        assert_eq!(written, vec![1, 3]);
+        assert!(queue.queued.is_empty());
+        assert_eq!(queue.bytes, 0);
+    }
+
+    #[test]
+    fn a_refusal_behind_a_waiting_record_keeps_every_channel_in_order() {
+        let mut queue = OutQueue::default();
+        let mut ev = events();
+        queue.push(Channel::SwoopFeedback, false, vec![1u8; 8], &mut ev);
+        queue.push(Channel::SwoopMeta, true, vec![2u8; 8], &mut ev);
+        queue.push(Channel::SwoopMeta, true, vec![3u8; 8], &mut ev);
+        queue.push(Channel::SwoopFeedback, false, vec![4u8; 8], &mut ev);
+
+        // Feedback is not open; the transport takes one meta record and then
+        // has no room for the second.
+        let mut taken = 0;
+        queue.drain(&mut ev, |channel, _, _| {
+            if channel == Channel::SwoopFeedback {
+                return WriteOutcome::NotOpen;
+            }
+            taken += 1;
+            if taken == 1 {
+                WriteOutcome::Accepted
+            } else {
+                WriteOutcome::NoRoom
+            }
+        });
+        assert_eq!(
+            queue.queued.iter().map(|i| i.data[0]).collect::<Vec<_>>(),
+            vec![1, 3, 4],
+            "the waiting record leads, the refused one follows, the unvisited one is last"
+        );
+        assert_eq!(queue.refusals, 1);
+        assert_eq!(queue.bytes, 24);
+    }
+
+    #[test]
+    fn a_record_for_a_channel_the_transport_closed_is_dropped_not_kept_at_the_head() {
+        let mut queue = OutQueue::default();
+        let mut ev = events();
+        queue.push(Channel::SwoopFeedback, false, vec![1u8; 8], &mut ev);
+        queue.push(Channel::SwoopMeta, true, vec![2u8; 8], &mut ev);
+        queue.push(Channel::SwoopCursor, false, vec![3u8; 8], &mut ev);
+
+        let mut written = Vec::new();
+        queue.drain(&mut ev, |channel, _, data| {
+            if channel == Channel::SwoopFeedback {
+                return WriteOutcome::Closed;
+            }
+            written.push(data[0]);
+            WriteOutcome::Accepted
+        });
+        assert_eq!(written, vec![2, 3], "nothing waited behind the dead record");
+        assert_eq!(queue.closed_drops, 1);
+        assert_eq!(queue.refusals, 0);
+        assert!(queue.queued.is_empty());
+        assert_eq!(queue.bytes, 0);
         assert!(ev.is_empty());
     }
 
@@ -1410,7 +1545,8 @@ mod tests {
         assert!(matches!(
             ev.as_slice(),
             [PeerEvent::ChannelQueueOverflow {
-                channel: Channel::SwoopControl
+                channel: Channel::SwoopControl,
+                overflows: 1
             }]
         ));
         // The newest record survived — it is the one the viewer still needs.

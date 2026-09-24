@@ -2109,3 +2109,16 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   kill, one kill ends every session. The e2e web server now carries an unreachable swoop signal origin and
   per-run ed25519 keys (`playwright.config.ts`). Learned the hard way: the mint answers 201; `problemDetail`
   consumes the body; a waiter on "contains /swoop/sessions + 200" catches the lease renewal.
+- 2026-09-24 ~19:xx UTC — **the frozen session: channel starvation, not the path.** Owner's B4A log (3.3.12)
+  flooded with `SwoopMeta/SwoopCursor queue overflowed` and str0m's `Drop ChannelData event for id: 6`; the
+  overlay showed 61034 gaps on a "live" session. Stream 6 is the browser's `swoop-feedback` (dtls client,
+  even ids, fourth of five). str0m had closed that stream on the host and removed its channel; the browser
+  never learns of a close it did not make and kept sending (str0m re-accepts the stream and drops the data —
+  the warn). `OutQueue::drain` returned at the first `NotOpen` record, so a pong queued for the dead channel
+  sat at the head and every later cursor/meta record overflowed behind it. Fix (`swoop/channel-starvation`):
+  `WriteOutcome::Closed` (the peer remembers `closed_channels`) drops the record; `NotOpen` records step aside
+  in order; overflow warns once then every 500th with the count; `ChannelClose` logs at warn. Page:
+  `SwoopFeedback` `onSilence` after `PONG_SILENCE_MS = 8 s` without a pong (only after a first pong) →
+  `session.end('peer_failed')` → the hook's reconnect ladder, which is the only way to get new channels.
+  Still unknown: **why** str0m closed stream 6 — need the debug log around the freeze
+  (`closed|stream 6|Stream 6|DCEP|wrong state|Getting stream`). Ships in 3.3.13.

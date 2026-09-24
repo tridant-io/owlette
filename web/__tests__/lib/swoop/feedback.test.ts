@@ -4,7 +4,7 @@
  * breaks — never report a latency that was not measured.
  */
 
-import { SwoopFeedback } from '@/lib/swoop/feedback';
+import { PONG_SILENCE_MS, SwoopFeedback } from '@/lib/swoop/feedback';
 
 import type { FeedbackMessage } from '@/lib/swoop/protocol';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';
@@ -27,7 +27,7 @@ interface Harness {
   frame: (overrides?: Partial<FrameObservation>) => FrameObservation;
 }
 
-function harness(): Harness {
+function harness(onSilence?: () => void): Harness {
   let clock = 1_000;
   const sent: FeedbackMessage[] = [];
   const feedback = new SwoopFeedback({
@@ -35,6 +35,7 @@ function harness(): Harness {
     viewport: () => ({ widthCss: 1920, heightCss: 1080 }),
     now: () => clock,
     reportIntervalMs: TICK_MS,
+    onSilence,
   });
 
   let answered = 0;
@@ -177,6 +178,47 @@ describe('swoop feedback reports', () => {
     );
     expect(h.feedback.diagnostics().rttUs).toBe(TICK_MS * 1000);
     expect(h.feedback.diagnostics().clockOffsetUs).toBe(SKEW_US);
+  });
+
+  it('reports a host that answered pings and then went silent, once per silence', () => {
+    const silences = jest.fn();
+    const h = harness(silences);
+    h.feedback.start();
+    h.answerPings();
+    h.advance(PONG_SILENCE_MS - TICK_MS);
+    expect(silences).not.toHaveBeenCalled();
+    h.advance(TICK_MS);
+    expect(silences).toHaveBeenCalledTimes(1);
+    expect(h.feedback.diagnostics().silences).toBe(1);
+    // re-armed: the next report is a full window later, not every tick.
+    h.advance(TICK_MS);
+    expect(silences).toHaveBeenCalledTimes(1);
+    h.advance(PONG_SILENCE_MS);
+    expect(silences).toHaveBeenCalledTimes(2);
+  });
+
+  it('never calls a host silent before it has answered at all', () => {
+    const silences = jest.fn();
+    const h = harness(silences);
+    h.feedback.start();
+    // a channel that has not opened yet answers nothing; that is the peer's
+    // connect path to judge, not this loop's.
+    h.advance(PONG_SILENCE_MS * 3);
+    expect(silences).not.toHaveBeenCalled();
+    expect(h.feedback.diagnostics().silences).toBe(0);
+  });
+
+  it('is not silence while pongs keep coming, however lossy the path', () => {
+    const silences = jest.fn();
+    const h = harness(silences);
+    h.feedback.start();
+    h.answerPings();
+    // one answer per window is enough to be alive.
+    for (let i = 0; i < 4; i += 1) {
+      h.advance(PONG_SILENCE_MS - TICK_MS);
+      h.answerPings();
+    }
+    expect(silences).not.toHaveBeenCalled();
   });
 
   it('counts a pong it never asked for instead of applying it', () => {
