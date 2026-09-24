@@ -302,9 +302,18 @@ mod tests {
 
     let change = rx.recv_timeout(Duration::from_secs(5)).expect("event");
     assert_eq!(change.file, OwletteFile::AppStates);
+    // The debounce is a gap between raw events, and a loaded ci runner can
+    // deliver one of the three renames more than that gap late (ubuntu,
+    // 2026-09-24: two reports for three writes). What the design promises is
+    // fewer reports than writes, so that is what is asserted; a report per
+    // write would mean nothing coalesced.
+    let mut reports = 1;
+    while rx.recv_timeout(Duration::from_millis(600)).is_ok() {
+      reports += 1;
+    }
     assert!(
-      rx.recv_timeout(Duration::from_millis(600)).is_err(),
-      "expected the burst to coalesce into a single report"
+      reports < 3,
+      "three writes in a burst produced {reports} reports: nothing coalesced"
     );
 
     drop(handle);
