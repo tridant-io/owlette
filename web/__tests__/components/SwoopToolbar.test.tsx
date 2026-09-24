@@ -60,8 +60,9 @@ describe('SwoopToolbar', () => {
     expect(onEnd).toHaveBeenCalledTimes(1);
   });
 
-  it('no longer says anything about keyboard lock in the bar', () => {
+  it('no longer says anything about keyboard lock or esc in the bar', () => {
     renderBar('connected');
     expect(screen.queryByText(/keyboard lock/i)).toBeNull();
+    expect(screen.queryByText(/hold esc/i)).toBeNull();
   });
 });
