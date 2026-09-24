@@ -193,6 +193,45 @@ describe('admission', () => {
     expect(fifth.body).toMatchObject({ code: 'room_full' });
     for (const client of clients) client.close();
   });
+
+  it('frees the slot of a viewer that stopped pinging, and tells the host it left', async () => {
+    // four viewers that never send a keepalive, then silence past the stale window
+    // (1.5 s in the test worker): the fifth is admitted, the four are closed as
+    // `stale`, and the host hears a `bye` for each so it can drop their peers.
+    const machine = machineId('stale');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const stale: RoomClient[] = [];
+    for (let i = 1; i <= 4; i += 1) {
+      stale.push(await dialBrowser(viewerToken(machine, `viewer_000000000${i}`), machine));
+    }
+    await settle(1800);
+
+    const fifth = await dialBrowser(viewerToken(machine, 'viewer_0000000005'), machine);
+    const hello = await fifth.waitFor('hello');
+    expect(hello.peers).toMatchObject({ viewer: 1 });
+    for (const client of stale) expect(await client.whenClosed).toMatchObject({ code: 1000, reason: 'stale' });
+    const byes = host.frames.filter((frame) => frame.type === 'bye' && frame.reason === 'stale');
+    expect(byes.map((frame) => frame.from).sort()).toEqual(
+      ['viewer_0000000001', 'viewer_0000000002', 'viewer_0000000003', 'viewer_0000000004']
+    );
+    fifth.close();
+    host.close();
+  });
+
+  it('keeps a viewer that pings past the stale window', async () => {
+    const machine = machineId('pinging');
+    const clients: RoomClient[] = [];
+    for (let i = 1; i <= 4; i += 1) {
+      clients.push(await dialBrowser(viewerToken(machine, `viewer_000000000${i}`), machine));
+    }
+    await settle(1000);
+    for (const client of clients) client.sendRaw('ping');
+    await settle(1000);
+    const fifth = await upgradeStatus(port, viewerToken(machine, 'viewer_0000000005'), { machine });
+    expect(fifth.status).toBe(429);
+    for (const client of clients) client.close();
+  });
 });
 
 describe('the auth signal', () => {

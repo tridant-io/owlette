@@ -219,7 +219,11 @@ targets.
 ## limits
 
 all in `src/messages.ts`, each with its number: 4 KiB token, 64 KiB frame, 4 viewers per room, 10 rings per
-60 s per machine. `jti` is single use, enforced in the room because it is the only verifier here with durable
+60 s per machine. a viewer that has not sent a frame or had a keepalive `ping` answered for 90 s is stale:
+when the room is full it is evicted (`bye` to the host, close `stale`) rather than counted, because a
+browser that vanished without a close keeps its socket in the hibernation set for a long time and four of
+those refused every live viewer as `room_full` (dev, 2026-09-24). the test worker sets
+`SWOOP_VIEWER_STALE_MS` to 1500 for that test. `jti` is single use, enforced in the room because it is the only verifier here with durable
 state.
 
 ### the two budgets a socket spends

@@ -36,8 +36,15 @@ interface Identity {
   controlCount: number;
   /** so a window that is dropping trickle says `rate_limited` once, not 600 times. */
   trickleWarned?: boolean;
-  /** set when the peer said bye, so webSocketClose does not announce it twice. */
+  /** the last frame this socket sent; keepalive pings are answered by the runtime and stamped separately. */
+  lastSeenMs?: number;
+  /** set when the peer said bye or was evicted, so webSocketClose does not announce it twice. */
   departed?: boolean;
+}
+
+/** the one knob the test worker turns down, so a stale viewer is a second old rather than a minute. */
+export interface RoomEnv {
+  SWOOP_VIEWER_STALE_MS?: string;
 }
 
 const JTI_PREFIX = 'jti:';
@@ -45,9 +52,11 @@ const RING_WINDOW_KEY = 'ring:window';
 
 export class SignalRoom implements DurableObject {
   private readonly ctx: DurableObjectState;
+  private readonly viewerStaleMs: number;
 
-  constructor(ctx: DurableObjectState) {
+  constructor(ctx: DurableObjectState, env: RoomEnv = {}) {
     this.ctx = ctx;
+    this.viewerStaleMs = Number(env.SWOOP_VIEWER_STALE_MS) || LIMITS.viewerStaleMs;
     // answered by the runtime without waking this handler, and therefore free. a
     // browser cannot send a websocket protocol ping from javascript; the agent's
     // doorbell uses protocol pings instead and never an application heartbeat.
@@ -70,8 +79,41 @@ export class SignalRoom implements DurableObject {
     return {
       doorbell: this.socketsByRole('doorbell').length,
       host: this.socketsByRole('host').length,
-      viewer: this.socketsByRole('viewer').length,
+      viewer: this.admittedViewers().length,
     };
+  }
+
+  /** the viewers that count toward the cap: admitted, and neither departed nor evicted. */
+  private admittedViewers(): Array<[WebSocket, Identity]> {
+    const admitted: Array<[WebSocket, Identity]> = [];
+    for (const socket of this.socketsByRole('viewer')) {
+      const self = socket.deserializeAttachment() as Identity | null;
+      if (self && !self.departed) admitted.push([socket, self]);
+    }
+    return admitted;
+  }
+
+  /** when the room last heard from a viewer: its join, its last frame, or its last answered keepalive. */
+  private lastSeenMs(socket: WebSocket, self: Identity): number {
+    const pinged = this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime() ?? 0;
+    return Math.max(self.joinedAtMs, self.lastSeenMs ?? 0, pinged);
+  }
+
+  /**
+   * a viewer that stopped pinging is gone, whatever the socket says: its slot is
+   * freed and the host is told, exactly as if the peer had dropped. the socket's
+   * own close may never complete — that is why the flag, not the close, is what
+   * takes it out of the count.
+   */
+  private evictStaleViewers(nowMs: number): void {
+    for (const [socket, self] of this.admittedViewers()) {
+      if (nowMs - this.lastSeenMs(socket, self) < this.viewerStaleMs) continue;
+      socket.serializeAttachment({ ...self, departed: true });
+      this.toAgentSide(
+        JSON.stringify({ type: 'bye', from: self.id, fromRole: 'viewer', reason: 'stale', serverTimeMs: nowMs })
+      );
+      socket.close(1000, 'stale');
+    }
   }
 
   private static refuse(code: string, status: number, reason: string): Response {
@@ -102,11 +144,14 @@ export class SignalRoom implements DurableObject {
     const expMs = Number(request.headers.get('x-swoop-exp-ms'));
     if (!isRole(role) || !id || !jti || !Number.isFinite(expMs)) return SignalRoom.refuse('bad_join', 400, 'protocol');
 
-    if (role === 'viewer' && this.socketsByRole('viewer').length >= LIMITS.viewersPerRoom) {
-      return SignalRoom.refuse('room_full', 429, 'room');
-    }
-
     const nowMs = Date.now();
+    if (role === 'viewer' && this.admittedViewers().length >= LIMITS.viewersPerRoom) {
+      // full of the living, or full of the dead: only the first is a refusal.
+      this.evictStaleViewers(nowMs);
+      if (this.admittedViewers().length >= LIMITS.viewersPerRoom) {
+        return SignalRoom.refuse('room_full', 429, 'room');
+      }
+    }
     // a replayed jti is an auth failure the caller can fix: a fresh token carries a
     // fresh jti, so it gets the generic signal and re-mints rather than backing off.
     if (!(await this.claimJti(jti, expMs, nowMs))) return SignalRoom.refuse('auth', 401, 'auth');
@@ -238,6 +283,9 @@ export class SignalRoom implements DurableObject {
     const payload = JSON.stringify({ type: 'kill', sid: body.sid, serverTimeMs: Date.now() });
     const sockets = this.ctx.getWebSockets();
     for (const socket of sockets) {
+      // a killed viewer's close may never complete either; the flag frees the slot now.
+      const self = socket.deserializeAttachment() as Identity | null;
+      if (self?.role === 'viewer') socket.serializeAttachment({ ...self, departed: true });
       socket.send(payload);
       socket.close(1000, 'kill');
     }
@@ -287,6 +335,7 @@ export class SignalRoom implements DurableObject {
     const dropping = trickle && self.trickleCount > LIMITS.trickleFramesPerWindow;
     const warn = dropping && !self.trickleWarned;
     if (warn) self.trickleWarned = true;
+    self.lastSeenMs = nowMs;
     socket.serializeAttachment(self);
 
     if (self.controlCount > LIMITS.controlFramesPerWindow) {
