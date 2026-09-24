@@ -25,6 +25,7 @@
 
 import { useCallback, useEffect, useState, type RefObject } from 'react';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
+import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
 import type { SwoopSessionState } from '@/hooks/useSwoopSession';
 
 export interface SwoopStageProps {
@@ -35,14 +36,33 @@ export interface SwoopStageProps {
   children?: React.ReactNode;
 }
 
+/** four seconds, once per entry into fullscreen, then gone. */
+function EscHint({ onDone }: { onDone: () => void }) {
+  useEffect(() => {
+    const timer = setTimeout(onDone, 4000);
+    return () => clearTimeout(timer);
+  }, [onDone]);
+  return (
+    <p className="pointer-events-none absolute inset-x-0 bottom-4 text-center text-xs text-muted-foreground">
+      hold esc for two seconds to leave fullscreen
+    </p>
+  );
+}
+
 export function SwoopStage({ session, state, stageRef, videoRef, children }: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  // the way out, said once fullscreen holds and only where it is not obvious:
+  // with the keyboard captured a tap of esc goes to the machine, and the hold
+  // is the exit the browser reserves. without the lock a tap leaves as usual.
+  const [escHint, setEscHint] = useState(false);
 
   useEffect(() => {
     const sync = () => {
       setLocked(document.pointerLockElement === stageRef.current);
-      setFullscreen(document.fullscreenElement === stageRef.current);
+      const on = document.fullscreenElement === stageRef.current;
+      setFullscreen(on);
+      setEscHint(on && hasKeyboardLock());
     };
     document.addEventListener('pointerlockchange', sync);
     document.addEventListener('fullscreenchange', sync);
@@ -88,8 +108,11 @@ export function SwoopStage({ session, state, stageRef, videoRef, children }: Swo
       )}
       {state === 'connected' && fullscreen && !locked && (
         <p className="pointer-events-none absolute inset-x-0 top-4 text-center text-xs text-muted-foreground">
-          click to capture the mouse · hold esc for two seconds to leave fullscreen
+          click to capture the mouse
         </p>
+      )}
+      {state === 'connected' && escHint && (
+        <EscHint onDone={() => setEscHint(false)} />
       )}
       {children}
     </div>

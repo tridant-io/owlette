@@ -37,21 +37,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
+import { hasKeyboardLock, keyboardLock } from '@/lib/swoop/keyboardLock';
 import type { SwoopSessionState } from '@/hooks/useSwoopSession';
-
-/** `navigator.keyboard` is not in the dom lib; this is the half we use. */
-interface KeyboardLock {
-  lock(keyCodes?: string[]): Promise<void>;
-  unlock(): void;
-}
-
-const keyboardLock = (): KeyboardLock | null => {
-  if (typeof navigator === 'undefined') return null;
-  const api = (navigator as Navigator & { keyboard?: KeyboardLock }).keyboard;
-  return typeof api?.lock === 'function' ? api : null;
-};
-
-const hasKeyboardLock = (): boolean => keyboardLock() !== null;
 const subscribeNever = (): (() => void) => () => {};
 
 const STATE_LABEL: Record<SwoopSessionState, string> = {
@@ -175,11 +162,6 @@ export function SwoopToolbar({
       )}
 
       {notice && <span className="text-xs text-muted-foreground">{notice}</span>}
-
-      {/* the bar is off screen once fullscreen holds, so the way out is said here first. */}
-      {live && (
-        <span className="text-xs text-muted-foreground">hold esc for two seconds to exit</span>
-      )}
 
       <div className="ml-auto flex items-center gap-2">
         {children}
