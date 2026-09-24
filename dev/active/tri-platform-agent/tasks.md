@@ -268,6 +268,20 @@ Lanes: `Owlette-wt-tri-w4a` and `Owlette-wt-tri-w4b`, both detached at `4a3de0cd
       - 5.2: ship the polkit rule exactly as the lab rule; `owlette-desktop.service` must not carry `Restart=always`.
       - Wave 6: the AppMenu tri-state.
 
+  - **2026-09-24 (overnight, inline, second slice) — `tri-platform/desktop-posix`:** the five win32 modules gated and given
+    posix arms so the crate builds on all three: `json_io` takes flock(2) on `tmp/json.lock` (2 s budget, 10 ms retry,
+    outcomes as on windows; `libc` is now a direct `cfg(unix)` dependency — it was already in the lock file through tauri);
+    `process_ctl` verifies the image (`/proc/<pid>/exe`, `ps -o comm=` on macos), SIGTERM with the graceful window then
+    SIGKILL, `TerminateMethod::Signaled`; `startup_link` writes `~/.config/autostart/owlette-desktop.desktop` /
+    `~/Library/LaunchAgents/app.owlette.desktop.plist`; `service_ctl` reads `systemctl show` / `launchctl print`, controls
+    with `systemctl start|stop --no-block` bounded at 5 s (a hang is reported as the polkit rule missing; the plan's
+    deviations 1–2), macos start/stop are typed refusals (deviation 4); `agent_cli` runs the interpreter from the install
+    root with the `CREATE_NO_WINDOW` flag windows-only. Frontend unions gain `'systemd'` and `'signaled'`. CI (4.6):
+    `desktop-posix` job matrix ubuntu/macos with tauri's gtk/webkit packages, clippy `-D warnings` + tests. **Not done:**
+    the restart request through the `ipc/requests` seam (deviation 3; needs the nonce protocol from 3.7 and a tauri
+    command — 4.7), relaunch-at-login proof on real boxes, and every macos runtime path (CI compiles and runs unit
+    tests only).
+
 - [ ] **Task 4.3: the POSIX job runner**  **[verbatim: H §15]**
   - Files: `desktop/src-tauri/src/jobrunner.rs` (new), `desktop/src-tauri/src/json_io.rs`, `desktop/src-tauri/src/watchers.rs`, `desktop/src-tauri/src/lib.rs`
   - Do: `#[cfg(unix)]` `jobrunner.rs`: watch `ipc/jobs` on the existing 120 ms debounce, execute `capture`/`shell`/`notify`/`launch` job types, honour a 120 s cap and the job's `trusted` flag, write results atomically into `ipc/results/<uuid>/`; POSIX lock in `json_io.rs` = `flock(2)` on `<data_root>/tmp/json.lock`, the same identity 3.1 gave Python; route `notify` to `tauri-plugin-notification` (already a dependency). The `launch` job type spawns the requested executable as a **child of the app** (posix_spawn) so it inherits the bundle's TCC responsibility — this is swoop's POSIX spawn path (cross-plan decision C2). The `launch` job carries `stdin_path` — a file the daemon writes 0640 root:<group> under `<data_root>/ipc/swoop/` (the POSIX analogue of swoop decision 3's fallback, never inside the 0770 `ipc/jobs` tree) — which the runner pipes to the child and unlinks after the child reads to EOF; `result.json` returns the child `pid` so the daemon can reap or kill by pid; a `stdin_path` is accepted only when it resolves inside `<data_root>/ipc/swoop/`, `st_uid == 0` and `st_mode & 0o022 == 0`; anything else is refused with a typed error.

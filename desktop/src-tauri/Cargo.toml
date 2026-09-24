@@ -41,6 +41,12 @@ tauri-plugin-notification = "2"
 tauri-plugin-fs = "2"
 notify = "8"
 
+# flock(2) and kill(2) for the json lock and process control off windows
+# (tri-platform tasks 4.2/4.3). already in the lock file through tauri; a
+# direct dependency because this crate calls it itself.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # the scm, the named mutex and WM_CLOSE are windows; the other two desktops do
 # not build these at all (tri-platform task 4.1).
 [target.'cfg(windows)'.dependencies]
