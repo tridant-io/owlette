@@ -1366,6 +1366,7 @@ mod host {
             test_override: describe_override(bundle),
             features: Vec::new(),
             outbox: Outbox::new(w.started),
+            outbox_refused_logged: 0,
         };
 
         // The browser offers as soon as it is in the room, and the relay drops
@@ -1501,6 +1502,11 @@ mod host {
         /// What the features produced this turn, bounded and paced so a
         /// clipboard transfer cannot evict the picture's records.
         outbox: Outbox,
+        /// The outbox's refusal count as last logged, so the line is written
+        /// when the count moves and not on every status tick for the rest of
+        /// the session (B4A logged "refused 9 records" every two seconds for
+        /// hours after nine refusals in its first minute).
+        outbox_refused_logged: u64,
     }
 
     /// One viewer's peer and everything that belongs to that one track.
@@ -3083,7 +3089,8 @@ mod host {
             }
             // The outbox's refusals have no `status` field — nothing outside
             // this process can act on them — so they stay a log line.
-            if self.outbox.refused() > 0 {
+            if self.outbox.refused() != self.outbox_refused_logged {
+                self.outbox_refused_logged = self.outbox.refused();
                 ::log::info!(
                     "swoop: the feature outbox has refused {} records",
                     self.outbox.refused()
