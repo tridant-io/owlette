@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [3.3.14] - 2026-09-24
+
 ### fixed — the swoop cursor was drawn at half size, and twice during a title-bar drag
 
 A pointer bigger than 32 px (pointer size 2, or 200% scaling) was shrunk for
