@@ -1,17 +1,22 @@
 # Local development + CI test infrastructure for roost (wave 1.6 piecemeal).
 #
-# Provides a MinIO instance that stands in for Cloudflare R2 at dev + CI
-# time. The web API's signed-URL issuance + chunk verification + GC
-# paths all speak the S3 API; MinIO serves the same dialect so code
+# Provides an S3-compatible gateway that stands in for Cloudflare R2 at dev
+# and CI time. The web API's signed-URL issuance + chunk verification + GC
+# paths all speak the S3 API; the gateway serves the same dialect so code
 # targeting R2 via the aws-sdk-s3 library works unchanged here.
+#
+# versitygw, not MinIO: MinIO withdrew its public distribution on 2026-09-24
+# (the Docker Hub and quay.io images both 401 an anonymous pull, dl.min.io
+# answers 410 Gone), which killed the roost-sync CI job before it ran a test.
+# versitygw is an Apache-2.0 S3 gateway over a directory that refuses an
+# unsigned request the way R2 does — the parity init-buckets checks.
 #
 # Usage:
 #   docker compose -f test/infra/docker-compose.yml up -d
 #   # wait a few seconds; `init-buckets` exits once setup is done
 #
 # Endpoints:
-#   MinIO API  : http://localhost:9000   (the S3-compatible endpoint)
-#   MinIO Web  : http://localhost:9001   (admin console)
+#   S3 API     : http://localhost:9000
 #   Credentials: minioadmin / minioadmin (dev-only, never used in prod)
 #
 # Buckets created match the production R2 layout (infra/r2/r2-bucket-policy.json):
@@ -22,54 +27,50 @@
 #           The `-v` removes the data volume — destroys all uploaded chunks.
 
 services:
-  minio:
-    # quay.io, not Docker Hub: MinIO put their Hub images behind authentication
-    # some time between 2026-09-09 and 2026-09-12, and an anonymous pull of
-    # either image now 401s -- which killed the roost-sync CI job before it ran
-    # a single test. Quay is MinIO's own mirror and still serves these exact
-    # pinned tags anonymously. Same versions; only the host changed.
-    image: quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z
-    container_name: roost-minio
+  s3:
+    image: versity/versitygw:v1.8.0
+    container_name: roost-s3
     ports:
       - "9000:9000"   # s3 API
-      - "9001:9001"   # web console
     environment:
       # dev credentials — hardcoded intentionally so CI runs don't need
       # secrets. production R2 uses its own IAM; this only ever serves
       # local and ephemeral-CI traffic.
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-      # anonymous access is denied by default; bucket policies are
-      # applied by the init service below.
+      ROOT_ACCESS_KEY: minioadmin
+      ROOT_SECRET_KEY: minioadmin
+      # the entrypoint assembles `versitygw $VGW_ARGS posix /data`.
+      VGW_BACKEND: posix
+      VGW_BACKEND_ARG: /data
+      VGW_ARGS: "--port :9000"
+      # the unauthenticated readiness route the healthcheck below polls.
+      VGW_HEALTH: /_/health
     volumes:
-      - minio-data:/data
-    command: server /data --console-address ":9001"
+      - s3-data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/_/health"]
       interval: 3s
       timeout: 5s
       retries: 10
       start_period: 5s
 
-  # One-shot container that uses the `mc` CLI to create the buckets and
-  # apply the same deny-anonymous / signed-only policies as production
-  # R2 (from infra/r2/r2-bucket-policy.json). Exits 0 on success — run
-  # it explicitly with `docker compose run init-buckets` to re-apply
-  # after a volume reset.
+  # One-shot container that creates the buckets and proves the same
+  # deny-anonymous posture as production R2 (infra/r2/r2-bucket-policy.json).
+  # Exits 0 on success — run it explicitly with `docker compose run
+  # init-buckets` to re-apply after a volume reset.
   init-buckets:
-    # quay.io for the same reason as the minio service above.
-    image: quay.io/minio/mc:RELEASE.2025-07-21T05-28-08Z
-    container_name: roost-minio-init
+    image: amazon/aws-cli:2.37.2
+    container_name: roost-s3-init
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_DEFAULT_REGION: us-east-1
+      S3_URL: http://s3:9000
     entrypoint: ["/bin/sh", "/scripts/init.sh"]
     volumes:
-      - ./minio/init.sh:/scripts/init.sh:ro
-      - ../../infra/r2/r2-bucket-policy.json:/scripts/r2-bucket-policy.json:ro
+      - ./s3/init.sh:/scripts/init.sh:ro
 
   agent-runner:
     build:
@@ -78,7 +79,7 @@ services:
       additional_contexts:
         repo: ../..
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
       init-buckets:
         condition: service_completed_successfully
@@ -88,12 +89,12 @@ services:
       OWLETTE_DATA_ROOT: /tmp/owlette-data
       OWLETTE_ENVIRONMENT: development
       OWLETTE_FIREBASE_PROJECT_ID: demo-test
-      OWLETTE_R2_ENDPOINT: http://minio:9000
+      OWLETTE_R2_ENDPOINT: http://s3:9000
       OWLETTE_R2_ACCESS_KEY_ID: minioadmin
       OWLETTE_R2_SECRET_ACCESS_KEY: minioadmin
       OWLETTE_R2_CONTENT_BUCKET: owlette-dev-content
       OWLETTE_R2_MANIFESTS_BUCKET: owlette-dev-manifests
 
 volumes:
-  minio-data:
-    name: roost-minio-data
+  s3-data:
+    name: roost-s3-data
