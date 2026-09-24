@@ -85,6 +85,15 @@ pub fn spawn<F>(root: &Path, sink: F) -> notify::Result<WatchHandle>
 where
   F: Fn(FileChange) + Send + 'static,
 {
+  // off windows the kernel reports the real path: on macos the temp tree is a
+  // symlink into /private, and a key built from the link never matches an
+  // event. windows is left alone — canonicalising there yields the \?\ form,
+  // which is not what ReadDirectoryChangesW reports.
+  #[cfg(unix)]
+  let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+  #[cfg(unix)]
+  let root: &Path = canonical.as_path();
+
   let targets: Vec<Target> = OwletteFile::ALL
     .iter()
     .map(|file| {
@@ -204,6 +213,9 @@ mod tests {
       ));
       let _ = fs::remove_dir_all(&dir);
       fs::create_dir_all(&dir).expect("scratch dir");
+      // the same real path the watcher keys on (see `spawn`).
+      #[cfg(unix)]
+      let dir = fs::canonicalize(&dir).unwrap_or(dir);
       Self(dir)
     }
   }
