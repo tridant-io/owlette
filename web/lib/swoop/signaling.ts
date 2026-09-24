@@ -26,6 +26,7 @@
  *    be the thing the ladder is waiting out.
  */
 
+import { backoffDelayMs } from '@/lib/swoop/backoff';
 import {
   MAX_SIGNALING_BYTES,
   SWOOP_SUBPROTOCOL,
@@ -52,7 +53,6 @@ const AUTH_SIGNALS: ReadonlySet<string> = new Set(['auth', 'token_expired', 'unk
 
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 15000;
-const BACKOFF_MAX_ATTEMPTS = 8;
 
 /** how early a token counts as spent. the worker compares against its own clock. */
 const TOKEN_SKEW_MS = 2000;
@@ -71,7 +71,7 @@ export type SwoopSignalStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' 
 export type SwoopSignalFatal =
   | 'version_mismatch'
   | 'mint_failed'
-  | 'exhausted';
+  ;
 
 /** the browser's `WebSocket`, narrowed to what this module uses. */
 export interface SwoopSocket {
@@ -417,18 +417,16 @@ export class SwoopSignaling {
     this.scheduleRetry();
   }
 
+  /**
+   * the ladder has no top: a room that is unreachable for an hour is still
+   * the room this session lives in, and every dial mints a fresh token, so
+   * waiting costs nothing and giving up costs the session (owner ruling:
+   * a session stays up indefinitely). only `close()` and a fatal end it.
+   */
   private scheduleRetry(): void {
     this.attempt += 1;
-    if (this.attempt > BACKOFF_MAX_ATTEMPTS) {
-      this.stopped = true;
-      this.setStatus('closed');
-      this.options.onFatal?.('exhausted');
-      return;
-    }
     this.setStatus('reconnecting');
-    const ceiling = Math.min(BACKOFF_BASE_MS * 2 ** (this.attempt - 1), BACKOFF_MAX_MS);
-    // full jitter: a fleet that reconnects together must not re-dial together.
-    const delay = Math.round(ceiling * (0.5 + Math.random() * 0.5));
+    const delay = backoffDelayMs(this.attempt, { baseMs: BACKOFF_BASE_MS, capMs: BACKOFF_MAX_MS });
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       void this.dial();

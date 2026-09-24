@@ -260,6 +260,30 @@ describe('swoop signaling', () => {
     expect(h.sockets).toHaveLength(3);
   });
 
+  it('keeps redialing for as long as the room stays unreachable, and never reports exhaustion', async () => {
+    jest.useFakeTimers();
+    const h = harness();
+    await h.signaling.connect();
+    h.sockets[0].open();
+    h.sockets[0].deliver(HELLO);
+
+    // twenty unclean closes in a row, well past the eight the ladder used to
+    // allow: every one of them is followed by another dial within the ceiling.
+    for (let i = 0; i < 20; i += 1) {
+      h.sockets[h.sockets.length - 1].drop(1006);
+      await settle();
+      await jest.advanceTimersByTimeAsync(BACKOFF_CEILING_MS);
+    }
+    expect(h.sockets).toHaveLength(21);
+    expect(h.fatals).toEqual([]);
+    expect(h.signaling.connectionStatus).toBe('reconnecting');
+
+    // and the room coming back is all it takes.
+    h.sockets[20].open();
+    h.sockets[20].deliver(HELLO);
+    expect(h.signaling.connectionStatus).toBe('open');
+  });
+
   it('backs off within the bound after an unclean close and recovers', async () => {
     jest.useFakeTimers();
     const h = harness();

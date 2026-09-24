@@ -33,7 +33,7 @@ export default function SwoopPage({
   params: Promise<{ siteId: string; machineId: string }>;
 }) {
   const { siteId, machineId } = use(params);
-  const { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect } = useSwoopSession(
+  const { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn } = useSwoopSession(
     siteId,
     machineId,
   );
@@ -70,6 +70,9 @@ export default function SwoopPage({
       {error && (
         <p role="alert" className="px-4 py-2 text-center text-sm text-destructive">
           {error}
+          {retryIn !== null && (
+            <span className="text-muted-foreground"> reconnecting in {retryIn} s…</span>
+          )}
         </p>
       )}
 
