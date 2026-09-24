@@ -1987,3 +1987,13 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   alt+f4, win+d, win+l, ctrl+esc, ctrl+shift+esc, print screen and esc as chords through the input capture's
   own sequence (`InputCapture.pressChord`), with a two-line explainer and the sas refusal surfaced. Needs
   `ctl`; disabled for a view-only session.
+- 2026-09-23 ~21:3x UTC — **3.3.9 on the dev catalog** (`Owlette-Installer-v3.3.9.exe`, sha256 `ff77cdd8…cec8`,
+  dev `68377293`, PR #194; VM upgrade from the fielded 3.3.7 12/0/4, uninstall proof 20/20). Carries #193's
+  pacer/governor/audio fixes, #191's keyboard menu, #192's reconnect, #190's log-level cleanup. Update
+  commands (`update_owlette`) sent to B4A and A4D through the dev API. Next: a B4A session for the picture.
+- 2026-09-23 22:xx UTC — **connect failures persist on 3.3.9 with the viewer's mDNS flag confirmed Disabled**, so
+  hidden addresses are not the cause. B4A's log is silent between "encoding on nvenc" and the failure because
+  str0m logs its ICE checks through `tracing`, which the host's `log` logger never saw. `swoop/ice-logging`:
+  the `tracing` crate's `log` feature is turned on (already in the tree via str0m; no new package), so every
+  ICE and DTLS event lands in the host log at debug. Ships as 3.3.10 to dev; the next failed attempt then
+  names the pair.
