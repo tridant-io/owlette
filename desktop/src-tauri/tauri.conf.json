@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "owlette",
-  "version": "3.3.12",
+  "version": "3.3.13",
   "identifier": "app.owlette.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -33,7 +33,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "app", "deb"],
+    "targets": [
+      "nsis",
+      "app",
+      "deb"
+    ],
     "macOS": {
       "signingIdentity": null,
       "minimumSystemVersion": "15.0"
