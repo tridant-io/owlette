@@ -25,6 +25,7 @@ import { SwoopDisplayPicker } from '@/components/swoop/SwoopDisplayPicker';
 import { SwoopSpecialKeys } from '@/components/swoop/SwoopSpecialKeys';
 import { SwoopAudioToggle } from '@/components/swoop/SwoopAudioToggle';
 import { SwoopPresence } from '@/components/swoop/SwoopPresence';
+import { SwoopCursor } from '@/components/swoop/SwoopCursor';
 
 export default function SwoopPage({
   params,
@@ -60,6 +61,7 @@ export default function SwoopPage({
 
       <div className="min-h-0 flex-1">
         <SwoopStage session={session} state={state} stageRef={stageRef} videoRef={videoRef}>
+          <SwoopCursor session={session} />
           <SwoopPresence session={session} />
           <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
         </SwoopStage>
