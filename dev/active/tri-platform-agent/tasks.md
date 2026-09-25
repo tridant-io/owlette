@@ -25,7 +25,8 @@ Seven tasks, 0.1–0.7 [inferred: the Progress string names 0.1 and 0.7; H §15 
   - Done when: the file records, for each of (a)(b)(c): granted/denied, time-to-first-jpeg, and whether the grant survived an app replacement **and** a reboot; plus the child-process responsibility answer.
   - Go/no-go: (a) works → `capture.rs` ~90 lines, no new crate. (a) fails, (b) works → `capture.rs` ~250 lines + one crate, owner Q5. Both fail → macOS ships `capabilities.screenCapture: 0` (owner Q6).
   - Depends on: nothing.
-  - Status (reconstructed): **NOT STARTED** as written. The Mac ran no capture/TCC spike. Its research-only findings are in H §16.3 (see `spikes/macos-tcc.md`). The original file was a stub: "macos-tcc.md is a stub: no Mac here" [verbatim: W4:4.5].
+  - Status 2026-09-25: **(a) and (b) MEASURED on the MBA over ssh** — (a) works: 348 ms to a 3420×2214 JPEG on the app's own grant, (b) 77 ms; an ad-hoc grant dies on rebuild; reboot survival and (c) still owed (need the owner at the laptop). Results in `spikes/macos-tcc.md`. Go: `capture.rs` ≈ 90 lines, no new crate.
+  - Status (reconstructed, before that): **NOT STARTED** as written. The Mac ran no capture/TCC spike. Its research-only findings are in H §16.3 (see `spikes/macos-tcc.md`). The original file was a stub: "macos-tcc.md is a stub: no Mac here" [verbatim: W4:4.5].
 
 - [ ] **Task 0.3: Linux capture spike** [title inferred]
   - Files: `dev/active/tri-platform-agent/spikes/linux-capture.md` [inferred: T#2]
