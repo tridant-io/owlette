@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — the machines API reports each machine's OS
+
+`GET /api/sites/{siteId}/machines` and the machine detail carry `osFamily`
+(`windows`, `macos` or `linux`), `arch` and `osVersion` as the agent
+heartbeats them; null for an agent that predates the fields.
+
 ### added — Linux packages, installed and verified on the kiosk VM
 
 `agent/build/linux/build.sh` produces `owlette-agent_<version>_<arch>.deb` (the
