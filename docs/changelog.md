@@ -22,6 +22,15 @@ the same modes the service expects, load both jobs and hand a pairing preseed
 to the pairing flow in the background. Signing and notarisation are flags
 that wait on the Apple team id.
 
+### added — the desktop app answers the daemon's capture and notification jobs on macOS and Linux
+
+Off Windows the service has no display, so it drops a job file into the data
+tree and the app carries it out where the user is: a screenshot on macOS on the
+app's own Screen Recording grant (a typed refusal until that grant exists), a
+notification on both, and a typed refusal for anything else. On macOS the app
+also tells the service every minute whether it holds Screen Recording, asking
+for it once per launch.
+
 ### changed — on macOS the app shows a Dock icon only while its window is open
 
 A menubar app the rest of the time.
