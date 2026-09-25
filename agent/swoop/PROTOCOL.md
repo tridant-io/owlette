@@ -257,8 +257,8 @@ a mac client maps cmd → `ControlLeft` **in the browser**, before it sends, so 
 shapes are cached by `id`; a repeat is `{"t":"cshape","id":n}` alone. css cursors above 128×128 are silently
 ignored by browsers, so a shape larger than 32×32 css px is presented as an overlay instead. `w`, `h`, `hotX`
 and `hotY` are pixels of the png; `scale` is machine pixels per png pixel, present only when the host shrank
-the shape for the wire, and a viewer draws such a shape at `w × scale` machine pixels — as an overlay, since
-a css cursor cannot be scaled up.
+the shape for the 64 px message cap, and a viewer draws such a shape at `w × scale` machine pixels — as an
+overlay, since a css cursor cannot be scaled up.
 
 `cpos` is the **machine's own** pointer, which is one thing however many people are watching. `vpos` is where
 each *other* controller is pointing, so a session with more than one controller can draw them — the host
