@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — the macOS app says when Screen Recording is off
+
+A notice in the window names the consequence (no remote screenshots, no swoop
+picture) and opens the Screen Recording setting; the grant takes effect on
+the next launch.
+
 ### changed — the machines API reports each machine's OS
 
 `GET /api/sites/{siteId}/machines` and the machine detail carry `osFamily`

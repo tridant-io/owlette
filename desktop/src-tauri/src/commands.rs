@@ -46,6 +46,20 @@ pub fn hostname() -> String {
   crate::tray::hostname()
 }
 
+/// Whether macOS has granted this app Screen Recording, read without asking
+/// (`tcc.rs` asks once per launch). None off macOS: no such permission there.
+#[tauri::command(async)]
+pub fn screen_recording_granted() -> Option<bool> {
+  #[cfg(target_os = "macos")]
+  {
+    Some(crate::tcc::granted())
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    None
+  }
+}
+
 /// Whether the run-on-login startup shortcut exists.
 #[tauri::command(async)]
 pub fn startup_link_enabled() -> bool {

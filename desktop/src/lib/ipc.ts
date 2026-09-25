@@ -175,6 +175,11 @@ export function startupLinkEnabled(): Promise<boolean> {
   return invoke<boolean>('startup_link_enabled')
 }
 
+/** macOS's answer on Screen Recording for this app; null off macOS. */
+export function screenRecordingGranted(): Promise<boolean | null> {
+  return invoke<boolean | null>('screen_recording_granted')
+}
+
 /** Create or remove the run-on-login shortcut; resolves to the resulting state. */
 export function setStartupLink(enabled: boolean): Promise<boolean> {
   return invoke<boolean>('set_startup_link', { enabled })
