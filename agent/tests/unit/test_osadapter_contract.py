@@ -2843,11 +2843,19 @@ class _FakeJobRunner(threading.Thread):
         self.result = result
         self.delay = delay
         self.seen = None
+        self._served = set()
         self._stopped = threading.Event()
 
     def run(self):
         while not self._stopped.wait(0.02):
             for request in sorted(self.jobs.glob('*.json')):
+                # Once per request, as the real runner does: the daemon removes
+                # the request only after it has read the result, and a runner
+                # that served it again in that gap would rebuild the result
+                # directory the daemon had just removed (macos-15 CI, 2026-09-25).
+                if request.name in self._served:
+                    continue
+                self._served.add(request.name)
                 job = json.loads(request.read_text(encoding='utf-8'))
                 self.seen = job
                 # A runner slower than the caller's patience: the result lands
