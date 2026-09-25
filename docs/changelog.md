@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [3.3.15] - 2026-09-24
+
 ### fixed — the swoop cursor was blocky
 
 The host shrank any pointer above 32 px to the css-cursor ceiling and the page
