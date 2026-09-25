@@ -94,6 +94,25 @@ fn open_in_notepad(path: &Path) -> Result<(), String> {
   .map_err(|code| format!("windows could not open {} ({code})", path.display()))
 }
 
+/// The Screen & System Audio Recording pane of System Settings. A constant of
+/// this module, never caller input, which is why it may bypass the web-only
+/// guard `open_url` keeps for everything the frontend hands over.
+#[cfg(target_os = "macos")]
+const SCREEN_RECORDING_SETTINGS: &str =
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+
+/// Open the Screen Recording pane (macOS); a typed refusal elsewhere.
+pub fn open_screen_recording_settings() -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    open_link(SCREEN_RECORDING_SETTINGS)
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    Err("screen recording is a macos setting".to_string())
+  }
+}
+
 /// Open an `http(s)` URL in the default browser.
 pub fn open_url(url: &str) -> Result<(), String> {
   let trimmed = url.trim();
