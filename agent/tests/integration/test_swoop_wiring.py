@@ -29,7 +29,10 @@ import time
 from pathlib import Path
 
 import pytest
-import win32event
+
+# the wiring under test is the windows service's; on a posix box this file
+# skips at collection instead of failing the whole run (mba, 2026-09-25).
+win32event = pytest.importorskip("win32event")
 
 import owlette_service
 import swoop_commands
