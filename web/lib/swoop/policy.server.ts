@@ -30,9 +30,9 @@
  * device-trust-born session is refused the window however live it is, and is
  * sent through the ceremony — which then stamps that session, so ITS reloads
  * cost nothing. The claim the window makes is therefore unchanged: "this user
- * proved possession of a second factor within the last 10 minutes, for this
+ * proved possession of a second factor within the last 12 hours, for this
  * machine, and the session asking also proved one". It is never "proved once,
- * trusted forever" — the 10 minutes run from the ceremony, reuse does not
+ * trusted forever" — the 12 hours run from the ceremony, reuse does not
  * extend them, and the window is a NECESSARY condition that
  * `evaluateSwoopAccess` consults only after site enablement, the machine
  * exclusion list and the capability have all already passed.
@@ -54,8 +54,13 @@ export const SWOOP_LEASE_SECONDS = 300;
 /** Absolute cap from `ready`, a hard stop rather than a renewal ceiling. */
 export const SWOOP_SESSION_CAP_SECONDS = 12 * 60 * 60;
 
-/** How long one live ceremony authorises control for, measured from the ceremony. */
-export const SWOOP_STEP_UP_WINDOW_MS = 10 * 60 * 1000;
+/**
+ * How long one live ceremony authorises control for, measured from the
+ * ceremony. A working day: 10 minutes made every fresh tab a passkey prompt
+ * (owner, 2026-09-25), and the same-tab case is covered separately by
+ * continuity (`continuity.server.ts`). Matches the session cap.
+ */
+export const SWOOP_STEP_UP_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 const STEP_UP_COLLECTION = 'swoop_step_up';
 const STEP_UP_REVOCATION_COLLECTION = 'swoop_step_up_revocations';
@@ -341,7 +346,7 @@ async function stepUpRevokedAt(siteId: string, machineId: string): Promise<numbe
  *
  * Four things can close a window, and all four are read here rather than
  * trusted to have deleted the document: the asking session not having run a
- * ceremony, the 10 minutes lapsing, a kill on the machine, and the account
+ * ceremony, the 12 hours lapsing, a kill on the machine, and the account
  * losing its last second factor. A missing or malformed field reads as closed.
  */
 export async function hasOpenStepUpWindow(
@@ -368,7 +373,7 @@ export async function hasOpenStepUpWindow(
   if (openedAt <= revokedAt) return false;
 
   // The window's length is the READER's constant: whatever is stored can only
-  // shorten it, never stretch it past 10 minutes from the ceremony.
+  // shorten it, never stretch it past 12 hours from the ceremony.
   return Math.min(expiresAt, openedAt + SWOOP_STEP_UP_WINDOW_MS) > (args.nowMs ?? Date.now());
 }
 

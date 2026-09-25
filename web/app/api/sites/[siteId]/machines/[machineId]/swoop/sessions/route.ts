@@ -89,10 +89,10 @@ type StepUpResult =
   | { ok: false; response: NextResponse; reason: string };
 
 /**
- * Run a live second-factor ceremony, open the 10-minute window for this
+ * Run a live second-factor ceremony, open the 12-hour window for this
  * (user, machine) pair, and record on the login session that it has now itself
  * proved a second factor — which is what lets this operator's reloads reuse the
- * window for the rest of those 10 minutes.
+ * window for the rest of those 12 hours.
  *
  * A timestamp can never stand in for any of it: a session born from the 30-day
  * device-trust cookie carries `mfaCompletedAt = now` with no ceremony behind it

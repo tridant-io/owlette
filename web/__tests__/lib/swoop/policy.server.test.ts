@@ -292,7 +292,7 @@ describe('step-up window', () => {
     expect(binding).not.toContain(MACHINE);
   });
 
-  it('opens for 10 minutes from the ceremony, on the (user, machine) document', async () => {
+  it('opens for 12 hours from the ceremony, on the (user, machine) document', async () => {
     const expiresAt = await openStepUpWindow({ ...target, proof, nowMs: NOW });
 
     expect(expiresAt).toBe(NOW + SWOOP_STEP_UP_WINDOW_MS);
@@ -344,7 +344,7 @@ describe('step-up window', () => {
    * The bug this keying exists to fix: a page reload ends the swoop session and
    * starts a new one, and the ceremony must not run again for each.
    */
-  it('lets a reconnect inside the 10 minutes through without a second ceremony', async () => {
+  it('lets a reconnect inside the 12 hours through without a second ceremony', async () => {
     await openStepUpWindow({ ...target, proof, nowMs: NOW });
     mockWrites.length = 0;
 
@@ -353,11 +353,11 @@ describe('step-up window', () => {
     expect(
       await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS - 1 }),
     ).toBe(true);
-    // Reading a window never writes one: reuse cannot slide the 10 minutes on.
+    // Reading a window never writes one: reuse cannot slide the 12 hours on.
     expect(mockWrites).toHaveLength(0);
   });
 
-  it('refuses a reconnect after the 10 minutes have run out', async () => {
+  it('refuses a reconnect after the 12 hours have run out', async () => {
     await openStepUpWindow({ ...target, proof, nowMs: NOW });
 
     expect(await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS })).toBe(
