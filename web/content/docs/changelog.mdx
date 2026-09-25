@@ -7,6 +7,17 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### added — Linux packages, installed and verified on the kiosk VM
+
+`agent/build/linux/build.sh` produces `owlette-agent_<version>_<arch>.deb` (the
+service runtime with its own Python 3.11 under `/opt/owlette`, the systemd
+unit, the user unit that starts the app for every login, and the polkit rule
+that lets the owlette group control the service) beside the app's own `.deb`
+from the Tauri build. Installed over the lab agent on the Ubuntu 24.04 kiosk
+VM: the service came up from the new runtime and heartbeated as the new
+version, the app started for the seat, a notification went through the
+service, and the seat user restarted the service without sudo.
+
 ### added — a macOS installer package (unsigned build path)
 
 `agent/build/macos/build.sh` produces one `.pkg` for Apple silicon on macOS 15
