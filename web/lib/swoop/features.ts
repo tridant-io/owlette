@@ -36,6 +36,7 @@ import { attach as attachAudio } from '@/lib/swoop/audio';
 import { attach as attachDisplays } from '@/lib/swoop/displays';
 import { attach as attachPresence } from '@/lib/swoop/presence';
 import { attach as attachCursor } from '@/lib/swoop/cursor';
+import { attach as attachWakeLock } from '@/lib/swoop/wakeLock';
 
 /** what `attach` hands back: undo everything it did, idempotently. */
 export type SwoopDetach = () => void;
@@ -202,4 +203,5 @@ export const SWOOP_FEATURES: readonly SwoopFeature[] = [
   { name: 'displays', attach: attachDisplays },
   { name: 'presence', attach: attachPresence },
   { name: 'cursor', attach: attachCursor },
+  { name: 'wake-lock', attach: attachWakeLock },
 ];
