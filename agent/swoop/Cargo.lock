@@ -512,7 +512,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "owlette-swoop"
-version = "3.3.14"
+version = "3.3.15"
 dependencies = [
  "anyhow",
  "audiopus",
