@@ -3538,7 +3538,7 @@ mod host {
                     }
                     match reader.shape(dup, info) {
                         Ok(Some((shape, bytes))) => {
-                            match tracker.on_shape(&shape, bytes, geometry.dpi) {
+                            match tracker.on_shape(&shape, bytes) {
                                 Ok(Some(message)) => pointer.push(message),
                                 Ok(None) => {}
                                 Err(e) => ::log::warn!("swoop: cursor shape: {e}"),

@@ -111,7 +111,7 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
         aria-hidden
         data-testid="machine-cursor"
         src={pngUrl(state.shape)}
-        className="pointer-events-none absolute max-w-none select-none [image-rendering:pixelated] [filter:drop-shadow(0_0_1px_white)_drop-shadow(0_0_1px_black)]"
+        className="pointer-events-none absolute max-w-none select-none [filter:drop-shadow(0_0_1px_white)_drop-shadow(0_0_1px_black)]"
         style={{
           left: left - state.shape.hotX * scale,
           top: top - state.shape.hotY * scale,

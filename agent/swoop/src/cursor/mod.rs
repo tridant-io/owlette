@@ -33,9 +33,11 @@
 //!
 //! `hotX`/`hotY` are in pixels of the PNG that goes with them, so every scaling
 //! step this module applies has to move the hotspot with it or the I-beam
-//! selects from its corner. The scaling step is per-monitor DPI: the same
-//! pointer is a 64x64 bitmap on a 200% output and a 32x32 one at 100%, and it
-//! is 32 css px either way. [`fit_for_css`] is the only place that resizes.
+//! selects from its corner. [`fit_for_wire`] is the only place that resizes,
+//! and it resizes for the byte cap alone: the viewer draws a shape at
+//! `width * scale` machine pixels whatever the output's dpi, so shrinking a
+//! 64 px pointer to the css ceiling only cost detail (B4A, 2026-09-24: the
+//! pointer came back at the right size and blocky).
 //!
 //! Hardware tests are `#[ignore]`d. With the working directory `agent/swoop`:
 //!
@@ -56,17 +58,16 @@ use crate::signal::messages::channel::Cursor;
 /// 96 dpi is 100% scaling — `USER_DEFAULT_SCREEN_DPI`.
 pub const DEFAULT_DPI: u32 = 96;
 
-/// §5: a css cursor larger than this is presented as an overlay by the viewer,
-/// and browsers ignore one above 128x128 outright. Shapes are downscaled to
-/// fit rather than sent at a size that may be silently dropped.
+/// §5: the viewer puts a shape up to this many css pixels on its own pointer
+/// and presents anything larger as an overlay (browsers ignore a css cursor
+/// above 128x128 outright). Advertised in [`CursorMetadata`]; nothing here
+/// shrinks to it.
 pub const MAX_CSS_SIZE: u32 = 32;
 
-/// Hard ceiling on the emitted bitmap, in image pixels.
-///
-/// [`MAX_CSS_SIZE`] alone does not bound the bytes: at 400% scaling a 32 css px
-/// pointer is a 128x128 bitmap, which is 65 KiB of RGBA and — with the stored
-/// deflate blocks [`encode_png`] writes — more than §2's 64 KiB frame cap once
-/// base64'd. 64 px keeps the worst case near 22 KiB.
+/// Hard ceiling on the emitted bitmap, in image pixels: a 128x128 pointer is
+/// 65 KiB of RGBA and — with the stored deflate blocks [`encode_png`] writes —
+/// more than §2's 64 KiB frame cap once base64'd. 64 px keeps the worst case
+/// near 22 KiB, and a shape shrunk to it says so with `scale`.
 pub const MAX_IMAGE_SIZE: u32 = 64;
 
 /// Anything larger is refused rather than decoded: the largest cursor Windows
@@ -180,7 +181,7 @@ pub struct CursorImage {
     pub hot_x: u32,
     pub hot_y: u32,
     /// Machine pixels per image pixel: 1 for a shape as captured, the factor
-    /// after [`fit_for_css`] shrank it for the wire. The viewer draws the
+    /// after [`fit_for_wire`] shrank it for the wire. The viewer draws the
     /// shape at `width * scale` machine pixels — without this a 64 px pointer
     /// (pointer size 2, or 200% scaling) went over as 32 px and was drawn at
     /// half its size (B4A, 2026-09-24).
@@ -346,20 +347,13 @@ fn mask_bit(row: &[u8], x: usize) -> bool {
     (row[x / 8] >> (7 - (x % 8))) & 1 == 1
 }
 
-/// Downscale a decoded shape until the browser will take it, moving the hotspot
-/// with it.
-///
-/// Two ceilings: [`MAX_CSS_SIZE`] in css pixels, which depends on the output's
-/// dpi because a 200% output delivers a bitmap of twice the pixels for the same
-/// cursor, and [`MAX_IMAGE_SIZE`] in image pixels, which bounds the message.
-pub fn fit_for_css(image: CursorImage, dpi: u32) -> CursorImage {
+/// Downscale a decoded shape until it fits the message, moving the hotspot
+/// with it and recording the factor in `scale` so the viewer draws it at its
+/// true size. One ceiling: [`MAX_IMAGE_SIZE`]. The output's dpi is not read —
+/// the viewer scales by the picture, not by css pixels.
+pub fn fit_for_wire(image: CursorImage) -> CursorImage {
     let longest = image.width.max(image.height);
-    let dpi = if dpi == 0 { DEFAULT_DPI } else { dpi };
-    let css = (u64::from(longest) * u64::from(DEFAULT_DPI)).div_ceil(u64::from(dpi)) as u32;
-    let factor = css
-        .div_ceil(MAX_CSS_SIZE)
-        .max(longest.div_ceil(MAX_IMAGE_SIZE))
-        .max(1);
+    let factor = longest.div_ceil(MAX_IMAGE_SIZE).max(1);
     if factor == 1 {
         return image;
     }
@@ -382,25 +376,20 @@ mod true_size_tests {
     }
 
     #[test]
-    fn a_shape_that_fits_keeps_scale_one() {
-        let fitted = fit_for_css(captured(32), DEFAULT_DPI);
+    fn a_shape_within_the_cap_goes_whole_at_scale_one() {
+        let fitted = fit_for_wire(captured(32));
         assert_eq!((fitted.width, fitted.scale), (32, 1));
-    }
-
-    #[test]
-    fn a_downscaled_shape_remembers_its_true_size() {
-        // pointer size 2 at 100%: 64 machine pixels that must still be drawn as 64.
-        let fitted = fit_for_css(captured(64), DEFAULT_DPI);
-        assert_eq!((fitted.width, fitted.height, fitted.scale), (32, 32, 2));
-        assert_eq!((fitted.hot_x, fitted.hot_y), (5, 6), "the hotspot moves with the pixels");
-    }
-
-    #[test]
-    fn a_hidpi_shape_is_not_shrunk_and_says_nothing() {
-        // 200% scaling delivers 64 pixels for a 32 css px pointer: the css
-        // ceiling is met as is, so the wire carries it whole at scale 1.
-        let fitted = fit_for_css(captured(64), DEFAULT_DPI * 2);
+        // pointer size 2 at 100%, or 200% scaling: 64 machine pixels, sent as
+        // 64 — the css ceiling is the viewer's business, not a shrink target.
+        let fitted = fit_for_wire(captured(64));
         assert_eq!((fitted.width, fitted.scale), (64, 1));
+    }
+
+    #[test]
+    fn a_shape_past_the_cap_is_shrunk_and_remembers_its_true_size() {
+        let fitted = fit_for_wire(captured(128));
+        assert_eq!((fitted.width, fitted.height, fitted.scale), (64, 64, 2));
+        assert_eq!((fitted.hot_x, fitted.hot_y), (5, 6), "the hotspot moves with the pixels");
     }
 }
 
@@ -496,13 +485,8 @@ impl CursorTracker {
     ///
     /// `Ok(None)` when the decoded shape is the one the viewer is already
     /// drawing — the common case, 142 updates for 11 shapes.
-    pub fn on_shape(
-        &mut self,
-        info: &ShapeInfo,
-        buf: &[u8],
-        dpi: u32,
-    ) -> Result<Option<Cursor>, CursorError> {
-        let image = fit_for_css(decode(info, buf)?, dpi);
+    pub fn on_shape(&mut self, info: &ShapeInfo, buf: &[u8]) -> Result<Option<Cursor>, CursorError> {
+        let image = fit_for_wire(decode(info, buf)?);
         if let Some(current) = self.current {
             if self
                 .shapes
@@ -961,26 +945,22 @@ mod tests {
     }
 
     #[test]
-    fn the_hotspot_follows_the_bitmap_through_the_per_monitor_dpi_fit() {
+    fn the_wire_fit_ignores_the_output_dpi_and_moves_the_hotspot_with_the_pixels() {
         let (hidpi, standard) = mixed_dpi_layout();
         assert_eq!(hidpi.scale(), 2.0);
         assert_eq!(standard.scale(), 1.0);
 
-        // The same pointer: 64x64 of bitmap either way, but 32 css px on the
-        // 200% output and 64 on the 100% one.
-        let fitted = fit_for_css(solid(64, 64, (32, 32)), hidpi.dpi);
-        assert_eq!((fitted.width, fitted.height), (64, 64));
+        // The same 64x64 pointer on either output goes whole: the viewer
+        // scales it by the picture, so dpi is nothing to the wire.
+        let fitted = fit_for_wire(solid(64, 64, (32, 32)));
+        assert_eq!((fitted.width, fitted.height, fitted.scale), (64, 64, 1));
+        assert_eq!((fitted.hot_x, fitted.hot_y), (32, 32));
+
+        let fitted = fit_for_wire(solid(128, 128, (64, 64)));
+        assert_eq!((fitted.width, fitted.height, fitted.scale), (64, 64, 2));
         assert_eq!(
             (fitted.hot_x, fitted.hot_y),
             (32, 32),
-            "32 css px already fits, so nothing moves"
-        );
-
-        let fitted = fit_for_css(solid(64, 64, (32, 32)), standard.dpi);
-        assert_eq!((fitted.width, fitted.height), (32, 32));
-        assert_eq!(
-            (fitted.hot_x, fitted.hot_y),
-            (16, 16),
             "halving the bitmap without halving the hotspot is the i-beam bug"
         );
     }
@@ -1046,11 +1026,11 @@ mod tests {
                 image.rgba[i + 3] = 0;
             }
         }
-        let fitted = fit_for_css(image, 384);
+        let fitted = fit_for_wire(image);
         assert_eq!(
-            (fitted.width, fitted.height),
-            (64, 64),
-            "128 px is 32 css px at 400%, so only the image cap applies"
+            (fitted.width, fitted.height, fitted.scale),
+            (64, 64, 2),
+            "128 px is past the image cap, so it is halved and says so"
         );
         assert_eq!((fitted.hot_x, fitted.hot_y), (32, 32));
         // The first column is fully transparent, the last fully white.
@@ -1079,7 +1059,7 @@ mod tests {
         let (arrow, arrow_bits) = mono([0xf0, 0x00, 0xcc, 0xa0]);
         let (beam, beam_bits) = mono([0x00, 0xff, 0x18, 0x18]);
 
-        let first = tracker.on_shape(&arrow, &arrow_bits, 96).expect("decode");
+        let first = tracker.on_shape(&arrow, &arrow_bits).expect("decode");
         let Some(Cursor::Cshape { id, png, w, h, .. }) = first else {
             panic!("the first shape must carry its bitmap");
         };
@@ -1088,19 +1068,19 @@ mod tests {
         assert!(png.is_some_and(|p| !p.is_empty()));
 
         // 141 of spike 0.8's 142 shape updates were this case.
-        assert_eq!(tracker.on_shape(&arrow, &arrow_bits, 96), Ok(None));
-        assert_eq!(tracker.on_shape(&arrow, &arrow_bits, 96), Ok(None));
+        assert_eq!(tracker.on_shape(&arrow, &arrow_bits), Ok(None));
+        assert_eq!(tracker.on_shape(&arrow, &arrow_bits), Ok(None));
 
-        let second = tracker.on_shape(&beam, &beam_bits, 96).expect("decode");
+        let second = tracker.on_shape(&beam, &beam_bits).expect("decode");
         assert!(matches!(
             second,
             Some(Cursor::Cshape { id: 2, png: Some(_), .. })
         ));
-        assert_eq!(tracker.on_shape(&beam, &beam_bits, 96), Ok(None));
+        assert_eq!(tracker.on_shape(&beam, &beam_bits), Ok(None));
 
         // Back to the arrow: cached, so an id and nothing else.
         assert_eq!(
-            tracker.on_shape(&arrow, &arrow_bits, 96),
+            tracker.on_shape(&arrow, &arrow_bits),
             Ok(Some(Cursor::Cshape {
                 id: 1,
                 hot_x: None,
@@ -1251,7 +1231,7 @@ mod tests {
                     if let Some((shape, bytes)) = reader.shape(dup, info).expect("read shape") {
                         shape_updates += 1;
                         if tracker
-                            .on_shape(&shape, bytes, geometry.dpi)
+                            .on_shape(&shape, bytes)
                             .expect("decode shape")
                             .is_some()
                         {

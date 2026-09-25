@@ -17,6 +17,14 @@ tooltips. The page holds a screen wake lock for the life of a session and takes
 it again whenever the tab comes back, so a display does not sleep under a live
 picture.
 
+## [3.3.15] - 2026-09-24
+
+### fixed — the swoop cursor was blocky
+
+The host shrank any pointer above 32 px to the css-cursor ceiling and the page
+stretched it back, nearest-neighbour. The wire now carries the shape at full
+detail up to the 64 px message cap, and the overlay is drawn smoothly.
+
 ## [3.3.14] - 2026-09-24
 
 ### fixed — the swoop cursor was drawn at half size, and twice during a title-bar drag
