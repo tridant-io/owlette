@@ -24,6 +24,7 @@
  */
 
 import { useCallback, useEffect, useState, type RefObject } from 'react';
+import { Loader2 } from 'lucide-react';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
 import type { SwoopSessionState } from '@/hooks/useSwoopSession';
@@ -102,8 +103,9 @@ export function SwoopStage({ session, state, stageRef, videoRef, children }: Swo
         aria-label="remote screen"
       />
       {state !== 'connected' && (
-        <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-          {state === 'ended' ? 'session ended' : 'connecting…'}
+        <p className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+          {state !== 'ended' && <Loader2 className="size-6 animate-spin" aria-hidden />}
+          {state === 'ended' ? 'session ended' : 'connecting'}
         </p>
       )}
       {state === 'connected' && fullscreen && !locked && (
