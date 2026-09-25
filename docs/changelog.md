@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — the machines API reports each machine's OS
+
+`GET /api/sites/{siteId}/machines` and the machine detail carry `osFamily`
+(`windows`, `macos` or `linux`), `arch` and `osVersion` as the agent
+heartbeats them; null for an agent that predates the fields.
+
 ### added — a macOS installer package (unsigned build path)
 
 `agent/build/macos/build.sh` produces one `.pkg` for Apple silicon on macOS 15
