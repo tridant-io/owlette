@@ -106,7 +106,12 @@ if __name__ == '__main__':
     sys.excepthook = _handle_unhandled_exception
     threading.excepthook = _handle_thread_exception
 
-    logging.info("Running under owlette-host")
+    # what hosts this process: owlette-host on windows, launchd or systemd
+    # elsewhere (the line said owlette-host everywhere until the first posix runs).
+    logging.info(
+        "Running under owlette-host" if sys.platform == 'win32'
+        else "Running as an init-system job"
+    )
 
     from owlette_service import OwletteService, Util
 
