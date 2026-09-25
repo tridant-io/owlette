@@ -48,6 +48,8 @@ export default function SwoopPage({
         session={session}
         state={state}
         error={error}
+        stats={stats}
+        retryIn={retryIn}
         onEnd={end}
         onReconnect={reconnect}
         statsOpen={statsOpen}
