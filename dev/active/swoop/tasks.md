@@ -2130,3 +2130,11 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   last log paste had no close/stream lines: the flood drowned them. Still wanted: the 80 lines before the
   first `Drop ChannelData` on B4A. Vercel failover origin is down (account blocked, 402); a Tridant team
   needs a card in the dashboard before the API will create it (`payment_method_required`).
+- 2026-09-25 (overnight) — **fleet on 3.3.15; page work merged.** 3.3.14 (cursor at true size via `cshape.scale`; one
+  pointer in the windowed view; black fullscreen letterbox) and 3.3.15 (cursor at full detail — the wire no longer
+  shrinks to the css ceiling) shipped to the dev catalog and to B4A/A4D. Page: clean session bar with badges only
+  when something is wrong (#221), screen wake lock for the life of a session, continuity — a control grant's token
+  lets the same tab reconnect without a passkey for its whole life (#223), step-up window 12 h (#225), legible
+  latency overlay with honest stage names and a codec row (#224). Still open: why str0m closed `swoop-feedback`
+  under the browser on B4A (needs the log window before the first drop on 3.3.15 — the flood is gone, so the next
+  one is readable), audio and a second viewer on hardware.
