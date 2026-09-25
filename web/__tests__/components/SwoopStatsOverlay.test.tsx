@@ -119,6 +119,39 @@ describe('SwoopStatsOverlay path indicator', () => {
     });
   };
 
+  it('names the codec the picture arrives in, and the stages by what they measure', async () => {
+    const stats = {
+      ...EMPTY_STATS,
+      frame: {
+        frameId: 9,
+        irap: false,
+        codec: 'hevc',
+        width: 1920,
+        height: 1080,
+        tCaptureUs: 0,
+        tEncodeUs: 5_000,
+        tSendUs: 9_000,
+        arrivalMs: 100,
+        decodeMs: 0.4,
+        presentedMs: 112,
+        expectedDisplayMs: 128.6,
+        presentedFrames: 9,
+      },
+    } as unknown as SwoopStats;
+    const session = sessionWith(async () => report({}));
+    await act(async () => {
+      render(<SwoopStatsOverlay session={session} stats={stats} open />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('HEVC')).toBeInTheDocument();
+    // a decoded frame waiting for the next paint is not decode time.
+    expect(screen.getByText('decode')).toBeInTheDocument();
+    expect(screen.getByText('wait for paint')).toBeInTheDocument();
+    expect(screen.getByText('paint → display')).toBeInTheDocument();
+    expect(screen.queryByText('decode → present')).toBeNull();
+  });
+
   it('names the path, the cap in force and why', async () => {
     const session = sessionWith(async () =>
       report({
