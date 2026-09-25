@@ -357,8 +357,10 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     .tooltip(tooltip(&paths::install_root(), &view))
     .menu(&menu.menu)
     // Windows defaults to the menu on either button; left click must open the
-    // window or there is no one-click way back to it.
-    .show_menu_on_left_click(false)
+    // window or there is no one-click way back to it. macOS is the other way
+    // round: a left click on a menubar icon is the menu, and "open owlette"
+    // is an item in it.
+    .show_menu_on_left_click(cfg!(target_os = "macos"))
     .build(app)?;
 
   tray.on_menu_event(|app, event| {
@@ -370,6 +372,11 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
   });
 
   tray.on_tray_icon_event(|tray, event| {
+    // On macOS the left click is the menu (above); opening the window on it
+    // as well would put the window behind the menu on every click.
+    if cfg!(target_os = "macos") {
+      return;
+    }
     if let TrayIconEvent::Click {
       button: MouseButton::Left,
       button_state: MouseButtonState::Up,
