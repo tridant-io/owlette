@@ -1,0 +1,62 @@
+#!/bin/sh
+# the owlette-agent package, after its files have landed (tri-platform 5.2).
+# runs as root. it builds the data tree the way osadapter/posix.py's mode
+# table has it, keeps the owlette group and its members, loads the service
+# and enables the app's user unit for every login, and hands a pairing
+# preseed (config/pairing.json placed before the install) to
+# configure_site.py in the background, never in this script's own time.
+set -e
+
+DATA_ROOT="/var/lib/owlette"
+RUNTIME="/opt/owlette"
+PYTHON="${RUNTIME}/python/bin/python3"
+GROUP="owlette"
+
+log() { echo "owlette postinst: $*"; }
+
+case "$1" in
+  configure)
+    # --- the group -------------------------------------------------------
+    getent group "${GROUP}" >/dev/null || { groupadd --system "${GROUP}" && log "created group ${GROUP}"; }
+    # the seat's user, when the install runs from a session: the app has to
+    # reach the tree from that account. a kiosk user named in the preseed is
+    # added by configure_site.py itself.
+    seat_user="${SUDO_USER:-}"
+    if [ -n "${seat_user}" ] && [ "${seat_user}" != "root" ] && ! id -nG "${seat_user}" | tr ' ' '\n' | grep -qx "${GROUP}"; then
+      usermod -aG "${GROUP}" "${seat_user}" && log "added ${seat_user} to ${GROUP}"
+    fi
+
+    # --- the data tree (posix._DIRECTORY_MODES / _FILE_MODES) ----------------
+    mode_dir() { mkdir -p "${DATA_ROOT}/$1" && chown "root:${GROUP}" "${DATA_ROOT}/$1" && chmod "$2" "${DATA_ROOT}/$1"; }
+    mkdir -p "${DATA_ROOT}" && chown "root:${GROUP}" "${DATA_ROOT}" && chmod 750 "${DATA_ROOT}"
+    mode_dir config 770
+    mode_dir tmp 770
+    mode_dir ipc 770
+    mode_dir logs 750
+    mode_dir logs/swoop 770
+    mode_dir cache 750
+    [ -f "${DATA_ROOT}/tmp/json.lock" ] || : > "${DATA_ROOT}/tmp/json.lock"
+    chown "root:${GROUP}" "${DATA_ROOT}/tmp/json.lock" && chmod 660 "${DATA_ROOT}/tmp/json.lock"
+    [ -f "${DATA_ROOT}/config/config.json" ] && chmod 660 "${DATA_ROOT}/config/config.json"
+    [ -f "${DATA_ROOT}/config/machine_id" ] && chmod 640 "${DATA_ROOT}/config/machine_id"
+
+    # --- the service and the app ----------------------------------------
+    systemctl daemon-reload
+    systemctl enable owlette-agent.service >/dev/null 2>&1 || true
+    systemctl restart owlette-agent.service && log "started the service"
+    systemctl --global enable owlette-desktop.service >/dev/null 2>&1 && log "enabled the app for every login"
+    # a session that is already up gets the app now rather than at next login.
+    for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
+      systemctl --user -M "$(id -nu "${uid}")@" start owlette-desktop.service >/dev/null 2>&1 || true
+    done
+
+    # --- the pairing preseed ---------------------------------------------
+    if [ -f "${DATA_ROOT}/config/pairing.json" ]; then
+      log "pairing preseed found; pairing in the background"
+      ( cd "${RUNTIME}/agent/src" && nohup "${PYTHON}" configure_site.py --preseed \
+          >> "${DATA_ROOT}/logs/pairing.log" 2>&1 & )
+    fi
+    ;;
+esac
+
+exit 0
