@@ -30,6 +30,8 @@ const buttonVariants = cva(
           "btn-sweep border bg-background shadow-xs hover:text-secondary-foreground dark:bg-input dark:hover:text-secondary-foreground",
         secondary: "btn-sweep bg-secondary text-secondary-foreground",
         ghost: "btn-sweep hover:text-secondary-foreground",
+        // a quiet destructive action, for icon-only controls: red glyph, no fill.
+        "ghost-destructive": "btn-sweep text-destructive hover:text-destructive",
         // link opts out of the button sweep — .hl-link gives it the
         // glyph-accurate text highlight instead.
         link: "hl-link text-primary",

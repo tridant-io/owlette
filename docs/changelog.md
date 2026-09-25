@@ -20,6 +20,16 @@ in memory only; its next mint presents it instead of a passkey, and the server
 honours it for the same user on the same machine, once, unless the previous
 session was killed, ended deliberately or revoked. A new tab asks as before.
 
+### changed — a clean swoop session bar, and the screen stays awake
+
+The bar shows the machine's name and nothing else while things are fine:
+"connected" and the wifi icon are gone, the stage carries the connecting
+spinner, and a badge appears only for disconnected, reconnecting, poor
+connection or view only. Fullscreen, end session and reconnect are icons with
+tooltips. The page holds a screen wake lock for the life of a session and takes
+it again whenever the tab comes back, so a display does not sleep under a live
+picture.
+
 ## [3.3.15] - 2026-09-24
 
 ### fixed — the swoop cursor was blocky
