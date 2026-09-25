@@ -476,6 +476,10 @@ pub fn show_main_window(app: &AppHandle) {
     log::warn!("no main window to show");
     return;
   };
+  // The Dock icon appears with the window and leaves with it (lib.rs setup
+  // starts the app as an accessory).
+  #[cfg(target_os = "macos")]
+  let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
   let _ = window.unminimize();
   let _ = window.show();
   let _ = window.set_focus();
@@ -491,6 +495,8 @@ pub fn hide_main_window(app: &AppHandle) {
   if let Some(window) = app.get_webview_window("main") {
     let _ = window.hide();
   }
+  #[cfg(target_os = "macos")]
+  let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
   pid_file::remove(&paths::data_root(), GUI_PID_REL);
 }
 

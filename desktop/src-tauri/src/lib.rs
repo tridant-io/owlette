@@ -124,6 +124,12 @@ pub fn run() {
       }
       app.handle().plugin(logger.build())?;
 
+      // A menubar app: no Dock icon until the window is opened (owner ruling,
+      // 2026-09-25). `show_main_window` / `hide_main_window` switch the policy
+      // with the window, so the icon comes and goes with it.
+      #[cfg(target_os = "macos")]
+      app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
       let root = paths::data_root();
 
       // Running agent-CLI children, so a pairing poll can be cancelled from its dialog and
