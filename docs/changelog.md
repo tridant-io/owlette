@@ -11,6 +11,17 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — a macOS installer package (unsigned build path)
+
+`agent/build/macos/build.sh` produces one `.pkg` for Apple silicon on macOS 15
+and up: the service runtime (a standalone Python 3.11 with the agent's
+dependencies) under `/Library/Application Support/Owlette/runtime`, the
+LaunchDaemon and LaunchAgent that run the service and the app, and the app in
+`/Applications`. The scripts stop what is running, lay out the data tree with
+the same modes the service expects, load both jobs and hand a pairing preseed
+to the pairing flow in the background. Signing and notarisation are flags
+that wait on the Apple team id.
+
 ### changed — on macOS the app shows a Dock icon only while its window is open
 
 A menubar app the rest of the time.
