@@ -28,8 +28,8 @@
 //!   mode.
 //! - Per-monitor DPI differs (96 and 120 here) and a desktop rect is in
 //!   **physical** pixels whatever the scaling is. So DPI never enters
-//!   [`DisplayEntry::canvas_point`]; it is carried because the cursor path
-//!   scales a bitmap by it ([`crate::cursor::fit_for_css`]).
+//!   [`DisplayEntry::canvas_point`]; it is carried for the cursor path's
+//!   [`crate::cursor::Output`], which reports the output's scale.
 //!
 //! # Hardware test
 //!

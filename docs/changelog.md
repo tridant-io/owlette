@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — the swoop cursor was blocky
+
+The host shrank any pointer above 32 px to the css-cursor ceiling and the page
+stretched it back, nearest-neighbour. The wire now carries the shape at full
+detail up to the 64 px message cap, and the overlay is drawn smoothly.
+
 ## [3.3.14] - 2026-09-24
 
 ### fixed — the swoop cursor was drawn at half size, and twice during a title-bar drag
