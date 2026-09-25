@@ -48,7 +48,13 @@ import { viewerKeyForResponse } from '@/lib/swoop/keys.server';
 import { mintViewerToken, canonicalizeFingerprint } from '@/lib/swoop/tokens.server';
 import { mintTurnCredentials, type SwoopIceServer } from '@/lib/swoop/turn.server';
 import { ringDoorbell } from '@/lib/swoop/signal.server';
-import { createSwoopSession, upsertSwoopViewer } from '@/lib/swoop/sessionStore.server';
+import { continuityInherits, mintContinuity, parseContinuity } from '@/lib/swoop/continuity.server';
+import {
+  createSwoopSession,
+  getSwoopSession,
+  markSwoopContinuityUsed,
+  upsertSwoopViewer,
+} from '@/lib/swoop/sessionStore.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
 import { recordSwoopDenied, recordSwoopSessionStarted } from '@/lib/swoop/audit.server';
 import {
@@ -66,6 +72,8 @@ interface SessionBody {
   fp?: unknown;
   clientCaps?: unknown;
   mfaProof?: unknown;
+  /** the continuity token of this tab's previous control session, in place of a proof. */
+  continuity?: unknown;
 }
 
 /** P2P first (plan.md D13); relays are added only when a mint succeeds. */
@@ -228,6 +236,38 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
         : false;
 
     let decision = evaluateSwoopAccess({ ...gate, stepUpOpen });
+    // A tab that held control keeps it for its own life: the continuity token
+    // of its last control session stands in for the ceremony, once, for the
+    // same user on the same machine, unless that session was killed, closed
+    // or revoked. A last factor removed since still closes the door.
+    let inheritedFrom: string | null = null;
+    if (
+      !decision.ok &&
+      decision.code === 'step_up_required' &&
+      body.continuity !== undefined &&
+      (await hasEnrolledFactor(userId))
+    ) {
+      const presented = parseContinuity(body.continuity);
+      const verdict = presented
+        ? continuityInherits({
+            record: await getSwoopSession(siteId, machineId, presented.sid),
+            userId,
+            hash: presented.hash,
+          })
+        : null;
+      if (presented && verdict?.ok) {
+        await markSwoopContinuityUsed(siteId, machineId, presented.sid, Date.now());
+        inheritedFrom = presented.sid;
+        decision = evaluateSwoopAccess({ ...gate, stepUpOpen: true });
+      } else {
+        recordSwoopDenied({
+          ...auditBase,
+          event: 'step_up_failed',
+          denyReason: verdict && !verdict.ok ? `continuity_${verdict.reason}` : 'continuity_malformed',
+          ctl: true,
+        });
+      }
+    }
     // The one refusal the caller can answer inside this same request: a live
     // ceremony opens the window and the decision is taken again.
     if (!decision.ok && decision.code === 'step_up_required' && body.mfaProof !== undefined) {
@@ -304,6 +344,15 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       });
     }
 
+    // Only a control session carries continuity: a watch session has no
+    // ceremony to carry, and a token for it would inherit nothing.
+    const continuity = decision.ctl ? mintContinuity(sid) : null;
+    if (inheritedFrom) {
+      logger.info('[swoop/sessions] step-up inherited from the tab\'s previous session', {
+        context: 'swoop/sessions',
+        data: { siteId, machineId, sid, from: inheritedFrom },
+      });
+    }
     await createSwoopSession({
       siteId,
       machineId,
@@ -311,6 +360,7 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       createdBy: `user:${userId}`,
       startedAt,
       absoluteExpiresAt: startedAt + SWOOP_SESSION_CAP_SECONDS * 1000,
+      ...(continuity ? { continuityHash: continuity.hash } : {}),
     });
     await upsertSwoopViewer({
       siteId,
@@ -385,6 +435,7 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
             // token is spent once at connect, the lease is what keeps the
             // session alive (PROTOCOL.md §10).
             expiresAt: leaseExpiresAt,
+            ...(continuity ? { continuity: continuity.token } : {}),
           },
         },
         { status: 201 },

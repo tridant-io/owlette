@@ -270,8 +270,17 @@ test.describe('two viewers on one machine, over the api', () => {
       mfaProof: { code: spent },
     });
     expect(controlRes.status, JSON.stringify(controlRes.body)).toBe(201);
-    const control = controlRes.body.data as { sid: string; viewerId: string; ctl: boolean; expiresAt: number };
+    const control = controlRes.body.data as {
+      sid: string;
+      viewerId: string;
+      ctl: boolean;
+      expiresAt: number;
+      continuity?: string;
+    };
     expect(control.ctl).toBe(true);
+    // a control grant carries the tab's continuity token, `<sid>.<secret>`;
+    // it is what lets the same tab reconnect after hours without a new code.
+    expect(control.continuity).toMatch(new RegExp(`^${control.sid}\\.[A-Za-z0-9_-]{43}$`));
 
     // an offline machine is refused once the gate and the ceremony have passed.
     const offline = await apiCall(operatorPage, 'POST', `/api/sites/${SITE_ID}/machines/${OFFLINE_ID}/swoop/sessions`, {

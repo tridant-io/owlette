@@ -64,6 +64,14 @@ export interface SwoopSession {
   viewers: SwoopSessionViewer[];
   endReason?: SwoopSessionEndReason;
   endedAt?: number;
+  /**
+   * sha-256 of the continuity secret a control grant carried
+   * (`lib/swoop/continuity.server.ts`); never the secret. Absent on a watch
+   * session and on one minted without a satisfied step-up.
+   */
+  continuityHash?: string;
+  /** when a later mint inherited this session's step-up; one-shot. */
+  continuityUsedAt?: number;
 }
 
 /** Write refusal. Its message names the offending FIELD, never its value. */
@@ -154,6 +162,7 @@ export async function createSwoopSession(args: {
   createdBy: string;
   startedAt: number;
   absoluteExpiresAt: number;
+  continuityHash?: string;
 }): Promise<void> {
   await writeSession(args.siteId, args.machineId, args.sid, {
     sid: args.sid,
@@ -165,7 +174,18 @@ export async function createSwoopSession(args: {
     absoluteExpiresAt: args.absoluteExpiresAt,
     viewers: [],
     createdAt: FieldValue.serverTimestamp(),
+    ...(args.continuityHash ? { continuityHash: args.continuityHash } : {}),
   });
+}
+
+/** The one-shot mark: a session's step-up has been carried to a new one. */
+export async function markSwoopContinuityUsed(
+  siteId: string,
+  machineId: string,
+  sid: string,
+  nowMs: number,
+): Promise<void> {
+  await writeSession(siteId, machineId, sid, { continuityUsedAt: nowMs });
 }
 
 function parseSession(
@@ -186,6 +206,8 @@ function parseSession(
     viewers: parseViewers(data.viewers),
     ...(data.endReason ? { endReason: data.endReason as SwoopSessionEndReason } : {}),
     ...(typeof data.endedAt === 'number' ? { endedAt: data.endedAt } : {}),
+    ...(typeof data.continuityHash === 'string' ? { continuityHash: data.continuityHash } : {}),
+    ...(typeof data.continuityUsedAt === 'number' ? { continuityUsedAt: data.continuityUsedAt } : {}),
   };
 }
 

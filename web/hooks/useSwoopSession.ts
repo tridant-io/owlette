@@ -147,6 +147,11 @@ interface SessionGrant {
   signalUrl: string;
   /** the LEASE expiry, not the 60 s life of the jwt beside it. */
   expiresAt: number;
+  /**
+   * a control session's continuity token: presented on this tab's next mint
+   * in place of a passkey. kept in memory only, so closing the tab forgets it.
+   */
+  continuity?: string;
 }
 
 const EMPTY_STATS: SwoopStats = {
@@ -239,6 +244,7 @@ export function useSwoopSession(
   // the proof is held in a ref, never in state: state lands in a devtools
   // snapshot and a live second-factor proof has no business being there.
   const proofRef = useRef<SwoopStepUpProof | null>(null);
+  const continuityRef = useRef<string | null>(null);
   const endRef = useRef<(reason: string) => void>(() => {});
   const stoppedRef = useRef(false);
 
@@ -299,6 +305,8 @@ export function useSwoopSession(
 
   const end = useCallback(() => {
     clearRetry();
+    // a deliberate end: the next session from this tab asks again.
+    continuityRef.current = null;
     endRef.current('closed');
   }, [clearRetry]);
 
@@ -443,6 +451,9 @@ export function useSwoopSession(
       // attempt cannot have one.
       const proof = attempt > 0 ? proofRef.current : null;
       proofRef.current = null;
+      // no proof in hand: the last control session's continuity stands in,
+      // and the server decides whether it still counts.
+      const continuity = proof || !wantControl ? null : continuityRef.current;
 
       const res = await fetch(
         `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions`,
@@ -455,6 +466,7 @@ export function useSwoopSession(
             fp,
             clientCaps,
             ...(proof ? { mfaProof: proof } : {}),
+            ...(continuity ? { continuity } : {}),
           }),
         },
       );
@@ -482,6 +494,8 @@ export function useSwoopSession(
         return null;
       }
       const body = (await res.json()) as { data: SessionGrant };
+      // a fresh token per session; a watch grant carries none and clears it.
+      continuityRef.current = body.data.continuity ?? null;
       return body.data;
     };
 
@@ -597,6 +611,7 @@ export function useSwoopSession(
         onClosed: (reason) => {
           if (disposed) return;
           if (reason === 'kill') {
+            continuityRef.current = null;
             setError('this session was ended from elsewhere.');
             setState('ended');
           } else if (reason !== 'closed') {
