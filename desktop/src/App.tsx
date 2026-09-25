@@ -14,6 +14,8 @@ import { RestartCountdown } from '@/components/RestartCountdown'
 import { SidebarDivider } from '@/components/SidebarDivider'
 import { StatusFooter } from '@/components/StatusFooter'
 import { WindowControls } from '@/components/WindowControls'
+import { PermissionBanner, SCREEN_RECORDING_SETTINGS_URL } from '@/components/PermissionBanner'
+import { openExternalUrl } from '@/lib/agentCli'
 import { IS_MAC } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import { InlineNotice } from '@/components/ui/inline-notice'
@@ -43,6 +45,7 @@ import {
   hostname,
   serverFromArgs,
   setStartupLink,
+  screenRecordingGranted,
   startupLinkEnabled,
   writeOwletteJson,
 } from '@/lib/ipc'
@@ -126,6 +129,19 @@ function App() {
   const [startOnLogin, setStartOnLogin] = useState<boolean | null>(null)
   useEffect(() => {
     startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
+  }, [])
+
+  // macOS Screen Recording, re-read whenever the window comes back: the grant
+  // takes effect on relaunch, but the banner should at least stop showing
+  // once the user has switched it on and come back.
+  const [screenRecording, setScreenRecording] = useState<boolean | null>(null)
+  useEffect(() => {
+    const read = () => {
+      screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
+    }
+    read()
+    window.addEventListener('focus', read)
+    return () => window.removeEventListener('focus', read)
   }, [])
 
   // The webview's native menu (Back/Refresh/Print/Inspect) is browser chrome, not
@@ -476,6 +492,15 @@ function App() {
           />
           {!IS_MAC && <WindowControls />}
         </header>
+
+        <PermissionBanner
+          granted={screenRecording}
+          onOpenSettings={() => {
+            void openExternalUrl(SCREEN_RECORDING_SETTINGS_URL).catch((cause: unknown) =>
+              toast.error('could not open system settings', { description: message(cause) }),
+            )
+          }}
+        />
 
         {config.error && (
           <InlineNotice className="m-3" data-testid="config-error">

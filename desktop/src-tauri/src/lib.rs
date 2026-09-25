@@ -83,6 +83,7 @@ pub fn run() {
       commands::owlette_data_root,
       commands::launch_args,
       commands::hostname,
+      commands::screen_recording_granted,
       commands::startup_link_enabled,
       commands::set_startup_link,
       commands::read_owlette_json,
