@@ -813,7 +813,14 @@ def _console_session():
     """(session id, user name) at the physical console, or None while a
     session is being attached or detached, or when it cannot be read. The name
     is '' at the logon screen. Two cheap calls and no token handle: the local
-    config watcher reads it twice a second."""
+    config watcher reads it twice a second.
+
+    Windows only: the session ACL repair it feeds is a Windows ACL concept,
+    and off Windows there is no session to repair — the posix arms fix modes
+    at install. Answering None keeps the watcher from importing pywin32
+    twice a second on a Mac (measured on the MBA, 2026-09-25)."""
+    if sys.platform != 'win32':
+        return None
     try:
         import win32ts
         session_id = win32ts.WTSGetActiveConsoleSessionId()
