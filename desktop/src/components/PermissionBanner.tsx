@@ -24,12 +24,12 @@ export function PermissionBanner({
   if (granted !== false) return null
   return (
     <InlineNotice className="m-3" data-testid="screen-recording-banner">
-      <div className="flex flex-1 flex-wrap items-center gap-3">
+      <div className="flex flex-1 items-center justify-between gap-4">
         <p className="text-sm">
           screen recording is off for owlette on this mac: remote screenshots and swoop cannot see
           this screen. switch it on in system settings, then quit and reopen owlette.
         </p>
-        <Button variant="outline" size="sm" onClick={onOpenSettings}>
+        <Button variant="outline" size="sm" className="shrink-0" onClick={onOpenSettings}>
           open system settings
         </Button>
       </div>
