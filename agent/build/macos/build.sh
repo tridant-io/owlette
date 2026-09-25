@@ -7,7 +7,8 @@
 #                              [--installer-identity "Developer ID Installer: …"]
 #                              [--notarize <notarytool keychain profile>]
 #
-# unsigned by default, which installs on a box that allows it and is what the
+# with APPLE_SIGNING_IDENTITY in the environment the app (Tauri) and every
+# mach-o in the runtime are signed with it; unsigned by default, which installs on a box that allows it and is what the
 # spike work runs on. with an identity the product is signed; with a profile
 # it is notarized and stapled too. the app's own signature is the Tauri
 # build's (`bundle.macOS.signingIdentity`, or APPLE_SIGNING_IDENTITY in the
@@ -72,6 +73,27 @@ mkdir -p "${RUNTIME}/agent"
 rsync -a --exclude '__pycache__' --exclude '*.pyc' --exclude '.venv' \
   "${REPO}/agent/src" "${REPO}/agent/VERSION" "${REPO}/agent/requirements.txt" "${RUNTIME}/agent/"
 find "${RUNTIME}/python" -name '__pycache__' -type d -prune -exec rm -rf {} +
+# --- signing the runtime, inside-out ------------------------------------------
+# notarization refuses a payload with any unsigned mach-o (measured: 93 issues
+# on the first submission — every dylib, extension module and the interpreter).
+# dylibs and modules first, then executables, each with the hardened runtime
+# and a secure timestamp; the interpreter gets the entitlements python needs
+# under the hardened runtime. the identity is the app's (Tauri reads the same
+# variable), so the whole product carries one team.
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  say "signing the runtime's mach-o files as ${APPLE_SIGNING_IDENTITY}"
+  ENTITLEMENTS="${PACKAGING}/entitlements.plist"
+  find "${RUNTIME}" -type f \( -name '*.dylib' -o -name '*.so' \) -print0     | xargs -0 codesign --force --options runtime --timestamp --sign "${APPLE_SIGNING_IDENTITY}"
+  find "${RUNTIME}" -type f -perm -u+x ! -name '*.dylib' ! -name '*.so' -print0     | while IFS= read -r -d '' candidate; do
+        if file -b "${candidate}" | grep -q 'Mach-O'; then
+          codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}"             --sign "${APPLE_SIGNING_IDENTITY}" "${candidate}"
+        fi
+      done
+  codesign --verify --strict "${PY}" && say "runtime signature verified"
+else
+  say "no APPLE_SIGNING_IDENTITY: the runtime stays unsigned (not notarizable)"
+fi
+
 cp "${PACKAGING}/app.owlette.agent.plist" "${PAYLOAD}/root/Library/LaunchDaemons/"
 cp "${PACKAGING}/app.owlette.desktop.plist" "${PAYLOAD}/root/Library/LaunchAgents/"
 chmod 644 "${PAYLOAD}/root/Library/LaunchDaemons/"*.plist "${PAYLOAD}/root/Library/LaunchAgents/"*.plist
