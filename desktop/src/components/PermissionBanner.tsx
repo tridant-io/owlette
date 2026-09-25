@@ -11,9 +11,6 @@ import { InlineNotice } from '@/components/ui/inline-notice'
  *
  * `granted` is null off macOS and before the first answer: nothing to say.
  */
-export const SCREEN_RECORDING_SETTINGS_URL =
-  'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
-
 export function PermissionBanner({
   granted,
   onOpenSettings,

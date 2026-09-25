@@ -195,6 +195,12 @@ pub fn open_external_url(url: String) -> Result<(), String> {
   shell_open::open_url(&url)
 }
 
+/// Open macOS's Screen Recording pane, for the permission notice.
+#[tauri::command(async)]
+pub fn open_screen_recording_settings() -> Result<(), String> {
+  shell_open::open_screen_recording_settings()
+}
+
 /// Width the process-list sidebar should open at, in logical pixels. Shares the
 /// per-user layout file with the window size so both are remembered together.
 #[tauri::command(async)]

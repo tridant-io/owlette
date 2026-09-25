@@ -14,8 +14,7 @@ import { RestartCountdown } from '@/components/RestartCountdown'
 import { SidebarDivider } from '@/components/SidebarDivider'
 import { StatusFooter } from '@/components/StatusFooter'
 import { WindowControls } from '@/components/WindowControls'
-import { PermissionBanner, SCREEN_RECORDING_SETTINGS_URL } from '@/components/PermissionBanner'
-import { openExternalUrl } from '@/lib/agentCli'
+import { PermissionBanner } from '@/components/PermissionBanner'
 import { IS_MAC } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import { InlineNotice } from '@/components/ui/inline-notice'
@@ -45,6 +44,7 @@ import {
   hostname,
   serverFromArgs,
   setStartupLink,
+  openScreenRecordingSettings,
   screenRecordingGranted,
   startupLinkEnabled,
   writeOwletteJson,
@@ -496,7 +496,7 @@ function App() {
         <PermissionBanner
           granted={screenRecording}
           onOpenSettings={() => {
-            void openExternalUrl(SCREEN_RECORDING_SETTINGS_URL).catch((cause: unknown) =>
+            void openScreenRecordingSettings().catch((cause: unknown) =>
               toast.error('could not open system settings', { description: message(cause) }),
             )
           }}
