@@ -11,6 +11,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — one passkey check covers a machine for 12 hours, not 10
+
+Taking control still needs a second factor, but one check now covers that
+machine for a working day, reconnects and new tabs included. The same tab keeps
+it for as long as it lives regardless. Ending a session from elsewhere still
+revokes the window at once.
+
 ### changed — the swoop latency overlay reads cleanly and names the codec
 
 The box is wider so no label wraps, the numbers line up, and the stages say

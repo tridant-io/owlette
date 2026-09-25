@@ -1,5 +1,5 @@
 /**
- * continuity: a control session's step-up outlives the 10-minute window for
+ * continuity: a control session's step-up outlives the step-up window for
  * as long as the browser tab does.
  *
  * owner ruling (2026-09-24): coming back to a tab after hours must not land on

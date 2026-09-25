@@ -548,7 +548,7 @@ describe('POST swoop/sessions', () => {
 
   /**
    * And the way back: one ceremony is recorded on the session that ran it, so
-   * that operator's own reloads cost nothing for the rest of the 10 minutes.
+   * that operator's own reloads cost nothing for the rest of the 12 hours.
    */
   it('covers a device-trust session reloads once it has run the ceremony itself', async () => {
     signIn(ADMIN, 'device-trust');
