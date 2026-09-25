@@ -93,8 +93,27 @@ fn startup_dir() -> Result<PathBuf, String> {
   Ok(config.join("autostart"))
 }
 
+/// The LaunchAgent the owlette installer puts in place for every login
+/// (`agent/packaging/macos/app.owlette.desktop.plist`). It carries the same
+/// label a per-user entry would, and launchd refuses a second job under one
+/// label, so while it exists it *is* the login item: enabled, and not this
+/// app's to switch off. None off macOS and on a Mac without the package.
+#[cfg(target_os = "macos")]
+fn managed_by_installer() -> Option<PathBuf> {
+  let path = PathBuf::from("/Library/LaunchAgents/app.owlette.desktop.plist");
+  path.is_file().then_some(path)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn managed_by_installer() -> Option<PathBuf> {
+  None
+}
+
 #[cfg(unix)]
 pub fn is_enabled() -> bool {
+  if managed_by_installer().is_some() {
+    return true;
+  }
   match link_path() {
     Ok(path) => path.is_file(),
     Err(error) => {
@@ -106,6 +125,9 @@ pub fn is_enabled() -> bool {
 
 #[cfg(unix)]
 pub fn enable() -> Result<PathBuf, String> {
+  if let Some(system) = managed_by_installer() {
+    return Ok(system);
+  }
   let path = link_path()?;
   let exe = std::env::current_exe().map_err(|error| format!("could not locate this exe: {error}"))?;
   if let Some(parent) = path.parent() {
@@ -119,6 +141,12 @@ pub fn enable() -> Result<PathBuf, String> {
 
 #[cfg(unix)]
 pub fn disable() -> Result<(), String> {
+  if let Some(system) = managed_by_installer() {
+    return Err(format!(
+      "start on login is set for every user by the owlette installer ({}); it is not this app's to turn off",
+      system.display()
+    ));
+  }
   let path = link_path()?;
   match std::fs::remove_file(&path) {
     Ok(()) => Ok(()),
