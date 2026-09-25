@@ -91,6 +91,14 @@ export const RELAY_PROBE_MS = 3000;
  * kills media at 30 s, so this is deliberately early.
  */
 export const DISCONNECTED_GRACE_MS = 2000;
+/**
+ * how long the first offer waits for the host's answer. a host that never
+ * answers is one the agent refused to start (its spawn ceiling, a bad bundle)
+ * or one mid-restart, and neither says so on the wire: without a bound the
+ * viewer sits on "connecting" for hours (b4a, 2026-09-25). a `host-ready`
+ * re-arms it, because that host is alive and has only now seen the offer.
+ */
+export const ANSWER_TIMEOUT_MS = 20_000;
 /** the restart ladder: the second restart 1 s after a failure, then doubling to the cap. */
 export const RESTART_BASE_MS = 1000;
 export const RESTART_CAP_MS = 15000;
@@ -113,7 +121,8 @@ export type SwoopPeerError =
   | 'host_mac_mismatch'
   | 'host_fingerprint_missing'
   | 'playout_delay_not_negotiated'
-  | 'answer_not_applied';
+  | 'answer_not_applied'
+  | 'host_silent';
 
 export interface SwoopIdentity {
   certificate: RTCCertificate;
@@ -215,6 +224,7 @@ export interface SwoopPeerOptions {
   playoutDelay?: PlayoutDelay;
   relayProbeMs?: number;
   disconnectedGraceMs?: number;
+  answerTimeoutMs?: number;
   onTrack?: (stream: MediaStream, receiver: RTCRtpReceiver) => void;
   onChannelOpen?: (label: SwoopChannel, channel: RTCDataChannel) => void;
   onError?: (code: SwoopPeerError) => void;
@@ -300,6 +310,7 @@ export class SwoopPeer {
   private readonly playoutDelay: PlayoutDelay;
   private readonly relayProbeMs: number;
   private readonly disconnectedGraceMs: number;
+  private readonly answerTimeoutMs: number;
   private readonly directServers: RTCIceServer[];
   private readonly relayServers: RTCIceServer[];
   private readonly pc: RTCPeerConnection;
@@ -325,6 +336,8 @@ export class SwoopPeer {
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private relayTimer: ReturnType<typeof setTimeout> | null = null;
   private linkTimer: ReturnType<typeof setTimeout> | null = null;
+  /** runs from the first offer until its answer is applied. */
+  private answerTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: SwoopPeerOptions) {
     this.options = options;
@@ -332,6 +345,7 @@ export class SwoopPeer {
     assertPlayoutDelay(this.playoutDelay);
     this.relayProbeMs = options.relayProbeMs ?? RELAY_PROBE_MS;
     this.disconnectedGraceMs = options.disconnectedGraceMs ?? DISCONNECTED_GRACE_MS;
+    this.answerTimeoutMs = options.answerTimeoutMs ?? ANSWER_TIMEOUT_MS;
 
     const { direct, relay } = partitionIceServers(options.iceServers);
     this.directServers = direct;
@@ -422,7 +436,10 @@ export class SwoopPeer {
           // an empty room was dropped by the relay. re-send the one we have —
           // unless its answer is already here and being applied, in which case
           // a re-send only earns a second answer.
-          if (this.awaitingAnswer && this.offerSdp) this.options.send({ type: 'offer', sdp: this.offerSdp });
+          if (this.awaitingAnswer && this.offerSdp) {
+            this.options.send({ type: 'offer', sdp: this.offerSdp });
+            this.armAnswerTimer();
+          }
           return;
         }
         // after the answer it is the host's ice policy asking for a restart:
@@ -502,6 +519,23 @@ export class SwoopPeer {
     this.offerSdp = sdp;
     this.awaitingAnswer = true;
     this.options.send({ type: 'offer', sdp });
+    // only the first offer: after an answer the link's own timers (disconnect
+    // grace, the restart ladder) are what watch the host.
+    if (!this.answered) this.armAnswerTimer();
+  }
+
+  private armAnswerTimer(): void {
+    this.clearAnswerTimer();
+    this.answerTimer = setTimeout(() => {
+      this.answerTimer = null;
+      if (!this.answered) this.abort('host_silent');
+    }, this.answerTimeoutMs);
+  }
+
+  private clearAnswerTimer(): void {
+    if (this.answerTimer === null) return;
+    clearTimeout(this.answerTimer);
+    this.answerTimer = null;
   }
 
   private onLocalCandidate(candidate: RTCIceCandidate | null): void {
@@ -548,6 +582,7 @@ export class SwoopPeer {
     // browser refuses, and that refusal read as the connection failing
     // (b4a, 2026-09-24).
     this.awaitingAnswer = false;
+    this.clearAnswerTimer();
 
     // an absent mac is a mismatch, not a lesser case.
     if (!mac) return this.abort('host_mac_mismatch');
@@ -781,6 +816,7 @@ export class SwoopPeer {
       this.relayTimer = null;
     }
     this.clearLinkTimer();
+    this.clearAnswerTimer();
     try {
       this.pc.close();
     } catch {

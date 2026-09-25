@@ -71,9 +71,15 @@ import {
 import type { SwoopStepUpProof } from '@/lib/swoop/stepUp';
 
 /** how far the page has got. `ended` and `error` are both terminal. */
-/** the reconnect ladder: 2 s, 4 s, … 30 s between sessions, reset after one held for `RETRY_RESET_MS`. */
+/**
+ * the reconnect ladder: 2 s, 4 s, … 30 s between sessions, reset after one
+ * held for `RETRY_RESET_MS`. five minutes, not thirty seconds: every attempt
+ * spawns a streamer on the machine, whose own ceiling is five spawns in ten
+ * minutes, and a host that comes up for a minute and drops used to reset the
+ * ladder to 2 s each time and burn that ceiling on its own (b4a, 2026-09-25).
+ */
 const RETRY_LADDER = { baseMs: 2000, capMs: 30000 };
-const RETRY_RESET_MS = 30000;
+const RETRY_RESET_MS = 5 * 60 * 1000;
 
 export type SwoopSessionState =
   | 'idle'
@@ -387,13 +393,15 @@ export function useSwoopSession(
       if (grant) {
         // best effort: the record ends server-side and the streamer is stopped
         // over two independent paths, so a lost beacon costs the user nothing.
+        // `viewerReason` is why this page ended it — a caller cannot claim a
+        // host-recorded `endReason`, but the audit trail needs the page's own.
         void fetch(
           `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions/${encodeURIComponent(grant.sid)}`,
           {
             method: 'DELETE',
             keepalive: true,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ endReason: 'closed' }),
+            body: JSON.stringify({ endReason: 'closed', viewerReason: reason }),
           },
         ).catch(() => undefined);
       }
@@ -604,6 +612,8 @@ export function useSwoopSession(
             fail('this machine could not prove it is the one you asked for; the session was refused.', false);
           } else if (code === 'playout_delay_not_negotiated') {
             fail('this machine did not agree the low-latency terms swoop requires.', false);
+          } else if (code === 'host_silent') {
+            fail('this machine did not answer.', true);
           } else {
             fail('the connection to this machine failed.', true);
           }

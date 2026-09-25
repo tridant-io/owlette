@@ -11,6 +11,7 @@ if (!('crypto' in globalThis)) {
 
 import { PLAYOUT_DELAY_URI, base64UrlDecode, type SignalingMessage } from '@/lib/swoop/protocol';
 import {
+  ANSWER_TIMEOUT_MS,
   DISCONNECTED_GRACE_MS,
   RELAY_PROBE_MS,
   SwoopPeer,
@@ -388,6 +389,42 @@ describe('swoop peer — offer', () => {
 
     expect(h.sent.map((m) => m.type)).toEqual(['offer']);
     expect(h.state.remoteDescriptions).toHaveLength(1);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('gives up on a host that never answers the first offer', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+  });
+
+  it('a host-ready re-arms the wait: that host is alive and has only now seen the offer', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 5_000);
+    await h.peer.handleSignal({ type: 'host-ready', sid: SID, to: VIEWER_ID });
+    expect(h.sent.map((m) => m.type)).toEqual(['offer', 'offer']);
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+  });
+
+  it('an answer clears the wait for good', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS * 3);
     expect(h.errors).toEqual([]);
   });
 

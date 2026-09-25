@@ -1,4 +1,4 @@
-import { backoffDelayMs, isTransientEnd, type SwoopEndReason } from '@/lib/swoop/backoff';
+import { backoffDelayMs, isSwoopEndReason, isTransientEnd, type SwoopEndReason } from '@/lib/swoop/backoff';
 
 describe('backoffDelayMs', () => {
   const ladder = { baseMs: 1000, capMs: 15000 };
@@ -32,5 +32,16 @@ describe('isTransientEnd', () => {
 
   it.each(table)('%s → retry %s', (reason, transient) => {
     expect(isTransientEnd(reason)).toBe(transient);
+  });
+});
+
+describe('isSwoopEndReason', () => {
+  it('accepts every reason the page reports and nothing else', () => {
+    expect(isSwoopEndReason('peer_failed')).toBe(true);
+    expect(isSwoopEndReason('closed')).toBe(true);
+    expect(isSwoopEndReason('lease_expired')).toBe(true);
+    expect(isSwoopEndReason('host_exit')).toBe(false);
+    expect(isSwoopEndReason('')).toBe(false);
+    expect(isSwoopEndReason(null)).toBe(false);
   });
 });

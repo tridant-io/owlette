@@ -11,6 +11,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — a swoop session that lost its host reconnects instead of waiting forever
+
+The page gives the machine 20 seconds to answer; a machine that stays silent
+(a streamer the agent refused to start, a host mid-restart) ends the attempt
+with the reason on screen and the reconnect ladder carries on. The ladder now
+only resets after a session has held for five minutes, and the agent no longer
+counts a clean exit against its spawn ceiling, so a host that comes up for a
+minute and drops cannot lock the machine out of swoop. The session record and
+audit trail keep the page's own reason for ending a session (`viewerReason`).
+
 ### added — the macOS app says when Screen Recording is off
 
 A notice in the window names the consequence (no remote screenshots, no swoop

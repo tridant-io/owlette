@@ -41,6 +41,24 @@ export type SwoopEndReason =
   | 'start_failed'
   | 'refused';
 
+/** every reason above, as the api's `viewerReason` allow-list. */
+export const SWOOP_END_REASONS: readonly SwoopEndReason[] = [
+  'closed',
+  'unmounted',
+  'kill',
+  'lease_expired',
+  'lease_refused',
+  'host_gone',
+  'signal_lost',
+  'peer_failed',
+  'start_failed',
+  'refused',
+];
+
+export function isSwoopEndReason(value: unknown): value is SwoopEndReason {
+  return typeof value === 'string' && (SWOOP_END_REASONS as readonly string[]).includes(value);
+}
+
 const TRANSIENT_ENDS: ReadonlySet<string> = new Set<SwoopEndReason>([
   'lease_expired',
   'host_gone',

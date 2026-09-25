@@ -117,8 +117,10 @@ describe('writes', () => {
       machineId: MACHINE,
       sid: SID,
       endReason: 'killed',
+      viewerReason: 'kill',
       endedAt: 5000,
     });
+    expect(mockSet.mock.calls[0][0]).toMatchObject({ viewerReason: 'kill' });
     expect(mockSet.mock.calls[0][0]).toMatchObject({
       state: 'ended',
       endReason: 'killed',
