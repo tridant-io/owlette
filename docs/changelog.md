@@ -11,6 +11,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — a swoop tab keeps its passkey for as long as it lives
+
+Coming back to a session after hours landed on the passkey screen: a reconnect
+mints a new session, and control needed a fresh ceremony once the 10-minute
+window had passed. A control grant now carries a continuity token the tab keeps
+in memory only; its next mint presents it instead of a passkey, and the server
+honours it for the same user on the same machine, once, unless the previous
+session was killed, ended deliberately or revoked. A new tab asks as before.
+
 ### changed — a clean swoop session bar, and the screen stays awake
 
 The bar shows the machine's name and nothing else while things are fine:
