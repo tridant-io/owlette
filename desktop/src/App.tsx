@@ -14,6 +14,8 @@ import { RestartCountdown } from '@/components/RestartCountdown'
 import { SidebarDivider } from '@/components/SidebarDivider'
 import { StatusFooter } from '@/components/StatusFooter'
 import { WindowControls } from '@/components/WindowControls'
+import { IS_MAC } from '@/lib/platform'
+import { cn } from '@/lib/utils'
 import { InlineNotice } from '@/components/ui/inline-notice'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -423,8 +425,11 @@ function App() {
     <TooltipProvider delayDuration={400}>
       <div className="flex h-screen flex-col bg-background">
         {/*
-          The window has no native titlebar (`decorations: false`), so this row
-          is it: the drag surface, the one wordmark, and the window controls.
+          On Windows and Linux the window has no native titlebar (`decorations:
+          false`), so this row is it: the drag surface, the one wordmark, and
+          the window controls. On macOS the native traffic lights overlay the
+          top left (`tauri.macos.conf.json`: decorations on, overlay titlebar),
+          so the row leaves them room and draws no controls of its own.
           `data-tauri-drag-region` applies only to the element carrying it, so
           the controls inside stay clickable without opting out.
 
@@ -441,7 +446,10 @@ function App() {
           // pointer-events-auto beats the pointer-events:none Radix puts on <body>
           // during a modal, so the window stays draggable with a dialog up.
           // DialogContent exempts [data-titlebar] from outside-dismiss to match.
-          className="pointer-events-auto relative z-[60] flex h-10 shrink-0 select-none items-center gap-2.5 border-b pl-4"
+          className={cn(
+            'pointer-events-auto relative z-[60] flex h-10 shrink-0 select-none items-center gap-2.5 border-b',
+            IS_MAC ? 'pl-20' : 'pl-4',
+          )}
         >
           <OwletteEye size={18} className="pointer-events-none" />
           <span className="pointer-events-none text-sm font-medium tracking-tight">owlette</span>
@@ -466,7 +474,7 @@ function App() {
               )
             }}
           />
-          <WindowControls />
+          {!IS_MAC && <WindowControls />}
         </header>
 
         {config.error && (

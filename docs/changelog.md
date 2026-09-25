@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — the desktop app uses macOS's own window buttons
+
+On macOS the window keeps the native traffic lights at top left and draws no
+Windows-style minimise, maximise and close controls of its own; the title row
+leaves them room.
+
 ### changed — one passkey check covers a machine for 12 hours, not 10
 
 Taking control still needs a second factor, but one check now covers that
