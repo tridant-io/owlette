@@ -11,6 +11,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — the swoop latency overlay reads cleanly and names the codec
+
+The box is wider so no label wraps, the numbers line up, and the stages say
+what they measure: "decode" is the decoder's own time, "wait for paint" is a
+decoded frame waiting for the next paint (0 to one refresh on a 60 Hz display,
+which is the jitter that used to read as decode), "paint → display" is the
+refresh after that. A "codec" row shows what the picture is arriving in.
+
 ### changed — a swoop tab keeps its passkey for as long as it lives
 
 Coming back to a session after hours landed on the passkey screen: a reconnect
