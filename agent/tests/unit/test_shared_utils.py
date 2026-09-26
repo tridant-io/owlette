@@ -187,7 +187,11 @@ class TestGetGpus:
     def _clear_backoff(self):
         shared_utils._nvml_retry_after = 0.0
         shared_utils._nvml_warn_after.clear()
-        yield
+        # the NVML arm is what these tests drive; on the macos runner the real
+        # platform would route to the ioregistry reader. the apple tests pin
+        # 'darwin' themselves, inside this patch.
+        with patch.object(shared_utils.sys, 'platform', 'linux'):
+            yield
         shared_utils._nvml_retry_after = 0.0
         shared_utils._nvml_warn_after.clear()
 
