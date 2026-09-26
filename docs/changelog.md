@@ -11,6 +11,29 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.0.3] - 2026-09-26
+
+### changed — the macOS menubar icon blends in
+
+The menubar shows a template glyph that macOS tints to match the bar (the owl's
+eye when the service is up and connected, a closed eye while the cloud is
+unreachable); only the error state keeps the red orb. Windows keeps its
+coloured icons.
+
+### fixed — the tray menu names the machine on macOS and Linux
+
+It read "hostname: unknown" because a launchd or systemd child carries no
+`HOSTNAME` in its environment and macOS has no `/etc/hostname`; the tray now
+asks the kernel, the same call the agent makes, so the menu and the machine
+card agree.
+
+### fixed — the swoop doorbell stops reconnecting every few minutes
+
+Its refresh margin was written for long-lived tokens, so the 300-second
+doorbell token was due for refresh the moment it arrived and the socket was
+torn down and re-dialled on every connect. A short token now refreshes at
+65–80 % of its life.
+
 ## [4.0.2] - 2026-09-26
 
 ### fixed — a Mac reports its GPU
