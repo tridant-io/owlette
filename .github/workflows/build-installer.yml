@@ -1,11 +1,18 @@
 name: build installer (slsa l3)
 
-# Hermetic CI build of the roost agent installer with SLSA Build Level 3
-# provenance (roost wave 5.8). Trigger on a release tag (`vX.Y.Z`) or
-# manual dispatch for test runs. The produced installer + in-toto
-# attestation are uploaded to the GitHub release so the slsa-verifier
-# can prove the installer was built from this repo at this commit by
-# this trusted workflow, not by a human on a laptop.
+# Hermetic CI build of the three roost agent installers — the Windows exe, the
+# Apple silicon pkg and the Linux deb — under one SLSA Build Level 3
+# provenance (roost wave 5.8, multi-platform releases 4.2). Trigger on a
+# release tag (`vX.Y.Z`) or manual dispatch for test runs. The installers and
+# one in-toto attestation are uploaded to the GitHub release so the
+# slsa-verifier can prove every file was built from this repo at this commit
+# by this trusted workflow, not by a human on a laptop.
+#
+# Job graph: security-gate → build-windows / build-macos / build-linux (in
+# parallel) → digest (one `sha256sum` line per file, base64) → provenance →
+# release → verify. Everything past the builds needs all three, so a dispatch
+# run without the Apple secrets stops at build-macos and nothing is attested;
+# build-windows and build-linux still produce their artifacts.
 #
 # Level 3 requires:
 #   - build runs on a trusted CI system (✅ github-hosted runner)
@@ -15,14 +22,24 @@ name: build installer (slsa l3)
 #   - provenance is non-falsifiable by the build (✅ the generator runs
 #     in a separate job, reads the hash we output, signs outside our control)
 #
+# build-macos signs and notarizes with the eight APPLE_* secrets of the
+# `release` GitHub environment (names in scripts/env-manifest.json under
+# github-repo-secrets). That environment is restricted to `v*` tags: a fork
+# PR cannot reach it, a dispatch on a branch is refused by GitHub at the
+# environment gate, and a dispatch on a tag by anyone with write access can —
+# accepted for this team. Until the owner creates the environment GitHub
+# auto-creates it unrestricted and empty, and the job's first step fails on
+# the missing names.
+#
 # Authenticode signing is NOT wired up yet. Two corrections to the older plan
 # that used to be documented here, both load-bearing:
 #
-#   1. Signing must happen BEFORE the "compute base64-subjects" step below,
-#      not after provenance is sealed. That step hashes the installer bytes
-#      into the attested subject, and the verify job re-hashes the released
-#      asset against it. Signing mutates the bytes, so signing afterwards
-#      would fail slsa-verifier on every tagged release.
+#   1. Signing must happen inside the build job, BEFORE the digest job hashes
+#      the file, not after provenance is sealed. The digest job hashes the
+#      installer bytes into the attested subject, and the verify job re-hashes
+#      the released asset against it. Signing mutates the bytes, so signing
+#      afterwards would fail slsa-verifier on every tagged release. (The pkg
+#      is already signed, notarized and stapled this way.)
 #
 #   2. An EV certificate is not the prerequisite. Microsoft removed EV's
 #      instant SmartScreen reputation in 2024 ("Paying a premium for EV solely
@@ -32,9 +49,11 @@ name: build installer (slsa l3)
 #      buys a verified publisher name plus reputation that persists across
 #      releases instead of resetting per file hash.
 #
-# The build job will also need `id-token: write` for Azure OIDC login.
+# The build-windows job will also need `id-token: write` for Azure OIDC login.
 
-on:
+# zizmor anchors cache-poisoning to the trigger, so the ignore lives here; the
+# rationale is on the build-windows rust-cache step.
+on: # zizmor: ignore[cache-poisoning]
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
@@ -45,12 +64,18 @@ on:
         required: false
         type: string
 
+# One release at a time per ref; never cancel a build that may already be
+# notarizing or attaching assets.
+concurrency:
+  group: build-installer-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 jobs:
   # ----------------------------------------------------------------------
-  # 1. Hermetic Windows build
+  # 1. Hermetic builds, one per platform
   # ----------------------------------------------------------------------
   # Nothing ships past a live advisory. See .github/workflows/security-gate.yml:
   # every release here is tag-triggered, so security-preflight.yml (branches
@@ -66,7 +91,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/security-gate.yml
 
-  build:
+  build-windows:
     name: build installer on windows-latest
     needs: [security-gate]
     runs-on: windows-latest
@@ -76,12 +101,11 @@ jobs:
     timeout-minutes: 60
     outputs:
       artifact-name: ${{ steps.build.outputs.artifact-name }}
-      artifact-subjects: ${{ steps.digest.outputs.subjects-b64 }}
       version: ${{ steps.version.outputs.version }}
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # full history so the VERSION + changelog commit that triggered
           # the tag are in the source tree for the build to reference.
@@ -145,11 +169,11 @@ jobs:
       # could never be read by the next tag's build. Only a dispatch run on main
       # populates something a tagged release can restore.
       #
-      # zizmor: ignore[cache-poisoning] — the finding is that a release build
-      # restoring a cache can ship what the cache held. It is scoped here as far
-      # as the mechanism allows: this workflow writes only from main, and the
-      # only other writer of these keys (rust-build.yml) is likewise main/dev.
-      # The alternative is a cold three-crate build on every release.
+      # zizmor cache-poisoning — the finding is that a release build restoring
+      # a cache can ship what the cache held. It is scoped here as far as the
+      # mechanism allows: this workflow writes only from main, and the only
+      # other writer of these keys (rust-build.yml) is likewise main/dev. The
+      # alternative is a cold three-crate build on every release.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
@@ -177,7 +201,7 @@ jobs:
           :: output artifact name for downstream jobs
           echo artifact-name=Owlette-Installer-v%OWLETTE_VERSION%.exe>> %GITHUB_OUTPUT%
 
-      # Runs after the build and BEFORE the subjects step, so a detection stops
+      # Runs after the build and BEFORE the digest job, so a detection stops
       # the release instead of being attested. owlette-swoop.exe is a small,
       # statically linked Rust PE — the shape Defender's ML classifier
       # misidentified on 2026-09-08 (agent/swoop/Cargo.toml documents the
@@ -215,51 +239,304 @@ jobs:
             throw "defender scan did not come back clean (exit $code)"
           }
 
-      - name: compute base64-subjects for SLSA generator
-        id: digest
-        shell: pwsh
+      - name: upload installer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installer-windows
+          path: agent/build/installer_output/Owlette-Installer-v${{ steps.version.outputs.version }}.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  build-macos:
+    name: build installer on macos-15
+    needs: [security-gate]
+    runs-on: macos-15
+    # the signing and notarization secrets live here; owner-created and
+    # restricted to v* tags (see the header).
+    environment: release
+    # notarytool --wait is the long pole after the tauri build; the cap
+    # leaves room for a slow notary day.
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    permissions:
+      contents: read
+    steps:
+      # before the checkout, so a run without the secrets fails in seconds
+      # naming what is missing instead of after a full rust build.
+      - name: check the apple signing secrets
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_INSTALLER_CERT_P12_BASE64: ${{ secrets.APPLE_INSTALLER_CERT_P12_BASE64 }}
+          APPLE_INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          missing=""
+          for name in APPLE_CERT_P12_BASE64 APPLE_CERT_PASSWORD \
+                      APPLE_INSTALLER_CERT_P12_BASE64 APPLE_INSTALLER_CERT_PASSWORD \
+                      APPLE_TEAM_ID APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_BASE64; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::apple signing secrets are not configured (environment \"release\"):$missing"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: resolve version
+        id: version
+        # same rules as the windows job: context via env, X.Y.Z or nothing.
+        env:
+          REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = push ] && [[ "$REF" == refs/tags/v* ]]; then
+            v="${REF#refs/tags/v}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            v="$INPUT_VERSION"
+          else
+            v="$(tr -d '[:space:]' < agent/VERSION)"
+          fi
+          if ! printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::refusing to build: version '$v' must be X.Y.Z semver"
+            exit 1
+          fi
+          # build.sh reads agent/VERSION (belt-and-suspenders, as on windows)
+          printf '%s\n' "$v" > agent/VERSION
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "building installer version $v"
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          # the lockfile is desktop/package-lock.json, not at the root, and
+          # build.sh runs npm ci itself.
+          package-manager-cache: false
+
+      # same pin and rationale as rust-build.yml: no version tags upstream, the
+      # toolchain comes through the input.
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+        with:
+          toolchain: '1.98.1'
+
+      # same scoping as the windows job's cache: written from main only.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: desktop/src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # a throwaway keychain holding the two developer id identities, and the
+      # notary key on disk; both go in the cleanup step. only names tauri does
+      # NOT read are in this env (APPLE_CERTIFICATE, APPLE_ID, APPLE_PASSWORD,
+      # APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH would make the
+      # tauri build import or notarize on its own).
+      - name: import the developer id certificates into a temp keychain
+        id: keychain
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_INSTALLER_CERT_P12_BASE64: ${{ secrets.APPLE_INSTALLER_CERT_P12_BASE64 }}
+          APPLE_INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          keychain="$RUNNER_TEMP/owlette-release.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          for cert in APPLE_CERT APPLE_INSTALLER_CERT; do
+            p12_var="${cert}_P12_BASE64"
+            pass_var="${cert}_PASSWORD"
+            printf '%s' "${!p12_var}" | base64 --decode > "$RUNNER_TEMP/$cert.p12"
+            security import "$RUNNER_TEMP/$cert.p12" -k "$keychain" -f pkcs12 -P "${!pass_var}" \
+              -T /usr/bin/codesign -T /usr/bin/productbuild
+            rm "$RUNNER_TEMP/$cert.p12"
+          done
+          # lets codesign and productbuild use the keys without a ui prompt
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+
+      # the identities are resolved here rather than passed as step outputs:
+      # their names carry the team id, and the runner drops any output that
+      # contains a secret's value.
+      - name: build, sign, notarize and staple the pkg
+        env:
+          KEYCHAIN: ${{ steps.keychain.outputs.keychain }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          identity() {
+            security find-identity -v -p "$1" "$KEYCHAIN" \
+              | sed -n "s/.*\"\($2: .*(${TEAM_ID})\)\".*/\1/p" | head -1
+          }
+          app="$(identity codesigning 'Developer ID Application')"
+          installer="$(identity basic 'Developer ID Installer')"
+          if [ -z "$app" ] || [ -z "$installer" ]; then
+            echo "::error::no valid Developer ID Application + Installer identity for the team in the imported certificates"
+            exit 1
+          fi
+          APPLE_SIGNING_IDENTITY="$app" agent/build/macos/build.sh \
+            --installer-identity "$installer" \
+            --notary-key "$RUNNER_TEMP/AuthKey.p8" \
+            --notary-key-id "$NOTARY_KEY_ID" \
+            --notary-issuer "$NOTARY_ISSUER"
+
+      - name: validate the staple and the gatekeeper assessment
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $version = $env:VERSION
-          $fileName = "Owlette-Installer-v$version.exe"
-          $path = "agent/build/installer_output/$fileName"
-          if (!(Test-Path $path)) {
-            throw "installer not found at $path — build step did not produce expected artifact"
-          }
-          # The slsa-github-generator `base64-subjects` input is the base64
-          # encoding of a `sha256sum` line — "<hex>␣␣<filename>\n" — NOT the raw
-          # hex and NOT the base64 of the digest bytes. The generator's `attest`
-          # command base64-DECODES this value, so passing raw hex fails with
-          # "illegal base64 data at input byte 64" (the space after the 64-char
-          # hash). Build the exact sha256sum line and base64 it.
-          $bytes = [IO.File]::ReadAllBytes($path)
-          $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
-          $hex = ([BitConverter]::ToString($sha) -replace '-', '').ToLower()
-          $subjectsLine = "$hex  $fileName`n"
-          $subjectsB64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($subjectsLine))
-          Write-Host "sha256 (hex):    $hex"
-          Write-Host "subjects line:   $($subjectsLine.Trim())"
-          Write-Host "base64-subjects: $subjectsB64"
-          "subjects-b64=$subjectsB64" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          pkg="agent/build/macos/Owlette-Installer-v$VERSION.pkg"
+          xcrun stapler validate "$pkg"
+          spctl -a -vvv -t install "$pkg"
+
+      - name: remove the keychain and the notary key
+        if: always()
+        env:
+          KEYCHAIN: ${{ steps.keychain.outputs.keychain }}
+        run: |
+          if [ -n "$KEYCHAIN" ] && [ -f "$KEYCHAIN" ]; then
+            security delete-keychain "$KEYCHAIN"
+          fi
+          if [ -f "$RUNNER_TEMP/AuthKey.p8" ]; then
+            rm "$RUNNER_TEMP/AuthKey.p8"
+          fi
 
       - name: upload installer artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: owlette-installer
-          path: agent/build/installer_output/Owlette-Installer-v${{ steps.version.outputs.version }}.exe
+          name: installer-macos
+          path: agent/build/macos/Owlette-Installer-v${{ steps.version.outputs.version }}.pkg
+          if-no-files-found: error
+          retention-days: 7
+
+  build-linux:
+    name: build installer on ubuntu-24.04
+    needs: [security-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: resolve version
+        id: version
+        env:
+          REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = push ] && [[ "$REF" == refs/tags/v* ]]; then
+            v="${REF#refs/tags/v}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            v="$INPUT_VERSION"
+          else
+            v="$(tr -d '[:space:]' < agent/VERSION)"
+          fi
+          if ! printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::refusing to build: version '$v' must be X.Y.Z semver"
+            exit 1
+          fi
+          printf '%s\n' "$v" > agent/VERSION
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "building installer version $v"
+
+      - name: tauri prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libxdo-dev libssl-dev build-essential
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+        with:
+          toolchain: '1.98.1'
+
+      - name: build the deb
+        run: agent/build/linux/build.sh
+
+      - name: upload installer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installer-linux
+          path: agent/build/linux/Owlette-Installer-v${{ steps.version.outputs.version }}.deb
+          if-no-files-found: error
           retention-days: 7
 
   # ----------------------------------------------------------------------
-  # 2. SLSA Build L3 provenance
+  # 2. One subject list for the three files
+  # ----------------------------------------------------------------------
+  digest:
+    name: sha256 subjects
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      subjects-b64: ${{ steps.digest.outputs.subjects-b64 }}
+      version: ${{ needs.build-windows.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: installer-*
+          merge-multiple: true
+          path: .
+
+      - name: compute base64-subjects for SLSA generator
+        id: digest
+        env:
+          VERSION: ${{ needs.build-windows.outputs.version }}
+        run: |
+          # The slsa-github-generator `base64-subjects` input is the base64
+          # encoding of `sha256sum` output — "<hex>␣␣<filename>\n" per file —
+          # NOT the raw hex and NOT the base64 of the digest bytes. The
+          # generator's `attest` command base64-DECODES this value, so passing
+          # raw hex fails with "illegal base64 data at input byte 64" (the
+          # space after the 64-char hash).
+          files=(
+            "Owlette-Installer-v$VERSION.exe"
+            "Owlette-Installer-v$VERSION.pkg"
+            "Owlette-Installer-v$VERSION.deb"
+          )
+          for f in "${files[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f was not produced by its build job"
+              exit 1
+            fi
+          done
+          sha256sum "${files[@]}"
+          echo "subjects-b64=$(sha256sum "${files[@]}" | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  # ----------------------------------------------------------------------
+  # 3. SLSA Build L3 provenance
   # ----------------------------------------------------------------------
   # The generic slsa-github-generator runs in its own job (not on the
-  # build runner) so the build can't forge its own attestation. It signs
+  # build runners) so the build can't forge its own attestation. It signs
   # with sigstore keylessly via github's OIDC token — the resulting
   # provenance is verifiable by anyone with `slsa-verifier`.
   provenance:
     name: slsa provenance
-    needs: [build]
+    needs: [digest]
     permissions:
       id-token: write       # keyless signing via OIDC
       contents: write       # attach attestation to release
@@ -270,20 +547,21 @@ jobs:
     # exception to the pin-everything policy.
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses]
     with:
-      # base64-encoded `sha256sum` line for the installer (built in the digest
-      # step). The generator base64-decodes this, so it must NOT be raw hex.
-      base64-subjects: "${{ needs.build.outputs.artifact-subjects }}"
-      # upload the signed .intoto.jsonl provenance next to the artifact
+      # base64-encoded `sha256sum` lines for the three installers (built in
+      # the digest job). The generator base64-decodes this, so it must NOT be
+      # raw hex.
+      base64-subjects: "${{ needs.digest.outputs.subjects-b64 }}"
+      # upload the signed .intoto.jsonl provenance next to the artifacts
       # on the release page. requires `contents: write` above.
       upload-assets: ${{ startsWith(github.ref, 'refs/tags/v') }}
       provenance-name: owlette-installer.intoto.jsonl
 
   # ----------------------------------------------------------------------
-  # 3. Publish installer to the release (only on tag pushes)
+  # 4. Publish the installers to the release (only on tag pushes)
   # ----------------------------------------------------------------------
   release:
-    name: attach installer to release
-    needs: [build, provenance]
+    name: attach installers to release
+    needs: [digest, provenance]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -291,25 +569,28 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: owlette-installer
+          pattern: installer-*
+          merge-multiple: true
           path: .
 
-      - name: upload installer to release
+      - name: upload installers to release
         # zizmor: ignore[superfluous-actions] — kept over `gh release upload`
         # because it CREATES the release when a bare tag push arrives without
         # one; the gh equivalent errors out in that case.
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v2 zizmor: ignore[superfluous-actions]
         with:
           files: |
-            Owlette-Installer-v${{ needs.build.outputs.version }}.exe
+            Owlette-Installer-v${{ needs.digest.outputs.version }}.exe
+            Owlette-Installer-v${{ needs.digest.outputs.version }}.pkg
+            Owlette-Installer-v${{ needs.digest.outputs.version }}.deb
 
   # ----------------------------------------------------------------------
-  # 4. Smoke-verify the provenance (catches a misconfigured generator
-  #    before the artifact ships to end users)
+  # 5. Smoke-verify the provenance (catches a misconfigured generator
+  #    before the artifacts ship to end users)
   # ----------------------------------------------------------------------
   verify:
     name: slsa-verifier smoke
-    needs: [build, provenance, release]
+    needs: [digest, provenance, release]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -326,10 +607,11 @@ jobs:
             -o /usr/local/bin/slsa-verifier
           chmod +x /usr/local/bin/slsa-verifier
 
-      - name: download installer
+      - name: download installers
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: owlette-installer
+          pattern: installer-*
+          merge-multiple: true
           path: .
 
       - name: download provenance attestation from release
@@ -345,10 +627,12 @@ jobs:
 
       - name: verify provenance
         env:
-          VERSION: ${{ needs.build.outputs.version }}
+          VERSION: ${{ needs.digest.outputs.version }}
         run: |
           slsa-verifier verify-artifact \
             "Owlette-Installer-v${VERSION}.exe" \
+            "Owlette-Installer-v${VERSION}.pkg" \
+            "Owlette-Installer-v${VERSION}.deb" \
             --provenance-path owlette-installer.intoto.jsonl \
             --source-uri "github.com/${GITHUB_REPOSITORY}" \
             --source-tag "${GITHUB_REF_NAME}"

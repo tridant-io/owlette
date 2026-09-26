@@ -18,20 +18,25 @@ The dashboard uses the same canonical `/api/installer/*` public management API a
 ## uploading a new version
 
 1. Click **upload new version**.
-2. Select or drag in a `.exe` installer. The dialog accepts only `.exe` files and auto-detects `X.Y.Z` from filenames such as `Owlette-Installer-v2.11.0.exe`.
-3. Confirm the `X.Y.Z` version number, add optional release notes, leave **Set as latest version (recommended)** checked unless this is a staged upload, then click **upload installer**.
+2. Select or drag in one installer file. The dialog accepts `.exe`, `.pkg` and `.deb`; the platform is derived from the extension and shown as a badge, and `X.Y.Z` is auto-detected from filenames such as:
+   - Windows (`windows_x64`): `Owlette-Installer-v2.11.0.exe`
+   - macOS, Apple silicon (`macos_arm64`): `Owlette-Installer-v2.11.0.pkg`
+   - Linux (`linux_x64`): `Owlette-Installer-v2.11.0.deb`
+3. Confirm the `X.Y.Z` version number, add optional release notes, leave **set as latest (all platforms)** checked unless this is a staged upload, then click **upload installer**.
+
+One upload is one file. Upload each platform's file under the same version and they merge into one version record; the release notes are version-level.
 
 The dashboard uses a three-step upload flow:
 
-1. **request URL**: `POST /api/installer/upload` with `version`, `fileName`, `contentType`, optional `releaseNotes`, and `setAsLatest` (defaults to `true`). The route requires an `Idempotency-Key`, validates the version and `.exe` filename, creates an `installer_uploads/{uploadId}` record, and returns a signed `uploadUrl`, `uploadId`, `storagePath`, and `expiresAt`. The signed URL expires after 15 minutes.
+1. **request URL**: `POST /api/installer/upload` with `version`, `fileName`, `contentType`, optional `platform`, optional `releaseNotes`, and `setAsLatest` (defaults to `true`). The route requires an `Idempotency-Key`, validates the version and the filename's extension (`platform`, when sent, must match it), creates an `installer_uploads/{uploadId}` record, and returns a signed `uploadUrl`, `uploadId`, `platform`, `storagePath`, and `expiresAt`. The signed URL expires after 15 minutes.
 2. **upload binary**: the browser `PUT`s the installer binary directly to the signed Storage URL and shows upload progress.
-3. **finalize**: `PUT /api/installer/upload` with the `uploadId` and dashboard-computed `checksum_sha256`. The route requires an `Idempotency-Key`, verifies the pending upload record has not expired, confirms the object exists, recomputes SHA-256 from the stored binary, rejects mismatches with `checksum_mismatch`, writes version metadata, and updates latest if requested.
+3. **finalize**: `PUT /api/installer/upload` with the `uploadId` and dashboard-computed `checksum_sha256`. The route requires an `Idempotency-Key`, verifies the pending upload record has not expired, confirms the object exists, recomputes SHA-256 from the stored binary, rejects mismatches with `checksum_mismatch`, merges the file into the version's `files` map (a `.exe` also refreshes the flat `download_url`, `checksum_sha256` and `file_size` alias), and updates latest if requested.
 
 ---
 
 ## version table
 
-Each active version shows:
+Each active version is a row group: the version row, then one row per platform (`windows`, `macos (apple silicon)`, `linux (.deb)`) showing that file's size, the start of its SHA-256, and a download link — or `—` for a platform the version has no file for.
 
 | column | description |
 |--------|-------------|
@@ -49,13 +54,16 @@ Each finalized version stores this metadata under `installer_metadata/data/versi
 | field | source |
 |-------|--------|
 | `version` | Confirmed `X.Y.Z` version from the upload dialog |
-| `download_url` | Long-lived signed read URL generated during finalize |
-| `checksum_sha256` | Server-computed checksum for the stored binary |
+| `files` | One entry per platform, keyed `windows_x64`, `macos_arm64` or `linux_x64`, each with `download_url`, `checksum_sha256`, `file_size`, `file_name` and `uploaded_at` |
+| `download_url` | The Windows file's long-lived signed read URL — an alias of `files.windows_x64.download_url` |
+| `checksum_sha256` | Server-computed checksum for the stored Windows binary (alias of `files.windows_x64`) |
 | `release_notes` | Optional notes from the upload dialog |
-| `file_size` | Storage object size in bytes |
+| `file_size` | Windows Storage object size in bytes (alias of `files.windows_x64`) |
 | `uploaded_at` / `release_date` | Finalize timestamp |
 | `uploaded_by` | User or API key actor that finalized the upload |
 | `deletedAt` | `null` for active versions; set when soft-deleted |
+
+A version uploaded before per-platform files carries its Windows installer under `files.windows_x64`, read from the flat fields.
 
 ---
 
@@ -63,13 +71,13 @@ Each finalized version stores this metadata under `installer_metadata/data/versi
 
 ### set as latest
 
-Uploads set the latest pointer by default. Clearing **Set as latest version (recommended)** keeps the version available in the table without changing the public latest installer.
+Uploads set the latest pointer by default. Clearing **set as latest (all platforms)** keeps the version available in the table without changing the public latest installer.
 
-Promote any uploaded, active non-latest version later with **set as latest**, which calls `POST /api/installer/{version}/set-latest` and rewrites `installer_metadata/latest`. Use this for rollback if a newer installer has issues.
+Promote any uploaded, active non-latest version later with **set as latest (all platforms)**, which calls `POST /api/installer/{version}/set-latest` and rewrites `installer_metadata/latest` with every file the version carries. Use this for rollback if a newer installer has issues.
 
 ### download
 
-Downloads use the signed `download_url` returned by the installer API.
+Each platform row downloads through the signed `download_url` returned by the installer API for that file.
 
 ### delete
 
@@ -96,16 +104,18 @@ Each candidate is soft-deleted via the public API.
 
 ## public download button
 
-All users see a dashboard download button that points to the current latest installer. The unauthenticated permalink remains `GET /download`; management metadata comes from `GET /api/installer/latest`.
+All users see a dashboard download button that points to the current latest installer for the platform they are browsing from, with the other two in a menu; a platform the latest version has no file for is disabled there, with the reason. The unauthenticated permalink remains `GET /download`, which picks the file from the User-Agent and takes `?os=windows|macos|linux` as an override; management metadata comes from `GET /api/installer/latest`.
 
 ---
 
 ## storage
 
-Installers are stored under:
+Installers are stored under `agent-installers/versions/{version}/`, one object per platform:
 
 ```text
-agent-installers/versions/{version}/Owlette-Installer-v{version}.exe
+Owlette-Installer-v{version}.exe
+Owlette-Installer-v{version}.pkg
+Owlette-Installer-v{version}.deb
 ```
 
 Metadata is stored in Firestore under:

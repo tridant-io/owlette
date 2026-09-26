@@ -7,9 +7,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Badge } from '@/components/ui/badge';
 import { Upload, FileUp, X, Loader2, CheckCircle } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { isValidVersion, formatFileSize } from '@/lib/storageUtils';
+import { PLATFORM_LABEL, platformFromExtension } from '@/lib/installerPlatform';
 import { AdminButton } from './AdminButton';
 
 // Extract version from filename (e.g., "owlette-Installer-v2.0.10.exe" -> "2.0.10")
@@ -42,6 +44,7 @@ export default function UploadInstallerDialog({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const platform = file ? platformFromExtension(file.name) : null;
 
   const resetForm = () => {
     setFile(null);
@@ -61,46 +64,35 @@ export default function UploadInstallerDialog({
     setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile && droppedFile.name.endsWith('.exe')) {
-      setFile(droppedFile);
-
-      // Auto-detect version from filename
-      const detectedVersion = extractVersionFromFilename(droppedFile.name);
-      if (detectedVersion) {
-        setVersion(detectedVersion);
-      }
-    } else {
+  const pickFile = useCallback((candidate: File | undefined) => {
+    if (!candidate || !platformFromExtension(candidate.name)) {
       toast.error('Invalid File', {
-        description: 'Please select a .exe file',
+        description: 'Please select a .exe, .pkg or .deb installer',
       });
+      return;
+    }
+    setFile(candidate);
+
+    // Auto-detect version from filename
+    const detectedVersion = extractVersionFromFilename(candidate.name);
+    if (detectedVersion) {
+      setVersion(detectedVersion);
     }
   }, []);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile && selectedFile.name.endsWith('.exe')) {
-      setFile(selectedFile);
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    pickFile(e.dataTransfer.files[0]);
+  }, [pickFile]);
 
-      // Auto-detect version from filename
-      const detectedVersion = extractVersionFromFilename(selectedFile.name);
-      if (detectedVersion) {
-        setVersion(detectedVersion);
-      }
-    } else {
-      toast.error('Invalid File', {
-        description: 'Please select a .exe file',
-      });
-    }
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    pickFile(e.target.files?.[0]);
   };
 
   const handleUpload = async () => {
     // Validation
-    if (!file) {
+    if (!file || !platform) {
       toast.error('No File Selected', {
         description: 'Please select an installer file',
       });
@@ -134,7 +126,7 @@ export default function UploadInstallerDialog({
       );
 
       toast.success('Upload Successful!', {
-        description: `Version ${version} has been uploaded${setAsLatest ? ' and set as latest' : ''}.`,
+        description: `Version ${version} (${PLATFORM_LABEL[platform]}) has been uploaded${setAsLatest ? ' and set as latest' : ''}.`,
       });
 
       resetForm();
@@ -192,18 +184,21 @@ export default function UploadInstallerDialog({
                   <input
                     id="file-upload"
                     type="file"
-                    accept=".exe"
+                    accept=".exe,.pkg,.deb"
                     className="hidden"
                     onChange={handleFileSelect}
                   />
-                  <p className="text-xs text-muted-foreground mt-4">Only .exe files accepted</p>
+                  <p className="text-xs text-muted-foreground mt-4">Only .exe, .pkg or .deb files accepted</p>
                 </div>
               ) : (
                 <div className="flex items-center justify-between bg-background rounded p-4">
                   <div className="flex items-center gap-3">
                     <CheckCircle className="h-5 w-5 text-green-500" />
                     <div className="text-left">
-                      <p className="text-white font-medium">{file.name}</p>
+                      <p className="text-white font-medium flex items-center gap-2">
+                        {file.name}
+                        {platform && <Badge variant="outline">{PLATFORM_LABEL[platform]}</Badge>}
+                      </p>
                       <p className="text-sm text-muted-foreground">{formatFileSize(file.size)}</p>
                     </div>
                   </div>
@@ -260,7 +255,7 @@ export default function UploadInstallerDialog({
               className="cursor-pointer"
             />
             <Label htmlFor="set-latest" className="text-white cursor-pointer">
-              Set as latest version (recommended)
+              set as latest (all platforms)
             </Label>
           </div>
 

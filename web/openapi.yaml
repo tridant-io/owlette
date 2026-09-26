@@ -1264,7 +1264,11 @@ paths:
                   description: Semver string (e.g. "3.0.0").
                 fileName:
                   type: string
-                  description: Must end in `.exe`.
+                  description: Must end in `.exe` (windows), `.pkg` (macos) or `.deb` (linux).
+                platform:
+                  type: string
+                  enum: [windows_x64, macos_arm64, linux_x64]
+                  description: The platform key the file is stored under. Derived from the `fileName` extension when omitted; must match it when given.
                 contentType:
                   type: string
                   default: application/octet-stream
@@ -1289,6 +1293,9 @@ paths:
                     type: string
                   storagePath:
                     type: string
+                  platform:
+                    type: string
+                    enum: [windows_x64, macos_arm64, linux_x64]
                   expiresAt:
                     type: string
                     format: date-time
@@ -1360,6 +1367,14 @@ paths:
                     type: string
                   file_size:
                     type: integer
+                  platform:
+                    type: string
+                    enum: [windows_x64, macos_arm64, linux_x64]
+                  files:
+                    type: object
+                    description: Every platform file the version carries after this upload, keyed by platform.
+                    additionalProperties:
+                      $ref: '#/components/schemas/InstallerFile'
         '400':
           description: Validation error or missing Idempotency-Key
           content:
@@ -9196,9 +9211,31 @@ components:
         enabled: { type: boolean }
         cooldownMinutes: { type: number, minimum: 0 }
 
+    InstallerFile:
+      type: object
+      description: One platform's installer within a version.
+      required: [download_url, checksum_sha256, file_size, file_name, uploaded_at]
+      properties:
+        download_url:
+          type: string
+          format: uri
+        checksum_sha256:
+          type: string
+          nullable: true
+        file_size:
+          type: integer
+          nullable: true
+        file_name:
+          type: string
+          nullable: true
+          description: Display name, e.g. `Owlette-Installer-v3.4.0.pkg`.
+        uploaded_at:
+          type: integer
+          nullable: true
+
     InstallerVersion:
       type: object
-      required: [version, download_url, checksum_sha256, file_size, uploaded_at, uploaded_by, release_date, deletedAt]
+      required: [version, download_url, checksum_sha256, file_size, uploaded_at, uploaded_by, release_date, deletedAt, files]
       properties:
         version:
           type: string
@@ -9206,6 +9243,7 @@ components:
           type: string
           format: uri
           nullable: true
+          description: The windows installer; an alias of `files.windows_x64.download_url`.
         checksum_sha256:
           type: string
           nullable: true
@@ -9228,6 +9266,22 @@ components:
         deletedAt:
           type: integer
           nullable: true
+        files:
+          type: object
+          description: |
+            The installer per platform, keyed `windows_x64`, `macos_arm64` or
+            `linux_x64` (`linux_arm64` is reserved, not built). A version
+            uploaded before per-platform files carries its windows installer
+            here under `windows_x64`, synthesised from the flat fields.
+          additionalProperties:
+            $ref: '#/components/schemas/InstallerFile'
+          example:
+            windows_x64:
+              download_url: https://storage.googleapis.com/owlette/agent-installers/versions/3.4.0/Owlette-Installer-v3.4.0.exe
+              checksum_sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+              file_size: 52428800
+              file_name: Owlette-Installer-v3.4.0.exe
+              uploaded_at: 1758758400000
         promoted_at:
           type: integer
           nullable: true

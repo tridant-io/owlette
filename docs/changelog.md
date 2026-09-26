@@ -23,6 +23,31 @@ from used ÷ percent, a sum that only holds on Windows; a 16 GB MacBook Air
 read as 7.7 GB. The agent also reports "used" the way its own percent is
 built (total minus available), so the bar and the figure agree.
 
+## [4.0.1] - 2026-09-26
+
+### fixed — the macOS installer always puts the app in /Applications
+
+The package no longer lets macOS relocate the app onto another copy of the
+bundle it knows about (a build tree, an old download), which left the login
+item pointing at nothing. The Windows build no longer deletes the macOS and
+Linux build scripts, and the upload script retries once when the API answers
+with an empty body.
+
+## [4.0.0] - 2026-09-25
+
+Owlette 4 runs on three platforms. One release ships the Windows exe, the Apple
+silicon pkg and the Ubuntu deb under one version and one `latest` pointer;
+downloads pick the visitor's platform; the fleet update sends each machine the
+installer for its own platform; and swoop, the remote-control session, ships
+with it. Everything below landed on the way.
+
+### changed — the fleet update sends each machine the installer for its own platform
+
+The update picks the file by the machine's os and architecture (an agent that
+reports neither is windows x64); a machine whose platform the version has no
+file for is skipped and named in the result, with the reason. One version can
+carry the windows exe, the apple silicon pkg and the linux deb.
+
 ### fixed — a swoop session that lost its host reconnects instead of waiting forever
 
 The page gives the machine 20 seconds to answer; a machine that stays silent
@@ -45,16 +70,20 @@ the next launch.
 (`windows`, `macos` or `linux`), `arch` and `osVersion` as the agent
 heartbeats them; null for an agent that predates the fields.
 
-### added — Linux packages, installed and verified on the kiosk VM
+### added — a Linux package, installed and verified on the kiosk VM
 
-`agent/build/linux/build.sh` produces `owlette-agent_<version>_<arch>.deb` (the
-service runtime with its own Python 3.11 under `/opt/owlette`, the systemd
-unit, the user unit that starts the app for every login, and the polkit rule
-that lets the owlette group control the service) beside the app's own `.deb`
-from the Tauri build. Installed over the lab agent on the Ubuntu 24.04 kiosk
-VM: the service came up from the new runtime and heartbeated as the new
-version, the app started for the seat, a notification went through the
-service, and the seat user restarted the service without sudo.
+`agent/build/linux/build.sh` produces one `Owlette-Installer-v<version>.deb`:
+the service runtime with its own Python 3.11 under `/opt/owlette`, the systemd
+unit, the desktop app with the user unit that starts it for every login, and
+the polkit rule that lets the owlette group control the service, with the
+app's own library dependencies declared so the agent's single-file self-update
+resolves. An upgrade restarts a running desktop app onto the new binary, and
+the python-build-standalone tarball the build fetches is checked against a
+pinned sha256 on every run. Installed on the Ubuntu 24.04 kiosk VM: the
+service came up from the new runtime and heartbeated as the new version, the
+app started for the seat, a notification went through the service, the seat
+user restarted the service without sudo, and the upgrade to the next build
+went through in one `apt-get install`.
 
 ### added — a macOS installer package (unsigned build path)
 

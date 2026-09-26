@@ -57,11 +57,12 @@ echo.
 :: Step 1: Clean previous builds
 :: ============================================================================
 echo [1/9] Cleaning previous builds...
-:: Keep downloads\ cache intact - only wipe the build output
-if exist "build" (
-    rmdir /s /q build 2>nul
+:: Keep downloads\ cache intact - only wipe this build's own output. build\linux
+:: and build\macos hold the tracked posix build scripts and stay.
+for %%D in (installer_package installer_output python tools) do (
+    if exist "build\%%D" rmdir /s /q "build\%%D" 2>nul
 )
-mkdir build
+if not exist "build" mkdir build
 mkdir build\installer_package
 :: Persistent download cache (survives clean)
 if not exist "downloads" mkdir downloads

@@ -1,25 +1,37 @@
 ---
 title: "installation"
-description: "there are four supported ways to install or update the owlette agent on a Windows machine."
-keywords: ["add a machine", "new machine", "onboard"]
+description: "there are four supported ways to install or update the owlette agent. one installer version ships one file per platform: Windows, macOS on Apple silicon, and Linux."
+keywords: ["add a machine", "new machine", "onboard", "macos", "linux"]
 ---
 
 1. Interactive packaged installer for a single machine
-2. Silent packaged installer with `/ADD=` for bulk enrollment
+2. Silent packaged installer with `/ADD=` for bulk enrollment (Windows only)
 3. Remote deployment to machines that already run the agent
 4. Manual packaged repair or source-development setup
 
 ---
 
+## the installer files
+
+One version carries up to three files, keyed by the same platform key the fleet reports for a machine:
+
+- Windows (`windows_x64`): `Owlette-Installer-v<version>.exe`
+- macOS, Apple silicon on macOS 15 or later (`macos_arm64`): `Owlette-Installer-v<version>.pkg`
+- Linux, Ubuntu 24.04 (`linux_x64`): `Owlette-Installer-v<version>.deb`
+
+The dashboard download button detects the platform you are browsing from and offers the other two in a menu; a platform the current version has no file for is disabled there, with the reason. The permalink `https://owlette.app/download` picks the file from your browser's User-Agent, and `?os=windows`, `?os=macos` or `?os=linux` overrides it — a client it cannot identify gets the Windows exe, and a platform the version has no file for answers `404 no <os> build in v<version>`. Intel Macs are not supported: the pkg refuses them.
+
+---
+
 ## method 1: interactive packaged install
 
-Download the packaged installer, run it as Administrator, and authorize the machine with the device-code pairing flow.
+Download the packaged installer for the machine's platform, run it with administrator rights, and authorize the machine with the device-code pairing flow.
 
-### steps
+### windows
 
 1. Log into the owlette dashboard.
 2. Click the download button in the header bar.
-3. Save `Owlette-Installer-v<version>.exe` to the target machine.
+3. Save the Windows installer (the `.exe` above) to the target machine.
 4. Right-click the installer and select **Run as administrator**.
 5. Follow the installer wizard.
 6. The owlette window opens on **join a site**, showing the pairing phrase, the authorization link for the server you installed against, and the environment it belongs to. The agent starts polling immediately. There is no console.
@@ -33,11 +45,35 @@ Pairing phrases expire after 10 minutes. Credentials are stored encrypted at `C:
 
 > **Kiosks, signage, media servers, and headless or RDP machines:** nothing opens a browser on the target machine on its own. The phrase and its link are displayed, polling starts, and you authorize from your phone or another computer. `--no-browser` and `OWLETTE_NO_BROWSER=1` are still accepted by `configure_site.py` so existing deployment scripts keep working, but they no longer change anything. For machines nobody is standing in front of, enroll with `/ADD=` instead — see method 2.
 
+### macos
+
+Apple silicon only, macOS 15 or later. The package is signed and notarized.
+
+1. Download the `.pkg` from the dashboard (the download button offers **macos (apple silicon)** from a Mac, or from the menu elsewhere).
+2. Double-click the package, or install it from a terminal:
+
+```bash
+sudo installer -pkg Owlette-Installer-v<version>.pkg -target /
+```
+
+3. Grant **Screen Recording** to the owlette app when macOS asks; the app shows a notice until it is granted.
+4. Pair from the owlette app after installing — the phrase and its link are shown there, and you authorize as in the Windows steps above.
+
+### linux
+
+Ubuntu 24.04. Install with `apt-get`, not `dpkg -i`: the package declares dependencies and `dpkg` resolves none of them.
+
+```bash
+sudo apt-get install ./Owlette-Installer-v<version>.deb
+```
+
+The service runs as `owlette-agent.service`, and the app starts for every login through a user unit. Pair from the owlette app after installing.
+
 ---
 
 ## method 2: silent install with `/ADD=`
 
-Use this path for bulk deployment when an admin has already generated and authorized a pairing phrase.
+Use this path for bulk deployment when an admin has already generated and authorized a pairing phrase. The silent install is Windows only; on macOS and Linux, pair from the app after installing.
 
 ![add machine modal](/docs-screens/add-machine-modal.png)
 
@@ -84,7 +120,7 @@ Owlette-Installer-v<version>.exe /SERVER=dev /ADD=silver-compass-drift /VERYSILE
 
 ## method 3: remote deployment or upgrade
 
-Remote deployment requires a target machine that already has a running owlette agent. The agent receives an `install_software` command, downloads the installer, verifies its SHA-256 checksum, and then executes it with the provided silent flags.
+Remote deployment requires a target machine that already has a running owlette agent. The agent receives an `install_software` command, downloads the installer, verifies its SHA-256 checksum, and then executes it with the provided silent flags. This path runs a Windows installer; to upgrade the agent itself on any platform, use **update owlette** on the deploy page, which sends each machine the file for its own platform — see [self-update](/docs/agent/self-update).
 
 Required fields for an owlette agent upgrade:
 
@@ -101,8 +137,8 @@ Example command payload:
 
 ```json
 {
-  "installer_url": "https://downloads.example.com/Owlette-Installer-v<version>.exe",
-  "installer_name": "Owlette-Installer-v<version>.exe",
+  "installer_url": "https://downloads.example.com/Owlette-Installer.exe",
+  "installer_name": "Owlette-Installer.exe",
   "silent_flags": "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVER=prod",
   "sha256_checksum": "<64-character sha256>",
   "verify_path": "C:\\ProgramData\\Owlette\\agent\\src\\owlette_service.py",
@@ -282,8 +318,8 @@ Before anything else, every install and upgrade retracts the Windows Defender ex
 
 | requirement | minimum |
 |-------------|---------|
-| OS | Windows 10 or later, 64-bit |
+| OS | Windows 10 or later, 64-bit; macOS 15 or later on Apple silicon; Ubuntu 24.04 |
 | RAM | 50 MB agent overhead |
 | Disk | About 200 MB including embedded Python |
 | Network | Access to the configured owlette API and Firebase services |
-| Permissions | Administrator privileges for service installation |
+| Permissions | Administrator privileges (Windows) or `sudo` (macOS, Linux) for service installation |

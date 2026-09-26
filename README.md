@@ -4,21 +4,21 @@
 
 # owlette
 
-### ai-powered fleet management for Windows applications
+### ai-powered fleet management for Windows, macOS and Linux applications
 
-[![Version](https://img.shields.io/badge/version-3.3.15-blue)](https://github.com/tridant-io/owlette/releases)
+[![Version](https://img.shields.io/badge/version-4.0.1-blue)](https://github.com/tridant-io/owlette/releases)
 [![License](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-green)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](https://owlette.app)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://owlette.app)
 
-[live app](https://owlette.app) &nbsp;&bull;&nbsp; [documentation](https://owlette.app/docs) &nbsp;&bull;&nbsp; [download agent](https://owlette.app/download)
+[live app](https://owlette.app) &nbsp;&bull;&nbsp; [documentation](https://owlette.app/docs) &nbsp;&bull;&nbsp; [download agent](https://owlette.app/download) (picks your platform; `?os=windows|macos|linux` overrides)
 
 </div>
 
 ---
 
-owlette is a cloud-connected system for monitoring, managing, and deploying software across fleets of Windows machines — from anywhere. a lightweight Python agent runs on each machine as a Windows service (hosted by a small Rust supervisor, `owlette-host`), reporting metrics and executing commands. a modern web dashboard gives you real-time visibility and control over your entire fleet, backed by Firebase and Cloud Firestore.
+owlette is a cloud-connected system for monitoring, managing, and deploying software across fleets of Windows, macOS and Linux machines — from anywhere. a lightweight Python agent runs on each machine as a system service (a Windows service hosted by a small Rust supervisor, `owlette-host`; a launchd daemon on macOS; a systemd unit on Linux), reporting metrics and executing commands. a modern web dashboard gives you real-time visibility and control over your entire fleet, backed by Firebase and Cloud Firestore.
 
-built for teams running **digital signage**, **media servers**, **kiosks**, **TouchDesigner installations**, and any Windows application that needs to stay running.
+built for teams running **digital signage**, **media servers**, **kiosks**, **TouchDesigner installations**, and any application that needs to stay running.
 
 <div align="center">
 <img src="web/public/dashboard.png" alt="owlette dashboard" width="100%"/>
@@ -68,7 +68,7 @@ agents                    cloud                     dashboard
                      +----------------+
 ```
 
-- **agent** — Python Windows service hosted by `owlette-host`. monitors processes every 5s, sends heartbeats + metrics on an adaptive interval (5s with the desktop window open, 30s while processes run, 120s idle), executes commands, works offline.
+- **agent** — Python service (Windows via `owlette-host`, launchd on macOS, systemd on Linux). monitors processes every 5s, sends heartbeats + metrics on an adaptive interval (5s with the desktop window open, 30s while processes run, 120s idle), executes commands, works offline.
 - **dashboard** — Next.js 16 web app. real-time Firestore listeners, a REST API with [OpenAPI documentation](https://owlette.app/docs/api).
 - **firestore** — real-time NoSQL database. state sync, command relay, and roost version pointers.
 - **object storage** — Cloudflare R2. content-addressed roost chunks and version bodies under a per-site prefix, reachable only through signed URLs.
@@ -80,8 +80,11 @@ agents                    cloud                     dashboard
 
 1. create an account at [owlette.app](https://owlette.app)
 2. create a **site** to organize your machines
-3. download the agent installer from the dashboard
-4. run the installer on your target Windows machine
+3. download the agent installer from the dashboard — the button picks the file for your platform and offers the other two; [owlette.app/download](https://owlette.app/download) does the same from the browser's user agent, and `?os=windows`, `?os=macos` or `?os=linux` overrides it:
+   - Windows: `Owlette-Installer-v<version>.exe`
+   - macOS (Apple silicon, macOS 15+): `Owlette-Installer-v<version>.pkg`
+   - Linux (Ubuntu 24.04): `Owlette-Installer-v<version>.deb`
+4. run the installer on your target machine (Windows as administrator; macOS `sudo installer -pkg … -target /` or double-click; Linux `sudo apt-get install ./Owlette-Installer-v<version>.deb`)
 5. a **3-word pairing phrase** appears — authorize it from the dashboard or your phone
 6. your machine appears in the dashboard within 30 seconds
 
@@ -105,7 +108,7 @@ setting up the repo — toolchain, the agent's Python venv, local env files, and
 | component | technology |
 |-----------|-----------|
 | **dashboard** | Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui |
-| **agent** | Python 3.11, Windows service hosted by `owlette-host` (Rust), psutil, pywin32 |
+| **agent** | Python 3.11, Windows service hosted by `owlette-host` (Rust) / launchd daemon on macOS / systemd unit on Linux, psutil, pywin32 |
 | **desktop app** | Tauri 2 (Rust), React 19, TypeScript, Tailwind CSS 4 |
 | **database** | Cloud Firestore (real-time NoSQL) |
 | **auth** | Firebase Auth, WebAuthn/Passkeys, TOTP 2FA, device code pairing |
