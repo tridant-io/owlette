@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "owlette-host"
-version = "4.0.1"
+version = "4.0.2"
 dependencies = [
  "windows-service",
  "winresource",
