@@ -99,15 +99,25 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
     setIsUpdating(true);
 
     try {
-      await updateMachines(siteId, targetMachines);
+      const skippedByPlatform = await updateMachines(siteId, targetMachines);
+      const sent = targetMachines.length - skippedByPlatform.length;
+      const skipNotes = [
+        ...(skipped > 0 ? [`${skipped} machine(s) skipped — offline or already updating`] : []),
+        ...skippedByPlatform.map(s => `skipped ${s.machineId}: ${s.reason}`),
+      ];
+
+      if (sent === 0) {
+        toast.error('No updates sent', { description: skipNotes.join('. '), duration: 8000 });
+        return;
+      }
 
       toast.success(
-        `Update initiated for ${targetMachines.length} machine(s)`,
+        `Update initiated for ${sent} machine(s)`,
         {
-          description: skipped > 0
-            ? `${skipped} machine(s) skipped — offline or already updating. the rest will restart automatically after updating.`
+          description: skipNotes.length > 0
+            ? `${skipNotes.join('. ')}. the rest will restart automatically after updating.`
             : 'The owlette service will restart automatically after updating',
-          duration: 5000,
+          duration: skipNotes.length > 0 ? 8000 : 5000,
         }
       );
 
