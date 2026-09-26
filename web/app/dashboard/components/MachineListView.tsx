@@ -31,6 +31,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { formatScheduleSummary } from '@/components/ScheduleEditor';
 import { BLOCK_COLORS } from '@/lib/scheduleDefaults';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
+import { resolveMemoryTotalGb } from '@/lib/machineMemory';
 import { formatStorageRange } from '@/lib/storageUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
 import { formatHeartbeatTime, formatMachineLocalClock, formatTimezoneShortName, getDisplayTimezone } from '@/lib/timeUtils';
@@ -328,14 +329,12 @@ export function MachineRow({
   const gpuDevice = resolveDevice(machine.devices?.gpus, pref.gpu, primary?.gpu);
   const nicDevice = resolveDevice(machine.devices?.nics, pref.nic, primary?.nic);
 
-  // v2 MemoryMetric doesn't report `totalGb`; derive it from usedGb/percent, and show used
-  // alone when percent is 0/missing.
+  // shows used alone when no total can be resolved.
   const memoryPercent = machine.metrics?.memory?.percent ?? 0;
   const memoryUsedGb = machine.metrics?.memory?.usedGb;
+  const resolvedMemoryTotalGb = resolveMemoryTotalGb(machine.metrics?.memory);
   const memoryTotalGb =
-    memoryUsedGb !== undefined && memoryPercent > 0
-      ? Math.round((memoryUsedGb / memoryPercent) * 100 * 10) / 10
-      : null;
+    resolvedMemoryTotalGb !== null ? Math.round(resolvedMemoryTotalGb * 10) / 10 : null;
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
   const isMuted = fullPrefs.mutedMachines.includes(machine.machineId);

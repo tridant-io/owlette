@@ -11,6 +11,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — a Mac or Linux machine no longer shows half its RAM
+
+The dashboard now reads the total the agent reports instead of recovering it
+from used ÷ percent, a sum that only holds on Windows; a 16 GB MacBook Air
+read as 7.7 GB. The agent also reports "used" the way its own percent is
+built (total minus available), so the bar and the figure agree.
+
 ### fixed — a swoop session that lost its host reconnects instead of waiting forever
 
 The page gives the machine 20 seconds to answer; a machine that stays silent

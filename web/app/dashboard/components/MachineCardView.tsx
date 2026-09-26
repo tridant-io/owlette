@@ -14,6 +14,7 @@ import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { resolveMemoryTotalGb } from '@/lib/machineMemory';
 import { toast } from '@/lib/toast';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
@@ -206,12 +207,8 @@ function MachineCard({
   const showGpuDropdown = shouldShowDeviceDropdown(machine.devices?.gpus);
   const showNicDropdown = shouldShowDeviceDropdown(machine.devices?.nics);
 
-  // v2 agents no longer send total_gb; recover it from usedGb / (percent/100).
   const memory = machine.metrics?.memory;
-  const memoryTotalGb =
-    memory && memory.usedGb != null && memory.percent != null && memory.percent > 0
-      ? memory.usedGb / (memory.percent / 100)
-      : null;
+  const memoryTotalGb = resolveMemoryTotalGb(memory);
 
   // Inline so they close over machine + resolved device state.
   const renderDeviceSelect = (

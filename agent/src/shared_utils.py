@@ -3344,7 +3344,11 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
 
         # GB, emitted in both snake_case and camelCase for v1 + v2 readers.
         mem = psutil.virtual_memory()
-        mem_used_gb = round(mem.used / (1024**3), 2)
+        # total - available, not psutil's `used`: on macos and linux `used`
+        # leaves out inactive and cached pages while `percent` counts them,
+        # so the pair the card draws (a bar and a figure) disagreed by half.
+        # on windows the two are the same number.
+        mem_used_gb = round((mem.total - mem.available) / (1024**3), 2)
         mem_total_gb = round(mem.total / (1024**3), 2)
         mem_percent = round(mem.percent, 1)
 
