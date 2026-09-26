@@ -251,6 +251,39 @@ class TestGetGpus:
         # Driver older than 510: the reading still arrives, off a v1 struct.
         assert gpus[0].memoryUsed == 7 * 1024
 
+    def test_apple_gpu_comes_from_the_ioregistry(self):
+        import plistlib
+        plist = plistlib.dumps([{
+            'IOClass': 'AGXAcceleratorG14G',
+            'model': b'Apple M2',
+            'PerformanceStatistics': {
+                'Device Utilization %': 44,
+                'In use system memory': 1024 ** 3,
+                'Alloc system memory': 9 * 1024 ** 3,
+            },
+        }])
+        run = Mock(return_value=SimpleNamespace(stdout=plist, returncode=0))
+        vm = SimpleNamespace(total=16 * 1024 ** 3)
+
+        with patch.object(shared_utils.sys, 'platform', 'darwin'), \
+                patch.object(shared_utils.subprocess, 'run', run), \
+                patch.object(shared_utils.psutil, 'virtual_memory', return_value=vm):
+            gpus = shared_utils.get_gpus()
+
+        assert run.call_args.args[0][0] == '/usr/sbin/ioreg'
+        assert len(gpus) == 1
+        assert gpus[0].name == 'Apple M2'
+        assert gpus[0].uuid == 'apple-gpu-0'
+        assert gpus[0].load == 0.44
+        assert gpus[0].memoryTotal == 16 * 1024
+        assert gpus[0].memoryUsed == 1024
+
+    def test_apple_gpu_read_failure_is_an_empty_list(self):
+        run = Mock(side_effect=OSError('no ioreg'))
+        with patch.object(shared_utils.sys, 'platform', 'darwin'), \
+                patch.object(shared_utils.subprocess, 'run', run):
+            assert shared_utils.get_gpus() == []
+
     def test_missing_library_backs_off_instead_of_raising(self):
         fake = self._fake_pynvml(init_error=self.LibraryNotFound('nvml.dll'))
 

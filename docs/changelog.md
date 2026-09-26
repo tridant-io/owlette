@@ -11,6 +11,11 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — a Mac reports its GPU
+
+The agent reads the Apple GPU from the IORegistry (name, utilisation, memory
+in use out of the unified pool), so the card and list show it instead of N/A.
+
 ### fixed — a Mac or Linux machine no longer shows half its RAM
 
 The dashboard now reads the total the agent reports instead of recovering it
