@@ -122,6 +122,12 @@ STOP_JOIN_TIMEOUT_SECONDS = 5.0  # the design target is a 2 s exit
 TOKEN_REFRESH_MARGIN_MIN_SECONDS = 600.0
 TOKEN_REFRESH_MARGIN_MAX_SECONDS = 900.0
 TOKEN_HARD_DEADLINE_SECONDS = 30.0  # close and back off rather than run past exp
+# The margins above assume a long-lived token; against the 300 s one the
+# protocol actually issues they are capped to a share of the lifetime, so a
+# token refreshes at 65-80 % of its life and is abandoned at 90 %.
+TOKEN_REFRESH_SHARE_MIN = 0.2
+TOKEN_REFRESH_SHARE_MAX = 0.35
+TOKEN_HARD_SHARE = 0.1
 
 # Close code / error codes that mean "this token is no longer acceptable", as
 # distinct from a generic drop. Task 2.8 must close an expired or unknown-kid
@@ -530,10 +536,17 @@ class SwoopDoorbell:
         now = self._monotonic()
         margin = self._rng.uniform(
             TOKEN_REFRESH_MARGIN_MIN_SECONDS, TOKEN_REFRESH_MARGIN_MAX_SECONDS)
+        # a doorbell token lives 300 s (PROTOCOL.md §8), shorter than the
+        # margin written for long-lived ones: capped to a share of the lifetime
+        # or the refresh deadline is already due when the token arrives and the
+        # socket is torn down and re-dialled on every connect.
+        margin = min(margin, expires_in * self._rng.uniform(
+            TOKEN_REFRESH_SHARE_MIN, TOKEN_REFRESH_SHARE_MAX))
+        hard_margin = min(TOKEN_HARD_DEADLINE_SECONDS, expires_in * TOKEN_HARD_SHARE)
         self._token = token
         self._signal_url = signal_url
         self._token_refresh_at = now + max(0.0, expires_in - margin)
-        self._token_hard_at = now + max(0.0, expires_in - TOKEN_HARD_DEADLINE_SECONDS)
+        self._token_hard_at = now + max(0.0, expires_in - hard_margin)
         self._mint_retry_at = None
         self._mint_failures = 0
         # kid and expiresIn are the only mint fields that may be logged.

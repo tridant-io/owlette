@@ -542,6 +542,25 @@ def test_token_refresh_fires_before_exp_with_a_jittered_margin():
     assert all(600.0 <= m <= 900.0 for m in margins)
 
 
+def test_a_short_lived_token_refreshes_late_in_its_life_not_at_once():
+    # the protocol's doorbell token lives 300 s, under the long-token margin:
+    # the refresh lands at 65-80 % of the life and the hard stop at 90 %, so a
+    # fresh token is not torn down the moment it arrives.
+    short = lambda n: FakeResponse(200, {
+        'token': TOKEN, 'kid': 'k1', 'expiresIn': 300, 'signalUrl': SIGNAL_URL,
+    })
+    refresh_at = []
+    for seed in range(100):
+        run = build(seed=seed, mint_behaviour=short)
+        at = run.clock.now
+        connect(run)
+        refresh_at.append(run.doorbell._token_refresh_at - at)
+        assert run.doorbell._token_hard_at == at + 270.0
+    assert all(195.0 <= r <= 240.0 for r in refresh_at)
+    assert min(refresh_at) < 205.0
+    assert max(refresh_at) > 230.0
+
+
 def test_refresh_deadline_survives_a_clock_step(monkeypatch):
     # The module reads no wall clock at all, which is the strongest form of the
     # guarantee: a kiosk that NTP-steps cannot move the schedule.
