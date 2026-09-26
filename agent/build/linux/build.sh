@@ -1,15 +1,22 @@
 #!/bin/bash
-# the owlette packages for linux (tri-platform 5.2): `owlette-agent_<ver>_<arch>.deb`
-# (the service runtime under /opt/owlette, its system unit, the app's user unit
-# and the polkit rule) beside the app's own `owlette_<ver>_<arch>.deb` from the
-# Tauri build. runs on the architecture it packages for (x86_64 or aarch64)
-# with the Tauri build dependencies, cargo and node installed; nothing here
-# needs root, and dpkg-deb owns the payload to root itself.
+# the owlette package for linux (tri-platform 5.2, multi-platform releases
+# 1.2): one `Owlette-Installer-v<ver>.deb` — the service runtime under
+# /opt/owlette, its system unit, the app's user unit, the polkit rule, and the
+# desktop app itself (the Tauri build's deb, unpacked into the payload with
+# its Depends carried over). the package stays `owlette-agent` and provides,
+# replaces and conflicts with the old `owlette` app package, so a box on the
+# two-package install upgrades in one apt-get install. runs on the
+# architecture it packages for (x86_64 or aarch64) with the Tauri build
+# dependencies, cargo and node installed; nothing here needs root, and
+# dpkg-deb owns the payload to root itself.
 #
-#   agent/build/linux/build.sh [--python 3.11.16+20260924] [--skip-app]
+#   agent/build/linux/build.sh [--skip-app]
+#
+# --skip-app reuses the newest deb under desktop/src-tauri/target/release/
+# bundle/deb instead of building the app.
 #
 # release order (CLAUDE.md): the version is read from agent/VERSION, so bump
-# and commit before building — the file names and the payload carry it.
+# and commit before building — the file name and the payload carry it.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -18,20 +25,24 @@ WORK="${OUT}/work"
 PAYLOAD="${WORK}/payload"
 PACKAGING="${REPO}/agent/packaging/linux"
 VERSION="$(tr -d '[:space:]' < "${REPO}/agent/VERSION")"
+DEB="${OUT}/Owlette-Installer-v${VERSION}.deb"
+# the interpreter is pinned to one python-build-standalone release; the sums
+# are the release's SHA256SUMS, and the three move together.
 PYTHON_BUILD="3.11.16+20260924"
+PBS_SHA256_x86_64="49a52eb189878431a36efd137e7cd08f6429e59dc049b9cfb030bf706eb33fd4"
+PBS_SHA256_aarch64="96f6f6af710762a34507ba222435a8d58d0b2a97c48cb84c0a0c73cdff199bb0"
 SKIP_APP=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --python) PYTHON_BUILD="$2"; shift 2 ;;
     --skip-app) SKIP_APP=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 case "$(uname -m)" in
-  x86_64) ARCH=amd64; PBS_ARCH=x86_64-unknown-linux-gnu ;;
-  aarch64) ARCH=arm64; PBS_ARCH=aarch64-unknown-linux-gnu ;;
+  x86_64) ARCH=amd64; PBS_ARCH=x86_64-unknown-linux-gnu; PBS_SHA256="${PBS_SHA256_x86_64}" ;;
+  aarch64) ARCH=arm64; PBS_ARCH=aarch64-unknown-linux-gnu; PBS_SHA256="${PBS_SHA256_aarch64}" ;;
   *) echo "build.sh: unsupported architecture $(uname -m)" >&2; exit 2 ;;
 esac
 say() { echo "== $*"; }
@@ -50,6 +61,11 @@ if [ ! -f "${OUT}/cache/${TARBALL}" ]; then
     "https://github.com/astral-sh/python-build-standalone/releases/download/${TAG}/${TARBALL}"
   mv "${OUT}/cache/${TARBALL}.part" "${OUT}/cache/${TARBALL}"
 fi
+# checked on every run, not only after a download: a warm cache is not a
+# verified one. a mismatch is left in place for a look.
+say "verifying ${TARBALL}"
+echo "${PBS_SHA256}  ${OUT}/cache/${TARBALL}" | sha256sum -c - \
+  || { echo "build.sh: ${OUT}/cache/${TARBALL} does not match its pinned sha256" >&2; exit 1; }
 say "unpacking the runtime"
 tar -xzf "${OUT}/cache/${TARBALL}" -C "${RUNTIME}"
 PY="${RUNTIME}/python/bin/python3"
@@ -68,6 +84,21 @@ find "${RUNTIME}/python" -name '__pycache__' -type d -prune -exec rm -rf {} +
 # write bits anywhere in it.
 chmod -R go-w "${RUNTIME}"
 
+# --- the app --------------------------------------------------------------------
+if [ "${SKIP_APP}" = "0" ]; then
+  say "building the app"
+  ( cd "${REPO}/desktop" && npm ci --no-audit --no-fund --silent && npx tauri build --bundles deb --ci )
+fi
+APP_DEB="$(ls -t "${REPO}"/desktop/src-tauri/target/release/bundle/deb/*.deb 2>/dev/null | head -1 || true)"
+[ -n "${APP_DEB}" ] || { echo "build.sh: no app .deb under desktop/src-tauri/target/release/bundle/deb" >&2; exit 1; }
+# the app's tree (/usr/bin/owlette-desktop, its .desktop file, its icons) joins
+# the payload and its runtime libraries join Depends: one package, one install.
+say "merging ${APP_DEB##*/} into the payload"
+dpkg-deb -x "${APP_DEB}" "${PAYLOAD}"
+APP_DEPENDS="$(dpkg-deb -f "${APP_DEB}" Depends)"
+[ -n "${APP_DEPENDS}" ] || { echo "build.sh: ${APP_DEB##*/} declares no Depends" >&2; exit 1; }
+
+# --- the package ------------------------------------------------------------------
 cp "${PACKAGING}/owlette-agent.service" "${PAYLOAD}/usr/lib/systemd/system/"
 cp "${PACKAGING}/owlette-desktop.service" "${PAYLOAD}/usr/lib/systemd/user/"
 cp "${PACKAGING}/49-owlette.rules" "${PAYLOAD}/etc/polkit-1/rules.d/"
@@ -82,30 +113,23 @@ Section: admin
 Priority: optional
 Architecture: ${ARCH}
 Installed-Size: ${SIZE_KB}
-Depends: owlette (>= ${VERSION}), polkitd | policykit-1
+Depends: ${APP_DEPENDS}, polkitd | policykit-1
+Provides: owlette
+Replaces: owlette
+Conflicts: owlette
 Maintainer: Tridant <support@owlette.app>
 Homepage: https://owlette.app
-Description: owlette agent — the process monitoring and remote management service
+Description: owlette — the process monitoring and remote management service and its app
  The owlette service with its own Python runtime under /opt/owlette, the
- systemd unit that runs it, the user unit that starts the owlette desktop app
+ systemd unit that runs it, the desktop app with the user unit that starts it
  for every login, and the polkit rule that lets the owlette group control the
- service.
+ service. Supersedes the separate owlette app package.
 EOF
 
-# --- the app --------------------------------------------------------------------
-if [ "${SKIP_APP}" = "0" ]; then
-  say "building the app"
-  ( cd "${REPO}/desktop" && npm ci --no-audit --no-fund --silent && npx tauri build --bundles deb --ci )
-fi
-APP_DEB="$(ls -t "${REPO}"/desktop/src-tauri/target/release/bundle/deb/*.deb 2>/dev/null | head -1 || true)"
-[ -n "${APP_DEB}" ] || { echo "build.sh: no app .deb under desktop/src-tauri/target/release/bundle/deb" >&2; exit 1; }
-
-# --- the packages ----------------------------------------------------------------
-say "building owlette-agent_${VERSION}_${ARCH}.deb"
-dpkg-deb --build --root-owner-group "${PAYLOAD}" "${OUT}/owlette-agent_${VERSION}_${ARCH}.deb" >/dev/null
-cp "${APP_DEB}" "${OUT}/"
+say "building ${DEB##*/}"
+dpkg-deb --build --root-owner-group "${PAYLOAD}" "${DEB}" >/dev/null
 
 say "done"
-ls -la "${OUT}"/*.deb
-sha256sum "${OUT}"/*.deb
-dpkg-deb --info "${OUT}/owlette-agent_${VERSION}_${ARCH}.deb" | sed -n '1,12p'
+ls -la "${DEB}"
+sha256sum "${DEB}"
+dpkg-deb --info "${DEB}"

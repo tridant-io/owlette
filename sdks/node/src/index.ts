@@ -248,6 +248,8 @@ export type {
   InstallerDeploymentMutationResult,
 } from './resources/installerDeployments';
 export type {
+  InstallerFile,
+  InstallerPlatform,
   InstallerVersion,
   ListInstallerOptions,
   ListInstallerResult,

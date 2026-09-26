@@ -16,8 +16,21 @@ import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 import type { OwletteClient } from '../lib/client';
 
+export type InstallerPlatform = 'windows_x64' | 'macos_arm64' | 'linux_x64';
+
+/** One platform's installer within a version. */
+export interface InstallerFile {
+  download_url: string;
+  checksum_sha256: string | null;
+  file_size: number | null;
+  /** Display name, e.g. `Owlette-Installer-v3.4.0.pkg`. */
+  file_name: string | null;
+  uploaded_at: number | null;
+}
+
 export interface InstallerVersion {
   version: string;
+  /** The windows installer; an alias of `files.windows_x64.download_url`. */
   download_url: string | null;
   checksum_sha256: string | null;
   release_notes: string | null;
@@ -26,6 +39,9 @@ export interface InstallerVersion {
   uploaded_by: string | null;
   release_date?: string | null;
   deletedAt: number | null;
+  /** The installer per platform. A version uploaded before per-platform
+   * files carries its windows installer under `windows_x64`. */
+  files: Partial<Record<InstallerPlatform, InstallerFile>>;
   promoted_at?: number | null;
   promoted_by?: string | null;
 }
@@ -42,12 +58,15 @@ export interface ListInstallerResult {
 }
 
 export interface UploadRequestOptions {
-  /** Local path to the `.exe` to upload. */
+  /** Local path to the `.exe`, `.pkg` or `.deb` to upload. */
   filePath: string;
   /** Semver `X.Y.Z`. */
   version: string;
   /** File name on storage; defaults to the basename of `filePath`. */
   fileName?: string;
+  /** Platform key the file is stored under; the api derives it from the file
+   * name's extension when omitted and rejects a mismatch. */
+  platform?: InstallerPlatform;
   contentType?: string;
   releaseNotes?: string | null;
   /** Whether to promote this version to `latest` on finalize. Default true. */
@@ -68,6 +87,9 @@ export interface UploadResult {
   download_url: string;
   checksum_sha256: string;
   file_size: number;
+  platform: InstallerPlatform;
+  /** Every platform file the version carries after this upload. */
+  files: Partial<Record<InstallerPlatform, InstallerFile>>;
 }
 
 export class Installer {
@@ -110,6 +132,7 @@ export class Installer {
       fileName,
       contentType,
     };
+    if (opts.platform !== undefined) startBody.platform = opts.platform;
     if (opts.releaseNotes !== undefined) startBody.releaseNotes = opts.releaseNotes;
     if (opts.setAsLatest !== undefined) startBody.setAsLatest = opts.setAsLatest;
     const idempotencyKey =

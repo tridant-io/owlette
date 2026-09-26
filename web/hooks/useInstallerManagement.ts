@@ -4,6 +4,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { handleError } from '@/lib/errorHandler';
 import { useAuth } from '@/contexts/AuthContext';
 import type { FirestoreTs } from '@/hooks/useFirestore';
+import {
+  normalizeInstallerFiles,
+  platformFromExtension,
+  type InstallerFiles,
+} from '@/lib/installerPlatform';
 
 export interface InstallerVersion {
   id: string;
@@ -15,9 +20,11 @@ export interface InstallerVersion {
   release_notes?: string;
   uploaded_by: string;
   is_latest?: boolean;
+  files: InstallerFiles;
 }
 
-interface InstallerVersionApi {
+// a type alias, not an interface, so the record is assignable to the normaliser's Record<string, unknown>
+type InstallerVersionApi = {
   version?: string;
   download_url?: string | null;
   file_size?: number | null;
@@ -26,7 +33,8 @@ interface InstallerVersionApi {
   checksum_sha256?: string | null;
   release_notes?: string | null;
   uploaded_by?: string | null;
-}
+  files?: unknown;
+};
 
 /**
  * useInstallerManagement Hook
@@ -96,10 +104,14 @@ export function useInstallerManagement() {
       if (!user) {
         throw new Error('You must be logged in to upload');
       }
+      const platform = platformFromExtension(file.name);
+      if (!platform) {
+        throw new Error('Installer must be a .exe, .pkg or .deb file');
+      }
 
       try {
         const checksum = await sha256File(file);
-        const idempotencyKey = createIdempotencyKey(`installer-upload-${version}`);
+        const idempotencyKey = createIdempotencyKey(`installer-upload-${version}-${platform}`);
         const uploadInit = await fetch('/api/installer/upload', {
           method: 'POST',
           headers: {
@@ -109,6 +121,7 @@ export function useInstallerManagement() {
           body: JSON.stringify({
             version,
             fileName: file.name,
+            platform,
             contentType: file.type || 'application/octet-stream',
             releaseNotes,
             setAsLatest,
@@ -260,6 +273,7 @@ function normalizeVersion(raw: InstallerVersionApi): InstallerVersion {
     checksum_sha256: raw.checksum_sha256 ?? '',
     release_notes: raw.release_notes ?? undefined,
     uploaded_by: raw.uploaded_by ?? '',
+    files: normalizeInstallerFiles(raw),
   };
 }
 

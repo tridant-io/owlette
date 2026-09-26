@@ -17,7 +17,7 @@
 import { Command } from 'commander';
 import { createHash, randomUUID } from 'crypto';
 import { readFileSync, statSync } from 'fs';
-import { basename } from 'path';
+import { basename, extname } from 'path';
 import { loadConfig } from '../config';
 import { fetchWithTimeout } from '../lib/http';
 import {
@@ -27,6 +27,14 @@ import {
   unconfirmedMutationFatal,
   usageFatal,
 } from '../lib/output';
+
+interface InstallerFile {
+  download_url: string;
+  checksum_sha256: string | null;
+  file_size: number | null;
+  file_name: string | null;
+  uploaded_at: number | null;
+}
 
 interface InstallerVersion {
   version: string;
@@ -38,7 +46,16 @@ interface InstallerVersion {
   uploaded_by: string | null;
   release_date?: string | null;
   deletedAt: number | null;
+  files?: Record<string, InstallerFile>;
 }
+
+// mirrors web/lib/installerPlatform.ts; the cli cannot import from web/.
+const PLATFORM_BY_EXTENSION: Record<string, string> = {
+  '.exe': 'windows_x64',
+  '.pkg': 'macos_arm64',
+  '.deb': 'linux_x64',
+};
+const INSTALLER_PLATFORMS = Object.values(PLATFORM_BY_EXTENSION);
 
 export function registerInstallerCommands(program: Command): void {
   const installer =
@@ -129,6 +146,10 @@ export function registerInstallerCommands(program: Command): void {
       process.stdout.write(
         renderTable(['version', 'size', 'uploaded', 'status', 'sha256 (12)'], rows),
       );
+      for (const v of versions) {
+        const files = renderFiles(v.files);
+        if (files) process.stdout.write(`\n${v.version}\n${files}`);
+      }
       const nextPageToken = data.next_page_token ?? data.nextPageToken ?? '';
       if (nextPageToken) {
         process.stdout.write(`\nnext page: --cursor ${nextPageToken}\n`);
@@ -184,7 +205,7 @@ export function registerInstallerCommands(program: Command): void {
               (data.checksum_sha256 ?? '').slice(0, 12),
             ],
           ],
-        ),
+        ) + renderFiles(data.files),
       );
     });
 
@@ -192,6 +213,10 @@ export function registerInstallerCommands(program: Command): void {
     .command('upload <file>')
     .description('upload a new installer binary (3-step: request → upload → finalize)')
     .requiredOption('--version <semver>', 'semver of the installer being uploaded (X.Y.Z)')
+    .option(
+      '--platform <key>',
+      `platform key (${INSTALLER_PLATFORMS.join(' | ')}); derived from the file extension by default`,
+    )
     .option('--release-notes <text>', 'release notes shown on the dashboard')
     .option('--set-latest', 'mark this version as the latest after upload (default: true)')
     .option(
@@ -201,6 +226,22 @@ export function registerInstallerCommands(program: Command): void {
     .action(async (file: string, opts, cmd) => {
       const { apiUrl, token, json } = resolveAuth(cmd);
       if (!token) return;
+
+      const fileName = basename(file);
+      const platform =
+        opts.platform !== undefined
+          ? String(opts.platform)
+          : PLATFORM_BY_EXTENSION[extname(fileName).toLowerCase()];
+      if (platform === undefined) {
+        usageFatal(
+          `cannot derive a platform from '${fileName}': expected a .exe (windows_x64), .pkg (macos_arm64) or .deb (linux_x64) file, or pass --platform`,
+        );
+        return;
+      }
+      if (!INSTALLER_PLATFORMS.includes(platform)) {
+        usageFatal(`--platform must be one of ${INSTALLER_PLATFORMS.join(', ')}`);
+        return;
+      }
 
       // Sync read: installers are typically <50 MiB, and streaming would force a
       // manual Content-Length while the signed url already has a server-side budget.
@@ -216,7 +257,6 @@ export function registerInstallerCommands(program: Command): void {
         return;
       }
 
-      const fileName = basename(file);
       const checksum = createHash('sha256').update(buffer).digest('hex');
 
       // Same key on POST and finalize so retries replay while the url is valid.
@@ -226,7 +266,7 @@ export function registerInstallerCommands(program: Command): void {
 
       if (!json) {
         process.stdout.write(
-          `owlette: uploading ${fileName} (${humanBytes(fileSize)}) — sha256 ${checksum.slice(0, 12)}…\n`,
+          `owlette: uploading ${fileName} (${platform}, ${humanBytes(fileSize)}) — sha256 ${checksum.slice(0, 12)}…\n`,
         );
       }
 
@@ -234,6 +274,7 @@ export function registerInstallerCommands(program: Command): void {
       const startBody: Record<string, unknown> = {
         version: opts.version,
         fileName,
+        platform,
       };
       if (opts.releaseNotes !== undefined) startBody.releaseNotes = opts.releaseNotes;
       if (opts.setLatest !== undefined) startBody.setAsLatest = Boolean(opts.setLatest);
@@ -328,6 +369,8 @@ export function registerInstallerCommands(program: Command): void {
         download_url?: string;
         checksum_sha256?: string;
         file_size?: number;
+        platform?: string;
+        files?: Record<string, InstallerFile>;
         detail?: string;
         code?: string;
       };
@@ -345,7 +388,7 @@ export function registerInstallerCommands(program: Command): void {
       }
 
       process.stdout.write(
-        `owlette: installer ${finalizeData.version} uploaded (${humanBytes(finalizeData.file_size ?? fileSize)})\n` +
+        `owlette: installer ${finalizeData.version} uploaded (${finalizeData.platform ?? platform}, ${humanBytes(finalizeData.file_size ?? fileSize)})\n` +
           `  sha256       ${finalizeData.checksum_sha256}\n` +
           `  download url ${finalizeData.download_url}\n`,
       );
@@ -537,6 +580,24 @@ function resolveAuth(cmd: Command): { apiUrl: string; token: string | null; json
 function fatal(msg: string): void {
   process.stderr.write(`owlette: ${msg}\n`);
   process.exitCode = 1;
+}
+
+/** One indented `platform  size  sha256 (12)` line per file; empty when there are none. */
+function renderFiles(files: Record<string, InstallerFile> | undefined): string {
+  const rows = Object.entries(files ?? {}).map(([platform, f]) => [
+    platform,
+    f.file_size != null ? humanBytes(f.file_size) : '',
+    (f.checksum_sha256 ?? '').slice(0, 12),
+  ]);
+  if (rows.length === 0) return '';
+  const width = (i: number): number => Math.max(...rows.map((r) => (r[i] ?? '').length));
+  return (
+    rows
+      .map((r) =>
+        `  ${(r[0] ?? '').padEnd(width(0))}  ${(r[1] ?? '').padEnd(width(1))}  ${r[2]}`.trimEnd(),
+      )
+      .join('\n') + '\n'
+  );
 }
 
 async function promptYesNo(question: string): Promise<boolean> {
