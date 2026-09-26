@@ -19,7 +19,7 @@ handshake), section 2 (the ten messages and per-role send rights), section 8 (jw
 | `GET /health` | none | fixed body, and it never touches a durable object — the first access to a room name pins that room's home colo for good. carrying `x-swoop-ring-secret` additionally returns the active `kids` and the `algorithm` constant, which is the only way to confirm a rotation landed |
 | `GET /v1/room/{site}/{machine}` | swoop jwt | the websocket upgrade. the room is named from the **token's** `site`+`machine`, and a url that disagrees is `403 room_mismatch` |
 | `POST /v1/ring` | `x-swoop-ring-secret` | body is exactly `{site, machine, sid}`; any other key is `400 unexpected_field` |
-| `POST /v1/kill` | `x-swoop-ring-secret` | body is `{site, machine, sid?}`, and `sid` may be `null` — "kill whatever is running" |
+| `POST /v1/kill` | `x-swoop-ring-secret` | body is `{site, machine, sid?}`. a sid closes that session's host and viewers only; `null` means "kill whatever is running" and closes every socket |
 
 a ring to a machine with no doorbell attached is `409 no_doorbell`, not a silent no-op.
 

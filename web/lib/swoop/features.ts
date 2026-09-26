@@ -99,8 +99,11 @@ export interface SwoopSession {
   renewLease(): Promise<SwoopLease>;
   /** when the lease currently held lapses. */
   leaseExpiresAt(): number;
-  /** end the session: tears down the peer and the page's state. */
-  end(reason: string): void;
+  /**
+   * end the session: tears down the peer and the page's state. `message` is
+   * what the page shows as the reason.
+   */
+  end(reason: string, message?: string): void;
 }
 
 export interface SwoopFeature {

@@ -124,6 +124,7 @@ import {
   DELETE,
 } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route';
 import { stepUpMachineBinding } from '@/lib/swoop/policy.server';
+import { mintContinuity } from '@/lib/swoop/continuity.server';
 
 const SITE = 'site-a';
 const MACHINE = 'machine-1';
@@ -164,6 +165,49 @@ function signIn(userId: string, satisfiedBy?: 'challenge' | 'device-trust'): voi
   mockLogin.userId = userId;
   mockLogin.expiresAt = Date.now() + 86_400_000;
   mockLogin.mfaSatisfiedBy = satisfiedBy ?? 'challenge';
+}
+
+/** the swoop commands this run queued, whatever the route that wrote them. */
+function queuedCommands(type: string): Array<Record<string, unknown>> {
+  return mocks.set.mock.calls
+    .flatMap(([payload]) => Object.entries(payload as Record<string, unknown>))
+    .filter(([key]) => key.startsWith('cmd_'))
+    .map(([, command]) => command as Record<string, unknown>)
+    .filter((command) => command.type === type);
+}
+
+const PREVIOUS_SID = 'sid0000000000000000000000000009';
+
+/**
+ * this tab's last control session, ended for a transient reason and written as
+ * the store leaves an ended record: no viewer rows. returns the token the tab holds.
+ */
+function stageContinuedSession(): { token: string } {
+  const continuity = mintContinuity(PREVIOUS_SID);
+  staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${PREVIOUS_SID}`, {
+    sid: PREVIOUS_SID,
+    state: 'ended',
+    createdBy: `user:${ADMIN}`,
+    startedAt: Date.now() - 3_600_000,
+    viewers: [],
+    endReason: 'lease_expired',
+    continuityHash: continuity.hash,
+  });
+  return { token: continuity.token };
+}
+
+function continuityRequest(token: string) {
+  return createMockRequest(url(), {
+    method: 'POST',
+    body: { control: true, fp: FP, continuity: token },
+  });
+}
+
+/** whether any write this run marked a continuity token spent. */
+function continuitySpent(): boolean {
+  return mocks.set.mock.calls.some(
+    ([payload]) => typeof (payload as Record<string, unknown>).continuityUsedAt === 'number',
+  );
 }
 
 /** A ceremony this user already ran, `openedAt` ms ago, for one machine. */
@@ -577,6 +621,59 @@ describe('POST swoop/sessions', () => {
     expect(mockVerifyMfaProof).toHaveBeenCalledTimes(1);
   });
 
+  // the tab's own reconnect after a lost path: the record it names ended as the
+  // store leaves it, with no viewer row, and this login ran no ceremony of its own.
+  it('carries control to the next session from a continuity token, with no proof', async () => {
+    signIn(ADMIN, 'device-trust');
+    const continuity = stageContinuedSession();
+
+    const res = await POST(continuityRequest(continuity.token), routeContext());
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(mockVerifyMfaProof).not.toHaveBeenCalled();
+    expect(continuitySpent()).toBe(true);
+  });
+
+  // a kill closes only the records still open, and this one had already ended for
+  // a transient reason: the kill's own timestamp is what has to reach it.
+  it('refuses a continuity token from a session a kill came after', async () => {
+    signIn(ADMIN, 'device-trust');
+    const continuity = stageContinuedSession();
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_step_up_revocations/current`, {
+      revokedAt: Date.now(),
+    });
+
+    const res = await POST(continuityRequest(continuity.token), routeContext());
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(continuitySpent()).toBe(false);
+    expect(writeAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'continuity_killed' }),
+    );
+  });
+
+  // the page retries a machine that reads offline with the same token, so it may
+  // only be spent by the request that actually creates the next session.
+  it('spends a continuity token only on the mint that creates the session', async () => {
+    signIn(ADMIN, 'device-trust');
+    const continuity = stageContinuedSession();
+    staged.set(`sites/${SITE}/machines/${MACHINE}`, { online: false });
+
+    const offline = await POST(continuityRequest(continuity.token), routeContext());
+    expect(offline.status).toBe(409);
+    expect(continuitySpent()).toBe(false);
+
+    staged.set(`sites/${SITE}/machines/${MACHINE}`, { online: true });
+    const retry = await POST(continuityRequest(continuity.token), routeContext());
+    expect(retry.status).toBe(201);
+    expect(continuitySpent()).toBe(true);
+  });
+
   it('refuses a control session on a window a kill has closed', async () => {
     openWindow(ADMIN);
     staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_step_up_revocations/current`, {
@@ -601,7 +698,6 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
       state: 'live',
       createdBy: `user:${ADMIN}`,
       startedAt: Date.now(),
-      absoluteExpiresAt: Date.now() + 3_600_000,
       viewers: [],
     });
   });
@@ -631,6 +727,43 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
     expect(status).toBe(200);
     expect((body.data as Record<string, unknown>).endReason).toBe('closed');
     expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
+  });
+
+  // the agent's swoop_kill (4.0.1 and every earlier one) stops whatever streamer is
+  // running, whatever sid it names, so a queued one lands on the session the page
+  // reconnected into.
+  it('queues no polled kill when the room broadcast landed', async () => {
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'closed' } }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(200);
+    expect(queuedCommands('swoop_kill')).toEqual([]);
+  });
+
+  it('falls back to one polled kill when the room broadcast failed', async () => {
+    mockKill.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'closed' } }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(200);
+    expect(queuedCommands('swoop_kill')).toEqual([expect.objectContaining({ sid: SID })]);
+  });
+
+  it('falls back to one polled kill when the room broadcast threw', async () => {
+    mockKill.mockRejectedValue(new Error('network down'));
+
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'closed' } }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(200);
+    expect(queuedCommands('swoop_kill')).toEqual([expect.objectContaining({ sid: SID })]);
   });
 
   it('refuses a viewerReason the page never reports', async () => {
@@ -786,7 +919,6 @@ describe('swoop audit trail', () => {
       state: 'live',
       createdBy: `user:${ADMIN}`,
       startedAt,
-      absoluteExpiresAt: startedAt + 3_600_000,
       viewers: [],
     });
 
@@ -817,7 +949,6 @@ describe('swoop audit trail', () => {
       state: 'live',
       createdBy: `user:${ADMIN}`,
       startedAt,
-      absoluteExpiresAt: startedAt + 3_600_000,
       viewers: [],
     });
 

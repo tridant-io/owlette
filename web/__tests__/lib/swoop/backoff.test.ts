@@ -1,4 +1,10 @@
-import { backoffDelayMs, isSwoopEndReason, isTransientEnd, type SwoopEndReason } from '@/lib/swoop/backoff';
+import {
+  backoffDelayMs,
+  isSwoopEndReason,
+  isTransientEnd,
+  isWithdrawal,
+  type SwoopEndReason,
+} from '@/lib/swoop/backoff';
 
 describe('backoffDelayMs', () => {
   const ladder = { baseMs: 1000, capMs: 15000 };
@@ -32,6 +38,28 @@ describe('isTransientEnd', () => {
 
   it.each(table)('%s → retry %s', (reason, transient) => {
     expect(isTransientEnd(reason)).toBe(transient);
+  });
+});
+
+describe('isWithdrawal', () => {
+  const table: Array<[number, string | null, boolean]> = [
+    [403, 'swoop_disabled', true],
+    [403, 'machine_excluded', true],
+    [403, 'capability_missing', true],
+    [403, 'members_may_not_watch', true],
+    [403, 'api_key_not_permitted', true],
+    // an edge in front of the app refuses with no problem code of the api's.
+    [403, null, false],
+    [403, 'forbidden', false],
+    [401, 'unauthorized', false],
+    [404, 'not_found', false],
+    [409, 'machine_offline', false],
+    [429, 'rate_limited', false],
+    [503, 'audit_unavailable', false],
+  ];
+
+  it.each(table)('%i %s → final %s', (status, code, final) => {
+    expect(isWithdrawal(status, code)).toBe(final);
   });
 });
 

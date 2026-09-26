@@ -6,7 +6,7 @@
  * so nothing in the browser half gives up on a path that may come back: the
  * signaling socket redials forever, ice restarts forever, and a session that
  * ended for a reason that was not a decision is started again. what it never
- * retries is a decision — an authorisation withdrawn, a cap reached, a host
+ * retries is a decision — an authorisation withdrawn, an admin's kill, a host
  * that failed its proof — because retrying a decision is a storm, not
  * resilience, and the operator is the one to act on those.
  */
@@ -76,4 +76,24 @@ const TRANSIENT_ENDS: ReadonlySet<string> = new Set<SwoopEndReason>([
  */
 export function isTransientEnd(reason: string): boolean {
   return TRANSIENT_ENDS.has(reason);
+}
+
+/** the api's policy refusals: each one is a decision about this user. */
+const WITHDRAWALS: ReadonlySet<string> = new Set([
+  'swoop_disabled',
+  'machine_excluded',
+  'capability_missing',
+  'members_may_not_watch',
+  'api_key_not_permitted',
+]);
+
+/**
+ * whether a refused request withdraws the session for good. only the api's
+ * own policy answer does: a 403 carrying one of its codes. everything else may
+ * come back — a lapsed login (401), a 403 from an edge in front of the app
+ * (no code), a record already gone (404), a machine briefly offline (409), a
+ * rate limit, a bad moment.
+ */
+export function isWithdrawal(status: number, code: string | null): boolean {
+  return status === 403 && code !== null && WITHDRAWALS.has(code);
 }

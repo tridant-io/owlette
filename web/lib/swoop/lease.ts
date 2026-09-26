@@ -16,15 +16,17 @@
  *    second attempt before the host's `expiry + 30 s` grace runs out, so one
  *    lost request costs nothing. renewing at 90 % would make every retry a
  *    coin toss against the grace.
- * 3. **a refusal is terminal; a network failure is not.** 401/403 is the
- *    authorisation going away — exactly what the lease is for — and the session
- *    ends immediately. anything else is retried until the host's grace would
- *    have run out anyway, because a flaky minute should not cost the operator
- *    the machine they are in the middle of fixing.
+ * 3. **a withdrawal is terminal; nothing else is.** the api's policy refusal
+ *    is the authorisation going away — exactly what the lease is for — and the
+ *    session ends immediately. anything else, a lapsed login and a 403 from an
+ *    edge in front of the app included, is retried until the host's grace
+ *    would have run out anyway, and the next session's mint re-checks it all:
+ *    a flaky minute should not cost the operator the machine they are in the
+ *    middle of fixing.
  */
 
+import { isWithdrawal } from '@/lib/swoop/backoff';
 import type { SwoopDetach, SwoopSession } from '@/lib/swoop/features';
-import { toast } from '@/lib/toast';
 
 /** renew this far into the lease's remaining life. */
 const RENEW_AT = 0.6;
@@ -39,9 +41,9 @@ const RETRY_DELAY_MS = 5_000;
 const GRACE_MS = 30_000;
 
 /**
- * a refusal the browser must not retry. thrown by `useSwoopSession`'s
- * `renewLease` so this module can tell "you are no longer allowed in" from
- * "the network dropped a request".
+ * a refusal the browser must not retry. `leaseFailure` makes one for the api's
+ * policy answer only, so this module can tell "you are no longer allowed in"
+ * from everything else that can go wrong on the way to the lease route.
  */
 export class SwoopLeaseRefused extends Error {
   constructor(
@@ -51,6 +53,16 @@ export class SwoopLeaseRefused extends Error {
     super(message);
     this.name = 'SwoopLeaseRefused';
   }
+}
+
+/** what a renewal throws when the lease route answers with a failure. */
+export function leaseFailure(status: number, problem: { code?: unknown; detail?: unknown; error?: unknown }): Error {
+  const code = typeof problem.code === 'string' ? problem.code : null;
+  const detail =
+    (typeof problem.detail === 'string' && problem.detail) ||
+    (typeof problem.error === 'string' && problem.error) ||
+    'the session lease could not be renewed.';
+  return isWithdrawal(status, code) ? new SwoopLeaseRefused(status, detail) : new Error(detail);
 }
 
 function delayFor(expiresAt: number, now: number): number {
@@ -69,13 +81,12 @@ export function attach(session: SwoopSession): SwoopDetach {
   };
 
   // a refusal is a decision and ends the session for good; a lease lost to a
-  // dropped path is an end the hook starts over from.
+  // dropped path is an end the hook starts over from. the page says which.
   const stop = (message: string, reason: 'lease_refused' | 'lease_expired') => {
     stopped = true;
     if (timer !== null) clearTimeout(timer);
     timer = null;
-    toast.error(message);
-    session.end(reason);
+    session.end(reason, message);
   };
 
   const renew = async () => {
@@ -91,8 +102,8 @@ export function attach(session: SwoopSession): SwoopDetach {
     } catch (err) {
       if (stopped) return;
       if (err instanceof SwoopLeaseRefused) {
-        // the 12 h cap arrives here too, as `session_cap_reached`: a hard stop
-        // the api states in its own sentence, which is the one to show.
+        // the api states the withdrawal in its own sentence, which is the one
+        // to show.
         stop(err.message, 'lease_refused');
         return;
       }

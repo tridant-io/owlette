@@ -50,9 +50,10 @@
  *    down `DISCONNECTED_GRACE_MS` later is restarted rather than waited on.
  * 5. **a restart is an offer, and its answer is what completes it.** so an
  *    answer is accepted per *offer* and not once per session — with the whole
- *    of §4 above re-verified on every one of them. a `host-ready` after the
- *    answer is the host asking for that restart: it answers and never offers,
- *    so it has no other way to ask.
+ *    of §4 above re-verified on every one of them — and waited on per offer,
+ *    under `ANSWER_TIMEOUT_MS`. a `host-ready` after the answer is the host
+ *    asking for that restart: it answers and never offers, so it has no other
+ *    way to ask.
  *
  * gate g1 closed on arm B: the video is an rtp track rendered into a `<video>`,
  * so the playout-delay extension is the whole latency story on this side. the
@@ -92,11 +93,15 @@ export const RELAY_PROBE_MS = 3000;
  */
 export const DISCONNECTED_GRACE_MS = 2000;
 /**
- * how long the first offer waits for the host's answer. a host that never
- * answers is one the agent refused to start (its spawn ceiling, a bad bundle)
- * or one mid-restart, and neither says so on the wire: without a bound the
- * viewer sits on "connecting" for hours (b4a, 2026-09-25). a `host-ready`
- * re-arms it, because that host is alive and has only now seen the offer.
+ * how long any offer waits for the host's answer. none comes from a host the
+ * agent refused to start (its spawn ceiling, a bad bundle) or one mid-restart,
+ * and a restart's is lost to a host mid re-dial, one that answers only its
+ * newest peer, one whose accept failed, or one that already let this viewer
+ * go. none of them says so on the wire: without a bound the viewer sits on
+ * "connecting" for hours (b4a, 2026-09-25), or refuses every restart after the
+ * lost one. `answerMissed` decides what the timeout ends. a `host-ready` before
+ * the first answer re-arms it: that host is alive and has only now seen the
+ * offer.
  */
 export const ANSWER_TIMEOUT_MS = 20_000;
 /** the restart ladder: the second restart 1 s after a failure, then doubling to the cap. */
@@ -336,7 +341,7 @@ export class SwoopPeer {
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private relayTimer: ReturnType<typeof setTimeout> | null = null;
   private linkTimer: ReturnType<typeof setTimeout> | null = null;
-  /** runs from the first offer until its answer is applied. */
+  /** runs from each offer until its answer is taken. */
   private answerTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: SwoopPeerOptions) {
@@ -459,6 +464,9 @@ export class SwoopPeer {
         });
         return;
       case 'kill':
+        // a kill names the session it ends, and one naming none ends whatever
+        // is running; another session's is not ours to act on.
+        if (typeof message.sid === 'string' && message.sid !== this.options.sid) return;
         this.shutdown('kill');
         return;
       case 'bye':
@@ -519,17 +527,43 @@ export class SwoopPeer {
     this.offerSdp = sdp;
     this.awaitingAnswer = true;
     this.options.send({ type: 'offer', sdp });
-    // only the first offer: after an answer the link's own timers (disconnect
-    // grace, the restart ladder) are what watch the host.
-    if (!this.answered) this.armAnswerTimer();
+    // restarts included: while an offer is out every later restart is refused,
+    // so one whose answer never comes would hold the link for good.
+    this.armAnswerTimer();
   }
 
   private armAnswerTimer(): void {
     this.clearAnswerTimer();
     this.answerTimer = setTimeout(() => {
       this.answerTimer = null;
-      if (!this.answered) this.abort('host_silent');
+      if (this.awaitingAnswer) void this.answerMissed();
     }, this.answerTimeoutMs);
+  }
+
+  /**
+   * an offer's answer never came. a restart on a link that is still up is
+   * rolled back rather than ended, because the session it set out to
+   * renegotiate works. the host may have applied the offer and lost only its
+   * answer: then the two ends drift until ice fails, and the restart ladder and
+   * the feedback watchdog take over from there. a first offer, a link that is
+   * down, or a rollback the browser refuses ends the attempt.
+   */
+  private async answerMissed(): Promise<void> {
+    const ice = this.pc.iceConnectionState;
+    if (!this.answered || (ice !== 'connected' && ice !== 'completed')) {
+      this.abort('host_silent');
+      return;
+    }
+    // both before the await: an answer landing mid-rollback must find nothing
+    // to answer, and the candidates held for it belong to a generation that
+    // never came.
+    this.awaitingAnswer = false;
+    this.pendingCandidates = [];
+    try {
+      await this.pc.setLocalDescription({ type: 'rollback' });
+    } catch {
+      this.abort('host_silent');
+    }
   }
 
   private clearAnswerTimer(): void {
@@ -753,9 +787,9 @@ export class SwoopPeer {
    * a link that failed is restarted, and restarted again: the first time at
    * once, then up a ladder to `RESTART_CAP_MS`, for as long as the peer is
    * open. a path that is gone for good ends the session elsewhere — the host
-   * drops a viewer whose lease lapses and says so — and until then every
-   * restart is a chance the network comes back (owner ruling: a session
-   * stays up indefinitely).
+   * drops a viewer whose lease lapses and says so, or a restart on a dead link
+   * goes unanswered — and until then every restart is a chance the network
+   * comes back (owner ruling: a session stays up indefinitely).
    */
   private async recover(_from: 'disconnected' | 'failed'): Promise<void> {
     if (this.closed || this.restartTimer !== null) return;
@@ -804,8 +838,9 @@ export class SwoopPeer {
 
   private abort(code: SwoopPeerError): void {
     if (this.closed) return;
-    this.shutdown(code);
+    // the reason goes first, so the page ends on it rather than on a bare close.
     this.options.onError?.(code);
+    this.shutdown(code);
   }
 
   private shutdown(reason: string): void {

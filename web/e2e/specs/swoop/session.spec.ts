@@ -28,6 +28,7 @@ const SITE_ID = `site-swoop-${SUFFIX}`;
 const MACHINE_ID = `mach-swoop-${SUFFIX}`;
 const EXCLUDED_ID = `mach-excluded-${SUFFIX}`;
 const OFFLINE_ID = `mach-offline-${SUFFIX}`;
+const RETURNING_ID = `mach-returning-${SUFFIX}`;
 const SESSIONS = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/sessions`;
 const KILL = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/kill`;
 
@@ -152,6 +153,8 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, EXCLUDED_ID, { displayName: `excluded box ${SUFFIX}` });
   await seedMachine(SITE_ID, OFFLINE_ID, { displayName: `offline box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${OFFLINE_ID}`).set({ online: false }, { merge: true });
+  await seedMachine(SITE_ID, RETURNING_ID, { displayName: `returning box ${SUFFIX}` });
+  await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
   const seeded = await seedTotpUser(`swoop-operator-${SUFFIX}`);
@@ -241,15 +244,43 @@ test.describe('the viewer page', () => {
   test('the site switch and the exclusion list refuse before any ceremony', async ({ page }) => {
     await signIn(page, operator, operatorSecret);
 
+    // a policy refusal is the api's answer, so the page stops rather than retrying it.
     await swoopSettings({ enabled: false });
     await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
     await expect(alertLine(page)).toContainText('swoop is not enabled for this site.');
+    await expect(alertLine(page)).not.toContainText('reconnecting');
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await swoopSettings({ enabled: true });
 
     await page.goto(`/swoop/${SITE_ID}/${EXCLUDED_ID}`);
     await expect(alertLine(page)).toContainText('swoop is excluded on this machine.');
+    await expect(alertLine(page)).not.toContainText('reconnecting');
     await expect(page.getByRole('dialog')).toHaveCount(0);
+  });
+
+  test('an offline machine is retried on its own, and the session starts once it is back', async ({ page }) => {
+    // the watcher needs no ceremony, so the only refusal on the way is the machine's state.
+    await signIn(page, watcher);
+    const seen = recordSwoopResponses(page);
+    await page.goto(`/swoop/${SITE_ID}/${RETURNING_ID}`);
+
+    await expect(alertLine(page)).toContainText('this machine is offline', { timeout: 20_000 });
+    await expect(alertLine(page)).toContainText(/reconnecting in \d+ s/);
+
+    const minted = page.waitForResponse(
+      (r) =>
+        r.url().endsWith(`/machines/${RETURNING_ID}/swoop/sessions`) &&
+        r.request().method() === 'POST' &&
+        r.status() === 201,
+      { timeout: 45_000 },
+    ).catch(() => null);
+    await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: true }, { merge: true });
+    expect(await minted, `swoop responses seen: ${seen.join(' | ')}`).not.toBeNull();
+
+    // the next attempt got a session: the refusal line is gone and the page waits for the host.
+    await expect(alertLine(page)).toHaveCount(0);
+    await expect(page.getByText(/connecting/i).first()).toBeVisible();
+    await page.getByRole('button', { name: /end session/i }).click();
   });
 });
 

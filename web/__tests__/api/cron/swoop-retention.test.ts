@@ -4,10 +4,11 @@
  * GET /api/cron/swoop-retention.
  *
  * Two things have to be true of this sweep and are not obvious from reading it:
- * a record past its 12-hour cap is CLOSED rather than left answering as live to
+ * a record whose lease lapsed is CLOSED rather than left answering as live to
  * the revocation sweep, and a session inside the retention window SURVIVES —
  * which is only observable if the query stub actually applies the cutoff rather
- * than handing back whatever it was seeded with.
+ * than handing back whatever it was seeded with. a session whose lease is still
+ * live survives both passes however old it is: it is somebody's open tab.
  */
 
 import { NextRequest } from 'next/server';
@@ -27,7 +28,6 @@ interface SessionDoc {
   id: string;
   state?: string;
   startedAt?: number;
-  absoluteExpiresAt?: number;
   viewers?: unknown[];
   endReason?: string;
 }
@@ -158,10 +158,14 @@ import { GET, SWOOP_SESSION_RETENTION_DAYS } from '@/app/api/cron/swoop-retentio
 const SITE = 'site-a';
 const MACHINE = 'machine-1';
 
-/** A session document that started `days` ago and ran its full 12-hour cap. */
+/** a session document that started `days` ago and holds no viewer row, so its lease is long gone. */
 function session(id: string, days: number, state = 'ended'): SessionDoc {
-  const startedAt = Date.now() - days * DAY_MS;
-  return { id, state, startedAt, absoluteExpiresAt: startedAt + 12 * HOUR_MS, viewers: [] };
+  return { id, state, startedAt: Date.now() - days * DAY_MS, viewers: [] };
+}
+
+/** one viewer row whose lease runs out `inMs` from now (negative: that long ago). */
+function leaseEnding(inMs: number): unknown[] {
+  return [{ viewerId: 'v1', uid: 'uid-1', ctl: false, joinedAt: 1, leaseExpiresAt: Date.now() + inMs }];
 }
 
 function request(secret?: string) {
@@ -255,24 +259,47 @@ describe('GET /api/cron/swoop-retention', () => {
    * live to `listUnendedSwoopSessionsForUser`, so every membership change
    * re-kills a session that ended weeks ago.
    */
-  it('closes a record still pending past its 12-hour cap', async () => {
+  it('closes a record whose lease lapsed, as lease_expired', async () => {
     const abandoned = session('abandoned', 2, 'pending');
-    seed(abandoned);
+    const lapsed: SessionDoc = {
+      id: 'lapsed',
+      state: 'live',
+      startedAt: Date.now() - HOUR_MS,
+      viewers: leaseEnding(-31_000),
+    };
+    seed(abandoned, lapsed);
 
     const body = await (await GET(request('cron-secret'))).json();
 
-    expect(body.closed).toBe(1);
-    expect(abandoned).toMatchObject({ state: 'ended', endReason: 'session_cap', viewers: [] });
+    expect(body.closed).toBe(2);
+    expect(abandoned).toMatchObject({ state: 'ended', endReason: 'lease_expired', viewers: [] });
+    expect(lapsed).toMatchObject({ state: 'ended', endReason: 'lease_expired', viewers: [] });
     expect(deletedIds).toEqual([]);
   });
 
-  it('leaves a session still inside its cap alone', async () => {
+  // the host drops a viewer 30 s after its lease runs out (PROTOCOL.md section
+  // 10), so a lease inside that grace can still be renewed and the record is live.
+  it('leaves a record inside the host grace alone', async () => {
+    const renewing: SessionDoc = {
+      id: 'renewing',
+      state: 'live',
+      startedAt: Date.now() - HOUR_MS,
+      viewers: leaseEnding(-29_000),
+    };
+    seed(renewing);
+
+    const body = await (await GET(request('cron-secret'))).json();
+
+    expect(body.closed).toBe(0);
+    expect(renewing.state).toBe('live');
+  });
+
+  it('leaves a 13-hour-old record with a live lease alone', async () => {
     const live: SessionDoc = {
       id: 'running',
       state: 'live',
-      startedAt: Date.now() - HOUR_MS,
-      absoluteExpiresAt: Date.now() + 11 * HOUR_MS,
-      viewers: [{ viewerId: 'v1', uid: 'uid-1', ctl: false, joinedAt: 1, leaseExpiresAt: 2 }],
+      startedAt: Date.now() - 13 * HOUR_MS,
+      viewers: leaseEnding(120_000),
     };
     seed(live);
 
@@ -281,6 +308,28 @@ describe('GET /api/cron/swoop-retention', () => {
     expect(body.closed).toBe(0);
     expect(live.state).toBe('live');
     expect(deletedIds).toEqual([]);
+  });
+
+  it('keeps a document whose lease is still live out of the delete pass, however old', async () => {
+    const tab: SessionDoc = { ...session('open-tab', 31, 'live'), viewers: leaseEnding(120_000) };
+    seed(tab, session('old', 31));
+
+    const body = await (await GET(request('cron-secret'))).json();
+
+    expect(body.deleted.swoopSessions).toBe(1);
+    expect(deletedIds).toEqual(['old']);
+    expect(backlog(SITE, MACHINE).map((d) => d.id)).toEqual(['open-tab']);
+    expect(tab.state).toBe('live');
+  });
+
+  it('stops rather than spins on a full page of documents it keeps', async () => {
+    seed(...Array.from({ length: 400 }, (_, i) => ({ ...session(`tab${i}`, 31, 'live'), viewers: leaseEnding(120_000) })));
+
+    const body = await (await GET(request('cron-secret'))).json();
+
+    expect(body.deleted.swoopSessions).toBe(0);
+    expect(backlog(SITE, MACHINE)).toHaveLength(400);
+    expect(body.truncated).toBe(true);
   });
 
   it('never re-closes a record that already ended', async () => {

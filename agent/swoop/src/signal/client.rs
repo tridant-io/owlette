@@ -356,9 +356,10 @@ impl SignalClient {
     }
 
     /// Read off the envelope rather than the strict decoder on purpose. The
-    /// room synthesises a `bye` for a viewer whose socket vanished and stamps an
-    /// extra `code` field on it (`infra/swoop-signal/src/room.ts`,
-    /// `webSocketClose`), which `Message`'s `deny_unknown_fields` refuses — and
+    /// room synthesises a `bye` for a viewer whose socket closed before its offer
+    /// reached this host and stamps an extra `code` field on it
+    /// (`infra/swoop-signal/src/room.ts`, `webSocketClose`), which `Message`'s
+    /// `deny_unknown_fields` refuses — and
     /// a refused `bye` would leak the viewer's slot until the session ended.
     /// `from` is all the host needs; `reason` is advisory.
     fn on_bye(&mut self, from: Option<&str>) -> Vec<Effect> {

@@ -68,10 +68,7 @@ export type SwoopSignalStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' 
 /**
  * a refusal no reconnect can fix. the page surfaces it; this module stops.
  */
-export type SwoopSignalFatal =
-  | 'version_mismatch'
-  | 'mint_failed'
-  ;
+export type SwoopSignalFatal = 'version_mismatch';
 
 /** the browser's `WebSocket`, narrowed to what this module uses. */
 export interface SwoopSocket {
@@ -312,11 +309,10 @@ export class SwoopSignaling {
     try {
       token = await this.options.mintToken();
     } catch {
-      // the api refused to mint. a retry ladder against an authorisation
-      // decision is a mint storm, not resilience.
-      this.stopped = true;
-      this.setStatus('closed');
-      this.options.onFatal?.('mint_failed');
+      // a mint that failed is a path that may come back, and the ladder waits
+      // it out. a withdrawn authorisation never waits here: the page ends the
+      // session, which closes this socket first.
+      if (!this.stopped) this.scheduleRetry();
       return;
     }
     if (this.stopped) return;
@@ -400,12 +396,9 @@ export class SwoopSignaling {
       this.setStatus('closed');
       return;
     }
-    // 1000 is the room saying it is done with us — a kill, or our own bye.
-    if (code === 1000) {
-      this.stopped = true;
-      this.setStatus('closed');
-      return;
-    }
+    // a clean close is not an end either: a stale eviction closes 1000 too,
+    // and a kill for this session reaches the peer first, whose end closes
+    // this socket through `close()`.
     if (code === CLOSE_AUTH && !this.authRetried) {
       // one free re-mint and an immediate redial: a kid rotation must not cost
       // a full backoff ladder. a second 4401 in a row joins the ladder.
