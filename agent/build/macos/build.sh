@@ -3,13 +3,15 @@
 # service runtime, the two launchd plists and the app. runs on an Apple silicon
 # Mac with the Command Line Tools, node and cargo; nothing here needs root.
 #
-#   agent/build/macos/build.sh [--python 3.11.16+20260924] [--skip-app]
+#   agent/build/macos/build.sh [--skip-app]
 #                              [--installer-identity "Developer ID Installer: …"]
-#                              [--notarize <notarytool keychain profile>]
+#                              [--notarize <notarytool keychain profile> |
+#                               --notary-key <path.p8> --notary-key-id <id> --notary-issuer <uuid>]
 #
 # with APPLE_SIGNING_IDENTITY in the environment the app (Tauri) and every
 # mach-o in the runtime are signed with it; unsigned by default, which installs on a box that allows it and is what the
-# spike work runs on. with an identity the product is signed; with a profile
+# spike work runs on. with an identity the product is signed; with a keychain
+# profile or an App Store Connect api key (the three --notary-* flags together)
 # it is notarized and stapled too. the app's own signature is the Tauri
 # build's (`bundle.macOS.signingIdentity`, or APPLE_SIGNING_IDENTITY in the
 # environment): an ad-hoc app loses its Screen Recording grant on every
@@ -26,21 +28,39 @@ PAYLOAD="${WORK}/payload"
 PACKAGING="${REPO}/agent/packaging/macos"
 VERSION="$(tr -d '[:space:]' < "${REPO}/agent/VERSION")"
 PYTHON_BUILD="3.11.16+20260924"
+# the tarball's published sha256 (SHA256SUMS of that release): moves with PYTHON_BUILD
+PBS_SHA256="d718e3c5c6f4b225ed25f88bf65e4c5d314e0dea0d716ea50bc9d038630c502b"
 SKIP_APP=0
 INSTALLER_IDENTITY=""
 NOTARIZE_PROFILE=""
+NOTARY_KEY=""
+NOTARY_KEY_ID=""
+NOTARY_ISSUER=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --python) PYTHON_BUILD="$2"; shift 2 ;;
     --skip-app) SKIP_APP=1; shift ;;
     --installer-identity) INSTALLER_IDENTITY="$2"; shift 2 ;;
     --notarize) NOTARIZE_PROFILE="$2"; shift 2 ;;
+    --notary-key) NOTARY_KEY="$2"; shift 2 ;;
+    --notary-key-id) NOTARY_KEY_ID="$2"; shift 2 ;;
+    --notary-issuer) NOTARY_ISSUER="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 [ "$(uname -m)" = "arm64" ] || { echo "build.sh: Apple silicon only" >&2; exit 2; }
+# notarytool takes a keychain profile or an api key (all three parts), never both
+NOTARY=()
+if [ -n "${NOTARY_KEY}${NOTARY_KEY_ID}${NOTARY_ISSUER}" ]; then
+  [ -n "${NOTARY_KEY}" ] && [ -n "${NOTARY_KEY_ID}" ] && [ -n "${NOTARY_ISSUER}" ] \
+    || { echo "build.sh: --notary-key, --notary-key-id and --notary-issuer go together" >&2; exit 2; }
+  [ -z "${NOTARIZE_PROFILE}" ] \
+    || { echo "build.sh: --notarize and --notary-key are alternatives, give one" >&2; exit 2; }
+  NOTARY=(--key "${NOTARY_KEY}" --key-id "${NOTARY_KEY_ID}" --issuer "${NOTARY_ISSUER}")
+elif [ -n "${NOTARIZE_PROFILE}" ]; then
+  NOTARY=(--keychain-profile "${NOTARIZE_PROFILE}")
+fi
 say() { echo "== $*"; }
 
 rm -rf "${WORK}"
@@ -59,6 +79,8 @@ if [ ! -f "${OUT}/cache/${TARBALL}" ]; then
     "https://github.com/astral-sh/python-build-standalone/releases/download/${TAG}/${TARBALL}"
   mv "${OUT}/cache/${TARBALL}.part" "${OUT}/cache/${TARBALL}"
 fi
+# checked on every run, cache hit included: a stale or altered cache must not ship
+echo "${PBS_SHA256}  ${OUT}/cache/${TARBALL}" | shasum -a 256 -c
 say "unpacking the runtime"
 tar -xzf "${OUT}/cache/${TARBALL}" -C "${RUNTIME}"
 PY="${RUNTIME}/python/bin/python3"
@@ -125,9 +147,9 @@ SIGN=()
 productbuild --quiet --distribution "${WORK}/distribution.xml" --resources "${WORK}/resources" \
   --package-path "${WORK}" --version "${VERSION}" "${SIGN[@]}" "${PRODUCT}"
 
-if [ -n "${NOTARIZE_PROFILE}" ]; then
+if [ "${#NOTARY[@]}" -gt 0 ]; then
   say "notarizing"
-  xcrun notarytool submit "${PRODUCT}" --keychain-profile "${NOTARIZE_PROFILE}" --wait
+  xcrun notarytool submit "${PRODUCT}" "${NOTARY[@]}" --wait
   xcrun stapler staple "${PRODUCT}"
 fi
 

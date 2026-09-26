@@ -45,9 +45,12 @@ case "$1" in
     systemctl enable owlette-agent.service >/dev/null 2>&1 || true
     systemctl restart owlette-agent.service && log "started the service"
     systemctl --global enable owlette-desktop.service >/dev/null 2>&1 && log "enabled the app for every login"
-    # a session that is already up gets the app now rather than at next login.
+    # a session that is already up gets the app now rather than at next login,
+    # and one running it gets it again on the new binary: an upgrade replaces
+    # /usr/bin/owlette-desktop under the old process, and a plain start is a
+    # no-op on an active unit.
     for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
-      systemctl --user -M "$(id -nu "${uid}")@" start owlette-desktop.service >/dev/null 2>&1 || true
+      systemctl --user -M "$(id -nu "${uid}")@" restart owlette-desktop.service >/dev/null 2>&1 || true
     done
 
     # --- the pairing preseed ---------------------------------------------
