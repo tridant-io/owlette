@@ -1113,10 +1113,16 @@ fn agent_version(install_root: &Path) -> String {
 }
 
 /// The machine's name as the fleet records it: `COMPUTERNAME` on Windows;
-/// `HOSTNAME` or `/etc/hostname` on the other two, where no environment
-/// variable is guaranteed.
+/// the kernel's hostname on the other two, the same call the agent's
+/// `socket.gethostname()` makes, so the tray and the machine card agree
+/// (`TEC-MBA.local`). A launchd or systemd child has no `HOSTNAME` in its
+/// environment and macOS has no `/etc/hostname`, so those are fallbacks only.
 pub(crate) fn hostname() -> String {
   let from_env = if cfg!(windows) { "COMPUTERNAME" } else { "HOSTNAME" };
+  #[cfg(unix)]
+  if let Some(name) = unix_hostname() {
+    return name;
+  }
   if let Some(name) = std::env::var(from_env).ok().filter(|name| !name.trim().is_empty()) {
     return name.trim().to_string();
   }
@@ -1126,6 +1132,19 @@ pub(crate) fn hostname() -> String {
     }
   }
   "unknown".to_string()
+}
+
+#[cfg(unix)]
+fn unix_hostname() -> Option<String> {
+  let mut buf = [0u8; 256];
+  // SAFETY: the buffer outlives the call and its length is passed with it.
+  let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+  if rc != 0 {
+    return None;
+  }
+  let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+  let name = String::from_utf8_lossy(&buf[..end]).trim().to_string();
+  (!name.is_empty()).then_some(name)
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -1269,6 +1288,17 @@ mod tests {
   /// SCM says up — the precondition for the document being consulted at all.
   const RUNNING: bool = true;
   const STOPPED: bool = false;
+
+  /// A launchd or systemd child carries no HOSTNAME and macOS has no
+  /// /etc/hostname: the kernel's name is what keeps the menu from "unknown".
+  #[cfg(unix)]
+  #[test]
+  fn the_hostname_comes_from_the_kernel_without_an_environment() {
+    std::env::remove_var("HOSTNAME");
+    let name = hostname();
+    assert_ne!(name, "unknown");
+    assert_eq!(Some(name.as_str()), unix_hostname().as_deref());
+  }
 
   fn fresh(value: Value) -> StatusDoc {
     StatusDoc::Fresh(value)
