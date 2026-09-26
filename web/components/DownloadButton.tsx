@@ -108,8 +108,9 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
     }
   };
 
-  const copyLink = async () => {
-    if (!primaryUrl) {
+  const copyLink = async (platform: InstallerPlatform | null) => {
+    const url = platform ? files[platform]?.download_url : undefined;
+    if (!platform || !url) {
       toast.error('copy failed', {
         description: 'download URL is not available.',
       });
@@ -117,9 +118,9 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
     }
 
     try {
-      await navigator.clipboard.writeText(primaryUrl);
+      await navigator.clipboard.writeText(url);
       toast.success('link copied', {
-        description: `download link for v${version} copied to clipboard.`,
+        description: `download link for v${version} (${osWord(platform)}) copied to clipboard.`,
       });
     } catch {
       toast.error('copy failed', {
@@ -163,7 +164,7 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
     <Button
       {...buttonProps}
       className={buttonClass}
-      onClick={copyLink}
+      onClick={() => copyLink(primary)}
       disabled={disabled}
       aria-label={iconOnly ? 'copy owlette agent download link' : undefined}
     >
@@ -179,6 +180,14 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
       }
     >
       {iconOnly ? <Tip tip={label} className={tipClass}>{primaryButton}</Tip> : primaryButton}
+
+      {iconOnly ? (
+        <Tip tip={isLoading ? label : `copy download link for owlette agent v${version}`} className={tipClass}>
+          {copyButton}
+        </Tip>
+      ) : (
+        copyButton
+      )}
 
       <DropdownMenu>
         <Tip tip="other platforms" className={tipClass}>
@@ -201,9 +210,24 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
                 key={platform}
                 disabled={!!reason}
                 onSelect={() => download(platform)}
-                className="cursor-pointer"
+                className="cursor-pointer gap-3"
               >
-                {PLATFORM_LABEL[platform]}
+                <span className="flex-1">{PLATFORM_LABEL[platform]}</span>
+                {/* a plain button: radix selects the row on a click that reaches it, so the copy stops there */}
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-foreground cursor-pointer disabled:cursor-default"
+                  disabled={!!reason}
+                  aria-label={`copy ${osWord(platform)} download link`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onPointerUp={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void copyLink(platform);
+                  }}
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
               </DropdownMenuItem>
             );
             if (!reason) return item;
@@ -221,14 +245,6 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
           })}
         </DropdownMenuContent>
       </DropdownMenu>
-
-      {iconOnly ? (
-        <Tip tip={isLoading ? label : `copy download link for owlette agent v${version}`} className={tipClass}>
-          {copyButton}
-        </Tip>
-      ) : (
-        copyButton
-      )}
     </div>
   );
 }

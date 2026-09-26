@@ -129,6 +129,20 @@ describe('DownloadButton', () => {
     expect(await screen.findByRole('tooltip')).toHaveTextContent('no linux build in this version');
   });
 
+  it('copies a platform link from its menu row without downloading', async () => {
+    setNavigator(WINDOWS_UA);
+    const open = jest.spyOn(window, 'open').mockImplementation(() => null);
+    // userEvent.setup() installs its own clipboard; read the copy back through it
+    const user = await openMenu('download v3.4.0 for windows');
+
+    await user.click(screen.getByRole('button', { name: 'copy linux download link' }));
+
+    expect(await navigator.clipboard.readText()).toBe(ALL_FILES.linux_x64!.download_url);
+    expect(open).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'copy macos download link' })).toBeEnabled();
+    open.mockRestore();
+  });
+
   it('keeps the header labels the e2e specs hover', async () => {
     setNavigator(WINDOWS_UA);
     const user = userEvent.setup();
