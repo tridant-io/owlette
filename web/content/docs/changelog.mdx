@@ -7,6 +7,14 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-09-25
+
+Owlette 4 runs on three platforms. One release ships the Windows exe, the Apple
+silicon pkg and the Ubuntu deb under one version and one `latest` pointer;
+downloads pick the visitor's platform; the fleet update sends each machine the
+installer for its own platform; and swoop, the remote-control session, ships
+with it. Everything below landed on the way.
+
 ### changed — the fleet update sends each machine the installer for its own platform
 
 The update picks the file by the machine's os and architecture (an agent that
