@@ -11,6 +11,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-09-26
+
+### fixed — the macOS installer always puts the app in /Applications
+
+The package no longer lets macOS relocate the app onto another copy of the
+bundle it knows about (a build tree, an old download), which left the login
+item pointing at nothing. The Windows build no longer deletes the macOS and
+Linux build scripts, and the upload script retries once when the API answers
+with an empty body.
+
 ## [4.0.0] - 2026-09-25
 
 Owlette 4 runs on three platforms. One release ships the Windows exe, the Apple

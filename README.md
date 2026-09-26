@@ -6,7 +6,7 @@
 
 ### ai-powered fleet management for Windows, macOS and Linux applications
 
-[![Version](https://img.shields.io/badge/version-4.0.0-blue)](https://github.com/tridant-io/owlette/releases)
+[![Version](https://img.shields.io/badge/version-4.0.1-blue)](https://github.com/tridant-io/owlette/releases)
 [![License](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://owlette.app)
 
