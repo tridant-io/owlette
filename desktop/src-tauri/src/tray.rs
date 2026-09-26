@@ -59,6 +59,12 @@ const ID_EXIT: &str = "exit";
 const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/normal.png");
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/disconnected.png");
 const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/error.png");
+// macos tints a template (black on alpha) to match the menubar; the eye and the
+// closed eye are templates, the error orb keeps its red so that one state shouts.
+#[cfg(target_os = "macos")]
+const ICON_TEMPLATE_NORMAL: &[u8] = include_bytes!("../icons/tray/template-normal.png");
+#[cfg(target_os = "macos")]
+const ICON_TEMPLATE_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/template-disconnected.png");
 
 /// Monitor granularity; the cadences below are multiples of it, so one thread
 /// drives both the status poll and the error flash.
@@ -354,6 +360,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
   let menu = build_menu(app, &view)?;
   let tray = TrayIconBuilder::with_id(TRAY_ID)
     .icon(icon_for(view.code))
+    .icon_as_template(icon_is_template(view.code))
     .tooltip(tooltip(&paths::install_root(), &view))
     .menu(&menu.menu)
     // Windows defaults to the menu on either button; left click must open the
@@ -711,7 +718,10 @@ fn set_icon(app: &AppHandle, code: StatusCode) -> Result<(), String> {
   };
   tray
     .set_icon(Some(icon_for(code)))
-    .map_err(|error| format!("could not set the tray icon: {error}"))
+    .map_err(|error| format!("could not set the tray icon: {error}"))?;
+  tray
+    .set_icon_as_template(icon_is_template(code))
+    .map_err(|error| format!("could not set the tray icon template flag: {error}"))
 }
 
 fn set_tooltip(app: &AppHandle, text: &str) -> Result<(), String> {
@@ -726,7 +736,25 @@ fn set_tooltip(app: &AppHandle, text: &str) -> Result<(), String> {
 fn icon_for(code: StatusCode) -> Image<'static> {
   // Bytes are compiled in and decoded by this file's tests: a failure here is a
   // packaging bug, not a runtime condition.
-  Image::from_bytes(code.icon_bytes()).expect("embedded tray icon should decode")
+  Image::from_bytes(icon_bytes_for(code)).expect("embedded tray icon should decode")
+}
+
+/// The template glyph on macos for every state but error; the colour orbs
+/// everywhere else (a windows tray has no template notion).
+fn icon_bytes_for(code: StatusCode) -> &'static [u8] {
+  #[cfg(target_os = "macos")]
+  match code {
+    StatusCode::Normal => return ICON_TEMPLATE_NORMAL,
+    StatusCode::Warning => return ICON_TEMPLATE_DISCONNECTED,
+    StatusCode::Error => {}
+  }
+  code.icon_bytes()
+}
+
+/// Whether macos should tint the icon to the menubar: the eye and the closed
+/// eye blend in, the error orb keeps its red.
+fn icon_is_template(code: StatusCode) -> bool {
+  cfg!(target_os = "macos") && !matches!(code, StatusCode::Error)
 }
 
 
