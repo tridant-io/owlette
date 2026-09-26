@@ -6062,8 +6062,8 @@ paths:
           description: |
             Refused by swoop policy. `code` is the branchable half:
             `api_key_not_permitted` (an api key called this route),
-            `swoop_disabled`, `machine_excluded`, `capability_missing`,
-            `members_may_not_watch`, or `session_cap_reached`.
+            `swoop_disabled`, `machine_excluded`, `capability_missing`, or
+            `members_may_not_watch`.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -6124,9 +6124,6 @@ paths:
                       state: { type: string, enum: [live, ended] }
                       createdBy: { type: string }
                       startedAt: { type: integer, description: Epoch milliseconds. }
-                      absoluteExpiresAt:
-                        type: integer
-                        description: Epoch milliseconds; the 12-hour cap, which no renewal moves.
                       viewers:
                         type: array
                         items:
@@ -6156,10 +6153,10 @@ paths:
       tags: [Machines]
       summary: end a swoop session
       description: |
-        Ends the session record and stops the streamer over two independent
-        paths — the signalling broadcast and a polled command. Neither failing
-        withholds the `200`: the record is already ended, and a streamer that
-        survives both is stopped by its own lease.
+        Ends the session record and stops the streamer through the signalling
+        broadcast, queueing a polled command only when the broadcast does not
+        land. Neither failing withholds the `200`: the record is already ended,
+        and a streamer that survives both is stopped by its own lease.
 
         `endReason` is optional and may only be one a caller may claim:
         `closed` (the default), `killed`, or `revoked`. The machine-side
@@ -6227,8 +6224,8 @@ paths:
         point of the lease is that authorisation is re-checked while the
         session runs: a removed member, a site that turns swoop off, an
         excluded machine or a revoked capability all take effect within one
-        lease. The 12-hour session cap is absolute and is not moved by a
-        renewal.
+        lease. There is no absolute cap: a session lasts as long as its lease
+        keeps being renewed.
 
         Control is re-applied from the viewer's stored state, so a watch-only
         viewer cannot renew itself into control. Step-up is deliberately not
@@ -6275,8 +6272,7 @@ paths:
         '403':
           description: |
             Refused by swoop policy — `code: api_key_not_permitted` when the
-            caller used an api key, `session_cap_reached` once the 12-hour cap
-            is reached, otherwise the policy code that denied it.
+            caller used an api key, otherwise the policy code that denied it.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }

@@ -255,7 +255,7 @@ async function recordEvents(
 
     // After the audit row and never fatal. The agent re-posts a batch it got a
     // 503 for, so failing here would duplicate audit rows to fix a record the
-    // 12-hour cap and the retention sweep both close anyway.
+    // retention sweep closes anyway once its lease lapses.
     if (isMirrored(event)) {
       try {
         await mirrorSessionRecord(siteId, machineId, event);

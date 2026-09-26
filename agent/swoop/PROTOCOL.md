@@ -22,7 +22,7 @@ failure.
 | [7](#7-the-bundle) | the bundle |
 | [8](#8-jwt-claims) | jwt claims |
 | [9](#9-the-host-fingerprint-mac) | the host fingerprint mac |
-| [10](#10-lease-renewal) | lease renewal, the 12 h cap, and a missed renewal |
+| [10](#10-lease-renewal) | lease renewal and a missed renewal |
 | [11](#11-security) | security |
 
 ---
@@ -66,9 +66,9 @@ the room only enforces who may send what, and to whom.
 |---|---|---|
 | `hello` | **server only** | the socket that just joined |
 | `ring` | **server only** (from `POST /v1/ring`) | doorbell sockets |
-| `viewer-join` | **server only** | host and doorbell |
+| `viewer-join` | **server only** | the host, once per viewer id per session (see below) |
 | `error` | **server only** | the offending socket |
-| `kill` | **server only** (from `POST /v1/kill`) | every socket, then `close(1000)` |
+| `kill` | **server only** (from `POST /v1/kill`) | every socket of the named `sid` (every socket when `sid` is null), then `close(1000)` |
 | `offer` | viewer only | host and doorbell |
 | `answer` | host only | the named viewer (`to`) |
 | `host-ready` | host only | the named viewer, or all viewers when `to` is absent |
@@ -87,6 +87,17 @@ side only, agent traffic goes to a named viewer or broadcasts to viewers.
 
 **rooms are addressed from the verified token, never from the path.** the durable object is named
 `${claims.site}:${claims.machine}`; a url that disagrees is refused `room_mismatch` (403).
+
+**a viewer's socket closing is not the viewer leaving.** the socket is only the viewer's signalling path: the
+page re-dials it for a fresh token whenever it must send after its first minute, and a network blip or a
+durable-object restart drops it while the viewer's media peer carries on. so once a viewer's offer has reached
+a host of its sid, the room never tells the host that viewer left because its socket closed, and a viewer that
+re-joins with an id the host already holds for that sid is not announced again. the host learns that such a
+viewer is gone from its own media peer (a dtls close, ice consent), from its lease ledger (section 10), or from
+the sid's `kill`. the room still invents a `bye` for a viewer whose offer never reached a host of its sid and
+that has no other live socket, when its socket closes or when the room evicts it from a full room after it
+stopped pinging: the host cannot be holding a peer for it, and nothing else would release it. when the host
+lets a viewer go (a `bye` with a `to`), that viewer's next join is announced again.
 
 fields, beyond `type`, `from`, `fromRole` and `serverTimeMs`:
 
@@ -446,7 +457,7 @@ in a firestore command document** — see section 11.
     "membersMayWatch": true,
     "maxViewers": 4,
     "leaseSeconds": 300,
-    "sessionCapSeconds": 43200
+    "sessionCapSeconds": 3153600000  // a hundred years: no session reaches it, section 10
   },
   "indicator": "banner" | "tray" | "none",
   "ctl": true,
@@ -540,8 +551,8 @@ the `mac` field of `signaling/signal-answer.json`.
 
 ## 10. lease renewal
 
-a live session holds a **5-minute lease** the browser renews silently, and an absolute cap of **12 hours**.
-the point of the lease is that authorisation is re-checked while the session runs: a member removed from the
+a live session holds a **5-minute lease** the browser renews silently, and no absolute cap: it lasts as long as
+its viewers keep renewing. the point of the lease is that authorisation is re-checked while the session runs: a member removed from the
 site, a site that turns swoop off, a capability revoked or a machine excluded all take effect within one
 lease rather than at the next reconnect.
 
@@ -568,9 +579,10 @@ anchor plus monotonic elapsed — never the wall clock. at `expiry + 30 s` grace
 
 when the last viewer is gone the streamer lingers about 60 s and exits 0 with `reason: "idle"`.
 
-**the 12-hour cap** (`sessionCapSeconds`, default 43200) runs from `ready`. at the cap the streamer ends the
-session for everyone and exits 0 with `reason: "session_cap"`, regardless of how healthy the leases are. it is
-a hard stop, not a renewal ceiling.
+**`sessionCapSeconds`** is still in the bundle, and the streamer still ends the session for everyone once that
+long has passed since `ready` (exit 0, `reason: "session_cap"`). the api sends a value no session reaches: the
+streamer parses the field strictly, as a required u64 compared `elapsed >= cap`, so it can be neither dropped
+nor zero.
 
 the kill switch is faster and independent of all of this: the worker broadcasts `kill`, the streamer exits,
 and that path completes in ≤ 2 s. the polled command is only the last resort for a machine with no socket.

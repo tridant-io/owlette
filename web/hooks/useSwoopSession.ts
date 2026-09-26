@@ -41,9 +41,9 @@ import {
   type SwoopSession,
 } from '@/lib/swoop/features';
 import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
-import { SwoopLeaseRefused } from '@/lib/swoop/lease';
+import { leaseFailure, SwoopLeaseRefused } from '@/lib/swoop/lease';
 import { createSwoopIdentity, createSwoopPeer, type SwoopPeer } from '@/lib/swoop/peer';
-import { backoffDelayMs, isTransientEnd } from '@/lib/swoop/backoff';
+import { backoffDelayMs, isTransientEnd, isWithdrawal } from '@/lib/swoop/backoff';
 import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import {
@@ -54,7 +54,6 @@ import {
 } from '@/lib/swoop/protocol';
 import {
   createSwoopSignaling,
-  type SwoopSignalFatal,
   type SwoopSignaling,
   type SwoopSignalStatus,
 } from '@/lib/swoop/signaling';
@@ -70,7 +69,6 @@ import {
 } from '@/lib/swoop/video/receiver';
 import type { SwoopStepUpProof } from '@/lib/swoop/stepUp';
 
-/** how far the page has got. `ended` and `error` are both terminal. */
 /**
  * the reconnect ladder: 2 s, 4 s, … 30 s between sessions, reset after one
  * held for `RETRY_RESET_MS`. five minutes, not thirty seconds: every attempt
@@ -81,6 +79,10 @@ import type { SwoopStepUpProof } from '@/lib/swoop/stepUp';
 const RETRY_LADDER = { baseMs: 2000, capMs: 30000 };
 const RETRY_RESET_MS = 5 * 60 * 1000;
 
+/**
+ * how far the page has got. `ended` and `error` count down to the next session
+ * while `retryIn` is set, and otherwise wait for the operator.
+ */
 export type SwoopSessionState =
   | 'idle'
   | 'authorizing'
@@ -213,13 +215,6 @@ function contentRect(video: HTMLVideoElement, width: number, height: number): DO
   return new DOMRect(box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h);
 }
 
-/** the server's own sentence, when it sent one. */
-async function problemDetail(res: Response, fallback: string): Promise<string> {
-  const body = (await res.json().catch(() => ({}))) as { detail?: string; error?: string };
-  return body.detail || body.error || fallback;
-}
-
-
 export function useSwoopSession(
   siteId: string,
   machineId: string,
@@ -251,7 +246,7 @@ export function useSwoopSession(
   // snapshot and a live second-factor proof has no business being there.
   const proofRef = useRef<SwoopStepUpProof | null>(null);
   const continuityRef = useRef<string | null>(null);
-  const endRef = useRef<(reason: string) => void>(() => {});
+  const endRef = useRef<(reason: string, message?: string) => void>(() => {});
   const stoppedRef = useRef(false);
 
   const submitProof = useCallback(async (proof: SwoopStepUpProof) => {
@@ -357,16 +352,6 @@ export function useSwoopSession(
     const frameHandlers = new Set<(observation: FrameObservation) => void>();
     const channelHandlers = new Map<SwoopChannel, Set<(data: unknown) => void>>();
 
-    // `transient` is the difference between a path that may come back and a
-    // decision: the first schedules the next session, the second waits for
-    // the operator.
-    const fail = (message: string, transient: boolean) => {
-      if (disposed) return;
-      setError(message);
-      setState('error');
-      if (transient) scheduleReconnect();
-    };
-
     const sendOnChannel = (label: SwoopChannel, data: string): boolean => {
       const channel = peer?.channel(label);
       if (!channel || channel.readyState !== 'open') return false;
@@ -390,7 +375,10 @@ export function useSwoopSession(
       receiver?.stop();
       peer?.close();
       signaling?.close(1000, reason);
-      if (grant) {
+      // only a deliberate end tells the server. a DELETE fans out into kills
+      // that can land on the next session, and ends the record this tab's
+      // continuity token names, so a path that may come back sends none.
+      if (grant && (reason === 'closed' || reason === 'unmounted')) {
         // best effort: the record ends server-side and the streamer is stopped
         // over two independent paths, so a lost beacon costs the user nothing.
         // `viewerReason` is why this page ended it — a caller cannot claim a
@@ -407,13 +395,30 @@ export function useSwoopSession(
       }
     };
 
-    endRef.current = (reason: string) => {
-      const transient = isTransientEnd(reason);
-      stoppedRef.current = !transient;
+    // the one way out of a run. it is torn down first, so none of its timers
+    // or sockets outlive the end; then a path that may come back walks the
+    // ladder, and a decision stops it along with any retry already due.
+    const leave = (reason: string, next: 'ended' | 'error', message?: string) => {
+      if (disposed) return;
       teardown(reason);
-      setState('ended');
-      if (transient) scheduleReconnect();
+      if (message !== undefined) setError(message);
+      setState(next);
+      if (isTransientEnd(reason)) {
+        scheduleReconnect();
+      } else {
+        stoppedRef.current = true;
+        clearRetry();
+      }
     };
+
+    // `transient` is the difference between a path that may come back and a
+    // decision: the first schedules the next session, the second waits for
+    // the operator.
+    const fail = (message: string, transient: boolean) =>
+      leave(transient ? 'start_failed' : 'refused', 'error', message);
+
+    const finish = (reason: string, message?: string) => leave(reason, 'ended', message);
+    endRef.current = finish;
 
     const renewLease = async (fp: string): Promise<SwoopLease> => {
       if (!grant) throw new Error('swoop: no session to renew');
@@ -425,15 +430,7 @@ export function useSwoopSession(
           body: JSON.stringify({ viewerId: grant.viewerId, fp }),
         },
       );
-      if (!res.ok) {
-        const detail = await problemDetail(res, 'the session lease could not be renewed.');
-        // 401/403 is the authorisation going away — what the lease exists to
-        // catch. everything else is a failure the renewer may retry.
-        if (res.status === 401 || res.status === 403) {
-          throw new SwoopLeaseRefused(res.status, detail);
-        }
-        throw new Error(detail);
-      }
+      if (!res.ok) throw leaseFailure(res.status, await res.json().catch(() => ({})));
       const body = (await res.json()) as { data: SwoopLease };
       leaseExpiresAt = body.data.expiresAt;
       return body.data;
@@ -450,7 +447,14 @@ export function useSwoopSession(
         pendingJwt = null;
         return spent;
       }
-      return (await renewLease(fp)).viewerJwt;
+      try {
+        return (await renewLease(fp)).viewerJwt;
+      } catch (err) {
+        // a withdrawal ends the session here rather than a lease later; any
+        // other failure is the signalling ladder's to wait out.
+        if (err instanceof SwoopLeaseRefused) finish('lease_refused', err.message);
+        throw err;
+      }
     };
 
     const createSession = async (fp: string, wantControl = control): Promise<SessionGrant | null> => {
@@ -479,8 +483,8 @@ export function useSwoopSession(
         },
       );
       if (!res.ok) {
-        // one read of the body: `problemDetail` consumes it, and every branch
-        // below wants both the code and the sentence.
+        // one read of the body: every branch below wants both the code and the
+        // sentence.
         const problem = (await res.json().catch(() => ({}))) as { code?: string; detail?: string; error?: string };
         const code = typeof problem.code === 'string' ? problem.code : null;
         const detail = problem.detail || problem.error || 'this swoop session could not be started.';
@@ -497,8 +501,12 @@ export function useSwoopSession(
           }
           return null;
         }
-        // a 5xx or a 429 is the api having a bad moment; a 4xx is its answer.
-        fail(detail, res.status >= 500 || res.status === 429);
+        // only the api's own answer is final: a policy refusal, a request it
+        // could not read, a site or machine that is not there. a lapsed login,
+        // a machine briefly offline, an edge in front of the app or a bad
+        // moment may all come back, and the ladder waits them out.
+        const final = isWithdrawal(res.status, code) || res.status === 400 || res.status === 404;
+        fail(res.status === 401 ? 'sign in again to resume.' : detail, !final);
         return null;
       }
       const body = (await res.json()) as { data: SessionGrant };
@@ -554,12 +562,8 @@ export function useSwoopSession(
         onStatus: (signal: SwoopSignalStatus) => {
           if (!disposed) setStats((prev) => ({ ...prev, signal }));
         },
-        onFatal: (code: SwoopSignalFatal) => {
-          if (code === 'version_mismatch') {
-            fail('this machine runs a swoop version this page cannot talk to.', false);
-          } else {
-            fail('this session is no longer authorised.', false);
-          }
+        onFatal: () => {
+          fail('this machine runs a swoop version this page cannot talk to.', false);
         },
       };
 
@@ -621,15 +625,16 @@ export function useSwoopSession(
         onClosed: (reason) => {
           if (disposed) return;
           if (reason === 'kill') {
+            // an admin's kill, or another tab or device taking the machine
+            // over: a retry would take it back, and the two would trade it
+            // forever. a service stop or update byes its viewers this way too.
             continuityRef.current = null;
-            setError('this session was ended from elsewhere.');
-            setState('ended');
-          } else if (reason !== 'closed') {
-            // the host went away without a decision: a service restart, a
-            // streamer that exited. the next session finds it back.
-            setState('ended');
-            scheduleReconnect();
+            finish('kill', 'this session was ended from elsewhere.');
+            return;
           }
+          // a host that let this viewer go, or a streamer that exited on its
+          // own: no decision, so the next session finds it back.
+          finish('host_gone');
         },
       });
 
@@ -670,7 +675,7 @@ export function useSwoopSession(
         },
         renewLease: () => renewLease(identity.fingerprint),
         leaseExpiresAt: () => leaseExpiresAt,
-        end: (reason) => endRef.current(reason),
+        end: finish,
       };
 
       for (const feature of SWOOP_FEATURES) detachers.push(feature.attach(live));
@@ -694,7 +699,7 @@ export function useSwoopSession(
     });
 
     return () => teardown('unmounted');
-  }, [siteId, machineId, control, attempt, scheduleReconnect]);
+  }, [siteId, machineId, control, attempt, scheduleReconnect, clearRetry]);
 
   const stepUp = useMemo<SwoopStepUpControls>(
     () => ({ required: stepUpRequired, enrolled, submitProof, cancel }),

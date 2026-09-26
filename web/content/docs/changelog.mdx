@@ -7,6 +7,34 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### fixed — a swoop session stays up for as long as its tab is open
+
+A network hiccup no longer ends a session. The signalling room used to tell the
+machine a viewer had left whenever the viewer's signalling socket closed, which
+the page does to refresh its token before every connection recovery after the
+first minute, and the machine then dropped a picture that was still flowing. The
+room now leaves that to the machine's own view of the connection, and does not
+announce a re-dialling viewer twice.
+
+A reconnect no longer kills itself. The page used to end the old session on
+every automatic reconnect, and that end reached the machine as a kill for
+whatever was running, which was usually the new session; the page now ends a
+session on the server only when the operator does, the room's kill reaches only
+the session it names, and the polled kill is sent only when the room could not
+deliver one.
+
+The page now stops only for the operator's end, an admin's kill, another tab or
+device taking the machine, or a policy refusal from the API. A lapsed sign-in, a
+machine that is briefly offline, a 403 from in front of the app, or a failed
+token mint during a re-dial now reconnect on the backoff ladder instead of
+ending for good. A reconnect keeps control without a new passkey, because the
+tab's continuity token no longer depends on the old session's viewer list; an
+admin's kill on the machine still voids it.
+
+There is no 12-hour cap any more: the lease route no longer refuses a long
+session, the machine is sent a cap no session reaches, and the daily sweep
+closes a session record only once its lease has lapsed.
+
 ## [4.0.3] - 2026-09-26
 
 ### changed — the macOS menubar icon blends in

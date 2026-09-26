@@ -7,9 +7,10 @@
  * secret bound to that session — which the tab keeps in memory only and
  * presents on its next mint instead of a proof. the server honours it when the
  * session it names was this user's control session on this machine, its
- * secret matches, it has not been spent, and the session did not end by a
- * kill, a deliberate close or a revocation. a new tab has no token and asks
- * as before; closing the tab forgets it.
+ * secret matches, it has not been spent, the session did not end by a kill, a
+ * deliberate close or a revocation, and no kill on the machine has come since
+ * it started. a new tab has no token and asks as before; closing the tab
+ * forgets it.
  *
  * what is stored is the secret's sha-256, never the secret, so a read of the
  * session record gives nothing to present. spending is one-shot: the mint
@@ -54,26 +55,32 @@ export function parseContinuity(token: unknown): { sid: string; hash: string } |
 
 export type ContinuityVerdict =
   | { ok: true }
-  | { ok: false; reason: 'no_session' | 'not_yours' | 'not_control' | 'secret_mismatch' | 'spent' | 'ended_for_good' };
+  | { ok: false; reason: 'no_session' | 'not_yours' | 'secret_mismatch' | 'spent' | 'killed' | 'ended_for_good' };
 
 /**
  * whether a presented token lets this user skip the ceremony for a new control
- * session on the same machine. pure: the record was read by the caller.
+ * session on the same machine. pure: the record and `revokedAt` — when a kill
+ * last closed the machine's step-up windows, 0 if never — were read by the caller.
  */
 export function continuityInherits(args: {
   record: SwoopSession | null;
   userId: string;
   hash: string;
+  revokedAt: number;
 }): ContinuityVerdict {
-  const { record, userId, hash } = args;
+  const { record, userId, hash, revokedAt } = args;
   if (!record) return { ok: false, reason: 'no_session' };
   if (record.createdBy !== `user:${userId}`) return { ok: false, reason: 'not_yours' };
-  if (!record.viewers.some((v) => v.uid === userId && v.ctl)) return { ok: false, reason: 'not_control' };
+  // only a control grant is ever given a hash, so the secret matching is what proves
+  // this was the user's control session: the viewer rows are gone once it ends.
   const stored = record.continuityHash;
   if (!stored || stored.length !== hash.length || !timingSafeEqual(Buffer.from(stored), Buffer.from(hash))) {
     return { ok: false, reason: 'secret_mismatch' };
   }
   if (record.continuityUsedAt !== undefined) return { ok: false, reason: 'spent' };
+  // a kill closes only the records still open: one that had already ended for a
+  // transient reason is reached through the kill's own timestamp instead.
+  if (revokedAt >= record.startedAt) return { ok: false, reason: 'killed' };
   if (record.endReason && FINAL_ENDS.has(record.endReason)) return { ok: false, reason: 'ended_for_good' };
   return { ok: true };
 }

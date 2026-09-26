@@ -39,7 +39,6 @@ jest.mock('@/lib/mfaFactors.server', () => ({
 
 import type { Actor } from '@/lib/capabilities';
 import {
-  SWOOP_SESSION_CAP_SECONDS,
   SWOOP_SETTINGS_DEFAULTS,
   SWOOP_STEP_UP_WINDOW_MS,
   SwoopPolicyError,
@@ -198,66 +197,50 @@ describe('evaluateSwoopAccess', () => {
 });
 
 describe('evaluateLeaseRenewal', () => {
-  const started = 1_000_000;
+  function renewal(over: Partial<Parameters<typeof evaluateLeaseRenewal>[0]>) {
+    return evaluateLeaseRenewal({
+      actor: member,
+      siteId: SITE,
+      machineId: MACHINE,
+      intent: 'view',
+      viaApiKey: false,
+      settings: ON,
+      ...over,
+    });
+  }
 
   it('renews while the authorization still holds', () => {
-    expect(
-      evaluateLeaseRenewal({
-        actor: member,
-        siteId: SITE,
-        machineId: MACHINE,
-        intent: 'view',
-        viaApiKey: false,
-        settings: ON,
-        startedAt: started,
-        nowMs: started + 60_000,
-      }),
-    ).toEqual({ ok: true, ctl: false });
+    expect(renewal({})).toEqual({ ok: true, ctl: false });
   });
 
-  it('refuses past the 12 hour absolute cap', () => {
-    expect(
-      evaluateLeaseRenewal({
-        actor: member,
-        siteId: SITE,
-        machineId: MACHINE,
-        intent: 'view',
-        viaApiKey: false,
-        settings: ON,
-        startedAt: started,
-        nowMs: started + SWOOP_SESSION_CAP_SECONDS * 1000,
-      }),
-    ).toMatchObject({ code: 'session_cap_reached' });
+  // the window is held open for a renewal: a ceremony every five minutes is how
+  // operators end up switching the feature off.
+  it('renews a control viewer without running step-up again', () => {
+    expect(renewal({ actor: admin, intent: 'control' })).toEqual({ ok: true, ctl: true });
   });
 
   it('refuses a renewal once membership is gone', () => {
-    expect(
-      evaluateLeaseRenewal({
-        actor: outsider,
-        siteId: SITE,
-        machineId: MACHINE,
-        intent: 'view',
-        viaApiKey: false,
-        settings: ON,
-        startedAt: started,
-        nowMs: started + 60_000,
-      }),
-    ).toMatchObject({ code: 'capability_missing' });
+    expect(renewal({ actor: outsider })).toMatchObject({ code: 'capability_missing' });
+  });
+
+  it('refuses a control renewal once the control capability is gone', () => {
+    expect(renewal({ intent: 'control' })).toMatchObject({ code: 'capability_missing' });
   });
 
   it('refuses a renewal once the site turns swoop off', () => {
-    expect(
-      evaluateLeaseRenewal({
-        actor: member,
-        siteId: SITE,
-        machineId: MACHINE,
-        intent: 'view',
-        viaApiKey: false,
-        settings: SWOOP_SETTINGS_DEFAULTS,
-        startedAt: started,
-        nowMs: started + 60_000,
-      }),
-    ).toMatchObject({ code: 'swoop_disabled' });
+    expect(renewal({ settings: SWOOP_SETTINGS_DEFAULTS })).toMatchObject({ code: 'swoop_disabled' });
+  });
+
+  it('refuses a renewal once the machine is excluded', () => {
+    expect(renewal({ settings: { ...ON, excludedMachineIds: [MACHINE] } })).toMatchObject({
+      code: 'machine_excluded',
+    });
+  });
+
+  it('refuses a member once the site stops members watching', () => {
+    expect(renewal({ settings: { ...ON, membersMayWatch: false } })).toMatchObject({
+      code: 'members_may_not_watch',
+    });
   });
 });
 

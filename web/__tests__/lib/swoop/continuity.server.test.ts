@@ -13,6 +13,7 @@ import {
 
 import type { SwoopSession } from '@/lib/swoop/sessionStore.server';
 
+/** an ended record as the store writes it: `endSwoopSession` empties `viewers`. */
 function record(overrides: Partial<SwoopSession> = {}): SwoopSession {
   return {
     sid: 'sid-1',
@@ -21,11 +22,15 @@ function record(overrides: Partial<SwoopSession> = {}): SwoopSession {
     state: 'ended',
     createdBy: 'user:alice',
     startedAt: 1,
-    absoluteExpiresAt: 2,
-    viewers: [{ viewerId: 'v1', uid: 'alice', ctl: true, joinedAt: 1, leaseExpiresAt: 2 }],
+    viewers: [],
     endReason: 'lease_expired',
     ...overrides,
   };
+}
+
+/** alice's verdict, on a machine no kill has touched unless `revokedAt` says otherwise. */
+function verdict(rec: SwoopSession | null, hash: string, over: { userId?: string; revokedAt?: number } = {}) {
+  return continuityInherits({ record: rec, userId: over.userId ?? 'alice', hash, revokedAt: over.revokedAt ?? 0 });
 }
 
 describe('swoop continuity', () => {
@@ -48,9 +53,7 @@ describe('swoop continuity', () => {
     const minted = mintContinuity('sid-1');
     const { hash } = parseContinuity(minted.token)!;
     for (const endReason of ['lease_expired', 'signal_lost', 'host_exit', 'error', undefined] as const) {
-      expect(
-        continuityInherits({ record: record({ continuityHash: minted.hash, endReason }), userId: 'alice', hash }),
-      ).toEqual({ ok: true });
+      expect(verdict(record({ continuityHash: minted.hash, endReason }), hash)).toEqual({ ok: true });
     }
   });
 
@@ -58,35 +61,42 @@ describe('swoop continuity', () => {
     const minted = mintContinuity('sid-1');
     const { hash } = parseContinuity(minted.token)!;
     for (const endReason of ['closed', 'killed', 'revoked'] as const) {
-      expect(
-        continuityInherits({ record: record({ continuityHash: minted.hash, endReason }), userId: 'alice', hash }),
-      ).toEqual({ ok: false, reason: 'ended_for_good' });
+      expect(verdict(record({ continuityHash: minted.hash, endReason }), hash)).toEqual({
+        ok: false,
+        reason: 'ended_for_good',
+      });
     }
+  });
+
+  // a kill closes only the records still open, and a tab's last one may already
+  // have ended for a transient reason: the kill's own timestamp is what reaches it.
+  it('never inherits from a session a kill on the machine came after', () => {
+    const minted = mintContinuity('sid-1');
+    const { hash } = parseContinuity(minted.token)!;
+    const lapsed = record({ continuityHash: minted.hash, startedAt: 1_000, endReason: 'lease_expired' });
+    expect(verdict(lapsed, hash, { revokedAt: 1_500 })).toEqual({ ok: false, reason: 'killed' });
+    expect(verdict(lapsed, hash, { revokedAt: 1_000 })).toEqual({ ok: false, reason: 'killed' });
+  });
+
+  it('inherits from a session that started after the last kill', () => {
+    const minted = mintContinuity('sid-1');
+    const { hash } = parseContinuity(minted.token)!;
+    const later = record({ continuityHash: minted.hash, startedAt: 1_000, endReason: 'lease_expired' });
+    expect(verdict(later, hash, { revokedAt: 999 })).toEqual({ ok: true });
   });
 
   it('is one-shot, bound to the user and to a control session, and needs the secret', () => {
     const minted = mintContinuity('sid-1');
     const { hash } = parseContinuity(minted.token)!;
     const good = record({ continuityHash: minted.hash });
-    expect(continuityInherits({ record: null, userId: 'alice', hash })).toEqual({ ok: false, reason: 'no_session' });
-    expect(continuityInherits({ record: good, userId: 'bob', hash })).toEqual({ ok: false, reason: 'not_yours' });
-    expect(
-      continuityInherits({
-        record: record({ continuityHash: minted.hash, viewers: [{ ...good.viewers[0], ctl: false }] }),
-        userId: 'alice',
-        hash,
-      }),
-    ).toEqual({ ok: false, reason: 'not_control' });
-    expect(continuityInherits({ record: good, userId: 'alice', hash: continuityHash('other') })).toEqual({
+    expect(verdict(null, hash)).toEqual({ ok: false, reason: 'no_session' });
+    expect(verdict(good, hash, { userId: 'bob' })).toEqual({ ok: false, reason: 'not_yours' });
+    expect(verdict(good, continuityHash('other'))).toEqual({ ok: false, reason: 'secret_mismatch' });
+    // a watch grant stores no hash at all, so no token can ever carry one into control.
+    expect(verdict(record({}), hash)).toEqual({ ok: false, reason: 'secret_mismatch' });
+    expect(verdict(record({ continuityHash: minted.hash, continuityUsedAt: 5 }), hash)).toEqual({
       ok: false,
-      reason: 'secret_mismatch',
+      reason: 'spent',
     });
-    expect(continuityInherits({ record: record({}), userId: 'alice', hash })).toEqual({
-      ok: false,
-      reason: 'secret_mismatch',
-    });
-    expect(
-      continuityInherits({ record: record({ continuityHash: minted.hash, continuityUsedAt: 5 }), userId: 'alice', hash }),
-    ).toEqual({ ok: false, reason: 'spent' });
   });
 });

@@ -222,6 +222,8 @@ interface PeerHarness {
   state: FakePeerState;
   sent: SignalingMessage[];
   errors: SwoopPeerError[];
+  /** `error:<code>` and `closed:<reason>`, in the order the page is told. */
+  endings: string[];
   refreshes: number;
 }
 
@@ -236,6 +238,7 @@ afterEach(() => {
 function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): PeerHarness {
   const sent: SignalingMessage[] = [];
   const errors: SwoopPeerError[] = [];
+  const endings: string[] = [];
   const counters = { refreshes: 0, leases: 0 };
 
   const peer = new SwoopPeer({
@@ -248,7 +251,11 @@ function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): P
     refreshToken: async () => {
       counters.refreshes += 1;
     },
-    onError: (code) => errors.push(code),
+    onError: (code) => {
+      errors.push(code);
+      endings.push(`error:${code}`);
+    },
+    onClosed: (reason) => endings.push(`closed:${reason}`),
     leaseToken: async () => `viewer.jwt.${(counters.leases += 1)}`,
     factory: factoryFor(state, IDENTITY.certificate),
   });
@@ -259,6 +266,7 @@ function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): P
     state,
     sent,
     errors,
+    endings,
     get refreshes() {
       return counters.refreshes;
     },
@@ -641,9 +649,35 @@ describe('swoop peer — relay promotion', () => {
     expect(h.state.offers[1]).toEqual({ iceRestart: true });
 
     // a relay pair that survives the restart never earns a second one.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'promoted'),
+      mac: HOST_MAC,
+    });
     await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
     expect(h.state.restarts).toBe(1);
     expect(h.peer.diagnostics().iceRestarted).toBe(true);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('rolls back a promotion whose answer never comes, and keeps the relayed session', async () => {
+    jest.useFakeTimers();
+    const h = await connected('relay');
+    (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
+
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS);
+    expect(h.state.restarts).toBe(1);
+
+    // a host whose accept failed answers nothing. ending here would reconnect
+    // onto the same relay and promote again, every twenty seconds.
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
+    expect(h.state.localDescriptions.at(-1)).toEqual({ type: 'rollback' });
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
+
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
+    expect(h.state.restarts).toBe(1);
   });
 
   it('leaves a direct pair alone', async () => {
@@ -714,8 +748,15 @@ describe('swoop peer — stage-2 browser turn', () => {
     expect(h.peer.diagnostics().browserRelayAdded).toBe(true);
 
     // and only once, however long it stays unconnected.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'stage2'),
+      mac: HOST_MAC,
+    });
     await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
     expect(state.configurations).toHaveLength(1);
+    expect(h.errors).toEqual([]);
   });
 
   it('leaves the browser relay out when the host trickled a relay candidate of its own', async () => {
@@ -805,8 +846,15 @@ describe('swoop peer — stage-2 browser turn', () => {
     expect(h.peer.diagnostics().promotionUsed).toBe(true);
 
     // and that is the end of it.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'promoted'),
+      mac: HOST_MAC,
+    });
     await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
     expect(state.restarts).toBe(2);
+    expect(h.errors).toEqual([]);
   });
 });
 
@@ -962,6 +1010,91 @@ describe('swoop peer — the restart answer', () => {
       type: 'answer',
       sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
     });
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
+  });
+
+  /** connected on the first answer and still up, with a host-asked restart outstanding. */
+  async function restartingWhileUp(): Promise<PeerHarness> {
+    const h = peerHarness();
+    await h.peer.start();
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'first'),
+      mac: HOST_MAC,
+    });
+    (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
+    await h.peer.handleSignal({ type: 'host-ready', sid: SID, to: VIEWER_ID });
+    expect(h.state.restarts).toBe(1);
+    return h;
+  }
+
+  it('ends as host_silent when a restart on a link that is down is never answered', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+
+    // lost to a host mid re-dial, or never sent by one that let this viewer
+    // go: while the offer is out no later restart can leave, and there is no
+    // working session left to keep.
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+    expect(h.state.closed).toBe(1);
+  });
+
+  it('rolls back an unanswered restart on a link that is still up, and restarts again later', async () => {
+    jest.useFakeTimers();
+    const h = await restartingWhileUp();
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
+    expect(h.state.localDescriptions.at(-1)).toEqual({ type: 'rollback' });
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
+
+    // nothing is outstanding now: a link that fails later restarts at once,
+    // from the bottom of the ladder.
+    (h.peer.connection as unknown as FakePeerConnection).iceState('failed');
+    await jest.advanceTimersByTimeAsync(0);
+    expect(h.state.restarts).toBe(2);
+    expect(h.peer.restartAttempts()).toBe(1);
+  });
+
+  it('ends as host_silent when the browser refuses the rollback', async () => {
+    jest.useFakeTimers();
+    const h = await restartingWhileUp();
+    (h.peer.connection as unknown as FakePeerConnection).setLocalDescription = async () => {
+      throw new Error('rollback refused');
+    };
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
+    expect(h.errors).toEqual(['host_silent']);
+    expect(h.state.closed).toBe(1);
+  });
+
+  it('never rolls back a first offer, whatever ice reports', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+    (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
+    expect(h.errors).toEqual(['host_silent']);
+    expect(h.state.localDescriptions).toHaveLength(1);
+  });
+
+  it('an answered restart clears the wait, and nothing fires after it', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+      mac: HOST_MAC,
+    });
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS * 3);
     expect(h.errors).toEqual([]);
     expect(h.state.closed).toBe(0);
   });
@@ -1125,6 +1258,42 @@ describe('swoop peer — trickle', () => {
 
     await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
     expect(h.state.remoteDescriptions).toHaveLength(0);
+  });
+});
+
+describe('swoop peer — endings', () => {
+  it('ignores a kill naming another session', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    await h.peer.handleSignal({ type: 'kill', sid: 'sid_someone_else' });
+    expect(h.state.closed).toBe(0);
+    expect(h.endings).toEqual([]);
+  });
+
+  it.each([
+    ['this session', SID],
+    ['no session, which means whatever is running', null],
+  ])('ends on a kill naming %s', async (_what, sid) => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    await h.peer.handleSignal({ type: 'kill', sid });
+    expect(h.state.closed).toBe(1);
+    expect(h.endings).toEqual(['closed:kill']);
+  });
+
+  it('an abort reports its code before it closes', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(),
+      mac: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    });
+    expect(h.endings).toEqual(['error:host_mac_mismatch', 'closed:host_mac_mismatch']);
   });
 });
 

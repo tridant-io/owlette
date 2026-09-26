@@ -51,14 +51,14 @@ export const SWOOP_SETTINGS_DOC = 'swoop';
 /** A live session's lease. The browser renews it silently (PROTOCOL.md §10). */
 export const SWOOP_LEASE_SECONDS = 300;
 
-/** Absolute cap from `ready`, a hard stop rather than a renewal ceiling. */
-export const SWOOP_SESSION_CAP_SECONDS = 12 * 60 * 60;
+/** how long past a lapsed lease the host still serves the viewer before dropping it (PROTOCOL.md §10). */
+export const SWOOP_LEASE_GRACE_SECONDS = 30;
 
 /**
  * How long one live ceremony authorises control for, measured from the
  * ceremony. A working day: 10 minutes made every fresh tab a passkey prompt
  * (owner, 2026-09-25), and the same-tab case is covered separately by
- * continuity (`continuity.server.ts`). Matches the session cap.
+ * continuity (`continuity.server.ts`).
  */
 export const SWOOP_STEP_UP_WINDOW_MS = 12 * 60 * 60 * 1000;
 
@@ -95,8 +95,7 @@ export type SwoopDenyCode =
   | 'machine_excluded'
   | 'capability_missing'
   | 'members_may_not_watch'
-  | 'step_up_required'
-  | 'session_cap_reached';
+  | 'step_up_required';
 
 export type SwoopDecision =
   | { ok: true; ctl: boolean }
@@ -204,19 +203,14 @@ export function evaluateSwoopAccess(input: SwoopAccessInput): SwoopDecision {
 }
 
 /**
- * A lease renewal is the same decision plus the absolute cap — the point of
- * the lease is that a removed member, a disabled site, an excluded machine or
- * a revoked capability takes effect within one lease rather than at the next
- * reconnect. Step-up is NOT re-run: the window covers it, and a 5-minute
- * ceremony prompt is how operators end up disabling the feature.
+ * a lease renewal is the same decision with the window held open, and nothing
+ * else: a session lives as long as its tab keeps renewing (owner, 2026-09-26),
+ * and the point of the lease is that a removed member, a disabled site, an
+ * excluded machine or a revoked capability takes effect within one lease rather
+ * than at the next reconnect. step-up is not re-run: a ceremony every five
+ * minutes is how operators end up switching the feature off.
  */
-export function evaluateLeaseRenewal(
-  input: SwoopAccessInput & { startedAt: number; nowMs?: number },
-): SwoopDecision {
-  const now = input.nowMs ?? Date.now();
-  if (now >= input.startedAt + SWOOP_SESSION_CAP_SECONDS * 1000) {
-    return deny(403, 'session_cap_reached', 'this session reached its 12 hour limit.');
-  }
+export function evaluateLeaseRenewal(input: SwoopAccessInput): SwoopDecision {
   return evaluateSwoopAccess({ ...input, stepUpOpen: true });
 }
 
@@ -328,7 +322,12 @@ export async function revokeStepUpWindows(args: {
   });
 }
 
-async function stepUpRevokedAt(siteId: string, machineId: string): Promise<number> {
+/**
+ * when a kill last closed this machine's windows, 0 if one never has. continuity
+ * reads it too: a kill closes only the records still open, and a tab whose last
+ * one had already ended must not carry control past it either.
+ */
+export async function stepUpRevokedAt(siteId: string, machineId: string): Promise<number> {
   const snap = await stepUpRevocationRef(siteId, machineId).get();
   const revokedAt = snap.exists ? snap.data()?.revokedAt : undefined;
   return typeof revokedAt === 'number' ? revokedAt : 0;

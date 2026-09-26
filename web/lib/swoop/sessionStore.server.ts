@@ -24,6 +24,7 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { SWOOP_LEASE_GRACE_SECONDS, SWOOP_LEASE_SECONDS } from '@/lib/swoop/policy.server';
 
 export type SwoopSessionState = 'pending' | 'live' | 'ended';
 
@@ -60,7 +61,6 @@ export interface SwoopSession {
   createdBy: string;
   /** Unix ms. */
   startedAt: number;
-  absoluteExpiresAt: number;
   viewers: SwoopSessionViewer[];
   endReason?: SwoopSessionEndReason;
   /**
@@ -167,7 +167,6 @@ export async function createSwoopSession(args: {
   sid: string;
   createdBy: string;
   startedAt: number;
-  absoluteExpiresAt: number;
   continuityHash?: string;
 }): Promise<void> {
   await writeSession(args.siteId, args.machineId, args.sid, {
@@ -177,7 +176,6 @@ export async function createSwoopSession(args: {
     state: 'pending' satisfies SwoopSessionState,
     createdBy: args.createdBy,
     startedAt: args.startedAt,
-    absoluteExpiresAt: args.absoluteExpiresAt,
     viewers: [],
     createdAt: FieldValue.serverTimestamp(),
     ...(args.continuityHash ? { continuityHash: args.continuityHash } : {}),
@@ -207,8 +205,6 @@ function parseSession(
     state: (data.state as SwoopSessionState) ?? 'pending',
     createdBy: String(data.createdBy ?? ''),
     startedAt: typeof data.startedAt === 'number' ? data.startedAt : 0,
-    absoluteExpiresAt:
-      typeof data.absoluteExpiresAt === 'number' ? data.absoluteExpiresAt : 0,
     viewers: parseViewers(data.viewers),
     ...(data.endReason ? { endReason: data.endReason as SwoopSessionEndReason } : {}),
     ...(typeof data.viewerReason === 'string' ? { viewerReason: data.viewerReason } : {}),
@@ -285,16 +281,30 @@ export async function listUnendedSwoopSessionsForMachine(args: {
 }
 
 /**
- * Unended sessions on this machine whose absolute 12-hour cap has already
- * passed — records nobody closed, because the browser went away without its
- * teardown reaching us. The cap is absolute, so one of these cannot still be
- * running, and left alone it answers as live to
- * `listUnendedSwoopSessionsForUser` for as long as the document exists.
+ * whether nobody can still be streaming this session: its latest viewer lease,
+ * or one lease from `startedAt` when it holds no viewer row, is past the grace
+ * the host gives a lapsed lease before it drops the viewer (PROTOCOL.md §10).
+ */
+function leaseLapsed(session: SwoopSession, nowMs: number): boolean {
+  const lastLease =
+    session.viewers.length > 0
+      ? Math.max(...session.viewers.map((viewer) => viewer.leaseExpiresAt))
+      : session.startedAt + SWOOP_LEASE_SECONDS * 1000;
+  return lastLease + SWOOP_LEASE_GRACE_SECONDS * 1000 < nowMs;
+}
+
+/**
+ * unended sessions on this machine whose lease has lapsed — records nobody
+ * closed, because the browser went away without its teardown reaching us. the
+ * host has dropped every viewer of one of these, so it cannot still be running,
+ * and left alone it answers as live to `listUnendedSwoopSessionsForUser` for as
+ * long as the document exists. a session whose tab keeps renewing is never one
+ * of them, however long ago it started.
  *
  * One page, by `state` alone: the whole point is that unended sessions are a
  * handful, and the sweep that calls this is what keeps them that way.
  */
-export async function listExpiredUnendedSwoopSessions(args: {
+export async function listLapsedUnendedSwoopSessions(args: {
   siteId: string;
   machineId: string;
   nowMs: number;
@@ -313,7 +323,7 @@ export async function listExpiredUnendedSwoopSessions(args: {
         doc.id,
       ),
     )
-    .filter((session) => session.absoluteExpiresAt < args.nowMs);
+    .filter((session) => leaseLapsed(session, args.nowMs));
 }
 
 /**
@@ -322,20 +332,32 @@ export async function listExpiredUnendedSwoopSessions(args: {
  *
  * References rather than sessions: the sweep only deletes them, and `startedAt`
  * is the one field every document carries whatever state it is in, so nothing
- * escapes the sweep by never having ended.
+ * escapes the sweep by never having ended. `refs` leaves out a session whose
+ * lease is still live — somebody's open tab, however long ago it started — and
+ * `scanned` is the page as the query served it, so the sweep can tell a drained
+ * machine from a page it kept.
  */
 export async function listSwoopSessionRefsStartedBefore(args: {
   siteId: string;
   machineId: string;
   beforeMs: number;
+  nowMs: number;
   limit: number;
-}): Promise<FirebaseFirestore.DocumentReference[]> {
+}): Promise<{ refs: FirebaseFirestore.DocumentReference[]; scanned: number }> {
   const snap = await sessionsRef(args.siteId, args.machineId)
     .where('startedAt', '<', args.beforeMs)
     .orderBy('startedAt', 'asc')
     .limit(args.limit)
     .get();
-  return snap.docs.map((doc) => doc.ref);
+  const refs = snap.docs
+    .filter((doc) =>
+      leaseLapsed(
+        parseSession((doc.data() ?? {}) as Record<string, unknown>, args.siteId, args.machineId, doc.id),
+        args.nowMs,
+      ),
+    )
+    .map((doc) => doc.ref);
+  return { refs, scanned: snap.docs.length };
 }
 
 /**
@@ -382,7 +404,7 @@ export async function removeSwoopViewer(args: {
   });
 }
 
-/** Push one viewer's lease out. The 12 h cap is not moved by a renewal. */
+/** Push one viewer's lease out. */
 export async function renewSwoopViewerLease(args: {
   siteId: string;
   machineId: string;

@@ -40,8 +40,8 @@ import {
   hasEnrolledFactor,
   hasOpenStepUpWindow,
   openStepUpWindow,
+  stepUpRevokedAt,
   SWOOP_LEASE_SECONDS,
-  SWOOP_SESSION_CAP_SECONDS,
   type SwoopIntent,
 } from '@/lib/swoop/policy.server';
 import { viewerKeyForResponse } from '@/lib/swoop/keys.server';
@@ -239,7 +239,8 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     // A tab that held control keeps it for its own life: the continuity token
     // of its last control session stands in for the ceremony, once, for the
     // same user on the same machine, unless that session was killed, closed
-    // or revoked. A last factor removed since still closes the door.
+    // or revoked, or a kill on the machine came after it started. A last
+    // factor removed since still closes the door.
     let inheritedFrom: string | null = null;
     if (
       !decision.ok &&
@@ -253,10 +254,10 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
             record: await getSwoopSession(siteId, machineId, presented.sid),
             userId,
             hash: presented.hash,
+            revokedAt: await stepUpRevokedAt(siteId, machineId),
           })
         : null;
       if (presented && verdict?.ok) {
-        await markSwoopContinuityUsed(siteId, machineId, presented.sid, Date.now());
         inheritedFrom = presented.sid;
         decision = evaluateSwoopAccess({ ...gate, stepUpOpen: true });
       } else {
@@ -348,6 +349,10 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     // ceremony to carry, and a token for it would inherit nothing.
     const continuity = decision.ctl ? mintContinuity(sid) : null;
     if (inheritedFrom) {
+      // spent here and no earlier: a machine that read offline or an audit that
+      // could not be written refused the request, and the page retries it with
+      // the same token.
+      await markSwoopContinuityUsed(siteId, machineId, inheritedFrom, Date.now());
       logger.info('[swoop/sessions] step-up inherited from the tab\'s previous session', {
         context: 'swoop/sessions',
         data: { siteId, machineId, sid, from: inheritedFrom },
@@ -359,7 +364,6 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       sid,
       createdBy: `user:${userId}`,
       startedAt,
-      absoluteExpiresAt: startedAt + SWOOP_SESSION_CAP_SECONDS * 1000,
       ...(continuity ? { continuityHash: continuity.hash } : {}),
     });
     await upsertSwoopViewer({
