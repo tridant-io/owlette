@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-09-26
+
 ### fixed — a Mac reports its GPU
 
 The agent reads the Apple GPU from the IORegistry (name, utilisation, memory

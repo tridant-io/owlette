@@ -4,7 +4,7 @@ name = "owlette-host"
 # for six releases because the sync script only knew about the desktop crate —
 # harmless while the binary carried no version resource, and wrong the moment
 # build.rs started stamping CARGO_PKG_VERSION into VERSIONINFO.
-version = "4.0.1"
+version = "4.0.2"
 description = "Windows service host for the owlette agent"
 authors = ["Tridant Inc."]
 license = "FSL-1.1-Apache-2.0"

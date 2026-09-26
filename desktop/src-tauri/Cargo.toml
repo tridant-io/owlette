@@ -1,6 +1,6 @@
 [package]
 name = "owlette-desktop"
-version = "4.0.1"
+version = "4.0.2"
 description = "owlette desktop app"
 authors = ["Tridant Inc."]
 license = "FSL-1.1-Apache-2.0"
