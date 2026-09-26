@@ -146,16 +146,22 @@ async function api(method, route, { body, idempotencyKey } = {}) {
   const headers = { 'x-api-key': apiKey, accept: 'application/json' };
   if (body !== undefined) headers['content-type'] = 'application/json';
   if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
-  const response = await fetch(`${baseUrl}${route}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`${method} ${route} -> ${response.status}\n${text}`);
+  // a 2xx with no body has been seen once on a cold route; the idempotency key
+  // makes the retry replay the same result, so one more try is safe
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(`${baseUrl}${route}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`${method} ${route} -> ${response.status}\n${text}`);
+    }
+    if (text.length > 0) return JSON.parse(text);
+    if (attempt > 0) throw new Error(`${method} ${route} -> ${response.status} with an empty body twice`);
+    console.log(`  ${method} ${route} answered with an empty body; retrying once`);
   }
-  return JSON.parse(text);
 }
 
 /** The bytes go straight from disk to the signed url: no owlette headers, no buffering. */

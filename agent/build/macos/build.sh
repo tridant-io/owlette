@@ -135,8 +135,13 @@ cp -R "${PACKAGING}/scripts" "${WORK}/scripts"
 chmod 755 "${WORK}/scripts/"*
 pkgbuild --quiet --root "${PAYLOAD}/root" --identifier app.owlette.runtime --version "${VERSION}" \
   --install-location / --scripts "${WORK}/scripts" "${WORK}/owlette-runtime.pkg"
+# the app must land in /Applications: without this the installer "relocates"
+# the payload onto any other copy of the bundle spotlight knows (a build tree,
+# an old download) and the LaunchAgent's /Applications path points at nothing.
+pkgbuild --analyze --root "${PAYLOAD}/app" "${WORK}/app-components.plist" >/dev/null
+plutil -replace 0.BundleIsRelocatable -bool false "${WORK}/app-components.plist"
 pkgbuild --quiet --root "${PAYLOAD}/app" --identifier app.owlette.app --version "${VERSION}" \
-  --install-location /Applications "${WORK}/owlette-app.pkg"
+  --install-location /Applications --component-plist "${WORK}/app-components.plist" "${WORK}/owlette-app.pkg"
 
 say "building the product"
 sed "s/__VERSION__/${VERSION}/g" "${PACKAGING}/distribution.xml" > "${WORK}/distribution.xml"
