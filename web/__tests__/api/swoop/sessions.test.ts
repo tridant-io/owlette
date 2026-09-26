@@ -633,6 +633,15 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
     expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
   });
 
+  it('refuses a viewerReason the page never reports', async () => {
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { viewerReason: 'host_exit' } }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(400);
+  });
+
   it('refuses an endReason only the host may record', async () => {
     const res = await DELETE(
       createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'lease_expired' } }),
@@ -768,6 +777,37 @@ describe('swoop audit trail', () => {
     expect(status).toBe(503);
     expect(body.code).toBe('audit_unavailable');
     expect(mockRing).not.toHaveBeenCalled();
+  });
+
+  it('records the page\'s own reason beside the caller endReason', async () => {
+    const startedAt = Date.now() - 5_000;
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`, {
+      sid: SID,
+      state: 'live',
+      createdBy: `user:${ADMIN}`,
+      startedAt,
+      absoluteExpiresAt: startedAt + 3_600_000,
+      viewers: [],
+    });
+
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), {
+        method: 'DELETE',
+        body: { endReason: 'closed', viewerReason: 'peer_failed' },
+      }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(200);
+    expect(allowRows()).toEqual([
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          event: 'session_ended',
+          endReason: 'closed',
+          viewerReason: 'peer_failed',
+        }),
+      }),
+    ]);
   });
 
   it('records the end of a session with its reason and duration', async () => {

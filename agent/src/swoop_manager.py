@@ -54,7 +54,10 @@ STATE_STOPPING = 'stopping'
 BACKOFF_BASE_S = 5
 BACKOFF_MAX_S = 300
 # and above the ladder, a hard ceiling: a streamer that dies fast enough to stay
-# under the backoff is still a loop, so cap the spawns in a rolling window.
+# under the backoff is still a loop, so cap the spawns in a rolling window. a
+# clean exit is a viewer leaving, not a loop, and does not count: a page that
+# reconnected five times in six minutes used to lock the machine out of swoop
+# for the rest of the window (b4a, 2026-09-25).
 SPAWN_CEILING = 5
 SPAWN_WINDOW_S = 600
 
@@ -451,6 +454,8 @@ class SwoopManager:
         if code == swoop_spawn.EXIT_OK:
             self._backoff_s = 0
             self._retry_after = 0.0
+            if self._spawn_times:
+                self._spawn_times.pop()
             return
         self._backoff_s = (
             BACKOFF_BASE_S if not self._backoff_s

@@ -115,7 +115,7 @@ export async function recordSwoopSessionStarted(
  * kill or a revocation, and `durationMs` is how long control was held.
  */
 export async function recordSwoopSessionEnded(
-  args: SwoopAuditBase & { sid: string; endReason: string; durationMs?: number },
+  args: SwoopAuditBase & { sid: string; endReason: string; viewerReason?: string; durationMs?: number },
 ): Promise<void> {
   await writeAuditEntryBlocking(
     args.siteId,
@@ -126,6 +126,7 @@ export async function recordSwoopSessionEnded(
       outcome: 'allow',
       metadata: {
         endReason: reasonCode(args.endReason),
+        ...(args.viewerReason !== undefined ? { viewerReason: reasonCode(args.viewerReason) } : {}),
         ...(args.durationMs !== undefined ? { durationMs: args.durationMs } : {}),
       },
     }),

@@ -29,6 +29,7 @@ import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHa
 import { Capability } from '@/lib/capabilities';
 import logger from '@/lib/logger';
 import { evaluateSwoopAccess } from '@/lib/swoop/policy.server';
+import { SWOOP_END_REASONS, isSwoopEndReason } from '@/lib/swoop/backoff';
 import {
   endSwoopSession,
   getSwoopSession,
@@ -119,13 +120,21 @@ const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, {
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
-    const raw = (parsed.body ?? {}) as { endReason?: unknown };
+    const raw = (parsed.body ?? {}) as { endReason?: unknown; viewerReason?: unknown };
     if (raw.endReason !== undefined && !CALLER_END_REASONS.has(String(raw.endReason))) {
       return problemValidation('field `endReason` is not one a caller may set', {
         endReason: [[...CALLER_END_REASONS].sort().join(', ')],
       });
     }
     const endReason = (raw.endReason ?? 'closed') as SwoopSessionEndReason;
+    // the page's own reason, kept beside the caller's `closed` so the audit
+    // trail says whether the operator left or the path failed under them.
+    if (raw.viewerReason !== undefined && !isSwoopEndReason(raw.viewerReason)) {
+      return problemValidation('field `viewerReason` is not one the page reports', {
+        viewerReason: [[...SWOOP_END_REASONS].sort().join(', ')],
+      });
+    }
+    const viewerReason = raw.viewerReason;
 
     const gate = await swoopGate({ ctx, machineId, intent: 'view' });
     const decision = evaluateSwoopAccess({ ...gate, stepUpOpen: false });
@@ -142,7 +151,7 @@ const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, {
     const session = await getSwoopSession(siteId, machineId, sessionId);
     if (!session) return problemNotFound('session not found');
 
-    await endSwoopSession({ siteId, machineId, sid: sessionId, endReason });
+    await endSwoopSession({ siteId, machineId, sid: sessionId, endReason, viewerReason });
 
     const [killed, queued] = await Promise.allSettled([
       killSession({ siteId, machineId, sid: sessionId }),
@@ -179,6 +188,7 @@ const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, {
       ...auditBase,
       sid: sessionId,
       endReason,
+      viewerReason,
       durationMs: Date.now() - session.startedAt,
     });
 

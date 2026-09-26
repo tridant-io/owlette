@@ -178,6 +178,29 @@ class TestSpawnRefusals:
         details = [call.kwargs.get('details', '') for call in firebase.log_event.call_args_list]
         assert any('spawn_rate_ceiling' in d for d in details)
 
+    def test_clean_exit_does_not_count_toward_the_ceiling(self, firebase):
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        now = time.monotonic()
+        manager._spawn_times = [now] * swoop_manager.SPAWN_CEILING
+
+        with manager._lock:
+            manager._apply_backoff(swoop_spawn.EXIT_OK)
+        assert len(manager._spawn_times) == swoop_manager.SPAWN_CEILING - 1
+
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+        assert manager.status()['lastRefusal'] is None
+
+    def test_crash_exit_keeps_its_spawn_in_the_window(self, firebase):
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager._spawn_times = [time.monotonic()]
+
+        with manager._lock:
+            manager._apply_backoff(20)
+        assert len(manager._spawn_times) == 1
+
     def test_backoff_window_refuses(self, firebase):
         backend = FakeSpawn()
         manager = make_manager(backend, firebase)

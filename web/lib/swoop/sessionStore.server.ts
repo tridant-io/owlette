@@ -63,6 +63,12 @@ export interface SwoopSession {
   absoluteExpiresAt: number;
   viewers: SwoopSessionViewer[];
   endReason?: SwoopSessionEndReason;
+  /**
+   * why the viewer's page ended it, in the page's own words (`lib/swoop/backoff.ts`
+   * `SwoopEndReason`): a caller may only record `closed`, so this is where
+   * "the peer failed" or "the host went away" survives for the audit trail.
+   */
+  viewerReason?: string;
   endedAt?: number;
   /**
    * sha-256 of the continuity secret a control grant carried
@@ -205,6 +211,7 @@ function parseSession(
       typeof data.absoluteExpiresAt === 'number' ? data.absoluteExpiresAt : 0,
     viewers: parseViewers(data.viewers),
     ...(data.endReason ? { endReason: data.endReason as SwoopSessionEndReason } : {}),
+    ...(typeof data.viewerReason === 'string' ? { viewerReason: data.viewerReason } : {}),
     ...(typeof data.endedAt === 'number' ? { endedAt: data.endedAt } : {}),
     ...(typeof data.continuityHash === 'string' ? { continuityHash: data.continuityHash } : {}),
     ...(typeof data.continuityUsedAt === 'number' ? { continuityUsedAt: data.continuityUsedAt } : {}),
@@ -400,11 +407,13 @@ export async function endSwoopSession(args: {
   machineId: string;
   sid: string;
   endReason: SwoopSessionEndReason;
+  viewerReason?: string;
   endedAt?: number;
 }): Promise<void> {
   await writeSession(args.siteId, args.machineId, args.sid, {
     state: 'ended' satisfies SwoopSessionState,
     endReason: args.endReason,
+    ...(args.viewerReason !== undefined ? { viewerReason: args.viewerReason } : {}),
     endedAt: args.endedAt ?? Date.now(),
     viewers: [],
   });
