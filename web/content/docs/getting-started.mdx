@@ -36,23 +36,31 @@ Sites organize your machines — think of them as locations, departments, or pro
 
 The dashboard header has two installer buttons side by side — pick the one that matches where you are:
 
-- **download** — if you're already working **on the machine you want to monitor**, click this to download the latest installer directly.
+- **download** — if you're already working **on the machine you want to monitor**, click this to download the latest installer directly. It picks the file for the platform you're on; the menu beside it lists the other two.
 - **copy link** — if you're **remoting into** the machine, click this to copy the installer link, then paste it into a browser on that machine to download it there — no file transfer needed.
+
+One version ships one file per platform:
+
+- Windows: `Owlette-Installer-v<version>.exe`
+- macOS, Apple silicon on macOS 15 or later: `Owlette-Installer-v<version>.pkg`
+- Linux, Ubuntu 24.04: `Owlette-Installer-v<version>.deb`
 
 ![the download and copy-link buttons in the dashboard header](/docs-screens/getting-started-install-buttons.png)
 
 ### install & connect
 
-1. Run the installer **as Administrator** on your target machine
-2. Follow the setup wizard
+1. Run the installer on your target machine: on Windows **as Administrator**; on macOS double-click the `.pkg` (or `sudo installer -pkg <file> -target /`); on Linux `sudo apt-get install ./<file>.deb`
+2. On Windows, follow the setup wizard; on macOS and Linux, open the owlette app after installing
 3. The owlette window opens on **join a site**, showing a **pairing phrase** (3 random words), the authorization link, and which owlette server it belongs to
 4. Click **open owlette.app/add** in that window to authorize from this machine, then select a site and click **"Authorize"**
 5. Or authorize from a phone or another computer by opening the displayed URL and entering the pairing phrase
 6. The agent receives credentials and connects — done
 
+Full per-platform steps, including the macOS **Screen Recording** grant, are in [installation](/docs/agent/installation).
+
 <Callout type="idea" title={"Bulk deployment"}>
 
-For deploying to many machines, use the `/ADD=` flag with a pre-authorized phrase from the dashboard. See [Installation → Silent Install](/docs/agent/installation#method-2-silent-install-with-add).
+For deploying to many Windows machines, use the `/ADD=` flag with a pre-authorized phrase from the dashboard. See [Installation → Silent Install](/docs/agent/installation#method-2-silent-install-with-add). On macOS and Linux, pair from the app after installing.
 
 </Callout>
 ---

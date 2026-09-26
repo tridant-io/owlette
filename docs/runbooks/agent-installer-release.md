@@ -1,6 +1,12 @@
 # agent installer release runbook
 
-This runbook is for maintainers shipping the Owlette Windows agent installer. It covers both supported artifact paths: a local maintainer build and a CI build with SLSA L3 provenance.
+This runbook is for maintainers shipping the Owlette agent installers: one version carries up to three files, keyed by the fleet's own platform key.
+
+- Windows (`windows_x64`): `Owlette-Installer-vX.Y.Z.exe`
+- macOS, Apple silicon on macOS 15+ (`macos_arm64`): `Owlette-Installer-vX.Y.Z.pkg`
+- Linux, Ubuntu 24.04 (`linux_x64`): `Owlette-Installer-vX.Y.Z.deb`
+
+It covers both supported artifact paths: a local maintainer build and a CI build with SLSA L3 provenance.
 
 It also covers the 3-step API upload that rolls a version out to agents, plus operational concerns around `setAsLatest`, demotion, smoke testing, and unsigned installer UX.
 
@@ -8,16 +14,17 @@ This document is only for the installer surface. For non-installer deploys, use 
 
 ## prerequisites
 
-- Windows machine with admin rights.
+- Windows machine with admin rights, for the `.exe`.
 - Inno Setup 6.x installed, or `%ISCC%` set to the compiler path.
 - Node.js 22 + npm, and the Rust toolchain (rustup) with the MSVC C++ build tools — the full build compiles the desktop app.
+- The `.pkg` and `.deb`: from the CI release (path b), or `agent/build/macos/build.sh` on a Mac and `agent/build/linux/build.sh` on Ubuntu 24.04.
 - `/.claude/.env.local` containing `OWLETTE_API_KEY`.
 - API key scope: `installer=*:write`.
 - Installer upload keys must be minted by a superadmin.
 - Push access to `dev` or the appropriate release branch.
 - Firebase admin access for `installer_metadata` visibility, if needed.
 - Access to the target base URL: `https://dev.owlette.app` or `https://owlette.app`.
-- A Windows test machine for post-release smoke testing.
+- Test machines for post-release smoke testing: a Windows box, plus an Apple silicon Mac and an Ubuntu 24.04 box for the platforms the release ships.
 
 Accepted auth headers:
 
@@ -35,8 +42,8 @@ The upload API requires a unique `Idempotency-Key` on both the `POST` and the fi
 
 | path | use when | output | rollout status |
 | --- | --- | --- | --- |
-| local manual build | ship now, debug build issues, or release before tagging | local `.exe` | ready for manual API upload |
-| ci build | tagged release, audit trail, SLSA L3 provenance | GitHub Release `.exe` and attestation | not rolled out to agents |
+| local manual build | ship now, debug build issues, or release before tagging | local `.exe` (the `.pkg` and `.deb` from their own build hosts) | ready for manual API upload |
+| ci build | tagged release, audit trail, SLSA L3 provenance | GitHub Release `.exe`, `.pkg` and `.deb` under one attestation | not rolled out to agents |
 | both | need provenance and a separate manual rollout | CI artifact plus local or downloaded upload artifact | checksums will differ if rebuilt |
 
 Decision guide:
@@ -69,7 +76,7 @@ Add the release section before running the installer build:
 ## [X.Y.Z] - YYYY-MM-DD
 ```
 
-This is mandatory because the installer bakes the version into the EXE filename.
+This is mandatory because every installer bakes the version into its filename.
 
 3. Sync version files.
 
@@ -102,10 +109,12 @@ Exit code 0 means the `.exe` was built; read the log on failure. Do not use `pow
 
 Expected runtime is about 5 minutes.
 
-Expected output:
+Expected output, and where the other two files come from:
 
 ```text
-agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe
+agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe   this build
+agent/build/macos/Owlette-Installer-vX.Y.Z.pkg              agent/build/macos/build.sh on a Mac, or the CI release
+agent/build/linux/Owlette-Installer-vX.Y.Z.deb              agent/build/linux/build.sh on Ubuntu 24.04, or the CI release
 ```
 
 Tool discovery:
@@ -114,74 +123,26 @@ Tool discovery:
 - No system Python is used: the build downloads the Python 3.11.8 embeddable zip into `agent/downloads/` and verifies its SHA-256 before extracting it.
 - Cargo is found through `%USERPROFILE%\.cargo\bin`, which the build prepends to `PATH`.
 
-6. Compute sha256.
+6. Upload the release files.
 
-Bash:
-
-```bash
-sha256sum agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe
-```
-
-PowerShell:
-
-```powershell
-Get-FileHash -Algorithm SHA256 agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe
-```
-
-Keep the hex sha256 for finalize. Supplying it is preferred because corruption fails with `412 checksum_mismatch`.
-
-7. Run the 3-step API upload.
-
-Set variables:
+`scripts/upload-installer.mjs` runs the 3-step API upload for every file you hand it — sha256, signed URL, bytes, finalize — so the version lands as one `installer_metadata` doc whose `files` map is keyed by platform, and `latest` carries every entry:
 
 ```bash
-API_KEY=$(grep OWLETTE_API_KEY .claude/.env.local | cut -d= -f2)
-BASE_URL="https://dev.owlette.app"
-VERSION="X.Y.Z"
-FILE_NAME="Owlette-Installer-vX.Y.Z.exe"
-INSTALLER="agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe"
-SHA256="<hex sha256>"
+node scripts/upload-installer.mjs --env dev --version X.Y.Z --notes "Release X.Y.Z" --set-latest \
+  agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe \
+  agent/build/macos/Owlette-Installer-vX.Y.Z.pkg \
+  agent/build/linux/Owlette-Installer-vX.Y.Z.deb
 ```
 
-Use `BASE_URL="https://owlette.app"` for production.
+- The platform is the extension: `.exe` → `windows_x64`, `.pkg` → `macos_arm64`, `.deb` → `linux_x64`. One file per platform, one to three files.
+- `--env dev` reads `OWLETTE_API_KEY` and `OWLETTE_DEV_API_URL`; `--env prod` reads `OWLETTE_API_KEY_PROD` and `OWLETTE_PROD_API_URL`, all from `/.claude/.env.local`.
+- `--set-latest` promotes the version once the last file has finalized. Leave it off until you are ready to roll out.
+- It prints each file's sha256 and finalize response, then the `files` keys on `GET /api/installer/latest`. A failure stops the run and names the files not published.
+- Idempotency keys are deterministic (`installer-<step>-<version>-<platform>`), so a re-run within 24 hours replays the first result for an unchanged request.
 
-Step 1: request a signed upload URL.
+The manual curl form is under "the 3-step api upload (in detail)" below.
 
-```bash
-curl -s -X POST "$BASE_URL/api/installer/upload" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $API_KEY" \
-  -H "Idempotency-Key: installer-upload-$VERSION-$(date +%s)" \
-  -d "{\"version\":\"$VERSION\",\"fileName\":\"$FILE_NAME\",\"releaseNotes\":\"Release $VERSION\",\"setAsLatest\":true}"
-```
-
-Save `uploadUrl`, `uploadId`, `storagePath`, and `expiresAt`.
-
-Step 2: upload the binary to GCS.
-
-```bash
-curl -X PUT "$UPLOAD_URL" \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @"$INSTALLER"
-```
-
-Do not send `Idempotency-Key` to GCS.
-
-Step 3: finalize.
-
-```bash
-UPLOAD_ID="<uploadId from step 1>"
-
-curl -s -X PUT "$BASE_URL/api/installer/upload" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $API_KEY" \
-  -H "Idempotency-Key: installer-finalize-$VERSION-$(date +%s)" \
-  -d "{\"uploadId\":\"$UPLOAD_ID\",\"checksum_sha256\":\"$SHA256\"}"
-```
-
-Finalize writes installer metadata. If step 1 used `setAsLatest:true`, finalize updates `latest`.
-
-8. Smoke test.
+7. Smoke test.
 
 Upload success is not release success. Run the post-release smoke section before calling the release done.
 
@@ -196,18 +157,23 @@ Triggers:
 
 Jobs:
 
-- `build`: Windows runner; uses the runner's preinstalled Inno Setup 6 (installing it with Chocolatey only if absent); pins Python 3.11 with `setup-python`; runs `build_installer_full.bat`; computes sha256 in hex and base64; uploads artifact `owlette-installer`; retains it for 7 days.
-- `provenance`: uses `slsa-framework/slsa-github-generator`; creates an in-toto attestation; signs with Sigstore keyless signing; uploads the attestation as a GitHub Release asset on tag pushes.
-- `release`, tag-only: uses `softprops/action-gh-release@v2` and attaches the `.exe` to the GitHub Release.
-- `verify`, tag-only: downloads the installer and provenance, then runs `slsa-verifier verify-artifact`.
+- `build-windows`: `windows-latest`; uses the runner's preinstalled Inno Setup 6 (installing it with Chocolatey only if absent); pins Python 3.11 with `setup-python`; runs `build_installer_full.bat`; uploads artifact `installer-windows`; retains it for 7 days.
+- `build-macos`: `macos-15`, in the tag-restricted `release` GitHub environment that holds the eight `APPLE_*` secrets; imports the Developer ID certificates into a temporary keychain, runs `agent/build/macos/build.sh` to sign, notarize and staple the pkg, validates the staple, then removes the keychain and notary key; uploads artifact `installer-macos`. A dispatch run without the secrets stops here and nothing is attested.
+- `build-linux`: `ubuntu-24.04`; runs `agent/build/linux/build.sh`; uploads artifact `installer-linux`.
+- `digest`: one `sha256sum` line per file, base64-encoded as the SLSA subject list.
+- `provenance`: uses `slsa-framework/slsa-github-generator`; creates one in-toto attestation over the three files; signs with Sigstore keyless signing; uploads the attestation as a GitHub Release asset on tag pushes.
+- `release`, tag-only: uses `softprops/action-gh-release@v2` and attaches the `.exe`, `.pkg` and `.deb` to the GitHub Release.
+- `verify`, tag-only: downloads the three installers and the provenance, then runs `slsa-verifier verify-artifact` over all of them.
 
-CI does not push the installer to Firebase Storage, write `installer_metadata`, update the app's `latest` installer pointer, or replace the manual 3-step API upload.
+CI does not push the installers to Firebase Storage, write `installer_metadata`, update the app's `latest` installer pointer, or replace the manual 3-step API upload.
 
-To roll out a CI-built installer to agents, download the exact `.exe` from the GitHub Release and use it in the 3-step API upload.
+To roll out CI-built installers to agents, download the exact files from the GitHub Release and hand them to `scripts/upload-installer.mjs` (path a, step 6).
 
 Do not rebuild locally for the upload unless you intend to roll out different bytes.
 
 ## the 3-step api upload (in detail)
+
+`scripts/upload-installer.mjs` runs these three steps for every file it is given (see path a, step 6). Use the manual form below only when the script cannot run. The platform (`windows_x64`, `macos_arm64`, `linux_x64`) is derived from the file's extension (`.exe`, `.pkg`, `.deb`); `platform` may also be sent explicitly on step 1 and must then match the extension. Each platform's file is its own three steps under the same version; finalize merges it into the version's `files` map and, for a `.exe`, refreshes the top-level `download_url` alias.
 
 Canonical endpoint:
 
@@ -243,7 +209,7 @@ Purpose:
 API_KEY=$(grep OWLETTE_API_KEY .claude/.env.local | cut -d= -f2)
 BASE_URL="https://dev.owlette.app"
 VERSION="X.Y.Z"
-FILE_NAME="Owlette-Installer-vX.Y.Z.exe"
+FILE_NAME="Owlette-Installer-vX.Y.Z.exe"   # or the .pkg / .deb: the three steps run once per file
 
 curl -s -X POST "$BASE_URL/api/installer/upload" \
   -H "Content-Type: application/json" \
@@ -264,6 +230,7 @@ Return shape:
 {
   "uploadUrl": "https://storage.googleapis.com/...",
   "uploadId": "...",
+  "platform": "windows_x64",
   "storagePath": "...",
   "expiresAt": "..."
 }
@@ -278,7 +245,7 @@ Purpose:
 - upload the exact installer bytes to the signed GCS destination
 
 ```bash
-INSTALLER="agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe"
+INSTALLER="agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe"   # or the .pkg / .deb this run is for
 
 curl -X PUT "$UPLOAD_URL" \
   -H "Content-Type: application/octet-stream" \
@@ -343,20 +310,16 @@ If omitted, the server computes the checksum.
 - [ ] Version and changelog changes are committed and pushed.
 - [ ] Inno Setup 6.x is installed, `%ISCC%` is set, or `PATH` can find `ISCC`.
 - [ ] Node.js 22 + npm and the Rust toolchain are available (the build compiles `desktop/`).
-- [ ] Build output is `agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe`.
-- [ ] sha256 is computed for the exact installer being uploaded.
-- [ ] `BASE_URL` points at the intended environment.
-- [ ] `OWLETTE_API_KEY` is loaded from `/.claude/.env.local`.
+- [ ] Every file the release ships is built, one per platform:
+  - `agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe`
+  - `agent/build/macos/Owlette-Installer-vX.Y.Z.pkg` (when the release ships macOS)
+  - `agent/build/linux/Owlette-Installer-vX.Y.Z.deb` (when the release ships Linux)
+- [ ] `--env` names the intended environment.
+- [ ] `OWLETTE_API_KEY` (dev) or `OWLETTE_API_KEY_PROD` (prod) is loaded from `/.claude/.env.local`.
 - [ ] API key scope is `installer=*:write`.
-- [ ] Step 1 uses `POST /api/installer/upload`.
-- [ ] Step 1 has a unique `Idempotency-Key`.
-- [ ] Step 1 uses `setAsLatest:true` only when ready to roll out.
-- [ ] Step 2 uses `Content-Type: application/octet-stream`.
-- [ ] Step 2 uses `--data-binary`.
-- [ ] Step 2 does not include `Idempotency-Key`.
-- [ ] Step 3 uses `PUT /api/installer/upload`.
-- [ ] Step 3 has a different unique `Idempotency-Key`.
-- [ ] Step 3 supplies `checksum_sha256` when possible.
+- [ ] `node scripts/upload-installer.mjs` is given one file per platform, with `--set-latest` only when ready to roll out.
+- [ ] The run ends with a `latest:` line naming every platform uploaded.
+- [ ] Manual curl fallback only: unique `Idempotency-Key` on the POST and the finalize PUT, none on the GCS PUT; `--data-binary` with `Content-Type: application/octet-stream`; `checksum_sha256` supplied on finalize.
 - [ ] Any new `self.*` attribute is set in `OwletteService._init_state()`.
 - [ ] `agent/tests/unit/test_service_shutdown.py::test_the_hosted_instance_carries_every_shutdown_attribute` passes.
 - [ ] `service.log` will be tailed for at least 30 seconds after restart.
@@ -372,16 +335,16 @@ If omitted, the server computes the checksum.
 - [ ] Maintainer understands `9dccd12`: agents now require `sha256_checksum`.
 - [ ] If using CI artifact, it was downloaded from the GitHub Release.
 - [ ] If using local artifact, no checksum match with CI is expected.
-- [ ] A Windows test machine is ready for smoke testing.
+- [ ] A test machine per platform the release ships is ready for smoke testing (Windows; Apple silicon Mac; Ubuntu 24.04).
 - [ ] The cortex CLI pin the shipped agent actually reads exists in the target environment and pins the CLI version the shipped SDK expects (`claude_agent_sdk/_cli_version.py`). A 3.4+ agent reads `installer_metadata/cortex_cli_<osFamily>_<arch>` — `cortex_cli_windows_x64` for a Windows installer — and never the unsuffixed `installer_metadata/cortex_cli`, which every pre-3.4 agent in the field still reads and which must stay current alongside it until the fleet floor is 3.4. Since 3.0.0 the installer no longer bundles `claude.exe`; a missing or stale pin leaves Cortex dead on every fresh install. See `/docs/internal/cortex-cli-provisioning.md`.
 
 ## post-release smoke
 
-1. Verify the installer is downloadable from `https://owlette.app/download` or the environment equivalent.
-2. Confirm the downloaded filename and version.
-3. Pair a controlled Windows test machine using the new installer.
+1. Verify each file is downloadable from `https://owlette.app/download?os=windows`, `?os=macos` and `?os=linux` (or the environment equivalent); a platform the version has no file for answers `404 no <os> build in vX.Y.Z`.
+2. Confirm the downloaded filenames and version.
+3. Pair a controlled test machine per platform the release ships (Windows; Apple silicon Mac; Ubuntu 24.04) using the new installer.
 4. Watch `service.log` for at least 30 seconds after restart.
-5. Look for `AttributeError`, crash-loop entries in `logs\service_host.log`, startup failures, connection failures, and update loop failures.
+5. Look for `AttributeError`, crash-loop entries in `logs\service_host.log` (Windows), startup failures, connection failures, and update loop failures.
 6. Treat log stability as a release gate because missing service state has caused repeated crash loops before.
 7. Confirm the dashboard shows the agent online.
 8. Confirm the dashboard shows the released version.
@@ -389,7 +352,7 @@ If omitted, the server computes the checksum.
 10. Confirm no token values appear in visible logs.
 11. With Firebase admin visibility, confirm the version exists in `installer_metadata`.
 12. Confirm `sha256_checksum` is present.
-13. Confirm `latest` points at the intended version.
+13. Confirm `latest` points at the intended version and its `files` map names every platform uploaded (`owlette installer latest` prints one line per file).
 14. Confirm active versions still satisfy the deletion floor.
 
 ## demote / rollback
@@ -421,7 +384,7 @@ Practical sequence:
 
 ## code signing context
 
-Installers are not Authenticode-signed today.
+The Windows installer is not Authenticode-signed today. The macOS pkg is Developer ID signed, notarized and stapled by the CI `build-macos` job; a local `agent/build/macos/build.sh` run without the signing identities produces an unsigned pkg.
 
 CI-built installers do ship with SLSA L3 provenance through a Sigstore-keyless in-toto attestation in `build-installer.yml`.
 
@@ -440,7 +403,10 @@ The signing decision is deferred. Treat it as a business and product call, not a
 - CI does not update `latest`.
 - Manual API upload is still required after CI to roll out to agents.
 - Local-built and CI-built installers checksum-differ.
-- If using CI artifact for rollout, download it from the GitHub Release.
+- If using CI artifacts for rollout, download them from the GitHub Release.
+- The signed, notarized pkg comes only from CI: the Apple secrets live in the tag-restricted `release` environment, and a run without them stops at `build-macos` with nothing attested.
+- The fleet update sends each machine the file for its own platform; a machine whose platform the version has no file for is skipped and named. A version missing a platform's file leaves that platform's machines on their current version.
+- The silent install (`/ADD=`) is Windows only; macOS and Linux pair from the app after installing.
 - Demoting to an older version may require rerunning the 3-step finalize.
 - A set-latest-only admin endpoint may exist, but this runbook does not confirm it.
 - Soft-delete is gated by a minimum of 2 active versions.

@@ -11,6 +11,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — the fleet update sends each machine the installer for its own platform
+
+The update picks the file by the machine's os and architecture (an agent that
+reports neither is windows x64); a machine whose platform the version has no
+file for is skipped and named in the result, with the reason. One version can
+carry the windows exe, the apple silicon pkg and the linux deb.
+
 ### fixed — a swoop session that lost its host reconnects instead of waiting forever
 
 The page gives the machine 20 seconds to answer; a machine that stays silent
@@ -33,16 +40,20 @@ the next launch.
 (`windows`, `macos` or `linux`), `arch` and `osVersion` as the agent
 heartbeats them; null for an agent that predates the fields.
 
-### added — Linux packages, installed and verified on the kiosk VM
+### added — a Linux package, installed and verified on the kiosk VM
 
-`agent/build/linux/build.sh` produces `owlette-agent_<version>_<arch>.deb` (the
-service runtime with its own Python 3.11 under `/opt/owlette`, the systemd
-unit, the user unit that starts the app for every login, and the polkit rule
-that lets the owlette group control the service) beside the app's own `.deb`
-from the Tauri build. Installed over the lab agent on the Ubuntu 24.04 kiosk
-VM: the service came up from the new runtime and heartbeated as the new
-version, the app started for the seat, a notification went through the
-service, and the seat user restarted the service without sudo.
+`agent/build/linux/build.sh` produces one `Owlette-Installer-v<version>.deb`:
+the service runtime with its own Python 3.11 under `/opt/owlette`, the systemd
+unit, the desktop app with the user unit that starts it for every login, and
+the polkit rule that lets the owlette group control the service, with the
+app's own library dependencies declared so the agent's single-file self-update
+resolves. An upgrade restarts a running desktop app onto the new binary, and
+the python-build-standalone tarball the build fetches is checked against a
+pinned sha256 on every run. Installed on the Ubuntu 24.04 kiosk VM: the
+service came up from the new runtime and heartbeated as the new version, the
+app started for the seat, a notification went through the service, the seat
+user restarted the service without sudo, and the upgrade to the next build
+went through in one `apt-get install`.
 
 ### added — a macOS installer package (unsigned build path)
 

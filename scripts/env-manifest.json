@@ -56,6 +56,19 @@
       "OWLETTE_E2E": "'1' swaps the real R2 object store for Firestore-backed stand-ins (web/lib/r2Client.server.ts:151, :243, :305) and changes installer-upload behaviour (web/app/api/installer/upload/route.ts:44). On a deploy target it would silently disconnect roost uploads from R2. Injected only by the Playwright webServer env (web/playwright.config.ts:163)."
     }
   },
+  "github-repo-secrets": {
+    "$note": "GitHub Actions secrets the release workflow (.github/workflows/build-installer.yml, job build-macos) reads from the `release` environment, which the owner creates on GitHub restricted to `v*` tags. Nothing under web/ reads them and they must never exist on railway-dev, railway-prod or vercel-prod, so like `never-set` they stay OUT of `vars`. Names only, never values. This block is documentation: `sync-env.mjs` ignores it. The names are deliberately NOT the ones the Tauri bundler reads (APPLE_CERTIFICATE, APPLE_ID, APPLE_PASSWORD, APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH) — those would make the desktop build import or notarize on its own.",
+    "keys": {
+      "APPLE_CERT_P12_BASE64": "Developer ID Application certificate + private key, a base64 .p12. Signs the Tauri app and every mach-o in the runtime (APPLE_SIGNING_IDENTITY in agent/build/macos/build.sh).",
+      "APPLE_CERT_PASSWORD": "Password the APPLE_CERT_P12_BASE64 .p12 was exported with.",
+      "APPLE_INSTALLER_CERT_P12_BASE64": "Developer ID Installer certificate + private key, a base64 .p12. Signs the .pkg (build.sh --installer-identity).",
+      "APPLE_INSTALLER_CERT_PASSWORD": "Password the APPLE_INSTALLER_CERT_P12_BASE64 .p12 was exported with.",
+      "APPLE_TEAM_ID": "Apple Developer team id. The workflow picks both identities out of the temp keychain by it.",
+      "APPLE_API_KEY_ID": "App Store Connect API key id (build.sh --notary-key-id).",
+      "APPLE_API_ISSUER_ID": "App Store Connect issuer id (build.sh --notary-issuer).",
+      "APPLE_API_KEY_BASE64": "App Store Connect API private key, the .p8 as base64. Decoded to $RUNNER_TEMP for notarytool (build.sh --notary-key) and removed when the job ends."
+    }
+  },
   "vars": {
     "ADMIN_EMAIL_DEV": { "class": "config", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
     "ADMIN_EMAIL_PROD": { "class": "config", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
