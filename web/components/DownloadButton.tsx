@@ -210,13 +210,17 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
                 key={platform}
                 disabled={!!reason}
                 onSelect={() => download(platform)}
-                className="cursor-pointer gap-3"
+                // the row itself stays flat: the label (download) and the copy icon each
+                // light up on their own; keyboard focus still highlights the row
+                className="cursor-pointer gap-1 p-1 focus:bg-transparent focus:text-inherit focus-visible:bg-accent"
               >
-                <span className="flex-1">{PLATFORM_LABEL[platform]}</span>
+                <span className="flex-1 rounded-sm px-2 py-1 hover:bg-accent hover:text-accent-foreground">
+                  {PLATFORM_LABEL[platform]}
+                </span>
                 {/* a plain button: radix selects the row on a click that reaches it, so the copy stops there */}
                 <button
                   type="button"
-                  className="text-muted-foreground hover:text-foreground cursor-pointer disabled:cursor-default"
+                  className="rounded-sm p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground cursor-pointer disabled:cursor-default"
                   disabled={!!reason}
                   aria-label={`copy ${osWord(platform)} download link`}
                   onPointerDown={(event) => event.stopPropagation()}
