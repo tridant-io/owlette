@@ -12,7 +12,7 @@ export type InstallerPlatform = (typeof INSTALLER_PLATFORMS)[number];
 
 export const PLATFORM_LABEL: Record<InstallerPlatform, string> = {
   windows_x64: 'windows',
-  macos_arm64: 'macos (apple silicon)',
+  macos_arm64: 'macOS (apple silicon)',
   linux_x64: 'linux (.deb)',
 };
 

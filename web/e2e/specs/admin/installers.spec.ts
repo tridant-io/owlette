@@ -159,7 +159,7 @@ test('renders one file row per platform under each version, — where the versio
 
   // A doc with `files` lists what it has and — for what it lacks.
   const latestMac = latestGroup.locator('tr[data-platform="macos_arm64"]');
-  await expect(latestMac).toContainText('macos (apple silicon)');
+  await expect(latestMac).toContainText('macOS (apple silicon)');
   await expect(latestMac).toContainText(/MB/);
   await expect(latestMac.getByRole('link', { name: /download/i })).toHaveAttribute(
     'href',
@@ -261,7 +261,7 @@ test('the upload dialog refuses a non-installer file and labels a .pkg by platfo
     buffer: PKG_BYTES,
   });
   await expect(dialog.getByText('Owlette-Installer-v2.0.0.pkg')).toBeVisible();
-  await expect(dialog.getByText('macos (apple silicon)')).toBeVisible();
+  await expect(dialog.getByText('macOS (apple silicon)')).toBeVisible();
   await expect(dialog.locator('#version')).toHaveValue('2.0.0');
 });
 
@@ -300,7 +300,7 @@ test('uploading a .pkg under an existing version lists the macos file beside the
   const group = page.locator('tbody').filter({ hasText: OLDER_VERSION.version });
   await expect(group.locator('tr[data-platform="windows_x64"]')).toContainText(/MB/);
   const macRow = group.locator('tr[data-platform="macos_arm64"]');
-  await expect(macRow).toContainText('macos (apple silicon)');
+  await expect(macRow).toContainText('macOS (apple silicon)');
   await expect(macRow).toContainText(`${PKG_BYTES.length} Bytes`);
   await expect(macRow).toContainText(`sha256 ${PKG_SHA256.slice(0, 12)}`);
   await expect(macRow.getByRole('link', { name: /download/i })).toHaveCount(1);

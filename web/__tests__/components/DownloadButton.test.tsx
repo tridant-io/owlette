@@ -89,7 +89,7 @@ describe('DownloadButton', () => {
     setNavigator(WINDOWS_UA);
     await openMenu('download v3.4.0 for windows');
 
-    for (const name of ['windows', 'macos (apple silicon)', 'linux (.deb)']) {
+    for (const name of ['windows', 'macOS (apple silicon)', 'linux (.deb)']) {
       expect(menuItem(name)).not.toHaveAttribute('aria-disabled');
     }
   });
@@ -112,7 +112,7 @@ describe('DownloadButton', () => {
     });
     const user = await openMenu('download v3.4.0 for windows (intel macs are not supported)');
 
-    const mac = menuItem('macos (apple silicon)');
+    const mac = menuItem('macOS (apple silicon)');
     expect(mac).toHaveAttribute('aria-disabled', 'true');
     await user.hover(mac);
     expect(await screen.findByRole('tooltip')).toHaveTextContent('intel macs are not supported');
