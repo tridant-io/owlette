@@ -355,8 +355,13 @@ jobs:
           for cert in APPLE_CERT APPLE_INSTALLER_CERT; do
             p12_var="${cert}_P12_BASE64"
             pass_var="${cert}_PASSWORD"
+            # a secret pasted from a windows prompt can carry a stray CR or LF;
+            # the export password never legitimately does
+            pass="${!pass_var}"
+            pass="${pass//$'\r'/}"
+            pass="${pass//$'\n'/}"
             printf '%s' "${!p12_var}" | base64 --decode > "$RUNNER_TEMP/$cert.p12"
-            security import "$RUNNER_TEMP/$cert.p12" -k "$keychain" -f pkcs12 -P "${!pass_var}" \
+            security import "$RUNNER_TEMP/$cert.p12" -k "$keychain" -f pkcs12 -P "$pass" \
               -T /usr/bin/codesign -T /usr/bin/productbuild
             rm "$RUNNER_TEMP/$cert.p12"
           done
