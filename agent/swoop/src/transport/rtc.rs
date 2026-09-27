@@ -193,7 +193,10 @@ pub enum PeerState {
 pub enum PeerEvent {
     /// ICE and DTLS are up; media flows from here.
     Connected,
-    Disconnected,
+    /// The viewer's end closed the DTLS or the SCTP association. Final for
+    /// this peer — where ICE losing its pair is an `Ice` edge the policy
+    /// waits out, because a lid, a roam or a blip comes back.
+    Closed,
     /// A local candidate to trickle to the viewer through the signaling
     /// client, as an SDP `candidate:` attribute value.
     LocalCandidate(String),
@@ -236,6 +239,13 @@ pub enum PeerEvent {
     ChannelQueueOverflow {
         channel: Channel,
         overflows: u64,
+    },
+    /// A received datagram was thrown away. Sent for the first and then every
+    /// hundredth, with the running count, so a stray burst is visible without
+    /// becoming a line per packet.
+    DatagramDropped {
+        dropped: u64,
+        reason: String,
     },
 }
 
@@ -282,6 +292,10 @@ pub struct PeerStats {
     /// answering WSAENETUNREACH) is a fact about that pair, not the peer, and
     /// ICE drops the pair itself when nothing answers on it.
     pub datagrams_send_failed: u64,
+    /// Datagrams received and thrown away: one that does not demultiplex, or a
+    /// STUN message that does not parse. A stray packet is a fact about that
+    /// packet, not the peer.
+    pub datagrams_dropped: u64,
     /// Access units handed to str0m's packetizer.
     pub frames_written: u64,
     pub channel_writes: u64,
@@ -778,22 +792,33 @@ impl RtcPeer {
             .set_read_timeout(Some(wait))
             .context("set_read_timeout")?;
         match self.socket.recv_from(&mut self.buf) {
-            Ok((n, source)) => {
-                let contents = self.buf[..n]
-                    .try_into()
-                    .map_err(|e| anyhow!("datagram from {source}: {e}"))?;
-                self.rtc
-                    .handle_input(Input::Receive(
-                        Instant::now(),
-                        Receive {
-                            proto: Protocol::Udp,
-                            source,
-                            destination: self.local_addr,
-                            contents,
-                        },
-                    ))
-                    .context("handle_input receive")?;
-            }
+            Ok((n, source)) => match self.buf[..n].try_into() {
+                Ok(contents) => {
+                    self.rtc
+                        .handle_input(Input::Receive(
+                            Instant::now(),
+                            Receive {
+                                proto: Protocol::Udp,
+                                source,
+                                destination: self.local_addr,
+                                contents,
+                            },
+                        ))
+                        .context("handle_input receive")?;
+                }
+                // the socket takes whatever reaches its port, and a packet
+                // nothing here can demultiplex never reached the association.
+                Err(error) => {
+                    self.stats.datagrams_dropped += 1;
+                    let dropped = self.stats.datagrams_dropped;
+                    if dropped == 1 || dropped.is_multiple_of(100) {
+                        events.push(PeerEvent::DatagramDropped {
+                            dropped,
+                            reason: error.to_string(),
+                        });
+                    }
+                }
+            },
             // Anything else is a timeout, a would-block, or Windows reporting
             // an ICMP port-unreachable from a *previous* send on the next
             // receive — routine while ICE is still probing, never fatal.
@@ -856,13 +881,17 @@ impl RtcPeer {
             ) => events.push(PeerEvent::Ice(IceEvent::Connected {
                 relayed: self.sending_over_relay(),
             })),
-            // Terminal for this peer, both of them: the browser always
-            // re-offers (plan.md D8), so a viewer that comes back gets a new
-            // peer rather than this one recovering. An ICE *restart* arrives
-            // while the peer is still live and goes through `accept_offer`.
-            Event::IceConnectionStateChange(IceConnectionState::Disconnected) | Event::Closed => {
+            // Not the viewer leaving: the path went quiet. The policy asks for
+            // the ICE restart that brings it back — the browser's re-offer goes
+            // through `accept_offer` on this same peer — and the session bounds
+            // how long it waits.
+            Event::IceConnectionStateChange(IceConnectionState::Disconnected) => {
+                events.push(PeerEvent::Ice(IceEvent::Disconnected))
+            }
+            // The viewer's end closed DTLS or SCTP. Nothing comes back from that.
+            Event::Closed => {
                 self.state = PeerState::Closed;
-                events.push(PeerEvent::Disconnected);
+                events.push(PeerEvent::Closed);
             }
             Event::MediaAdded(m) => self.on_media_added(&m),
             Event::ChannelOpen(id, label) => match channel_from_label(&label) {
@@ -1177,6 +1206,66 @@ mod tests {
 
     fn events() -> Vec<PeerEvent> {
         Vec::new()
+    }
+
+    fn loopback_peer() -> RtcPeer {
+        RtcPeer::bind(PeerConfig {
+            bind_addr: "127.0.0.1:0".parse().expect("a literal address"),
+            codec: Codec::H264,
+            fps: 60,
+            bitrate_bps: 20_000_000,
+            qpc_hz: 10_000_000,
+            enable_bwe: false,
+        })
+        .expect("bind on loopback")
+    }
+
+    /// A lost pair is an edge the policy waits out, so the peer stays; a closed
+    /// association is the viewer's end having gone, and the peer goes with it.
+    #[test]
+    fn a_lost_ice_pair_holds_the_peer_and_a_closed_association_ends_it() {
+        let mut peer = loopback_peer();
+        let mut ev = events();
+        peer.handle_event(
+            Event::IceConnectionStateChange(IceConnectionState::Disconnected),
+            &mut ev,
+        );
+        assert_eq!(ev, vec![PeerEvent::Ice(IceEvent::Disconnected)]);
+        assert_ne!(peer.state(), PeerState::Closed);
+
+        ev.clear();
+        peer.handle_event(Event::Closed, &mut ev);
+        assert_eq!(ev, vec![PeerEvent::Closed]);
+        assert_eq!(peer.state(), PeerState::Closed);
+    }
+
+    /// Anything can reach the socket's port. A datagram nothing demultiplexes,
+    /// and a stun header that does not parse, are counted and dropped, and the
+    /// first is reported. Either one used to end the viewer.
+    #[test]
+    fn a_datagram_that_does_not_parse_is_counted_and_the_peer_lives_on() {
+        let mut peer = loopback_peer();
+        let stray = UdpSocket::bind("127.0.0.1:0").expect("bind a stray sender");
+        stray
+            .send_to(&[0xff, 0x00, 0x01], peer.local_addr())
+            .expect("send");
+        // byte 0 and the length say stun; the magic cookie does not.
+        stray.send_to(&[0u8; 20], peer.local_addr()).expect("send");
+
+        let mut ev = events();
+        for _ in 0..2 {
+            peer.poll(Instant::now(), Duration::from_millis(200), &mut ev)
+                .expect("a stray datagram is not the peer's end");
+        }
+        assert_eq!(peer.stats().datagrams_dropped, 2);
+        assert_ne!(peer.state(), PeerState::Closed);
+        assert!(
+            matches!(
+                ev.as_slice(),
+                [PeerEvent::DatagramDropped { dropped: 1, .. }]
+            ),
+            "the first drop is reported and the second only counted: {ev:?}"
+        );
     }
 
     #[test]

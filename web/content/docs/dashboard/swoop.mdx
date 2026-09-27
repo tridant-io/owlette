@@ -72,8 +72,9 @@ a watch-only session is labelled **view only**.
 ## how long a session lasts
 
 - a session has **no time limit**: it lasts as long as the tab that started it
-- a dropped network, a sleeping laptop or a machine that stops answering does not end it. the viewer reconnects on its own, on a growing delay (up to 30 seconds between attempts), and says so while it waits
-- what does end it: the **end** button, closing the tab, an admin's kill, an update or restart of the machine's agent, another tab or device opening swoop on the same machine, or the lease check below refusing
+- a dropped network does not end it. after a short drop the same session picks up where it was; after a longer one, a sleeping laptop or a machine that stops answering, the viewer starts a new session on its own, on a growing delay (up to 30 seconds between attempts), and says so while it waits
+- an update or restart of the machine's agent sends the viewer to reconnect too, once the agent is back. agents older than 4.0.4 end the session instead, and so does the update from one of them
+- what does end it: the **end** button, closing the tab, an admin's kill, another tab or device opening swoop on the same machine, or the lease check below refusing
 - a viewer holds a **5-minute lease**, renewed silently while the tab is open. the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
 
 ---

@@ -27,7 +27,7 @@ interface Harness {
   frame: (overrides?: Partial<FrameObservation>) => FrameObservation;
 }
 
-function harness(onSilence?: () => void): Harness {
+function harness(onSilence?: () => void, linkUp?: () => boolean): Harness {
   let clock = 1_000;
   const sent: FeedbackMessage[] = [];
   const feedback = new SwoopFeedback({
@@ -36,6 +36,7 @@ function harness(onSilence?: () => void): Harness {
     now: () => clock,
     reportIntervalMs: TICK_MS,
     onSilence,
+    linkUp,
   });
 
   let answered = 0;
@@ -219,6 +220,48 @@ describe('swoop feedback reports', () => {
       h.answerPings();
     }
     expect(silences).not.toHaveBeenCalled();
+  });
+
+  it('does not call a host silent while the link under the channel is down', () => {
+    const silences = jest.fn();
+    let up = true;
+    const h = harness(silences, () => up);
+    h.feedback.start();
+    h.answerPings();
+
+    // the path dropped: the peer's restart ladder owns that, however long.
+    up = false;
+    h.advance(PONG_SILENCE_MS * 3);
+    expect(silences).not.toHaveBeenCalled();
+  });
+
+  it('counts the silence from the moment the link comes back', () => {
+    const silences = jest.fn();
+    let up = true;
+    const h = harness(silences, () => up);
+    h.feedback.start();
+    h.answerPings();
+    up = false;
+    h.advance(PONG_SILENCE_MS * 3);
+
+    // the first tick that sees the link up starts the clock again.
+    up = true;
+    h.advance(TICK_MS);
+    h.advance(PONG_SILENCE_MS - TICK_MS);
+    expect(silences).not.toHaveBeenCalled();
+    h.advance(TICK_MS);
+    expect(silences).toHaveBeenCalledTimes(1);
+  });
+
+  it('still calls a dead channel on a live link silent at the same mark', () => {
+    const silences = jest.fn();
+    const h = harness(silences, () => true);
+    h.feedback.start();
+    h.answerPings();
+    h.advance(PONG_SILENCE_MS - TICK_MS);
+    expect(silences).not.toHaveBeenCalled();
+    h.advance(TICK_MS);
+    expect(silences).toHaveBeenCalledTimes(1);
   });
 
   it('counts a pong it never asked for instead of applying it', () => {

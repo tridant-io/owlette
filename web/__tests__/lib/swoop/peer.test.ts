@@ -14,6 +14,7 @@ import {
   ANSWER_TIMEOUT_MS,
   DISCONNECTED_GRACE_MS,
   RELAY_PROBE_MS,
+  RESTART_ANSWER_TIMEOUT_MS,
   SwoopPeer,
   candidateType,
   createSwoopIdentity,
@@ -411,6 +412,22 @@ describe('swoop peer — offer', () => {
     expect(h.errors).toEqual(['host_silent']);
   });
 
+  it('counts the first offer’s wait from the moment the socket opens', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    // the page offers as soon as the dial is away, before the socket opens.
+    h.peer.signalOpen(false);
+    await h.peer.start();
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS * 3);
+    expect(h.errors).toEqual([]);
+    h.peer.signalOpen(true);
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+  });
+
   it('a host-ready re-arms the wait: that host is alive and has only now seen the offer', async () => {
     jest.useFakeTimers();
     const h = peerHarness();
@@ -670,8 +687,8 @@ describe('swoop peer — relay promotion', () => {
     expect(h.state.restarts).toBe(1);
 
     // a host whose accept failed answers nothing. ending here would reconnect
-    // onto the same relay and promote again, every twenty seconds.
-    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
+    // onto the same relay and promote again, every time the wait ran out.
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS);
     expect(h.state.localDescriptions.at(-1)).toEqual({ type: 'rollback' });
     expect(h.errors).toEqual([]);
     expect(h.state.closed).toBe(0);
@@ -1030,25 +1047,43 @@ describe('swoop peer — the restart answer', () => {
     return h;
   }
 
-  it('ends as host_silent when a restart on a link that is down is never answered', async () => {
+  it('ends as host_silent when a restart on a link that is down goes unanswered with the socket open', async () => {
     jest.useFakeTimers();
     const h = await restarting();
 
-    // lost to a host mid re-dial, or never sent by one that let this viewer
-    // go: while the offer is out no later restart can leave, and there is no
-    // working session left to keep.
-    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    // the offer reached the room and nothing came back: a host silent with
+    // our socket open is dead or wedged, and there is no working session left
+    // to keep. a new one is right.
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS - 1);
     expect(h.errors).toEqual([]);
     await jest.advanceTimersByTimeAsync(1);
     expect(h.errors).toEqual(['host_silent']);
     expect(h.state.closed).toBe(1);
   });
 
+  it('waits on a restart only while its answer can come back', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+
+    // the viewer's own path is down: the offer sits queued in signalling, and
+    // the host may well be holding this viewer the whole time.
+    h.peer.signalOpen(false);
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS * 30);
+    expect(h.errors).toEqual([]);
+
+    // back online, the queued offer gets its whole wait from here.
+    h.peer.signalOpen(true);
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+  });
+
   it('rolls back an unanswered restart on a link that is still up, and restarts again later', async () => {
     jest.useFakeTimers();
     const h = await restartingWhileUp();
 
-    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS);
     expect(h.state.localDescriptions.at(-1)).toEqual({ type: 'rollback' });
     expect(h.errors).toEqual([]);
     expect(h.state.closed).toBe(0);
@@ -1068,7 +1103,7 @@ describe('swoop peer — the restart answer', () => {
       throw new Error('rollback refused');
     };
 
-    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS);
     expect(h.errors).toEqual(['host_silent']);
     expect(h.state.closed).toBe(1);
   });
@@ -1094,7 +1129,7 @@ describe('swoop peer — the restart answer', () => {
       sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
       mac: HOST_MAC,
     });
-    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS * 3);
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS * 2);
     expect(h.errors).toEqual([]);
     expect(h.state.closed).toBe(0);
   });

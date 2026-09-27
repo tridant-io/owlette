@@ -35,6 +35,23 @@ There is no 12-hour cap any more: the lease route no longer refuses a long
 session, the machine is sent a cap no session reaches, and the daily sweep
 closes a session record only once its lease has lapsed.
 
+### fixed — swoop holds on through a lost network and survives an agent update
+
+The machine now holds a viewer for a minute after its connection drops, pausing
+its picture and asking the browser to restart the connection, where it used to
+drop the viewer after 15 to 25 seconds; the page no longer abandons a session
+just because its connection is down, so a short drop picks up on the same
+session, and it gives up on a silent machine only while it can actually reach
+it.
+An agent update or restart now sends viewers back to reconnect instead of ending
+their session for good. The update to this version itself still ends one,
+because the old agent does the stopping.
+
+The agent's swoop kill ends only the session it names, a late request for an
+earlier session no longer replaces the live one, a packet the machine cannot
+parse no longer ends a viewer, and the agent logs the streamer's real reason for
+exiting instead of "normal".
+
 ## [4.0.3] - 2026-09-26
 
 ### changed — the macOS menubar icon blends in

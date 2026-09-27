@@ -66,7 +66,8 @@ const PENDING_PINGS = 4;
  * the browser is never told (the host cannot re-open a channel it does not
  * own). that is what this notices; the session then reconnects with fresh
  * channels. B4A, 2026-09-24: the picture froze and the cursor vanished for
- * good behind exactly that.
+ * good behind exactly that. it is a dead channel on a live path, so silence
+ * counts only while the path is up (`linkUp`).
  */
 export const PONG_SILENCE_MS = 8_000;
 
@@ -91,6 +92,12 @@ export interface SwoopFeedbackOptions {
    */
   onSilence?: () => void;
   silenceMs?: number;
+  /**
+   * whether the path under the channel is up. with it down the peer's restart
+   * ladder owns recovery and no silence is judged; the silence clock starts
+   * again when it comes back. absent means always up.
+   */
+  linkUp?: () => boolean;
 }
 
 export interface SwoopFeedbackDiagnostics {
@@ -177,6 +184,8 @@ export class SwoopFeedback {
   private offsetUs: number | null = null;
   private rttUs: number | null = null;
   private lastPongMs: number | null = null;
+  /** the path was down at the last look, so the next look that finds it up restarts the clock. */
+  private linkWasDown = false;
 
   private latest: FrameObservation | null = null;
   private lastFrameId: number | null = null;
@@ -353,6 +362,17 @@ export class SwoopFeedback {
 
   private watchSilence(): void {
     if (this.lastPongMs === null || this.options.onSilence === undefined) return;
+    // pongs lost to a path that is down are the restart ladder's to recover,
+    // and the silence that counts starts when the path is back.
+    if (this.options.linkUp?.() === false) {
+      this.linkWasDown = true;
+      return;
+    }
+    if (this.linkWasDown) {
+      this.linkWasDown = false;
+      this.lastPongMs = this.now();
+      return;
+    }
     const silentMs = this.now() - this.lastPongMs;
     if (silentMs < this.silenceMs) return;
     this.stats.silences += 1;

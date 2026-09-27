@@ -1092,7 +1092,7 @@ export const encodeFeedbackMessage = (message: FeedbackMessage): string => JSON.
 export type PipeEvent =
   | { type: 'ready'; sid: string; pid: number; version: string; protocolVersion: number; codecs: string[]; displays: number }
   | { type: 'viewer_joined'; sid: string; viewer: string; ctl: boolean; codec: string }
-  | { type: 'viewer_left'; sid: string; viewer: string; reason: 'bye' | 'timeout' | 'lease_expired' | 'kill' }
+  | { type: 'viewer_left'; sid: string; viewer: string; reason: 'bye' | 'timeout' | 'lease_expired' | 'kill' | 'restart' }
   | { type: 'sas_request'; sid: string; viewer: string }
   | {
       type: 'status';
@@ -1108,7 +1108,7 @@ export type PipeEvent =
     }
   | { type: 'exiting'; sid: string; code: number; reason: 'idle' | 'kill' | 'signal_lost' | 'session_cap' | 'error' };
 
-const VIEWER_LEFT_REASONS = ['bye', 'timeout', 'lease_expired', 'kill'];
+const VIEWER_LEFT_REASONS = ['bye', 'timeout', 'lease_expired', 'kill', 'restart'];
 const EXIT_REASONS = ['idle', 'kill', 'signal_lost', 'session_cap', 'error'];
 
 export function decodePipeEvent(line: string): SwoopResult<PipeEvent> {
@@ -1147,7 +1147,12 @@ export function decodePipeEvent(line: string): SwoopResult<PipeEvent> {
       if (viewer === undefined || reason === undefined || !VIEWER_LEFT_REASONS.includes(reason)) {
         return reject('malformed_message', 'viewer_left');
       }
-      return accept({ type: 'viewer_left', sid, viewer, reason: reason as 'bye' | 'timeout' | 'lease_expired' | 'kill' });
+      return accept({
+        type: 'viewer_left',
+        sid,
+        viewer,
+        reason: reason as 'bye' | 'timeout' | 'lease_expired' | 'kill' | 'restart',
+      });
     }
     case 'sas_request': {
       const viewer = str(o, 'viewer');
@@ -1192,8 +1197,14 @@ export function decodePipeEvent(line: string): SwoopResult<PipeEvent> {
   }
 }
 
-/** stdin control lines, service → streamer. line 1 is the bundle, never this. */
-export type PipeControl = { type: 'kill'; sid?: string } | { type: 'sas_result'; ok: boolean };
+/**
+ * stdin control lines, service → streamer. line 1 is the bundle, never this.
+ * a kill's `reason` is absent on every kill that is somebody's decision, and
+ * names the service's own stop, which viewers come back from.
+ */
+export type PipeControl =
+  | { type: 'kill'; sid?: string; reason?: 'service_stop' }
+  | { type: 'sas_result'; ok: boolean };
 
 export function decodePipeControl(line: string): SwoopResult<PipeControl> {
   const parsed = parseJsonObject(line);
@@ -1205,7 +1216,15 @@ export function decodePipeControl(line: string): SwoopResult<PipeControl> {
       // both are accepted, and a sid that names another session is the
       // streamer's business, not the parser's.
       const sid = str(o, 'sid');
-      return accept(sid === undefined ? { type: 'kill' } : { type: 'kill', sid });
+      // closed like the streamer's own: a reason this build does not know
+      // refuses the line rather than reading as somebody's decision.
+      const reason = o.reason ?? undefined;
+      if (reason !== undefined && reason !== 'service_stop') return reject('malformed_message', 'kill.reason');
+      return accept({
+        type: 'kill',
+        ...(sid === undefined ? {} : { sid }),
+        ...(reason === undefined ? {} : { reason }),
+      });
     }
     case 'sas_result': {
       const ok = bool(o, 'ok');

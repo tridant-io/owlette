@@ -794,7 +794,8 @@ mod host {
     use crate::gpu::Frame;
     use crate::input::{InputEvent, Injector, PointerSpace, SendInputInjector};
     use crate::ipc::{
-        self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, LeftReason, MediaPath,
+        self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, KillReason,
+        LeftReason, MediaPath,
     };
     use crate::bundle::Secret;
     use crate::signal::client::{Effect, SignalTransport};
@@ -811,7 +812,7 @@ mod host {
     };
     use crate::transport::ice_policy::{
         admit_remote, ifwatch::InterfaceWatcher, Admission, DropReason, IceAction, IceEvent,
-        IcePolicy, SystemResolver,
+        IcePolicy, SystemResolver, DISCONNECTED_LIMIT,
     };
     use crate::transport::rtc::{qpc_hz, PeerConfig, PeerEvent, PeerState, RtcPeer};
     use crate::transport::VideoSink;
@@ -1251,6 +1252,18 @@ mod host {
         }
     }
 
+    /// The `bye` every viewer gets when the service ends the session. The
+    /// service's own stop is a host going away to come back, so the page
+    /// starts again. Every other kill is somebody's decision and final:
+    /// `session_change` above all, which is another tab or device taking the
+    /// machine, and told to come back the two would trade it forever.
+    fn kill_left_reason(reason: Option<KillReason>) -> LeftReason {
+        match reason {
+            Some(KillReason::ServiceStop) => LeftReason::Restart,
+            None => LeftReason::Kill,
+        }
+    }
+
     /// Everything the session loop was handed rather than built.
     struct Wiring {
         clock: HostClock,
@@ -1616,20 +1629,17 @@ mod host {
             }
         }
 
-        /// How long after a re-dial the room's replayed joins are expected.
-        const REPLAY_WINDOW: Duration = Duration::from_secs(5);
-
-        /// A fresh host token from the service: dial the room again with it and
-        /// swap the socket. The old one closes on drop, and the room announces
-        /// nothing for a host that goes, so every viewer keeps its peer and its
-        /// picture; the room replays their joins, which the client already
-        /// knows. A failed dial keeps the old socket — it works until its token
-        /// expires, and the service retries the mint before then.
         /// How often the service is asked again while the room stays
         /// unreachable: the service's own retry cadence, so one ask per
         /// attempt it would make anyway.
         const TOKEN_ASK_INTERVAL: Duration = Duration::from_secs(20);
 
+        /// A fresh host token from the service: dial the room again with it and
+        /// swap the socket. The old one closes on drop, and the room announces
+        /// nothing for a host that goes, so every viewer keeps its peer and its
+        /// picture; the room replays their joins, which the client already
+        /// holds. A failed dial keeps the old socket — it works until its token
+        /// expires, and the service retries the mint before then.
         fn redial(&mut self, host_token: &Secret) {
             let handshake = match Handshake::with_token(
                 &self.signal_url,
@@ -1646,7 +1656,6 @@ mod host {
             match RoomSocket::dial(&handshake) {
                 Ok(socket) => {
                     self.socket = socket;
-                    self.client.expect_replay(Instant::now() + Self::REPLAY_WINDOW);
                     match self.signal_down_since.take() {
                         Some(since) => ::log::info!(
                             "swoop: signaling recovered after {:.0} s without the room",
@@ -1666,11 +1675,13 @@ mod host {
         fn pump_service(&mut self) -> Option<(Exit, ExitReason)> {
             loop {
                 match self.service_rx.try_recv() {
-                    Ok(FromService::Control(Control::Kill { sid })) => {
+                    Ok(FromService::Control(Control::Kill { sid, reason })) => {
                         if sid.as_deref().is_some_and(|s| s != self.sid) {
+                            ::log::info!("swoop: a kill for another session ignored");
                             continue;
                         }
-                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, LeftReason::Kill));
+                        let left = kill_left_reason(reason);
+                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, left));
                     }
                     Ok(FromService::Control(Control::SasResult { ok })) => {
                         self.on_sas_result(ok);
@@ -1680,7 +1691,10 @@ mod host {
                     }
                     Ok(FromService::Eof) | Err(TryRecvError::Disconnected) => {
                         ::log::info!("swoop: stdin closed, the service is gone");
-                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, LeftReason::Kill));
+                        // a service that is gone is stopping, whether or not it
+                        // got to say so.
+                        let left = kill_left_reason(Some(KillReason::ServiceStop));
+                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, left));
                     }
                     Err(TryRecvError::Empty) => return None,
                 }
@@ -2193,6 +2207,7 @@ mod host {
                 send_us,
             };
             let frame_id = frame.frame_id as u32;
+            let now = Instant::now();
 
             let mut answered = false;
             let mut needs_irap = false;
@@ -2202,6 +2217,9 @@ mod host {
                 let outcome = match v.peer.as_mut() {
                     None => Outcome::Skipped,
                     Some(peer) if peer.state() != PeerState::Connected => Outcome::Skipped,
+                    // ICE lost its pair: a frame now only fills the uplink on its
+                    // way nowhere, and the reconnect asks for the keyframe.
+                    Some(_) if v.ice.down_for(now).is_some() => Outcome::Skipped,
                     // Never the first thing a decoder sees: a delta whose
                     // references it never had is a black stream, not a lost
                     // frame. One IRAP answers every viewer waiting on one.
@@ -2385,7 +2403,7 @@ mod host {
             }
         }
 
-        /// The one thing the policy asks for.
+        /// What the policy asks for.
         ///
         /// The host answers and never offers (plan.md D8), so it is the ICE
         /// *controlled* agent: it cannot renegotiate by itself. `host-ready` is
@@ -2394,10 +2412,52 @@ mod host {
         /// credentials — which is the "every later offer is an ICE restart" path
         /// in `on_offer`.
         fn on_ice_action(&mut self, viewer: &str, action: IceAction) {
-            let IceAction::RestartIce(reason) = action;
-            ::log::info!("swoop: asking viewer {viewer} for an ice restart ({reason:?})");
-            let ready = self.client.host_ready(Some(viewer));
-            self.send(&ready);
+            match action {
+                IceAction::RestartIce(reason) => {
+                    ::log::info!("swoop: asking viewer {viewer} for an ice restart ({reason:?})");
+                    let ready = self.client.host_ready(Some(viewer));
+                    self.send(&ready);
+                }
+                IceAction::GiveUp => {
+                    ::log::info!(
+                        "swoop: viewer {viewer} ice down for {} s, dropping it",
+                        DISCONNECTED_LIMIT.as_secs()
+                    );
+                    let effects = self.client.end_viewer(viewer, LeftReason::Timeout);
+                    let _ = self.apply(effects);
+                }
+            }
+        }
+
+        /// One ICE edge from a viewer's peer, for its policy, and a log line for
+        /// the two an operator reads: the path going down and coming back.
+        fn on_ice_event(&mut self, viewer: &str, event: IceEvent) {
+            let now = Instant::now();
+            let Some(v) = self.viewer_mut(viewer) else {
+                return;
+            };
+            let codec = v.codec;
+            let down_for = v.ice.down_for(now);
+            let action = v.ice.observe(now, event);
+            match (event, down_for) {
+                (IceEvent::Disconnected, None) => ::log::info!(
+                    "swoop: viewer {viewer} ice disconnected, holding it up to {} s",
+                    DISCONNECTED_LIMIT.as_secs()
+                ),
+                (IceEvent::Connected { .. } | IceEvent::PairChanged { .. }, Some(down)) => {
+                    ::log::info!(
+                        "swoop: viewer {viewer} ice reconnected after {:.0} s",
+                        down.as_secs_f64()
+                    );
+                    // no frame went out while it was down, so its decoder has
+                    // nothing to continue from.
+                    self.request_idr(codec);
+                }
+                _ => {}
+            }
+            if let Some(action) = action {
+                self.on_ice_action(viewer, action);
+            }
         }
 
         /// Every feature's turn to produce, then the one write.
@@ -2553,9 +2613,11 @@ mod host {
                         self.request_idr(codec);
                     }
                 }
-                PeerEvent::Disconnected => {
-                    // No `bye` came, so the viewer did not leave — it stopped
-                    // answering. That is a timeout, and the release matters.
+                PeerEvent::Closed => {
+                    // No `bye` came, so the room never said the viewer left —
+                    // its end closed the association. That is a timeout, and
+                    // the release matters.
+                    ::log::info!("swoop: viewer {viewer} peer closed");
                     let effects = self.client.end_viewer(viewer, LeftReason::Timeout);
                     let _ = self.apply(effects);
                 }
@@ -2572,14 +2634,7 @@ mod host {
                     };
                     self.send(&message);
                 }
-                PeerEvent::Ice(event) => {
-                    let action = self
-                        .viewer_mut(viewer)
-                        .and_then(|v| v.ice.observe(Instant::now(), event));
-                    if let Some(action) = action {
-                        self.on_ice_action(viewer, action);
-                    }
-                }
+                PeerEvent::Ice(event) => self.on_ice_event(viewer, event),
                 PeerEvent::KeyframeRequest => self.request_idr(codec),
                 PeerEvent::ChannelOpen(Channel::SwoopControl) => self.send_hello_host(viewer),
                 PeerEvent::ChannelOpen(channel) => ::log::debug!("swoop: {channel:?} open"),
@@ -2621,6 +2676,9 @@ mod host {
                         )
                     }
                 }
+                PeerEvent::DatagramDropped { dropped, reason } => ::log::warn!(
+                    "swoop: dropped a datagram for {viewer} ({reason}); {dropped} dropped so far"
+                ),
                 // Never fires: BWE is off. Named so it is not a silent arm.
                 PeerEvent::BitrateEstimate(_) => {}
             }
@@ -4009,6 +4067,19 @@ mod host {
                 GovernorPhase::Climbing
             );
             assert_eq!(governor_phase(GovernorState::Pinned), GovernorPhase::Pinned);
+        }
+
+        /// An agent update ends a session without ending it for good: the
+        /// service's own stop, and stdin closing under it, tell every viewer to
+        /// come back. A kill with no reason — `session_change`, `swoop_kill` —
+        /// stays final.
+        #[test]
+        fn only_the_services_own_stop_tells_a_viewer_to_come_back() {
+            assert_eq!(
+                kill_left_reason(Some(KillReason::ServiceStop)),
+                LeftReason::Restart
+            );
+            assert_eq!(kill_left_reason(None), LeftReason::Kill);
         }
 
         /// The frame-rate rung is enforced by feeding the encoder less often,

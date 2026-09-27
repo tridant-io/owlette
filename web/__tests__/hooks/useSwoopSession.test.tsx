@@ -17,7 +17,9 @@ const wired: {
   peer: SwoopPeerOptions | null;
   signaling: SwoopSignalingOptions | null;
   session: SwoopSession | null;
-} = { peer: null, signaling: null, session: null };
+  /** what the hook told the peer about the signalling socket, in order. */
+  signalOpen: boolean[];
+} = { peer: null, signaling: null, session: null, signalOpen: [] };
 
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ mfaFactors: { totp: true, passkeys: 0 } }),
@@ -31,7 +33,13 @@ jest.mock('@/lib/swoop/peer', () => ({
   createSwoopIdentity: async () => ({ certificate: {}, fingerprint: 'sha-256 AA:BB' }),
   createSwoopPeer: (options: SwoopPeerOptions) => {
     wired.peer = options;
-    return { start: async () => undefined, close: () => undefined, handleSignal: async () => undefined, channel: () => null };
+    return {
+      start: async () => undefined,
+      close: () => undefined,
+      handleSignal: async () => undefined,
+      channel: () => null,
+      signalOpen: (open: boolean) => wired.signalOpen.push(open),
+    };
   },
 }));
 
@@ -150,6 +158,7 @@ beforeEach(() => {
   wired.peer = null;
   wired.signaling = null;
   wired.session = null;
+  wired.signalOpen = [];
   (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
 });
 
@@ -252,5 +261,13 @@ describe('useSwoopSession — how a session ends', () => {
     expect(swoop.error).toBe('swoop is excluded on this machine.');
     expect(swoop.retryIn).toBeNull();
     expect(deletes()).toHaveLength(0);
+  });
+
+  it('tells the peer when an answer can come back over signalling', async () => {
+    await open();
+
+    act(() => wired.signaling!.onStatus!('reconnecting'));
+    act(() => wired.signaling!.onStatus!('open'));
+    expect(wired.signalOpen).toEqual([false, true]);
   });
 });
