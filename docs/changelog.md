@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.0.4] - 2026-09-26
+
 ### fixed — a swoop session stays up for as long as its tab is open
 
 A network hiccup no longer ends a session. The signalling room used to tell the
