@@ -284,7 +284,7 @@ class RecordingManager:
     def ensure_streamer(self, sid):
         self.calls.append(('ensure_streamer', sid))
 
-    def kill(self, reason='kill'):
+    def kill(self, reason='kill', sid=None):
         self.calls.append(('kill', reason))
 
     def on_session_change(self):

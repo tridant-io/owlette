@@ -560,7 +560,11 @@ export function useSwoopSession(
           void peer?.handleSignal(message);
         },
         onStatus: (signal: SwoopSignalStatus) => {
-          if (!disposed) setStats((prev) => ({ ...prev, signal }));
+          if (disposed) return;
+          setStats((prev) => ({ ...prev, signal }));
+          // an answer can only come back over an open socket, so the peer's
+          // wait for one runs only while it is.
+          peer?.signalOpen(signal === 'open');
         },
         onFatal: () => {
           fail('this machine runs a swoop version this page cannot talk to.', false);
@@ -627,13 +631,15 @@ export function useSwoopSession(
           if (reason === 'kill') {
             // an admin's kill, or another tab or device taking the machine
             // over: a retry would take it back, and the two would trade it
-            // forever. a service stop or update byes its viewers this way too.
+            // forever. a 4.0.x service stop or update byes its viewers this
+            // way too; later agents say `restart`, which lands below.
             continuityRef.current = null;
             finish('kill', 'this session was ended from elsewhere.');
             return;
           }
-          // a host that let this viewer go, or a streamer that exited on its
-          // own: no decision, so the next session finds it back.
+          // a host that let this viewer go, a service going away to come back,
+          // or a streamer that exited on its own: no decision, so the next
+          // session finds it back.
           finish('host_gone');
         },
       });

@@ -120,9 +120,6 @@ pub struct SignalClient {
     /// The last `error` code the room sent, so a close can be read together
     /// with the frame that preceded it.
     last_error: Option<String>,
-    /// While set, a join for a viewer already on the roster is the room
-    /// replaying it to a host that just re-dialed, not a second join.
-    replay_until: Option<Instant>,
 }
 
 impl SignalClient {
@@ -140,15 +137,7 @@ impl SignalClient {
             viewers: BTreeMap::new(),
             host_fingerprint: None,
             last_error: None,
-            replay_until: None,
         })
-    }
-
-    /// The host re-dialed the room (a token refresh): until `until`, the joins
-    /// the room replays for viewers still present are swallowed rather than
-    /// counted against admission or allowed to reset a verified `ctl`.
-    pub fn expect_replay(&mut self, until: Instant) {
-        self.replay_until = Some(until);
     }
 
     pub fn sid(&self) -> &str {
@@ -290,12 +279,12 @@ impl SignalClient {
         if sid != self.sid {
             return vec![Effect::Refused(Refusal::RoomMismatch)];
         }
-        // a host that re-dialed the room (a token refresh) is replayed every
-        // viewer still present. inside that window those are not joins:
-        // counting them would spend the admission budget twice, and
-        // re-inserting them would reset the ctl a step-up already verified.
-        // outside it a repeat join is what the rate guard below is for.
-        if self.replay_until.is_some_and(|until| now <= until) && self.viewers.contains_key(&viewer) {
+        // a viewer this host already holds is not joining: it is the room
+        // replaying it to a host that re-dialed, or its own socket re-dialing
+        // under a peer that is still up. counting it again would spend the
+        // admission budget twice, and re-inserting it would drop the
+        // fingerprint its lease is bound to and the ctl its token verified.
+        if self.viewers.contains_key(&viewer) {
             return Vec::new();
         }
         if let Err(denial) = self.admission.admit(&viewer, now) {
@@ -582,6 +571,7 @@ fn left_reason_text(reason: LeftReason) -> &'static str {
         LeftReason::Timeout => "timeout",
         LeftReason::LeaseExpired => "lease_expired",
         LeftReason::Kill => "kill",
+        LeftReason::Restart => "restart",
     }
 }
 
@@ -927,6 +917,19 @@ pub(crate) mod tests {
         assert_eq!(client.handle(&dropped.to_string()), Vec::new());
     }
 
+    /// The page stops on a `kill` and starts its next session on any other
+    /// `bye` from the host, which is exactly what an agent update has to be.
+    #[test]
+    fn a_restart_reaches_the_viewer_as_its_own_bye() {
+        let (mut client, viewer) = client_with_viewer();
+        let effects = client.end_viewer(&viewer, LeftReason::Restart);
+        let Some(Effect::Send(Message::Bye { reason, to, .. })) = effects.first() else {
+            panic!("a bye leads the effects: {effects:?}");
+        };
+        assert_eq!(reason.as_deref(), Some("restart"));
+        assert_eq!(to.as_deref(), Some(viewer.as_str()));
+    }
+
     #[test]
     fn an_offer_from_a_viewer_the_host_never_admitted_is_denied() {
         let mut client = client();
@@ -969,8 +972,10 @@ pub(crate) mod tests {
             client.handle_at(&frame, start)[..],
             [Effect::Admitted { .. }]
         ));
-        // a second join inside the interval floor.
-        let effects = client.handle_at(&frame, start + Duration::from_millis(500));
+        // a second viewer inside the interval floor.
+        let mut second = join["message"].clone();
+        second["viewer"] = json!("viewer_0000000002");
+        let effects = client.handle_at(&second.to_string(), start + Duration::from_millis(500));
         let mut remaining = Vec::new();
         for effect in effects {
             match effect {
@@ -982,33 +987,45 @@ pub(crate) mod tests {
         }
         assert_eq!(
             remaining,
-            vec![Effect::Denied(Denial::new("viewer_0000000001", DenialReason::JoinTooSoon))]
+            vec![Effect::Denied(Denial::new(
+                "viewer_0000000002",
+                DenialReason::JoinTooSoon
+            ))]
         );
         let sent: Value = serde_json::from_str(&socket.sent[0]).expect("the bye is json");
         assert_eq!(sent["type"], "bye");
-        assert_eq!(sent["to"], "viewer_0000000001");
+        assert_eq!(sent["to"], "viewer_0000000002");
         assert_eq!(sent["reason"], "join_too_soon");
     }
 
-    /// After a re-dial the room replays the joins of every viewer still
-    /// present; inside the window they are swallowed, and the viewer keeps
-    /// what it had. Past the window a repeat join is a repeat join again.
+    /// A viewer the host holds is not joining again, whenever the join comes:
+    /// the room replays it to a host that re-dialed, and its own socket
+    /// re-dials under a peer that is still up. It keeps its admission and the
+    /// fingerprint its lease is bound to, and a join is news again only once
+    /// it has left.
     #[test]
-    fn a_replayed_join_after_a_redial_is_swallowed() {
-        let mut client = client();
-        let join = read("signaling/signal-viewer-join.json");
-        let frame = join["message"].to_string();
-        let start = Instant::now();
-        assert!(matches!(client.handle_at(&frame, start)[..], [Effect::Admitted { .. }]));
-        let before = client.viewer_count();
+    fn a_repeat_join_for_a_held_viewer_is_swallowed_until_it_leaves() {
+        let (mut client, viewer) = client_with_viewer();
+        let join = read("signaling/signal-viewer-join.json")["message"].to_string();
+        let later = Instant::now() + Duration::from_secs(600);
 
-        client.expect_replay(start + Duration::from_secs(5));
-        assert!(client.handle_at(&frame, start + Duration::from_millis(100)).is_empty());
-        assert_eq!(client.viewer_count(), before);
+        assert!(client.handle_at(&join, later).is_empty());
+        assert_eq!(client.viewer_count(), 1, "not counted twice");
+        // the binding survived: the refusal is the token's, not a missing fingerprint.
+        let refused = client
+            .verify_viewer_token(&viewer, "not.a.token")
+            .expect_err("garbage");
+        assert_eq!(refused.reason, DenialReason::Token(TokenError::Malformed));
 
-        // the window has passed: a repeat join is handled as it always was
-        let effects = client.handle_at(&frame, start + Duration::from_secs(6));
-        assert!(matches!(effects[..], [Effect::Admitted { .. }]));
+        let effects = client.end_viewer(&viewer, LeftReason::Timeout);
+        assert!(matches!(
+            effects[..],
+            [Effect::Send(_), Effect::ViewerGone { .. }]
+        ));
+        assert!(matches!(
+            client.handle_at(&join, later + Duration::from_secs(3))[..],
+            [Effect::Admitted { .. }]
+        ));
     }
 
     /// A join for a session this streamer is not serving is a room mismatch,

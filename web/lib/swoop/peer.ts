@@ -51,9 +51,9 @@
  * 5. **a restart is an offer, and its answer is what completes it.** so an
  *    answer is accepted per *offer* and not once per session — with the whole
  *    of §4 above re-verified on every one of them — and waited on per offer,
- *    under `ANSWER_TIMEOUT_MS`. a `host-ready` after the answer is the host
- *    asking for that restart: it answers and never offers, so it has no other
- *    way to ask.
+ *    under `ANSWER_TIMEOUT_MS` or, for a restart, `RESTART_ANSWER_TIMEOUT_MS`.
+ *    a `host-ready` after the answer is the host asking for that restart: it
+ *    answers and never offers, so it has no other way to ask.
  *
  * gate g1 closed on arm B: the video is an rtp track rendered into a `<video>`,
  * so the playout-delay extension is the whole latency story on this side. the
@@ -93,17 +93,24 @@ export const RELAY_PROBE_MS = 3000;
  */
 export const DISCONNECTED_GRACE_MS = 2000;
 /**
- * how long any offer waits for the host's answer. none comes from a host the
- * agent refused to start (its spawn ceiling, a bad bundle) or one mid-restart,
- * and a restart's is lost to a host mid re-dial, one that answers only its
- * newest peer, one whose accept failed, or one that already let this viewer
- * go. none of them says so on the wire: without a bound the viewer sits on
- * "connecting" for hours (b4a, 2026-09-25), or refuses every restart after the
- * lost one. `answerMissed` decides what the timeout ends. a `host-ready` before
- * the first answer re-arms it: that host is alive and has only now seen the
- * offer.
+ * how long a first offer waits for the host's answer, counted only while the
+ * signalling socket is open (`signalOpen`). none comes from a host the agent
+ * refused to start (its spawn ceiling, a bad bundle) or one mid-restart, and
+ * neither says so on the wire: without a bound the viewer sits on
+ * "connecting" for hours (b4a, 2026-09-25). a spawning host is slow, hence
+ * the margin. a `host-ready` before the first answer re-arms it: that host is
+ * alive and has only now seen the offer.
  */
 export const ANSWER_TIMEOUT_MS = 20_000;
+/**
+ * how long a restart offer waits for its answer, counted the same way. a live
+ * host answers within about a second; the answer is lost to a host mid
+ * re-dial, one that answers only its newest peer, one whose accept failed, or
+ * one that already let this viewer go, and a host silent with our socket open
+ * is dead or wedged. unbounded, the offer would refuse every restart after it.
+ * `answerMissed` decides what the timeout ends.
+ */
+export const RESTART_ANSWER_TIMEOUT_MS = 10_000;
 /** the restart ladder: the second restart 1 s after a failure, then doubling to the cap. */
 export const RESTART_BASE_MS = 1000;
 export const RESTART_CAP_MS = 15000;
@@ -341,8 +348,10 @@ export class SwoopPeer {
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private relayTimer: ReturnType<typeof setTimeout> | null = null;
   private linkTimer: ReturnType<typeof setTimeout> | null = null;
-  /** runs from each offer until its answer is taken. */
+  /** runs from each offer until its answer is taken, while `signalingOpen` holds. */
   private answerTimer: ReturnType<typeof setTimeout> | null = null;
+  /** the signalling socket is open, so an answer can come back; see `signalOpen`. */
+  private signalingOpen = true;
 
   constructor(options: SwoopPeerOptions) {
     this.options = options;
@@ -387,6 +396,26 @@ export class SwoopPeer {
 
   channel(label: SwoopChannel): RTCDataChannel | null {
     return this.channels.get(label) ?? null;
+  }
+
+  /** whether the path under the channels is up: ice connected or completed. */
+  linkUp(): boolean {
+    const ice = this.pc.iceConnectionState;
+    return ice === 'connected' || ice === 'completed';
+  }
+
+  /**
+   * the signalling socket opened or left `open`. an answer can only come back
+   * over it, so an offer's wait runs only while it is open: with the viewer's
+   * own path down the offer sits queued, and a wait that ran through that
+   * outage would end a session the host is still holding. the queue flushes
+   * on open, and the wait starts again from there.
+   */
+  signalOpen(open: boolean): void {
+    if (this.closed) return;
+    this.signalingOpen = open;
+    if (!open) this.clearAnswerTimer();
+    else if (this.awaitingAnswer) this.armAnswerTimer();
   }
 
   /** build the two transceivers and the five channels, then offer. */
@@ -534,10 +563,13 @@ export class SwoopPeer {
 
   private armAnswerTimer(): void {
     this.clearAnswerTimer();
+    if (!this.signalingOpen) return;
+    // every offer after the first answer is a restart.
+    const bound = this.answered ? RESTART_ANSWER_TIMEOUT_MS : this.answerTimeoutMs;
     this.answerTimer = setTimeout(() => {
       this.answerTimer = null;
       if (this.awaitingAnswer) void this.answerMissed();
-    }, this.answerTimeoutMs);
+    }, bound);
   }
 
   /**
@@ -549,8 +581,7 @@ export class SwoopPeer {
    * down, or a rollback the browser refuses ends the attempt.
    */
   private async answerMissed(): Promise<void> {
-    const ice = this.pc.iceConnectionState;
-    if (!this.answered || (ice !== 'connected' && ice !== 'completed')) {
+    if (!this.answered || !this.linkUp()) {
       this.abort('host_silent');
       return;
     }

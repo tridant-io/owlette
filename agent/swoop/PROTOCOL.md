@@ -103,12 +103,15 @@ fields, beyond `type`, `from`, `fromRole` and `serverTimeMs`:
 
 - `hello`: `protocolVersion`, `role`, `id`, `sid`, `ctl`, `peers {doorbell, host, viewer}`
 - `ring`: `sid`, `sentAtMs` — **and nothing else**, see section 11
-- `viewer-join`: `viewer`, `sid`, `ctl`
+- `viewer-join`: `viewer`, `sid`, `ctl`. the host ignores a repeat for a viewer it already holds, until that
+  viewer leaves
 - `offer` / `answer`: `sdp`; `answer` also carries `mac` (section 9) and `to`
 - `host-ready`: `sid`, optional `to`
 - `candidate`: `candidate`, `sdpMid`, `sdpMLineIndex`, optional `to`
 - `kill`: `sid` (may be null — "kill whatever is running")
-- `bye`: optional `reason`, optional `to`
+- `bye`: optional `reason`, optional `to`. from the host, `restart` means the service is stopping to come
+  back (an update, a restart) and the viewer starts its next session; `kill` is somebody's decision and the
+  viewer stops
 - `error`: `code`
 
 golden vectors: one per type in `testdata/protocol/signaling/`, plus `signal-viewer-sends-answer.json`
@@ -333,14 +336,17 @@ is ever on a command line.
 **line 1 is the bundle**: one json object, one line, utf-8, no bom, terminated by `\n`. every line after it is
 a control line:
 
-- `{"type":"kill"}` — end the session and exit 0.
+- `{"type":"kill"}` — end the session and exit 0. an optional `sid` names the session: a kill for any other
+  sid is ignored. an optional `reason`, whose only value is `service_stop`, marks the service's own stop,
+  which viewers are told to come back from (`bye` with `reason: "restart"`); every other kill byes them
+  `kill`.
 - `{"type":"sas_result","ok":true}` — the answer to a `sas_request`; the service, not the streamer, calls
   `SendSAS`. the streamer routes it to whichever feature raised that `sas_request` and to nothing else; an
   answer to a question nobody put is dropped with a log line. `"ok": false` means the service could not
   raise the sequence at all.
 
-**eof on stdin means the service is gone.** the streamer tears the session down and exits 0. it does not try
-to carry on, and it does not try to reach the service any other way.
+**eof on stdin means the service is gone.** the streamer byes its viewers `restart`, tears the session down
+and exits 0. it does not try to carry on, and it does not try to reach the service any other way.
 
 ### stdout, streamer → service
 
@@ -351,7 +357,7 @@ loop.
 |---|---|
 | `ready` | `sid`, `pid`, `version`, `protocolVersion`, `codecs[]`, `displays` |
 | `viewer_joined` | `sid`, `viewer`, `ctl`, `codec` |
-| `viewer_left` | `sid`, `viewer`, `reason` (`bye` \| `timeout` \| `lease_expired` \| `kill`) |
+| `viewer_left` | `sid`, `viewer`, `reason` (`bye` \| `timeout` \| `lease_expired` \| `kill` \| `restart`) |
 | `sas_request` | `sid`, `viewer` |
 | `token_needed` | `sid` — the signaling socket closed under a live session; the service answers with a `token` line and the streamer redials. repeated every 20 s while the room stays unreachable; a session with no live viewer exits `SignalLost` instead |
 | `host_event` | `sid`, `kind`, `viewer` (optional), `reason` (optional) |
@@ -579,6 +585,16 @@ anchor plus monotonic elapsed — never the wall clock. at `expiry + 30 s` grace
 
 when the last viewer is gone the streamer lingers about 60 s and exits 0 with `reason: "idle"`.
 
+**host behaviour on a lost path.** ice going `disconnected` does not end a viewer. the host asks the viewer for
+an ice restart after 2 s, pauses that viewer's media while the path is down, and asks for a keyframe once it
+is back. a viewer still disconnected 60 s after ice reports the path down (str0m does that 15–25 s after the
+last packet) is let go with `reason: "timeout"`, and a dtls or sctp close ends it at once. the page matches
+it: its silence watchdog only judges a live path, and a restart offer's answer is timed only while the page's
+own signalling socket is open. a viewer that is itself offline waits, and a host that stays silent while the
+offer can reach it is given up on 10 s later. the picture comes back with the path; after a long drop the
+data channels can lag it by up to a minute, because sctp backs its retransmit timer off to 60 s, and the
+page's watchdog then starts a new session 8 s after the path is back rather than wait for them.
+
 **`sessionCapSeconds`** is still in the bundle, and the streamer still ends the session for everyone once that
 long has passed since `ready` (exit 0, `reason: "session_cap"`). the api sends a value no session reaches: the
 streamer parses the field strictly, as a required u64 compared `elapsed >= cap`, so it can be neither dropped
@@ -716,7 +732,8 @@ k         = HKDF-SHA256(
   plus `sid` where the type carries one, plus the canonical envelope (`siteId`, `machineId`,
   `timestamp`, `status`, `queuedBy`) and the writer's lifecycle fields. Per type: `sid` is **mandatory**
   for `swoop_session_requested`, **optional** for `swoop_kill` (absent means "kill whatever is
-  running"), and **never present** for `swoop_refresh` (an enablement toggle names no session).
+  running"; a sid that is not the running session is ignored), and **never present** for
+  `swoop_refresh` (an enablement toggle names no session).
 - No bundle, no JWT, no key, no TURN credential, no viewer id, no uid. The reason is not stylistic:
   **every active site member can read that collection** — `firestore.rules:303-306` admits
   `canAccessSite(siteId)`, and `canAccessSite` is any active member (`firestore.rules:162-165`).

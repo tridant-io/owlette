@@ -170,11 +170,13 @@ const feedbackFeature: SwoopFeature = {
         const box = session.contentRect();
         return { widthCss: box.width, heightCss: box.height };
       },
-      // the host stopped answering on a channel that had been working. an
-      // ice restart would not help — the channels are what died, and only a
-      // new peer gets new ones — so this is the transient end the hook
-      // reconnects from, with the retry ladder it already has.
+      // the host stopped answering on a channel that had been working, over a
+      // path that is up. an ice restart would not help — the channels are
+      // what died, and only a new peer gets new ones — so this is the
+      // transient end the hook reconnects from, with the retry ladder it
+      // already has. a path that is down is the peer's to restart instead.
       onSilence: () => session.end('peer_failed'),
+      linkUp: () => session.peer.linkUp(),
     });
     const offFrame = session.onFrame((observation) => feedback.observeFrame(observation));
     const offMessage = session.onChannelMessage('swoop-feedback', (data) =>

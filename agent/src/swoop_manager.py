@@ -12,6 +12,7 @@ machine rather than degrading it. Task 3.1 assigns the instance as
 ``service.swoop_manager``.
 """
 
+import collections
 import json
 import logging
 import os
@@ -60,9 +61,18 @@ BACKOFF_MAX_S = 300
 # for the rest of the window (b4a, 2026-09-25).
 SPAWN_CEILING = 5
 SPAWN_WINDOW_S = 600
+# a sid is one session, and the web sends it twice: the ring, and the polled
+# command 2-5 s behind it. a request for a sid this service already ran that is
+# not the one running is that straggler -- a tab's previous session landing
+# after the ring for its next -- and acting on it would end the one that
+# replaced it. stragglers are seconds old, so the last few sids are enough.
+SERVED_SIDS_MAX = 16
 
 # how long the streamer gets to act on the kill line before the job is closed.
 KILL_GRACE_S = 5
+# the service's own stop (owlette_service._stop_swoop): the one kill the streamer
+# tells viewers to come back from, because an update is not an ending.
+KILL_SERVICE_STOP = 'service_stop'
 # bounded so a consumer that stops draining cannot grow the agent's memory.
 EVENT_QUEUE_MAX = 256
 WORK_QUEUE_MAX = 32
@@ -112,6 +122,12 @@ TOKEN_REFRESH_LEAD_S = 60
 TOKEN_REFRESH_RETRY_S = 20
 
 
+def _wipe(buf):
+    """Zero a bundle buffer in place, when there is one."""
+    if buf is not None:
+        buf[:] = b'\x00' * len(buf)
+
+
 class SwoopManager:
     """Runs and ends the swoop streamer. Every method returns immediately."""
 
@@ -134,7 +150,7 @@ class SwoopManager:
         self._last_status = {}
         self._last_refusal = None
         self._last_exit = None
-        self._end_logged = True
+        self._stop_reason = None
         self._token_timer = None
         self._token_expires_at = 0.0
         self._token_minted_at = 0.0
@@ -142,6 +158,7 @@ class SwoopManager:
         self._backoff_s = 0
         self._retry_after = 0.0
         self._spawn_times = []
+        self._served = collections.deque(maxlen=SERVED_SIDS_MAX)
 
         self._events = queue.Queue(maxsize=EVENT_QUEUE_MAX)
         self._work = queue.Queue(maxsize=WORK_QUEUE_MAX)
@@ -159,9 +176,9 @@ class SwoopManager:
         """Ask for a running streamer for ``sid``. Returns without waiting."""
         self._submit(('ensure', sid))
 
-    def kill(self, reason='kill'):
-        """End the current session. Returns without waiting."""
-        self._submit(('kill', reason))
+    def kill(self, reason='kill', sid=None):
+        """End the current session; given a ``sid``, only if it is that one. Returns without waiting."""
+        self._submit(('kill', (reason, sid)))
 
     def set_enabled(self, enabled):
         """Apply or undo swoop's machine-wide side effects. Returns without waiting."""
@@ -227,7 +244,7 @@ class SwoopManager:
                 if action == 'ensure':
                     self._do_ensure(payload)
                 elif action == 'kill':
-                    self._do_kill(payload)
+                    self._do_kill(*payload)
                 elif action == 'side_effects':
                     self._do_side_effects(payload)
                 elif action == 'token':
@@ -239,22 +256,36 @@ class SwoopManager:
 
     def _do_ensure(self, sid):
         with self._lock:
-            running = self._proc is not None
-            same_sid = running and self._sid == sid
-        if same_sid:
+            live = self._sid if self._proc is not None else None
+            served = sid in self._served
+        if sid == live:
             return
-        if running:
+        if served:
+            logger.info('swoop: session request for %s ignored, that sid was already served', sid)
+            self._log_event('swoop_session_ignored', 'info',
+                            f'sid={sid} reason=served running={live}')
+            return
+
+        bundle = None
+        if live is not None:
+            # the new sid's bundle first: a sid the api no longer serves -- an
+            # ended session, a late ring or command -- must not end the live one.
+            bundle = self._fetch_bundle(sid)
+            if bundle is None:
+                return
             # one streamer per machine: a new sid replaces the old session.
             self._do_kill('session_change')
 
         refusal = self._spawn_gate()
         if refusal:
+            _wipe(bundle)
             self._refuse(refusal)
             return
 
         try:
             exe_path = self._spawn.verify_install()
         except swoop_spawn.SwoopSpawnError as e:
+            _wipe(bundle)
             self._refuse(e.reason, str(e))
             return
 
@@ -263,25 +294,19 @@ class SwoopManager:
             self._sid = sid
             self._spawn_times.append(time.monotonic())
 
-        try:
-            bundle = self._spawn.fetch_bundle(
-                sid, self._site_id(), self._machine_id(), self._auth_manager(),
-            )
-        except swoop_spawn.SwoopSpawnError as e:
-            self._refuse(e.reason, str(e))
-            return
-        except Exception as e:
-            self._refuse(swoop_spawn.REFUSAL_BUNDLE_UNAVAILABLE, str(e))
-            return
+        if bundle is None:
+            bundle = self._fetch_bundle(sid)
+            if bundle is None:
+                return
 
         try:
             proc = self._spawn.spawn(exe_path)
         except swoop_spawn.SwoopSpawnError as e:
-            bundle[:] = b'\x00' * len(bundle)
+            _wipe(bundle)
             self._refuse(e.reason, str(e))
             return
         except Exception as e:
-            bundle[:] = b'\x00' * len(bundle)
+            _wipe(bundle)
             self._refuse(swoop_spawn.REFUSAL_SPAWN_FAILED, str(e))
             return
 
@@ -289,7 +314,7 @@ class SwoopManager:
             proc.write_bundle(bundle)
         except Exception as e:
             # a streamer that never got its bundle must not be left running.
-            bundle[:] = b'\x00' * len(bundle)
+            _wipe(bundle)
             proc.close()
             self._refuse(swoop_spawn.REFUSAL_SPAWN_FAILED, str(e))
             return
@@ -297,11 +322,12 @@ class SwoopManager:
         with self._lock:
             self._proc = proc
             self._state = STATE_RUNNING
+            self._served.append(sid)
             self._viewers = set()
             self._controllers = set()
             self._last_status = {}
             self._last_refusal = None
-            self._end_logged = False
+            self._stop_reason = None
             self._reader = threading.Thread(
                 target=self._reader_loop, args=(proc, sid),
                 name='swoop-reader', daemon=True,
@@ -310,6 +336,18 @@ class SwoopManager:
 
         self._log_event('swoop_session_start', 'info', f'sid={sid} pid={proc.pid}')
         self._schedule_token_refresh(sid, TOKEN_TTL_DEFAULT_S)
+
+    def _fetch_bundle(self, sid):
+        """The sid's bundle, or None once the refusal is logged."""
+        try:
+            return self._spawn.fetch_bundle(
+                sid, self._site_id(), self._machine_id(), self._auth_manager(),
+            )
+        except swoop_spawn.SwoopSpawnError as e:
+            self._refuse(e.reason, str(e))
+        except Exception as e:
+            self._refuse(swoop_spawn.REFUSAL_BUNDLE_UNAVAILABLE, str(e))
+        return None
 
     # host token refresh
 
@@ -327,12 +365,6 @@ class SwoopManager:
             self._token_timer = threading.Timer(wait, self._submit, args=(('token', sid),))
             self._token_timer.daemon = True
             self._token_timer.start()
-
-    def _cancel_token_refresh(self):
-        with self._lock:
-            if self._token_timer is not None:
-                self._token_timer.cancel()
-                self._token_timer = None
 
     def _on_token_needed(self, sid):
         """The streamer lost its signaling socket under a live session and
@@ -408,17 +440,31 @@ class SwoopManager:
 
     # teardown
 
-    def _do_kill(self, reason):
+    def _do_kill(self, reason, sid=None):
         with self._lock:
             proc = self._proc
-            sid = self._sid
+            running = self._sid
             if proc is None:
                 self._state = STATE_IDLE
                 return
-            self._state = STATE_STOPPING
+            # a kill names the session it ends, and one for a session already
+            # gone must not end the one that replaced it.
+            stale = sid is not None and sid != running
+            if not stale:
+                self._state = STATE_STOPPING
+                self._stop_reason = reason
+        if stale:
+            logger.info('swoop: %s ignored, sid %s is running', reason, running)
+            self._log_event('swoop_kill_ignored', 'info', f'sid={sid} running={running}')
+            return
 
+        line = {'type': 'kill'}
+        if sid is not None:
+            line['sid'] = sid
+        if reason == KILL_SERVICE_STOP:
+            line['reason'] = KILL_SERVICE_STOP
         try:
-            proc.write_line({'type': 'kill'})
+            proc.write_line(line)
         except Exception as e:
             logger.debug('swoop: kill line not delivered: %s', e)
 
@@ -431,23 +477,27 @@ class SwoopManager:
         # job with KILL_ON_JOB_CLOSE, so this covers a streamer that ignored the line.
         proc.close()
 
-        self._finish_session(proc, sid, reason, code)
+        self._finish_session(proc, running, reason, code)
 
     def _finish_session(self, proc, sid, reason, code):
-        self._cancel_token_refresh()
         with self._lock:
-            if self._proc is proc:
-                self._proc = None
-                self._state = STATE_IDLE
-                self._viewers = set()
-                self._controllers = set()
-            already_logged = self._end_logged
-            self._end_logged = True
+            # the kill and the reader both end a process and only the first may:
+            # the second finds it gone, or already replaced by the next one.
+            if self._proc is not proc:
+                return
+            # a kill is logged as its own reason, whichever of the two got here first.
+            reason = self._stop_reason or reason
+            self._proc = None
+            self._state = STATE_IDLE
+            self._viewers = set()
+            self._controllers = set()
             self._last_exit = {'reason': reason, 'code': code}
             self._apply_backoff(code)
-        if not already_logged:
-            self._log_event('swoop_session_end', 'info',
-                            f'sid={sid} reason={reason} exit={code}')
+            if self._token_timer is not None:
+                self._token_timer.cancel()
+                self._token_timer = None
+        self._log_event('swoop_session_end', 'info',
+                        f'sid={sid} reason={reason} exit={code}')
 
     def _apply_backoff(self, code):
         """Called under the lock. A clean exit clears the ladder; a crash climbs it."""
@@ -466,9 +516,12 @@ class SwoopManager:
     # stdout reader
 
     def _reader_loop(self, proc, sid):
+        said = None
         try:
             for line in proc.iter_lines():
-                self._handle_line(line)
+                event = self._handle_line(line)
+                if event is not None and event.get('type') == EVENT_EXITING:
+                    said = event.get('reason')
         except Exception as e:
             logger.debug('swoop: stdout reader stopped: %s', e)
 
@@ -481,7 +534,13 @@ class SwoopManager:
         with self._lock:
             unexpected = self._proc is proc
         if unexpected:
-            reason = swoop_spawn.EXIT_REASONS.get(code, 'unknown')
+            # exit 0 is an idle end, a session cap and a kill from the room alike, so
+            # there the streamer's own word is the reason. a failure's word is only
+            # ever "error", and its exit code names it better.
+            if code == swoop_spawn.EXIT_OK and isinstance(said, str) and said:
+                reason = said
+            else:
+                reason = swoop_spawn.EXIT_REASONS.get(code, 'unknown')
             proc.close()
             self._finish_session(proc, sid, reason, code)
 
@@ -530,6 +589,7 @@ class SwoopManager:
                 self._events.put_nowait(event)
             except queue.Empty:
                 pass
+        return event
 
     # host events -> the audit route
 

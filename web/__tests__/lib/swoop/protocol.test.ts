@@ -623,6 +623,24 @@ describe('channel messages', () => {
   });
 });
 
+describe('the pipe', () => {
+  it('a kill names the service’s own stop, and nothing else', () => {
+    const stop = decodePipeControl('{"type":"kill","sid":"sid_1","reason":"service_stop"}');
+    expect(stop.ok && stop.value).toEqual({ type: 'kill', sid: 'sid_1', reason: 'service_stop' });
+    // a reason this build does not know refuses the line rather than reading
+    // as somebody's decision.
+    expect(verdict(decodePipeControl('{"type":"kill","reason":"session_change"}'))).toEqual({
+      expect: 'reject',
+      reason: 'malformed_message',
+    });
+  });
+
+  it('a viewer let go for a restart says so', () => {
+    const left = decodePipeEvent('{"type":"viewer_left","sid":"sid_1","viewer":"viewer_1","reason":"restart"}');
+    expect(left.ok && left.value).toEqual({ type: 'viewer_left', sid: 'sid_1', viewer: 'viewer_1', reason: 'restart' });
+  });
+});
+
 describe('the bundle is refused rather than repaired', () => {
   const valid = readVectorFile('bundle/bundle-valid.json').toString('utf8');
   const expectations = { protocolVersion: 1, agentVersion: REFERENCE_AGENT_VERSION };
