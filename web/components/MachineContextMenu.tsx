@@ -319,19 +319,10 @@ export function MachineContextMenu({
           )}
           {isOnline && (
             <>
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onScreenshot?.();
-                }}
-                className="text-sky-400 focus:bg-sky-950/30 focus:text-sky-300 cursor-pointer"
-              >
-                <Camera className="mr-2 h-4 w-4" />
-                screenshot
-              </DropdownMenuItem>
               {/* Swoop supersedes live view on a machine that can stream; the
                   slideshow stays for every agent that can't, so the menu never
-                  loses its screen entry. */}
+                  loses its screen entry. It leads: the live picture is the
+                  entry people reach for, the still is the fallback. */}
               {swoopCapable ? (
                 <DropdownMenuItem
                   onClick={(e) => {
@@ -357,6 +348,16 @@ export function MachineContextMenu({
                   live view
                 </DropdownMenuItem>
               )}
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onScreenshot?.();
+                }}
+                className="text-sky-400 focus:bg-sky-950/30 focus:text-sky-300 cursor-pointer"
+              >
+                <Camera className="mr-2 h-4 w-4" />
+                screenshot
+              </DropdownMenuItem>
             </>
           )}
           {onViewDisplays && (
