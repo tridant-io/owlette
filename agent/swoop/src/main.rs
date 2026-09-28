@@ -50,8 +50,18 @@ fn main() -> ExitCode {
 /// The `run` verb. Logging is installed only here: `probe` and `version` are
 /// read by the service on paths that must not create directories or touch the
 /// log.
+/// `OWLETTE_SWOOP_LOG=debug` (or `trace`) from the service turns the per-frame
+/// counters on for a diagnosis; anything else, or nothing, is info.
+fn log_level_from_env() -> ::log::LevelFilter {
+    match std::env::var("OWLETTE_SWOOP_LOG").ok().map(|v| v.to_ascii_lowercase()).as_deref() {
+        Some("debug") => ::log::LevelFilter::Debug,
+        Some("trace") => ::log::LevelFilter::Trace,
+        _ => ::log::LevelFilter::Info,
+    }
+}
+
 fn run() -> ExitCode {
-    if let Err(e) = swoop_log::init(::log::LevelFilter::Info) {
+    if let Err(e) = swoop_log::init(log_level_from_env()) {
         eprintln!("owlette-swoop: could not install the logger: {e}");
         return ExitCode::from(exit::INTERNAL);
     }

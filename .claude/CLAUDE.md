@@ -2,7 +2,7 @@
 
 Owlette is a cloud-connected Windows process management and remote deployment system for managing TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python Windows service (agent) + Next.js web dashboard (web) + Firebase/Firestore backend.
 
-**Version**: 3.3.5 | **License**: FSL-1.1-Apache-2.0
+**Version**: 4.0.6 | **License**: FSL-1.1-Apache-2.0
 
 ---
 
@@ -131,7 +131,7 @@ Agents authenticate via a device code flow — no browser login on the target ma
 
 ## Deployment
 
-**Web**: Push to `dev`/`main` triggers Railway auto-deploy. A Vercel project (`theexperiential/owlette`) is configured as a failover origin for owlette.app behind Cloudflare Load Balancing.
+**Web**: Push to `dev`/`main` triggers Railway auto-deploy. A Vercel project (`owlette` in the `tridant-7931a9aa` team; the Experiential scope it lived in until 2026-09-24 is blocked) is configured as a failover origin for owlette.app behind Cloudflare Load Balancing.
 
 **Env vars** (Railway dev/prod + Vercel prod): managed via `scripts/env-manifest.json` (canonical key registry — keys + metadata, never values) and `node scripts/sync-env.mjs` (`status` / `check` / `diff` / `sync <target>`). Full workflow + the `must-match` secret rules + the Vercel read-back caveat: `.claude/skills/env-management.md`.
 
@@ -221,6 +221,8 @@ Reviews are judged on calibration, not volume. Three accurate findings are more 
 
 The `deploy-agent.mjs` hook auto-copies edited `agent/src/*.py` files to `C:\ProgramData\Owlette\agent\src\`. Service files (`owlette_service.py`, `shared_utils.py`, `firebase_client.py`, `connection_manager.py`, `auth_manager.py`) require a restart. **Do this automatically** — don't wait for the user to ask.
 
+The hook copies unelevated, so after each agent install it needs `powershell -File scripts/bootstrap-windows.ps1 -DevGrant` from an elevated prompt (the installer resets `agent\src`), which grants only the developer's own account Modify on `agent\src` and `app` (`-RemoveDevGrant` reverts it). While the grant is in place, the service logs a DevMode warning at every start.
+
 ### Restart sequence (order matters):
 1. **Close the desktop app** (it holds the tray icon): kill the `owlette-desktop.exe` PID from `C:\ProgramData\Owlette\tmp\tray.pid` — by PID, never by image name.
 2. **Restart service**: `powershell -Command "Start-Process cmd -ArgumentList '/c net stop OwletteService && net start OwletteService' -Verb RunAs -Wait"`
@@ -270,4 +272,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-09-15
+**Last Updated**: 2026-09-28

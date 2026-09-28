@@ -22,7 +22,9 @@ import os
 import pwd
 import shlex
 import shutil
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import threading
@@ -31,7 +33,7 @@ import uuid
 from collections import namedtuple
 from collections.abc import Iterator
 
-from . import resolve_data_root
+from . import keep_exit_code, resolve_data_root
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +148,33 @@ CLI_CACHE_DIR = 'cache/claude-cli'
 _Session = namedtuple('_Session', 'name type id uid')
 
 _children = {}
+# The return codes of spawned children that have been reaped, and of watched
+# processes the exit listener heard end, until read.
+_exit_codes = {}
 _children_lock = threading.Lock()
+_exit_recorded = threading.Condition(_children_lock)
+
+# Linux's process-event connector: the kernel's notice of every process exit,
+# status included. A process the daemon adopted after a restart is not its
+# child, so no wait reaches it, and this is the only thing that still reports
+# how it ended. The listener keeps the exits of the watched pids alone.
+_NETLINK_CONNECTOR = 11
+_CN_IDX_PROC = 1
+_CN_VAL_PROC = 1
+_PROC_CN_MCAST_LISTEN = 1
+_PROC_EVENT_EXIT = 0x80000000
+_NLMSG_DONE = 3
+_NLMSG_HEADER = struct.Struct('=IHHII')  # len, type, flags, seq, pid
+_CN_MSG = struct.Struct('=IIIIHH')  # idx, val, seq, ack, len, flags
+_PROC_EVENT = struct.Struct('=IIQ')  # what, cpu, timestamp_ns
+_EXIT_EVENT = struct.Struct('=III')  # pid, tgid, exit_code
+_EXIT_EVENTS_BUFFER = 1 << 20
+_watched_exits = set()
+# None until the first watch starts it; False once it cannot run.
+_exit_listener = None
+# The kernel sends the notice before the pid reads as gone, but the listener
+# may not have run yet when the monitor loop asks.
+_EXIT_EVENT_WAIT_SECONDS = 0.5
 
 # Jobs whose caller gave up waiting, and how long a late runner is still watched
 # for: the result directory belongs to the caller, and an abandoned one has none.
@@ -336,6 +364,39 @@ def launch_managed_process(spec: dict) -> int | None:
         return None
     logger.info(f"Process launched with PID {pid}")
     return pid
+
+
+def watch_exit(pid: int) -> None:
+    """Keep what it takes to read `pid`'s exit code once it ends.
+
+    A child the daemon spawned is waited on anyway. One it adopted after a
+    restart is not its child: on Linux the exit listener hears it end, and on
+    macOS it is re-attached to the launchd job it runs as.
+    """
+    if sys.platform == 'darwin':
+        from . import darwin
+
+        darwin._watch_session_job(pid)
+        return
+    if _start_exit_listener():
+        with _children_lock:
+            _watched_exits.add(pid)
+
+
+def exit_code(pid: int) -> int | None:
+    """How a spawned or watched process ended, read once: its exit code, or
+    the negative signal that ended it."""
+    if sys.platform == 'darwin':
+        from . import darwin
+
+        return darwin._session_job_exit_code(pid)
+    _reap_finished()
+    with _exit_recorded:
+        if pid in _watched_exits:
+            _exit_recorded.wait_for(
+                lambda: pid in _exit_codes, timeout=_EXIT_EVENT_WAIT_SECONDS)
+            _watched_exits.discard(pid)
+        return _exit_codes.pop(pid, None)
 
 
 def desktop_process_name() -> str:
@@ -821,15 +882,96 @@ def _remember(child) -> int:
     """
     _reap_finished()
     with _children_lock:
+        # an unread code under a reused pid belongs to the process that had it.
+        _exit_codes.pop(child.pid, None)
         _children[child.pid] = child
     return child.pid
 
 
 def _reap_finished() -> None:
-    """Wait on the spawned children that have exited, releasing their pids."""
+    """Wait on the spawned children that have exited, releasing their pids and
+    keeping how they ended."""
     with _children_lock:
         for pid in [pid for pid, child in _children.items() if child.poll() is not None]:
-            del _children[pid]
+            keep_exit_code(_exit_codes, pid, _children.pop(pid).returncode)
+
+
+def _start_exit_listener() -> bool:
+    """Start the exit listener once; False when the connector refuses it."""
+    global _exit_listener
+    with _children_lock:
+        if _exit_listener is None:
+            try:
+                sock = _exit_events()
+            except OSError as e:
+                logger.warning(
+                    f"No process exit events ({e}): how a process adopted "
+                    f"after a restart ends cannot be read")
+                _exit_listener = False
+            else:
+                _exit_listener = threading.Thread(
+                    target=_listen_for_exits, args=(sock,),
+                    name='exit-events', daemon=True)
+                _exit_listener.start()
+        return bool(_exit_listener)
+
+
+def _exit_events() -> socket.socket:
+    """A netlink socket subscribed to the kernel's process events."""
+    sock = socket.socket(socket.AF_NETLINK, socket.SOCK_DGRAM, _NETLINK_CONNECTOR)
+    try:
+        # an exit storm past the buffer drops notices, not the listener.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _EXIT_EVENTS_BUFFER)
+        sock.bind((0, _CN_IDX_PROC))
+        listen = struct.pack('=I', _PROC_CN_MCAST_LISTEN)
+        message = _CN_MSG.pack(_CN_IDX_PROC, _CN_VAL_PROC, 0, 0, len(listen), 0) + listen
+        sock.send(_NLMSG_HEADER.pack(
+            _NLMSG_HEADER.size + len(message), _NLMSG_DONE, 0, 0, 0) + message)
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def _listen_for_exits(sock: socket.socket) -> None:
+    """Keep the exit status of every watched pid the kernel reports ending."""
+    global _exit_listener
+    while True:
+        try:
+            data = sock.recv(_EXIT_EVENTS_BUFFER)
+        except OSError as e:
+            if e.errno == errno.ENOBUFS:
+                continue
+            logger.warning(f"Process exit events stopped: {e}")
+            with _children_lock:
+                _exit_listener = False
+                _watched_exits.clear()
+            sock.close()
+            return
+        for pid, code in _exits_in(data):
+            with _exit_recorded:
+                if pid in _watched_exits:
+                    _watched_exits.discard(pid)
+                    keep_exit_code(_exit_codes, pid, code)
+                    _exit_recorded.notify_all()
+
+
+def _exits_in(data: bytes) -> Iterator[tuple[int, int]]:
+    """Each process exit in one read off the connector, as (pid, code) with
+    the code a Popen returncode would carry: negative for a signal."""
+    offset = 0
+    while offset + _NLMSG_HEADER.size <= len(data):
+        length = _NLMSG_HEADER.unpack_from(data, offset)[0]
+        if length < _NLMSG_HEADER.size:
+            return
+        event = offset + _NLMSG_HEADER.size + _CN_MSG.size
+        if event + _PROC_EVENT.size + _EXIT_EVENT.size <= offset + length:
+            what = _PROC_EVENT.unpack_from(data, event)[0]
+            pid, tgid, status = _EXIT_EVENT.unpack_from(data, event + _PROC_EVENT.size)
+            # every thread reports its own exit; the process is its leader's.
+            if what == _PROC_EVENT_EXIT and pid == tgid:
+                yield tgid, -(status & 0x7f) if status & 0x7f else (status >> 8) & 0xff
+        offset += (length + 3) & ~3
 
 
 def _managed_argv(spec: dict) -> list[str]:

@@ -45,9 +45,13 @@ _WATCHDOG_CONFIG_TTL_SECONDS = 60.0
 _COLD_BOOT_WINDOW_SECONDS = 600.0
 _COLD_BOOT_GRACE_SECONDS = 300.0
 
-# Sentinel file: touch to disable the watchdog without restarting the service.
-# Checked every cycle — belt-and-braces for when config sync itself is broken.
-_EMERGENCY_SENTINEL_PATH = shared_utils.get_data_path('tmp/watchdog_disabled')
+# registry off switch. from an elevated prompt, disable the watchdog with
+#   reg add HKLM\SOFTWARE\Owlette /v WatchdogDisabled /t REG_DWORD /d 1 /f /reg:64
+# and clear it with
+#   reg delete HKLM\SOFTWARE\Owlette /v WatchdogDisabled /f /reg:64
+# checked every cycle — belt-and-braces for when config sync itself is broken.
+_EMERGENCY_REG_KEY = r'SOFTWARE\Owlette'
+_EMERGENCY_REG_VALUE = 'WatchdogDisabled'
 _EMERGENCY_ENV_VAR = "OWLETTE_DISABLE_WATCHDOG_RESTART"
 
 # Throttle the budget-exhausted log; otherwise it repeats every 10s forever.
@@ -137,16 +141,25 @@ def _system_uptime_seconds() -> Optional[float]:
         return None
 
 
+def _read_watchdog_disabled_value():
+    """Raw WatchdogDisabled value from the 64-bit registry view; raises when the
+    key or value is absent."""
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _EMERGENCY_REG_KEY, 0,
+                        winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+        value, _regtype = winreg.QueryValueEx(key, _EMERGENCY_REG_VALUE)
+        return value
+
+
 def _emergency_kill_active() -> bool:
-    """Check env var + sentinel file. Cheap; called every watchdog cycle."""
+    """Check env var + registry off switch. Cheap; called every watchdog cycle.
+    An absent, zero or unreadable value leaves the watchdog enabled."""
     if os.environ.get(_EMERGENCY_ENV_VAR) == "1":
         return True
     try:
-        if os.path.exists(_EMERGENCY_SENTINEL_PATH):
-            return True
-    except OSError:
-        pass
-    return False
+        return _read_watchdog_disabled_value() == 1
+    except Exception:
+        return False
 
 
 def _merge_watchdog_config(user_cfg: Optional[dict]) -> dict:
@@ -899,7 +912,7 @@ class ConnectionManager:
             self.logger.error(
                 "[WATCHDOG] Self-restart budget exhausted — running in degraded mode. "
                 f"Detail: {decision.detail}. Normal reconnect retries continue; "
-                "operator may re-enable via config or clear tmp/watchdog_disabled."
+                "operator may re-enable via config or clear the WatchdogDisabled registry value."
             )
             self._budget_exhausted_last_log_mono = now_mono
 

@@ -601,7 +601,7 @@ def _get_agent_health(params, config):
     del params, config  # unused
     from health_probe import HealthProbe
 
-    api_base = shared_utils.read_config(['firebase', 'api_base']) or shared_utils.get_api_base_url()
+    api_base = shared_utils.get_configured_api_base()
     state = HealthProbe(
         config_path=shared_utils.CONFIG_PATH,
         api_base=api_base,

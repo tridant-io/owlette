@@ -139,11 +139,16 @@ describe('pointer batching', () => {
     expect(h.sent()).toEqual([{ t: 'mr', dx: 10, dy: 0, seq: 1, tsUs: TS_US }]);
   });
 
-  it('clamps an absolute move that leaves the video box', () => {
+  it('keeps a drag going past the video box, pinned to its edge', () => {
     const h = harness();
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 0 }));
     h.target.dispatchEvent(pointerEvent('pointermove', { clientX: -40, clientY: 400 }));
     h.tick();
-    expect(h.sent()).toEqual([{ t: 'm', x: 0, y: 1, seq: 1, tsUs: TS_US }]);
+    expect(h.sent()).toEqual([
+      { t: 'b', button: 0, down: true, seq: 1, tsUs: TS_US },
+      { t: 'm', x: 0, y: 1, seq: 2, tsUs: TS_US },
+    ]);
+    expect(h.capture.pointerOutside).toBe(false);
   });
 
   it('flushes the pending move ahead of a key, without waiting for a tick', () => {
@@ -168,6 +173,66 @@ describe('pointer batching', () => {
       { t: 'w', dx: 0, dy: 42, mode: 'pixel', seq: 1, tsUs: TS_US },
       { t: 'w', dx: 0, dy: 1, mode: 'line', seq: 2, tsUs: TS_US },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// off the picture
+// ---------------------------------------------------------------------------
+
+describe('off the picture', () => {
+  it('moves nothing on the host over the letterbox bars, and says the pointer is off the picture', () => {
+    const h = harness();
+    const changes = jest.fn();
+    h.capture.onPointerOutsideChange(changes);
+
+    h.target.dispatchEvent(pointerEvent('pointermove', { clientX: 100, clientY: -20 }));
+    h.tick();
+    expect(h.sent()).toEqual([]);
+    expect(h.capture.pointerOutside).toBe(true);
+
+    h.target.dispatchEvent(pointerEvent('pointermove', { clientX: 100, clientY: 50 }));
+    h.tick();
+    expect(h.sent()).toEqual([{ t: 'm', x: 0.5, y: 0.5, seq: 1, tsUs: TS_US }]);
+    expect(h.capture.pointerOutside).toBe(false);
+    expect(changes).toHaveBeenCalledTimes(2);
+  });
+
+  it('clicks nothing on the host for a press in the bars, and sends no release for it', () => {
+    const h = harness();
+    const down = pointerEvent('pointerdown', { clientX: 250, clientY: 50, button: 0 });
+    h.target.dispatchEvent(down);
+    h.target.dispatchEvent(pointerEvent('pointerup', { clientX: 250, clientY: 50, button: 0 }));
+    expect(h.sent()).toEqual([]);
+    expect(down.defaultPrevented).toBe(false);
+  });
+
+  it('scrolls nothing on the host for a wheel over the bars', () => {
+    const h = harness();
+    h.target.dispatchEvent(new WheelEvent('wheel', { deltaY: 30, clientX: 100, clientY: 150, cancelable: true }));
+    h.tick();
+    expect(h.sent()).toEqual([]);
+  });
+
+  it('counts leaving the stage as off the picture, unless a drag carries the pointer out', () => {
+    const h = harness();
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 0 }));
+    h.target.dispatchEvent(pointerEvent('pointerleave'));
+    expect(h.capture.pointerOutside).toBe(false);
+
+    h.target.dispatchEvent(pointerEvent('pointerup', { button: 0 }));
+    h.target.dispatchEvent(pointerEvent('pointerleave'));
+    expect(h.capture.pointerOutside).toBe(true);
+  });
+
+  it('clicks under pointer lock wherever the local pointer sits: it has no position there', () => {
+    const h = harness();
+    h.target.dispatchEvent(pointerEvent('pointermove', { clientX: 100, clientY: -20 }));
+    setPointerLock(h.target);
+    expect(h.capture.pointerOutside).toBe(false);
+
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 250, clientY: -20, button: 0 }));
+    expect(h.sent()).toEqual([{ t: 'b', button: 0, down: true, seq: 1, tsUs: TS_US }]);
   });
 });
 
@@ -260,6 +325,21 @@ describe('cmd mapping', () => {
     h.target.dispatchEvent(keyEvent('keydown', 'MetaRight'));
 
     expect(h.sent().map((m) => (m.t === 'k' ? m.code : m.t))).toEqual(['MetaLeft', 'MetaRight']);
+  });
+
+  it('presses a chord in order and releases it in reverse, inside the one sequence', () => {
+    const h = harness();
+    h.capture.pressChord(['AltLeft', 'Tab']);
+
+    const keys = h.sent().filter((m) => m.t === 'k');
+    expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual([
+      'AltLeft:down',
+      'Tab:down',
+      'Tab:up',
+      'AltLeft:up',
+    ]);
+    const seqs = keys.map((m) => m.seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
   });
 
   it('releases what is held before the mapping changes under it', () => {

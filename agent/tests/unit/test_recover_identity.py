@@ -266,6 +266,7 @@ def launch_service(tmp_path, monkeypatch, state_file):
     """
     import sys
     import win32process
+    import owlette_service
     from owlette_service import OwletteService
 
     # Everything get_data_path() resolves must land in the sandbox.
@@ -284,6 +285,11 @@ def launch_service(tmp_path, monkeypatch, state_file):
 
     monkeypatch.setattr(win32process, 'CreateProcessAsUser',
                         fake_create_process_as_user)
+    # the faked pid is no real child and the runner owns the file; the
+    # handoff's owner and ancestry gates are pinned in
+    # test_owlette_service_hardening.py.
+    monkeypatch.setattr(owlette_service.acl_hardening, 'is_trusted_owner', lambda *a: True)
+    monkeypatch.setattr(owlette_service, '_pid_descends_from', lambda *a: True)
 
     exe = tmp_path / 'target-app.exe'
     exe.write_bytes(b'')  # must exist; the faked spawn never runs it

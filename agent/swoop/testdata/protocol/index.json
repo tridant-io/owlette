@@ -361,7 +361,23 @@
       "format": "json",
       "expect": "reject",
       "reason": "clipboard_too_large",
-      "description": "totalBytes is checked before the first chunk is buffered: text caps at 256 KiB, image at 2 MiB"
+      "description": "totalBytes is checked before the first chunk is buffered: text caps at 256 KiB"
+    },
+    {
+      "file": "messages/msg-clipboard-image-at-cap.json",
+      "kind": "message-clipboard",
+      "format": "json",
+      "expect": "accept",
+      "reason": "ok",
+      "description": "an image declaring exactly 15 MiB is admitted: the image cap is inclusive"
+    },
+    {
+      "file": "messages/msg-clipboard-image-oversize.json",
+      "kind": "message-clipboard",
+      "format": "json",
+      "expect": "reject",
+      "reason": "clipboard_too_large",
+      "description": "an image one byte over 15 MiB is refused before its first chunk is buffered"
     },
     {
       "file": "messages/msg-control.json",

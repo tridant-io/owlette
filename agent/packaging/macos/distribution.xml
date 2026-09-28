@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  the owlette installer product (tri-platform 5.1): two component packages,
+  the runtime under the data root and the app in /Applications. Apple silicon
+  only and macOS 15 and up (the app's own floor and spike 0.2's box), refused
+  before anything lands otherwise. `__VERSION__` is filled in by build.sh.
+-->
+<installer-gui-script minSpecVersion="2">
+  <title>owlette __VERSION__</title>
+  <options customize="never" require-scripts="true" hostArchitectures="arm64" rootVolumeOnly="true"/>
+  <allowed-os-versions>
+    <os-version min="15.0"/>
+  </allowed-os-versions>
+  <domains enable_localSystem="true"/>
+  <welcome file="welcome.txt" mime-type="text/plain"/>
+  <choices-outline>
+    <line choice="runtime"/>
+    <line choice="app"/>
+  </choices-outline>
+  <choice id="runtime" title="owlette service" visible="false">
+    <pkg-ref id="app.owlette.runtime"/>
+  </choice>
+  <choice id="app" title="owlette app" visible="false">
+    <pkg-ref id="app.owlette.app"/>
+  </choice>
+  <pkg-ref id="app.owlette.runtime" version="__VERSION__" onConclusion="none">owlette-runtime.pkg</pkg-ref>
+  <pkg-ref id="app.owlette.app" version="__VERSION__" onConclusion="none">owlette-app.pkg</pkg-ref>
+</installer-gui-script>

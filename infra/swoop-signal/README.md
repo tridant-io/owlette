@@ -19,7 +19,7 @@ handshake), section 2 (the ten messages and per-role send rights), section 8 (jw
 | `GET /health` | none | fixed body, and it never touches a durable object — the first access to a room name pins that room's home colo for good. carrying `x-swoop-ring-secret` additionally returns the active `kids` and the `algorithm` constant, which is the only way to confirm a rotation landed |
 | `GET /v1/room/{site}/{machine}` | swoop jwt | the websocket upgrade. the room is named from the **token's** `site`+`machine`, and a url that disagrees is `403 room_mismatch` |
 | `POST /v1/ring` | `x-swoop-ring-secret` | body is exactly `{site, machine, sid}`; any other key is `400 unexpected_field` |
-| `POST /v1/kill` | `x-swoop-ring-secret` | body is `{site, machine, sid?}`, and `sid` may be `null` — "kill whatever is running" |
+| `POST /v1/kill` | `x-swoop-ring-secret` | body is `{site, machine, sid?}`. a sid closes that session's host and viewers only; `null` means "kill whatever is running" and closes every socket |
 
 a ring to a machine with no doorbell attached is `409 no_doorbell`, not a silent no-op.
 
@@ -69,15 +69,11 @@ locally they come from `.dev.vars`, which is gitignored. in an environment they 
 
 ### key rotation runbook
 
-**this runbook cannot be executed today.** step 3 has nowhere to put the outgoing key: `PROTOCOL.md` §11
-requires every bundle to carry **both** the current and the previous public key with their `kid`s, and
-`scripts/env-manifest.json` has no `SWOOP_JWT_PUBLIC_KEY_PREVIOUS` / `SWOOP_JWT_KID_PREVIOUS` rows for
-`railway-dev`, `railway-prod` or `vercel-prod` — only the singular `SWOOP_JWT_PUBLIC_KEY` / `SWOOP_JWT_KID`
-(`:112-114`). the worker half of the overlap exists (`SWOOP_JWT_KID_PREV` / `SWOOP_JWT_PUBLIC_KEY_PREV`); the
-api half does not. until those two rows are registered and set on all three targets, a rotation is a flag day
-for every streamer holding a bundle minted under the old key, which is exactly what the two-key design is for.
-**PENDING [human]** — register the rows (class `config`, all three targets, same class as the singular pair
-they mirror), then delete this paragraph.
+both halves of the overlap exist: the worker's `SWOOP_JWT_KID_PREV` / `SWOOP_JWT_PUBLIC_KEY_PREV` (secrets,
+`_PREV`) and the api's `SWOOP_JWT_KID_PREVIOUS` / `SWOOP_JWT_PUBLIC_KEY_PREVIOUS` (`scripts/env-manifest.json`,
+class `config`, all three targets, `_PREVIOUS`). outside a rotation window the api pair is set to the
+**empty string** on every target — not left unset — so `sync-env.mjs check` stays clean; the bundle route
+treats an empty value as "one active key".
 
 order matters: the worker learns the new key **before** the api starts minting with it, or every token 401s.
 
@@ -121,22 +117,26 @@ dev costs nothing and a mistake on prod ends every live session.
 two environments, one worker script each, and no third: `wrangler.toml` declares `env.dev` and `env.prod`, and
 a bare `wrangler deploy` with no `-e` would publish a *fourth*, unenvironmented script — never run one.
 
-| branch | command | script | serves |
+| trigger | command | script | serves |
 |---|---|---|---|
-| `dev` | `wrangler deploy -e dev` | `swoop-signal-dev` | dev.owlette.app's `SWOOP_SIGNAL_URL` |
-| `main` | `wrangler deploy -e prod` | `swoop-signal-prod` | owlette.app's `SWOOP_SIGNAL_URL`, both origins |
+| push to `dev` | `wrangler deploy -e dev` | `swoop-signal-dev` | dev.owlette.app's `SWOOP_SIGNAL_URL` |
+| `gh workflow run swoop-signal-deploy.yml --ref main -f environment=prod` | `wrangler deploy -e prod` | `swoop-signal-prod` | owlette.app's `SWOOP_SIGNAL_URL`, both origins |
 
 [`.github/workflows/swoop-signal-deploy.yml`](../../.github/workflows/swoop-signal-deploy.yml) does it: path
 filters on `infra/swoop-signal/**` and the workflow itself, the vitest suite first on every pull request and
-every push, then the deploy on a push to `dev` or `main`, then `GET /health` against the deployed origin with
-a non-200 failing the job. concurrency is `cancel-in-progress: false` — a cancelled deploy leaves whichever
-version cloudflare last accepted.
+every push, then the deploy on a push to `dev` or on a `workflow_dispatch`, then `GET /health` against the
+deployed origin with a non-200 failing the job. **a push to `main` deploys nothing**: the prod worker is a
+deliberate dispatch with `environment=prod`, and the dispatch input defaults to `dev` so a mis-click lands on
+dev. never run it before the three prod secrets are set — a worker missing `SWOOP_SIGNAL_RING_SECRET`
+answers every ring `500 ring_secret_unconfigured` while `/health` still returns 200, and the smoke step
+deliberately sends no secret. concurrency is `cancel-in-progress: false` — a cancelled deploy leaves
+whichever version cloudflare last accepted.
 
 ### what the workflow needs, and what it must never hold
 
 | kind | name | |
 |---|---|---|
-| repo secret | `CLOUDFLARE_API_TOKEN` | scoped: **workers scripts: edit** + **workers durable objects: edit** (account-level), nothing else. not a global api key |
+| repo secret | `CLOUDFLARE_API_TOKEN` | scoped: **workers scripts: edit** (account-level, which also covers the durable objects the script binds — there is no separate durable-objects permission in the token editor) + **workers routes: edit** on the zone, nothing else. not a global api key |
 | repo secret | `CLOUDFLARE_ACCOUNT_ID` | a secret here purely so it stays out of a public repo's logs; it is an account identifier, not a credential |
 | repo variable | `SWOOP_SIGNAL_DEV_URL` / `SWOOP_SIGNAL_PROD_URL` | the origin `/health` is fetched from: `https://signal-dev.owlette.app` and `https://signal.owlette.app`. a **variable** rather than a literal in the workflow so the hostname is settable without a code change, and so a rename is one dashboard edit rather than a pull request |
 
@@ -149,11 +149,13 @@ therefore cannot lose them — but a *new* environment starts with none, and a w
 ### first-time setup — **PENDING [human]**. copy-paste protocol
 
 none of this can be done from an agent session: it needs the owner's cloudflare account and the repository's
-settings. nothing below has been executed, and **the workflow has never run**.
+settings. the workflow itself has run (on `dev`, most recently 2026-09-19, which created
+`signal-dev.owlette.app`); **the prod steps below have not been executed**, and the prod deploy is a
+deliberate dispatch (see [deploy](#deploy)) that must wait for them.
 
 1. **the api token.** cloudflare dashboard → my profile → api tokens → create token → custom token.
-   permissions: `account` → `workers scripts` → `edit`, `account` → `workers durable objects` → `edit`,
-   **and `zone` → `workers routes` → `edit` on the `owlette.app` zone** — `wrangler.toml` declares a custom
+   permissions: `account` → `workers scripts` → `edit` (durable objects ride on it; the token editor
+   has no durable-objects permission to add), **and `zone` → `workers routes` → `edit` on the `owlette.app` zone** — `wrangler.toml` declares a custom
    domain per environment, and without the zone permission the deploy fails at the route, after the script
    has already uploaded. account resources: this account only; zone resources: `owlette.app` only.
 2. **the repository secrets.** github → settings → secrets and variables → actions → new repository secret,
@@ -198,8 +200,8 @@ a deploy is a version; rolling back publishes an earlier one. it does **not** to
 
 ```
 cd infra/swoop-signal
-npx wrangler deployments list -e dev      # newest first; copy the version id to go back to
-npx wrangler rollback <version-id> -e dev # prompts for a reason, then publishes it
+npx wrangler deployments list -e dev      # oldest first: the current deployment is the LAST entry
+npx wrangler rollback <version-id> -e dev -y --message "<why>"   # -y and --message keep it non-interactive
 curl -sS -o /dev/null -w '%{http_code}\n' https://<dev origin>/health
 ```
 
@@ -207,14 +209,21 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://<dev origin>/health
 check — a human decides between rolling back and rolling forward, because a red `/health` is as often a
 missing secret or a missing route as it is bad code.
 
-**PENDING [human]** — these steps have never been executed on dev. task 3.4's done-when requires one rehearsal
-(roll back to the previous version, `/health` 200, roll forward again); note the date, the two version ids and
-the result here when it is done.
+**rehearsed 2026-09-23 on dev** with the token in `.claude/.env.local` (workers scripts edit is enough): rolled
+back from `34fcfe4b` (the 2026-09-23 08:22 deploy) to `cf2cab25` (2026-09-22 21:58), `/health` 200 within
+5 s; rolled forward to `34fcfe4b`, `/health` 200 again; `deployments list` shows `34fcfe4b` at 100%. both were
+workflow deploys of the same worker code, so nothing user-visible moved. a `versions list` on this worker
+starts with four 2026-09-18 entries whose source is "Secret Change": those carry no code and are not rollback
+targets.
 
 ## limits
 
 all in `src/messages.ts`, each with its number: 4 KiB token, 64 KiB frame, 4 viewers per room, 10 rings per
-60 s per machine. `jti` is single use, enforced in the room because it is the only verifier here with durable
+60 s per machine. a viewer that has not sent a frame or had a keepalive `ping` answered for 90 s is stale:
+when the room is full it is evicted (`bye` to the host, close `stale`) rather than counted, because a
+browser that vanished without a close keeps its socket in the hibernation set for a long time and four of
+those refused every live viewer as `room_full` (dev, 2026-09-24). the test worker sets
+`SWOOP_VIEWER_STALE_MS` to 1500 for that test. `jti` is single use, enforced in the room because it is the only verifier here with durable
 state.
 
 ### the two budgets a socket spends

@@ -284,11 +284,12 @@ pub mod channel {
 
     use super::Refusal;
 
-    /// Text caps at 256 KiB, an image at 2 MiB, one chunk at 16 KiB. Checked
-    /// before the first chunk is buffered — a receiver that waits until
-    /// reassembly to notice the size has already paid for it.
+    /// Text caps at 256 KiB, an image at 15 MiB — a compressed 4K screenshot
+    /// with room to spare — and one chunk at 16 KiB. Checked before the first
+    /// chunk is buffered — a receiver that waits until reassembly to notice the
+    /// size has already paid for it.
     pub const CLIPBOARD_TEXT_MAX_BYTES: u64 = 256 * 1024;
-    pub const CLIPBOARD_IMAGE_MAX_BYTES: u64 = 2 * 1024 * 1024;
+    pub const CLIPBOARD_IMAGE_MAX_BYTES: u64 = 15 * 1024 * 1024;
     pub const CLIPBOARD_CHUNK_MAX_BYTES: u64 = 16 * 1024;
 
     /// The five data channels. The host refuses any other label and never
@@ -353,6 +354,11 @@ pub mod channel {
             w: Option<u16>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
             h: Option<u16>,
+            /// Machine pixels per png pixel, sent only when above 1: the host
+            /// shrinks a shape past the css ceiling for the wire and the
+            /// viewer draws it back at `w * scale`.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            scale: Option<u16>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
             png: Option<String>,
         },
@@ -582,10 +588,10 @@ mod tests {
             Err(Refusal::ClipboardTooLarge)
         );
         assert_eq!(
-            clip(ClipFormat::Png, 200, 3 * 1024 * 1024).admit(),
+            clip(ClipFormat::Png, 961, 15 * 1024 * 1024 + 1).admit(),
             Err(Refusal::ClipboardTooLarge)
         );
-        assert_eq!(clip(ClipFormat::Png, 128, 2 * 1024 * 1024).admit(), Ok(()));
+        assert_eq!(clip(ClipFormat::Png, 960, 15 * 1024 * 1024).admit(), Ok(()));
         // 11 bytes of text in one chunk, the ordinary case.
         assert_eq!(clip(ClipFormat::Text, 1, 11).admit(), Ok(()));
         // a transfer that cannot fit in the chunks it declares is refused too.

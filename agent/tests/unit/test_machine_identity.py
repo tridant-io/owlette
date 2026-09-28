@@ -94,6 +94,34 @@ def test_the_identity_is_seeded_from_the_hostname(data_root, monkeypatch):
     assert (data_root / 'config' / 'machine_id').read_text(encoding='utf-8') == 'KIOSK-01'
 
 
+def test_a_mac_identity_is_seeded_without_the_local_suffix(data_root, monkeypatch):
+    """macOS reports `Name.local`; the api's machine id rule (letters, digits,
+    `_`, `-`) refuses the dot, so a Mac seeded with it pairs but never swoops."""
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'darwin')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'TEC-MBA.local')
+
+    assert shared_utils.get_machine_id() == 'TEC-MBA'
+    assert (data_root / 'config' / 'machine_id').read_text(encoding='utf-8') == 'TEC-MBA'
+
+
+def test_the_local_suffix_is_kept_off_macos(data_root, monkeypatch):
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'linux')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'kiosk.local')
+
+    assert shared_utils.get_machine_id() == 'kiosk.local'
+
+
+def test_a_mac_already_registered_with_the_suffix_keeps_its_identity(data_root, monkeypatch):
+    """The token claims the persisted id: rewriting it would lock the machine out.
+    A Mac paired as `Name.local` moves only by re-pairing."""
+    (data_root / 'config').mkdir()
+    (data_root / 'config' / 'machine_id').write_text('TEC-MBA.local', encoding='utf-8')
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'darwin')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'TEC-MBA.local')
+
+    assert shared_utils.get_machine_id() == 'TEC-MBA.local'
+
+
 def test_an_existing_identity_is_read_rather_than_reseeded(data_root, monkeypatch):
     """The upgrade path: a machine already registered keeps the document it has."""
     (data_root / 'config').mkdir()
@@ -250,12 +278,14 @@ def test_a_short_write_is_finished_rather_than_reported_as_a_rewrite(
     assert secure_storage.SecureStorage(data_root).get_site_id() == 'site-1'
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='the Windows writer replaces the store '
+                    'atomically; a failed rewrite leaves it whole under the previous key')
 def test_a_rewrite_that_fails_mid_write_says_what_is_on_disk(
         data_root, machine_binding, monkeypatch, caplog):
-    """`_write_token_file` truncates at the open, so a write that fails after it
-    leaves the store short — not "left under the previous key", which reads as
-    no action needed. A restart before the next save then comes up
-    unauthenticated with nothing in the log that pointed at the copy."""
+    """Off Windows `_write_token_file` truncates at the open, so a write that
+    fails after it leaves the store short — not "left under the previous key",
+    which reads as no action needed. A restart before the next save then comes
+    up unauthenticated with nothing in the log that pointed at the copy."""
     token_file = data_root / secure_storage.TOKEN_FILE_NAME
     original = _pre_migration_blob({'refresh_token': 'refresh-abc', 'site_id': 'site-1'})
     token_file.write_bytes(original)
@@ -419,8 +449,8 @@ def test_a_store_that_cannot_be_retained_stays_on_the_previous_key(
 
 def test_a_half_written_retained_copy_is_not_mistaken_for_one(
         data_root, machine_binding, monkeypatch):
-    """`_write_token_file` truncates before it writes, so a write that dies
-    part way leaves a file behind. A store under the new key with only that
+    """Off Windows `_write_token_file` truncates before it writes, so a write
+    that dies part way leaves a file behind. A store under the new key with only that
     beside it is a machine the hotfix rollback has nothing to rename, so the
     unusable copy is dropped and the store stays on the previous key."""
     token_file = data_root / secure_storage.TOKEN_FILE_NAME

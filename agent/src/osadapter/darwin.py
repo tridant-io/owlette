@@ -31,17 +31,19 @@ import uuid
 
 import psutil
 
-from . import posix
+from . import keep_exit_code, posix
 from .posix import (
     console_user,
     data_root,
     desktop_process_name,
+    exit_code,
     json_lock,
     launch_managed_process,
     notify,
     run_job,
     session_env,
     spawn_as_user,
+    watch_exit,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,8 +74,17 @@ _STATE_POLL_SECONDS = 0.5
 SESSION_JOB_PREFIX = 'app.owlette.session.'
 # One line of `launchctl print gui/<uid>`'s services block naming a session job
 # of ours: its pid (0 once exited), its last exit status, and its label.
-_SESSION_JOB_LINE = re.compile(
-    rf'^\s*(\d+)\s+\S+\s+({re.escape(SESSION_JOB_PREFIX)}[0-9a-f]{{32}})\s*$')
+_SESSION_LABEL = rf'{re.escape(SESSION_JOB_PREFIX)}[0-9a-f]{{32}}'
+_SESSION_JOB_LINE = re.compile(rf'^\s*(\d+)\s+(\S+)\s+({_SESSION_LABEL})\s*$')
+# The domain and label of each session job by its pid (None for a watched
+# process that is no job of ours), until its exit status is read off the
+# services block; and those statuses, until the monitor loop asks. A sweep
+# reads them too, so a job booted out before anybody asked keeps it.
+_session_jobs = {}
+_session_exits = {}
+_session_jobs_lock = threading.Lock()
+# The monitor loop reads an exit inline, so launchd gets less than a spawn does.
+_EXIT_STATUS_TIMEOUT_SECONDS = 5
 # launchd's spawn trampoline, which a job's pid is until it execs the program.
 XPCPROXY = '/usr/libexec/xpcproxy'
 _EXEC_SETTLE_SECONDS = 5
@@ -381,6 +392,9 @@ def _spawn_job(argv, uid, env, cwd, deadline) -> int:
     except OSError:
         _run(['launchctl', 'bootout', service], _remaining(deadline, floor=1))
         raise
+    with _session_jobs_lock:
+        _session_exits.pop(pid, None)
+        _session_jobs[pid] = (domain, label)
     return pid
 
 
@@ -396,13 +410,70 @@ def _sweep_session_jobs(domain: str, deadline: float) -> None:
     printed = _run(['launchctl', 'print', domain], _remaining(deadline))
     if printed is None or printed.returncode != 0:
         return
+    _keep_session_exits(printed.stdout)
     for line in printed.stdout.splitlines():
         job = _SESSION_JOB_LINE.match(line)
         if job is None or job.group(1) != '0':
             continue
         if time.monotonic() >= deadline:
             return
-        _run(['launchctl', 'bootout', f'{domain}/{job.group(2)}'], _remaining(deadline))
+        _run(['launchctl', 'bootout', f'{domain}/{job.group(3)}'], _remaining(deadline))
+
+
+def _watch_session_job(pid: int) -> None:
+    """posix.watch_exit's macOS half: re-attach a process the daemon adopted
+    after a restart to the session job it runs as, which launchd names in its
+    environment, so the job's exit status can still be read. Anything else is
+    kept as no job of ours, so it is looked up once."""
+    with _session_jobs_lock:
+        if pid in _session_jobs:
+            return
+    try:
+        process = psutil.Process(pid)
+        label = process.environ().get('XPC_SERVICE_NAME', '')
+        job = (f'gui/{process.uids().real}', label) \
+            if re.fullmatch(_SESSION_LABEL, label) else None
+    except psutil.Error:
+        return
+    with _session_jobs_lock:
+        _session_jobs.setdefault(pid, job)
+
+
+def _session_job_exit_code(pid: int) -> int | None:
+    """posix.exit_code's macOS half: launchd's last exit status for the
+    session job `pid` runs as, read once."""
+    with _session_jobs_lock:
+        job = _session_jobs.get(pid)
+    if job is not None:
+        printed = _run(['launchctl', 'print', job[0]], _EXIT_STATUS_TIMEOUT_SECONDS)
+        if printed is not None and printed.returncode == 0:
+            _keep_session_exits(printed.stdout)
+    with _session_jobs_lock:
+        if not psutil.pid_exists(pid):
+            # gone without launchd showing it exit: its login ended and took
+            # the domain with it, or it was booted out. It never will now.
+            _session_jobs.pop(pid, None)
+        return _session_exits.pop(pid, None)
+
+
+def _keep_session_exits(services: str) -> None:
+    """Keep the exit status of every tracked session job the services block
+    shows as exited. A status that is not a number ('-' before a first exit,
+    '(pe)' for a job launchd could not start) keeps nothing: unknown."""
+    for line in services.splitlines():
+        job = _SESSION_JOB_LINE.match(line)
+        if job is None or job.group(1) != '0':
+            continue
+        with _session_jobs_lock:
+            pid = next(
+                (pid for pid, tracked in _session_jobs.items()
+                 if tracked and tracked[1] == job.group(3)),
+                None)
+            if pid is None:
+                continue
+            del _session_jobs[pid]
+            if re.fullmatch(r'-?\d+', job.group(2)):
+                keep_exit_code(_session_exits, pid, int(job.group(2)))
 
 
 def _await_exec(pid: int, uid: int, deadline: float) -> None:

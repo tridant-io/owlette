@@ -3,8 +3,14 @@
 import pytest
 from unittest.mock import MagicMock, patch, call
 import logging
+import os
+import sys
+import time
 
 try:
+    import winreg
+    import connection_manager
+    import watchdog_state
     from connection_manager import ConnectionManager, ConnectionState
 except ImportError:
     pytest.skip("connection_manager not importable", allow_module_level=True)
@@ -171,3 +177,67 @@ class TestShutdown:
         assert cm._current_backoff == cm.BACKOFF_BASE
         assert cm._circuit_open is False
         assert cm.state == ConnectionState.DISCONNECTED
+
+
+class TestWatchdogOffSwitch:
+    """The WatchdogDisabled registry value (1) stops the self-restart watchdog;
+    the old tmp/watchdog_disabled file does nothing."""
+
+    @pytest.fixture
+    def firing_cm(self, logger, monkeypatch, tmp_path):
+        """A manager whose next watchdog check fires the restart callback."""
+        monkeypatch.delenv(connection_manager._EMERGENCY_ENV_VAR, raising=False)
+        monkeypatch.setattr(watchdog_state, 'BUDGET_PATH', str(tmp_path / 'budget.json'))
+        monkeypatch.setattr(watchdog_state, 'HISTORY_PATH', str(tmp_path / 'history.json'))
+        reboot_state = MagicMock()
+        reboot_state.read_state.return_value = {'attempt': None}
+        monkeypatch.setitem(sys.modules, 'reboot_state', reboot_state)
+        manager = ConnectionManager(logger)
+        config = connection_manager._merge_watchdog_config(
+            {'thresholds': {'failure_seconds': 1, 'boot_grace_seconds': 0}}
+        )
+        monkeypatch.setattr(manager, '_read_watchdog_config', lambda: config)
+        monkeypatch.setattr(manager, '_check_internet', lambda: True)
+        manager._process_start_time_mono = time.monotonic() - 5.0
+        manager.set_restart_callback(MagicMock())
+        return manager
+
+    def test_value_one_disables_watchdog(self, firing_cm, monkeypatch):
+        monkeypatch.setattr(connection_manager, '_read_watchdog_disabled_value', lambda: 1)
+        firing_cm._check_self_restart()
+        firing_cm._restart_callback.assert_not_called()
+
+    @pytest.mark.parametrize('read', [
+        MagicMock(side_effect=FileNotFoundError),
+        MagicMock(return_value=0),
+        MagicMock(side_effect=PermissionError),
+    ], ids=['absent', 'zero', 'read-error'])
+    def test_watchdog_stays_enabled(self, firing_cm, monkeypatch, read):
+        monkeypatch.setattr(connection_manager, '_read_watchdog_disabled_value', read)
+        firing_cm._check_self_restart()
+        firing_cm._restart_callback.assert_called_once()
+
+    def test_old_sentinel_file_does_nothing(self, firing_cm, monkeypatch):
+        monkeypatch.setattr(connection_manager, '_read_watchdog_disabled_value',
+                            MagicMock(side_effect=FileNotFoundError))
+        exists = os.path.exists
+        monkeypatch.setattr(
+            os.path, 'exists',
+            lambda path: str(path).endswith('watchdog_disabled') or exists(path),
+        )
+        firing_cm._check_self_restart()
+        firing_cm._restart_callback.assert_called_once()
+
+    def test_reads_hklm_owlette_through_64_bit_view(self, monkeypatch):
+        open_key = MagicMock()
+        query_value = MagicMock(return_value=(1, winreg.REG_DWORD))
+        monkeypatch.setattr(winreg, 'OpenKey', open_key)
+        monkeypatch.setattr(winreg, 'QueryValueEx', query_value)
+        assert connection_manager._read_watchdog_disabled_value() == 1
+        open_key.assert_called_once_with(
+            winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Owlette', 0,
+            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+        )
+        query_value.assert_called_once_with(
+            open_key.return_value.__enter__.return_value, 'WatchdogDisabled',
+        )

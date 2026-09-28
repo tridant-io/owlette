@@ -17,11 +17,7 @@ import { apiError } from '@/lib/apiErrorResponse';
 import { problemValidation } from '@/lib/apiErrors';
 import logger from '@/lib/logger';
 import { sessionKeyForBundle } from '@/lib/swoop/keys.server';
-import {
-  SWOOP_LEASE_SECONDS,
-  SWOOP_SESSION_CAP_SECONDS,
-  loadSwoopSettings,
-} from '@/lib/swoop/policy.server';
+import { SWOOP_LEASE_SECONDS, loadSwoopSettings } from '@/lib/swoop/policy.server';
 import { SWOOP_PROTOCOL_VERSION } from '@/lib/swoop/protocol';
 import { getSwoopSession } from '@/lib/swoop/sessionStore.server';
 import { mintHostToken, swoopJwtPublicKeys, type SwoopJwtKeyEntry } from '@/lib/swoop/tokens.server';
@@ -36,6 +32,14 @@ import { NO_STORE, SWOOP_ID_PATTERN, requireSwoopAgent, swoopRoomUrl } from '../
  * operator asks for a different number.
  */
 const SWOOP_MAX_VIEWERS = 4;
+
+/**
+ * a hundred years, which no session reaches: a session lives as long as its tab
+ * keeps the lease. the field cannot go instead — every fielded streamer parses
+ * `enablement` strictly, as a required u64, and ends the session at
+ * `elapsed >= cap`, so it can be neither dropped nor zero.
+ */
+const STREAMER_SESSION_CAP_SECONDS = 100 * 365 * 24 * 60 * 60;
 
 /** DER wrapper so a raw 32-byte ed25519 key becomes a KeyObject without PEM. */
 const SPKI_ED25519_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
@@ -63,8 +67,10 @@ function rawPublicKey(value: string): string | null {
  * Current key plus the previous one — PROTOCOL.md §11 rotates with a two-key
  * overlap, so a token signed before the flip still verifies. `swoopJwtPublicKeys()`
  * returns the current pair only; the previous slot is read from the environment
- * here because `scripts/env-manifest.json` has no row for it yet, and its
- * absence simply means one active key.
+ * here (`SWOOP_JWT_KID_PREVIOUS` / `SWOOP_JWT_PUBLIC_KEY_PREVIOUS`, registered in
+ * `scripts/env-manifest.json` as config on every target and set to the empty
+ * string outside a rotation window), and an empty value simply means one
+ * active key.
  */
 function bundleJwtKeys(): SwoopJwtKeyEntry[] {
   const keys = swoopJwtPublicKeys();
@@ -203,7 +209,7 @@ export const POST = withRateLimit(
             membersMayWatch: settings.membersMayWatch,
             maxViewers: SWOOP_MAX_VIEWERS,
             leaseSeconds: SWOOP_LEASE_SECONDS,
-            sessionCapSeconds: SWOOP_SESSION_CAP_SECONDS,
+            sessionCapSeconds: STREAMER_SESSION_CAP_SECONDS,
           },
           indicator: settings.indicator,
           // The session floor, not a grant: a viewer's own `ctl` comes from its

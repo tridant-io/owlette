@@ -11,8 +11,7 @@
  * neither one failing withholds a session the caller is entitled to.
  */
 
-import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
   problem,
@@ -41,15 +40,21 @@ import {
   hasEnrolledFactor,
   hasOpenStepUpWindow,
   openStepUpWindow,
+  stepUpRevokedAt,
   SWOOP_LEASE_SECONDS,
-  SWOOP_SESSION_CAP_SECONDS,
   type SwoopIntent,
 } from '@/lib/swoop/policy.server';
 import { viewerKeyForResponse } from '@/lib/swoop/keys.server';
 import { mintViewerToken, canonicalizeFingerprint } from '@/lib/swoop/tokens.server';
 import { mintTurnCredentials, type SwoopIceServer } from '@/lib/swoop/turn.server';
 import { ringDoorbell } from '@/lib/swoop/signal.server';
-import { createSwoopSession, upsertSwoopViewer } from '@/lib/swoop/sessionStore.server';
+import { continuityInherits, mintContinuity, parseContinuity } from '@/lib/swoop/continuity.server';
+import {
+  createSwoopSession,
+  getSwoopSession,
+  markSwoopContinuityUsed,
+  upsertSwoopViewer,
+} from '@/lib/swoop/sessionStore.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
 import { recordSwoopDenied, recordSwoopSessionStarted } from '@/lib/swoop/audit.server';
 import {
@@ -67,6 +72,8 @@ interface SessionBody {
   fp?: unknown;
   clientCaps?: unknown;
   mfaProof?: unknown;
+  /** the continuity token of this tab's previous control session, in place of a proof. */
+  continuity?: unknown;
 }
 
 /** P2P first (plan.md D13); relays are added only when a mint succeeds. */
@@ -82,10 +89,10 @@ type StepUpResult =
   | { ok: false; response: NextResponse; reason: string };
 
 /**
- * Run a live second-factor ceremony, open the 10-minute window for this
+ * Run a live second-factor ceremony, open the 12-hour window for this
  * (user, machine) pair, and record on the login session that it has now itself
  * proved a second factor — which is what lets this operator's reloads reuse the
- * window for the rest of those 10 minutes.
+ * window for the rest of those 12 hours.
  *
  * A timestamp can never stand in for any of it: a session born from the 30-day
  * device-trust cookie carries `mfaCompletedAt = now` with no ceremony behind it
@@ -229,6 +236,39 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
         : false;
 
     let decision = evaluateSwoopAccess({ ...gate, stepUpOpen });
+    // A tab that held control keeps it for its own life: the continuity token
+    // of its last control session stands in for the ceremony, once, for the
+    // same user on the same machine, unless that session was killed, closed
+    // or revoked, or a kill on the machine came after it started. A last
+    // factor removed since still closes the door.
+    let inheritedFrom: string | null = null;
+    if (
+      !decision.ok &&
+      decision.code === 'step_up_required' &&
+      body.continuity !== undefined &&
+      (await hasEnrolledFactor(userId))
+    ) {
+      const presented = parseContinuity(body.continuity);
+      const verdict = presented
+        ? continuityInherits({
+            record: await getSwoopSession(siteId, machineId, presented.sid),
+            userId,
+            hash: presented.hash,
+            revokedAt: await stepUpRevokedAt(siteId, machineId),
+          })
+        : null;
+      if (presented && verdict?.ok) {
+        inheritedFrom = presented.sid;
+        decision = evaluateSwoopAccess({ ...gate, stepUpOpen: true });
+      } else {
+        recordSwoopDenied({
+          ...auditBase,
+          event: 'step_up_failed',
+          denyReason: verdict && !verdict.ok ? `continuity_${verdict.reason}` : 'continuity_malformed',
+          ctl: true,
+        });
+      }
+    }
     // The one refusal the caller can answer inside this same request: a live
     // ceremony opens the window and the decision is taken again.
     if (!decision.ok && decision.code === 'step_up_required' && body.mfaProof !== undefined) {
@@ -305,13 +345,26 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       });
     }
 
+    // Only a control session carries continuity: a watch session has no
+    // ceremony to carry, and a token for it would inherit nothing.
+    const continuity = decision.ctl ? mintContinuity(sid) : null;
+    if (inheritedFrom) {
+      // spent here and no earlier: a machine that read offline or an audit that
+      // could not be written refused the request, and the page retries it with
+      // the same token.
+      await markSwoopContinuityUsed(siteId, machineId, inheritedFrom, Date.now());
+      logger.info('[swoop/sessions] step-up inherited from the tab\'s previous session', {
+        context: 'swoop/sessions',
+        data: { siteId, machineId, sid, from: inheritedFrom },
+      });
+    }
     await createSwoopSession({
       siteId,
       machineId,
       sid,
       createdBy: `user:${userId}`,
       startedAt,
-      absoluteExpiresAt: startedAt + SWOOP_SESSION_CAP_SECONDS * 1000,
+      ...(continuity ? { continuityHash: continuity.hash } : {}),
     });
     await upsertSwoopViewer({
       siteId,
@@ -386,6 +439,7 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
             // token is spent once at connect, the lease is what keeps the
             // session alive (PROTOCOL.md §10).
             expiresAt: leaseExpiresAt,
+            ...(continuity ? { continuity: continuity.token } : {}),
           },
         },
         { status: 201 },
@@ -433,16 +487,33 @@ export async function POST(
   request: NextRequest,
   routeContext: { params: Promise<SwoopRouteParams> },
 ): Promise<NextResponse> {
-  // Peek on a CLONE so the chosen handler still gets an unconsumed body.
-  // Anything that is not an explicit `control: true` takes the watch bar, and
-  // the core handler re-derives the intent from the body it parses itself.
-  let control = false;
+  // One read of the body. Peeking on a clone and letting the handler read the
+  // original again is two reads of one streamed body, which failed now and
+  // then in production ("could not read request body", 2026-09-23). The bytes
+  // are read here once and handed on in a fresh request; anything that is not
+  // an explicit `control: true` takes the watch bar, and the core handler
+  // re-derives the intent from the body it parses itself.
+  let raw: string | null = null;
   try {
-    const peek = (await request.clone().json()) as { control?: unknown };
-    control = peek?.control === true;
+    raw = await request.text();
   } catch {
-    // An unparseable body is a watch request as far as the bar goes; the core
-    // handler emits the validation error.
+    // Unreadable here is unreadable there: let the handler report it.
   }
-  return (control ? controlHandler : viewHandler)(request, routeContext);
+  let control = false;
+  if (raw !== null) {
+    try {
+      control = (JSON.parse(raw) as { control?: unknown })?.control === true;
+    } catch {
+      // An unparseable body is a watch request as far as the bar goes; the
+      // core handler emits the validation error.
+    }
+  }
+  const handler = control ? controlHandler : viewHandler;
+  if (raw === null) return handler(request, routeContext);
+  const replay = new NextRequest(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: raw,
+  });
+  return handler(replay, routeContext);
 }

@@ -4,18 +4,24 @@ import { useState, useEffect } from 'react';
 import { doc, onSnapshot, Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { handleError } from '@/lib/errorHandler';
+import { normalizeInstallerFiles, type InstallerFiles } from '@/lib/installerPlatform';
 
 export interface InstallerVersionInfo {
   version: string;
-  downloadUrl: string;
+  files: InstallerFiles;
   fileSize: number;
   releaseDate: Timestamp;
   releaseNotes?: string;
 }
 
+// one shared empty map so a consumer's deps do not change on every render
+const NO_FILES: InstallerFiles = {};
+
 /**
  * Latest installer version, live via onSnapshot. Backs the dashboard header's
- * download button; readable by any authenticated user.
+ * download button; readable by any authenticated user. `files` holds every
+ * platform's installer; `downloadUrl` stays the windows one for callers that
+ * only want that.
  */
 export function useInstallerVersion() {
   const [versionInfo, setVersionInfo] = useState<InstallerVersionInfo | null>(null);
@@ -37,7 +43,7 @@ export function useInstallerVersion() {
           const data = doc.data();
           setVersionInfo({
             version: data.version,
-            downloadUrl: data.download_url,
+            files: normalizeInstallerFiles(data),
             fileSize: data.file_size,
             releaseDate: data.release_date,
             releaseNotes: data.release_notes,
@@ -59,9 +65,12 @@ export function useInstallerVersion() {
     return () => unsubscribe();
   }, []);
 
+  const files = versionInfo?.files ?? NO_FILES;
+
   return {
     version: versionInfo?.version,
-    downloadUrl: versionInfo?.downloadUrl,
+    files,
+    downloadUrl: files.windows_x64?.download_url ?? null,
     fileSize: versionInfo?.fileSize,
     releaseDate: versionInfo?.releaseDate,
     releaseNotes: versionInfo?.releaseNotes,

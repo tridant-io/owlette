@@ -366,6 +366,10 @@ def update_service(tmp_path, monkeypatch):
     (tmp_path / 'Owlette' / 'logs').mkdir(parents=True)
     monkeypatch.setattr(
         shared_utils, 'get_os_family_arch', lambda: ('linux', 'x64'))
+    # the marker's owner check is windows' and this double is the posix lane
+    # on a windows box; its own coverage is test_owlette_service_hardening.py.
+    import acl_hardening
+    monkeypatch.setattr(acl_hardening, 'is_trusted_owner', lambda *a, **k: True)
 
     svc = SimpleNamespace(
         firebase_client=_FakeFirebase(),
@@ -465,7 +469,7 @@ def test_the_artifact_is_staged_where_only_root_can_write(update_service):
     """
     from osadapter import posix
 
-    staging = update_service._update_staging_dir()
+    staging = update_service._update_staging_dir('linux')
 
     assert stat.S_IMODE(os.stat(staging).st_mode) == 0o700
     parent = os.path.relpath(

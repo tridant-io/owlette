@@ -14,6 +14,7 @@ import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { resolveMemoryTotalGb } from '@/lib/machineMemory';
 import { toast } from '@/lib/toast';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
@@ -206,12 +207,8 @@ function MachineCard({
   const showGpuDropdown = shouldShowDeviceDropdown(machine.devices?.gpus);
   const showNicDropdown = shouldShowDeviceDropdown(machine.devices?.nics);
 
-  // v2 agents no longer send total_gb; recover it from usedGb / (percent/100).
   const memory = machine.metrics?.memory;
-  const memoryTotalGb =
-    memory && memory.usedGb != null && memory.percent != null && memory.percent > 0
-      ? memory.usedGb / (memory.percent / 100)
-      : null;
+  const memoryTotalGb = resolveMemoryTotalGb(memory);
 
   // Inline so they close over machine + resolved device state.
   const renderDeviceSelect = (
@@ -460,8 +457,10 @@ function MachineCard({
                   <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                   {/* fixed five cells, absent metrics included: the same metric
                       lands at the same x on every card, so the dashboard reads
-                      as columns rather than five different ragged rows */}
-                  <div className="grid grid-cols-5 gap-x-2 flex-1 min-w-0 text-sm text-muted-foreground/70">
+                      as columns rather than five different ragged rows.
+                      text-left: this is a button's content, and a button centres
+                      its text, which floated each label to the middle of its cell */}
+                  <div className="grid grid-cols-5 gap-x-2 flex-1 min-w-0 text-left text-sm text-muted-foreground/70">
                     <span className="min-w-0 truncate tabular-nums">
                       {cpuDevice && cpuDevice.percent != null && (
                         <>cpu <span className="text-foreground font-medium">{Math.round(cpuDevice.percent)}%</span>
@@ -838,7 +837,9 @@ function MachineCard({
           {!processesExpanded && (
             <CollapsibleTrigger asChild>
               <Button variant="ghost" className="w-full border-t border-border/50 rounded-none cursor-pointer px-4 py-2.5 h-auto">
-                <div className="flex items-center gap-2.5 w-full select-none overflow-hidden">
+                {/* gap-2 after the chevron like the metrics and displays rows, so
+                    the three labels share a left edge */}
+                <div className="flex items-center gap-2 w-full select-none overflow-hidden">
                   <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                   <span className="text-sm flex-shrink-0 text-muted-foreground/70">
                     <span className="text-foreground font-medium">{machine.processes.length}</span> process{machine.processes.length > 1 ? 'es' : ''}

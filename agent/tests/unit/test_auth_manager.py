@@ -203,3 +203,19 @@ class TestBackoff:
         # Should have made an HTTP call to refresh
         assert mock_post.called
         assert token == "fresh-token"
+
+
+# TestApiBase — every token request goes to api_base
+class TestApiBase:
+    @pytest.mark.parametrize("api_base", [
+        "https://owlette.app/api",
+        "https://dev.owlette.app/api/",
+    ])
+    def test_an_owlette_api_base_is_accepted(self, storage, api_base):
+        am = AuthManager(api_base=api_base, machine_id="TEST-MACHINE", storage=storage)
+        assert am.api_base == api_base.rstrip("/")
+
+    def test_any_other_api_base_is_refused(self, storage):
+        """A refresh token must never be sent to a host outside owlette.app."""
+        with pytest.raises(ValueError, match="attacker.example"):
+            AuthManager(api_base="https://attacker.example/api", machine_id="TEST-MACHINE", storage=storage)

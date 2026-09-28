@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "owlette",
+        "width": 1060,
+        "height": 640,
+        "minWidth": 780,
+        "minHeight": 540,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 12, "y": 18 },
+        "visible": false,
+        "center": true,
+        "theme": "Dark",
+        "backgroundColor": "#020B16",
+        "dragDropEnabled": true
+      }
+    ]
+  }
+}

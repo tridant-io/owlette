@@ -10,18 +10,29 @@ and Playwright browser setup in the repo's web directory after required checks
 pass. The optional -InstallAgentDeps switch creates the agent venv
 (agent\.venv, Python 3.11) and installs agent\requirements.txt and
 agent\requirements-dev.txt into it; the build hooks run agent checks with that
-interpreter.
+interpreter. The optional -DevGrant switch runs on its own, from an elevated
+prompt, instead of the checks: it sets HKLM\SOFTWARE\Owlette\DevMode and grants
+the current account Modify on the installed agent\src and app directories, so
+the deploy hook can copy into them. -RemoveDevGrant reverts both.
 
 .EXAMPLE
 .\scripts\bootstrap-windows.ps1 -Detailed
 
 .EXAMPLE
 .\scripts\bootstrap-windows.ps1 -InstallWebDeps -InstallAgentDeps
+
+.EXAMPLE
+.\scripts\bootstrap-windows.ps1 -DevGrant
+
+.EXAMPLE
+.\scripts\bootstrap-windows.ps1 -RemoveDevGrant
 #>
 param(
     [switch]$InstallWebDeps,
     [switch]$InstallAgentDeps,
-    [switch]$Detailed
+    [switch]$Detailed,
+    [switch]$DevGrant,
+    [switch]$RemoveDevGrant
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,6 +50,17 @@ $script:InfoSymbol = [char]0x2139
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $agentVenvPath = Join-Path $repoRoot 'agent\.venv'
 $agentVenvPython = Join-Path $agentVenvPath 'Scripts\python.exe'
+
+$programData = $env:ProgramData
+if ([string]::IsNullOrWhiteSpace($programData)) {
+    $programData = 'C:\ProgramData'
+}
+
+$devGrantDirs = @(
+    (Join-Path $programData 'Owlette\agent\src'),
+    (Join-Path $programData 'Owlette\app')
+)
+$devModeKeyPath = 'SOFTWARE\Owlette'
 
 function Write-Pass {
     param([string]$Message)
@@ -230,6 +252,131 @@ function Complete-Script {
     }
 
     exit 1
+}
+
+function Get-DevGrantAccount {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]$identity
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'needs an elevated prompt; open PowerShell with "Run as administrator" and run this command again'
+    }
+
+    # the token user is an account, never a group, and elevation keeps it the
+    # developer's own. IsAccountSid refuses SYSTEM, service accounts and every
+    # built-in SID; S-1-12-1 is an Entra ID user, which it does not recognise
+    $sid = $identity.User
+    if (-not ($sid.IsAccountSid() -or $sid.Value -like 'S-1-12-1-*')) {
+        throw "$($identity.Name) ($sid) is not a user account; run this from your own account"
+    }
+
+    return $identity
+}
+
+function Open-DevModeKey {
+    param([switch]$Create)
+
+    # the 64-bit view is the one the service reads, even from a 32-bit shell
+    $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+    if ($Create) {
+        return $hklm.CreateSubKey($devModeKeyPath)
+    }
+
+    return $hklm.OpenSubKey($devModeKeyPath, $true)
+}
+
+function Grant-DevAccess {
+    param([Security.Principal.WindowsIdentity]$Account)
+
+    foreach ($dir in $devGrantDirs) {
+        $item = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+        # the grant belongs on the installed directory itself, not on a link
+        if ($null -eq $item -or -not $item.PSIsContainer -or $item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+            throw "$dir is missing or not a plain directory; install the agent first"
+        }
+    }
+
+    # DevMode goes first: the service's start-up check tolerates the grant only while it is set
+    $key = Open-DevModeKey -Create
+    $key.SetValue('DevMode', 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+    $key.Close()
+    Write-Pass "dev grant: DevMode = 1 in HKLM\$devModeKeyPath"
+
+    foreach ($dir in $devGrantDirs) {
+        # /grant merges into an existing ACE with the same flags, so a rerun still leaves one
+        $grantResult = Invoke-Native -FilePath 'icacls.exe' -ArgumentList @($dir, '/grant', "*$($Account.User.Value):(OI)(CI)M")
+        if ($grantResult.ExitCode -ne 0) {
+            throw "icacls /grant on $dir failed: $(Get-FirstLine $grantResult.Output)"
+        }
+
+        Write-Pass "dev grant: Modify for $($Account.Name) ($($Account.User)) on $dir"
+    }
+
+    Write-Warn 'dev grant: this machine is now dev-tainted; the service logs a DevMode warning at every start'
+    Write-Info 'dev grant: revert from an elevated prompt with .\scripts\bootstrap-windows.ps1 -RemoveDevGrant (icacls /remove on both directories, then deletes DevMode)'
+}
+
+function Revoke-DevAccess {
+    param([Security.Principal.WindowsIdentity]$Account)
+
+    # the grants go before DevMode, so a failure part way leaves DevMode covering what remains
+    foreach ($dir in $devGrantDirs) {
+        $granted = $false
+        if (Test-Path -LiteralPath $dir -PathType Container) {
+            $explicitRules = (Get-Acl -LiteralPath $dir).GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier])
+            $granted = $null -ne ($explicitRules | Where-Object { $_.IdentityReference -eq $Account.User -and $_.AccessControlType -eq 'Allow' })
+        }
+
+        if (-not $granted) {
+            Write-Info "dev grant: none for $($Account.Name) on $dir"
+            continue
+        }
+
+        $removeResult = Invoke-Native -FilePath 'icacls.exe' -ArgumentList @($dir, '/remove:g', "*$($Account.User.Value)")
+        if ($removeResult.ExitCode -ne 0) {
+            throw "icacls /remove on $dir failed: $(Get-FirstLine $removeResult.Output)"
+        }
+
+        Write-Pass "dev grant: removed $($Account.Name) from $dir"
+    }
+
+    $key = Open-DevModeKey
+    if ($null -ne $key -and $null -ne $key.GetValue('DevMode')) {
+        $key.DeleteValue('DevMode')
+        Write-Pass "dev grant: DevMode removed from HKLM\$devModeKeyPath"
+    }
+    else {
+        Write-Info 'dev grant: DevMode is not set'
+    }
+
+    if ($null -ne $key) {
+        $key.Close()
+    }
+
+    Write-Info 'dev grant: files created under agent\src while the grant was in place stay owned by this account; reinstall the agent for a clean tree'
+}
+
+# the dev grant changes the installed agent rather than checking the toolchain,
+# so it runs on its own
+if ($DevGrant -or $RemoveDevGrant) {
+    try {
+        if ($DevGrant -and $RemoveDevGrant) {
+            throw 'pass -DevGrant or -RemoveDevGrant, not both'
+        }
+
+        $devAccount = Get-DevGrantAccount
+        if ($DevGrant) {
+            Grant-DevAccess -Account $devAccount
+        }
+        else {
+            Revoke-DevAccess -Account $devAccount
+        }
+    }
+    catch {
+        Write-Fail "dev grant: $($_.Exception.Message)"
+        exit 1
+    }
+
+    exit 0
 }
 
 Write-Host 'CORE' -ForegroundColor Cyan
@@ -488,11 +635,6 @@ Invoke-Check -Name 'Inno Setup 6' -OnError Warn -ScriptBlock {
 # reports whether THIS machine is running a host-registered service yet, which
 # is the first thing to check when a local agent behaves oddly after an upgrade.
 Invoke-Check -Name 'Service host' -OnError Info -ScriptBlock {
-    $programData = $env:ProgramData
-    if ([string]::IsNullOrWhiteSpace($programData)) {
-        $programData = 'C:\ProgramData'
-    }
-
     $hostPath = Join-Path $programData 'Owlette\tools\owlette-host.exe'
 
     if (Test-Path -LiteralPath $hostPath -PathType Leaf) {

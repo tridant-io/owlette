@@ -79,6 +79,50 @@ async function getApiKeyRateLimitIdentifier(request: NextRequest): Promise<strin
 }
 
 /**
+ * The 429 a rate-limited request gets, for the wrapper and for routes that
+ * check a limiter inside their handler (after auth has resolved the key).
+ */
+export function rateLimitedResponse(
+  result: Awaited<ReturnType<typeof checkRateLimit>>,
+  reason: RateLimitedReason,
+): NextResponse {
+  const headers = getRateLimitHeaders({ ...result, reason });
+
+  const retryAfter = result.retryAfter ?? 1;
+  const message = `Too many requests. Please try again in ${retryAfter} seconds.`;
+
+  return problem(
+    {
+      type: ProblemType.RateLimited,
+      title: 'rate limited',
+      status: 429,
+      detail: message,
+      retryAfter,
+      error: 'Rate limit exceeded',
+      message,
+    },
+    headers,
+  );
+}
+
+/** The counters a request under the limit carries on its own response. */
+export function applyRateLimitCounters(
+  response: NextResponse,
+  result: Awaited<ReturnType<typeof checkRateLimit>>,
+): NextResponse {
+  // Counters only on success — no Retry-After or reason on 200s.
+  const headers = getRateLimitHeaders({
+    limit: result.limit,
+    remaining: result.remaining,
+    reset: result.reset,
+  });
+  Object.entries(headers).forEach(([key, value]) => {
+    response.headers.set(key, value);
+  });
+  return response;
+}
+
+/**
  * Generic over the extra args Next.js passes the route (e.g. the App-Router
  * `context` with dynamic params); they are forwarded to the handler unchanged.
  */
@@ -124,39 +168,10 @@ export function withRateLimit<TArgs extends unknown[]>(
 
     if (!result.success) {
       console.warn(`[RateLimit] Rate limit exceeded for ${options.strategy}:`, identifier);
-
-      const headers = getRateLimitHeaders({ ...result, reason });
-
-      const retryAfter = result.retryAfter ?? 1;
-      const message = `Too many requests. Please try again in ${retryAfter} seconds.`;
-
-      return problem(
-        {
-          type: ProblemType.RateLimited,
-          title: 'rate limited',
-          status: 429,
-          detail: message,
-          retryAfter,
-          error: 'Rate limit exceeded',
-          message,
-        },
-        headers,
-      );
+      return rateLimitedResponse(result, reason);
     }
 
-    const response = await handler(request, ...rest);
-
-    // Counters only on success — no Retry-After or reason on 200s.
-    const headers = getRateLimitHeaders({
-      limit: result.limit,
-      remaining: result.remaining,
-      reset: result.reset,
-    });
-    Object.entries(headers).forEach(([key, value]) => {
-      response.headers.set(key, value);
-    });
-
-    return response;
+    return applyRateLimitCounters(await handler(request, ...rest), result);
   };
 }
 

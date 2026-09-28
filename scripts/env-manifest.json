@@ -32,12 +32,14 @@
     "public": "NEXT_PUBLIC_* — inlined into the client bundle at build time; not secret. Synced non-sensitive so values stay readable in Vercel.",
     "config": "Non-secret app configuration (emails, ids, endpoints, flags). Synced non-sensitive.",
     "secret": "Sensitive credential. Synced --sensitive (unreadable after write).",
-    "must-match": "Sensitive AND silently catastrophic if it differs between mirror targets: SESSION_SECRET logs everyone out, MFA_ENCRYPTION_KEY locks out 2FA users, LLM_ENCRYPTION_KEY breaks stored Cortex keys. Synced --sensitive.",
+    "must-match": "Sensitive AND silently catastrophic if it differs between mirror targets. Seven: SESSION_SECRET logs everyone out, MFA_ENCRYPTION_KEY locks out 2FA users, LLM_ENCRYPTION_KEY breaks stored Cortex keys, TURNSTILE_SECRET fails every captcha, SWOOP_JWT_PRIVATE_KEY makes one origin's bundles fail at the relay, SWOOP_SESSION_MASTER_KEY makes a session's derived keys unreadable across origins, SWOOP_SIGNAL_RING_SECRET makes the relay refuse rings and kill broadcasts. Synced --sensitive.",
     "build": "Build-time-only credential (Sentry source-map upload). Synced --sensitive."
   },
   "never-set": {
     "$note": "Env vars the web code reads that must NEVER exist on railway-dev, railway-prod, or vercel-prod. They are inventoried here and deliberately kept OUT of `vars` below — that omission IS the guard. `sync-env.mjs` computes `undeclared` as live keys minus `manifest.vars` without regard to `targets`, so an unregistered key that turns up on a target is reported as drift and `check` exits 1. Registering one under `vars` — even with an empty `targets` — would permanently silence that alarm. These belong in a local `.env.local` or a Playwright `webServer.env` only. This block is documentation: `sync-env.mjs` reads `targets`, `mirror`, and `vars`, and ignores everything else.",
     "keys": {
+      "CLOUDFLARE_ACCOUNT_ID": "Local tooling only (infra/cloudflare terraform, wrangler, .claude/.env.example). Never a web env var: the web reads CLOUDFLARE_TURN_KEY_ID / CLOUDFLARE_TURN_KEY_API_TOKEN for TURN, and the signalling worker's deploy holds these two as GitHub repository secrets, not on Railway or Vercel.",
+      "CLOUDFLARE_API_TOKEN": "Local tooling only, same as CLOUDFLARE_ACCOUNT_ID: a zone/worker-scoped token for terraform and wrangler on a developer box or in the deploy workflow's repository secrets. Nothing under web/ reads it.",
       "ALLOW_INSECURE_WEBHOOK_URLS": "'1' drops the https-only requirement on user-supplied webhook endpoints (web/lib/webhookUrl.ts:25), downgrading an SSRF guard. Local-dev http smoke tests only. Captured at module scope, so it only takes effect at process start.",
       "E2E_DISABLE_RATE_LIMIT": "'true' turns both rate limiters into an unconditional allow (web/lib/rateLimit.ts:376, web/lib/rateLimit.server.ts:535) and suppresses the production boot alarm for a missing distributed limiter (web/instrumentation.ts:20). Injected only by the Playwright webServer env (web/playwright.config.ts:156).",
       "ENABLE_CAPABILITY_ENFORCEMENT": "Firestore-outage fallback only — the live switch is the `global/security_config` document (docs/runbooks/security-boundary-kill-switches.md). Unset means enabled (web/lib/securityConfig.server.ts:94-98 is fail-safe); setting 'false' would disable capability checks fleet-wide during any Firestore blip.",
@@ -52,6 +54,19 @@
       "NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST": "Browser-side Firestore emulator host — same gate and same build-time inlining as NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST (web/lib/firebase.ts:84).",
       "NEXT_PUBLIC_USE_FIREBASE_EMULATOR": "'true' points the browser Firebase SDK at localhost emulators (web/lib/firebase.ts:31, :74) and skips App Check init (web/lib/firebase.ts:128). On a deploy target it takes the dashboard down for every visitor, and because it is NEXT_PUBLIC_ it is baked into the bundle at build time — unsetting it later does not undo a build that saw it. Injected only by the Playwright webServer env.",
       "OWLETTE_E2E": "'1' swaps the real R2 object store for Firestore-backed stand-ins (web/lib/r2Client.server.ts:151, :243, :305) and changes installer-upload behaviour (web/app/api/installer/upload/route.ts:44). On a deploy target it would silently disconnect roost uploads from R2. Injected only by the Playwright webServer env (web/playwright.config.ts:163)."
+    }
+  },
+  "github-repo-secrets": {
+    "$note": "GitHub Actions secrets the release workflow (.github/workflows/build-installer.yml, job build-macos) reads from the `release` environment, which the owner creates on GitHub restricted to `v*` tags. Nothing under web/ reads them and they must never exist on railway-dev, railway-prod or vercel-prod, so like `never-set` they stay OUT of `vars`. Names only, never values. This block is documentation: `sync-env.mjs` ignores it. The names are deliberately NOT the ones the Tauri bundler reads (APPLE_CERTIFICATE, APPLE_ID, APPLE_PASSWORD, APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH) — those would make the desktop build import or notarize on its own.",
+    "keys": {
+      "APPLE_CERT_P12_BASE64": "Developer ID Application certificate + private key, a base64 .p12. Signs the Tauri app and every mach-o in the runtime (APPLE_SIGNING_IDENTITY in agent/build/macos/build.sh).",
+      "APPLE_CERT_PASSWORD": "Password the APPLE_CERT_P12_BASE64 .p12 was exported with.",
+      "APPLE_INSTALLER_CERT_P12_BASE64": "Developer ID Installer certificate + private key, a base64 .p12. Signs the .pkg (build.sh --installer-identity).",
+      "APPLE_INSTALLER_CERT_PASSWORD": "Password the APPLE_INSTALLER_CERT_P12_BASE64 .p12 was exported with.",
+      "APPLE_TEAM_ID": "Apple Developer team id. The workflow picks both identities out of the temp keychain by it.",
+      "APPLE_API_KEY_ID": "App Store Connect API key id (build.sh --notary-key-id).",
+      "APPLE_API_ISSUER_ID": "App Store Connect issuer id (build.sh --notary-issuer).",
+      "APPLE_API_KEY_BASE64": "App Store Connect API private key, the .p8 as base64. Decoded to $RUNNER_TEMP for notarytool (build.sh --notary-key) and removed when the job ends."
     }
   },
   "vars": {

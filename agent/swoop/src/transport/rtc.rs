@@ -137,6 +137,12 @@ const OPUS_PT: u8 = 111;
 /// standing queue the pacer exists to prevent.
 const OUT_QUEUE_HIGH_WATERMARK: usize = 64 * 1024;
 
+/// How much of that queue feature records (clipboard chunks, cursor shapes)
+/// may fill. The session holds them back past it, so the other half is always
+/// the session's own: a queue full enough to drop its oldest record got there
+/// on `swoop-meta` and the like, never on a backlog the features built.
+pub const OUT_QUEUE_FEATURE_BYTES: usize = OUT_QUEUE_HIGH_WATERMARK / 2;
+
 /// One datagram. str0m's target MTU is well under this.
 const RECV_BUF_BYTES: usize = 2048;
 
@@ -193,7 +199,10 @@ pub enum PeerState {
 pub enum PeerEvent {
     /// ICE and DTLS are up; media flows from here.
     Connected,
-    Disconnected,
+    /// The viewer's end closed the DTLS or the SCTP association. Final for
+    /// this peer — where ICE losing its pair is an `Ice` edge the policy
+    /// waits out, because a lid, a roam or a blip comes back.
+    Closed,
     /// A local candidate to trickle to the viewer through the signaling
     /// client, as an SDP `candidate:` attribute value.
     LocalCandidate(String),
@@ -231,10 +240,52 @@ pub enum PeerEvent {
         queued_bytes: usize,
     },
     /// The out-queue hit its watermark and the oldest record was dropped to
-    /// make room. Never silent.
+    /// make room. Never silent, but `overflows` — the running count — lets the
+    /// session say so once in a while rather than sixty times a second.
     ChannelQueueOverflow {
         channel: Channel,
+        overflows: u64,
     },
+    /// A received datagram was thrown away. Sent for the first and then every
+    /// hundredth, with the running count, so a stray burst is visible without
+    /// becoming a line per packet.
+    DatagramDropped {
+        dropped: u64,
+        reason: String,
+    },
+}
+
+/// Put one datagram on the socket. A refusal is counted, logged sparingly and
+/// survived: before nomination str0m tries every candidate pair, and a
+/// destination this host has no route to (a viewer's vpn address, an address
+/// family the socket does not carry) is one pair failing its check, which ICE
+/// handles by never nominating it. Ending the peer for it — what `?` did here
+/// until 2026-09-23 — took a live session down for a candidate that was never
+/// going to carry it.
+fn send_datagram(
+    socket: &UdpSocket,
+    stats: &mut PeerStats,
+    contents: &[u8],
+    destination: SocketAddr,
+) -> bool {
+    match socket.send_to(contents, destination) {
+        Ok(_) => {
+            stats.datagrams_sent += 1;
+            true
+        }
+        Err(error) => {
+            stats.datagrams_send_failed += 1;
+            // the first few and then one in a hundred: enough to see a pair
+            // that never worked, not a log line per retry
+            if stats.datagrams_send_failed <= 3 || stats.datagrams_send_failed.is_multiple_of(100) {
+                ::log::debug!(
+                    "swoop: send_to {destination} refused ({error}); {} refused so far",
+                    stats.datagrams_send_failed
+                );
+            }
+            false
+        }
+    }
 }
 
 /// One peer's counters, which is what a governor reads.
@@ -243,12 +294,22 @@ pub struct PeerStats {
     pub pacer: PacerStats,
     /// Datagrams this peer put on the socket.
     pub datagrams_sent: u64,
+    /// Datagrams the socket refused: one unreachable candidate (a vpn address
+    /// answering WSAENETUNREACH) is a fact about that pair, not the peer, and
+    /// ICE drops the pair itself when nothing answers on it.
+    pub datagrams_send_failed: u64,
+    /// Datagrams received and thrown away: one that does not demultiplex, or a
+    /// STUN message that does not parse. A stray packet is a fact about that
+    /// packet, not the peer.
+    pub datagrams_dropped: u64,
     /// Access units handed to str0m's packetizer.
     pub frames_written: u64,
     pub channel_writes: u64,
     /// `Ok(false)` from `Channel::write`, cumulative.
     pub channel_write_refusals: u64,
     pub channel_queue_overflows: u64,
+    /// Records dropped because the transport had closed their channel.
+    pub channel_closed_drops: u64,
     pub channels_refused: u64,
     /// One for the initial offer, one more per accepted ICE restart.
     pub negotiations: u64,
@@ -266,8 +327,16 @@ enum WriteOutcome {
     Accepted,
     /// `Ok(false)`: no room inside the 128 KiB shared ceiling right now.
     NoRoom,
-    /// The channel is not open (yet, or any more).
+    /// The channel is not open yet: the browser opens the five, so a record
+    /// can be ready before its channel is. The record waits.
     NotOpen,
+    /// The channel was open and the transport has since closed it. Nothing
+    /// will ever carry the record, so it is dropped rather than left at the
+    /// head of the queue — where it starved every other channel for the rest
+    /// of a session (B4A, 2026-09-24: str0m closed `swoop-feedback` under
+    /// the browser, and every later cursor and meta record overflowed behind
+    /// the pong that was queued for it).
+    Closed,
 }
 
 #[derive(Debug)]
@@ -288,6 +357,8 @@ struct OutQueue {
     writes: u64,
     refusals: u64,
     overflows: u64,
+    /// Records dropped because their channel had closed.
+    closed_drops: u64,
 }
 
 impl OutQueue {
@@ -300,6 +371,7 @@ impl OutQueue {
             self.overflows += 1;
             events.push(PeerEvent::ChannelQueueOverflow {
                 channel: dropped.channel,
+                overflows: self.overflows,
             });
         }
         self.bytes += data.len();
@@ -311,13 +383,16 @@ impl OutQueue {
     }
 
     /// Write as much as the transport will take, stopping at the first refusal
-    /// so ordering holds. `write` is the seam the unit tests substitute a fake
-    /// channel through.
+    /// so ordering holds. A record whose channel is not open yet steps aside
+    /// and keeps its place among its own channel's records; one whose channel
+    /// has closed is dropped. Neither holds up the other channels. `write` is
+    /// the seam the unit tests substitute a fake channel through.
     fn drain(
         &mut self,
         events: &mut Vec<PeerEvent>,
         mut write: impl FnMut(Channel, bool, &[u8]) -> WriteOutcome,
     ) {
+        let mut waiting: VecDeque<Outbound> = VecDeque::new();
         while let Some(item) = self.queued.pop_front() {
             match write(item.channel, item.binary, &item.data) {
                 WriteOutcome::Accepted => {
@@ -331,15 +406,21 @@ impl OutQueue {
                         queued_bytes: self.bytes,
                     });
                     self.queued.push_front(item);
-                    return;
+                    break;
                 }
-                WriteOutcome::NotOpen => {
-                    // Not an error and not a refusal: the browser opens the
-                    // channels, so a record can be ready before its channel is.
-                    self.queued.push_front(item);
-                    return;
+                WriteOutcome::NotOpen => waiting.push_back(item),
+                WriteOutcome::Closed => {
+                    self.bytes -= item.data.len();
+                    self.closed_drops += 1;
                 }
             }
+        }
+        if !waiting.is_empty() {
+            // The waiting records go back in front of whatever the refusal
+            // left, so per-channel order is untouched: every record of a
+            // waiting channel was visited, in order, before the stop.
+            waiting.append(&mut self.queued);
+            self.queued = waiting;
         }
     }
 }
@@ -381,6 +462,11 @@ pub struct RtcPeer {
     pacer: SendPacer,
     out: OutQueue,
     channels: Vec<(ChannelId, Channel)>,
+    /// Channels the transport closed under the browser. The browser owns the
+    /// five (PROTOCOL §3) and never learns of a close it did not make, so a
+    /// closed channel stays closed for the life of this peer; its records are
+    /// dropped and the viewer's own watchdog decides what to do about it.
+    closed_channels: Vec<Channel>,
     /// The addresses of the viewer's `typ relay` candidates, which is all the
     /// pair classification below needs — the host's own candidates are host
     /// candidates until Task 7.4 allocates a relay.
@@ -469,6 +555,7 @@ impl RtcPeer {
             pacer: SendPacer::new(Instant::now(), u64::from(cfg.bitrate_bps), cfg.fps),
             out: OutQueue::default(),
             channels: Vec::new(),
+            closed_channels: Vec::new(),
             remote_relays: Vec::new(),
             sending_to: None,
             pending_events: VecDeque::new(),
@@ -494,6 +581,7 @@ impl RtcPeer {
             channel_writes: self.out.writes,
             channel_write_refusals: self.out.refusals,
             channel_queue_overflows: self.out.overflows,
+            channel_closed_drops: self.out.closed_drops,
             ..self.stats
         }
     }
@@ -637,6 +725,11 @@ impl RtcPeer {
         self.pending_events.extend(events);
     }
 
+    /// Bytes queued for the transport and not yet taken by it.
+    pub fn queued_bytes(&self) -> usize {
+        self.out.bytes
+    }
+
     /// Drive I/O and timers for at most `budget`, appending what it learned to
     /// `events`.
     ///
@@ -651,32 +744,50 @@ impl RtcPeer {
     ) -> Result<()> {
         events.extend(self.pending_events.drain(..));
         self.drain_out(events);
-        // Before `poll_output`, so a frame queued this turn leaves on this
-        // turn rather than waiting for the next one.
-        #[cfg(feature = "audio-opus")]
-        self.drain_audio(now);
 
+        // str0m does not packetise on `write`: a write is queued per media
+        // and ONE queued write per media is packetised by each
+        // `handle_input(Timeout)`, never by `poll_output`. A queue past 100
+        // is refused as "Consecutive calls to write() without poll_output()
+        // in between" — the wording is about polling, the rule is about
+        // timeouts. Audio arrives at 100 frames a second and this poll ran
+        // one timeout per call, so the audio queue grew until every write
+        // was refused (B4A, 2026-09-24). So each round here is: a timeout at
+        // `now` to packetise what is queued — the session's video frame and
+        // the last audio frame — then the outputs, then the next audio
+        // frame, until the audio queue is empty.
         let deadline = loop {
-            match self.rtc.poll_output().context("poll_output")? {
-                Output::Timeout(t) => break t,
-                Output::Transmit(t) => {
-                    let len = t.contents.len();
-                    let destination = t.destination;
-                    // RFC 7983's demultiplexer: 0..=3 is STUN, which goes to
-                    // every pair still being checked. Everything above it —
-                    // DTLS, SRTP, SCTP — goes only to the pair ICE nominated,
-                    // which is what makes its destination a pair report.
-                    let nominated = t.contents.first().is_some_and(|first| *first > 3);
-                    self.socket
-                        .send_to(&t.contents, destination)
-                        .with_context(|| format!("send_to {destination}"))?;
-                    self.stats.datagrams_sent += 1;
-                    self.pacer.record_sent(now, len);
-                    if nominated {
-                        self.on_send_addr(destination, events);
+            self.rtc
+                .handle_input(Input::Timeout(now))
+                .context("handle_input timeout")?;
+            let deadline = loop {
+                match self.rtc.poll_output().context("poll_output")? {
+                    Output::Timeout(t) => break t,
+                    Output::Transmit(t) => {
+                        let len = t.contents.len();
+                        let destination = t.destination;
+                        // RFC 7983's demultiplexer: 0..=3 is STUN, which goes to
+                        // every pair still being checked. Everything above it —
+                        // DTLS, SRTP, SCTP — goes only to the pair ICE nominated,
+                        // which is what makes its destination a pair report.
+                        let nominated = t.contents.first().is_some_and(|first| *first > 3);
+                        if !send_datagram(&self.socket, &mut self.stats, &t.contents, destination) {
+                            continue;
+                        }
+                        self.pacer.record_sent(now, len);
+                        if nominated {
+                            self.on_send_addr(destination, events);
+                        }
                     }
+                    Output::Event(e) => self.handle_event(e, events),
                 }
-                Output::Event(e) => self.handle_event(e, events),
+            };
+            #[cfg(feature = "audio-opus")]
+            let wrote_audio = self.drain_audio(now);
+            #[cfg(not(feature = "audio-opus"))]
+            let wrote_audio = false;
+            if !wrote_audio {
+                break deadline;
             }
         };
 
@@ -692,22 +803,33 @@ impl RtcPeer {
             .set_read_timeout(Some(wait))
             .context("set_read_timeout")?;
         match self.socket.recv_from(&mut self.buf) {
-            Ok((n, source)) => {
-                let contents = self.buf[..n]
-                    .try_into()
-                    .map_err(|e| anyhow!("datagram from {source}: {e}"))?;
-                self.rtc
-                    .handle_input(Input::Receive(
-                        Instant::now(),
-                        Receive {
-                            proto: Protocol::Udp,
-                            source,
-                            destination: self.local_addr,
-                            contents,
-                        },
-                    ))
-                    .context("handle_input receive")?;
-            }
+            Ok((n, source)) => match self.buf[..n].try_into() {
+                Ok(contents) => {
+                    self.rtc
+                        .handle_input(Input::Receive(
+                            Instant::now(),
+                            Receive {
+                                proto: Protocol::Udp,
+                                source,
+                                destination: self.local_addr,
+                                contents,
+                            },
+                        ))
+                        .context("handle_input receive")?;
+                }
+                // the socket takes whatever reaches its port, and a packet
+                // nothing here can demultiplex never reached the association.
+                Err(error) => {
+                    self.stats.datagrams_dropped += 1;
+                    let dropped = self.stats.datagrams_dropped;
+                    if dropped == 1 || dropped.is_multiple_of(100) {
+                        events.push(PeerEvent::DatagramDropped {
+                            dropped,
+                            reason: error.to_string(),
+                        });
+                    }
+                }
+            },
             // Anything else is a timeout, a would-block, or Windows reporting
             // an ICMP port-unreachable from a *previous* send on the next
             // receive — routine while ICE is still probing, never fatal.
@@ -727,7 +849,11 @@ impl RtcPeer {
 
     fn drain_out(&mut self, events: &mut Vec<PeerEvent>) {
         let Self {
-            out, rtc, channels, ..
+            out,
+            rtc,
+            channels,
+            closed_channels,
+            ..
         } = self;
         out.drain(events, |channel, binary, data| {
             let Some(id) = channels
@@ -735,7 +861,11 @@ impl RtcPeer {
                 .find(|(_, c)| *c == channel)
                 .map(|(id, _)| *id)
             else {
-                return WriteOutcome::NotOpen;
+                return if closed_channels.contains(&channel) {
+                    WriteOutcome::Closed
+                } else {
+                    WriteOutcome::NotOpen
+                };
             };
             let Some(mut ch) = rtc.channel(id) else {
                 return WriteOutcome::NotOpen;
@@ -762,18 +892,23 @@ impl RtcPeer {
             ) => events.push(PeerEvent::Ice(IceEvent::Connected {
                 relayed: self.sending_over_relay(),
             })),
-            // Terminal for this peer, both of them: the browser always
-            // re-offers (plan.md D8), so a viewer that comes back gets a new
-            // peer rather than this one recovering. An ICE *restart* arrives
-            // while the peer is still live and goes through `accept_offer`.
-            Event::IceConnectionStateChange(IceConnectionState::Disconnected) | Event::Closed => {
+            // Not the viewer leaving: the path went quiet. The policy asks for
+            // the ICE restart that brings it back — the browser's re-offer goes
+            // through `accept_offer` on this same peer — and the session bounds
+            // how long it waits.
+            Event::IceConnectionStateChange(IceConnectionState::Disconnected) => {
+                events.push(PeerEvent::Ice(IceEvent::Disconnected))
+            }
+            // The viewer's end closed DTLS or SCTP. Nothing comes back from that.
+            Event::Closed => {
                 self.state = PeerState::Closed;
-                events.push(PeerEvent::Disconnected);
+                events.push(PeerEvent::Closed);
             }
             Event::MediaAdded(m) => self.on_media_added(&m),
             Event::ChannelOpen(id, label) => match channel_from_label(&label) {
                 Some(channel) => {
                     self.channels.push((id, channel));
+                    self.closed_channels.retain(|c| *c != channel);
                     events.push(PeerEvent::ChannelOpen(channel));
                 }
                 None => {
@@ -786,6 +921,7 @@ impl RtcPeer {
             Event::ChannelClose(id) => {
                 if let Some(pos) = self.channels.iter().position(|(c, _)| *c == id) {
                     let (_, channel) = self.channels.remove(pos);
+                    self.closed_channels.push(channel);
                     events.push(PeerEvent::ChannelClose(channel));
                 }
             }
@@ -873,30 +1009,34 @@ impl RtcPeer {
     /// Write whatever audio is waiting. Straight to str0m, never through the
     /// pacer — see the module doc.
     #[cfg(feature = "audio-opus")]
-    fn drain_audio(&mut self, now: Instant) {
+    /// Write ONE queued audio frame, and say whether it did: the caller runs
+    /// a `poll_output` round between writes, which is the transport's rule.
+    fn drain_audio(&mut self, now: Instant) -> bool {
         if self.state != PeerState::Connected {
-            return;
+            return false;
         }
         let (Some(mid), Some(pt), Some(track)) =
             (self.audio.mid, self.audio.pt, self.audio.track.clone())
         else {
-            return;
+            return false;
         };
-        while let Some(packet) = track.try_recv() {
-            let Some(writer) = self.rtc.writer(mid) else {
-                return;
-            };
-            // The capture clock's own timestamp, contiguous across every
-            // device gap because `audio::opus::Timeline` filled the holes.
-            let time = MediaTime::new(packet.rtp_48k, str0m::media::Frequency::FORTY_EIGHT_KHZ);
-            if let Err(e) = writer.write(pt, now, time, packet.payload.as_slice()) {
-                // One bad write is not a dead session: the next frame is 10 ms
-                // away and the timeline does not depend on this one landing.
-                ::log::warn!("swoop: audio frame at {} not written: {e}", packet.rtp_48k);
-                return;
-            }
-            self.stats.audio_packets_written += 1;
+        let Some(packet) = track.try_recv() else {
+            return false;
+        };
+        let Some(writer) = self.rtc.writer(mid) else {
+            return false;
+        };
+        // The capture clock's own timestamp, contiguous across every
+        // device gap because `audio::opus::Timeline` filled the holes.
+        let time = MediaTime::new(packet.rtp_48k, str0m::media::Frequency::FORTY_EIGHT_KHZ);
+        if let Err(e) = writer.write(pt, now, time, packet.payload.as_slice()) {
+            // One bad write is not a dead session: the next frame is 10 ms
+            // away and the timeline does not depend on this one landing.
+            ::log::warn!("swoop: audio frame at {} not written: {e}", packet.rtp_48k);
+            return false;
         }
+        self.stats.audio_packets_written += 1;
+        true
     }
 
     /// 90 kHz media time for one frame, from the capture clock the front half
@@ -1058,10 +1198,96 @@ pub fn qpc_hz() -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_refused_send_is_counted_and_survived() {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind");
+        let mut stats = super::PeerStats::default();
+        // an address family the socket does not carry: refused synchronously
+        let unreachable: std::net::SocketAddr = "[::1]:9".parse().expect("addr");
+        assert!(!super::send_datagram(&socket, &mut stats, b"", unreachable));
+        assert_eq!(stats.datagrams_send_failed, 1);
+        assert_eq!(stats.datagrams_sent, 0);
+        // and a reachable one still counts as sent
+        let reachable = socket.local_addr().expect("local");
+        assert!(super::send_datagram(&socket, &mut stats, b"", reachable));
+        assert_eq!(stats.datagrams_sent, 1);
+    }
+
     use super::*;
 
     fn events() -> Vec<PeerEvent> {
         Vec::new()
+    }
+
+    fn loopback_peer() -> RtcPeer {
+        RtcPeer::bind(PeerConfig {
+            bind_addr: "127.0.0.1:0".parse().expect("a literal address"),
+            codec: Codec::H264,
+            fps: 60,
+            bitrate_bps: 20_000_000,
+            qpc_hz: 10_000_000,
+            enable_bwe: false,
+        })
+        .expect("bind on loopback")
+    }
+
+    /// What the session reads to hold feature records back: every byte waiting
+    /// for the transport, here a record whose channel is not open yet.
+    #[test]
+    fn queued_bytes_counts_what_waits_for_the_transport() {
+        let mut peer = loopback_peer();
+        assert_eq!(peer.queued_bytes(), 0);
+        peer.write_channel(Channel::SwoopControl, false, vec![0u8; 1000]);
+        peer.write_channel(Channel::SwoopMeta, true, vec![0u8; 24]);
+        assert_eq!(peer.queued_bytes(), 1024);
+    }
+
+    /// A lost pair is an edge the policy waits out, so the peer stays; a closed
+    /// association is the viewer's end having gone, and the peer goes with it.
+    #[test]
+    fn a_lost_ice_pair_holds_the_peer_and_a_closed_association_ends_it() {
+        let mut peer = loopback_peer();
+        let mut ev = events();
+        peer.handle_event(
+            Event::IceConnectionStateChange(IceConnectionState::Disconnected),
+            &mut ev,
+        );
+        assert_eq!(ev, vec![PeerEvent::Ice(IceEvent::Disconnected)]);
+        assert_ne!(peer.state(), PeerState::Closed);
+
+        ev.clear();
+        peer.handle_event(Event::Closed, &mut ev);
+        assert_eq!(ev, vec![PeerEvent::Closed]);
+        assert_eq!(peer.state(), PeerState::Closed);
+    }
+
+    /// Anything can reach the socket's port. A datagram nothing demultiplexes,
+    /// and a stun header that does not parse, are counted and dropped, and the
+    /// first is reported. Either one used to end the viewer.
+    #[test]
+    fn a_datagram_that_does_not_parse_is_counted_and_the_peer_lives_on() {
+        let mut peer = loopback_peer();
+        let stray = UdpSocket::bind("127.0.0.1:0").expect("bind a stray sender");
+        stray
+            .send_to(&[0xff, 0x00, 0x01], peer.local_addr())
+            .expect("send");
+        // byte 0 and the length say stun; the magic cookie does not.
+        stray.send_to(&[0u8; 20], peer.local_addr()).expect("send");
+
+        let mut ev = events();
+        for _ in 0..2 {
+            peer.poll(Instant::now(), Duration::from_millis(200), &mut ev)
+                .expect("a stray datagram is not the peer's end");
+        }
+        assert_eq!(peer.stats().datagrams_dropped, 2);
+        assert_ne!(peer.state(), PeerState::Closed);
+        assert!(
+            matches!(
+                ev.as_slice(),
+                [PeerEvent::DatagramDropped { dropped: 1, .. }]
+            ),
+            "the first drop is reported and the second only counted: {ev:?}"
+        );
     }
 
     #[test]
@@ -1312,9 +1538,103 @@ mod tests {
         queue.drain(&mut ev, |_, _, _| WriteOutcome::NotOpen);
         assert_eq!(
             queue.refusals, 0,
-            "a closed channel is not a full transport"
+            "an unopened channel is not a full transport"
         );
         assert_eq!(queue.queued.len(), 1);
+        assert_eq!(queue.bytes, 16);
+        assert!(ev.is_empty());
+    }
+
+    #[test]
+    fn a_waiting_channel_does_not_hold_up_the_others_and_keeps_its_own_order() {
+        let mut queue = OutQueue::default();
+        let mut ev = events();
+        queue.push(Channel::SwoopFeedback, false, vec![1u8; 8], &mut ev);
+        queue.push(Channel::SwoopMeta, true, vec![2u8; 8], &mut ev);
+        queue.push(Channel::SwoopFeedback, false, vec![3u8; 8], &mut ev);
+        queue.push(Channel::SwoopCursor, false, vec![4u8; 8], &mut ev);
+
+        let mut written = Vec::new();
+        queue.drain(&mut ev, |channel, _, data| {
+            if channel == Channel::SwoopFeedback {
+                return WriteOutcome::NotOpen;
+            }
+            written.push(data[0]);
+            WriteOutcome::Accepted
+        });
+        assert_eq!(written, vec![2, 4], "the open channels went through");
+        assert_eq!(
+            queue.queued.iter().map(|i| i.data[0]).collect::<Vec<_>>(),
+            vec![1, 3],
+            "the waiting channel's records are still queued, in order"
+        );
+        assert_eq!(queue.bytes, 16);
+        assert!(ev.is_empty());
+
+        // The channel opens: its records go, oldest first.
+        written.clear();
+        queue.drain(&mut ev, |_, _, data| {
+            written.push(data[0]);
+            WriteOutcome::Accepted
+        });
+        assert_eq!(written, vec![1, 3]);
+        assert!(queue.queued.is_empty());
+        assert_eq!(queue.bytes, 0);
+    }
+
+    #[test]
+    fn a_refusal_behind_a_waiting_record_keeps_every_channel_in_order() {
+        let mut queue = OutQueue::default();
+        let mut ev = events();
+        queue.push(Channel::SwoopFeedback, false, vec![1u8; 8], &mut ev);
+        queue.push(Channel::SwoopMeta, true, vec![2u8; 8], &mut ev);
+        queue.push(Channel::SwoopMeta, true, vec![3u8; 8], &mut ev);
+        queue.push(Channel::SwoopFeedback, false, vec![4u8; 8], &mut ev);
+
+        // Feedback is not open; the transport takes one meta record and then
+        // has no room for the second.
+        let mut taken = 0;
+        queue.drain(&mut ev, |channel, _, _| {
+            if channel == Channel::SwoopFeedback {
+                return WriteOutcome::NotOpen;
+            }
+            taken += 1;
+            if taken == 1 {
+                WriteOutcome::Accepted
+            } else {
+                WriteOutcome::NoRoom
+            }
+        });
+        assert_eq!(
+            queue.queued.iter().map(|i| i.data[0]).collect::<Vec<_>>(),
+            vec![1, 3, 4],
+            "the waiting record leads, the refused one follows, the unvisited one is last"
+        );
+        assert_eq!(queue.refusals, 1);
+        assert_eq!(queue.bytes, 24);
+    }
+
+    #[test]
+    fn a_record_for_a_channel_the_transport_closed_is_dropped_not_kept_at_the_head() {
+        let mut queue = OutQueue::default();
+        let mut ev = events();
+        queue.push(Channel::SwoopFeedback, false, vec![1u8; 8], &mut ev);
+        queue.push(Channel::SwoopMeta, true, vec![2u8; 8], &mut ev);
+        queue.push(Channel::SwoopCursor, false, vec![3u8; 8], &mut ev);
+
+        let mut written = Vec::new();
+        queue.drain(&mut ev, |channel, _, data| {
+            if channel == Channel::SwoopFeedback {
+                return WriteOutcome::Closed;
+            }
+            written.push(data[0]);
+            WriteOutcome::Accepted
+        });
+        assert_eq!(written, vec![2, 3], "nothing waited behind the dead record");
+        assert_eq!(queue.closed_drops, 1);
+        assert_eq!(queue.refusals, 0);
+        assert!(queue.queued.is_empty());
+        assert_eq!(queue.bytes, 0);
         assert!(ev.is_empty());
     }
 
@@ -1336,7 +1656,8 @@ mod tests {
         assert!(matches!(
             ev.as_slice(),
             [PeerEvent::ChannelQueueOverflow {
-                channel: Channel::SwoopControl
+                channel: Channel::SwoopControl,
+                overflows: 1
             }]
         ));
         // The newest record survived — it is the one the viewer still needs.
@@ -1558,5 +1879,137 @@ mod tests {
         );
         assert!(stats.datagrams_sent > 0);
         assert!(host.last_rtp_timestamp_90k().is_some());
+    }
+
+    /// Audio arrives faster than the session polls: five 10 ms frames per
+    /// poll here, a ratio the product sees whenever a poll waits on the
+    /// socket. str0m packetises one queued write per media per timeout and
+    /// refuses a queue past 100, so a poll that runs one timeout loses every
+    /// audio frame after the first second (B4A, 2026-09-24). Loopback.
+    #[cfg(feature = "audio-opus")]
+    #[test]
+    fn audio_queued_faster_than_the_poll_rate_is_all_written() {
+        use crate::audio::{AudioPacket, AudioTrack};
+        use str0m::media::Direction;
+
+        let mut host = RtcPeer::bind(PeerConfig {
+            bind_addr: "127.0.0.1:0".parse().expect("a literal address"),
+            codec: Codec::H264,
+            fps: 60,
+            bitrate_bps: 20_000_000,
+            qpc_hz: 10_000_000,
+            enable_bwe: false,
+        })
+        .expect("bind host");
+        let (audio_tx, track) = AudioTrack::channel();
+        host.set_audio_source(track);
+
+        let viewer_socket = UdpSocket::bind("127.0.0.1:0").expect("bind viewer");
+        viewer_socket
+            .set_read_timeout(Some(Duration::from_millis(1)))
+            .expect("read timeout");
+        let viewer_addr = viewer_socket.local_addr().expect("viewer addr");
+
+        let mut exts = ExtensionMap::standard();
+        exts.set(EXT_ID_PLAYOUT_DELAY, Extension::PlayoutDelay);
+        exts.set(EXT_ID_TWCC, Extension::TransportSequenceNumber);
+        let mut viewer = RtcConfig::new()
+            .clear_codecs()
+            .enable_h264(true)
+            .enable_opus(true)
+            .set_extension_map(exts)
+            .build(Instant::now());
+        viewer.add_local_candidate(
+            Candidate::host(viewer_addr, "udp").expect("viewer host candidate"),
+        );
+        let mut api = viewer.sdp_api();
+        api.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
+        api.add_media(MediaKind::Audio, Direction::RecvOnly, None, None, None);
+        let (offer, pending) = api.apply().expect("the offer has changes");
+        let answer = host
+            .accept_offer(&offer.to_sdp_string())
+            .expect("the host answers");
+        viewer
+            .sdp_api()
+            .accept_answer(
+                pending,
+                str0m::change::SdpAnswer::from_sdp_string(&answer).expect("parse answer"),
+            )
+            .expect("the viewer applies the answer");
+
+        const POLLS: u64 = 40;
+        const AUDIO_PER_POLL: u64 = 5;
+        let mut buf = vec![0u8; RECV_BUF_BYTES];
+        let mut ev = events();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut connected = false;
+        let mut polls_with_media = 0u64;
+        while Instant::now() < deadline {
+            host.poll(Instant::now(), Duration::from_millis(1), &mut ev)
+                .expect("host poll");
+            loop {
+                match viewer.poll_output().expect("viewer poll_output") {
+                    Output::Timeout(_) => break,
+                    Output::Transmit(t) => {
+                        viewer_socket
+                            .send_to(&t.contents, t.destination)
+                            .expect("viewer send");
+                    }
+                    Output::Event(Event::Connected) => connected = true,
+                    Output::Event(_) => {}
+                }
+            }
+            if let Ok((n, source)) = viewer_socket.recv_from(&mut buf) {
+                let contents = buf[..n].try_into().expect("a datagram");
+                viewer
+                    .handle_input(Input::Receive(
+                        Instant::now(),
+                        Receive {
+                            proto: Protocol::Udp,
+                            source,
+                            destination: viewer_addr,
+                            contents,
+                        },
+                    ))
+                    .expect("viewer handle_input");
+            } else {
+                viewer
+                    .handle_input(Input::Timeout(Instant::now()))
+                    .expect("viewer timeout");
+            }
+            if polls_with_media == POLLS {
+                break;
+            }
+            if host.state() == PeerState::Connected && connected {
+                // the product's order: the video frame between polls, with
+                // the audio that arrived meanwhile waiting on the track.
+                for i in 0..AUDIO_PER_POLL {
+                    let n = polls_with_media * AUDIO_PER_POLL + i;
+                    audio_tx
+                        .send(AudioPacket { rtp_48k: n * 480, payload: vec![0xfc; 20] })
+                        .expect("queue an audio frame");
+                }
+                host.send(&EncodedFrame {
+                    data: vec![0u8; 4_000],
+                    is_irap: polls_with_media == 0,
+                    codec: Codec::H264,
+                    width: 1920,
+                    height: 1080,
+                    frame_id: polls_with_media,
+                    captured_qpc: (polls_with_media as i64) * 166_667,
+                    encoded_qpc: (polls_with_media as i64) * 166_667,
+                })
+                .expect("write the frame");
+                polls_with_media += 1;
+            }
+        }
+        assert!(connected, "the two peers never completed ICE + DTLS");
+        let stats = host.stats();
+        assert_eq!(stats.frames_written, POLLS);
+        assert_eq!(
+            stats.audio_packets_written,
+            POLLS * AUDIO_PER_POLL,
+            "audio frames were refused once str0m's per-media queue filled"
+        );
     }
 }

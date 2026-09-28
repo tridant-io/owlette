@@ -257,3 +257,5 @@ jobs:
       - name: unit tests
         working-directory: web
         run: npm test -- --ci
+      - name: script tests
+        run: npm run test:scripts

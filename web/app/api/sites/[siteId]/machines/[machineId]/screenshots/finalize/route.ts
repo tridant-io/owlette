@@ -13,7 +13,8 @@
  * Auth: `machine=<id>:write` or agent ID-token, as on /screenshots/upload-url.
  * Naturally idempotent apart from the history append, which pruning absorbs.
  * Not separately rate limited: every call needs a storagePath minted by an already-counted
- * /screenshots/upload-url request, so billing both legs would halve the per-IP screenshot budget.
+ * /screenshots/upload-url request, so billing both legs would halve the machine's screenshot
+ * budget.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';

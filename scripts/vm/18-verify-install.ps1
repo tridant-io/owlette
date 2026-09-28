@@ -19,7 +19,6 @@
 # ASCII ONLY: PowerShell 5.1 decodes a .ps1 as the system ANSI codepage unless
 # the file carries a UTF-8 BOM.
 
-#Requires -RunAsAdministrator
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'CredFile',
   Justification = 'Path to a DPAPI-encrypted PSCredential file, not a credential.')]
 param(
@@ -35,6 +34,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Reverting and PowerShell Direct need Hyper-V rights, which a member of
+# Hyper-V Administrators (S-1-5-32-578) holds without elevation; an elevated
+# administrator has them too. Either is enough (the same guard as 18b).
+$__id = [Security.Principal.WindowsIdentity]::GetCurrent()
+$__pr = New-Object Security.Principal.WindowsPrincipal($__id)
+$__hv = [bool]($__id.Groups | Where-Object { $_.Value -eq 'S-1-5-32-578' })
+if (-not ($__hv -or $__pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))) {
+  throw "run this elevated, or as a member of Hyper-V Administrators"
+}
+
 try { Stop-Transcript | Out-Null } catch { }
 $log = Join-Path $env:TEMP ("owlette-vm-verify-{0}-{1}.log" -f $PID, (Get-Date -Format 'HHmmss'))
 try { Start-Transcript -Path $log -Force | Out-Null; Write-Host "transcript: $log" -ForegroundColor Cyan }

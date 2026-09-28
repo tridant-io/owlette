@@ -146,6 +146,7 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
       { value: 'watchdog_restart', label: 'watchdog restart' },
       { value: 'watchdog_budget_exhausted', label: 'watchdog budget exhausted' },
       { value: 'unexpected_service_restart', label: 'unexpected service restart' },
+      { value: 'install_permissions_repaired', label: 'install permissions repaired' },
     ],
   },
   {
@@ -156,6 +157,7 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
       { value: 'process_stopped', label: 'process stopped' },
       { value: 'process_killed', label: 'process killed' },
       { value: 'process_crash', label: 'process crashed' },
+      { value: 'process_exited', label: 'process exited' },
       { value: 'process_start_failed', label: 'process start failed' },
       { value: 'process_launch_failed', label: 'process launch failed' },
       { value: 'exe_missing', label: 'executable missing' },

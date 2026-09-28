@@ -224,20 +224,17 @@ Owlette-Installer-v<version>.exe /SERVER=prod
 
 ### Manual Configuration Override
 
-`configure_site.py` accepts `--url` to point at an API base other than the two hosted ones:
+`configure_site.py` accepts `--url` with one of the two hosted API bases only, `https://owlette.app/api` or `https://dev.owlette.app/api`:
 
 ```bash
-python configure_site.py --url https://localhost:3000/api --server dev
+python configure_site.py --url https://dev.owlette.app/api --server dev
 ```
 
-Two things matter here:
+The agent sends its credentials to those two hosts and no others. Any other `--url` is refused before anything is sent, and any other `firebase.api_base` in `config.json` is ignored in favour of the environment's base, with a warning in the log. An agent cannot be pointed at a local web server.
 
-- `--server` is **required** whenever `--url` is given. `--url` is a pure base-URL override and carries no environment of its own, so without `--server` the agent would write a production Firebase project id for a development URL. Passing `--url` alone exits with code 2.
-- The base must end at `/api`, not `/setup`. The agent appends its own paths to it (`/agent/auth/exchange`, `/agent/auth/device-code/...`).
+`--server` is **required** whenever `--url` is given. `--url` carries no environment of its own, so without `--server` the agent would write a production Firebase project id for a development URL. Passing `--url` alone exits with code 2.
 
 With no `--url`, `--server` is optional: the machine keeps the environment its config is already bound to.
-
-This is useful for local web development.
 
 ## Version History
 

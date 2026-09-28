@@ -7,11 +7,582 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+## [4.0.6] - 2026-09-28
+
+### fixed — a Mac is no longer refused its swoop token
+
+macOS names a machine `Name.local`, and the API's machine id rule allows only
+letters, digits, `_` and `-`, so a Mac paired under that name had every swoop
+token request refused. A Mac now takes its id without the `.local` suffix the
+first time it pairs. A Mac already paired as `Name.local` keeps its id, because
+its token is bound to it; re-pair it to move to the short one. Hosting a swoop
+session on macOS and Linux still waits on the streamer for those platforms.
+
+### fixed — a process that exits cleanly is no longer a crash
+
+The agent only checked whether a managed process was still alive, so a process
+that finished and exited normally was booked as a crash: an error event, an
+alert, a crash screenshot, a hoot investigation and a relaunch attempt. An app
+that exits on a schedule used up its relaunch limit and raised a restart pending
+on a machine where nothing had crashed, and so did somebody closing an app that
+kept coming back. The agent now reads the exit code. Exit code 0 is never a
+crash: it is logged as `process_exited` and the process is relaunched without
+spending its relaunch budget. After an exit 0 within a minute of launch the
+relaunch waits a minute, so a program that quits straight away is not started
+again every five seconds. A non-zero exit code is still a crash, and the code
+now appears in the event. The exit of a process the agent re-adopted after an
+update or a service restart is read as well.
+
+### fixed — pasting from your computer into a swoop session works
+
+A paste into the machine never arrived. The page read your clipboard through a
+browser permission it asked for on the first paste, gave that prompt a second
+and a half, and stopped trying after a refusal; in fullscreen the prompt could
+not be seen at all. ctrl+v now hands the page your clipboard the way a paste
+into any web page does, with nothing to allow, and the page sends it to the
+machine before the keystroke that pastes it.
+
+### fixed — an image pasted into the machine is the one that pastes
+
+The machine decoded a pasted image into a bitmap before it put anything on its
+clipboard, and on a large image the ctrl+v behind it got there first and pasted
+whatever was copied before. The image now goes on at once, and the bitmap that
+apps like Paint read is made when one of them asks for it.
+
+## [4.0.5] - 2026-09-27
+
+### fixed — swoop shows your own pointer over the bars around the picture
+
+Over the dark bars between the toolbar and a picture that does not fill the
+window, the page hid your pointer and pinned the machine's to the picture's
+edge, so it looked stuck while your mouse moved on unseen; a click or a scroll
+there reached the machine at that edge. Now your own pointer shows over the
+bars and nothing is sent from them. A drag that starts on the picture and runs
+off it still carries on, held at the edge.
+
+### changed — swoop copies and pastes images both ways, up to 15 MB
+
+An image copied on either side of a session now pastes on the other at
+screenshot sizes. The limit rose from 2 MB to 15 MB, and a bitmap copied on the
+machine, such as a Print Screen or a copy from most Windows apps, is sent as a
+compressed PNG instead of at its raw size, so a 4K screenshot is a few megabytes
+rather than over the limit. An image pasted into the machine now also reaches
+apps that paste only bitmaps, such as Paint.
+
+A large image is sent at the pace the connection can carry, so it never holds up
+the picture or the session's own messages, and the paste reaches the machine
+only after the image has left the browser. The machine needs an agent from this
+release or later for images over 2 MB.
+
+## [4.0.4] - 2026-09-26
+
+### fixed — a swoop session stays up for as long as its tab is open
+
+A network hiccup no longer ends a session. The signalling room used to tell the
+machine a viewer had left whenever the viewer's signalling socket closed, which
+the page does to refresh its token before every connection recovery after the
+first minute, and the machine then dropped a picture that was still flowing. The
+room now leaves that to the machine's own view of the connection, and does not
+announce a re-dialling viewer twice.
+
+A reconnect no longer kills itself. The page used to end the old session on
+every automatic reconnect, and that end reached the machine as a kill for
+whatever was running, which was usually the new session; the page now ends a
+session on the server only when the operator does, the room's kill reaches only
+the session it names, and the polled kill is sent only when the room could not
+deliver one.
+
+The page now stops only for the operator's end, an admin's kill, another tab or
+device taking the machine, or a policy refusal from the API. A lapsed sign-in, a
+machine that is briefly offline, a 403 from in front of the app, or a failed
+token mint during a re-dial now reconnect on the backoff ladder instead of
+ending for good. A reconnect keeps control without a new passkey, because the
+tab's continuity token no longer depends on the old session's viewer list; an
+admin's kill on the machine still voids it.
+
+There is no 12-hour cap any more: the lease route no longer refuses a long
+session, the machine is sent a cap no session reaches, and the daily sweep
+closes a session record only once its lease has lapsed.
+
+### fixed — swoop holds on through a lost network and survives an agent update
+
+The machine now holds a viewer for a minute after its connection drops, pausing
+its picture and asking the browser to restart the connection, where it used to
+drop the viewer after 15 to 25 seconds; the page no longer abandons a session
+just because its connection is down, so a short drop picks up on the same
+session, and it gives up on a silent machine only while it can actually reach
+it.
+An agent update or restart now sends viewers back to reconnect instead of ending
+their session for good. The update to this version itself still ends one,
+because the old agent does the stopping.
+
+The agent's swoop kill ends only the session it names, a late request for an
+earlier session no longer replaces the live one, a packet the machine cannot
+parse no longer ends a viewer, and the agent logs the streamer's real reason for
+exiting instead of "normal".
+
+## [4.0.3] - 2026-09-26
+
+### changed — the macOS menubar icon blends in
+
+The menubar shows a template glyph that macOS tints to match the bar (the owl's
+eye when the service is up and connected, a closed eye while the cloud is
+unreachable); only the error state keeps the red orb. Windows keeps its
+coloured icons.
+
+### fixed — the tray menu names the machine on macOS and Linux
+
+It read "hostname: unknown" because a launchd or systemd child carries no
+`HOSTNAME` in its environment and macOS has no `/etc/hostname`; the tray now
+asks the kernel, the same call the agent makes, so the menu and the machine
+card agree.
+
+### fixed — the swoop doorbell stops reconnecting every few minutes
+
+Its refresh margin was written for long-lived tokens, so the 300-second
+doorbell token was due for refresh the moment it arrived and the socket was
+torn down and re-dialled on every connect. A short token now refreshes at
+65–80 % of its life.
+
+## [4.0.2] - 2026-09-26
+
+### fixed — a Mac reports its GPU
+
+The agent reads the Apple GPU from the IORegistry (name, utilisation, memory
+in use out of the unified pool), so the card and list show it instead of N/A.
+
+### fixed — a Mac or Linux machine no longer shows half its RAM
+
+The dashboard now reads the total the agent reports instead of recovering it
+from used ÷ percent, a sum that only holds on Windows; a 16 GB MacBook Air
+read as 7.7 GB. The agent also reports "used" the way its own percent is
+built (total minus available), so the bar and the figure agree.
+
+## [4.0.1] - 2026-09-26
+
+### fixed — the macOS installer always puts the app in /Applications
+
+The package no longer lets macOS relocate the app onto another copy of the
+bundle it knows about (a build tree, an old download), which left the login
+item pointing at nothing. The Windows build no longer deletes the macOS and
+Linux build scripts, and the upload script retries once when the API answers
+with an empty body.
+
+## [4.0.0] - 2026-09-25
+
+Owlette 4 runs on three platforms. One release ships the Windows exe, the Apple
+silicon pkg and the Ubuntu deb under one version and one `latest` pointer;
+downloads pick the visitor's platform; the fleet update sends each machine the
+installer for its own platform; and swoop, the remote-control session, ships
+with it. Everything below landed on the way.
+
+### changed — the fleet update sends each machine the installer for its own platform
+
+The update picks the file by the machine's os and architecture (an agent that
+reports neither is windows x64); a machine whose platform the version has no
+file for is skipped and named in the result, with the reason. One version can
+carry the windows exe, the apple silicon pkg and the linux deb.
+
+### fixed — a swoop session that lost its host reconnects instead of waiting forever
+
+The page gives the machine 20 seconds to answer; a machine that stays silent
+(a streamer the agent refused to start, a host mid-restart) ends the attempt
+with the reason on screen and the reconnect ladder carries on. The ladder now
+only resets after a session has held for five minutes, and the agent no longer
+counts a clean exit against its spawn ceiling, so a host that comes up for a
+minute and drops cannot lock the machine out of swoop. The session record and
+audit trail keep the page's own reason for ending a session (`viewerReason`).
+
+### added — the macOS app says when Screen Recording is off
+
+A notice in the window names the consequence (no remote screenshots, no swoop
+picture) and opens the Screen Recording setting; the grant takes effect on
+the next launch.
+
+### changed — the machines API reports each machine's OS
+
+`GET /api/sites/{siteId}/machines` and the machine detail carry `osFamily`
+(`windows`, `macos` or `linux`), `arch` and `osVersion` as the agent
+heartbeats them; null for an agent that predates the fields.
+
+### added — a Linux package, installed and verified on the kiosk VM
+
+`agent/build/linux/build.sh` produces one `Owlette-Installer-v<version>.deb`:
+the service runtime with its own Python 3.11 under `/opt/owlette`, the systemd
+unit, the desktop app with the user unit that starts it for every login, and
+the polkit rule that lets the owlette group control the service, with the
+app's own library dependencies declared so the agent's single-file self-update
+resolves. An upgrade restarts a running desktop app onto the new binary, and
+the python-build-standalone tarball the build fetches is checked against a
+pinned sha256 on every run. Installed on the Ubuntu 24.04 kiosk VM: the
+service came up from the new runtime and heartbeated as the new version, the
+app started for the seat, a notification went through the service, the seat
+user restarted the service without sudo, and the upgrade to the next build
+went through in one `apt-get install`.
+
+### added — a macOS installer package (unsigned build path)
+
+`agent/build/macos/build.sh` produces one `.pkg` for Apple silicon on macOS 15
+and up: the service runtime (a standalone Python 3.11 with the agent's
+dependencies) under `/Library/Application Support/Owlette/runtime`, the
+LaunchDaemon and LaunchAgent that run the service and the app, and the app in
+`/Applications`. The scripts stop what is running, lay out the data tree with
+the same modes the service expects, load both jobs and hand a pairing preseed
+to the pairing flow in the background. Signing and notarisation are flags
+that wait on the Apple team id.
+
+### added — the desktop app answers the daemon's capture and notification jobs on macOS and Linux
+
+Off Windows the service has no display, so it drops a job file into the data
+tree and the app carries it out where the user is: a screenshot on macOS on the
+app's own Screen Recording grant (a typed refusal until that grant exists), a
+notification on both, and a typed refusal for anything else. On macOS the app
+also tells the service every minute whether it holds Screen Recording, asking
+for it once per launch.
+
+### changed — on macOS the app shows a Dock icon only while its window is open
+
+A menubar app the rest of the time.
+
+### changed — the desktop app uses macOS's own window buttons
+
+On macOS the window keeps the native traffic lights at top left and draws no
+Windows-style minimise, maximise and close controls of its own; the title row
+leaves them room.
+
+### changed — one passkey check covers a machine for 12 hours, not 10
+
+Taking control still needs a second factor, but one check now covers that
+machine for a working day, reconnects and new tabs included. The same tab keeps
+it for as long as it lives regardless. Ending a session from elsewhere still
+revokes the window at once.
+
+### changed — the swoop latency overlay reads cleanly and names the codec
+
+The box is wider so no label wraps, the numbers line up, and the stages say
+what they measure: "decode" is the decoder's own time, "wait for paint" is a
+decoded frame waiting for the next paint (0 to one refresh on a 60 Hz display,
+which is the jitter that used to read as decode), "paint → display" is the
+refresh after that. A "codec" row shows what the picture is arriving in.
+
+### changed — a swoop tab keeps its passkey for as long as it lives
+
+Coming back to a session after hours landed on the passkey screen: a reconnect
+mints a new session, and control needed a fresh ceremony once the 10-minute
+window had passed. A control grant now carries a continuity token the tab keeps
+in memory only; its next mint presents it instead of a passkey, and the server
+honours it for the same user on the same machine, once, unless the previous
+session was killed, ended deliberately or revoked. A new tab asks as before.
+
+### changed — a clean swoop session bar, and the screen stays awake
+
+The bar shows the machine's name and nothing else while things are fine:
+"connected" and the wifi icon are gone, the stage carries the connecting
+spinner, and a badge appears only for disconnected, reconnecting, poor
+connection or view only. Fullscreen, end session and reconnect are icons with
+tooltips. The page holds a screen wake lock for the life of a session and takes
+it again whenever the tab comes back, so a display does not sleep under a live
+picture.
+
+## [3.3.15] - 2026-09-24
+
+### fixed — the swoop cursor was blocky
+
+The host shrank any pointer above 32 px to the css-cursor ceiling and the page
+stretched it back, nearest-neighbour. The wire now carries the shape at full
+detail up to the 64 px message cap, and the overlay is drawn smoothly.
+
+## [3.3.14] - 2026-09-24
+
+### fixed — the swoop cursor was drawn at half size, and twice during a title-bar drag
+
+A pointer bigger than 32 px (pointer size 2, or 200% scaling) was shrunk for
+the wire and drawn at the shrunk size. The host now says by how much it shrank a
+shape and the page draws it back at true size, as an overlay. In the windowed
+view the page also hides the local pointer whenever the machine hides its own
+(Windows paints the cursor into the picture during a title-bar drag) and
+whenever an overlay stands in for it, so there is one cursor, never two. The
+fullscreen letterbox is black rather than the theme's blue.
+
+## [3.3.13] - 2026-09-24
+
+### fixed — a swoop session froze for good when the transport closed a channel
+
+The streamer's outbound channel queue stopped at the first record whose channel
+was not open, so once the transport had closed one channel under the browser
+(B4A: `swoop-feedback`, with a pong queued for it) every later cursor and meta
+record was dropped behind it and the picture, the cursor and the stats froze
+while the session stayed "live". A record for a closed channel is now dropped,
+a record for a channel that has not opened yet steps aside, and neither holds
+up the others. The overflow warning that flooded the log at sixty a second is
+now logged once and then every five hundredth, with the count, and the feature
+outbox's refusal count is logged when it moves rather than every status tick.
+
+The page's feedback loop now notices a host that answered pings and then went
+silent for eight seconds and reconnects the session with fresh channels — the
+browser owns the channels, so nothing short of a new peer brings one back.
+
+## [3.3.12] - 2026-09-24
+
+### fixed — swoop audio was refused for the whole session
+
+The streamer packetised one queued audio frame per poll while audio arrived
+at a hundred a second, so the queue filled within a second and every frame
+after it was refused. Each poll round now packetises what is queued first.
+
+### changed — a swoop session survives the host losing its signalling socket
+
+The streamer exited the moment its room socket closed, ending a live session
+that no longer needed the room. With a viewer connected it now keeps the
+session, asks the service for a fresh token and redials.
+
+### changed — the viewer page keeps a session up
+
+The page redials the room and restarts the link for as long as it takes, and
+starts a new session after an end that was not a decision. It presents every
+renewed lease to the host, so sessions no longer end at five and a half
+minutes; a doubled answer no longer ends one either. The machine's own cursor
+is drawn in fullscreen, at the picture's scale.
+
+## [3.3.11] - 2026-09-24
+
+### fixed — swoop connects from a host that has a VPN up
+
+The streamer offered the one address on its internet route, which with a
+VPN connected is the tunnel's, unreachable from the LAN. It now offers the
+address that actually routes to the viewer.
+
+## [3.3.10] - 2026-09-23
+
+### changed — the swoop streamer's diagnostic log covers the connection itself
+
+With the agent's log level at debug, the streamer now records how each
+viewer's connection was negotiated, so a session that never shows a picture
+leaves a trace of why.
+
+## [3.3.9] - 2026-09-23
+
+### fixed — swoop keeps its picture clean and its bitrate up
+
+The streamer was cutting its own bitrate every time it held a frame back,
+and again when the viewer noticed the gap, so a 50 mbps session ran at a
+fraction of that and every held frame smeared until the next keyframe. It
+no longer cuts on its own doing, allows a short burst on a screen change,
+and a keyframe no longer costs the frames behind it.
+
+### fixed — swoop audio no longer drops most of its frames
+
+Only the first audio frame per tick was reaching the viewer; all of them do
+now.
+
+### added — a keyboard menu in the swoop toolbar
+
+Ctrl+Alt+Del, the Windows key, Alt+Tab and the other shortcuts your browser
+keeps for itself can be sent from a menu beside the settings. The keyboard
+lock notice is gone; the fullscreen button explains what it captures.
+
+### added — reconnect from an ended or failed swoop session
+
+The toolbar offers reconnect in place of end session once a session has
+ended or failed.
+
+### changed — the swoop streamer follows the agent's logging level
+
+The separate `swoop.logLevel` key that 3.3.8 introduced is gone; setting the
+agent's `logging.level` to `debug` turns the streamer's counters on too.
+
+## [3.3.8] - 2026-09-23
+
+### fixed — a swoop session no longer ends at the five-minute mark
+
+The host's signaling credential lives five minutes, and the streamer had no
+way to renew it, so every session froze at that point with no message. The
+agent now renews it ahead of time and the session carries on for as long
+as its cap allows.
+
+### fixed — a swoop session survives a network path it cannot use
+
+A viewer's browser offers every address its machine has, VPN and virtual
+adapters included. One the host could not reach used to end the whole
+session; it is now skipped, and connecting is faster for it.
+
+### changed — swoop's firewall rule and policy follow the site switch
+
+Turning swoop on for a site now creates the host's inbound firewall rule
+and the secure-attention policy on each machine; turning it off removes
+them, and uninstalling the agent removes them along with swoop's logs.
+
+### changed — the machine list's OS line sits under the hostname
+
+In list view the operating system now starts under the hostname's first
+letter, and when the column is narrow it abbreviates rather than hiding
+behind a hover: "Win 11 Pro 23H2" then "Win 11 Pro", "Ubuntu 24.04.5" then
+"Ubuntu 24.04" then "Ubuntu 24". The full name stays in the tooltip.
+
+### added — a diagnostic log level for the swoop streamer
+
+Setting `swoop.logLevel` to `debug` in the agent's config turns on the
+streamer's per-frame counters for a support investigation.
+
+## [3.3.7] - 2026-09-23
+
+### security — a hardening fix for the install folder's permission repair
+
+Details follow after the disclosure window.
+
+### changed — the agent catches up with the dashboard
+
+This is the first installer to carry the agent's half of the 3.3.6 entries:
+machines report their operating system, and the swoop streamer ships
+switched off.
+
+### fixed — docs search puts the page named for your query first
+
+Searching the docs for a word that is a page's title, such as "roost", now lists
+that page first. It used to lose to pages that repeat the word in short code
+samples, and could fall off the end of the list altogether.
+
+## [3.3.6] - 2026-09-21
+
+### security — the install folder is no longer writable by every local account
+
+owlette keeps its program files and its data under one folder,
+`C:\ProgramData\Owlette`, whose permissions let any standard Windows account on
+the machine modify what was inside it. Two things followed from that: the
+agent's program files — which the service runs with full system privileges —
+could be replaced by an account that has none, and the encrypted file holding
+the machine's owlette credentials could be read by any local account rather
+than only the person using the machine. A machine whose only accounts are
+administrators was never exposed; a machine anyone else can sign in to was.
+Upgrade every machine — 3.3.6 corrects the permissions and keeps them
+corrected.
+
+- The program folders (`agent`, `python`, `tools`, `app`, `scripts`), the
+  documents in the install root and the uninstaller are readable and runnable
+  by standard users, and writable only by the system account and
+  administrators.
+- The installer applies this on every install and upgrade, and the service
+  re-checks it and repairs any drift when it starts and when someone signs in,
+  so a machine whose permissions have been changed corrects itself without a
+  reinstall.
+- The machine's credential file is limited to the system account,
+  administrators and the signed-in user. Each save now writes a new protected
+  file and swaps it over the store in one step instead of rewriting it in
+  place, so there is no moment at which it sits there half-written.
+- A self-update downloads into a folder only the service can write, and the
+  installer's checksum is taken from the same open file the service hands to
+  Windows to run: the file that was verified is the file that runs.
+- The service confirms who created a file before it acts on it — its stop
+  signal, the update marker, the Cortex/hoot command queue and the result a
+  process launch reports back. A file written by an account it cannot vouch
+  for is logged and ignored.
+- The recovery watchdog can be switched off only through a registry value an
+  administrator sets, `HKLM\SOFTWARE\Owlette\WatchdogDisabled`. The old
+  `tmp\watchdog_disabled` file has no effect.
+- The agent sends its credentials only to the owlette.app API hosts. Any other
+  configured address is refused rather than used.
+- Permission checks identify the Windows built-in accounts by their fixed
+  identifiers instead of their English names, so they work on a non-English
+  Windows.
+- **Known limitation — the person signed in at the machine can still read its
+  credentials.** Pairing runs as that user, so the credential file stays
+  readable by the account at the console; 3.4.0 moves pairing and credential
+  storage behind the service and ends it. Every other local account has lost
+  the access.
+- **Known limitation — re-pair machines that had untrusted local accounts.**
+  3.3.6 changes who can read the credential file; it does not invalidate a copy
+  taken before the upgrade. On any machine where an account you do not trust
+  could sign in, re-pair the machine after upgrading so it runs on fresh
+  credentials.
+- **Known limitation — the upgrade onto 3.3.6 is carried out by the agent
+  already on the machine.** A self-update runs from the version installed, so
+  this one download still uses the old, unprotected staging folder; the
+  protected folder applies to every update from 3.3.6 onwards. Running the
+  3.3.6 installer yourself skips that last step.
+- **Known limitation — the desktop app resets one file's permissions.** The
+  tray app writes `tmp\app_states.json` itself, and its write drops the
+  protected permissions the service had set on it; the service restores them on
+  its next write.
+- **Known limitation — `configure_site.py --url` no longer accepts a local
+  development server.** It takes `https://owlette.app/api` or
+  `https://dev.owlette.app/api` and nothing else, so an agent can no longer be
+  pointed at a development API running on the machine.
+- **Known limitation — re-pairing from a remote session.** After the service's
+  permission repair, only the account signed in at the machine's console holds
+  write access to the credential file, so re-pairing from a Remote Desktop
+  session run as a standard user fails. Re-pair from the console, or from an
+  elevated prompt in the remote session; 3.4.0 removes the need.
+
+### changed — a developer grant, and a record when permissions are repaired
+
+- **`-DevGrant` for developers who deploy into an installed agent.** Run from
+  an elevated prompt, `scripts/bootstrap-windows.ps1 -DevGrant` gives the
+  developer's own account — never every user — write access to the installed
+  `agent\src` and `app` folders, so a local deploy hook keeps working against a
+  hardened tree. `-RemoveDevGrant` reverts it. An agent install resets those
+  folders, so the grant is re-run afterwards.
+- **A repaired machine says so.** When the service finds and fixes drifted
+  install permissions at start-up, it records an `install_permissions_repaired`
+  event naming the paths it corrected, rather than only noting it in the local
+  log.
+
+### added — swoop, the remote screen, ships switched off
+
+The dashboard gains swoop: watch a machine's screen live and, with a second
+factor, take its keyboard and mouse. It is off for every site until a site
+admin turns it on, and it has its own release to come; nothing changes for a
+site that leaves it off.
+
+### added — machines report their operating system
+
+Each machine now reports its operating system and version. The machine card
+shows it under the hostname, and the machine list carries it as a second line.
+
+### added — filter the logs by several actions at once
+
+The action filter on the logs page is a searchable list of checkboxes, so you
+can show, say, every start and stop together, and find an action by the name
+you see in a row. The filters sit on one row, with the custom date range
+joining it instead of opening a second one.
+
 ### added — pin a metric to read it on its own
 
 Clicking a stat card under a machine's metrics chart pins it: its line stays
 highlighted, the other cards dim, and the readout under the cursor lists only
 that metric while you scrub along the line. Click the card again to unpin.
+
+### changed — machine cards are easier to read
+
+The metrics row lines up the same metric at the same place on every card,
+healthy temperatures are no longer coloured so colour only marks a crossed
+threshold, the online pill is a dot that shares the "last seen" tooltip, and
+the ping cell now shows whether the network interface is up. The labels in
+that row start at the same left edge as the display and process rows below
+it, instead of floating towards the middle of their cells on a wide card.
+
+### changed — docs search returns a usable number of results
+
+A search of the docs now returns a bounded, ranked list instead of every
+matching section, and the pages carry keywords for the words you type that
+the prose never uses.
+
+### changed — groundwork for the agent on macOS and Linux
+
+The agent's code now runs on all three operating systems and is tested on
+each in every build. Nothing changes on Windows, and there is no macOS or
+Linux installer yet; those ship with their own release.
+
+### changed — you can no longer demote or remove yourself
+
+A site owner or admin who tries to change or delete their own membership now
+gets a refusal instead of locking themselves out, whatever the platform's
+capability enforcement switch is set to.
+
+### changed — the capability enforcement switch no longer covers swoop
+
+Turning capability enforcement off, the break-glass step during an
+authorization misfire, no longer opens swoop's viewing, control and settings
+capabilities: during a misfire swoop stays locked rather than open.
 
 ### fixed — every line on a metrics chart has a scale you can read
 
@@ -24,6 +595,13 @@ and throughput on one chart the labels follow the device under the cursor,
 keeping a CPU's or GPU's percent and temperature on their sides. Throughput
 scales now step evenly, so both sides line up with the gridlines, and their
 labels no longer wrap onto two lines.
+
+### fixed — a restart-pending banner on an unreachable machine can be dismissed
+
+A machine that crashed a process and never came back carried its
+restart-pending banner indefinitely, and dismissing it did nothing because it
+only queued a command the offline machine never collected. Dismiss now clears
+the flag in the cloud and relays the command to the agent as a courtesy.
 
 ## [3.3.5] - 2026-09-15
 

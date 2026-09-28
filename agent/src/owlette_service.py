@@ -12,6 +12,7 @@ if src_dir not in sys.path:
 
 import osadapter
 import shared_utils
+import acl_hardening
 import installer_utils
 import reboot_state
 import session_state
@@ -72,6 +73,12 @@ def _handle_thread_exception(args):
 MAX_RELAUNCH_ATTEMPTS = 3
 SLEEP_INTERVAL = 5
 TIME_TO_INIT = 60
+
+# An exit code of 0 is never a crash: the app finished, or somebody closed it.
+# One this soon after launch holds the relaunch for the failed-launch cooldown,
+# so a program that quits straight away (a launcher that hands off to another
+# executable) is started once a minute rather than every tick.
+QUICK_EXIT_SECONDS = 60
 
 # Marker the desktop app writes to tmp/app_states.json just before terminating a
 # PID for the operator. It has no Firebase client, so without this the service
@@ -749,12 +756,231 @@ def _remove_tree_nofollow(path):
         os.close(directory_fd)
 
 
+# ─── install-tree hardening ──────────────────────────────────────────────
+
+# access masks as ntsecuritycon spells them (FILE_ALL_ACCESS; FILE_GENERIC_READ
+# | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE; FILE_GENERIC_READ):
+# literals, so the module imports off windows. nothing here reads the
+# hardening table at import; it is empty off windows.
+_FILE_FULL = 0x1F01FF
+_FILE_MODIFY = 0x1301BF
+_FILE_READ = 0x120089
+
+
+def _console_user_acl_paths():
+    """The hardening-table paths that grant whoever is at the console. Their
+    repairs are expected (the grant is dropped at a boot with no one logged in
+    and added back at login), so only the fixed entries count as drift worth a
+    cloud event."""
+    return frozenset(
+        entry.path for entry in acl_hardening.specs()
+        if acl_hardening.follows_console_user(entry)
+    )
+
+
+def _update_marker_dacl():
+    """The self-update marker's DACL. Users keep read: the desktop app reads
+    the marker as the console user, so it never starts the service while an
+    update owns it."""
+    return [
+        (acl_hardening.SID_SYSTEM, _FILE_FULL, 0),
+        (acl_hardening.SID_ADMINISTRATORS, _FILE_FULL, 0),
+        (acl_hardening.SID_USERS, _FILE_READ, 0),
+    ]
+
+
+def _update_staging_aces():
+    """The ACEs the start-up repair asserts for update-staging (SYSTEM and
+    Administrators only); self-update stages its installer under them. Raises
+    AclApplyError when the table has no such row, so a staging directory
+    without a DACL to give it is never created."""
+    for entry in acl_hardening.specs():
+        if os.path.basename(entry.path) == 'update-staging':
+            return entry.aces
+    raise acl_hardening.AclApplyError('the hardening table holds no update-staging entry')
+
+# the exact shape cortex_tools._write_ipc_command writes. the service runs these
+# as system, and the id names the result file, so it must stay a bare file name.
+_CORTEX_CMD_MAX_BYTES = 64 * 1024
+_CORTEX_CMD_KEYS = frozenset({'id', 'tool_name', 'tool_params', 'timestamp'})
+_CORTEX_CMD_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
+# tool_name -> (required params, optional params)
+_CORTEX_TOOL_PARAMS = {
+    'restart_process': (frozenset({'process_name'}), frozenset()),
+    'kill_process': (frozenset({'process_name'}), frozenset()),
+    'start_process': (frozenset({'process_name'}), frozenset()),
+    'set_launch_mode': (frozenset({'process_name'}), frozenset({'mode', 'schedules'})),
+    'capture_screenshot': (frozenset(), frozenset({'monitor'})),
+}
+_LAUNCH_MODES = frozenset({'off', 'always', 'scheduled'})
+
+
+def _console_session():
+    """(session id, user name) at the physical console, or None while a
+    session is being attached or detached, or when it cannot be read. The name
+    is '' at the logon screen. Two cheap calls and no token handle: the local
+    config watcher reads it twice a second.
+
+    Windows only: the session ACL repair it feeds is a Windows ACL concept,
+    and off Windows there is no session to repair — the posix arms fix modes
+    at install. Answering None keeps the watcher from importing pywin32
+    twice a second on a Mac (measured on the MBA, 2026-09-25)."""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import win32ts
+        session_id = win32ts.WTSGetActiveConsoleSessionId()
+        if session_id == 0xFFFFFFFF:
+            return None
+        return session_id, win32ts.WTSQuerySessionInformation(
+            None, session_id, win32ts.WTSUserName)
+    except Exception as e:
+        logging.debug(f"Could not read the console session: {e}")
+        return None
+
+
+def _token_user_sid(token):
+    """The user SID a token runs as, or None when it cannot be read."""
+    try:
+        import win32security
+        return win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+    except Exception:
+        return None
+
+
+def _discard_untrusted_file(path, what, level=logging.WARNING):
+    """Log and delete a control file that fails acl_hardening.is_trusted_owner."""
+    logging.log(level, f"Ignoring {what} {path}: not a single-link file owned by "
+                       f"SYSTEM or Administrators - deleting it")
+    try:
+        os.remove(path)
+    except OSError as e:
+        logging.log(level, f"Could not delete untrusted {what} {path}: {e}")
+
+
+def _create_update_marker(path, marker):
+    """Write the self-update marker as a new file with _update_marker_dacl(), set
+    through the handle that creates it.
+
+    Its readers trust it only when SYSTEM or Administrators owns it, and any
+    local user can create files in logs\\, so whatever is at the path (a stale
+    marker of ours, or a planted file) is removed and the marker is created
+    exclusively: a file slipped in between fails this update instead of being
+    adopted. Raises OSError when the marker cannot be created.
+    """
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    payload = json.dumps(marker, indent=2).encode('utf-8')
+    try:
+        shared_utils._write_new_file_with_dacl(path, payload, _update_marker_dacl())
+    except acl_hardening.AclApplyError as e:
+        # written and owned by the service, so its readers still accept it.
+        logging.warning(f"{e}; the update marker keeps its inherited permissions")
+
+
+def _file_has_content(path):
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
+def _file_id(path):
+    """The file's id, which an atomic replace changes, or None when absent."""
+    try:
+        return os.stat(path).st_ino
+    except OSError:
+        return None
+
+
+def _pid_descends_from(pid, ancestor_pid, not_before, max_depth=5):
+    """True when `ancestor_pid` is among the first `max_depth` ancestors of
+    `pid` and every process on that walk was created at or after `not_before`.
+
+    Parent pids are compared as recorded rather than through psutil's parent(),
+    which is None once the parent has exited, and the launcher helper exits as
+    soon as it has reported. The creation-time bound keeps a recycled pid from
+    standing in for the helper.
+    """
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return False
+    try:
+        proc = psutil.Process(pid)
+        for _ in range(max_depth):
+            if proc.create_time() < not_before:
+                return False
+            ppid = proc.ppid()
+            if ppid == ancestor_pid:
+                return True
+            proc = psutil.Process(ppid)
+    except (psutil.Error, ValueError):
+        return False
+    return False
+
+
+def _read_cortex_command(path, console_sid):
+    """Load one queued Cortex command.
+
+    Raises ValueError unless the file is owned by SYSTEM, Administrators or the
+    console user (a Windows check: off Windows the data root's mode table
+    guards the channel), is at most 64 KiB, and holds a JSON object with a
+    bare-name id.
+    """
+    if os.name == 'nt' and not acl_hardening.is_trusted_owner(path, console_sid):
+        raise ValueError('refused: not a single-link file owned by SYSTEM, '
+                         'Administrators or the console user')
+    with open(path, 'rb') as f:
+        raw = f.read(_CORTEX_CMD_MAX_BYTES + 1)
+    if len(raw) > _CORTEX_CMD_MAX_BYTES:
+        raise ValueError('refused: larger than 64 KiB')
+    cmd = json.loads(raw.decode('utf-8'))
+    if not (isinstance(cmd, dict) and isinstance(cmd.get('id'), str)
+            and _CORTEX_CMD_ID.fullmatch(cmd['id'])):
+        raise ValueError('refused: not a JSON object with a valid id')
+    return cmd
+
+
+def _cortex_command_refusal(cmd, process_names):
+    """Why `cmd` is not a well-formed Cortex tool call, or None when it is.
+    `process_names` holds the configured process names, lowercased."""
+    if not set(cmd) <= _CORTEX_CMD_KEYS:
+        return 'unexpected keys'
+    timestamp = cmd.get('timestamp', 0)
+    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+        return 'timestamp is not a number'
+    tool_name = cmd.get('tool_name')
+    if not isinstance(tool_name, str) or tool_name not in _CORTEX_TOOL_PARAMS:
+        return 'unknown tool'
+    params = cmd.get('tool_params')
+    if not isinstance(params, dict):
+        return 'tool_params is not an object'
+    required, optional = _CORTEX_TOOL_PARAMS[tool_name]
+    if not required <= set(params) or set(params) - required - optional:
+        return f'unexpected tool_params for {tool_name}'
+    if 'process_name' in params:
+        name = params['process_name']
+        if not isinstance(name, str) or name.lower() not in process_names:
+            return 'process_name is not a configured process'
+    if 'mode' in params:
+        mode = params['mode']
+        if not isinstance(mode, str) or mode not in _LAUNCH_MODES:
+            return 'mode is not one of off, always, scheduled'
+    if 'schedules' in params and not isinstance(params['schedules'], list):
+        return 'schedules is not a list'
+    if 'monitor' in params:
+        monitor = params['monitor']
+        if isinstance(monitor, bool) or not isinstance(monitor, int) or monitor < 0:
+            return 'monitor is not a non-negative integer'
+    return None
+
+
 class Util:
 
     @staticmethod
     def initialize_results_file():
-        with open(shared_utils.RESULT_FILE_PATH, 'w') as f:
-            json.dump({}, f)
+        shared_utils.write_json_to_file({}, shared_utils.RESULT_FILE_PATH)
 
     @staticmethod
     def is_pid_running(pid):
@@ -797,7 +1023,7 @@ class OwletteService:
         self._service_start_time = time.time()
         # Replaced by the startup probe in both construction paths.
         self._health_state = None
-        self._api_base = shared_utils.read_config(['firebase', 'api_base']) or shared_utils.get_api_base_url()
+        self._api_base = shared_utils.get_configured_api_base()
 
         # _write_service_status throttle; initialised so the first call is always
         # refresh-due. That method also hasattr-guards, for callers that
@@ -955,6 +1181,18 @@ class OwletteService:
 
         self.firebase_client = None
 
+        # install-tree hardening: main() does the start-up repair and sets
+        # _acl_console and _acl_startup_repaired for real; the self-update
+        # handler holds _update_image_handle while an installer runs.
+        # (_untrusted_sentinel_logged is getattr-guarded and
+        # _pending_anomaly_event is set before every read, so neither needs a
+        # slot here.)
+        self._acl_repair_lock = threading.Lock()
+        self._acl_console = None
+        self._acl_startup_repaired = False
+        self._update_image_handle = None
+        self.console_user_token = None
+
     @property
     def _auth_manager(self):
         """The AuthManager the cloud client was built with, or None.
@@ -990,7 +1228,7 @@ class OwletteService:
                 return False
 
             project_id = shared_utils.read_config(['firebase', 'project_id']) or shared_utils.get_project_id()
-            api_base = shared_utils.read_config(['firebase', 'api_base']) or shared_utils.get_api_base_url()
+            api_base = shared_utils.get_configured_api_base()
             cache_path = shared_utils.get_data_path('cache/firebase_cache.json')
 
             logging.info(f"Initializing Firebase client - site: {site_id}, project: {project_id}")
@@ -1136,12 +1374,7 @@ class OwletteService:
                 'swoop': self._swoop_section()
             }
 
-            temp_path = status_path + '.tmp'
-            with open(temp_path, 'w') as f:
-                json.dump(status, f, indent=2)
-            if os.path.exists(status_path):
-                os.remove(status_path)
-            os.rename(temp_path, status_path)
+            shared_utils.write_json_to_file(status, status_path)
 
         except Exception as e:
             logging.debug(f"Failed to write early service status: {e}")
@@ -1269,12 +1502,14 @@ class OwletteService:
                     pass
                 return
 
-            temp_path = status_path + '.tmp'
-            with open(temp_path, 'w') as f:
-                json.dump(status, f, indent=2)
-
-            # os.replace() is atomic on Windows (no gap where file is missing)
-            os.replace(temp_path, status_path)
+            # one attempt, never a retry sleep: this runs on the 5-second loop,
+            # and a failed write is retried on its next tick. write_json_to_file
+            # logs its own failure (a lock at debug) and returns, so only a
+            # write that replaced the file advances the throttle.
+            previous_id = _file_id(status_path)
+            shared_utils.write_json_to_file(status, status_path, max_retries=1)
+            if _file_id(status_path) == previous_id:
+                raise OSError(f"{status_path} was not replaced")
 
             reason = (
                 'shutdown' if not running
@@ -1567,6 +1802,16 @@ class OwletteService:
             if not os.path.exists(STOP_SENTINEL_PATH):
                 return None
         except OSError:
+            return None
+
+        # owlette-host runs as localsystem; any local user can create files in
+        # tmp\. polled four times a second, so only the first one warns.
+        if not acl_hardening.is_trusted_owner(STOP_SENTINEL_PATH):
+            already_logged = getattr(self, '_untrusted_sentinel_logged', False)
+            self._untrusted_sentinel_logged = True
+            _discard_untrusted_file(
+                STOP_SENTINEL_PATH, 'stop sentinel',
+                logging.DEBUG if already_logged else logging.WARNING)
             return None
 
         written_at = self._stop_sentinel_written_at()
@@ -2279,7 +2524,9 @@ class OwletteService:
         """Execute pending Cortex IPC commands. Runs on a worker, never the loop.
 
         Scans ipc/cortex_commands/ for JSON files, executes the tool,
-        writes result to ipc/cortex_results/.
+        writes result to ipc/cortex_results/. A file runs only when it is owned
+        by SYSTEM, Administrators or the console user and is exactly the shape
+        Cortex writes; anything else is logged and deleted.
         """
         cmd_dir = shared_utils.CORTEX_IPC_CMD_DIR
         result_dir = shared_utils.CORTEX_IPC_RESULT_DIR
@@ -2292,19 +2539,26 @@ class OwletteService:
         except OSError:
             return
 
+        console_sid = acl_hardening.console_user_sid()
         for filename in files:
             cmd_path = os.path.join(cmd_dir, filename)
             try:
-                with open(cmd_path, 'r', encoding='utf-8') as f:
-                    cmd = json.load(f)
-
-                cmd_id = cmd.get('id', filename.replace('.json', ''))
-                tool_name = cmd.get('tool_name', '')
-                tool_params = cmd.get('tool_params', {})
-
-                logging.debug(f"Processing Cortex IPC command: {cmd_id} ({tool_name})")
-
-                result = self._execute_cortex_command(tool_name, tool_params)
+                cmd = _read_cortex_command(cmd_path, console_sid)
+                cmd_id = cmd['id']
+                config = shared_utils.read_config()
+                process_names = {
+                    proc.get('name', '').lower() for proc in config.get('processes', [])
+                }
+                refusal = _cortex_command_refusal(cmd, process_names)
+                if refusal:
+                    # the writer is trusted, so it gets the reason now rather
+                    # than a timeout.
+                    logging.warning(f"Refused Cortex IPC command {cmd_id}: {refusal}")
+                    result = {'error': f'command refused: {refusal}'}
+                else:
+                    tool_name = cmd['tool_name']
+                    logging.debug(f"Processing Cortex IPC command: {cmd_id} ({tool_name})")
+                    result = self._execute_cortex_command(tool_name, cmd['tool_params'])
 
                 os.makedirs(result_dir, exist_ok=True)
                 result_path = os.path.join(result_dir, f"{cmd_id}.json")
@@ -2318,7 +2572,7 @@ class OwletteService:
 
             except Exception as e:
                 logging.error(f"Error processing Cortex IPC command {filename}: {e}")
-                # Remove corrupt command to prevent infinite retry
+                # refused or corrupt: remove it so it is not retried forever.
                 try:
                     os.remove(cmd_path)
                 except OSError:
@@ -2596,6 +2850,10 @@ class OwletteService:
                 get_agent_token=self.firebase_client.auth_manager.get_valid_token,
                 shutdown_event=self._swoop_shutdown,
                 is_connected=self.firebase_client.is_connected,
+                # the mint's 200 / 403 is the enable bit for the firewall and
+                # SAS side effects; set_enabled hands the work to the manager's
+                # own thread, so the doorbell never waits on it.
+                on_enabled=lambda enabled: self.swoop_manager.set_enabled(enabled),
             )
             self.swoop_manager = SwoopManager(
                 firebase_client=self.firebase_client,
@@ -2923,6 +3181,10 @@ class OwletteService:
             if session_id != getattr(self, '_last_logged_session_id', None):
                 logging.info(f"User token refreshed for console session {session_id}")
                 self._last_logged_session_id = session_id
+                # the token file and the cortex queues grant whoever is at the
+                # console, and a new session can be a new user.
+                if getattr(self, '_acl_startup_repaired', False):
+                    self._start_session_acl_repair()
 
             return True
 
@@ -2934,6 +3196,33 @@ class OwletteService:
             self.console_user_token = None
             self.environment = None
             return False
+
+    def _start_session_acl_repair(self):
+        """Re-assert the install-tree DACLs for a new console session.
+
+        On a daemon thread: _refresh_user_token runs on the 5-second loop before
+        every launch. repair_all resolves the console user itself and never
+        raises.
+        """
+        def _repair():
+            with self._acl_repair_lock:
+                acl_hardening.repair_all(logging.getLogger(), session_change=True)
+
+        try:
+            threading.Thread(
+                target=_repair, name='acl-session-repair', daemon=True).start()
+        except Exception as e:
+            logging.warning(f"Could not start the session ACL repair (non-fatal): {e}")
+
+    def _check_console_session_acls(self):
+        """Start a session ACL repair when the console session or its user has
+        changed since the last look. Called on every local config watcher tick,
+        so a login is noticed even when the service launches nothing (a desktop
+        app started from the Startup folder, no configured process)."""
+        console = _console_session()
+        if console is not None and console != self._acl_console:
+            self._acl_console = console
+            self._start_session_acl_repair()
 
     def _get_elevated_install_token(self):
         """Get an elevated token that runs on the user's desktop.
@@ -3316,6 +3605,7 @@ class OwletteService:
         import json as json_module
         import uuid
         import win32con
+        import win32file
         import win32process
 
         # The uuid suffix is required: os.getpid() is constant for the service's
@@ -3325,8 +3615,30 @@ class OwletteService:
         handoff = f'{int(time.time())}_{os.getpid()}_{uuid.uuid4().hex[:8]}'
         pid_file = os.path.join(tmp_dir, f'pid_{handoff}.txt')
         args_file = os.path.join(tmp_dir, f'launch_{handoff}.json')
+        # every local user can create and modify files in tmp\, and the helper
+        # runs as the console user, whose sid the pid file grants.
+        helper_sid = _token_user_sid(self.console_user_token)
+        args_handle = None
 
         try:
+            # created exclusively, so the service owns it and only the helper's
+            # user can write the answer; the pid in it is still checked against
+            # the helper's process tree below.
+            os.close(os.open(pid_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            if helper_sid is None:
+                logging.warning(
+                    "Could not read the launch token's user - the PID handoff "
+                    "file keeps its inherited permissions")
+            else:
+                try:
+                    acl_hardening.apply(pid_file, [
+                        (acl_hardening.SID_SYSTEM, _FILE_FULL, 0),
+                        (acl_hardening.SID_ADMINISTRATORS, _FILE_FULL, 0),
+                        (helper_sid, _FILE_MODIFY, 0),
+                    ])
+                except acl_hardening.AclApplyError as e:
+                    logging.warning(f"Could not restrict the PID handoff file: {e}")
+
             launch_args = {
                 'exe_path': exe_path,
                 'file_path': file_path,
@@ -3335,8 +3647,13 @@ class OwletteService:
                 'priority': priority,
                 'pid_file': pid_file
             }
-            with open(args_file, 'w') as f:
-                json_module.dump(launch_args, f)
+            # held open with write sharing denied until the helper has answered,
+            # so no one can change the exe it launches in between.
+            args_handle = win32file.CreateFile(
+                args_file, win32file.GENERIC_WRITE, win32file.FILE_SHARE_READ,
+                None, win32file.CREATE_NEW, 0, None)
+            win32file.WriteFile(
+                args_handle, json_module.dumps(launch_args).encode('utf-8'))
 
             python_exe = shared_utils.get_python_exe_path()
             launcher_script = shared_utils.get_path('process_launcher.py')
@@ -3348,6 +3665,9 @@ class OwletteService:
             # The helper only makes COM calls, so it needs no console; the target
             # gets GUI context via Task Scheduler + cmd /c start.
             DETACHED_PROCESS = 0x00000008
+            # creation times are stamped at clock-tick resolution, hence the
+            # second of slack; the helper and its target both start after this.
+            not_before = time.time() - 1
             _, _, helper_pid, _ = win32process.CreateProcessAsUser(
                 self.console_user_token,
                 None,
@@ -3362,13 +3682,21 @@ class OwletteService:
 
             # ShellExecuteEx returns the PID immediately, so 1-2s is typical;
             # the slack covers file-association launches resolving the real PID.
+            # the file exists from the start, so wait for the helper's answer.
+            answered = False
             for _ in range(50):  # 5 second timeout
-                if os.path.exists(pid_file):
+                if _file_has_content(pid_file):
                     time.sleep(0.3)
+                    answered = True
                     break
                 time.sleep(0.1)
 
-            if os.path.exists(pid_file):
+            if not answered:
+                logging.error("Launcher helper did not produce a PID file within timeout")
+            elif not acl_hardening.is_trusted_owner(pid_file, helper_sid):
+                logging.warning(
+                    "Ignoring the PID handoff file: it was replaced by another account")
+            else:
                 with open(pid_file, 'r') as f:
                     pid_content = f.read().strip()
 
@@ -3384,13 +3712,20 @@ class OwletteService:
                     logging.error(f"Launcher helper failed: {result['error']}")
                     return None
 
-                pid = result['pid']
-                if result.get('adopted'):
-                    logging.info(f"Adopted existing process with PID {pid} (single-instance app)")
+                # the service later terminates this pid as system, so it is
+                # bound only when the helper provably started it.
+                if _pid_descends_from(result['pid'], helper_pid, not_before):
+                    pid = result['pid']
+                    if result.get('adopted'):
+                        logging.info(f"Adopted existing process with PID {pid} (single-instance app)")
+                    else:
+                        logging.info(f"Process launched with PID {pid}")
                 else:
-                    logging.info(f"Process launched with PID {pid}")
-            else:
-                logging.error("Launcher helper did not produce a PID file within timeout")
+                    logging.warning(
+                        f"Refusing PID {result['pid']!r} from the launch handoff: "
+                        f"not a process the launcher helper started")
+
+            if pid is None:
                 # Fallback: process may have launched but psutil couldn't see it in time.
                 # Scan by exe before giving up — prevents spurious failed=True and double-launches.
                 # An unambiguous hit here is an INHERIT (D1): the pid did not
@@ -3410,7 +3745,7 @@ class OwletteService:
                     shared_utils.update_process_status_in_json(
                         found_pid, 'LAUNCHING', self.firebase_client,
                         process_id=process['id'], extra=inherit_extra)
-                    logging.info(f"Fallback scan found process (PID {found_pid}) after PID file timeout")
+                    logging.info(f"Fallback scan found process (PID {found_pid}) without a usable PID handoff")
                     return found_pid
                 return None
 
@@ -3419,6 +3754,8 @@ class OwletteService:
             logging.exception("Full traceback:")
             return None
         finally:
+            if args_handle is not None:
+                args_handle.Close()
             for f in [args_file, pid_file]:
                 try:
                     if os.path.exists(f):
@@ -3438,6 +3775,7 @@ class OwletteService:
         if pid is None:
             return None
 
+        osadapter.watch_exit(pid)
         self.current_timestamp = int(time.time())
 
         # Read existing results from the output file
@@ -3513,7 +3851,7 @@ class OwletteService:
             self._seat_probe = osadapter.console_user() is None
         return self._seat_probe
 
-    def reached_max_relaunch_attempts(self, process):
+    def reached_max_relaunch_attempts(self, process, after_crash=True):
         # The gate before anything else: while a reboot is pending nothing
         # relaunches, and off Windows nothing but a dashboard dismiss ends
         # that. Asking who is at the seat first billed the 5-second loop a
@@ -3523,6 +3861,11 @@ class OwletteService:
         # it, terminating the kiosk app of a machine frozen to preserve it.
         if self._is_restart_prompt_active():
             return True
+        # A process that exited 0 did not crash (see QUICK_EXIT_SECONDS): its
+        # relaunch spends nothing, or an app that exits on a schedule, or one
+        # somebody keeps closing, would escalate to a reboot.
+        if not after_crash:
+            return False
         # A launch that never happened is not a crash, and off Windows a box
         # with nobody at a graphical seat — logged out, at the display
         # manager's greeter, or imaged before its first login — refuses
@@ -3757,15 +4100,15 @@ class OwletteService:
         candidates.sort(key=lambda item: item[0], reverse=True)
         return [path for _, path in candidates[:max_results]]
 
-    def handle_process_launch(self, process):
+    def handle_process_launch(self, process, after_crash=True):
         # Callers decided "needs launching" outside the lock; if a launch lands
         # while we wait that decision is stale. _launch_locked re-checks this
         # against the post-lock value.
         pid_before_lock = self.last_started.get(process.get('id', ''), {}).get('pid')
         with self._launch_lock_for(process.get('id', '')):
-            return self._launch_locked(process, pid_before_lock)
+            return self._launch_locked(process, pid_before_lock, after_crash)
 
-    def _launch_locked(self, process, pid_before_lock):
+    def _launch_locked(self, process, pid_before_lock, after_crash=True):
         process_id = process.get('id', '')
         current_pid = self.last_started.get(process_id, {}).get('pid')
         if (current_pid and current_pid != pid_before_lock
@@ -3809,7 +4152,7 @@ class OwletteService:
             _surface_launch_failed(process_id)
             return None
 
-        if not self.reached_max_relaunch_attempts(process):
+        if not self.reached_max_relaunch_attempts(process, after_crash):
             process_list_id = process['id']
             delay = float(process.get('time_delay', 0))
 
@@ -3977,8 +4320,9 @@ class OwletteService:
 
         else:
             # PID detection can fail on a successful launch, so scan by
-            # exe+cmdline before launching again.
-            if last_info.get('failed'):
+            # exe+cmdline before launching again. A relaunch held after a
+            # quick clean exit waits out the same cooldown.
+            if last_info.get('failed') or last_info.get('clean_exit'):
                 exe_path = process.get('exe_path', '')
                 file_path = process.get('file_path', '')
                 found_pid = self._find_running_process_by_exe(exe_path, file_path) if exe_path else None
@@ -4004,6 +4348,8 @@ class OwletteService:
                         return  # Still cooling down, skip this cycle
 
             if last_pid and Util.is_pid_running(last_pid):
+                # an adopted pid never passed through _record_launch.
+                osadapter.watch_exit(last_pid)
                 last_time = last_info.get('time')
                 time_to_init = float(process.get('time_to_init', 0) or TIME_TO_INIT)
                 if last_time and (self.current_time - last_time).total_seconds() < time_to_init:
@@ -4026,7 +4372,14 @@ class OwletteService:
                     shared_utils.update_process_status_in_json(last_pid, 'RUNNING', self.firebase_client, process_id=process_list_id)
 
             else:
+                # a held relaunch carries its clean exit until the launch.
+                exited_cleanly = last_info.get('clean_exit', False)
+                hold_relaunch = False
                 if last_pid:
+                    # read here, once: the read consumes it, whichever branch runs.
+                    code = osadapter.exit_code(last_pid)
+                    last_time = last_info.get('time')
+                    ran_seconds = (self.current_time - last_time).total_seconds() if last_time else 0
                     # KILLED = service/dashboard kill, RESTARTING = operator via
                     # the local app. Both are intended exits; only RESTARTING
                     # earns an audit event.
@@ -4077,8 +4430,24 @@ class OwletteService:
                                 f"'{Util.get_process_name(process)}' ended with the "
                                 f"graphical session (PID {last_pid}) - not a crash, "
                                 f"launching when somebody signs in")
+                    elif code == 0:
+                        exited_cleanly = True
+                        hold_relaunch = ran_seconds < QUICK_EXIT_SECONDS
+                        process_name = Util.get_process_name(process)
+                        logging.info(f"'{process_name}' (PID {last_pid}) exited normally after {int(ran_seconds)}s")
+                        if self.firebase_client and self.firebase_client.is_connected():
+                            self.firebase_client.log_event(
+                                action='process_exited',
+                                level='info',
+                                process_name=process_name,
+                                details=f'Process exited normally (PID {last_pid}, exit code 0)'
+                            )
                     else:
                         process_name = Util.get_process_name(process)
+                        details = (
+                            f'Process stopped unexpectedly (PID {last_pid} no longer running)'
+                            if code is None else
+                            f'Process stopped unexpectedly (PID {last_pid}, exit code {code})')
 
                         # Best-effort screenshot capture before relaunch
                         crash_screenshot_url = None
@@ -4092,13 +4461,13 @@ class OwletteService:
                                 action='process_crash',
                                 level='error',
                                 process_name=process_name,
-                                details=f'Process stopped unexpectedly (PID {last_pid} no longer running)',
+                                details=details,
                                 screenshot_url=crash_screenshot_url
                             )
                             self.firebase_client.send_process_alert(
-                                process_name, f'Process stopped unexpectedly (PID {last_pid} no longer running)', 'process_crash'
+                                process_name, details, 'process_crash'
                             )
-                        self._write_cortex_event(process_name, f'Process stopped unexpectedly (PID {last_pid} no longer running)', 'process_crash')
+                        self._write_cortex_event(process_name, details, 'process_crash')
 
                 # Re-read: the GUI or Firestore may have changed launch_mode since
                 # the loop iteration began.
@@ -4141,6 +4510,11 @@ class OwletteService:
                         shared_utils.update_process_status_in_json(existing_pid, 'RUNNING', self.firebase_client, process_id=process_list_id, extra=inherit_extra)
                         logging.info(f"[OK] Adopted already-running '{Util.get_process_name(process)}' (PID {existing_pid})")
                         new_pid = None
+                    elif hold_relaunch:
+                        # the cooldown at the top of this method paces the retry.
+                        self.last_started[process_list_id] = {
+                            'time': datetime.datetime.now(), 'pid': None, 'clean_exit': True}
+                        new_pid = None
                     else:
                         # Keep failed markers so missing-exe alerts fire only on
                         # transition; clearing other stale entries makes the
@@ -4149,7 +4523,7 @@ class OwletteService:
                             self._skip_launch_delay.add(process_list_id)
                         else:
                             self.last_started.pop(process_list_id, None)
-                        new_pid = self.handle_process_launch(process)
+                        new_pid = self.handle_process_launch(process, after_crash=not exited_cleanly)
         
         # Real time, not loop-start, so cooldowns measure from the actual launch.
         if new_pid:
@@ -4433,6 +4807,9 @@ class OwletteService:
         assumes a single invoker — single-flight dispatch, the mtime baseline
         CAS — so the main loop must not call it as well.
 
+        Each tick also looks at the console session (_check_console_session_acls),
+        which never raises.
+
         Runs on its own daemon thread, like the SCM stop watcher, and stops with
         self.is_alive.
         """
@@ -4452,6 +4829,7 @@ class OwletteService:
                             f"Local config watcher tick failed "
                             f"({consecutive_errors}): {e}"
                         )
+                self._check_console_session_acls()
                 time.sleep(LOCAL_CONFIG_POLL_INTERVAL)
 
         thread = threading.Thread(
@@ -7742,7 +8120,12 @@ class OwletteService:
         # released the moment this returns, so a marker written once the
         # installer is on disk would leave the guard above covering nothing
         # for the minutes a download takes.
-        self._write_update_marker(cmd_id, cmd_data, target_version)
+        try:
+            self._write_update_marker(cmd_id, cmd_data, target_version)
+        except OSError as e:
+            # a file slipped in where the marker goes fails this update rather
+            # than being adopted.
+            return f"Error: initiating update failed: {e}"
 
         if os_family == 'windows':
             return self._run_self_update(cmd_id, cmd_data, target_version, os_family)
@@ -7763,6 +8146,14 @@ class OwletteService:
         """
         marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
         if not os.path.exists(marker_path):
+            return None
+
+        # only this service writes the marker; one any local user can write
+        # would hold off every self-update for as long as it stays fresh, so
+        # it is ignored even when it cannot be deleted (a windows check; off
+        # windows logs\ is the daemon's own).
+        if os.name == 'nt' and not acl_hardening.is_trusted_owner(marker_path):
+            _discard_untrusted_file(marker_path, 'update marker')
             return None
 
         try:
@@ -7824,8 +8215,14 @@ class OwletteService:
             # family's extension: apt-get refuses a package that is not
             # called `.deb`.
             temp_installer_path = os.path.join(
-                self._update_staging_dir(),
+                self._update_staging_dir(os_family),
                 installer_utils.UPDATE_ARTIFACT_NAMES[os_family])
+
+            if os_family == 'windows':
+                # an earlier attempt's hold would keep the file from being
+                # replaced. the guard above lets this attempt through only
+                # once that one has failed or is over ten minutes old.
+                self._release_update_image()
 
             logging.info("Downloading installer (3 retries with exponential backoff)...")
             download_success, actual_path = installer_utils.download_file(
@@ -7834,7 +8231,11 @@ class OwletteService:
                 progress_callback=None,  # Progress already tracked via Firestore status
                 max_retries=3,
                 connect_timeout=30,
-                read_timeout=600
+                read_timeout=600,
+                # windows: a locked file fails this attempt instead of moving
+                # the download to another name, so the task runs the path
+                # that was verified.
+                strict_path=(os_family == 'windows'),
             )
 
             if not download_success:
@@ -7851,7 +8252,19 @@ class OwletteService:
 
             # SHA256 checksum verification (MANDATORY for self-updates)
             logging.info("Verifying installer checksum...")
-            if not installer_utils.verify_checksum(temp_installer_path, expected_sha256):
+            if os_family == 'windows':
+                # read through a handle that shares read access only, so the
+                # file cannot be changed, renamed or deleted while it is held.
+                # it is held until this process exits, which is when the
+                # installer stops the service: schtasks /Run returns before
+                # the task starts the installer, so a hold released there
+                # would protect nothing. nothing below reopens the path.
+                update_image = installer_utils.open_verified(temp_installer_path, expected_sha256)
+                if update_image is None:
+                    installer_utils.cleanup_installer(temp_installer_path, force=True)
+                    raise Exception("Checksum verification FAILED - installer may be corrupted or tampered. Update aborted.")
+                self._update_image_handle = update_image
+            elif not installer_utils.verify_checksum(temp_installer_path, expected_sha256):
                 installer_utils.cleanup_installer(temp_installer_path, force=True)
                 raise Exception("Checksum verification FAILED - installer may be corrupted or tampered. Update aborted.")
             logging.info("[OK] Checksum verification passed")
@@ -7904,19 +8317,46 @@ class OwletteService:
             marker['installer_path'] = installer_path
 
         marker_path = shared_utils.get_data_path('logs/update_in_progress.json')
-        with open(marker_path, 'w') as f:
-            json.dump(marker, f, indent=2)
+        if os.name == 'nt':
+            # created new under the marker dacl; whatever sits at the path is
+            # removed first, so only a marker this service wrote is read back.
+            try:
+                _create_update_marker(marker_path, marker)
+            except OSError as e:
+                raise OSError(f"could not create {marker_path}: {e}") from e
+        else:
+            with open(marker_path, 'w') as f:
+                json.dump(marker, f, indent=2)
         logging.debug(f"Update marker written: {marker_path}")
 
-    def _update_staging_dir(self):
+    def _release_update_image(self):
+        """Drop the hold an earlier attempt left on its installer image, so this
+        attempt's download can replace the file."""
+        held = self._update_image_handle
+        if held is not None:
+            self._update_image_handle = None
+            held.Close()
+
+    def _update_staging_dir(self, os_family):
         """Where the update artifact is downloaded, verified and installed from.
 
-        Under `cache/`, which decision 4's mode table keeps closed to the
-        agent's group, and not the 0770 `tmp/` the desktop app shares: the
-        package is checked by name and then handed to a root install by name,
-        so anything that can write that directory - or rename it aside - can
-        swap the artifact between the checksum and the install.
+        Windows: `update-staging`, the directory the start-up repair and the
+        installer harden - not tmp\\, which every local user can write, nor
+        WINDOWS\\TEMP, where security software blocks execution. Created
+        fail-closed: an existing one that is not SYSTEM's or Administrators',
+        or is a link, or a DACL that cannot be set, fails this attempt before
+        anything is downloaded.
+
+        POSIX: under `cache/`, which decision 4's mode table keeps closed to
+        the agent's group, and not the 0770 `tmp/` the desktop app shares:
+        the package is checked by name and then handed to a root install by
+        name, so anything that can write that directory - or rename it aside
+        - can swap the artifact between the checksum and the install.
         """
+        if os_family == 'windows':
+            staging = shared_utils.get_data_path('update-staging')
+            acl_hardening.create_private_dir(staging, _update_staging_aces())
+            return staging
         staging = shared_utils.get_data_path('cache/update')
         os.makedirs(staging, exist_ok=True)
         os.chmod(staging, 0o700)
@@ -8068,6 +8508,13 @@ class OwletteService:
 
             if not os.path.exists(update_marker_path):
                 return  # No update was in progress
+
+            # its command and deployment ids are reported to the cloud as
+            # completed or failed, so only a marker this service wrote counts
+            # (a windows check; off windows logs\ is the daemon's own).
+            if os.name == 'nt' and not acl_hardening.is_trusted_owner(update_marker_path):
+                _discard_untrusted_file(update_marker_path, 'update marker')
+                return
 
             logging.info("=" * 60)
             logging.info("UPDATE STATUS CHECK")
@@ -8398,6 +8845,57 @@ class OwletteService:
                 f"will re-run next start (idempotent — the tasks are already gone)"
             )
 
+    def _repair_install_acls(self):
+        """Re-assert every install-tree DACL once at start-up.
+
+        Drift on a fixed entry is queued as the startup anomaly event unless
+        _classify_startup_session, which must run first because it resets the
+        slot, already queued one. repair_all logs each repaired path and the
+        DevMode warning itself.
+        """
+        repaired = acl_hardening.repair_all(logging.getLogger())
+        if not repaired:
+            logging.info("acl hardening: ok")
+            return
+        console_paths = _console_user_acl_paths()
+        drift = [path for path in repaired if path not in console_paths]
+        if drift and getattr(self, '_pending_anomaly_event', None) is None:
+            self._pending_anomaly_event = (
+                'install_permissions_repaired',
+                f"repaired drifted permissions on {', '.join(drift)}",
+            )
+
+    def _sweep_stale_update_installers(self):
+        """Delete tmp\\owlette-Update*.exe files left by earlier self-updates.
+
+        Any local user can write to tmp\\, so an installer left there is not
+        one the service can vouch for. Plain files only, one os.remove each;
+        a directory by that name is left alone.
+        """
+        tmp_dir = shared_utils.get_data_path('tmp')
+        try:
+            with os.scandir(tmp_dir) as entries:
+                stale = [
+                    entry.path for entry in entries
+                    if entry.name.lower().startswith('owlette-update')
+                    and entry.name.lower().endswith('.exe')
+                    and not entry.is_dir(follow_symlinks=False)
+                ]
+        except OSError as e:
+            logging.debug(f"Stale update installer sweep skipped: {e}")
+            return
+
+        for path in stale:
+            try:
+                os.remove(path)
+                logging.info(f"Removed stale update installer {path}")
+            except OSError as e:
+                # the installer that just upgraded this agent may still be
+                # running from it.
+                logging.info(
+                    f"Could not remove stale update installer {path} ({e}); "
+                    f"will retry next start")
+
     def main(self):
 
         # The token ladder is Windows': off Windows the adapter spawns into
@@ -8459,6 +8957,32 @@ class OwletteService:
         # _pending_anomaly_event until Firebase connects, and writes the fresh
         # session_state.json baseline that later intent writes mutate.
         self._classify_startup_session()
+
+        # after the classifier, which resets _pending_anomaly_event. the slots
+        # are declared in _init_state; the work happens here. session-change
+        # repairs wait for this one, so its drift report is complete, and take
+        # the lock, so the last applies the current console user. _acl_console
+        # is read first: the local config watcher repairs again after any
+        # change from it, including a login later in start-up.
+        self._acl_console = _console_session()
+        try:
+            self._repair_install_acls()
+        except Exception as e:
+            logging.warning(f"ACL hardening errored (non-fatal): {e}")
+        self._acl_startup_repaired = True
+
+        # an upgrade leaves tmp\app_states.json with the ACL it was created
+        # under: SPECS covers directories and the token file, not this file, and
+        # an idle machine may not write it for days.
+        try:
+            shared_utils.harden_existing_json(shared_utils.RESULT_FILE_PATH)
+        except Exception as e:
+            logging.warning(f"app_states.json ACL check errored (non-fatal): {e}")
+
+        try:
+            self._sweep_stale_update_installers()
+        except Exception as e:
+            logging.warning(f"Stale update installer sweep errored (non-fatal): {e}")
 
         # Service-log visibility only — Firestore submission waits for connect.
         try:

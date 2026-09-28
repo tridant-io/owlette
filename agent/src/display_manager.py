@@ -374,8 +374,10 @@ def _ensure_ipc_dir_acl(ipc_dir: str) -> None:
 
 def _build_ipc_dacl_entries(ws, ntcon) -> list:
     """Build ``(label, mask, sid)`` entries for the display IPC DACL."""
-    system_sid, _, _ = ws.LookupAccountName('', 'SYSTEM')
-    admins_sid, _, _ = ws.LookupAccountName('', 'Administrators')
+    # well-known sids, not names: account names are localized, so a name lookup
+    # fails on non-english windows ("Administratoren").
+    system_sid = ws.ConvertStringSidToSid('S-1-5-18')
+    admins_sid = ws.ConvertStringSidToSid('S-1-5-32-544')
     full = getattr(ntcon, 'FILE_ALL_ACCESS', ntcon.GENERIC_ALL)
     modify = (
         ntcon.FILE_GENERIC_READ

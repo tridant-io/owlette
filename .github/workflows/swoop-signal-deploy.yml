@@ -4,9 +4,14 @@ name: swoop signal deploy
 # part of web/, so railway's auto-deploy never sees it: without this workflow a
 # merged worker change sits in git and nothing runs it.
 #
-#   push to dev  -> wrangler deploy -e dev  -> swoop-signal-dev
-#   push to main -> wrangler deploy -e prod -> swoop-signal-prod
-#   pull request -> the suite, and nothing else
+#   push to dev          -> wrangler deploy -e dev  -> swoop-signal-dev
+#   workflow_dispatch    -> wrangler deploy -e <environment input> (default dev)
+#   pull request         -> the suite, and nothing else
+#
+# a push to main deploys nothing: the prod worker is created and updated only by
+# a deliberate dispatch with environment=prod, after its three secrets are set
+# (infra/swoop-signal/README.md, first-time setup). a promotion merge into main
+# therefore cannot stand up an unconfigured prod worker on its own.
 #
 # CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are repository secrets and are
 # referenced by name only. the worker's OWN secrets (SWOOP_JWT_PUBLIC_KEY,
@@ -21,10 +26,17 @@ on:
       - 'infra/swoop-signal/**'
       - '.github/workflows/swoop-signal-deploy.yml'
   push:
-    branches: [main, dev]
+    branches: [dev]
     paths:
       - 'infra/swoop-signal/**'
       - '.github/workflows/swoop-signal-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'environment to deploy (prod is a deliberate act, never a push)'
+        type: choice
+        options: [dev, prod]
+        default: dev
 
 # deploys queue, they do not cancel: a cancelled `wrangler deploy` leaves whatever
 # version cloudflare last accepted, and the next push would be racing it.
@@ -71,12 +83,14 @@ jobs:
   deploy:
     name: deploy
     needs: test
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # push is filtered to main and dev, so there is no third case.
-      WRANGLER_ENV: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+      # prod only from a dispatch that asks for it. the `a && b || c` idiom falls
+      # through to c whenever b is empty, and here c is dev: a push (no inputs)
+      # and a dispatch with an empty input both land on dev, the safe direction.
+      WRANGLER_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
       # the origin to smoke-check is a repository *variable*, not a literal in
       # this file: the repository is public and a worker hostname carries either
       # the account's workers.dev subdomain or the zone it is routed on. both are

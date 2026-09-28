@@ -10,7 +10,6 @@ import { scheduleClockLabel } from '@/lib/scheduleClockCopy';
 import { useSchedulePresets } from '@/hooks/useSchedulePresets';
 import { useDeployments } from '@/hooks/useDeployments';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
-import { useInstallerVersion } from '@/hooks/useInstallerVersion';
 import { useAgentAlertToasts, type ExeMissingToastAlert } from '@/hooks/useAgentAlertToasts';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,7 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/lib/toast';
-import { Plus, LayoutGrid, List, ChevronsUpDown, ChevronsDownUp, Square, Copy, Trash2, Download, Monitor, Cog, Settings2, RotateCw, Loader2, CheckCircle2, Clock } from 'lucide-react';
+import { Plus, LayoutGrid, List, ChevronsUpDown, ChevronsDownUp, Square, Trash2, Monitor, Cog, Settings2, RotateCw, Loader2, CheckCircle2, Clock } from 'lucide-react';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import { Table, TableBody } from '@/components/ui/table';
 import { ManageSitesDialog } from '@/components/ManageSitesDialog';
@@ -78,7 +77,6 @@ export default function DashboardPage() {
   const router = useRouter();
   const { user, loading, isSuperadmin, isSiteAdmin, userSites, lastSiteId, updateLastSite, requiresMfaSetup, userPreferences, updateUserPreferences } = useAuth();
   const { sites, loading: sitesLoading, createSite, updateSite, deleteSite } = useSites(user?.uid, userSites, isSuperadmin);
-  const { version, downloadUrl } = useInstallerVersion();
   // One fetch per mount (the hook never polls), gated on auth resolving so it doesn't
   // fire a request the session cookie can only 401.
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
@@ -1222,58 +1220,7 @@ export default function DashboardPage() {
                   download and run the installer <strong className="text-foreground">on the machine you want to add</strong> (not necessarily this one).
                   use the copy link option if connecting via remote desktop tools like Parsec, TeamViewer, or RDP.
                 </p>
-                <div className="flex gap-2">
-                  <Button
-                    onClick={() => {
-                      if (!downloadUrl) {
-                        toast.error('download unavailable', {
-                          description: 'installer download URL is not available.',
-                        });
-                        return;
-                      }
-                      try {
-                        window.open(downloadUrl, '_blank');
-                        toast.success('download started', {
-                          description: `downloading owlette v${version}`,
-                        });
-                      } catch {
-                        toast.error('download failed', {
-                          description: 'failed to start download. please try again.',
-                        });
-                      }
-                    }}
-                    disabled={!downloadUrl}
-                    className="flex-1 text-gray-900 cursor-pointer"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    <span>download {version && `v${version}`}</span>
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      if (!downloadUrl) {
-                        toast.error('copy failed', {
-                          description: 'download URL is not available.',
-                        });
-                        return;
-                      }
-                      try {
-                        navigator.clipboard.writeText(downloadUrl);
-                        toast.success('link copied', {
-                          description: 'download link copied to clipboard',
-                        });
-                      } catch {
-                        toast.error('copy failed', {
-                          description: 'failed to copy link. please try again.',
-                        });
-                      }
-                    }}
-                    disabled={!downloadUrl}
-                    className="flex-1 text-gray-900 cursor-pointer"
-                  >
-                    <Copy className="h-4 w-4 mr-2" />
-                    <span>copy link</span>
-                  </Button>
-                </div>
+                <DownloadButton variant="card" />
               </div>
               <div className="rounded-lg border border-border bg-card-sunken p-4">
                 <h3 className="font-semibold text-foreground">step 2: run the installer</h3>

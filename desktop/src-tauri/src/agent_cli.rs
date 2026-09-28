@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -40,7 +41,13 @@ pub const EVENT_AGENT_CLI: &str = "owlette://agent-cli";
 /// The bundled interpreter, relative to the data root. `python.exe` rather than
 /// `pythonw.exe`: we need its stdout, and `CREATE_NO_WINDOW` already keeps the
 /// console off the operator's screen.
+#[cfg(windows)]
 const PYTHON_REL: &str = "python/python.exe";
+/// The bundled interpreter under the install root off windows
+/// (`shared_utils.get_python_exe_path`: `/opt/owlette/python/bin/python3`,
+/// `…/Owlette/runtime/python/bin/python3`).
+#[cfg(unix)]
+const PYTHON_REL: &str = "python/bin/python3";
 
 /// The agent script that hosts every headless mode.
 const SCRIPT_REL: &str = "agent/src/configure_site.py";
@@ -50,6 +57,7 @@ const SCRIPT_REL: &str = "agent/src/configure_site.py";
 const REPORT_DIR_REL: &str = "tmp";
 
 /// Windows creation flag: no console window for the child.
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// How often a running child is checked for having exited.
@@ -178,15 +186,18 @@ pub fn start(
 ) -> Result<String, String> {
   let flag = flag_for(mode)?;
   let root = paths::data_root();
+  // the interpreter and the scripts are the agent's own files: the install
+  // root, which is the data root on windows and its own place elsewhere.
+  let install = paths::install_root();
 
-  let python = root.join(PYTHON_REL);
+  let python = install.join(PYTHON_REL);
   if !python.is_file() {
     return Err(format!(
       "the bundled python interpreter is missing ({}) — reinstall the owlette agent",
       python.display()
     ));
   }
-  let script = root.join(SCRIPT_REL);
+  let script = install.join(SCRIPT_REL);
   if !script.is_file() {
     return Err(format!(
       "the agent scripts are missing ({}) — reinstall the owlette agent",
@@ -205,13 +216,16 @@ pub fn start(
 
   let arguments = build_arguments(&script, flag, mode, staged.as_deref(), server)?;
 
-  let mut child = Command::new(&python)
+  let mut command = Command::new(&python);
+  command
     .args(&arguments)
-    .current_dir(root.join("agent").join("src"))
+    .current_dir(install.join("agent").join("src"))
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .creation_flags(CREATE_NO_WINDOW)
+    .stderr(Stdio::piped());
+  #[cfg(windows)]
+  command.creation_flags(CREATE_NO_WINDOW);
+  let mut child = command
     .spawn()
     .map_err(|error| format!("could not start the agent helper: {error}"))?;
 
