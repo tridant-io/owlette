@@ -139,34 +139,36 @@ git add -A && git commit -m "chore: bump version to X.Y.Z" && git push origin de
 # is the check — no diff means nothing user-visible changed, which is a valid
 # result. See web/e2e/desktop-screenshots/README.md.
 
-# 4. Compute checksum
-sha256sum agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe
+# 4. Upload every file of the release (per file: sha256 → signed URL → bytes → finalize)
+# One version doc with `files` keyed by platform — windows_x64 / macos_arm64 / linux_x64,
+# derived from the extension .exe / .pkg / .deb — and with --set-latest one `latest`
+# pointer carrying every entry. One to three files, one per platform; --set-latest only
+# when ready to roll out. Reads OWLETTE_API_KEY + OWLETTE_DEV_API_URL (or the _PROD pair
+# for --env prod) from .claude/.env.local. Prints each finalize response, then the
+# `files` keys on /api/installer/latest; a failure stops the run and names what is left.
+node scripts/upload-installer.mjs --env dev --version X.Y.Z --notes "Release X.Y.Z" --set-latest \
+  agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe \
+  agent/build/macos/Owlette-Installer-vX.Y.Z.pkg \
+  agent/build/linux/Owlette-Installer-vX.Y.Z.deb
 
-# 5. Upload via API (3-step: request URL → upload binary → finalize)
+# Fallback — manual curl, one file (the same 3 steps the script runs per file).
 # Endpoint is `/api/installer/upload` (api-sprint route — old `/api/admin/installer/upload` was removed).
 # Auth: api key with `installer=*:write` scope (superadmin-only at minting). `x-api-key` or `Authorization: Bearer owk_…` both work.
 # Idempotency-Key REQUIRED on both POST and PUT — the route is wrapped in `withIdempotency(..., { requireKey: true })`.
+# `platform` is derived from the fileName extension (.exe/.pkg/.deb); sent explicitly, it must match.
 API_KEY=$(grep OWLETTE_API_KEY .claude/.env.local | cut -d= -f2)
 BASE_URL="https://dev.owlette.app"  # or https://owlette.app for prod
-
-# Step 5a: Get signed upload URL
 curl -s -X POST "$BASE_URL/api/installer/upload" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $API_KEY" \
-  -H "Idempotency-Key: installer-upload-X.Y.Z-$(date +%s)" \
+  -H "Content-Type: application/json" -H "x-api-key: $API_KEY" \
+  -H "Idempotency-Key: installer-upload-X.Y.Z-windows_x64" \
   -d '{"version":"X.Y.Z","fileName":"Owlette-Installer-vX.Y.Z.exe","releaseNotes":"...","setAsLatest":true}'
-# → returns uploadUrl, uploadId, storagePath, expiresAt (15-min window)
-
-# Step 5b: Upload binary to the signed GCS URL (no Idempotency-Key here — it's a direct GCS PUT)
+# → returns uploadUrl, uploadId, platform, storagePath, expiresAt (15-min window)
 curl -X PUT "$UPLOAD_URL" -H "Content-Type: application/octet-stream" \
-  --data-binary @agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe
-
-# Step 5c: Finalize (verifies file in storage, computes/checks checksum, writes installer_metadata, sets as latest)
+  --data-binary @agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe   # no Idempotency-Key: a direct GCS PUT
 curl -s -X PUT "$BASE_URL/api/installer/upload" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $API_KEY" \
-  -H "Idempotency-Key: installer-finalize-X.Y.Z-$(date +%s)" \
-  -d '{"uploadId":"<from step 5a>","checksum_sha256":"<sha256 from earlier>"}'
+  -H "Content-Type: application/json" -H "x-api-key: $API_KEY" \
+  -H "Idempotency-Key: installer-finalize-X.Y.Z-windows_x64" \
+  -d '{"uploadId":"<from the POST>","checksum_sha256":"<sha256sum of the file>"}'
 # checksum_sha256 is optional — server computes it if omitted, but providing it gets a 412 `checksum_mismatch` on corruption.
 ```
 

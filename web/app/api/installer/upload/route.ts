@@ -3,8 +3,9 @@
  * uploads the binary directly to Firebase Storage with it.
  *
  * PUT /api/installer/upload — step 2 (finalize): verify the file is in Storage, compute
- * the checksum, reject a caller-supplied mismatch, write
- * `installer_metadata/data/versions/{version}` and optionally the `latest` pointer.
+ * the checksum, reject a caller-supplied mismatch, merge the file into
+ * `installer_metadata/data/versions/{version}.files.<platform>` and optionally
+ * write the `latest` pointer.
  *
  * Auth (both verbs): an api key with `installer=*:write` (superadmin-only at minting),
  * or a superadmin session / id-token.
@@ -26,6 +27,14 @@ import { getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import { withIdempotency } from '@/lib/idempotency';
 import { emitMutation } from '@/lib/auditLogClient';
 import {
+  INSTALLER_PLATFORMS,
+  PLATFORM_EXT,
+  installerFileName,
+  normalizeInstallerFiles,
+  platformFromExtension,
+  type InstallerPlatform,
+} from '@/lib/installerPlatform';
+import {
   applyAuthDeprecations,
   readAndParseJsonBody,
   requirePlatformAuthAndScope,
@@ -38,6 +47,7 @@ const IS_E2E = process.env.OWLETTE_E2E === '1';
 interface UploadStartBody {
   version?: unknown;
   fileName?: unknown;
+  platform?: unknown;
   contentType?: unknown;
   releaseNotes?: unknown;
   setAsLatest?: unknown;
@@ -73,15 +83,34 @@ export async function POST(request: NextRequest) {
         }
         const version = body.version;
 
-        if (
-          typeof body.fileName !== 'string' ||
-          !body.fileName.toLowerCase().endsWith('.exe')
-        ) {
-          return problemValidation('fileName is required and must end with .exe', {
-            'body.fileName': ['must be a string ending in .exe'],
-          });
+        const fileName = typeof body.fileName === 'string' ? body.fileName : '';
+        const platform = platformFromExtension(fileName);
+        if (!platform) {
+          return problemValidation(
+            'fileName is required and must end with .exe, .pkg or .deb',
+            { 'body.fileName': ['must be a string ending in .exe, .pkg or .deb'] },
+          );
         }
-        const fileName = body.fileName;
+
+        if (
+          body.platform !== undefined &&
+          !(INSTALLER_PLATFORMS as readonly unknown[]).includes(body.platform)
+        ) {
+          return problemValidation(
+            `platform must be one of ${INSTALLER_PLATFORMS.join(', ')} when provided`,
+            { 'body.platform': [`must be one of ${INSTALLER_PLATFORMS.join(', ')}`] },
+          );
+        }
+        if (body.platform !== undefined && body.platform !== platform) {
+          return problemValidation(
+            `fileName extension does not match platform ${body.platform}`,
+            {
+              'body.fileName': [
+                `must end in .${PLATFORM_EXT[body.platform as InstallerPlatform]}`,
+              ],
+            },
+          );
+        }
 
         if (
           body.contentType !== undefined &&
@@ -120,7 +149,7 @@ export async function POST(request: NextRequest) {
         const db = getAdminDb();
         const storage = getAdminStorage();
         const bucket = storage.bucket();
-        const storagePath = `agent-installers/versions/${version}/Owlette-Installer-v${version}.exe`;
+        const storagePath = `agent-installers/versions/${version}/${installerFileName(version, platform)}`;
         const file = bucket.file(storagePath);
 
         const expiresAt = new Date(
@@ -141,6 +170,7 @@ export async function POST(request: NextRequest) {
         await db.collection('installer_uploads').doc(uploadId).set({
           version,
           fileName,
+          platform,
           storagePath,
           userId: auth.userId,
           releaseNotes,
@@ -162,6 +192,7 @@ export async function POST(request: NextRequest) {
             method: 'POST',
             verb: 'upload_initiated',
             uploadId,
+            platform,
             setAsLatest,
           },
         });
@@ -170,6 +201,7 @@ export async function POST(request: NextRequest) {
           NextResponse.json({
             uploadUrl,
             uploadId,
+            platform,
             storagePath,
             expiresAt: expiresAt.toISOString(),
           }),
@@ -307,42 +339,73 @@ export async function PUT(request: NextRequest) {
         const finalChecksum = computedChecksum;
 
         const downloadExpiry = new Date('2030-01-01');
-        const [downloadUrl] = await file.getSignedUrl({
-          action: 'read',
-          expires: downloadExpiry,
-        });
+        // the emulator cannot sign urls; its media endpoint is the public read
+        const downloadUrl = IS_E2E
+          ? `http://127.0.0.1:9199/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(uploadData.storagePath)}?alt=media`
+          : (
+              await file.getSignedUrl({
+                action: 'read',
+                expires: downloadExpiry,
+              })
+            )[0];
 
         const version = uploadData.version as string;
+        // an upload requested before `platform` was recorded is a windows exe
+        const platform: InstallerPlatform = uploadData.platform ?? 'windows_x64';
         const now = Date.now();
 
-        const versionData = {
-          version,
+        const fileEntry = {
           download_url: downloadUrl,
           checksum_sha256: finalChecksum,
-          release_notes: uploadData.releaseNotes ?? null,
           file_size: fileSize,
+          file_name: uploadData.fileName,
           uploaded_at: now,
-          release_date: Timestamp.fromMillis(now),
-          uploaded_by: uploadData.userId,
-          deletedAt: null,
         };
+        const alias =
+          platform === 'windows_x64'
+            ? { download_url: downloadUrl, checksum_sha256: finalChecksum, file_size: fileSize }
+            : {};
 
-        await db
+        const versionRef = db
           .collection('installer_metadata')
           .doc('data')
           .collection('versions')
-          .doc(version)
-          .set(versionData);
+          .doc(version);
+        const latestRef = db.collection('installer_metadata').doc('latest');
 
-        if (uploadData.setAsLatest) {
-          await db
-            .collection('installer_metadata')
-            .doc('latest')
-            .set({
-              ...versionData,
-              release_date: new Date(now).toISOString(),
+        // one transaction so two platforms finalizing at once both land in `files`
+        const versionData = await db.runTransaction(async (tx) => {
+          const snap = await tx.get(versionRef);
+          const existing = snap.data() ?? {};
+          // a re-upload of a deleted version is a new release of that number:
+          // fresh version-level fields, and only the files uploaded from here on
+          const fresh = !snap.exists || typeof existing.deletedAt === 'number';
+          const merged: Record<string, unknown> = {
+            ...(fresh
+              ? {
+                  version,
+                  release_notes: uploadData.releaseNotes ?? null,
+                  uploaded_at: now,
+                  release_date: Timestamp.fromMillis(now),
+                  uploaded_by: uploadData.userId,
+                  deletedAt: null,
+                }
+              : existing),
+            ...alias,
+            files: { ...(fresh ? {} : existing.files), [platform]: fileEntry },
+          };
+          tx.set(versionRef, merged);
+          if (uploadData.setAsLatest) {
+            tx.set(latestRef, {
+              ...merged,
+              files: normalizeInstallerFiles(merged),
+              release_date: isoReleaseDate(merged.release_date, now),
+              promoted_at: now,
+              promoted_by: auth.userId,
             });
-        }
+          }
+          return merged;
+        });
 
         await db
           .collection('installer_uploads')
@@ -365,6 +428,7 @@ export async function PUT(request: NextRequest) {
             method: 'PUT',
             verb: 'upload_finalized',
             uploadId,
+            platform,
             setAsLatest: uploadData.setAsLatest === true,
             file_size: fileSize,
           },
@@ -373,9 +437,11 @@ export async function PUT(request: NextRequest) {
         return applyAuthDeprecations(
           NextResponse.json({
             version,
+            platform,
             download_url: downloadUrl,
             checksum_sha256: finalChecksum,
             file_size: fileSize,
+            files: normalizeInstallerFiles(versionData),
           }),
           auth.scopeCheck,
         );
@@ -385,4 +451,13 @@ export async function PUT(request: NextRequest) {
   } catch (err) {
     return problemFromError(err, 'installer/upload:PUT');
   }
+}
+
+// `latest` keeps release_date as an iso string: deployed agents parse it as text
+function isoReleaseDate(value: unknown, fallbackMs: number): string {
+  if (typeof value === 'string') return value;
+  const stamp = value as { toDate?: () => Date } | null;
+  return typeof stamp?.toDate === 'function'
+    ? stamp.toDate().toISOString()
+    : new Date(fallbackMs).toISOString();
 }

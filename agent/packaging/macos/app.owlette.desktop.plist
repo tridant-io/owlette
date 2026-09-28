@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  the owlette desktop app for every login: a LaunchAgent in
+  /Library/LaunchAgents (tri-platform 5.1, plan decision 2 — the init system
+  starts the app, the daemon never does). Aqua sessions only: there is no
+  tray to draw at the login window or over ssh. KeepAlive puts the tray icon
+  back if the app is quit; "exit" in its menu is a quit the user asked for and
+  launchd honours it until the next login.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>app.owlette.desktop</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/owlette.app/Contents/MacOS/owlette-desktop</string>
+    <string>--tray</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>app.owlette.desktop</string>
+  </array>
+</dict>
+</plist>

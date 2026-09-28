@@ -46,6 +46,20 @@ pub fn hostname() -> String {
   crate::tray::hostname()
 }
 
+/// Whether macOS has granted this app Screen Recording, read without asking
+/// (`tcc.rs` asks once per launch). None off macOS: no such permission there.
+#[tauri::command(async)]
+pub fn screen_recording_granted() -> Option<bool> {
+  #[cfg(target_os = "macos")]
+  {
+    Some(crate::tcc::granted())
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    None
+  }
+}
+
 /// Whether the run-on-login startup shortcut exists.
 #[tauri::command(async)]
 pub fn startup_link_enabled() -> bool {
@@ -179,6 +193,12 @@ pub fn open_owlette_path(path: String) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn open_external_url(url: String) -> Result<(), String> {
   shell_open::open_url(&url)
+}
+
+/// Open macOS's Screen Recording pane, for the permission notice.
+#[tauri::command(async)]
+pub fn open_screen_recording_settings() -> Result<(), String> {
+  shell_open::open_screen_recording_settings()
 }
 
 /// Width the process-list sidebar should open at, in logical pixels. Shares the

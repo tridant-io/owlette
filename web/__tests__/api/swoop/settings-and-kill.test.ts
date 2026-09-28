@@ -163,7 +163,6 @@ function stageSession(sid = SID, state: string = 'live'): void {
     state,
     createdBy: `user:${ADMIN}`,
     startedAt,
-    absoluteExpiresAt: startedAt + 43_200_000,
     viewers: [{ viewerId: 'v1', uid: ADMIN, ctl: true, joinedAt: startedAt, leaseExpiresAt: startedAt }],
   });
 }

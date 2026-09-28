@@ -11,8 +11,9 @@ Terraform (IaC) in `infra/cloudflare/` for a Cloudflare load balancer that fails
 (e.g. Railway losing GCP egress) doesn't take the app down:
 
 - **Railway** (`owlette-prod` service) — primary
-- **Vercel** (`owlette` project) — standby; builds production from `main` only (its
-  Ignored Build Step cancels every other deployment)
+- **Vercel** (`owlette` project in the `tridant-7931a9aa` team since 2026-09-24; the
+  Experiential scope it started in is blocked) — standby; builds production from `main`
+  only (its Ignored Build Step cancels every other deployment)
 
 **Status: not live.** As of 2026-09-10 no load balancer, pool, or monitor exists —
 `owlette.app` is a plain proxied CNAME to Railway, and the May 2026 apply was destroyed

@@ -3,8 +3,8 @@
  *
  * the browser half is where authorisation being withdrawn actually reaches the
  * operator, so what is under test is the timing (early enough that one lost
- * request costs nothing), the difference between a refusal and a dropped
- * packet, and the 12-hour cap arriving as a refusal like any other.
+ * request costs nothing) and the difference between the api withdrawing the
+ * session and anything else going wrong on the way to it.
  *
  * the revocation half is the fast path for the same decision: the lease alone
  * ends a removed member's session within five minutes, and this closes that to
@@ -12,9 +12,6 @@
  */
 
 import type { SwoopSession } from '@/lib/swoop/features';
-
-const toastError = jest.fn();
-jest.mock('@/lib/toast', () => ({ toast: { error: (m: unknown) => toastError(m) } }));
 
 jest.mock('@/lib/logger', () => ({
   __esModule: true,
@@ -43,7 +40,7 @@ jest.mock('@/lib/swoop/audit.server', () => ({
   recordSwoopSessionEnded: (...a: unknown[]) => recordSwoopSessionEnded(...a),
 }));
 
-import { attach, SwoopLeaseRefused } from '@/lib/swoop/lease';
+import { attach, leaseFailure, SwoopLeaseRefused } from '@/lib/swoop/lease';
 import { revokeSwoopSessionsForUser } from '@/lib/swoop/revokeViewerSessions.server';
 
 const NOW = 1_700_000_000_000;
@@ -54,6 +51,7 @@ const RENEW_AFTER_MS = 180_000;
 interface Harness {
   session: SwoopSession;
   renewLease: jest.Mock;
+  presentLease: jest.Mock;
   end: jest.Mock;
 }
 
@@ -64,12 +62,14 @@ function harness(): Harness {
     return { viewerJwt: 'header.payload.signature', expiresAt };
   });
   const end = jest.fn();
+  const presentLease = jest.fn(async () => undefined);
   const session = {
     renewLease,
     leaseExpiresAt: () => expiresAt,
     end,
+    peer: { presentLease },
   } as unknown as SwoopSession;
-  return { session, renewLease, end };
+  return { session, renewLease, presentLease, end };
 }
 
 /** run the timer callback AND let the promise it started settle. */
@@ -84,7 +84,6 @@ describe('lease.ts — the browser renewer', () => {
   beforeEach(() => {
     jest.useFakeTimers();
     jest.setSystemTime(NOW);
-    toastError.mockClear();
   });
   afterEach(() => jest.useRealTimers());
 
@@ -96,6 +95,20 @@ describe('lease.ts — the browser renewer', () => {
     expect(renewLease).not.toHaveBeenCalled();
     await advance(1);
     expect(renewLease).toHaveBeenCalledTimes(1);
+    detach();
+  });
+
+  it('presents every renewed token to the host, whose ledger is the one that drops a viewer', async () => {
+    const { session, renewLease, presentLease } = harness();
+    renewLease
+      .mockImplementationOnce(async () => ({ viewerJwt: 'renewed.jwt.1', expiresAt: Date.now() + LEASE_MS }))
+      .mockImplementationOnce(async () => ({ viewerJwt: 'renewed.jwt.2', expiresAt: Date.now() + LEASE_MS }));
+    const detach = attach(session);
+
+    await advance(RENEW_AFTER_MS);
+    expect(presentLease).toHaveBeenCalledWith('renewed.jwt.1');
+    await advance(RENEW_AFTER_MS);
+    expect(presentLease.mock.calls.map((call) => call[0])).toEqual(['renewed.jwt.1', 'renewed.jwt.2']);
     detach();
   });
 
@@ -117,16 +130,27 @@ describe('lease.ts — the browser renewer', () => {
     detach();
   });
 
-  it('tears the session down on a 403 and says so once', async () => {
+  it('turns only the api’s policy refusal into a SwoopLeaseRefused', () => {
+    const refused = leaseFailure(403, { code: 'capability_missing', detail: 'you do not have permission to do this.' });
+    expect(refused).toBeInstanceOf(SwoopLeaseRefused);
+    expect(refused.message).toBe('you do not have permission to do this.');
+
+    expect(leaseFailure(401, { code: 'unauthorized', detail: 'Unauthorized: Session expired' })).not.toBeInstanceOf(
+      SwoopLeaseRefused,
+    );
+    expect(leaseFailure(403, {})).not.toBeInstanceOf(SwoopLeaseRefused);
+    expect(leaseFailure(404, {}).message).toBe('the session lease could not be renewed.');
+  });
+
+  it('ends the session for good on a policy refusal, in the api’s own sentence', async () => {
     const { session, renewLease, end } = harness();
     renewLease.mockRejectedValue(
-      new SwoopLeaseRefused(403, 'you do not have permission to do this.'),
+      leaseFailure(403, { code: 'capability_missing', detail: 'you do not have permission to do this.' }),
     );
     attach(session);
 
     await advance(RENEW_AFTER_MS);
-    expect(end).toHaveBeenCalledWith('lease_expired');
-    expect(toastError).toHaveBeenCalledWith('you do not have permission to do this.');
+    expect(end).toHaveBeenCalledWith('lease_refused', 'you do not have permission to do this.');
 
     // terminal: nothing is armed behind it.
     await advance(LEASE_MS * 4);
@@ -134,25 +158,21 @@ describe('lease.ts — the browser renewer', () => {
     expect(end).toHaveBeenCalledTimes(1);
   });
 
-  it('treats a 401 the same way', async () => {
+  it.each([
+    ['a lapsed login', 401, { code: 'unauthorized', detail: 'Unauthorized: Session expired' }],
+    ['an edge in front of the app', 403, {}],
+  ])('retries %s, and starts over once the host’s grace is gone', async (_what, status, problem) => {
     const { session, renewLease, end } = harness();
-    renewLease.mockRejectedValue(new SwoopLeaseRefused(401, 'this session is no longer authorised.'));
+    renewLease.mockRejectedValue(leaseFailure(status, problem));
     attach(session);
 
     await advance(RENEW_AFTER_MS);
-    expect(end).toHaveBeenCalledWith('lease_expired');
-  });
+    await advance(5_000);
+    expect(renewLease).toHaveBeenCalledTimes(2);
+    expect(end).not.toHaveBeenCalled();
 
-  it('hard-stops at the 12 hour cap, in the api’s own words', async () => {
-    const { session, renewLease, end } = harness();
-    renewLease.mockRejectedValue(
-      new SwoopLeaseRefused(403, 'this session reached its 12 hour limit.'),
-    );
-    attach(session);
-
-    await advance(RENEW_AFTER_MS);
-    expect(toastError).toHaveBeenCalledWith('this session reached its 12 hour limit.');
-    expect(end).toHaveBeenCalledWith('lease_expired');
+    await advance(LEASE_MS);
+    expect(end).toHaveBeenCalledWith('lease_expired', 'this session lost its lease and ended.');
   });
 
   it('retries a failure that is not a refusal, then gives up once the host’s grace is gone', async () => {
@@ -170,7 +190,7 @@ describe('lease.ts — the browser renewer', () => {
 
     // past expiry + 30 s the host has already dropped this viewer.
     await advance(LEASE_MS);
-    expect(end).toHaveBeenCalledWith('lease_expired');
+    expect(end).toHaveBeenCalledWith('lease_expired', 'this session lost its lease and ended.');
     const calls = renewLease.mock.calls.length;
     await advance(LEASE_MS);
     expect(renewLease).toHaveBeenCalledTimes(calls);
@@ -201,7 +221,6 @@ describe('revokeSwoopSessionsForUser', () => {
     state: 'live',
     createdBy: UID,
     startedAt: NOW - 60_000,
-    absoluteExpiresAt: NOW + 1_000,
     viewers: [{ viewerId: 'v1', uid: UID, ctl: true, joinedAt: NOW, leaseExpiresAt: NOW }],
   };
   const watchSession = {
@@ -221,8 +240,12 @@ describe('revokeSwoopSessionsForUser', () => {
       ...extra,
     });
 
-  it('ends a removed member’s sessions over both stop paths', async () => {
+  // the agent's swoop_kill (4.0.1 and every earlier one) stops whatever streamer is
+  // running, whatever sid it names, so a polled one queued beside a broadcast that
+  // landed hits the next session.
+  it('ends a removed member’s sessions over the room broadcast, queueing no polled kill when it lands', async () => {
     listUnendedSwoopSessionsForUser.mockResolvedValue([controlSession, watchSession]);
+    killSession.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true });
 
     const result = await revoke();
 
@@ -235,11 +258,21 @@ describe('revokeSwoopSessionsForUser', () => {
       machineId: 'machine-1',
       sid: 'sid-control',
     });
-    expect(requestSwoopSession).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'swoop_kill', sid: 'sid-control' }),
-    );
+    expect(requestSwoopSession).not.toHaveBeenCalled();
     expect(recordSwoopSessionEnded).toHaveBeenCalledWith(
       expect.objectContaining({ sid: 'sid-control', endReason: 'member_removed' }),
+    );
+  });
+
+  it('falls back to the polled kill when the broadcast throws', async () => {
+    listUnendedSwoopSessionsForUser.mockResolvedValue([controlSession]);
+    killSession.mockRejectedValueOnce(new Error('network down'));
+
+    const result = await revoke();
+
+    expect(result.revokedSids).toEqual(['sid-control']);
+    expect(requestSwoopSession).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'swoop_kill', sid: 'sid-control' }),
     );
   });
 
@@ -261,6 +294,10 @@ describe('revokeSwoopSessionsForUser', () => {
     expect(result.revokedSids).toEqual(['sid-control']);
     // the record is ended regardless: the lease route refuses the next renewal.
     expect(endSwoopSession).toHaveBeenCalledTimes(1);
+    // and the polled command, the last resort, goes in the broadcast's place.
+    expect(requestSwoopSession).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'swoop_kill', sid: 'sid-control' }),
+    );
   });
 
   it('never throws at its caller when the sweep itself fails', async () => {

@@ -5,15 +5,16 @@
  * A page reload starts a new session, so `swoop_sessions` grows with use and
  * nothing else ever removes a document from it. Two passes per machine:
  *
- *  1. CLOSE. A session past its absolute 12-hour cap cannot be running — the
- *     cap is absolute and the lease route refuses to renew past it — so one
- *     still recorded `pending` or `live` is a record nobody closed, left by a
- *     browser that went away without its teardown reaching us. Until it is
- *     closed it answers as live to `listUnendedSwoopSessionsForUser`, and every
- *     membership change re-kills a session that ended months ago.
+ *  1. CLOSE. a session whose lease lapsed past the host's grace cannot be
+ *     running — the host has dropped every viewer of it — so one still recorded
+ *     `pending` or `live` is a record nobody closed, left by a browser that went
+ *     away without its teardown reaching us. Until it is closed it answers as
+ *     live to `listUnendedSwoopSessionsForUser`, and every membership change
+ *     re-kills a session that ended months ago.
  *
  *  2. DELETE. Every session document that started before the window, whatever
- *     state it is in.
+ *     state it is in, except one whose lease is still live: a session lives as
+ *     long as its tab keeps renewing, so an old one can still be somebody's.
  *
  * Why 30 days and not the 400 of `/api/cron/retention`: the session document is
  * operational state, not the record. A session is evidenced in
@@ -21,9 +22,8 @@
  * deliberately the one place a site admin cannot bulk-delete, and that is what
  * anyone actually queries. A second copy of who watched which machine when,
  * kept for over a year in a collection whose only reader is the running
- * session, is retention with no purpose behind it. 30 days is sixty times the
- * 12-hour cap, so nothing live is ever near the cutoff, and it comfortably
- * covers the window in which a session is still being asked about. The 400-day
+ * session, is retention with no purpose behind it. 30 days comfortably covers
+ * the window in which a session is still being asked about. The 400-day
  * commitment is a ceiling, not a target.
  *
  * NOT a Firestore TTL policy, for the same reason `/api/cron/retention` is not:
@@ -32,14 +32,15 @@
  *
  * Bounded: each machine drains page by page, oldest-first, until empty or the
  * run's budget is spent. `truncated: true` means work remains — a ceiling was
- * hit, or a delete failed its retries — and the next run resumes oldest-first.
+ * hit, a delete failed its retries, or a full page of live sessions stood in
+ * front of the rest — and the next run resumes oldest-first.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
   endSwoopSession,
-  listExpiredUnendedSwoopSessions,
+  listLapsedUnendedSwoopSessions,
   listSwoopSessionRefsStartedBefore,
 } from '@/lib/swoop/sessionStore.server';
 
@@ -129,7 +130,7 @@ export async function GET(request: NextRequest) {
         // than this has a bigger problem than retention, and the next run takes
         // the rest. Closing them is what keeps the query cheap.
         if (closeBudget > 0) {
-          const abandoned = await listExpiredUnendedSwoopSessions({
+          const abandoned = await listLapsedUnendedSwoopSessions({
             siteId: site.id,
             machineId: machine.id,
             nowMs: now,
@@ -141,8 +142,8 @@ export async function GET(request: NextRequest) {
               siteId: site.id,
               machineId: machine.id,
               sid: session.sid,
-              // The cap is what ended it; nobody was left to say so.
-              endReason: 'session_cap',
+              // the lease lapsed and nobody was left to say so.
+              endReason: 'lease_expired',
             });
             closed += 1;
             closeBudget -= 1;
@@ -153,14 +154,15 @@ export async function GET(request: NextRequest) {
         // older data behind while still reporting truncated:false.
         while (deleteBudget > 0) {
           const pageSize = Math.min(deleteBudget, QUERY_PAGE_SIZE);
-          const refs = await listSwoopSessionRefsStartedBefore({
+          const { refs, scanned } = await listSwoopSessionRefsStartedBefore({
             siteId: site.id,
             machineId: machine.id,
             beforeMs: startedBefore,
+            nowMs: now,
             limit: pageSize,
           });
 
-          if (refs.length === 0) break;
+          if (scanned === 0) break;
 
           const removed = await deleteRefs(db, refs);
           deleted += removed;
@@ -172,7 +174,13 @@ export async function GET(request: NextRequest) {
             break;
           }
           // A short page means the collection is drained for this cutoff.
-          if (refs.length < pageSize) break;
+          if (scanned < pageSize) break;
+          // a full page of live sessions would come back whole as well: stop, and
+          // say that older documents may remain behind it.
+          if (refs.length === 0) {
+            incomplete = true;
+            break;
+          }
         }
       }
     }
@@ -188,7 +196,7 @@ export async function GET(request: NextRequest) {
       deleted: { swoopSessions: deleted },
       cutoffs: { startedBefore: new Date(startedBefore).toISOString() },
       retentionDays: { swoopSessions: SWOOP_SESSION_RETENTION_DAYS },
-      // true => a ceiling was hit or a delete failed; older data remains.
+      // true => a ceiling was hit, a delete failed or live sessions blocked a page; older data remains.
       truncated,
     });
   } catch (error) {

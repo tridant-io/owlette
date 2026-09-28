@@ -21,7 +21,10 @@ const TURN_API_BASE = 'https://rtc.live.cloudflare.com/v1/turn/keys';
 /** Cloudflare's documented ceiling: "up to 48 hours in the future". */
 export const TURN_MAX_TTL_SECONDS = 48 * 60 * 60;
 
-/** A session's cap is 12 h (plan.md D10), so this is the default we ask for. */
+/**
+ * 12 h. a session has no cap any more, so a relayed one outlives these
+ * credentials only once re-minted ones reach both ends (task 7.4).
+ */
 export const TURN_DEFAULT_TTL_SECONDS = 12 * 60 * 60;
 
 const TURN_TIMEOUT_MS = 5000;

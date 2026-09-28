@@ -14,6 +14,9 @@ import { RestartCountdown } from '@/components/RestartCountdown'
 import { SidebarDivider } from '@/components/SidebarDivider'
 import { StatusFooter } from '@/components/StatusFooter'
 import { WindowControls } from '@/components/WindowControls'
+import { PermissionBanner } from '@/components/PermissionBanner'
+import { IS_MAC } from '@/lib/platform'
+import { cn } from '@/lib/utils'
 import { InlineNotice } from '@/components/ui/inline-notice'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -41,6 +44,8 @@ import {
   hostname,
   serverFromArgs,
   setStartupLink,
+  openScreenRecordingSettings,
+  screenRecordingGranted,
   startupLinkEnabled,
   writeOwletteJson,
 } from '@/lib/ipc'
@@ -124,6 +129,19 @@ function App() {
   const [startOnLogin, setStartOnLogin] = useState<boolean | null>(null)
   useEffect(() => {
     startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
+  }, [])
+
+  // macOS Screen Recording, re-read whenever the window comes back: the grant
+  // takes effect on relaunch, but the banner should at least stop showing
+  // once the user has switched it on and come back.
+  const [screenRecording, setScreenRecording] = useState<boolean | null>(null)
+  useEffect(() => {
+    const read = () => {
+      screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
+    }
+    read()
+    window.addEventListener('focus', read)
+    return () => window.removeEventListener('focus', read)
   }, [])
 
   // The webview's native menu (Back/Refresh/Print/Inspect) is browser chrome, not
@@ -423,8 +441,11 @@ function App() {
     <TooltipProvider delayDuration={400}>
       <div className="flex h-screen flex-col bg-background">
         {/*
-          The window has no native titlebar (`decorations: false`), so this row
-          is it: the drag surface, the one wordmark, and the window controls.
+          On Windows and Linux the window has no native titlebar (`decorations:
+          false`), so this row is it: the drag surface, the one wordmark, and
+          the window controls. On macOS the native traffic lights overlay the
+          top left (`tauri.macos.conf.json`: decorations on, overlay titlebar),
+          so the row leaves them room and draws no controls of its own.
           `data-tauri-drag-region` applies only to the element carrying it, so
           the controls inside stay clickable without opting out.
 
@@ -441,7 +462,10 @@ function App() {
           // pointer-events-auto beats the pointer-events:none Radix puts on <body>
           // during a modal, so the window stays draggable with a dialog up.
           // DialogContent exempts [data-titlebar] from outside-dismiss to match.
-          className="pointer-events-auto relative z-[60] flex h-10 shrink-0 select-none items-center gap-2.5 border-b pl-4"
+          className={cn(
+            'pointer-events-auto relative z-[60] flex h-10 shrink-0 select-none items-center gap-2.5 border-b',
+            IS_MAC ? 'pl-20' : 'pl-4',
+          )}
         >
           <OwletteEye size={18} className="pointer-events-none" />
           <span className="pointer-events-none text-sm font-medium tracking-tight">owlette</span>
@@ -466,8 +490,17 @@ function App() {
               )
             }}
           />
-          <WindowControls />
+          {!IS_MAC && <WindowControls />}
         </header>
+
+        <PermissionBanner
+          granted={screenRecording}
+          onOpenSettings={() => {
+            void openScreenRecordingSettings().catch((cause: unknown) =>
+              toast.error('could not open system settings', { description: message(cause) }),
+            )
+          }}
+        />
 
         {config.error && (
           <InlineNotice className="m-3" data-testid="config-error">

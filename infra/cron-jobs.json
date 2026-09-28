@@ -164,7 +164,7 @@
         "dev": "https://dev.owlette.app/api/cron/swoop-retention",
         "prod": "https://owlette.app/api/cron/swoop-retention"
       },
-      "purpose": "Sweeps sites/{siteId}/machines/{machineId}/swoop_sessions. First closes records still marked pending or live past their absolute 12-hour cap — sessions nobody closed, because the browser went away without its teardown landing — then deletes every session document that started more than SWOOP_SESSION_RETENTION_DAYS (30) ago. Bounded at 200 closes and 2000 deletes per invocation, oldest-first so progress is monotonic across runs.",
+      "purpose": "Sweeps sites/{siteId}/machines/{machineId}/swoop_sessions. First closes records still marked pending or live whose lease lapsed past the host's grace — sessions nobody closed, because the browser went away without its teardown landing — then deletes every session document that started more than SWOOP_SESSION_RETENTION_DAYS (30) ago, except one whose lease is still live. Bounded at 200 closes and 2000 deletes per invocation, oldest-first so progress is monotonic across runs.",
       "failureMode": {
         "silent": true,
         "description": "Nothing errors. Session documents accumulate forever, each naming the user who started the session and every viewer uid in it — who watched which machine, when — with no other deletion path, since this collection is deliberately not covered by a Firestore TTL policy. Abandoned records also keep answering as live to the revocation sweep, so every later membership change re-kills sessions that ended months ago."

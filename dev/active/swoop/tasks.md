@@ -502,7 +502,9 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cd web && npx jest __tests__/api/swoop/agent-routes.test.ts` is green with named cases: machine A's token requesting machine B's bundle → 404; a `sid` minted for another machine → 404; a session-cookie (non-agent) caller → 404/403; a doorbell-token request for a site with swoop disabled → 403 `swoop_disabled`; a host denial event writes an `audit_log` row with `outcome: 'deny'`. A test greps the three route sources and asserts neither `requireAgentOrSiteScope` nor `requireAgentOrSiteAuthAndScope` appears. `npx eslint` clean on all three routes.
   - Depends on: 1.3, 2.4
 
-- [ ] **Task 3.4: Worker deploy pipeline** `[agent+human]`
+- [x] **Task 3.4: Worker deploy pipeline** `[agent+human]` — closed 2026-09-23: zizmor green on every PR (the
+  CI job scans all workflows; #187), the dev push deploy on `1ebf3585` green with `/health` 200, prod deploys only
+  by dispatch (`3deb0bb6`), and the rollback rehearsed both ways on dev (README "rollback").
   - Files: `.github/workflows/swoop-signal-deploy.yml`, `infra/swoop-signal/README.md`
   - Do: Write the deploy workflow using `.github/workflows/agent-tests.yml` as the template — actions pinned to SHAs with a trailing `# vN` comment, `permissions: contents: read`, a `concurrency` group, `timeout-minutes`, `persist-credentials: false`, and path filters on `infra/swoop-signal/**` plus the workflow itself. Push to `dev` deploys `wrangler deploy --env dev`; push to `main` deploys `--env prod`; both run the Worker's vitest suite first and then smoke-check `GET /health` on the deployed URL, failing the job on a non-200. Repo secrets are `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; Worker secrets (`SWOOP_JWT_PUBLIC_KEY`, `SWOOP_JWT_KID`, `SWOOP_SIGNAL_RING_SECRET`) are set with `wrangler secret put` and never committed. The README documents both environments, every secret and where it comes from, the rollback procedure (`wrangler deployments list` → `wrangler rollback`), and the key-rotation overlap window in which the Worker verifies against two public keys. The `[human]` half: create the scoped Cloudflare API token (Workers Scripts Edit + Durable Objects), add the two repo secrets, and run the first `--env dev` deploy by hand.
   - Done when: `zizmor .github/workflows/swoop-signal-deploy.yml` reports no findings; a push to `dev` touching `infra/swoop-signal/**` runs the workflow green and `curl https://<dev worker>/health` returns 200; the README's rollback steps have been executed once on dev and the result noted in the file.
@@ -1878,3 +1880,261 @@ rules were created by hand (task 7.7's, since `set_enabled()` has no caller), sw
 `default_site` in **dev firestore**, and `shared_utils.py` is patched to point at localhost
 (original at `.predev`). `web/lib/versionUtils.ts` is patched to 3.3.5 and **must be reverted** —
 the real value is 3.4.0 and the pre-commit hook catches it.
+
+### 2026-09-23 — resumed after the 3.3.6/3.3.7 releases and the prod promotion
+
+Gap analysis in `research/resume-2026-09-23.md` (status per wave, all 18 open tasks, every Log follow-up).
+Headline: the bundle route enforces `SWOOP_MIN_AGENT_VERSION` (`bundle/route.ts:128`) and it read 3.4.0, so no
+fielded 3.3.7 agent could be served a session; the 09-19 live session ran on a box-local patch. Owner rulings
+recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A starts: 1.3 follow-up (floor =
+3.3.7, comments corrected, test that 3.3.7 is admitted), 7.7 agent half, 7.5 follow-ups, 3.4 close-out, G2 memo.
+- 2026-09-23 — Wave A progress. **1.3 follow-up done** (floor 3.3.7, `6869ae7d`). **7.7 agent half done**
+  (`f6dbafa6`): the doorbell reports the mint's 200 / 403 as the enable bit, on change only, and the service
+  hands it to `SwoopManager.set_enabled`; the `[UninstallRun]` half is next, with the owner's rulings (uninstall
+  removes all swoop logs; mDNS rule deferred). **7.5 follow-up, half:** a refused `send_to` is now counted
+  (`PeerStats.datagrams_send_failed`) and survived instead of ending the peer. The other half — treating
+  str0m's ICE `Disconnected` as recoverable with a give-up deadline — is deferred to Wave B: the viewer-side
+  policy (`session/mod.rs:2281` RestartIce) and the give-up length need the LAN measurement to size, and
+  loopback cannot exercise a real ICE disconnect. Recorded here so it is not read as done.
+- 2026-09-23 — **7.7 installer half done** (owner acked the `.iss` edit): `[UninstallRun]` gains one PowerShell
+  step after the host uninstall that removes both firewall rules by group and restores `SoftwareSASGeneration`
+  from `tmp\swoop_side_effects.json` (`absent` → value deleted, 0..3 → set, else untouched; always exit 0);
+  `usPostUninstall` removes `{app}\swoop`, `logs\swoop`, `ipc\swoop` and the record regardless of the
+  keep-user-data answer (ruling: remove all swoop logs). The mDNS rule is deferred, so nothing creates it and
+  the group removal still covers it. Quick build compiles; the generated PowerShell parses. VM proof of the
+  uninstall path is next.
+- 2026-09-23 — **7.7 uninstall path proven on the e2e VM** (`scripts/vm/18c-verify-swoop-uninstall.ps1`, 20/20):
+  two rounds, a record saying the SAS policy was absent (value deleted after uninstall) and one saying 1 (value
+  reads 1), both rules gone by group, `{app}\swoop`, `logs\swoop`, `ipc\swoop` and the record gone, the rest
+  of `logs\` kept. The first two runs failed on the uninstaller's PowerShell step (exit code 1 in the uninstall
+  log): Inno turns `{{` into `{` but a `}` is literal already, so the `}}` I wrote reached PowerShell doubled
+  and the whole command failed to parse. Single closing braces now, and the harness waits for the
+  uninstaller's temp copy (`_iu*.tmp`) rather than for `unins000.exe`, which exits at once.
+- 2026-09-23 16:43 UTC — **first A4D → B4A session on dev: black picture, "the connection to this machine
+  failed" (= `ice_failed`, `peer.ts:705`).** Evidence: session `f9256ae5…` under TEC-B4A stayed `pending`;
+  dev logs show `turn mint failed; offering stun only` (TURN not configured) and the host's bundle minted one
+  second later, so the streamer ran and answered — the header's "connected" is `onTrack`, i.e. the answer was
+  applied, not media flowing. ICE then found no pair: STUN-only on one LAN. Both machines run the catalog 3.3.7
+  (no Wave A wiring, so no `Owlette swoop` firewall rules on B4A). Two candidates, in order: (1) B4A cannot
+  resolve A4D's `.local` mDNS candidates (the host resolves through the Windows DNS client; a Public network
+  profile blocks inbound 5353) so the only pairs were srflx↔srflx behind one NAT; (2) inbound UDP to
+  `owlette-swoop.exe` blocked on B4A. Discriminator requested from the owner: retry with the browser's
+  mDNS obfuscation off (`#enable-webrtc-hide-local-ips-with-mdns` = Disabled). G2 memo not yet writable.
+- 2026-09-23 17:1x UTC — **G2 met: first picture over a real network** (A4D → B4A on dev, keyboard and mouse
+  worked) once the viewer's browser stopped hiding its LAN address behind mDNS — which confirms the 16:43
+  failure was the host failing to resolve `.local` candidates. Connect took 10–15 s by hand. Memo:
+  `spikes/g2-first-picture.md`. **Wave B opens with two findings:** host-side mDNS resolution (un-defer the
+  UDP 5353 rule and/or query mDNS from the streamer instead of the OS resolver) and the connect budget.
+- 2026-09-23 17:2x UTC — **second A4D → B4A session (host log read on B4A, both machines wired):** streamer up
+  and encoding on nvenc 135 ms after spawn; `peer connected` **17.5 s** later (all of it ICE, STUN-only);
+  overlay: capture→display 113.5 ms of which send→arrive 63.5 ms with app RTT 0.8 ms, delay rise 60 ms,
+  **gaps 2834**, direct path, cap 50 mbps / 60 fps; heavy smearing at 50 and at 30 mbps. Wired both ends, so
+  the gaps are host-side frame refusals (the pacer), not the network. **At +348 s the host logged "lease
+  lapsed past the grace, dropping it", then `room error token_expired (Remint(TokenExpired))`, socket closed,
+  exit 14 SignalLost:** the host token's 300 s TTL expired, the streamer exited by design ("holds no
+  credential to re-mint with"), and the page froze with no message. First session's peer had died at +31 s
+  with `peer poll failed: poll_output`. Wave B order is now: (1) sessions must survive the host token TTL,
+  (2) the pacer refusals / smearing, (3) the 17 s connect, (4) mDNS resolution on the host.
+- 2026-09-23 17:3x UTC — **third session: `ice_failed` again with the mDNS flag off.** Root cause, fits all
+  three: the viewer (A4D) has nine IPv4 interfaces (Ethernet ×2, three virtual, OpenVPN DCO, Tailscale, Wi-Fi,
+  Hyper-V default switch) and advertises a host candidate for each; the host binds one address and walks the
+  pairs; the fielded 3.3.7 streamer ends the peer on the first `send_to` to an unroutable address (session 1's
+  `peer poll failed` at +31 s, session 3's failure), and session 2's 17.5 s connect was the walk through dead
+  pairs before the Ethernet pair. The wave A fix (`265369eb`, a refused send is counted and survived) is on dev
+  and not on B4A. The host gathers no srflx at all (no STUN client), which is fine on the LAN and fatal off it
+  without TURN. mDNS remains a real second cause for a viewer without the flag off.
+- 2026-09-23 — **Wave B item 1 done: sessions survive the host token's lifetime.** 5.1 / 2.4 follow-up. The
+  service arms a timer at spawn (TTL 300 s from PROTOCOL §8, lead 60 s; not a bundle field, because the
+  fielded streamer's bundle parser is `deny_unknown_fields`), re-mints through the bundle route (allowed for
+  any non-ended sid), and writes `{"type":"token","host_token":…}` to the streamer's stdin; a failed mint
+  retries every 20 s while the token lives, then logs `swoop_token_refresh_failed`. The streamer re-dials the
+  room with the new token and swaps the socket (the room announces nothing for a host that goes; viewers
+  keep their peers), and swallows the joins the room replays for present viewers inside a 5 s window so
+  admission is not charged twice and a verified `ctl` is not reset. Also: `OWLETTE_SWOOP_LOG=debug|trace`
+  from `config.json` `swoop.logLevel` turns the streamer's per-frame counters on for the pacer diagnosis.
+  Tests: 4 manager tests (refresh lands, kill cancels, no-time failure logs, retry recovers), ipc parse test
+  (token never printed), client replay-window test; agent suite 1996 passed, crate 351 passed, clippy clean.
+  Proof on a real session (> 5 min without a freeze) comes with 3.3.8 on B4A.
+- 2026-09-23 — **pacer hypothesis for the smearing (from the code; unconfirmed until 3.3.8's debug counters):**
+  `pacer.rs` holds a bucket exactly one frame interval deep at the ceiling in force; an IRAP is admitted on
+  an exemption that leaves the bucket empty (`KEYFRAME_VBV_SCALE = 4`, so it is 4 frames' worth); the deltas
+  right behind it are refused as over budget (`dropped_over_budget`), each refusal is a gap at the viewer,
+  the viewer's PLI asks for another IRAP, and the loop never lets the picture clean. The governor only ever
+  descends on gaps (`governor.rs:15`), which shrinks the bucket and feeds the loop; the overlay's "cap" is
+  the top rung, not the rate in force. Candidate fixes, to be chosen on the counters: a pacer bucket 1.5–2
+  frames deep with the encoder's one-frame VBV untouched (absorbs NVENC's overshoot at ≤ 1 frame of queue),
+  and a refill to full after an IRAP exemption so the recovery point's own deltas are not the next casualty.
+- 2026-09-23 — **B4A debug log read (two sessions, both connected in < 150 ms):** ~35 `pacer refused frame`
+  lines over ~55 s at 17–39 KB each, in clusters right after keyframes, under a 50 mbps cap — so the rate in
+  force was ~15 mbps: the governor cut on its own refusals (`on_report` treated `dropped_over_budget` as
+  congestion) and again on the viewer's `framesDropped` rise those same refusals caused. Plus, with audio
+  on, every audio frame but the first per tick was refused by str0m ("Consecutive calls to write() without
+  poll_output() in between"). **Fixed on `swoop/pacer-loop`:** the governor counts refusals but never cuts on
+  them and matches viewer gaps against them before calling a gap the path's; the pacer bucket is two frame
+  intervals deep and an IRAP leaves no debt; audio writes one frame per `poll_output` round, interleaved.
+  Crate 352 passed, clippy clean, both feature sets. Ships as 3.3.9 to dev for B4A. The two connect failures
+  after 3.3.8 remain unexplained by the host (its debug log shows instant connects); most likely the browser
+  flag was back at default for those — owner to confirm.
+- 2026-09-23 — **UI finding (owner, 5.2 follow-up):** the ended and failed states are dead ends. Wanted: in
+  `ended` / `failed` the toolbar offers **reconnect** (a fresh session, same machine) — no "back to
+  dashboard", swoop opens in its own tab (owner); "end session" in the failed state resets the page instead
+  of doing nothing. **Done 2026-09-23 (`swoop/reconnect`):** `useSwoopSession.reconnect()` bumps the attempt
+  from a clean slate (proof dropped, error cleared) and the toolbar shows **reconnect** instead of "end
+  session" in `ended` / `error`; RTL test on the bar.
+- 2026-09-23 — **keyboard menu shipped (6.1's web half, owner's ask):** the toolbar's keyboard-lock sentence
+  is gone; the fullscreen button carries a tooltip that says what fullscreen captures in this browser; a
+  keyboard button beside settings sends ctrl+alt+del (the `sas` control message), windows key, alt+tab,
+  alt+f4, win+d, win+l, ctrl+esc, ctrl+shift+esc, print screen and esc as chords through the input capture's
+  own sequence (`InputCapture.pressChord`), with a two-line explainer and the sas refusal surfaced. Needs
+  `ctl`; disabled for a view-only session.
+- 2026-09-23 ~21:3x UTC — **3.3.9 on the dev catalog** (`Owlette-Installer-v3.3.9.exe`, sha256 `ff77cdd8…cec8`,
+  dev `68377293`, PR #194; VM upgrade from the fielded 3.3.7 12/0/4, uninstall proof 20/20). Carries #193's
+  pacer/governor/audio fixes, #191's keyboard menu, #192's reconnect, #190's log-level cleanup. Update
+  commands (`update_owlette`) sent to B4A and A4D through the dev API. Next: a B4A session for the picture.
+- 2026-09-23 22:xx UTC — **connect failures persist on 3.3.9 with the viewer's mDNS flag confirmed Disabled**, so
+  hidden addresses are not the cause. B4A's log is silent between "encoding on nvenc" and the failure because
+  str0m logs its ICE checks through `tracing`, which the host's `log` logger never saw. `swoop/ice-logging`:
+  the `tracing` crate's `log` feature is turned on (already in the tree via str0m; no new package), so every
+  ICE and DTLS event lands in the host log at debug. Ships as 3.3.10 to dev; the next failed attempt then
+  names the pair.
+- 2026-09-23 ~23:0x UTC — **3.3.10 on the dev catalog** (sha256 `e44a2117…45e7`, dev `353cd9c5`, PR #198; VM
+  12/0/4 + 20/20), both machines updated by `update_owlette`. Carries #196 (str0m's ICE/DTLS events in the
+  host log at debug). Web on dev also has #197 (esc hint on the stage only when fullscreen captures the
+  keyboard) and #195 (sessions route reads its body once). Next: one session attempt; a failure now leaves
+  the pair-level trace in B4A's log.
+- 2026-09-24 — **connect failures persist with one viewer interface (brave "default public interface only")
+  and the mDNS flag off**, so the viewer is cleared; the host's single bound address is the remaining
+  suspect: `local_bind_addr()` takes the interface on the internet route, which with a full-tunnel vpn up
+  on B4A is the tunnel, and a tunnel host candidate is unreachable from the lan. `swoop/bind-toward-viewer`:
+  the peer binds the interface the os routes to the viewer's first host (then srflx) candidate from the
+  offer, logged at info per viewer; an offer with no candidate keeps the session-wide address. Multi-
+  interface gathering (7.5) remains the full answer. Owner asked whether a vpn is up on B4A.
+- 2026-09-24 — **3.3.11 on the dev catalog** (sha256 `fa78255d…49d3`, dev `4323d17d`, PR #200; VM 12/0/4 +
+  20/20), both machines updated. Carries #199 (bind toward the viewer's candidate). Next: a B4A session; the
+  host log now says which address it bound per viewer.
+- 2026-09-24 — **sessions connect on 3.3.11 ("working better"); in fullscreen the owner cannot see the cursor.**
+  Root cause: the frames never carry the pointer (desktop duplication leaves it to the adapter, 4.4's
+  `pointer_in_frame: false`), and the browser decoded `cpos`/`cshape` (`protocol.ts`) but nothing consumed
+  them — presence only reads `vpos`. Under pointer lock the browser hides the local css cursor, so nothing
+  was left on screen. `swoop/machine-cursor`: a `cursor` feature (`lib/swoop/cursor.ts`, shape cache by id,
+  lost upload → no shape) and `SwoopCursor.tsx` on the stage: outside lock the machine's shape becomes the
+  stage's css cursor (one pointer, never two); under lock, or for a shape above 32 css px, the shape is
+  overlaid at `cpos` over the picture with the hotspot on the position, plain arrow before a shape lands,
+  hidden when the machine hides it. `useSwoopPictureBox` is the picture-box measure, moved out of presence
+  and shared. Web only; no host change.
+- 2026-09-24 ~04:1x UTC — **B4A stuck on "connecting": the signal room refuses every viewer join with 429
+  `room_full`.** Proven with `wrangler tail -e dev`: mint 200, ring 200, host joins, viewer joins 429 ×n;
+  the kill at 04:12:19 returned 200 and the room was still full 8 s later, so the four sockets it counts
+  are dead peers whose close never completes (earlier tabs behind the vpn / frozen sessions). The room
+  counted `getWebSockets('role:viewer')` raw. `swoop/stale-viewers`: a viewer with no frame and no
+  answered keepalive for 90 s (`LIMITS.viewerStaleMs`; browser pings every 25 s) is evicted when the room
+  is full — `departed` flag frees the slot at once, `bye reason=stale` to the host, close `stale`; kill
+  flags viewers too. Test worker runs with `SWOOP_VIEWER_STALE_MS=1500`; two new tests. Deploys to dev
+  through the worker workflow on merge; the B4A room's dead viewers get evicted on the next join.
+  Also seen: doorbell ring `rejected` at 03:53/03:54 (a non-4xx from the room) — one-off, ring 200 at
+  04:12:27; and something on A4D polling `GET /machines/TEC-A4D` every 20–40 s with 401 since 03:52.
+- 2026-09-24 ~04:4x UTC — **3.3.11 B4A log: every audio frame refused, "Consecutive calls to write() without
+  poll_output() in between", one line per frame for the whole session.** The wording misled #193: str0m
+  packetises ONE queued write per media per `handle_input(Timeout)`, never in `poll_output`, and refuses a
+  per-media queue past 100. `RtcPeer::poll` ran one timeout per call while audio arrived at 100/s, so the
+  queue filled in about a second and stayed full. `swoop/audio-timeout`: each round in `poll` is now a
+  timeout at `now` (packetises the session's video frame and the last audio frame), the outputs, then the
+  next audio frame. Loopback test feeds 5 audio frames per poll over 40 polls: 140/200 written before,
+  200/200 after. Host change → ships in 3.3.12. The black square on the same attempt is a separate stage:
+  ICE + DTLS came up (the host was writing media); waiting on the non-audio lines of that log.
+- 2026-09-24 ~06:0x UTC — **B4A black square, debug log in hand: not ICE, not the firewall, not the bind.**
+  At 05:57 UTC ICE completed in 25 ms (host 192.168.88.20:57309 ↔ browser prflx 192.168.88.10:63485,
+  nominated), the browser sent its DTLS hello, the host answered flight 4 and resent it four times into
+  silence. Two lines earlier: `Accept offer` / `Create answer` TWICE, 2 ms apart. The host sends a per-viewer
+  `host-ready` on every viewer join (`session/mod.rs:1752`); the page re-sends its standing offer on
+  `host-ready` whenever no answer has been applied; when the first offer already got through, the host
+  answers both copies, and the second answer lands inside the first one's async mac verification
+  (`acceptAnswer` only cleared `awaitingAnswer` after `setRemoteDescription`), so the page applies both,
+  the browser refuses the second (`InvalidStateError` in stable) → `abort('answer_not_applied')` → "the
+  connection to this machine failed", and the torn-down peer never answers DTLS. Timing-dependent, which
+  is why 03:04 connected and 04:25/05:57 did not. Firewall rules on B4A are enabled on every profile, both
+  adapters Private. `swoop/double-answer` (web only): `awaitingAnswer` is consumed before the first await
+  (the replay check moved ahead of it), and `host-ready` re-sends only while the offer is unanswered. Two
+  peer tests reproduce it (slow apply + a second copy 2 ms later; host-ready mid-apply), both fail on the
+  old code. The 03:04 session's end — "lease lapsed past the grace" at 03:10 — is the next item.
+- 2026-09-24 ~06:3x UTC — **PR #204 (double answer) live on dev; B4A connects ("looks like it worked this
+  time").** Next, the 5 min 30 s drop: the browser's renewer (`lease.ts`) renewed with the api on schedule
+  but never presented the renewed token to the host — `presentLease` ran only when `swoop-control` opened —
+  so the host's ledger lapsed at 5 min and its 30 s grace dropped the viewer (03:04 → 03:10 "lease lapsed
+  past the grace"). `swoop/lease-present` (web only): every renewal is presented down the control channel
+  (`presentLease(token)`); tests in lease.test.ts and peer.test.ts. Owner also reports the fullscreen
+  cursor overlay is too small and vanishes over dark text (an I-beam): scale with the picture and add a
+  contrast halo — next.
+- 2026-09-24 ~07:xx UTC — **owner ruling (going to bed): "sessions should stay active on swoop indefinitely, at
+  all costs"; keep auditing/fixing/testing unattended; tri-platform and swoop both priorities; playwright
+  multi-user.** `swoop/session-resilience` (web only): (1) `signaling.ts` ladder has no top — redials
+  forever, capped 15 s with jitter; `exhausted` fatal removed; (2) `peer.ts` ice restarts walk a ladder
+  (`RESTART_BASE_MS` 1 s → `RESTART_CAP_MS` 15 s) instead of aborting on the second failure; `ice_failed`
+  error removed; reset when the link is up; (3) the hook starts a new session after an end that was not a
+  decision (`lib/swoop/backoff.ts`: `isTransientEnd` table — lease lost, host gone, signal lost, peer
+  failed, start failed/5xx) on a 2 s → 30 s ladder that resets after 30 s connected; decisions (operator
+  end, kill, lease refused incl. the 12 h cap, mint refused, host proof failed) stop as before; the page
+  says "reconnecting in N s…" beside the error and the reconnect button reconnects now; `lease.ts` ends with
+  `lease_refused` vs `lease_expired`. Playwright: yamon blocks parallel subagents this week (82 % budget),
+  so everything runs inline. Real B4A/MBA sessions cannot be driven by playwright (api keys are refused on
+  the mint route by design; step-up is a passkey ceremony), so multi-user coverage will be emulator e2e.
+- 2026-09-24 ~08:xx UTC — **host half of "stays up": `swoop/host-signal-redial`.** The streamer exited
+  `SignalLost` the moment its room socket closed, ending a live p2p session that did not need the room.
+  Now a closed socket with a live viewer keeps the session and emits a new stdout event `token_needed`
+  (`ipc.rs`, PROTOCOL §6) every 20 s; the service answers with the same `token` control line a scheduled
+  refresh uses (`_on_token_needed`, floored at 5 s) and the host redials; a viewerless session still exits
+  as before. Rust 364/364 + clippy clean; python 31/31. Ships in 3.3.12 with the audio fix.
+- 2026-09-24 ~09:5x UTC — **3.3.12 on the dev catalog** (sha256 `8b9b4eae…895a`, release PR #209; VM upgrade
+  from the fielded 3.3.7 12/0/4, swoop uninstall proof 20/20), `update_owlette` queued to B4A and A4D. Carries
+  #203 (audio packetised per poll round) and #208 (host keeps a live session without its room). Docs
+  screenshots not refreshed (desktop app unchanged; last capture 3.3.7). E2E: `specs/swoop/session.spec.ts`
+  — 2/4 green on the first real run; the two mint-dependent tests need the e2e web server to carry swoop
+  signalling env (`SWOOP_SIGNAL_URL` is blanked as a third-party credential, so the mint route refuses with
+  `signal_not_configured`); fixing by giving the e2e server an unreachable signal origin plus generated jwt
+  keys. Also learned: the api refuses a replayed totp, so a step-up right after the sign-in that spent this
+  period's code waits for the next period.
+- 2026-09-24 ~07:48 UTC — **B4A and A4D on 3.3.12, online** (self-update via `update_owlette`, A4D log
+  `[SUCCESS] Self-update completed successfully!`). The `GET /machines/TEC-A4D` 401 every 20–40 s is a Google
+  Cloud Monitoring uptime check aimed at an authenticated route (`clientUa` GoogleStackdriverMonitoring); owner:
+  re-point it at `/api/health` in the dev GCP project.
+- 2026-09-24 ~08:0x UTC — **#207 (session resilience) and #209 (release 3.3.12) merged to dev (`cecbaa75`).**
+  Dev web now carries every overnight fix; the fleet (B4A, A4D) runs 3.3.12. Next: the swoop e2e spec to
+  green, the page's watch fallback for members (`controlRefusedForCapability`), then tri-platform.
+- 2026-09-24 ~10:xx UTC — **swoop e2e green (4/4) and the page's watch fallback.** `web/e2e/specs/swoop/session.spec.ts`:
+  step-up dialog + totp opens a control session and the record follows it to its end; a member is refused
+  control by the route's capability gate and the page now asks for a watch session instead
+  (`lib/swoop/intent.ts` `controlRefusedForCapability`, once, for that refusal only); site switch and
+  exclusion list refuse before any ceremony; over the api two viewers hold leases of their own, the token
+  carries the fingerprint presented (the host enforces it), an offline machine is 409, a watcher cannot
+  kill, one kill ends every session. The e2e web server now carries an unreachable swoop signal origin and
+  per-run ed25519 keys (`playwright.config.ts`). Learned the hard way: the mint answers 201; `problemDetail`
+  consumes the body; a waiter on "contains /swoop/sessions + 200" catches the lease renewal.
+- 2026-09-24 ~19:xx UTC — **the frozen session: channel starvation, not the path.** Owner's B4A log (3.3.12)
+  flooded with `SwoopMeta/SwoopCursor queue overflowed` and str0m's `Drop ChannelData event for id: 6`; the
+  overlay showed 61034 gaps on a "live" session. Stream 6 is the browser's `swoop-feedback` (dtls client,
+  even ids, fourth of five). str0m had closed that stream on the host and removed its channel; the browser
+  never learns of a close it did not make and kept sending (str0m re-accepts the stream and drops the data —
+  the warn). `OutQueue::drain` returned at the first `NotOpen` record, so a pong queued for the dead channel
+  sat at the head and every later cursor/meta record overflowed behind it. Fix (`swoop/channel-starvation`):
+  `WriteOutcome::Closed` (the peer remembers `closed_channels`) drops the record; `NotOpen` records step aside
+  in order; overflow warns once then every 500th with the count; `ChannelClose` logs at warn. Page:
+  `SwoopFeedback` `onSilence` after `PONG_SILENCE_MS = 8 s` without a pong (only after a first pong) →
+  `session.end('peer_failed')` → the hook's reconnect ladder, which is the only way to get new channels.
+  Still unknown: **why** str0m closed stream 6 — need the debug log around the freeze
+  (`closed|stream 6|Stream 6|DCEP|wrong state|Getting stream`). Ships in 3.3.13.
+- 2026-09-24 ~21:xx UTC — **#213 merged (`84211ba9`), 3.3.13 cut (#216).** Around it: #214 fixed the desktop
+  watcher burst test that went red on dev's ubuntu leg after #212 (asserts fewer reports than writes, not one
+  report in a window); #215 replaced MinIO in the roost CI rig with `versity/versitygw` + `amazon/aws-cli`
+  after MinIO withdrew its public images and binaries the same day (job green in 52 s). The outbox refusal
+  line now logs when the count moves, not every status tick (B4A's log was one such line every 2 s). Owner's
+  last log paste had no close/stream lines: the flood drowned them. Still wanted: the 80 lines before the
+  first `Drop ChannelData` on B4A. Vercel failover origin is down (account blocked, 402); a Tridant team
+  needs a card in the dashboard before the API will create it (`payment_method_required`).
+- 2026-09-25 (overnight) — **fleet on 3.3.15; page work merged.** 3.3.14 (cursor at true size via `cshape.scale`; one
+  pointer in the windowed view; black fullscreen letterbox) and 3.3.15 (cursor at full detail — the wire no longer
+  shrinks to the css ceiling) shipped to the dev catalog and to B4A/A4D. Page: clean session bar with badges only
+  when something is wrong (#221), screen wake lock for the life of a session, continuity — a control grant's token
+  lets the same tab reconnect without a passkey for its whole life (#223), step-up window 12 h (#225), legible
+  latency overlay with honest stage names and a codec row (#224). Still open: why str0m closed `swoop-feedback`
+  under the browser on B4A (needs the log window before the first drop on 3.3.15 — the flood is gone, so the next
+  one is readable), audio and a second viewer on hardware.

@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Plus, Loader2, CheckCircle2, Copy, Monitor, Terminal, Download, RefreshCw } from 'lucide-react';
+import { Plus, Loader2, CheckCircle2, Copy, Monitor, Terminal, RefreshCw } from 'lucide-react';
+import DownloadButton from '@/components/DownloadButton';
 import { toast } from '@/lib/toast';
 import { useInstallerVersion } from '@/hooks/useInstallerVersion';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
@@ -38,7 +39,7 @@ export function AddMachineButton({
 }: AddMachineButtonProps) {
   const [internalOpen, setInternalOpen] = useState(false);
   const [internalTab, setInternalTab] = useState<AddMachineTab>('enter');
-  const { version, downloadUrl, isLoading: isLoadingVersion } = useInstallerVersion();
+  const { version } = useInstallerVersion();
 
   // Uncontrolled by default; controlled when the parent passes the props above.
   const open = controlledOpen ?? internalOpen;
@@ -216,51 +217,7 @@ export function AddMachineButton({
                     <p className="text-sm text-muted-foreground leading-snug">
                       1) install owlette on the target machine
                     </p>
-                    <div className="flex items-center gap-0.5 shrink-0">
-                      <TooltipProvider disableHoverableContent>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={isLoadingVersion || !downloadUrl}
-                              onClick={() => downloadUrl && window.open(downloadUrl, '_blank')}
-                              aria-label="download owlette agent"
-                              className="text-muted-foreground cursor-pointer p-1.5"
-                            >
-                              {isLoadingVersion ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">
-                            <p>{isLoadingVersion ? 'loading...' : `download v${version}`}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <TooltipProvider disableHoverableContent>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={isLoadingVersion || !downloadUrl}
-                              onClick={() => {
-                                if (downloadUrl) {
-                                  navigator.clipboard.writeText(downloadUrl);
-                                  toast.success('download link copied');
-                                }
-                              }}
-                              aria-label="copy owlette agent download link"
-                              className="text-muted-foreground cursor-pointer p-1.5"
-                            >
-                              <Copy className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">
-                            <p>copy download link</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </div>
+                    <DownloadButton variant="inline" />
                   </div>
                   <div className="space-y-2">
                     <p className="text-sm text-muted-foreground">
@@ -351,6 +308,9 @@ export function AddMachineButton({
                         <Copy className="h-4 w-4" />
                       </Button>
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      silent install is windows only; on macos and linux pair from the app after installing
+                    </p>
                   </div>
 
                   <div className="flex items-center justify-between">

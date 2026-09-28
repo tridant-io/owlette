@@ -19,12 +19,14 @@ from .posix import (
     console_user,
     data_root,
     desktop_process_name,
+    exit_code,
     json_lock,
     launch_managed_process,
     notify,
     run_job,
     session_env,
     spawn_as_user,
+    watch_exit,
 )
 
 logger = logging.getLogger(__name__)

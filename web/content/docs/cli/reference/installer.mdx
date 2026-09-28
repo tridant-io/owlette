@@ -3,7 +3,13 @@ title: "installer"
 description: "superadmin only. Installer commands require a superadmin user session or an API key with installer=*:read for list/latest, installer=*:write for upload, and installer=*:admin for set-latest/delete."
 ---
 
-Agent installer binary management for the platform-wide catalog of `Owlette-Installer-vX.Y.Z.exe` binaries that new agents pull during pairing. This is not the per-site classic deploy surface; see [`deploy`](/docs/cli/reference/deploy).
+Agent installer binary management for the platform-wide catalog of installers that new agents pull during pairing. One version carries one file per platform, keyed by the fleet's own platform key:
+
+- Windows (`windows_x64`): `Owlette-Installer-vX.Y.Z.exe`
+- macOS, Apple silicon (`macos_arm64`): `Owlette-Installer-vX.Y.Z.pkg`
+- Linux (`linux_x64`): `Owlette-Installer-vX.Y.Z.deb`
+
+This is not the per-site classic deploy surface; see [`deploy`](/docs/cli/reference/deploy).
 
 Soft-delete is gated by a `min-active-versions >= 2` floor and the current latest version cannot be deleted until another active version is promoted.
 
@@ -11,7 +17,7 @@ Soft-delete is gated by a `min-active-versions >= 2` floor and the current lates
 
 ## list
 
-List uploaded installer versions, newest first. Cursor-paged.
+List uploaded installer versions, newest first. Cursor-paged. The table shows each version's Windows size and checksum; under it, one indented `platform  size  sha256` line per file the version carries. `--json` returns every version's `files` map.
 
 **synopsis** - `owlette installer list [--include-deleted] [--limit <n>] [--cursor <token>] [--json]`
 
@@ -33,7 +39,7 @@ owlette installer list --json | jq '.versions[] | select(.deletedAt == null) | .
 
 ## latest
 
-Show the current latest installer metadata.
+Show the current latest installer metadata: the version row, then one line per platform file. `--json` includes the `files` map alongside the flat Windows fields.
 
 **synopsis** - `owlette installer latest [--json]`
 
@@ -48,20 +54,21 @@ owlette installer latest --json
 
 ## upload
 
-Upload a new installer binary. The CLI orchestrates the full three-step flow:
+Upload one installer file. The platform is derived from the file's extension (`.exe`, `.pkg` or `.deb`); any other extension is refused unless `--platform` names one, and the server then requires it to match. Run it once per file, under the same version: each upload merges into that version's `files` map. The CLI orchestrates the full three-step flow:
 
-1. `POST /api/installer/upload` requests a signed URL and reserves the version/storage path.
+1. `POST /api/installer/upload` requests a signed URL and reserves the version/storage path for that platform.
 2. `PUT <signedUrl>` uploads the bytes directly to Storage.
 3. `PUT /api/installer/upload` finalizes the upload, verifies the stored object checksum, writes installer metadata, and flips the `latest` pointer unless the API request explicitly opts out.
 
 The same `Idempotency-Key` is sent on both server-side calls, so retries of the request/finalize API calls replay cleanly while the signed upload URL is still valid. The CLI computes local SHA-256 and the server recomputes SHA-256 from Storage before publishing metadata.
 
-**synopsis** - `owlette installer upload <file> --version <semver> [--release-notes <text>] [--set-latest] [--idempotency-key <key>]`
+**synopsis** - `owlette installer upload <file> --version <semver> [--platform <key>] [--release-notes <text>] [--set-latest] [--idempotency-key <key>]`
 
 | flag | required | purpose |
 |---|---|---|
-| `<file>` | yes | path to the installer exe to upload |
+| `<file>` | yes | path to the installer file to upload (`.exe`, `.pkg` or `.deb`) |
 | `--version <semver>` | yes | semver of the installer being uploaded (`X.Y.Z`) |
+| `--platform <key>` | no | `windows_x64`, `macos_arm64` or `linux_x64`; derived from the file extension by default |
 | `--release-notes <text>` | no | release notes shown on the dashboard |
 | `--set-latest` | no | mark this version as the new `latest` after upload; this is the default behavior |
 | `--idempotency-key <key>` | no | pin the `Idempotency-Key` used on both server calls |
@@ -69,11 +76,13 @@ The same `Idempotency-Key` is sent on both server-side calls, so retries of the 
 `--set-latest` defaults to `true`: omitting the flag leaves `setAsLatest` unset, and the upload API treats that as `true`. The current CLI does not accept `--no-set-latest` or `--set-latest=false`, so there is no direct CLI opt-out; use the upload API with `setAsLatest: false` if you need to upload without moving the `latest` pointer.
 
 ```bash
-owlette installer upload ./Owlette-Installer-v2.11.0.exe \
-  --version 2.11.0 \
-  --release-notes "fixes display-manager flicker" \
-  --set-latest
+# one file per platform, all under 2.11.0
+owlette installer upload ./Owlette-Installer-v2.11.0.exe --version 2.11.0 --release-notes "fixes display-manager flicker" --set-latest
+owlette installer upload ./Owlette-Installer-v2.11.0.pkg --version 2.11.0 --set-latest
+owlette installer upload ./Owlette-Installer-v2.11.0.deb --version 2.11.0 --set-latest
 ```
+
+Each run prints the platform and size it is uploading, then the finalized version, sha256 and download URL for that file.
 
 **backing endpoints**:
 

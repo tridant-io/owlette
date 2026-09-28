@@ -16,6 +16,7 @@ import { MachineStatusPill } from '@/components/MachineStatusPill';
 import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, Pencil, Copy, Square, Plus, Clock, Monitor, Cog, Settings2, MoreVertical, BellOff, RotateCcw } from 'lucide-react';
+import OsLabel from '@/components/OsLabel';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +31,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { formatScheduleSummary } from '@/components/ScheduleEditor';
 import { BLOCK_COLORS } from '@/lib/scheduleDefaults';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
+import { resolveMemoryTotalGb } from '@/lib/machineMemory';
 import { formatStorageRange } from '@/lib/storageUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
 import { formatHeartbeatTime, formatMachineLocalClock, formatTimezoneShortName, getDisplayTimezone } from '@/lib/timeUtils';
@@ -327,14 +329,12 @@ export function MachineRow({
   const gpuDevice = resolveDevice(machine.devices?.gpus, pref.gpu, primary?.gpu);
   const nicDevice = resolveDevice(machine.devices?.nics, pref.nic, primary?.nic);
 
-  // v2 MemoryMetric doesn't report `totalGb`; derive it from usedGb/percent, and show used
-  // alone when percent is 0/missing.
+  // shows used alone when no total can be resolved.
   const memoryPercent = machine.metrics?.memory?.percent ?? 0;
   const memoryUsedGb = machine.metrics?.memory?.usedGb;
+  const resolvedMemoryTotalGb = resolveMemoryTotalGb(machine.metrics?.memory);
   const memoryTotalGb =
-    memoryUsedGb !== undefined && memoryPercent > 0
-      ? Math.round((memoryUsedGb / memoryPercent) * 100 * 10) / 10
-      : null;
+    resolvedMemoryTotalGb !== null ? Math.round(resolvedMemoryTotalGb * 10) / 10 : null;
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
   const isMuted = fullPrefs.mutedMachines.includes(machine.machineId);
@@ -440,20 +440,18 @@ export function MachineRow({
               <span className="truncate">{machine.machineId}</span>
               {isMuted && <span title="alerts muted"><BellOff className="h-3 w-3 text-muted-foreground flex-shrink-0" /></span>}
             </div>
-            {/* The muted figure style the ram and disk columns use, and flush
-                to the cell rather than indented to the clock line: the hostname
-                column is a fixed 130px, so every pixel of indent is a pixel of
-                OS string that would need a hover to read. Nothing renders at
-                all for an agent that reports no osVersion — the row keeps its
-                height. */}
+            {/* The muted figure style the ram and disk columns use, indented
+                by the icon button plus its gap (pl-10) so the OS starts under
+                the hostname's first letter. The hostname column is a fixed
+                130px, so the label shortens itself to fit ("Win 11 Pro",
+                "Ubuntu 24") rather than hiding behind a hover. Nothing renders
+                at all for an agent that reports no osVersion — the row keeps
+                its height. */}
             {machine.osVersion && (
-              <span
-                data-testid="machine-os-version"
-                className="text-muted-foreground text-xs truncate"
-                title={machine.osVersion}
-              >
-                {machine.osVersion}
-              </span>
+              <OsLabel
+                osVersion={machine.osVersion}
+                className="pl-10 text-muted-foreground text-xs"
+              />
             )}
             {showLocalClock && clockTooltip && localClock && (
               <Tooltip>

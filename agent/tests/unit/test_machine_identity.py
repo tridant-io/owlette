@@ -94,6 +94,34 @@ def test_the_identity_is_seeded_from_the_hostname(data_root, monkeypatch):
     assert (data_root / 'config' / 'machine_id').read_text(encoding='utf-8') == 'KIOSK-01'
 
 
+def test_a_mac_identity_is_seeded_without_the_local_suffix(data_root, monkeypatch):
+    """macOS reports `Name.local`; the api's machine id rule (letters, digits,
+    `_`, `-`) refuses the dot, so a Mac seeded with it pairs but never swoops."""
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'darwin')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'TEC-MBA.local')
+
+    assert shared_utils.get_machine_id() == 'TEC-MBA'
+    assert (data_root / 'config' / 'machine_id').read_text(encoding='utf-8') == 'TEC-MBA'
+
+
+def test_the_local_suffix_is_kept_off_macos(data_root, monkeypatch):
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'linux')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'kiosk.local')
+
+    assert shared_utils.get_machine_id() == 'kiosk.local'
+
+
+def test_a_mac_already_registered_with_the_suffix_keeps_its_identity(data_root, monkeypatch):
+    """The token claims the persisted id: rewriting it would lock the machine out.
+    A Mac paired as `Name.local` moves only by re-pairing."""
+    (data_root / 'config').mkdir()
+    (data_root / 'config' / 'machine_id').write_text('TEC-MBA.local', encoding='utf-8')
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'darwin')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'TEC-MBA.local')
+
+    assert shared_utils.get_machine_id() == 'TEC-MBA.local'
+
+
 def test_an_existing_identity_is_read_rather_than_reseeded(data_root, monkeypatch):
     """The upgrade path: a machine already registered keeps the document it has."""
     (data_root / 'config').mkdir()

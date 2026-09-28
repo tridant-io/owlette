@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { toast } from '@/lib/toast';
 import UploadInstallerDialog from '@/components/admin/UploadInstallerDialog';
 import { formatFileSize } from '@/lib/storageUtils';
+import { INSTALLER_PLATFORMS, PLATFORM_LABEL } from '@/lib/installerPlatform';
 
 /**
  * Installers Admin Page
@@ -316,24 +317,24 @@ export default function InstallerVersionsPage() {
                 <th className="text-right p-4 text-sm font-medium text-foreground">actions</th>
               </tr>
             </thead>
-            <tbody>
-              {versions.length === 0 ? (
+            {versions.length === 0 ? (
+              <tbody>
                 <tr>
                   <td colSpan={6} className="p-8 text-center text-muted-foreground">
                     No versions uploaded yet. Click &quot;upload new version&quot; to get started.
                   </td>
                 </tr>
-              ) : (
-                versions.map((version) => {
-                  const isLatest = latestVersion?.version === version.version;
-                  const isDeleting = deletingVersion === version.version;
-                  const isSetting = settingLatest === version.version;
+              </tbody>
+            ) : (
+              versions.map((version) => {
+                const isLatest = latestVersion?.version === version.version;
+                const isDeleting = deletingVersion === version.version;
+                const isSetting = settingLatest === version.version;
 
-                  return (
-                    <tr
-                      key={version.id}
-                      className="border-b border-border hover:bg-muted/50 transition-colors"
-                    >
+                // one row group per version: the version row, then one file row per platform
+                return (
+                  <tbody key={version.id}>
+                    <tr className="hover:bg-muted/50 transition-colors">
                       {/* Version */}
                       <td className="p-4">
                         <div className="flex items-center gap-2">
@@ -392,7 +393,7 @@ export default function InstallerVersionsPage() {
                                 ) : (
                                   <>
                                     <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                                    set as latest
+                                    set as latest (all platforms)
                                   </>
                                 )}
                               </Button>
@@ -452,10 +453,50 @@ export default function InstallerVersionsPage() {
                         </div>
                       </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
+
+                    {INSTALLER_PLATFORMS.map((platform) => {
+                      const file = version.files[platform];
+                      return (
+                        <tr
+                          key={platform}
+                          data-platform={platform}
+                          className="bg-background/30 text-sm text-muted-foreground last:border-b last:border-border"
+                        >
+                          <td className="py-2 pl-10 pr-4">{PLATFORM_LABEL[platform]}</td>
+                          <td className="py-2 px-4">
+                            {file?.file_size != null ? formatFileSize(file.file_size) : '—'}
+                          </td>
+                          <td colSpan={3} className="py-2 px-4">
+                            {file?.checksum_sha256 ? (
+                              <code className="text-xs" title={file.checksum_sha256}>
+                                sha256 {file.checksum_sha256.slice(0, 12)}
+                              </code>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td className="py-2 px-4 text-right">
+                            {file ? (
+                              <a
+                                href={file.download_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1.5 hover:text-foreground"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                download
+                              </a>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                );
+              })
+            )}
           </table>
         </div>
       )}
@@ -484,7 +525,7 @@ export default function InstallerVersionsPage() {
           <DialogHeader>
             <DialogTitle className="text-foreground">set as latest version</DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              Set version {versionToSetLatest} as the latest version?
+              Set version {versionToSetLatest} as the latest version for all platforms?
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

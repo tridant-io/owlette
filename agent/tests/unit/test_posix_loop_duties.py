@@ -602,7 +602,7 @@ def _daemon_that_finds_a_dead_entry(dead_pid, seat_absent):
         _capture_crash_screenshot=lambda: (
             recorded.screenshots.append('captured') or _CRASH_SHOT_URL),
         _write_cortex_event=lambda name, details, kind: recorded.cortex.append(kind),
-        handle_process_launch=lambda process: recorded.launched.append(process['id']),
+        handle_process_launch=lambda process, after_crash=True: recorded.launched.append(process['id']),
     )
     svc.handle_process = _bound('handle_process', svc)
     return svc, recorded

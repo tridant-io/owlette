@@ -748,7 +748,7 @@ impl Duplication {
     ///         }
     ///     }
     ///     match reader.shape(dup, info) {
-    ///         Ok(Some((shape, bytes))) => match tracker.on_shape(&shape, bytes, geometry.dpi) {
+    ///         Ok(Some((shape, bytes))) => match tracker.on_shape(&shape, bytes) {
     ///             Ok(Some(msg)) => send(msg),
     ///             Ok(None) => {}          // a shape the viewer already has
     ///             Err(e) => log_and_continue(e),

@@ -168,6 +168,7 @@ use crate::encode::{Codec, CodecCaps};
 use crate::gpu::scale::Limits;
 use crate::ipc::{AudioState, Desktop, DisplayState, HostEventKind};
 use crate::signal::messages::channel::{Channel, DisplayInfo};
+use crate::transport::rtc::OUT_QUEUE_FEATURE_BYTES;
 
 /// A host feature that lives for the length of a session.
 ///
@@ -313,10 +314,12 @@ pub struct Outbound {
 /// it is base64 inside JSON, comfortably under this.
 pub const OUTBOX_BURST_BYTES: usize = 32 * 1024;
 
-/// How fast that allowance comes back: ~4 Mbps, a fifth of the default video
-/// target. A 2 MiB clipboard image therefore takes a few seconds and never
-/// competes with the picture for the link.
-pub const OUTBOX_REFILL_BYTES_PER_SEC: usize = 512 * 1024;
+/// How fast that allowance comes back: ~8 Mbps, two fifths of the default video
+/// target, and only while a feature has something to send. A 15 MiB clipboard
+/// image — about 20 MiB once base64 inside JSON — takes about 20 s, and a
+/// typical compressed 4K screenshot a few. A viewer whose transport queue is
+/// full slows it further (`feature_room`).
+pub const OUTBOX_REFILL_BYTES_PER_SEC: usize = 1024 * 1024;
 
 /// A feature's whole outbound path: a bounded, paced buffer that the session
 /// thread drains and writes.
@@ -406,6 +409,12 @@ impl Outbox {
         self.allowance = (self.allowance + gained).min(OUTBOX_BURST_BYTES);
     }
 
+    /// Hold this turn's sends to `room` ([`feature_room`]). What is refused
+    /// stays with its feature, exactly as for the allowance itself.
+    fn limit_to(&mut self, room: usize) {
+        self.allowance = self.allowance.min(room);
+    }
+
     fn take(&mut self) -> Vec<Outbound> {
         std::mem::take(&mut self.queued)
     }
@@ -416,6 +425,27 @@ impl Outbox {
     fn take_requests(&mut self) -> Vec<FeatureRequest> {
         std::mem::take(&mut self.requests)
     }
+}
+
+/// How much feature output the connected viewers' transport queues can take
+/// this turn: the least room any of them has left under
+/// [`OUT_QUEUE_FEATURE_BYTES`], given what each has queued and whether its
+/// path is up.
+///
+/// A transport queue that fills drops its oldest record, on any channel, and a
+/// clip chunk dropped there is the page throwing away the whole transfer — so
+/// feature records wait here for room instead. The slowest viewer sets the
+/// pace, which is right for a clipboard they all share. A viewer whose path is
+/// down does not: its queue cannot drain until the path is back, and one
+/// watcher's closed lid must not hold everyone else's clipboard up for the
+/// length of its hold. With every path down there is no room at all.
+fn feature_room(viewers: impl IntoIterator<Item = (usize, bool)>) -> usize {
+    viewers
+        .into_iter()
+        .filter(|&(_, up)| up)
+        .map(|(queued, _)| OUT_QUEUE_FEATURE_BYTES.saturating_sub(queued))
+        .min()
+        .unwrap_or(0)
 }
 
 /// What a feature is handed when the session starts it.
@@ -778,9 +808,9 @@ mod host {
     use windows::Win32::System::Performance::QueryPerformanceCounter;
 
     use super::{
-        codec_wire_name, limits_for, pick_codec, tier_encodes, tiers, CaptureGate, Denials,
-        Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining, Outbox, SessionHandle,
-        TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
+        codec_wire_name, feature_room, limits_for, pick_codec, tier_encodes, tiers, CaptureGate,
+        Denials, Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining, Outbox,
+        SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
     use crate::capture::{
@@ -794,8 +824,10 @@ mod host {
     use crate::gpu::Frame;
     use crate::input::{InputEvent, Injector, PointerSpace, SendInputInjector};
     use crate::ipc::{
-        self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, LeftReason, MediaPath,
+        self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, KillReason,
+        LeftReason, MediaPath,
     };
+    use crate::bundle::Secret;
     use crate::signal::client::{Effect, SignalTransport};
     use crate::signal::messages::channel::{
         self, Channel, Control as ControlMessage, Feedback, Input as InputMessage,
@@ -810,7 +842,7 @@ mod host {
     };
     use crate::transport::ice_policy::{
         admit_remote, ifwatch::InterfaceWatcher, Admission, DropReason, IceAction, IceEvent,
-        IcePolicy, SystemResolver,
+        IcePolicy, SystemResolver, DISCONNECTED_LIMIT,
     };
     use crate::transport::rtc::{qpc_hz, PeerConfig, PeerEvent, PeerState, RtcPeer};
     use crate::transport::VideoSink;
@@ -1250,6 +1282,18 @@ mod host {
         }
     }
 
+    /// The `bye` every viewer gets when the service ends the session. The
+    /// service's own stop is a host going away to come back, so the page
+    /// starts again. Every other kill is somebody's decision and final:
+    /// `session_change` above all, which is another tab or device taking the
+    /// machine, and told to come back the two would trade it forever.
+    fn kill_left_reason(reason: Option<KillReason>) -> LeftReason {
+        match reason {
+            Some(KillReason::ServiceStop) => LeftReason::Restart,
+            None => LeftReason::Kill,
+        }
+    }
+
     /// Everything the session loop was handed rather than built.
     struct Wiring {
         clock: HostClock,
@@ -1318,6 +1362,9 @@ mod host {
             session_cap: Duration::from_secs(bundle.enablement.session_cap_seconds),
             client,
             socket,
+            signal_url: bundle.signal_url.clone(),
+            site: bundle.site.clone(),
+            machine: bundle.machine.clone(),
             out: io::stdout(),
             viewers: Vec::new(),
             roster: Roster::new(bundle.ctl),
@@ -1348,6 +1395,8 @@ mod host {
                 }
             },
             bind_addr: local_bind_addr(),
+            signal_down_since: None,
+            token_asked_at: None,
             idle_since: Some(w.started),
             capture: CaptureGate::open(),
             denials: Denials::default(),
@@ -1360,6 +1409,7 @@ mod host {
             test_override: describe_override(bundle),
             features: Vec::new(),
             outbox: Outbox::new(w.started),
+            outbox_refused_logged: 0,
         };
 
         // The browser offers as soon as it is in the room, and the relay drops
@@ -1407,6 +1457,18 @@ mod host {
         session_cap: Duration,
         client: SignalClient,
         socket: RoomSocket,
+        /// For a re-dial with a fresh token (`Control::Token`): the room does
+        /// not move, only the credential does.
+        signal_url: String,
+        /// When the signaling socket was found closed under a live viewer,
+        /// and when the service was last asked for the token to redial with.
+        /// The media path does not need the room — offers, candidates and
+        /// leases ride the peer's own channels once it is up — so a live
+        /// session outlives its socket and only a viewerless one exits.
+        signal_down_since: Option<Instant>,
+        token_asked_at: Option<Instant>,
+        site: String,
+        machine: String,
         out: io::Stdout,
         /// Every viewer's peer and its own rate control, in join order.
         viewers: Vec<Viewer>,
@@ -1483,6 +1545,11 @@ mod host {
         /// What the features produced this turn, bounded and paced so a
         /// clipboard transfer cannot evict the picture's records.
         outbox: Outbox,
+        /// The outbox's refusal count as last logged, so the line is written
+        /// when the count moves and not on every status tick for the rest of
+        /// the session (B4A logged "refused 9 records" every two seconds for
+        /// hours after nine refusals in its first minute).
+        outbox_refused_logged: u64,
     }
 
     /// One viewer's peer and everything that belongs to that one track.
@@ -1592,22 +1659,72 @@ mod host {
             }
         }
 
+        /// How often the service is asked again while the room stays
+        /// unreachable: the service's own retry cadence, so one ask per
+        /// attempt it would make anyway.
+        const TOKEN_ASK_INTERVAL: Duration = Duration::from_secs(20);
+
+        /// A fresh host token from the service: dial the room again with it and
+        /// swap the socket. The old one closes on drop, and the room announces
+        /// nothing for a host that goes, so every viewer keeps its peer and its
+        /// picture; the room replays their joins, which the client already
+        /// holds. A failed dial keeps the old socket — it works until its token
+        /// expires, and the service retries the mint before then.
+        fn redial(&mut self, host_token: &Secret) {
+            let handshake = match Handshake::with_token(
+                &self.signal_url,
+                &self.site,
+                &self.machine,
+                host_token.expose(),
+            ) {
+                Ok(handshake) => handshake,
+                Err(e) => {
+                    ::log::warn!("swoop: token refresh refused, room unchanged ({e})");
+                    return;
+                }
+            };
+            match RoomSocket::dial(&handshake) {
+                Ok(socket) => {
+                    self.socket = socket;
+                    match self.signal_down_since.take() {
+                        Some(since) => ::log::info!(
+                            "swoop: signaling recovered after {:.0} s without the room",
+                            since.elapsed().as_secs_f64()
+                        ),
+                        None => ::log::info!("swoop: room re-dialed with a fresh host token"),
+                    }
+                    self.token_asked_at = None;
+                }
+                Err(e) => {
+                    ::log::warn!("swoop: re-dial with the fresh token failed ({e}); keeping the old socket");
+                }
+            }
+        }
+
         /// stdin. EOF is the service going away, which §6 makes a clean exit.
         fn pump_service(&mut self) -> Option<(Exit, ExitReason)> {
             loop {
                 match self.service_rx.try_recv() {
-                    Ok(FromService::Control(Control::Kill { sid })) => {
+                    Ok(FromService::Control(Control::Kill { sid, reason })) => {
                         if sid.as_deref().is_some_and(|s| s != self.sid) {
+                            ::log::info!("swoop: a kill for another session ignored");
                             continue;
                         }
-                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, LeftReason::Kill));
+                        let left = kill_left_reason(reason);
+                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, left));
                     }
                     Ok(FromService::Control(Control::SasResult { ok })) => {
                         self.on_sas_result(ok);
                     }
+                    Ok(FromService::Control(Control::Token { host_token })) => {
+                        self.redial(&host_token);
+                    }
                     Ok(FromService::Eof) | Err(TryRecvError::Disconnected) => {
                         ::log::info!("swoop: stdin closed, the service is gone");
-                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, LeftReason::Kill));
+                        // a service that is gone is stopping, whether or not it
+                        // got to say so.
+                        let left = kill_left_reason(Some(KillReason::ServiceStop));
+                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, left));
                     }
                     Err(TryRecvError::Empty) => return None,
                 }
@@ -1636,12 +1753,42 @@ mod host {
                 }
             }
             if !self.socket.is_open() {
+                return self.on_signal_down();
+            }
+            None
+        }
+
+        /// The socket is closed. With no viewer live there is nothing to
+        /// keep alive and the exit is the one it always was; with one, the
+        /// session stays and the service is asked for the token a redial
+        /// needs (owner ruling: a session stays up indefinitely). The lease
+        /// ledger still ends a viewer whose renewals stop, so a room that
+        /// never comes back still costs no more than one session's linger.
+        fn on_signal_down(&mut self) -> Option<(Exit, ExitReason)> {
+            let live = self.viewers.iter().filter(|v| v.peer.is_some()).count();
+            if live == 0 {
                 ::log::error!("swoop: the signaling socket closed");
                 return Some(self.teardown(
                     Exit::SignalingUnreachable,
                     ExitReason::SignalLost,
                     LeftReason::Timeout,
                 ));
+            }
+            let now = Instant::now();
+            if self.signal_down_since.is_none() {
+                ::log::error!(
+                    "swoop: the signaling socket closed with {live} viewer(s) live; keeping the session and asking for a fresh token"
+                );
+                self.signal_down_since = Some(now);
+            }
+            let ask = match self.token_asked_at {
+                None => true,
+                Some(at) => now.duration_since(at) >= Self::TOKEN_ASK_INTERVAL,
+            };
+            if ask {
+                self.token_asked_at = Some(now);
+                let event = Event::TokenNeeded { sid: self.sid.clone() };
+                self.emit(&event);
             }
             None
         }
@@ -1814,8 +1961,16 @@ mod host {
                 let _ = self.apply(effects);
                 return false;
             }
+            // the address to bind is the one that routes to the VIEWER, read off
+            // the offer's own candidates: with a vpn up, the internet route the
+            // session-wide address came from goes through the tunnel, and a
+            // host candidate on the tunnel is unreachable from the lan (the
+            // on-and-off connects of 2026-09-23). an offer with no candidate
+            // yet keeps the session-wide address.
+            let bind_addr = bind_addr_toward_offer(sdp).unwrap_or(self.bind_addr);
+            ::log::info!("swoop: viewer {viewer} peer binds {bind_addr}");
             let peer = match RtcPeer::bind(PeerConfig {
-                bind_addr: self.bind_addr,
+                bind_addr,
                 codec,
                 fps: TARGET_FPS,
                 bitrate_bps: self.viewers[at].governor.target_bps(),
@@ -2082,6 +2237,7 @@ mod host {
                 send_us,
             };
             let frame_id = frame.frame_id as u32;
+            let now = Instant::now();
 
             let mut answered = false;
             let mut needs_irap = false;
@@ -2091,6 +2247,9 @@ mod host {
                 let outcome = match v.peer.as_mut() {
                     None => Outcome::Skipped,
                     Some(peer) if peer.state() != PeerState::Connected => Outcome::Skipped,
+                    // ICE lost its pair: a frame now only fills the uplink on its
+                    // way nowhere, and the reconnect asks for the keyframe.
+                    Some(_) if v.ice.down_for(now).is_some() => Outcome::Skipped,
                     // Never the first thing a decoder sees: a delta whose
                     // references it never had is a black stream, not a lost
                     // frame. One IRAP answers every viewer waiting on one.
@@ -2274,7 +2433,7 @@ mod host {
             }
         }
 
-        /// The one thing the policy asks for.
+        /// What the policy asks for.
         ///
         /// The host answers and never offers (plan.md D8), so it is the ICE
         /// *controlled* agent: it cannot renegotiate by itself. `host-ready` is
@@ -2283,10 +2442,52 @@ mod host {
         /// credentials — which is the "every later offer is an ICE restart" path
         /// in `on_offer`.
         fn on_ice_action(&mut self, viewer: &str, action: IceAction) {
-            let IceAction::RestartIce(reason) = action;
-            ::log::info!("swoop: asking viewer {viewer} for an ice restart ({reason:?})");
-            let ready = self.client.host_ready(Some(viewer));
-            self.send(&ready);
+            match action {
+                IceAction::RestartIce(reason) => {
+                    ::log::info!("swoop: asking viewer {viewer} for an ice restart ({reason:?})");
+                    let ready = self.client.host_ready(Some(viewer));
+                    self.send(&ready);
+                }
+                IceAction::GiveUp => {
+                    ::log::info!(
+                        "swoop: viewer {viewer} ice down for {} s, dropping it",
+                        DISCONNECTED_LIMIT.as_secs()
+                    );
+                    let effects = self.client.end_viewer(viewer, LeftReason::Timeout);
+                    let _ = self.apply(effects);
+                }
+            }
+        }
+
+        /// One ICE edge from a viewer's peer, for its policy, and a log line for
+        /// the two an operator reads: the path going down and coming back.
+        fn on_ice_event(&mut self, viewer: &str, event: IceEvent) {
+            let now = Instant::now();
+            let Some(v) = self.viewer_mut(viewer) else {
+                return;
+            };
+            let codec = v.codec;
+            let down_for = v.ice.down_for(now);
+            let action = v.ice.observe(now, event);
+            match (event, down_for) {
+                (IceEvent::Disconnected, None) => ::log::info!(
+                    "swoop: viewer {viewer} ice disconnected, holding it up to {} s",
+                    DISCONNECTED_LIMIT.as_secs()
+                ),
+                (IceEvent::Connected { .. } | IceEvent::PairChanged { .. }, Some(down)) => {
+                    ::log::info!(
+                        "swoop: viewer {viewer} ice reconnected after {:.0} s",
+                        down.as_secs_f64()
+                    );
+                    // no frame went out while it was down, so its decoder has
+                    // nothing to continue from.
+                    self.request_idr(codec);
+                }
+                _ => {}
+            }
+            if let Some(action) = action {
+                self.on_ice_action(viewer, action);
+            }
         }
 
         /// Every feature's turn to produce, then the one write.
@@ -2301,6 +2502,17 @@ mod host {
             }
             let now = Instant::now();
             self.outbox.refill(now);
+            // records wait for transport room, requests do not: a request is not
+            // bytes on the wire, and every feature is still polled for them.
+            self.outbox.limit_to(feature_room(
+                self.viewers
+                    .iter()
+                    .filter(|v| v.connected())
+                    .filter_map(|v| {
+                        let peer = v.peer.as_ref()?;
+                        Some((peer.queued_bytes(), v.ice.down_for(now).is_none()))
+                    }),
+            ));
             // Drained per feature rather than once at the end: a request has to
             // carry who made it, and `sas_result` routed to the wrong feature
             // is a handshake that never completes.
@@ -2442,9 +2654,11 @@ mod host {
                         self.request_idr(codec);
                     }
                 }
-                PeerEvent::Disconnected => {
-                    // No `bye` came, so the viewer did not leave — it stopped
-                    // answering. That is a timeout, and the release matters.
+                PeerEvent::Closed => {
+                    // No `bye` came, so the room never said the viewer left —
+                    // its end closed the association. That is a timeout, and
+                    // the release matters.
+                    ::log::info!("swoop: viewer {viewer} peer closed");
                     let effects = self.client.end_viewer(viewer, LeftReason::Timeout);
                     let _ = self.apply(effects);
                 }
@@ -2461,18 +2675,16 @@ mod host {
                     };
                     self.send(&message);
                 }
-                PeerEvent::Ice(event) => {
-                    let action = self
-                        .viewer_mut(viewer)
-                        .and_then(|v| v.ice.observe(Instant::now(), event));
-                    if let Some(action) = action {
-                        self.on_ice_action(viewer, action);
-                    }
-                }
+                PeerEvent::Ice(event) => self.on_ice_event(viewer, event),
                 PeerEvent::KeyframeRequest => self.request_idr(codec),
                 PeerEvent::ChannelOpen(Channel::SwoopControl) => self.send_hello_host(viewer),
                 PeerEvent::ChannelOpen(channel) => ::log::debug!("swoop: {channel:?} open"),
-                PeerEvent::ChannelClose(channel) => ::log::debug!("swoop: {channel:?} closed"),
+                // The browser owns the five and never re-opens one it did
+                // not close, so from here the peer drops that channel's
+                // records and the viewer's pong watchdog is what recovers.
+                PeerEvent::ChannelClose(channel) => {
+                    ::log::warn!("swoop: {channel:?} closed by the transport for {viewer}")
+                }
                 PeerEvent::ChannelData {
                     channel,
                     binary,
@@ -2495,9 +2707,19 @@ mod host {
                     channel,
                     queued_bytes,
                 } => ::log::debug!("swoop: {channel:?} write refused, {queued_bytes} queued"),
-                PeerEvent::ChannelQueueOverflow { channel } => {
-                    ::log::warn!("swoop: {channel:?} queue overflowed")
+                PeerEvent::ChannelQueueOverflow { channel, overflows } => {
+                    // Once, and then every five hundredth: a starved queue
+                    // overflows sixty times a second, and the log is what the
+                    // starvation is diagnosed from.
+                    if overflows == 1 || overflows % 500 == 0 {
+                        ::log::warn!(
+                            "swoop: {channel:?} queue overflowed for {viewer} ({overflows} records dropped so far)"
+                        )
+                    }
                 }
+                PeerEvent::DatagramDropped { dropped, reason } => ::log::warn!(
+                    "swoop: dropped a datagram for {viewer} ({reason}); {dropped} dropped so far"
+                ),
                 // Never fires: BWE is off. Named so it is not a silent arm.
                 PeerEvent::BitrateEstimate(_) => {}
             }
@@ -2966,7 +3188,8 @@ mod host {
             }
             // The outbox's refusals have no `status` field — nothing outside
             // this process can act on them — so they stay a log line.
-            if self.outbox.refused() > 0 {
+            if self.outbox.refused() != self.outbox_refused_logged {
+                self.outbox_refused_logged = self.outbox.refused();
                 ::log::info!(
                     "swoop: the feature outbox has refused {} records",
                     self.outbox.refused()
@@ -3414,7 +3637,7 @@ mod host {
                     }
                     match reader.shape(dup, info) {
                         Ok(Some((shape, bytes))) => {
-                            match tracker.on_shape(&shape, bytes, geometry.dpi) {
+                            match tracker.on_shape(&shape, bytes) {
                                 Ok(Some(message)) => pointer.push(message),
                                 Ok(None) => {}
                                 Err(e) => ::log::warn!("swoop: cursor shape: {e}"),
@@ -3712,6 +3935,56 @@ mod host {
     /// One host candidate, on the interface that would reach the internet. A
     /// udp `connect` sends nothing; it only picks the route. Task 7.4/7.5 adds
     /// server-reflexive and relayed candidates through `add_local_candidate`.
+    /// The address to bind for one viewer: the interface the os routes to
+    /// the viewer's first host candidate (then its first server-reflexive
+    /// one), port 0. None when the offer carries no usable candidate.
+    fn bind_addr_toward_offer(sdp: &str) -> Option<SocketAddr> {
+        offer_candidate_ips(sdp)
+            .into_iter()
+            .find_map(|remote| bind_addr_toward(remote).map(|ip| SocketAddr::new(ip, 0)))
+    }
+
+    /// The IPv4 addresses of an offer's `a=candidate:` lines, host candidates
+    /// first, then server-reflexive, in the offer's own order. An mdns name,
+    /// an ipv6 address or a relay candidate says nothing about which of our
+    /// interfaces faces the viewer, so they are left out.
+    fn offer_candidate_ips(sdp: &str) -> Vec<IpAddr> {
+        let mut host = Vec::new();
+        let mut srflx = Vec::new();
+        for line in sdp.lines() {
+            let line = line.trim_end();
+            let Some(rest) = line.strip_prefix("a=candidate:") else { continue };
+            // foundation component transport priority address port typ <type> ...
+            let fields: Vec<&str> = rest.split_whitespace().collect();
+            if fields.len() < 8 || !fields[2].eq_ignore_ascii_case("udp") || fields[6] != "typ" {
+                continue;
+            }
+            let Ok(ip) = fields[4].parse::<Ipv4Addr>() else { continue };
+            // loopback stays: the same-box session offers it, and toward it
+            // the right interface is loopback.
+            if ip.is_unspecified() {
+                continue;
+            }
+            match fields[7] {
+                "host" => host.push(IpAddr::V4(ip)),
+                "srflx" => srflx.push(IpAddr::V4(ip)),
+                _ => {}
+            }
+        }
+        host.extend(srflx);
+        host
+    }
+
+    /// The local address the os would send from to reach `remote`: a connected
+    /// udp socket's own address, no packet sent. A lan peer resolves to the lan
+    /// interface even while a full-tunnel vpn holds the default route.
+    fn bind_addr_toward(remote: IpAddr) -> Option<IpAddr> {
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+        socket.connect((remote, 9)).ok()?;
+        let ip = socket.local_addr().ok()?.ip();
+        (!ip.is_unspecified()).then_some(ip)
+    }
+
     fn local_bind_addr() -> SocketAddr {
         let found = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
             .and_then(|socket| {
@@ -3743,6 +4016,38 @@ mod host {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        const OFFER_WITH_CANDIDATES: &str = "v=0\r\n\
+            a=candidate:1 1 udp 2122260223 192.168.1.44 51234 typ host generation 0\r\n\
+            a=candidate:2 1 udp 2122194687 100.101.102.103 51235 typ host generation 0\r\n\
+            a=candidate:3 1 udp 1686052607 203.0.113.9 51234 typ srflx raddr 192.168.1.44 rport 51234\r\n\
+            a=candidate:4 1 udp 2122260223 abcd-1234.local 51236 typ host\r\n\
+            a=candidate:5 1 tcp 1518280447 192.168.1.44 9 typ host tcptype active\r\n\
+            a=candidate:6 1 udp 41885439 198.51.100.7 3478 typ relay raddr 203.0.113.9 rport 51234\r\n";
+
+        #[test]
+        fn an_offers_udp_host_candidates_come_first_then_srflx_and_nothing_else() {
+            let ips = offer_candidate_ips(OFFER_WITH_CANDIDATES);
+            assert_eq!(
+                ips,
+                vec![
+                    IpAddr::V4(Ipv4Addr::new(192, 168, 1, 44)),
+                    IpAddr::V4(Ipv4Addr::new(100, 101, 102, 103)),
+                    IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)),
+                ]
+            );
+            assert!(offer_candidate_ips("v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n").is_empty());
+        }
+
+        #[test]
+        fn the_bind_address_is_the_interface_that_routes_to_the_viewer() {
+            // loopback is the one route every box has: toward 127.0.0.1 the os
+            // answers from 127.0.0.1, never from the internet-route interface.
+            assert_eq!(bind_addr_toward(IpAddr::V4(Ipv4Addr::LOCALHOST)), Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+            let offer = "a=candidate:1 1 udp 1 127.0.0.1 5000 typ host\r\n";
+            assert_eq!(bind_addr_toward_offer(offer), Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)));
+            assert_eq!(bind_addr_toward_offer("v=0\r\n"), None);
+        }
 
         /// One tier at the session's own defaults, for the hardware tests that
         /// drive the capture thread without a roster behind them.
@@ -3803,6 +4108,19 @@ mod host {
                 GovernorPhase::Climbing
             );
             assert_eq!(governor_phase(GovernorState::Pinned), GovernorPhase::Pinned);
+        }
+
+        /// An agent update ends a session without ending it for good: the
+        /// service's own stop, and stdin closing under it, tell every viewer to
+        /// come back. A kill with no reason — `session_change`, `swoop_kill` —
+        /// stays final.
+        #[test]
+        fn only_the_services_own_stop_tells_a_viewer_to_come_back() {
+            assert_eq!(
+                kill_left_reason(Some(KillReason::ServiceStop)),
+                LeftReason::Restart
+            );
+            assert_eq!(kill_left_reason(None), LeftReason::Kill);
         }
 
         /// The frame-rate rung is enforced by feeding the encoder less often,
@@ -4439,12 +4757,12 @@ mod tests {
 
         // A turn too short to earn a byte must not throw its remainder away:
         // a hundred of them still add up to the rate.
-        for i in 1..=100u32 {
-            out.refill(start + Duration::from_micros(i as u64));
+        for i in 1..=100u64 {
+            out.refill(start + Duration::from_nanos(i * 500));
         }
         assert!(
             out.send(Channel::SwoopControl, vec![0u8; 50]),
-            "100 us at the refill rate is about 52 bytes"
+            "50 us at the refill rate is about 52 bytes"
         );
 
         out.refill(start + Duration::from_secs(10));
@@ -4483,6 +4801,53 @@ mod tests {
         assert!(out.request(FeatureRequest::Sas));
         assert_eq!(out.take().len(), 1);
         assert_eq!(out.take_requests().len(), 1);
+    }
+
+    /// The transport queue drops its oldest record once it fills, so feature
+    /// records wait for room instead: a turn with a viewer above the gate sends
+    /// none, requests still go, and the records go once that queue drains.
+    #[test]
+    fn feature_records_wait_for_room_in_the_fullest_viewers_queue() {
+        let start = Instant::now();
+        let mut out = Outbox::new(start);
+        // one viewer drained, one holding its whole feature share already.
+        out.limit_to(feature_room([(0, true), (OUT_QUEUE_FEATURE_BYTES, true)]));
+        assert!(
+            !out.send(Channel::SwoopControl, vec![0u8; 1]),
+            "above the gate"
+        );
+        assert!(out.request(FeatureRequest::Sas), "a request is not bytes");
+        assert!(out.take().is_empty());
+
+        // part drained: what fits under the share goes, and no more.
+        out.refill(start + Duration::from_secs(1));
+        out.limit_to(feature_room([
+            (0, true),
+            (OUT_QUEUE_FEATURE_BYTES - 8 * 1024, true),
+        ]));
+        assert!(!out.send(Channel::SwoopControl, vec![0u8; 16 * 1024]));
+        assert!(out.send(Channel::SwoopControl, vec![0u8; 8 * 1024]));
+
+        // drained: the chunk that waited goes on the next turn.
+        out.refill(start + Duration::from_secs(2));
+        out.limit_to(feature_room([(0, true), (0, true)]));
+        assert!(out.send(Channel::SwoopControl, vec![0u8; 16 * 1024]));
+        assert_eq!(out.take().len(), 2);
+        assert_eq!(out.take_requests().len(), 1);
+    }
+
+    /// A viewer whose path is down cannot drain until it is back, so its full
+    /// queue does not hold the others up for the length of its hold; with
+    /// every path down there is nowhere for a record to go.
+    #[test]
+    fn a_viewer_whose_path_is_down_does_not_hold_the_others_up() {
+        let full = OUT_QUEUE_FEATURE_BYTES;
+        assert_eq!(feature_room([(0, true), (full, false)]), full);
+        assert_eq!(
+            feature_room([(8 * 1024, true), (full, false)]),
+            full - 8 * 1024
+        );
+        assert_eq!(feature_room([(0, false)]), 0);
     }
 
     // ------------------------------------------------------- the fan-out ---
