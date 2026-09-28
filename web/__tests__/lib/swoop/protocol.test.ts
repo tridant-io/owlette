@@ -585,7 +585,11 @@ describe('channel messages', () => {
       reason: 'clipboard_too_large',
     });
     // an image gets the larger cap, and a single chunk still cannot exceed 16 KiB
-    expect(decodeControlMessage(JSON.stringify({ ...base, fmt: 'png', totalBytes: 2 * 1024 * 1024 }), { ctl: true }).ok).toBe(true);
+    expect(decodeControlMessage(JSON.stringify({ ...base, fmt: 'png', totalBytes: 15 * 1024 * 1024 }), { ctl: true }).ok).toBe(true);
+    expect(verdict(decodeControlMessage(JSON.stringify({ ...base, fmt: 'png', totalBytes: 15 * 1024 * 1024 + 1 }), { ctl: true }))).toEqual({
+      expect: 'reject',
+      reason: 'clipboard_too_large',
+    });
     const fatChunk = { ...base, totalBytes: 100, data: Buffer.alloc(17 * 1024, 0x41).toString('base64') };
     expect(verdict(decodeControlMessage(JSON.stringify(fatChunk), { ctl: true }))).toEqual({
       expect: 'reject',

@@ -137,6 +137,12 @@ const OPUS_PT: u8 = 111;
 /// standing queue the pacer exists to prevent.
 const OUT_QUEUE_HIGH_WATERMARK: usize = 64 * 1024;
 
+/// How much of that queue feature records (clipboard chunks, cursor shapes)
+/// may fill. The session holds them back past it, so the other half is always
+/// the session's own: a queue full enough to drop its oldest record got there
+/// on `swoop-meta` and the like, never on a backlog the features built.
+pub const OUT_QUEUE_FEATURE_BYTES: usize = OUT_QUEUE_HIGH_WATERMARK / 2;
+
 /// One datagram. str0m's target MTU is well under this.
 const RECV_BUF_BYTES: usize = 2048;
 
@@ -719,6 +725,11 @@ impl RtcPeer {
         self.pending_events.extend(events);
     }
 
+    /// Bytes queued for the transport and not yet taken by it.
+    pub fn queued_bytes(&self) -> usize {
+        self.out.bytes
+    }
+
     /// Drive I/O and timers for at most `budget`, appending what it learned to
     /// `events`.
     ///
@@ -1218,6 +1229,17 @@ mod tests {
             enable_bwe: false,
         })
         .expect("bind on loopback")
+    }
+
+    /// What the session reads to hold feature records back: every byte waiting
+    /// for the transport, here a record whose channel is not open yet.
+    #[test]
+    fn queued_bytes_counts_what_waits_for_the_transport() {
+        let mut peer = loopback_peer();
+        assert_eq!(peer.queued_bytes(), 0);
+        peer.write_channel(Channel::SwoopControl, false, vec![0u8; 1000]);
+        peer.write_channel(Channel::SwoopMeta, true, vec![0u8; 24]);
+        assert_eq!(peer.queued_bytes(), 1024);
     }
 
     /// A lost pair is an edge the policy waits out, so the peer stays; a closed

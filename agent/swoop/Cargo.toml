@@ -238,9 +238,10 @@ audiopus_sys = { version = "=0.2.2", optional = true, features = ["static"] }
 # Wave 3+ task must not edit this manifest: Direct3D11/DXGI for capture and the
 # GPU convert/scale path, Gdi + HiDpi for display geometry, KeyboardAndMouse for
 # injection, StationsAndDesktops for the secure desktop, DataExchange + Memory
-# for the clipboard, Media_Audio for the WASAPI loopback capture, Devices_Display
-# for the display topology, LibraryLoader for the DLL search path, Performance
-# for QPC timestamps.
+# for the clipboard and Graphics_Imaging (WIC) for its png compression both
+# ways, Media_Audio for the WASAPI loopback capture, Devices_Display for the
+# display topology, LibraryLoader for the DLL search path, Performance for QPC
+# timestamps.
 #
 # Com_StructuredStorage and Variant are not subsystems this crate calls: both
 # `IMMDevice::Activate` and `ActivateAudioInterfaceAsync` are generated behind
@@ -258,6 +259,7 @@ windows = { version = "=0.62.2", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Imaging",
     "Win32_Media_Audio",
     "Win32_Security",
     "Win32_System_Com",

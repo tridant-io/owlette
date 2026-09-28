@@ -285,9 +285,20 @@ its own cursor a css cursor.
 
 `{"t":"clip","dir":"to-host"|"to-viewer","fmt":"text"|"png","seq":n,"chunk":i,"chunks":k,"totalBytes":n,"data":"<base64>"}`
 
-- caps: text ≤ 256 KiB, image ≤ 2 MiB, one chunk ≤ 16 KiB. `totalBytes` is checked **before the first chunk
-  is buffered** — a receiver that waits until reassembly to notice the size has already paid for it.
-  over cap → drop the whole transfer, reason `clipboard_too_large`.
+- caps: text ≤ 256 KiB, image ≤ 15 MiB (a compressed 4k screenshot, with room to spare), one chunk ≤ 16 KiB.
+  `totalBytes` is checked **before the first chunk is buffered** — a receiver that waits until reassembly to
+  notice the size has already paid for it. over cap → drop the whole transfer, reason `clipboard_too_large`.
+- `png` is always a compressed png. the host sends the clipboard's registered `PNG` format when it has one,
+  and otherwise compresses its bitmap (`CF_DIBV5`, else `CF_DIB`); the cap applies to the png, not the
+  bitmap. an incoming `png` is set as both `PNG` and a `CF_DIBV5` bitmap (32-bit bottom-up BGRA, straight
+  alpha), so apps that paste only bitmaps can paste it. a bitmap is carried up to 64 Mi pixels (8192 × 8192)
+  either way; an incoming `png` the host cannot decode, or one above that, goes on as `PNG` alone.
+- a sender paces a transfer rather than handing the channel a whole image at once. the host sends through
+  its outbox (a 32 KiB burst, then 1 MiB/s) and holds records back while any connected viewer whose path is
+  up has more than 32 KiB (half its 64 KiB transport queue) waiting, so the slowest viewer slows a transfer
+  instead of losing a chunk of it. the page stops above 1 MiB buffered and carries on below 256 KiB, and
+  holds the paste keystroke until the last chunk has left its buffer, so the keystroke is not sent while
+  most of the clip is still queued behind it.
 - file lists are never carried. there is no file transfer in this protocol.
 - transfers above 64 KiB are reported to `POST /api/agent/swoop/events` for the audit trail, as a
   `host_event` with `kind: "clipboard_audit"`. the content never is.
@@ -321,7 +332,9 @@ timestamps comparable across the two clocks. feedback drives the rate governor: 
 
 golden vectors: `messages/msg-input-batch.json`, `messages/msg-input-no-ctl.json` (reject, `not_permitted`),
 `messages/msg-cursor.json`, `messages/msg-clipboard-text.json`, `messages/msg-clipboard-oversize.json`
-(reject, `clipboard_too_large`), `messages/msg-control.json`, `messages/msg-feedback.json`.
+(reject, `clipboard_too_large`), `messages/msg-clipboard-image-at-cap.json`,
+`messages/msg-clipboard-image-oversize.json` (reject, `clipboard_too_large`), `messages/msg-control.json`,
+`messages/msg-feedback.json`.
 
 ---
 

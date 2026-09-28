@@ -20,8 +20,28 @@ Object.assign(globalThis, { TextEncoder, TextDecoder });
 // harness
 // ---------------------------------------------------------------------------
 
+/**
+ * the `swoop-control` data channel's send buffer, which a transfer paces itself
+ * by. it only fills when the harness asks it to buffer.
+ */
+class FakeChannel extends EventTarget {
+  readyState = 'open';
+  bufferedAmount = 0;
+  bufferedAmountLowThreshold = 0;
+
+  /** empty the buffer to `to`, firing the event the browser fires on the way down. */
+  drain(to = 0): void {
+    const was = this.bufferedAmount;
+    this.bufferedAmount = to;
+    if (was > this.bufferedAmountLowThreshold && to <= this.bufferedAmountLowThreshold) {
+      this.dispatchEvent(new Event('bufferedamountlow'));
+    }
+  }
+}
+
 interface Harness {
   stage: HTMLElement;
+  channel: FakeChannel;
   /** every `swoop-control` payload the feature sent. */
   sent: string[];
   /** what a listener where `input.ts` binds actually saw. */
@@ -33,11 +53,12 @@ interface Harness {
   detach(): void;
 }
 
-function harness(options: { ctl?: boolean } = {}): Harness {
+function harness(options: { ctl?: boolean; buffering?: boolean } = {}): Harness {
   const stage = document.createElement('div');
   stage.tabIndex = 0;
   document.body.appendChild(stage);
 
+  const channel = new FakeChannel();
   const sent: string[] = [];
   const forwarded: KeyboardEvent[] = [];
   const order: string[] = [];
@@ -55,10 +76,12 @@ function harness(options: { ctl?: boolean } = {}): Harness {
   const session = {
     ctl: options.ctl ?? true,
     stage,
+    peer: { channel: (label: string) => (label === 'swoop-control' ? channel : null) },
     send: (label: string, data: string) => {
       if (label === 'swoop-control') {
         sent.push(data);
         order.push('clip');
+        if (options.buffering) channel.bufferedAmount += data.length;
       }
       return true;
     },
@@ -73,6 +96,7 @@ function harness(options: { ctl?: boolean } = {}): Harness {
   const detach = attach(session);
   return {
     stage,
+    channel,
     sent,
     forwarded,
     order,
@@ -113,7 +137,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-const attached = (options?: { ctl?: boolean }): Harness => {
+const attached = (options?: { ctl?: boolean; buffering?: boolean }): Harness => {
   const h = harness(options);
   detaches.push(h);
   return h;
@@ -214,6 +238,121 @@ describe('paste interception', () => {
 // ---------------------------------------------------------------------------
 // host → viewer
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// pacing
+// ---------------------------------------------------------------------------
+
+const CHUNK = 16 * 1024;
+
+/** a clipboard whose `read()` holds one png of these bytes. */
+function withImage(bytes: Uint8Array): void {
+  const blob = { arrayBuffer: () => Promise.resolve(bytes.buffer) } as unknown as Blob;
+  withClipboard({
+    read: () => Promise.resolve([{ types: ['image/png'], getType: () => Promise.resolve(blob) } as unknown as ClipboardItem]),
+  });
+}
+
+/** a paste event as the browser's own edit menu fires it. */
+function pasteEvent(data: { image?: Uint8Array; text?: string }): Event {
+  const items = data.image
+    ? [{ type: 'image/png', getAsFile: () => ({ arrayBuffer: () => Promise.resolve(data.image!.buffer) }) }]
+    : [];
+  return Object.assign(new Event('paste', { bubbles: true, cancelable: true }), {
+    clipboardData: { items, getData: (type: string) => (type === 'text/plain' ? (data.text ?? '') : '') },
+  });
+}
+
+describe('pacing', () => {
+  it('paces a large image by the channel buffer and lets the paste go only once the clip has left', async () => {
+    const image = new Uint8Array(3 * 1024 * 1024).fill(7);
+    const total = Math.ceil(image.length / CHUNK);
+    withImage(image);
+    const h = attached({ buffering: true });
+
+    h.stage.dispatchEvent(pasteKey());
+    await flush();
+
+    // it stopped once more than 1 MiB was waiting, keystroke still held.
+    expect(h.sent.length).toBeGreaterThan(0);
+    expect(h.sent.length).toBeLessThan(total);
+    expect(h.channel.bufferedAmount).toBeGreaterThan(1024 * 1024);
+    expect(h.forwarded).toHaveLength(0);
+
+    while (h.sent.length < total) {
+      h.channel.drain();
+      await flush();
+    }
+    // every chunk is handed over, but the tail is still in the buffer.
+    expect(h.forwarded).toHaveLength(0);
+
+    h.channel.drain();
+    await flush();
+    expect(h.forwarded.map((event) => event.code)).toEqual(['KeyV']);
+    expect(h.order.at(-1)).toBe('key');
+    expect(JSON.parse(h.sent[0]) as ClipboardMessage).toMatchObject({
+      fmt: 'png',
+      chunk: 0,
+      chunks: total,
+      totalBytes: image.length,
+    });
+  });
+
+  it('holds the paste through a low-buffer event that no longer describes the buffer', async () => {
+    withClipboard({ readText: () => Promise.resolve('queued') });
+    const h = attached({ buffering: true });
+
+    h.stage.dispatchEvent(pasteKey());
+    await flush();
+    expect(h.sent).toHaveLength(1);
+
+    // a crossing the browser queued under an earlier threshold, landing late.
+    h.channel.dispatchEvent(new Event('bufferedamountlow'));
+    await flush();
+    expect(h.forwarded).toHaveLength(0);
+
+    h.channel.drain();
+    await flush();
+    expect(h.forwarded.map((event) => event.code)).toEqual(['KeyV']);
+  });
+
+  it('gives up on a clip whose channel never drains, and lets the paste go anyway', async () => {
+    jest.useFakeTimers();
+    try {
+      withImage(new Uint8Array(3 * 1024 * 1024));
+      const h = attached({ buffering: true });
+
+      h.stage.dispatchEvent(pasteKey());
+      await jest.advanceTimersByTimeAsync(0);
+      const sentBefore = h.sent.length;
+      expect(h.forwarded).toHaveLength(0);
+
+      await jest.advanceTimersByTimeAsync(30_000);
+      expect(h.sent.length).toBe(sentBefore);
+      expect(h.forwarded.map((event) => event.code)).toEqual(['KeyV']);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('sends one clip at a time, so a later paste lands after the one still going', async () => {
+    const image = new Uint8Array(3 * 1024 * 1024);
+    const h = attached({ buffering: true });
+
+    h.stage.dispatchEvent(pasteEvent({ image }));
+    await flush();
+    h.stage.dispatchEvent(pasteEvent({ text: 'pasted after' }));
+    await flush();
+
+    while (h.channel.bufferedAmount > 0) {
+      h.channel.drain();
+      await flush();
+    }
+    const sequences = h.sent.map((payload) => (JSON.parse(payload) as ClipboardMessage).seq);
+    expect(sequences).toEqual([...Array(Math.ceil(image.length / CHUNK)).fill(1), 2]);
+    expect(atob((JSON.parse(h.sent.at(-1)!) as ClipboardMessage).data)).toBe('pasted after');
+  });
+});
 
 describe('applying the host clipboard', () => {
   it('writes inside the next user activation when the first attempt is refused', async () => {
