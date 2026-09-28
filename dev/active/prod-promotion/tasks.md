@@ -1,5 +1,5 @@
 # prod promotion — Tasks
-**Progress**: 0/20 complete
+**Progress**: 10/20 complete — **promotion base frozen at `fdcf86d1` (dev, 2026-09-22 22:33 UTC, #175 merged)**
 
 Read [plan.md](plan.md), then [research/main-vs-dev.md](research/main-vs-dev.md) and
 [research/env-vars.md](research/env-vars.md), then only the files your task names. **The owner's explicit go is
@@ -38,7 +38,7 @@ before the `release/3.3.6` forward-merge landed. **Re-read them; do not trust th
 
 Four commits on `dev`, in this order. The last one freezes the promotion base.
 
-- [ ] **Task 0.1: Gate the prod Worker deploy behind `workflow_dispatch`** `[agent]`
+- [x] **Task 0.1: Gate the prod Worker deploy behind `workflow_dispatch`** `[agent]`
   - Files: `.github/workflows/swoop-signal-deploy.yml`, `infra/swoop-signal/README.md`
   - Do: Make it impossible for the promotion merge to create the prod signalling Worker (plan D1, risk R6). In the
     `on:` block, drop `main` from `push.branches` so only `dev` auto-deploys, and add a `workflow_dispatch` with a
@@ -62,7 +62,7 @@ Four commits on `dev`, in this order. The last one freezes the promotion base.
     calls Cloudflare).
   - Depends on: the forward-merge.
 
-- [ ] **Task 0.2: Re-key the screenshot upload rate limit on the machine, not the client IP** `[agent]`
+- [x] **Task 0.2: Re-key the screenshot upload rate limit on the machine, not the client IP** `[agent]`
   - Files: `web/app/api/sites/[siteId]/machines/[machineId]/screenshots/upload-url/route.ts`,
     `web/app/api/sites/[siteId]/machines/[machineId]/screenshots/finalize/route.ts` (comment only),
     `web/__tests__/api/sites-screenshots.test.ts`
@@ -90,7 +90,7 @@ Four commits on `dev`, in this order. The last one freezes the promotion base.
     returns nothing.
   - Depends on: the forward-merge.
 
-- [ ] **Task 0.3: Env-surface housekeeping on `dev`** `[agent]`
+- [x] **Task 0.3: Env-surface housekeeping on `dev`** `[agent]`
   - Files: `infra/swoop-signal/README.md`, `web/app/api/agent/swoop/bundle/route.ts` (comment only),
     `.claude/skills/env-management.md`, `scripts/env-manifest.json` (the `classes` note only),
     `web/playwright.config.ts`, `web/.env.example`
@@ -122,7 +122,7 @@ Four commits on `dev`, in this order. The last one freezes the promotion base.
     clean on the config.
   - Depends on: the forward-merge.
 
-- [ ] **Task 0.4: Changelog, version, tracked plan — and freeze the promotion base** `[agent]` + `[human]` sign-off
+- [x] **Task 0.4: Changelog, version, tracked plan — and freeze the promotion base** `[agent]` + `[human]` sign-off
   - Files: `docs/changelog.md`, `web/content/docs/changelog.mdx`, `dev/active/prod-promotion/**` (force-added),
     and — only if a version file disagrees — whatever `node scripts/sync-versions.js 3.3.6` rewrites
   - Do: `manual-infrastructure.md:324-329` declares its order supersedes `production-deploy.md` steps 6-9, and its
@@ -163,7 +163,7 @@ Four commits on `dev`, in this order. The last one freezes the promotion base.
 
 Every task here writes to production. Each needs its own explicit go. Days ahead of the push is fine and preferred.
 
-- [ ] **Task 1.1: Firestore export, then the `swoop_sessions` index, then the `Enabled` gate** `[human]`
+- [x] **Task 1.1: Firestore export, then the `swoop_sessions` index, then the `Enabled` gate** `[human]`
   - Files: none (`firestore.indexes.json:288-296` is the source; do not edit it)
   - Do: Retire risk R4 (plan D3). In order, per `manual-infrastructure.md:324-345` steps 2-4:
     (1) cheap insurance, even though no migration is needed —
@@ -183,7 +183,7 @@ Every task here writes to production. Each needs its own explicit go. Days ahead
     `firebase firestore:indexes --project dev` for 36 before re-running.
   - Depends on: nothing. Can run before Wave 0 finishes.
 
-- [ ] **Task 1.2: The ten keys on `railway-prod`, the four on `railway-dev`** `[human]`
+- [x] **Task 1.2: The ten keys on `railway-prod`, the four on `railway-dev`** `[human]`
   - Files: none (never a values file; `scripts/env-manifest.json` is the key registry and is not edited here)
   - Do: Plan D4. **Start from the diff, not from memory:** `node scripts/sync-env.mjs diff railway-dev railway-prod`
     prints a key-presence diff and is the checklist. At research time `railway-prod` was missing exactly the ten new
@@ -220,7 +220,7 @@ Every task here writes to production. Each needs its own explicit go. Days ahead
     in this file.
   - Depends on: nothing. Must complete **before** the Wave 3 build, not just before the merge.
 
-- [ ] **Task 1.3: Confirm whether the failover load balancer exists, and which origins are in its pool** `[human]`
+- [x] **Task 1.3: Confirm whether the failover load balancer exists, and which origins are in its pool** `[human]`
   - Files: none
   - Do: Settle plan R2 / D7 — the one question the research could not answer, because the
     `CLOUDFLARE_API_TOKEN` in `.claude/.env.local` is the Workers deploy token and lacks *Zone › Load Balancers ›
@@ -242,7 +242,7 @@ Every task here writes to production. Each needs its own explicit go. Days ahead
     origin is a manual standby and its commit is recorded, not relied on).
   - Depends on: nothing.
 
-- [ ] **Task 1.4: Record the rollback anchors and confirm the Railway → Firebase mapping** `[human]`
+- [~] **Task 1.4: Record the rollback anchors and confirm the Railway → Firebase mapping** `[human]`
   - Files: none
   - Do: Two things that can only be done *before* the push. (1) **The abort anchor.** Railway's "redeploy previous
     deployment" is the fast rollback and is documented in no runbook (research §4.6 gap 1); the id is hard to find
@@ -250,6 +250,7 @@ Every task here writes to production. Each needs its own explicit go. Days ahead
     `owlette-prod`) reports the active deployment id and its commit — at research time deployment `49cbfb29`,
     commit `73f5d512`. Record both, plus the exact dashboard click-path (Railway → `owlette-prod` → Deployments →
     the entry → Redeploy), in this file **and** in Task A.1. Record `git rev-parse origin/main` as the code-path
+  - **Anchors recorded 2026-09-22:** Railway `owlette-prod` deployment `49cbfb29` (SUCCESS, commit `73f5d512`, branch `main`, 2026-09-14T20:15Z) → Deployments → that entry → Redeploy; code anchor `origin/main` = `73f5d512`.
     anchor too. (2) **The one-time prerequisite `production-deploy.md:43-45` asks for and the repo cannot prove**
     (research §4.0, `dev-to-prod-workflow.md:26-29`): confirm the `owlette-prod` service's `FIREBASE_PROJECT_ID`
     really names `owlette-prod-90a12` and that its R2 bucket is the prod one. This needs reading two values, so it
@@ -265,7 +266,7 @@ Every task here writes to production. Each needs its own explicit go. Days ahead
 All four gates in plan D10, plus the two walkthroughs. Every one runs against the **frozen promotion base** from
 Task 0.4. If `dev` has moved, re-freeze and re-run — do not reason about which gate "was probably still valid".
 
-- [ ] **Task 2.1: `/preflight` clean on the promotion base** `[agent]`
+- [x] **Task 2.1: `/preflight` clean on the promotion base** `[agent]`
   - Files: none
   - Do: Run `/preflight` (`.claude/commands/preflight.md`) on a `dev` checkout at the promotion base. It runs, in
     order: `node scripts/check-security-alerts.mjs` (exit 1 ⇒ stop); the e2e scope check; `cd web && npm run lint`
@@ -280,7 +281,7 @@ Task 0.4. If `dev` has moved, re-freeze and re-run — do not reason about which
     (the research's CLEAR was on `docs/dashboard-coverage`, a different ref). Paste the summary lines.
   - Depends on: 0.4.
 
-- [ ] **Task 2.2: `npm run smoke:dev` green on the exact promotion base** `[agent]`
+- [x] **Task 2.2: `npm run smoke:dev` green on the exact promotion base** `[agent]`
   - Files: none
   - Do: The gate `/preflight` does not run and nothing in CI enforces (risk R3b, `production-deploy.md:139-190`).
     From a `dev` checkout pulled to the promotion base: `cd web && npm run smoke:dev`. It waits up to 10 minutes
@@ -298,7 +299,7 @@ Task 0.4. If `dev` has moved, re-freeze and re-run — do not reason about which
     `WARNING`.
   - Depends on: 0.4, and dev having deployed the promotion base.
 
-- [ ] **Task 2.3: `sync-env.mjs check` green, the diff checklist closed, the three dev-only keys decided** `[human]`
+- [x] **Task 2.3: `sync-env.mjs check` green, the diff checklist closed, the three dev-only keys decided** `[human]`
   - Files: none
   - Do: First, link the Vercel CLI — `web/.vercel` is absent in this checkout, so `sync-env.mjs status` exits 1 at
     the Vercel step with "Your codebase isn't linked to a project on Vercel", and neither `status`, `check` nor
@@ -319,7 +320,7 @@ Task 0.4. If `dev` has moved, re-freeze and re-run — do not reason about which
     decision beside every asymmetry; and the three dev-only keys each carry a written decision.
   - Depends on: 1.2, 0.3.
 
-- [ ] **Task 2.4: Fleet-path probes, and a live heartbeat + screenshot from a paired 3.3.6 machine** `[agent]`
+- [~] **Task 2.4: Fleet-path probes, and a live heartbeat + screenshot from a paired 3.3.6 machine** `[agent]`
   - Files: none
   - Do: Prove success criteria 3 and 4 *before* the push, against dev, so the post-push run has a baseline.
     (1) **Contract proof, static:** re-run the blob comparison for the nine pre-existing agent routes plus
@@ -514,3 +515,228 @@ Nothing in this wave starts until Waves 0-2 are complete and the owner says go, 
     not possible; and the write-up is copied into `docs/runbooks/hotfix-rollback.md` as its own section (a separate
     commit on `dev`, after the promotion settles — not during it).
   - Depends on: 1.4. Blocks 3.1.
+
+## Log
+- 2026-09-22 — Prerequisite met: `release/3.3.6` is on `dev` (#174 → `23c42e1e`, 21:25 UTC); dev's CI green after
+  one rerun of the macOS leg (`test_shared_utils.py::TestIdentityPathNormalisation::test_a_recorded_row_still_matches_after_a_restart`
+  flaked once on dev and once on the PR; passes on rerun; dev's own identity code, untouched by the merge —
+  worth a look on the macOS runner, not a promotion blocker); dev.owlette.app serves `23c42e1e`.
+- 2026-09-22 — Wave 0 done as four commits on `chore/promotion-wave0` (branch off `23c42e1e`), **draft PR #175 →
+  dev**, gates and CI running: 0.1 `3deb0bb6` (worker deploy: `push.branches: [dev]`, `workflow_dispatch`
+  `environment` choice defaulting to dev, `WRANGLER_ENV` from the event, README says the prod deploy is a
+  dispatch and must wait for the three secrets; local `wrangler deploy --dry-run` both envs ok, vitest 76 passed
+  — vitest exits 127 on this Windows box after a green run, a workerd teardown quirk; CI is the proof, and the
+  zizmor SARIF for the file is still to be read on the PR); 0.2 `34a74ebb` (per-machine key
+  `screenshot_upload:{siteId}:{machineId}`, new `screenshotUploadRateLimit` 1000/h — 300/h was below the 720/h
+  talon cadence, so a new limiter rather than `apiRateLimit`; `withRateLimit` exports `rateLimitedResponse` +
+  `applyRateLimitCounters` so the 429 and the counters are shared, not copied; test: two machines behind one ip,
+  independent budgets, 429 body + headers asserted; eslint/tsc clean; 64 tests in the four related suites);
+  0.3 `aac01264` (all six spots; manifest JSON valid; envManifest test 4 passed; `playwright test --list` lists
+  402 tests with the three keys present in a temporary `.env.local`; the surviving greps for "never run" /
+  "three" are unrelated sentences); 0.4 `714b6240` (both changelogs: `[Unreleased]` empty, 3.3.6 entry gains
+  eleven sections — the task's "restart schedules" item has no commit on `main..dev` touching the dialog, so
+  no entry; the tri-platform entry says groundwork only, since no macOS/Linux installer exists; the R5
+  sign-off was given by the owner earlier — the 3.3.6 entry is intended public; `sync-versions` prints 3.3.6 on
+  every line; four plan files tracked; no tag at HEAD). **Freeze:** the promotion base is recorded once #175
+  lands on `dev`.
+- 2026-09-22 — Wave 0 gates on #175 (`714b6240`): local `npm run lint` 0 errors, `tsc` clean, jest 302 suites /
+  6023 passed, e2e **400 passed** (the changelog anchors included); CI: swoop signal deploy (worker suite success,
+  deploy skipped — a PR), playwright e2e, openapi drift check, CodeQL, Actions Security, dependency review and the
+  quick gates all green (16 pass, 1 skip). **zizmor SARIF read** for `swoop-signal-deploy.yml`: four
+  `ref-version-mismatch` Medium warnings (the `# v6` comments on the pinned checkout/setup-node hashes), identical
+  to dev's scan of the same file before the change — nothing new, and no finding on the `inputs.environment`
+  expression (used in `env:`, never in `run:`). #175 marked ready for review; the owner's "Go" merges it.
+- 2026-09-22 — **#175 merged into `dev` as `fdcf86d1` on the owner's "Go". Promotion base = `fdcf86d1`.** Every
+  Wave 2 gate runs against it; a later fix on `dev` moves the base and re-runs the gates. Remote branch deleted.
+  dev's CI on the merge and the dev.owlette.app deploy being watched.
+- 2026-09-22 — Task 2.4 (agent parts done; the live half needs the owner). (1) Blob comparison `origin/main` vs
+  the base: the nine `/api/agent/*` routes, `_shared.ts`, `chunks/download-urls`, `roosts/[roostId]/version-url`
+  and `bug-report` — **all thirteen identical**. `screenshots/finalize/route.ts` differs by two comments only
+  (the not-separately-limited note, now "the machine's screenshot budget", and a reworded `MAX_HISTORY` comment);
+  `screenshots/upload-url/route.ts` differs by design (Task 0.2). (2) Unauthenticated probes, dev / prod, status
+  identical on every fleet route and none 404 or 5xx: `agent/site` POST 405/405 · `agent/alert` 401/401 ·
+  `agent/screenshot` 401/401 · `auth/exchange` 400/400 · `auth/refresh` 400/400 · `auth/device-code` 200/200 ·
+  `device-code/poll` 400/400 · `device-code/authorize` 400/400 · `generate-installer` 400/400 ·
+  `screenshots/upload-url` 401/401 · `screenshots/finalize` 401/401 · `health` 200/200; control:
+  `sites/x/swoop-settings` GET 401 on dev, 404 on prod (not yet promoted). **Note:** the device-code probe is a
+  generating call — an empty POST minted one throwaway pairing phrase on each host (they expire unused); the
+  other probes were refused before doing anything. (3) Live heartbeat/screenshot: this dev box's agent (3.3.5
+  source via the deploy hook, paired to dev) could not be read — `OWLETTE_API_KEY` in `.claude/.env.local` is a
+  placeholder (401), and the prod key is installer-scoped. **Owner:** a dev key with machine read scope, or the
+  dashboard, to confirm a heartbeat; and a paired fielded 3.3.6 machine for the three-leg screenshot. Otherwise
+  this stays an explicit unverified item carried to Task 4.3.
+- 2026-09-22 — Task 2.2 blocked on a credential: `npm run smoke:dev` needs the dev service account at
+  `agent/config/firebase-creds-dev.json` (or `SMOKE_SA_PATH`), which is not on this box; `web/.env.local` has the
+  dev project id and web api key; `SMOKE_LLM_API_KEY` is absent but only needed on a first run. dev.owlette.app
+  serves the base. **Owner:** place the service-account file, then the agent runs the smoke.
+- 2026-09-22 — Task 2.1 done on the base `fdcf86d1`: RESULT: CLEAR (1 acknowledged blocker(s), 27 warning(s) to report) Tests:       1 skipped, 6023 passed, 6024 total Tests:       139 passed, 139 total   400 passed (12.9m)  — every step exit 0 (security alerts, lint, tsc, jest, rules, e2e). dev's own CI on the merge: e2e, swoop worker deploy (dev deployed, prod untouched), CodeQL, openapi drift all green.
+- 2026-09-22 — Task 1.4, read-only half done from this box (Railway CLI logged in as the owner): **abort anchor —
+  `owlette-prod` active deployment `49cbfb29`, status SUCCESS, commit `73f5d512`, branch `main`, created
+  2026-09-14T20:15Z; `origin/main` = `73f5d512`** (the same commit). Click-path: Railway → project `owlette` →
+  service `owlette-prod` → Deployments → the `49cbfb29` entry → Redeploy. Mapping: `FIREBASE_PROJECT_ID` and
+  `NEXT_PUBLIC_FIREBASE_PROJECT_ID` on `owlette-prod` are the prod project — **confirmed**; the R2 endpoint/bucket
+  names carry no dev marker — confirmed; 48 keys on the service. Also recorded in Task A.1.
+- 2026-09-22 — Environment for Waves 1–2, now on this box: gcloud signed in (owner's account; `CLOUDSDK_PYTHON`
+  must point at `agent/.venv/Scripts/python.exe`, gcloud's own python is too old) and it lists prod's composite
+  indexes; Firebase CLI sees both projects; Railway CLI logged in and linked to `owlette`/`dev`/`owlette-dev`;
+  Vercel CLI logged in and `web/` linked to project `owlette` (the `.env.local` it wrote into the worktree's
+  `web/`, holding only `VERCEL_OIDC_TOKEN`, was removed — it would have tripped playwright's secret audit); dev
+  service account at `agent/config/firebase-creds-dev.json`. `sync-env.mjs status`: railway-dev 4 missing,
+  railway-prod 10 missing, vercel-prod 10 missing — exactly the research's picture. Still owed by the owner: a
+  Cloudflare token with the load-balancer scope (Task 1.3), the TURN key or the empty-string decision, and the
+  dev API key. Side note, owner-approved dev data edit: the owner's own dev account carried one passkey (registered
+  2026-09-19, unusable from any of their authenticators) that locked them out at `/verify-2fa`; on "clear it"
+  the passkey record was deleted and the account set to zero factors / mandatory setup, mirroring
+  `applyMfaFactorChange`'s zero case. No trusted devices existed. Dev only.
+- 2026-09-22 — Task 2.2 done. `npm run smoke:dev` from a checkout at exactly `origin/dev` (the run refuses any
+  other commit), owner's dev service account + `web/.env.local` via `SMOKE_SA_PATH` / `SMOKE_ENV_FILE`:
+  **`commit fdcf86d1d30b104ca20f4145c10d7b31e630b43b (origin/dev; dev served it when the specs started)` ·
+  `totals 7 passed, 0 flaky, 0 failed, 0 skipped` · playwright exit 0 · stub agent exit 0 · `exit 0`**, no
+  `--any-commit`, no forwarded grep, no `WARNING` line. `SMOKE_LLM_API_KEY` was unset; the smoke-siteadmin
+  account already held a hoot key, so the hoot turn ran. Not covered by this suite (per its README): swoop,
+  the cross-platform agent work, restart-schedule authoring — Task 2.5. Re-run required if `dev` moves before
+  Task 3.1.
+- 2026-09-22 — Task 1.1 on the owner's "go 1.1", run from this box with the owner's gcloud/firebase logins.
+  Pre-checks: bucket `owlette-prod-backup` exists; prod's 34 composite indexes are exactly the file's 35 minus
+  `swoop_sessions` once the listing's implicit `__name__` field is ignored (a first comparison without that
+  normalisation looked like 32 would be deleted — it would not have been; the deploy ran `--non-interactive`, which
+  fails on any delete prompt rather than deleting). (1) Export: operation started,
+  `outputUriPrefix: gs://owlette-prod-backup/pre-3.3.6-20260922-1814` (state PROCESSING at return — completes on
+  its own). (2) `firebase deploy --only firestore:indexes --project prod --non-interactive` → "deployed indexes
+  in firestore.indexes.json successfully for (default) database". (3) READY poll running; the read-back
+  (`swoop_sessions` READY, 35 composite) is appended below when it lands.
+- 2026-09-22 — Task 1.2 done on the owner's "go 1.2". Values generated by `scratchpad/set_prod_keys.mjs` in the
+  shapes the code decodes (raw 32-byte Ed25519 seed/public key as standard base64, `SWOOP_JWT_KID` =
+  `prod-2026-09-22`, a random 32-byte base64 master key, a random 32-byte hex ring secret,
+  `SWOOP_SIGNAL_URL=https://signal.owlette.app`) and handed straight to the Railway CLI; nothing printed or
+  written. **Empty strings, and why:** `SWOOP_JWT_KID_PREVIOUS` / `SWOOP_JWT_PUBLIC_KEY_PREVIOUS` (no rotation in
+  progress; presence keeps `check` green) and `CLOUDFLARE_TURN_KEY_ID` / `CLOUDFLARE_TURN_KEY_API_TOKEN` (no TURN
+  key supplied yet — falsy-guarded, STUN-only as on dev; set for real once the owner creates a Realtime TURN
+  key). Same four empties on `railway-dev`. Read-back: both Railway targets **✓ in sync**; `diff railway-dev
+  railway-prod` leaves only the intended asymmetries (dev-only `RATE_LIMIT_OBSERVE_ONLY`,
+  `SECURITY_BOUNDARY_SENTRY_METRICS`, `W8_1_DRILL_TS`; prod-only Instatus/Sentry/`NEXT_PUBLIC_BASE_URL`/
+  `ROOST_ENV`). No redeploy was triggered: `owlette-prod` is still deployment `49cbfb29` @ `73f5d512`, so the
+  abort anchor stands. **The ring secret lives on `railway-prod`** (readable there by the owner's CLI) and is
+  what the prod Worker's `wrangler secret put SWOOP_SIGNAL_RING_SECRET -e prod` must receive, byte for byte.
+  `vercel-prod` still reports the 10 missing — that is the `sync vercel-prod --apply` step, which needs its own go.
+- 2026-09-22 — Vercel mirror on the owner's "go vercel": `node scripts/sync-env.mjs sync vercel-prod --apply` set
+  42/46 (every value piped provider→provider, so the seven `must-match` values on `vercel-prod` now equal
+  `railway-prod`'s); the four **empty-string** keys failed — the script pipes values over stdin and Vercel's
+  non-interactive `env add` reads an empty stdin as "missing value". `vercel env add <key> production --value ""
+  --yes` accepts an empty value, so the four were set that way by hand. **`node scripts/sync-env.mjs check` → `✓
+  all targets match the manifest`, exit 0 (Task 2.3's gate).** Follow-up for `dev`: `sync-env.mjs` should pass
+  `--value ""` when a value is empty instead of piping nothing.
+- 2026-09-22 — Findings for `dev`, not promotion blockers, all pre-existing on `main`: (1) `/setup-2fa`'s
+  "continue to dashboard" left the owner on the setup page after a first passkey enrolment even though the user
+  record was correct (enrolled, setup not required) — the page and the passkey routes are byte-identical on
+  `main`; the owner is testing a full navigation vs the in-app one to tell a stale session cookie from a client
+  navigation bug. (2) `infra/swoop-signal/README.md` and `.claude/.env.example` name a "Workers Durable
+  Objects" token permission that the Cloudflare token UI does not offer; Workers Scripts › Edit covers it.
+  (3) Cloudflare's TURN console shows the key **id** on the app card; the API token is shown only at creation,
+  so prod needs its own TURN app created to obtain both.
+- 2026-09-22 — Task 1.1 read-back: `gcloud firestore indexes composite list --project owlette-prod-90a12` → `CICAgPj-pYIK | swoop_sessions | COLLECTION_GROUP | READY | siteId ASCENDING, state ASCENDING`; `firebase firestore:indexes --project prod` lists **35** composite indexes (was 34). Done. Task 2.3: `check` exit 0 recorded above; the diff decisions (three dev-only keys stay off prod: RATE_LIMIT_OBSERVE_ONLY, W8_1_DRILL_TS, SECURITY_BOUNDARY_SENTRY_METRICS) are the recommended ones and await the owner's one-line confirmation.
+- 2026-09-22 — Task 1.3 done with the owner's rolled `CLOUDFLARE_API_TOKEN` (verified `active`; note: current
+  Cloudflare tokens are longer than the 40 characters I had claimed). **`GET /zones/{owlette.app}/load_balancers`
+  → `result: []` (total_count 0); `GET /accounts/{id}/load_balancers/pools` → `result: []`.** DNS: `owlette.app`
+  = proxied CNAME to `h90clljq.up.railway.app` (plus MX/TXT); `vercel-origin.owlette.app` = A `76.76.21.21`,
+  **DNS-only (grey cloud)** — correct for Vercel's HTTP-01 renewals; no `www` record. **Answer: there is no
+  automatic failover. Vercel is a manual standby reached by hand-editing DNS.** Task 3.3's read-back therefore
+  records the Vercel origin's commit after `sync --apply` + redeploy rather than requiring both origins to serve
+  one commit behind an LB. Nothing changed; no terraform run.
+- 2026-09-22 — Task 2.3 closed: `check` exit 0 on all three targets; the diff's remaining asymmetries are the
+  intended ones (recorded under 1.2); the three dev-only keys stay off `railway-prod` per plan D4, which the owner
+  accepted with the defaults on 2026-09-22 — `RATE_LIMIT_OBSERVE_ONLY` (would turn prod's limiter into logging),
+  `W8_1_DRILL_TS` and `SECURITY_BOUNDARY_SENTRY_METRICS` (security-boundary drills, dev only).
+  **Wave 2 remaining before the push:** 2.4's live half (needs the dev API key; else carried as unverified) and 2.5
+  (the walkthrough on dev.owlette.app — the owner's, or the agent drives it headlessly with the smoke accounts and
+  records screenshots, at the owner's choice). A.1's anchors are written in.
+- 2026-09-23 — **Failover load balancer, stage 1 (rehearsal) done on the owner's "go rehearsal".** Load
+  Balancing was not enabled on the Tridant account (first apply failed on the monitor with `interval is not in
+  range [1, 1]`, nothing created); the owner enabled it (and is cancelling the stray subscription on the TEC
+  account). `infra/cloudflare` gained `lb_host` (`bcf7852b` on `chore/promotion-wave2`) so the LB can be
+  rehearsed on a throwaway name. Applied with `lb_host = lbtest.owlette.app`: monitor `85f9e279…`, pools
+  `owlette-railway-primary` (`h90clljq.up.railway.app`, Host owlette.app) `cc4f595b…` and
+  `owlette-vercel-standby` (`vercel-origin.owlette.app`) `4b9cbbfc…`, LB `07a5c9e4…` on `lbtest.owlette.app`;
+  `terraform.tfvars` (gitignored) holds the ids and origins; state is local in `infra/cloudflare/`.
+  **Proof:** `https://lbtest.owlette.app/api/health` → `origin: railway` (73f5d512); Railway pool disabled via
+  API → within 10 s `origin: vercel:iad1` (da031235); pool re-enabled → within 11 s `origin: railway`.
+  `owlette.app` untouched throughout. **Stage 2 (go-live) is a new Task 3.4, after 3.3:** once Vercel serves
+  the new `main`, set `lb_host = ""` and `terraform apply` — Terraform replaces the lbtest LB with one named
+  `owlette.app` (the LB hostname takes precedence over the existing proxied CNAME, which stays as the
+  fallback); read back `/api/health` on owlette.app and confirm `GET zones/{id}/load_balancers` lists it. Until
+  then the standby serves stale code, which is why it must not front owlette.app yet. Task 3.3's read-back
+  reverts to the with-LB form: both origins must serve one commit.
+- 2026-09-23 — **Task 2.5 walkthrough, owner-driven on `https://dev.owlette.app` (dev, not a prod-shaped
+  staging environment; Railway PR environment / Vercel preview: neither available, as the research predicted).**
+  Passkey login PASS (after the owner's account was reset to zero factors on 2026-09-22 and re-enrolled).
+  Machine list, card and list views PASS. Machine detail PASS. `/download` PASS. Logs action multi-select PASS
+  (machine and level stay single-select: by design, not a regression). Docs search: works, relevance for
+  "roost" weak (top hits are CLI / CI examples, not the roost overview) — dev follow-up, not a blocker.
+  **Two findings:** (1) the collapsed metrics row's labels floated to the middle of their cells on a wide card
+  (a button centres its text; five 1fr cells) — real bug from `18db25dc`, **fixed on `fix/card-metrics-row-left`
+  = PR #176 against dev** with a red-then-green e2e spec (17px offset at 1920px before, ≤1px after). If it
+  merges before the push, `dev` moves off `fdcf86d1` and Tasks 2.1/2.2 re-run on the new SHA (both are
+  minutes). (2) "OS not reported on the card" for the owner's own box: that machine runs a partial mirror of
+  `agent/src` without the OS-reporting code (`0` matches for the OS fields there vs `7` on dev's tree), so the
+  card's no-OS fallback is correct; OS reporting is unproven on dev until a merged-build agent pairs — the VM
+  harness now takes `-Server dev` (`/SERVER=dev` on both installs; uncommitted on `chore/promotion-wave2`).
+  **Swoop shows on dev and that is expected:** the plan's "no card offers a swoop entry" assumed no site had
+  opted in, but dev's `sites/default_site/settings/swoop` has `enabled: true` since 2026-09-19 and TEC-A4D's
+  heartbeat carries `capabilities.swoop = 1`, so the entry renders and a session connects. Off-by-default is the
+  policy gate (`swoop_disabled` 403 when the settings doc is absent), not hidden UI. On prod no site has the
+  doc, confirmed by the Wave 1 export listing. Not yet walked: roost, billing, restart-schedule authoring. Dev
+  finding carried from 2026-09-22: `/setup-2fa` "continue to dashboard" only toasts.
+- 2026-09-23 — **#176 merged into dev on the owner's "merge 176": dev moved to `1ebf3585` (merge commit of
+  `f58a0115`, diff vs `fdcf86d1` = the card fix, its spec, two changelog lines). The promotion base is now
+  `1ebf3585`;** Tasks 2.1 and 2.2 re-run against it: security CLEAR (3 acked, 57 warnings, unchanged), lint 0
+  errors / 9 pre-existing warnings, tsc clean, jest 6023 passed. Local e2e and the `playwright e2e` run for
+  `1ebf3585` in progress; `smoke:dev` waits for Railway to serve `1ebf3585` on dev.owlette.app.
+- 2026-09-23 — Task 2.2 re-run on `1ebf3585`: dev.owlette.app `/api/health` served `1ebf3585` from ~03:40 UTC;
+  `smoke:dev` 7 passed / 0 failed (hoot stub ×3, passkeys, roles ×2, share), exit 0.
+- 2026-09-23 — Task 2.1 closed on `1ebf3585`: local e2e suite green (see the counts in the preflight report of
+  this date), CI `playwright e2e` and `security preflight` runs for `1ebf3585` both green. **Waves 0-2 complete
+  on base `1ebf3585`; Wave 3 waits on the owner's "go".**
+- 2026-09-23 — **Wave 3 started on the owner's "go".** Task 3.1: `origin/dev` = `1ebf3585` confirmed; PR #177
+  `dev` → `main` opened (title `chore: merge dev for v3.3.6 production release`, body = base SHA, gates, Wave 1
+  read-backs, the three acked findings with reasons, abort anchor `49cbfb29` @ `73f5d512`). Auto-merge is not
+  enabled on the repo, and the PR's own runs of the three required checks had to start from scratch, so the merge
+  waits on them. The GitHub Advanced Security `zizmor` check on the PR reports "40 new alerts including 1 error"
+  (#365 cache-poisoning in `build-installer.yml`, plus id-token permissions in three publish workflows): all
+  pre-existing on dev (#365 created 2026-09-19), surfaced only because the PR's base is 216 commits behind; the
+  security gate script rates the branch CLEAR and this check is not required by main's protection. Merge fires
+  automatically once the three required checks are green.
+- 2026-09-23 04:05 UTC — **Task 3.1 DONE: #177 merged as regular merge commit `c68638a8` on `origin/main`**
+  (`git log --first-parent origin/main -1` = `chore: merge dev for v3.3.6 production release`;
+  `git diff origin/main origin/dev --stat` empty). The first merge attempt was refused: the PR's check list
+  showed the dev push's green runs under the same names while the PR's own runs were still pending, so the
+  second wait keyed on GitHub's `mergeStateStatus` (UNSTABLE = non-required zizmor red, required checks green).
+  No tag pushed. Task 3.2 read-backs in progress.
+- 2026-09-23 04:10 UTC — Task 3.2 partial read-backs on `c68638a8`: no `swoop-signal-deploy` run exists for the
+  merge commit (latest runs are dev pushes, as designed); `signal.owlette.app` → NXDOMAIN at 1.1.1.1; no tag
+  containing 3.3.6 on origin; `security preflight` for `c68638a8` completed, `playwright e2e` in progress.
+  Task 3.3: env already mirrored — `diff railway-prod vercel-prod` = 46 keys in both, none one-sided;
+  `check vercel-prod` exit 0 (from the `Owlette-merge` worktree, the one linked to Vercel), so no `--apply` was
+  needed. Vercel production build of `main` started 04:08 UTC. Waiting on: owlette.app serving `c68638a8`
+  (Railway), `vercel-origin.owlette.app` serving `c68638a8`, then the health/openapi/swoop-settings/`/swoop`
+  read-backs, then Task 3.4 LB go-live.
+- 2026-09-23 04:12 UTC — **Task 3.2 DONE on `c68638a8`:** Railway deployment SUCCESS (`c68638a8`, created
+  04:04:57 UTC); `owlette.app/api/health` → `origin: railway`, commit `c68638a8`; openapi 120 paths;
+  `GET /api/sites/x/swoop-settings` 401; `POST …/swoop/sessions` 401; `/swoop/x/y` 307 → `/login?redirect=`;
+  `/dashboard` 307 → login; `/docs` 200; `/download` 307; installer route gated (401). **Task 3.3 DONE:**
+  Vercel production build of `main` Ready; `vercel-origin.owlette.app/api/health` → `origin: vercel:iad1`,
+  commit `c68638a8` — both origins on one commit. **Task 3.4 DONE (LB go-live):** `lb_host = ""` +
+  `terraform apply` → `cloudflare_load_balancer.owlette` renamed in place `lbtest.owlette.app` → `owlette.app`
+  (0 added, 1 changed, 0 destroyed; id `07a5c9e4…`); `GET zones/{id}/load_balancers` lists exactly one:
+  `owlette.app`, enabled, proxied, steering off; six health reads through it all `railway c68638a8`. No prod
+  failover drill run (the rehearsal on lbtest proved it 2026-09-23 02:25 UTC; a pool disable on prod is a
+  mutating call reserved for the 24-hour watch if the owner wants it). `lbtest.owlette.app` no longer has an LB.
+- 2026-09-23 04:20 UTC — Task 4.1 partial: `check-status-page-ready.mjs --base-url https://owlette.app` exits 1
+  with 11 fails — every one is the documented pre-promotion state (six `INSTATUS_COMPONENT_*_ID` keys are
+  unset on every target per `scripts/env-manifest.json`, "promote once the Instatus component exists"; the live
+  probe needs `CRON_SECRET` in the local environment, which is not pasted anywhere). Not a regression of this
+  promotion; carried as an unverified item. `smoke-r2-roundtrip.mjs` cannot run from this box: the only prod
+  key on hand is installer-scoped. **Tag decision: no tag pushed.** Filters checked: `build-installer.yml`
+  `v[0-9]+.[0-9]+.[0-9]+`, `cli-publish.yml` `cli-v…`, `node-sdk-publish.yml` `node-sdk-v…`,
+  `py-sdk-publish.yml` `py-sdk-v*` — `web-3.3.6` matches none, safe if the owner wants a marker. **Owner
+  items left in 4.1:** the two 403 behaviour checks with a real prod session (`cannot_modify_own_membership`,
+  `swoop_disabled`) and the flow walkthrough on owlette.app. 4.2 (cron-job.org entry) is vendor-UI only.
