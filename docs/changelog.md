@@ -19,6 +19,21 @@ every swoop session. A Mac now takes its id without the `.local` suffix the
 first time it pairs. A Mac already paired as `Name.local` keeps its id, because
 its token is bound to it; re-pair it to move to the short one.
 
+### fixed — a process that exits cleanly is no longer a crash
+
+The agent only checked whether a managed process was still alive, so a process
+that finished and exited normally was booked as a crash: an error event, an
+alert, a crash screenshot, a hoot investigation and a relaunch attempt. An app
+that exits on a schedule used up its relaunch limit and raised a restart pending
+on a machine where nothing had crashed, and so did somebody closing an app that
+kept coming back. The agent now reads the exit code. Exit code 0 is never a
+crash: it is logged as `process_exited` and the process is relaunched without
+spending its relaunch budget. After an exit 0 within a minute of launch the
+relaunch waits a minute, so a program that quits straight away is not started
+again every five seconds. A non-zero exit code is still a crash, and the code
+now appears in the event. The exit of a process the agent re-adopted after an
+update or a service restart is read as well.
+
 ## [4.0.5] - 2026-09-27
 
 ### fixed — swoop shows your own pointer over the bars around the picture

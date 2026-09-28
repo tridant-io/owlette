@@ -51,7 +51,7 @@ import { TALON_MAX_DELAY_MINUTES } from '@/lib/talons/validation';
  * exhaustively — a new catalog entry without a description fails the build.
  */
 const TALON_EVENT_INFO: Record<TalonEventType, string> = {
-  process_crash: 'a managed process exited on its own — not stopped by an operator or a schedule',
+  process_crash: 'a managed process crashed or exited with an error — not a clean exit, and not stopped by an operator or a schedule',
   process_start_failed: 'owlette tried to launch a process and it failed to start',
   process_restarted: 'a process came back up — via recovery, a schedule, or an operator restart',
   exe_missing: 'a process executable no longer exists at its configured path',
