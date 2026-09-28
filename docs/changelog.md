@@ -34,6 +34,15 @@ again every five seconds. A non-zero exit code is still a crash, and the code
 now appears in the event. The exit of a process the agent re-adopted after an
 update or a service restart is read as well.
 
+### fixed — pasting from your computer into a swoop session works
+
+A paste into the machine never arrived. The page read your clipboard through a
+browser permission it asked for on the first paste, gave that prompt a second
+and a half, and stopped trying after a refusal; in fullscreen the prompt could
+not be seen at all. ctrl+v now hands the page your clipboard the way a paste
+into any web page does, with nothing to allow, and the page sends it to the
+machine before the keystroke that pastes it.
+
 ## [4.0.5] - 2026-09-27
 
 ### fixed — swoop shows your own pointer over the bars around the picture
