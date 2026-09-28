@@ -8,12 +8,8 @@ pytest-mock==3.15.1
 pytest-asyncio==1.4.0
 
 # Code Quality
-pylint==3.0.3
 black==26.5.1
 flake8==7.3.0
-
-# Type Checking
-mypy==1.7.1
 
 # Testing Utilities
 responses==0.26.3  # Mock HTTP requests
