@@ -15,6 +15,10 @@
  * - **under pointer lock** the browser hides the local cursor (fullscreen
  *   takes the lock on click), so the shape is overlaid at `cpos` over the
  *   picture, hotspot on the position, and hidden when the machine hides it.
+ * - **off the picture** — over the letterbox bars, with no drag under way —
+ *   input sends nothing, so the local pointer is shown as itself and the
+ *   machine's is not drawn: pinned to the picture's edge it looked stuck
+ *   there while the real pointer moved on unseen.
  *
  * a shape above 32 css px is overlaid in both cases: browsers silently ignore
  * large css cursors (PROTOCOL.md §5). the host downscales to 32, so that is
@@ -31,7 +35,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { MousePointer2 } from 'lucide-react';
 import { NO_CURSOR, swoopCursor, type SwoopCursorShape } from '@/lib/swoop/cursor';
 import { toPixel, useSwoopPictureBox } from '@/hooks/useSwoopPictureBox';
-import type { SwoopSession } from '@/lib/swoop/features';
+import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 
 export interface SwoopCursorProps {
   session: SwoopSession | null;
@@ -39,6 +43,7 @@ export interface SwoopCursorProps {
 
 const subscribeNever = (): (() => void) => () => {};
 const noCursor = () => NO_CURSOR;
+const onPicture = () => false;
 
 /** §5: the largest shape a css cursor can be trusted with. */
 const MAX_CSS_CURSOR_PX = 32;
@@ -71,6 +76,12 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
     noCursor,
   );
   const locked = usePointerLocked(session);
+  const capture = swoopInputCapture(session);
+  const outside = useSyncExternalStore(
+    capture ? capture.onPointerOutsideChange : subscribeNever,
+    capture ? () => capture.pointerOutside : onPicture,
+    onPicture,
+  );
   const box = useSwoopPictureBox(session);
   const overlay = locked || (state.shape !== null && !fitsCssCursor(state.shape));
 
@@ -83,7 +94,7 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
   useEffect(() => {
     if (!session) return;
     const style = session.stage.style;
-    if (locked) {
+    if (locked || outside) {
       style.removeProperty('cursor');
     } else if (overlay || (state.shape && !state.visible)) {
       style.setProperty('cursor', 'none');
@@ -95,9 +106,9 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
     return () => {
       style.removeProperty('cursor');
     };
-  }, [session, locked, overlay, state.shape, state.visible]);
+  }, [session, locked, outside, overlay, state.shape, state.visible]);
 
-  if (!session || !box || !overlay || !state.visible) return null;
+  if (!session || !box || !overlay || !state.visible || outside) return null;
 
   const left = toPixel(state.x, box.left, box.width);
   const top = toPixel(state.y, box.top, box.height);

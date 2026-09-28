@@ -4,14 +4,15 @@
  *
  * the machine's own pointer, drawn one way or the other and never both:
  * outside pointer lock it is the stage's css cursor, under pointer lock it is
- * an overlay at `cpos` over the picture, hotspot on the position.
+ * an overlay at `cpos` over the picture, hotspot on the position. over the
+ * letterbox bars it is neither, and the local pointer shows as itself.
  */
 
 import React from 'react';
 import { render, screen, act, cleanup } from '@testing-library/react';
 import { SwoopCursor } from '@/components/swoop/SwoopCursor';
 import { attach } from '@/lib/swoop/cursor';
-import type { SwoopSession } from '@/lib/swoop/features';
+import { SWOOP_FEATURES, type SwoopSession } from '@/lib/swoop/features';
 
 const PNG = 'iVBORw0KGgo=';
 
@@ -26,17 +27,22 @@ interface Harness {
   detach(): void;
 }
 
-/** a 16:9 picture letterboxed inside a taller stage. */
-function harness(): Harness {
+/**
+ * a 16:9 picture letterboxed inside a taller stage. `input` attaches the real
+ * input capture too, which is what says whether the pointer is on the picture.
+ */
+function harness(options: { input?: boolean } = {}): Harness {
   const handlers = new Map<string, (data: unknown) => void>();
   const stage = document.createElement('div');
   stage.getBoundingClientRect = () => rect(0, 0, 1000, 800);
 
   const session = {
     viewerId: 'viewer-me',
+    ctl: true,
     stage,
     video: document.createElement('video'),
     contentRect: () => rect(0, 81, 1000, 638),
+    send: () => true,
     onChannelMessage: (label: string, incoming: (data: unknown) => void) => {
       handlers.set(label, incoming);
       return () => {
@@ -45,7 +51,14 @@ function harness(): Harness {
     },
   } as unknown as SwoopSession;
 
-  const detach = attach(session);
+  const detachCursor = attach(session);
+  const detachInput = options.input
+    ? SWOOP_FEATURES.find((feature) => feature.name === 'input')!.attach(session)
+    : () => {};
+  const detach = () => {
+    detachInput();
+    detachCursor();
+  };
   return {
     session,
     stage,
@@ -61,6 +74,17 @@ function harness(): Harness {
 }
 
 const cpos = (x: number, y: number, visible = true) => JSON.stringify({ t: 'cpos', x, y, visible, tsUs: 1 });
+
+/** jsdom has no PointerEvent constructor, so build the surface input.ts reads. */
+const pointerMove = (clientX: number, clientY: number): Event =>
+  Object.assign(new Event('pointermove', { bubbles: true }), {
+    clientX,
+    clientY,
+    movementX: 0,
+    movementY: 0,
+    button: 0,
+    pointerId: 1,
+  });
 const shape = (w = 32, h = 32, scale?: number) =>
   JSON.stringify({ t: 'cshape', id: 1, hotX: 4, hotY: 6, w, h, ...(scale === undefined ? {} : { scale }), png: PNG });
 
@@ -149,6 +173,47 @@ describe('SwoopCursor', () => {
     h.cursor(cpos(0.5, 0.5));
     expect(screen.getByTestId('machine-cursor')).toBeInTheDocument();
     expect(h.stage.style.cursor).toBe('none');
+    h.detach();
+  });
+
+  it('shows the local pointer and draws no machine cursor while the pointer is over the letterbox', () => {
+    const h = harness({ input: true });
+    render(<SwoopCursor session={h.session} />);
+    h.cursor(shape(64, 64));
+    h.cursor(cpos(0.5, 0.5));
+    expect(screen.getByTestId('machine-cursor')).toBeInTheDocument();
+
+    // the picture spans y 81..719 of this stage, so y 40 is the top bar.
+    act(() => {
+      h.stage.dispatchEvent(pointerMove(500, 40));
+    });
+    expect(screen.queryByTestId('machine-cursor')).toBeNull();
+    expect(h.stage.style.cursor).toBe('');
+
+    act(() => {
+      h.stage.dispatchEvent(pointerMove(500, 400));
+    });
+    expect(screen.getByTestId('machine-cursor')).toBeInTheDocument();
+    expect(h.stage.style.cursor).toBe('none');
+    h.detach();
+  });
+
+  it('gives the bars the local pointer when the machine shape is a css cursor too', () => {
+    const h = harness({ input: true });
+    render(<SwoopCursor session={h.session} />);
+    h.cursor(shape());
+    h.cursor(cpos(0.5, 0.5));
+    expect(h.stage.style.cursor).toContain('url(data:image/png;base64,');
+
+    act(() => {
+      h.stage.dispatchEvent(pointerMove(500, 760));
+    });
+    expect(h.stage.style.cursor).toBe('');
+
+    act(() => {
+      h.stage.dispatchEvent(pointerMove(500, 400));
+    });
+    expect(h.stage.style.cursor).toContain('url(data:image/png;base64,');
     h.detach();
   });
 

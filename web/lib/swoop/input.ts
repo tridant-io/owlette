@@ -90,6 +90,14 @@ export interface InputCaptureOptions {
 export interface InputCapture {
   readonly mode: InputMode;
   readonly pointerLocked: boolean;
+  /**
+   * the pointer is off the picture — over the letterbox bars or off the stage —
+   * with no button held, so nothing reaches the host and the page shows the
+   * local pointer instead of the machine's.
+   */
+  readonly pointerOutside: boolean;
+  /** called whenever `pointerOutside` changes; returns the unsubscribe. */
+  onPointerOutsideChange(listener: () => void): () => void;
   setCmdMapping(mapping: CmdMapping): void;
   /**
    * relative mode. `unadjustedMovement` asks for raw deltas with no pointer
@@ -159,6 +167,27 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   const queue: InputMessage[] = [];
   const heldKeys = new Set<string>();
   const heldButtons = new Set<number>();
+
+  // off the picture — over its letterbox bars or off the stage — with nothing
+  // held. nothing reaches the host from there: a move pinned to the edge drags
+  // the machine's pointer along it, and a click in the bars lands on whatever
+  // sits at the screen's edge.
+  let outside = false;
+  const outsideListeners = new Set<() => void>();
+  const setOutside = (value: boolean): void => {
+    if (value === outside) return;
+    outside = value;
+    for (const listener of outsideListeners) listener();
+  };
+
+  /** a client point in the picture's `0..1`, or null while there is no picture box. */
+  const onPicture = (clientX: number, clientY: number): { x: number; y: number } | null => {
+    const box = rect();
+    if (box.width <= 0 || box.height <= 0) return null;
+    return { x: (clientX - box.left) / box.width, y: (clientY - box.top) / box.height };
+  };
+  const inPicture = (point: { x: number; y: number } | null): point is { x: number; y: number } =>
+    point !== null && point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1;
 
   /**
    * one message in, coalescing with the tail when both describe motion of the
@@ -272,19 +301,23 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       return;
     }
 
-    const box = rect();
-    if (box.width <= 0 || box.height <= 0) return;
     const latest = samples[samples.length - 1];
-    enqueue({
-      t: 'm',
-      x: clamp01((latest.clientX - box.left) / box.width),
-      y: clamp01((latest.clientY - box.top) / box.height),
-      tsUs,
-    });
+    const point = onPicture(latest.clientX, latest.clientY);
+    if (point === null) return;
+    // a drag keeps going past the picture, pinned to its edge; a pointer that
+    // only wanders over the bars moves nothing on the host.
+    if (heldButtons.size === 0 && !inPicture(point)) {
+      setOutside(true);
+      return;
+    }
+    setOutside(false);
+    enqueue({ t: 'm', x: clamp01(point.x), y: clamp01(point.y), tsUs });
   };
 
   const onPointerDown = (event: PointerEvent): void => {
     if (event.button < 0 || event.button > 4) return;
+    // under pointer lock the pointer has no position, only the machine's.
+    if (!locked && !inPicture(onPicture(event.clientX, event.clientY))) return;
     event.preventDefault();
     // keep the release even if the drag leaves the element, or the button is
     // held on the host forever.
@@ -301,9 +334,16 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
 
   const onPointerUp = (event: PointerEvent): void => {
     if (event.button < 0 || event.button > 4) return;
+    // only a press the host was sent: one in the bars never was, and one
+    // already released on blur or cancel was released there.
+    if (!heldButtons.delete(event.button)) return;
     event.preventDefault();
-    heldButtons.delete(event.button);
     enqueueNow({ t: 'b', button: event.button, down: false, tsUs: nowUs() });
+  };
+
+  // off the stage is off the picture, unless a drag carries the pointer there.
+  const onPointerLeave = (): void => {
+    if (heldButtons.size === 0) setOutside(true);
   };
 
   // a cancelled pointer never sends its up, and the button would stay down on
@@ -315,6 +355,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
 
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
+    if (!locked && !inPicture(onPicture(event.clientX, event.clientY))) return;
     enqueue({
       t: 'w',
       dx: event.deltaX,
@@ -344,7 +385,10 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     const nowLocked = doc.pointerLockElement === target;
     if (nowLocked === locked) return;
     locked = nowLocked;
-    if (locked) return;
+    if (locked) {
+      setOutside(false);
+      return;
+    }
 
     flush();
     // chrome swallows the escape keydown that drops pointer lock, so the host
@@ -365,6 +409,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   target.addEventListener('pointermove', onPointerMove);
   target.addEventListener('pointerdown', onPointerDown);
   target.addEventListener('pointerup', onPointerUp);
+  target.addEventListener('pointerleave', onPointerLeave);
   target.addEventListener('pointercancel', onPointerCancel);
   target.addEventListener('wheel', onWheel, { passive: false });
   target.addEventListener('contextmenu', onContextMenu);
@@ -382,6 +427,16 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     },
     get pointerLocked(): boolean {
       return locked;
+    },
+    get pointerOutside(): boolean {
+      return outside;
+    },
+
+    onPointerOutsideChange(listener: () => void): () => void {
+      outsideListeners.add(listener);
+      return () => {
+        outsideListeners.delete(listener);
+      };
     },
 
     setCmdMapping(mapping: CmdMapping): void {
@@ -430,6 +485,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       target.removeEventListener('pointermove', onPointerMove);
       target.removeEventListener('pointerdown', onPointerDown);
       target.removeEventListener('pointerup', onPointerUp);
+      target.removeEventListener('pointerleave', onPointerLeave);
       target.removeEventListener('pointercancel', onPointerCancel);
       target.removeEventListener('wheel', onWheel);
       target.removeEventListener('contextmenu', onContextMenu);
