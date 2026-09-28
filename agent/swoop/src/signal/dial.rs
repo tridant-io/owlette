@@ -112,17 +112,28 @@ pub struct Handshake<'a> {
 
 impl<'a> Handshake<'a> {
     pub fn new(bundle: &'a Bundle) -> Result<Self, DialError> {
-        let (scheme, _authority, path) =
-            split_ws_url(&bundle.signal_url).ok_or(DialError::BadSignalUrl)?;
+        Self::with_token(&bundle.signal_url, &bundle.site, &bundle.machine, bundle.host_token.expose())
+    }
+
+    /// The same checks as [`Handshake::new`], for a re-dial with a token that
+    /// arrived on stdin after the bundle: the room and the url do not move,
+    /// only the credential does.
+    pub fn with_token(
+        signal_url: &'a str,
+        site: &str,
+        machine: &str,
+        token: &'a str,
+    ) -> Result<Self, DialError> {
+        let (scheme, _authority, path) = split_ws_url(signal_url).ok_or(DialError::BadSignalUrl)?;
         // ws:// is for a `wrangler dev` worker on localhost and nothing else;
         // every fielded bundle carries wss.
         if scheme != "wss" && scheme != "ws" {
             return Err(DialError::BadSignalUrl);
         }
-        if path != room_path(&bundle.site, &bundle.machine) {
+        if path != room_path(site, machine) {
             return Err(DialError::RoomMismatch);
         }
-        Ok(Self { url: &bundle.signal_url, token: bundle.host_token.expose() })
+        Ok(Self { url: signal_url, token })
     }
 
     /// The `Authorization` value, for the one call that opens the socket. Never

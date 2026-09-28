@@ -52,7 +52,7 @@ const SERVICE_MAX_LIFETIME_S: i64 = 300;
 /// A bundle string that must never be printed. `Debug` and `Display` render a
 /// placeholder, so a `{:?}` anywhere — an error, a struct, a panic message —
 /// cannot leak it, and the buffer is wiped on drop.
-#[derive(Clone, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
 pub struct Secret(String);
 

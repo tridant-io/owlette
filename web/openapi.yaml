@@ -1264,7 +1264,11 @@ paths:
                   description: Semver string (e.g. "3.0.0").
                 fileName:
                   type: string
-                  description: Must end in `.exe`.
+                  description: Must end in `.exe` (windows), `.pkg` (macos) or `.deb` (linux).
+                platform:
+                  type: string
+                  enum: [windows_x64, macos_arm64, linux_x64]
+                  description: The platform key the file is stored under. Derived from the `fileName` extension when omitted; must match it when given.
                 contentType:
                   type: string
                   default: application/octet-stream
@@ -1289,6 +1293,9 @@ paths:
                     type: string
                   storagePath:
                     type: string
+                  platform:
+                    type: string
+                    enum: [windows_x64, macos_arm64, linux_x64]
                   expiresAt:
                     type: string
                     format: date-time
@@ -1360,6 +1367,14 @@ paths:
                     type: string
                   file_size:
                     type: integer
+                  platform:
+                    type: string
+                    enum: [windows_x64, macos_arm64, linux_x64]
+                  files:
+                    type: object
+                    description: Every platform file the version carries after this upload, keyed by platform.
+                    additionalProperties:
+                      $ref: '#/components/schemas/InstallerFile'
         '400':
           description: Validation error or missing Idempotency-Key
           content:
@@ -6047,8 +6062,8 @@ paths:
           description: |
             Refused by swoop policy. `code` is the branchable half:
             `api_key_not_permitted` (an api key called this route),
-            `swoop_disabled`, `machine_excluded`, `capability_missing`,
-            `members_may_not_watch`, or `session_cap_reached`.
+            `swoop_disabled`, `machine_excluded`, `capability_missing`, or
+            `members_may_not_watch`.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -6109,9 +6124,6 @@ paths:
                       state: { type: string, enum: [live, ended] }
                       createdBy: { type: string }
                       startedAt: { type: integer, description: Epoch milliseconds. }
-                      absoluteExpiresAt:
-                        type: integer
-                        description: Epoch milliseconds; the 12-hour cap, which no renewal moves.
                       viewers:
                         type: array
                         items:
@@ -6141,10 +6153,10 @@ paths:
       tags: [Machines]
       summary: end a swoop session
       description: |
-        Ends the session record and stops the streamer over two independent
-        paths — the signalling broadcast and a polled command. Neither failing
-        withholds the `200`: the record is already ended, and a streamer that
-        survives both is stopped by its own lease.
+        Ends the session record and stops the streamer through the signalling
+        broadcast, queueing a polled command only when the broadcast does not
+        land. Neither failing withholds the `200`: the record is already ended,
+        and a streamer that survives both is stopped by its own lease.
 
         `endReason` is optional and may only be one a caller may claim:
         `closed` (the default), `killed`, or `revoked`. The machine-side
@@ -6212,8 +6224,8 @@ paths:
         point of the lease is that authorisation is re-checked while the
         session runs: a removed member, a site that turns swoop off, an
         excluded machine or a revoked capability all take effect within one
-        lease. The 12-hour session cap is absolute and is not moved by a
-        renewal.
+        lease. There is no absolute cap: a session lasts as long as its lease
+        keeps being renewed.
 
         Control is re-applied from the viewer's stored state, so a watch-only
         viewer cannot renew itself into control. Step-up is deliberately not
@@ -6260,8 +6272,7 @@ paths:
         '403':
           description: |
             Refused by swoop policy — `code: api_key_not_permitted` when the
-            caller used an api key, `session_cap_reached` once the 12-hour cap
-            is reached, otherwise the policy code that denied it.
+            caller used an api key, otherwise the policy code that denied it.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -9196,9 +9207,31 @@ components:
         enabled: { type: boolean }
         cooldownMinutes: { type: number, minimum: 0 }
 
+    InstallerFile:
+      type: object
+      description: One platform's installer within a version.
+      required: [download_url, checksum_sha256, file_size, file_name, uploaded_at]
+      properties:
+        download_url:
+          type: string
+          format: uri
+        checksum_sha256:
+          type: string
+          nullable: true
+        file_size:
+          type: integer
+          nullable: true
+        file_name:
+          type: string
+          nullable: true
+          description: Display name, e.g. `Owlette-Installer-v3.4.0.pkg`.
+        uploaded_at:
+          type: integer
+          nullable: true
+
     InstallerVersion:
       type: object
-      required: [version, download_url, checksum_sha256, file_size, uploaded_at, uploaded_by, release_date, deletedAt]
+      required: [version, download_url, checksum_sha256, file_size, uploaded_at, uploaded_by, release_date, deletedAt, files]
       properties:
         version:
           type: string
@@ -9206,6 +9239,7 @@ components:
           type: string
           format: uri
           nullable: true
+          description: The windows installer; an alias of `files.windows_x64.download_url`.
         checksum_sha256:
           type: string
           nullable: true
@@ -9228,6 +9262,22 @@ components:
         deletedAt:
           type: integer
           nullable: true
+        files:
+          type: object
+          description: |
+            The installer per platform, keyed `windows_x64`, `macos_arm64` or
+            `linux_x64` (`linux_arm64` is reserved, not built). A version
+            uploaded before per-platform files carries its windows installer
+            here under `windows_x64`, synthesised from the flat fields.
+          additionalProperties:
+            $ref: '#/components/schemas/InstallerFile'
+          example:
+            windows_x64:
+              download_url: https://storage.googleapis.com/owlette/agent-installers/versions/3.4.0/Owlette-Installer-v3.4.0.exe
+              checksum_sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+              file_size: 52428800
+              file_name: Owlette-Installer-v3.4.0.exe
+              uploaded_at: 1758758400000
         promoted_at:
           type: integer
           nullable: true

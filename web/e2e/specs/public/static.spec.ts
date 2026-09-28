@@ -129,11 +129,38 @@ test.describe('public routes', () => {
     expect((await typo.json()).length).toBeGreaterThan(0);
   });
 
-  test('download permalink redirects to latest installer and falls back when empty', async ({ request }) => {
-    await seedInstallerLatest('https://example.test/downloads/owlette-e2e.exe');
-    const latest = await request.get('/download', { maxRedirects: 0 });
-    expect([307, 308]).toContain(latest.status());
-    expect(latest.headers().location).toBe('https://example.test/downloads/owlette-e2e.exe');
+  test('download permalink picks a platform and falls back when empty', async ({ request }) => {
+    const exe = 'https://example.test/downloads/owlette-e2e.exe';
+    const pkg = 'https://example.test/downloads/owlette-e2e.pkg';
+    await seedInstallerLatest(exe, {
+      windows_x64: { download_url: exe },
+      macos_arm64: { download_url: pkg },
+    });
+
+    const expectRedirect = async (path: string, location: string, userAgent?: string) => {
+      const response = await request.get(path, {
+        maxRedirects: 0,
+        headers: userAgent ? { 'user-agent': userAgent } : {},
+      });
+      expect([307, 308]).toContain(response.status());
+      expect(response.headers().location).toBe(location);
+      expect(response.headers().vary).toMatch(/user-agent/i);
+      expect(response.headers()['cache-control']).toContain('no-store');
+    };
+
+    await expectRedirect('/download?os=windows', exe);
+    await expectRedirect('/download?os=macos', pkg);
+    await expectRedirect(
+      '/download',
+      pkg,
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+    );
+    await expectRedirect('/download', exe, 'curl/8.6.0');
+
+    const missing = await request.get('/download?os=linux', { maxRedirects: 0 });
+    expect(missing.status()).toBe(404);
+    expect(missing.headers()['content-type']).toMatch(/^text\/plain/);
+    expect(await missing.text()).toBe('no linux build in ve2e-latest');
 
     await deleteDocIfExists('installer_metadata/latest');
     const fallback = await request.get('/download', { maxRedirects: 0 });

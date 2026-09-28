@@ -1,0 +1,5 @@
+owlette installs a background service under /Library/Application Support/Owlette and the owlette app in /Applications.
+
+After installing, the app asks once for Screen Recording so remote screenshots and swoop can work; allow it in System Settings and it stays allowed across updates.
+
+To pair this machine with a site, open the owlette app from the menu bar, or place a pairing preseed at /Library/Application Support/Owlette/config/pairing.json before installing.

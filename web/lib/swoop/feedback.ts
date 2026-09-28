@@ -58,6 +58,19 @@ const CLOCK_SAMPLES = 8;
 /** unanswered pings held before the oldest is abandoned and counted. */
 const PENDING_PINGS = 4;
 
+/**
+ * how long the host may go without answering a ping once it has answered one.
+ * pings ride `swoop-feedback` every second, unordered and lossy, so eight in
+ * a row lost on a live path is not a thing that happens — but a transport
+ * that closed the channel under the browser answers nothing ever again, and
+ * the browser is never told (the host cannot re-open a channel it does not
+ * own). that is what this notices; the session then reconnects with fresh
+ * channels. B4A, 2026-09-24: the picture froze and the cursor vanished for
+ * good behind exactly that. it is a dead channel on a live path, so silence
+ * counts only while the path is up (`linkUp`).
+ */
+export const PONG_SILENCE_MS = 8_000;
+
 export interface FeedbackViewport {
   widthCss: number;
   heightCss: number;
@@ -72,6 +85,19 @@ export interface SwoopFeedbackOptions {
   now?: () => number;
   reportIntervalMs?: number;
   referenceWindowMs?: number;
+  /**
+   * the host answered pings and then stopped for `silenceMs`. fires once per
+   * silence; never before the first pong, because a channel that has not
+   * opened yet is the peer's business, not this loop's.
+   */
+  onSilence?: () => void;
+  silenceMs?: number;
+  /**
+   * whether the path under the channel is up. with it down the peer's restart
+   * ladder owns recovery and no silence is judged; the silence clock starts
+   * again when it comes back. absent means always up.
+   */
+  linkUp?: () => boolean;
 }
 
 export interface SwoopFeedbackDiagnostics {
@@ -83,6 +109,8 @@ export interface SwoopFeedbackDiagnostics {
   /** a `pong` for an id we never sent, or already answered. */
   pongsUnmatched: number;
   pingsAbandoned: number;
+  /** times the host's pongs stopped for `PONG_SILENCE_MS` after having come. */
+  silences: number;
   framesObserved: number;
   /** cumulative frames the host sent that never reached presentation. */
   framesDropped: number;
@@ -146,6 +174,7 @@ export class SwoopFeedback {
   private readonly now: () => number;
   private readonly reportIntervalMs: number;
   private readonly reference: MinWindow;
+  private readonly silenceMs: number;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticks = 0;
@@ -154,6 +183,9 @@ export class SwoopFeedback {
   private readonly clock: ClockSample[] = [];
   private offsetUs: number | null = null;
   private rttUs: number | null = null;
+  private lastPongMs: number | null = null;
+  /** the path was down at the last look, so the next look that finds it up restarts the clock. */
+  private linkWasDown = false;
 
   private latest: FrameObservation | null = null;
   private lastFrameId: number | null = null;
@@ -169,6 +201,7 @@ export class SwoopFeedback {
     pongsMatched: 0,
     pongsUnmatched: 0,
     pingsAbandoned: 0,
+    silences: 0,
     framesObserved: 0,
     framesDropped: 0,
     arrivalFallbacks: 0,
@@ -180,6 +213,7 @@ export class SwoopFeedback {
     this.now = options.now ?? (() => performance.now());
     this.reportIntervalMs = options.reportIntervalMs ?? REPORT_INTERVAL_MS;
     this.reference = new MinWindow(options.referenceWindowMs ?? REFERENCE_WINDOW_MS);
+    this.silenceMs = options.silenceMs ?? PONG_SILENCE_MS;
   }
 
   /** start reporting. the first ping goes immediately, so the first `stats` a
@@ -236,6 +270,7 @@ export class SwoopFeedback {
     this.pending.delete(id);
     const rttUs = Math.max(0, usFromMs(this.now() - sentMs));
     this.stats.pongsMatched += 1;
+    this.lastPongMs = this.now();
     this.record({ rttUs, offsetUs: hostUs - (usFromMs(sentMs) + Math.round(rttUs / 2)) });
   }
 
@@ -263,6 +298,7 @@ export class SwoopFeedback {
   private tick(): void {
     this.ticks += 1;
     this.stats.reports += 1;
+    this.watchSilence();
     this.sendFb();
     // §5 puts `stats` on a one-second cadence, so it rides every other tick.
     if (this.ticks % 2 === 0) {
@@ -322,6 +358,28 @@ export class SwoopFeedback {
         heightCss: Math.round(viewport.heightCss),
       }),
     );
+  }
+
+  private watchSilence(): void {
+    if (this.lastPongMs === null || this.options.onSilence === undefined) return;
+    // pongs lost to a path that is down are the restart ladder's to recover,
+    // and the silence that counts starts when the path is back.
+    if (this.options.linkUp?.() === false) {
+      this.linkWasDown = true;
+      return;
+    }
+    if (this.linkWasDown) {
+      this.linkWasDown = false;
+      this.lastPongMs = this.now();
+      return;
+    }
+    const silentMs = this.now() - this.lastPongMs;
+    if (silentMs < this.silenceMs) return;
+    this.stats.silences += 1;
+    // re-armed from now, so one silence is reported once and a session the
+    // caller chose to keep is watched again from here.
+    this.lastPongMs = this.now();
+    this.options.onSilence();
   }
 
   private sendPing(): void {

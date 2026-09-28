@@ -29,7 +29,10 @@ import time
 from pathlib import Path
 
 import pytest
-import win32event
+
+# the wiring under test is the windows service's; on a posix box this file
+# skips at collection instead of failing the whole run (mba, 2026-09-25).
+win32event = pytest.importorskip("win32event")
 
 import owlette_service
 import swoop_commands
@@ -281,7 +284,7 @@ class RecordingManager:
     def ensure_streamer(self, sid):
         self.calls.append(('ensure_streamer', sid))
 
-    def kill(self, reason='kill'):
+    def kill(self, reason='kill', sid=None):
         self.calls.append(('kill', reason))
 
     def on_session_change(self):

@@ -1,8 +1,6 @@
 {
-  "version": "3.3.5",
-  "capturedAt": "2026-09-15T16:05:22.738Z",
-  "installedExe": "3.3.5",
-  "missing": [
-    "agent-right-click.png (tray menu — icon likely in the hidden-icons overflow)"
-  ]
+  "version": "4.0.4",
+  "capturedAt": "2026-09-27T05:43:43.700Z",
+  "installedExe": "4.0.4",
+  "missing": []
 }

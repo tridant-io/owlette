@@ -25,6 +25,7 @@ import { SwoopDisplayPicker } from '@/components/swoop/SwoopDisplayPicker';
 import { SwoopSpecialKeys } from '@/components/swoop/SwoopSpecialKeys';
 import { SwoopAudioToggle } from '@/components/swoop/SwoopAudioToggle';
 import { SwoopPresence } from '@/components/swoop/SwoopPresence';
+import { SwoopCursor } from '@/components/swoop/SwoopCursor';
 
 export default function SwoopPage({
   params,
@@ -32,7 +33,7 @@ export default function SwoopPage({
   params: Promise<{ siteId: string; machineId: string }>;
 }) {
   const { siteId, machineId } = use(params);
-  const { state, error, stats, session, videoRef, stageRef, stepUp, end } = useSwoopSession(
+  const { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn } = useSwoopSession(
     siteId,
     machineId,
   );
@@ -47,7 +48,10 @@ export default function SwoopPage({
         session={session}
         state={state}
         error={error}
+        stats={stats}
+        retryIn={retryIn}
         onEnd={end}
+        onReconnect={reconnect}
         statsOpen={statsOpen}
         onToggleStats={() => setStatsOpen((open) => !open)}
       >
@@ -59,6 +63,7 @@ export default function SwoopPage({
 
       <div className="min-h-0 flex-1">
         <SwoopStage session={session} state={state} stageRef={stageRef} videoRef={videoRef}>
+          <SwoopCursor session={session} />
           <SwoopPresence session={session} />
           <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
         </SwoopStage>
@@ -67,6 +72,9 @@ export default function SwoopPage({
       {error && (
         <p role="alert" className="px-4 py-2 text-center text-sm text-destructive">
           {error}
+          {retryIn !== null && (
+            <span className="text-muted-foreground"> reconnecting in {retryIn} s…</span>
+          )}
         </p>
       )}
 

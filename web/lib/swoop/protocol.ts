@@ -34,7 +34,8 @@ export const FRAME_FLAG_PARAMETER_SETS_IN_BAND = 0x04;
 
 /** section 5 clipboard caps, checked before the first chunk is buffered. */
 export const CLIPBOARD_MAX_TEXT_BYTES = 256 * 1024;
-export const CLIPBOARD_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+/** a compressed 4k screenshot, with room to spare (owner, 2026-09-27: 10 to 15 MB, never 30). */
+export const CLIPBOARD_MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 export const CLIPBOARD_MAX_CHUNK_BYTES = 16 * 1024;
 /** transfers above this are reported to the audit trail by the host. */
 export const CLIPBOARD_AUDIT_BYTES = 64 * 1024;
@@ -772,7 +773,17 @@ export const encodeInputMessage = (message: InputMessage): string => JSON.string
 
 export type CursorMessage =
   | { t: 'cpos'; x: number; y: number; visible: boolean; tsUs: number }
-  | { t: 'cshape'; id: number; hotX?: number; hotY?: number; w?: number; h?: number; png?: string };
+  | {
+      t: 'cshape';
+      id: number;
+      hotX?: number;
+      hotY?: number;
+      w?: number;
+      h?: number;
+      /** machine pixels per png pixel; the host sends it only when above 1. */
+      scale?: number;
+      png?: string;
+    };
 
 export function decodeCursorMessage(raw: unknown): SwoopResult<CursorMessage> {
   const parsed = parseJsonObject(raw);
@@ -806,7 +817,13 @@ export function decodeCursorMessage(raw: unknown): SwoopResult<CursorMessage> {
     if (hotX === undefined || hotY === undefined || w === undefined || h === undefined || png === undefined) {
       return reject('malformed_message', 'cshape upload');
     }
-    return accept({ t: 'cshape', id, hotX, hotY, w, h, png });
+    // the host shrinks a shape past the css ceiling for the wire and says by
+    // how much; absent means as captured, and stays absent so the decoded
+    // message is the wire message.
+    if (!('scale' in o)) return accept({ t: 'cshape', id, hotX, hotY, w, h, png });
+    const scale = int(o, 'scale');
+    if (scale === undefined || scale < 1) return reject('malformed_message', 'cshape scale');
+    return accept({ t: 'cshape', id, hotX, hotY, w, h, scale, png });
   }
   return reject('unknown_type', 'cursor');
 }
@@ -1076,7 +1093,7 @@ export const encodeFeedbackMessage = (message: FeedbackMessage): string => JSON.
 export type PipeEvent =
   | { type: 'ready'; sid: string; pid: number; version: string; protocolVersion: number; codecs: string[]; displays: number }
   | { type: 'viewer_joined'; sid: string; viewer: string; ctl: boolean; codec: string }
-  | { type: 'viewer_left'; sid: string; viewer: string; reason: 'bye' | 'timeout' | 'lease_expired' | 'kill' }
+  | { type: 'viewer_left'; sid: string; viewer: string; reason: 'bye' | 'timeout' | 'lease_expired' | 'kill' | 'restart' }
   | { type: 'sas_request'; sid: string; viewer: string }
   | {
       type: 'status';
@@ -1092,7 +1109,7 @@ export type PipeEvent =
     }
   | { type: 'exiting'; sid: string; code: number; reason: 'idle' | 'kill' | 'signal_lost' | 'session_cap' | 'error' };
 
-const VIEWER_LEFT_REASONS = ['bye', 'timeout', 'lease_expired', 'kill'];
+const VIEWER_LEFT_REASONS = ['bye', 'timeout', 'lease_expired', 'kill', 'restart'];
 const EXIT_REASONS = ['idle', 'kill', 'signal_lost', 'session_cap', 'error'];
 
 export function decodePipeEvent(line: string): SwoopResult<PipeEvent> {
@@ -1131,7 +1148,12 @@ export function decodePipeEvent(line: string): SwoopResult<PipeEvent> {
       if (viewer === undefined || reason === undefined || !VIEWER_LEFT_REASONS.includes(reason)) {
         return reject('malformed_message', 'viewer_left');
       }
-      return accept({ type: 'viewer_left', sid, viewer, reason: reason as 'bye' | 'timeout' | 'lease_expired' | 'kill' });
+      return accept({
+        type: 'viewer_left',
+        sid,
+        viewer,
+        reason: reason as 'bye' | 'timeout' | 'lease_expired' | 'kill' | 'restart',
+      });
     }
     case 'sas_request': {
       const viewer = str(o, 'viewer');
@@ -1176,8 +1198,14 @@ export function decodePipeEvent(line: string): SwoopResult<PipeEvent> {
   }
 }
 
-/** stdin control lines, service → streamer. line 1 is the bundle, never this. */
-export type PipeControl = { type: 'kill'; sid?: string } | { type: 'sas_result'; ok: boolean };
+/**
+ * stdin control lines, service → streamer. line 1 is the bundle, never this.
+ * a kill's `reason` is absent on every kill that is somebody's decision, and
+ * names the service's own stop, which viewers come back from.
+ */
+export type PipeControl =
+  | { type: 'kill'; sid?: string; reason?: 'service_stop' }
+  | { type: 'sas_result'; ok: boolean };
 
 export function decodePipeControl(line: string): SwoopResult<PipeControl> {
   const parsed = parseJsonObject(line);
@@ -1189,7 +1217,15 @@ export function decodePipeControl(line: string): SwoopResult<PipeControl> {
       // both are accepted, and a sid that names another session is the
       // streamer's business, not the parser's.
       const sid = str(o, 'sid');
-      return accept(sid === undefined ? { type: 'kill' } : { type: 'kill', sid });
+      // closed like the streamer's own: a reason this build does not know
+      // refuses the line rather than reading as somebody's decision.
+      const reason = o.reason ?? undefined;
+      if (reason !== undefined && reason !== 'service_stop') return reject('malformed_message', 'kill.reason');
+      return accept({
+        type: 'kill',
+        ...(sid === undefined ? {} : { sid }),
+        ...(reason === undefined ? {} : { reason }),
+      });
     }
     case 'sas_result': {
       const ok = bool(o, 'ok');

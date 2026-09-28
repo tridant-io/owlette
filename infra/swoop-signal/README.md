@@ -19,7 +19,7 @@ handshake), section 2 (the ten messages and per-role send rights), section 8 (jw
 | `GET /health` | none | fixed body, and it never touches a durable object — the first access to a room name pins that room's home colo for good. carrying `x-swoop-ring-secret` additionally returns the active `kids` and the `algorithm` constant, which is the only way to confirm a rotation landed |
 | `GET /v1/room/{site}/{machine}` | swoop jwt | the websocket upgrade. the room is named from the **token's** `site`+`machine`, and a url that disagrees is `403 room_mismatch` |
 | `POST /v1/ring` | `x-swoop-ring-secret` | body is exactly `{site, machine, sid}`; any other key is `400 unexpected_field` |
-| `POST /v1/kill` | `x-swoop-ring-secret` | body is `{site, machine, sid?}`, and `sid` may be `null` — "kill whatever is running" |
+| `POST /v1/kill` | `x-swoop-ring-secret` | body is `{site, machine, sid?}`. a sid closes that session's host and viewers only; `null` means "kill whatever is running" and closes every socket |
 
 a ring to a machine with no doorbell attached is `409 no_doorbell`, not a silent no-op.
 
@@ -136,7 +136,7 @@ whichever version cloudflare last accepted.
 
 | kind | name | |
 |---|---|---|
-| repo secret | `CLOUDFLARE_API_TOKEN` | scoped: **workers scripts: edit** + **workers durable objects: edit** (account-level), nothing else. not a global api key |
+| repo secret | `CLOUDFLARE_API_TOKEN` | scoped: **workers scripts: edit** (account-level, which also covers the durable objects the script binds — there is no separate durable-objects permission in the token editor) + **workers routes: edit** on the zone, nothing else. not a global api key |
 | repo secret | `CLOUDFLARE_ACCOUNT_ID` | a secret here purely so it stays out of a public repo's logs; it is an account identifier, not a credential |
 | repo variable | `SWOOP_SIGNAL_DEV_URL` / `SWOOP_SIGNAL_PROD_URL` | the origin `/health` is fetched from: `https://signal-dev.owlette.app` and `https://signal.owlette.app`. a **variable** rather than a literal in the workflow so the hostname is settable without a code change, and so a rename is one dashboard edit rather than a pull request |
 
@@ -154,8 +154,8 @@ settings. the workflow itself has run (on `dev`, most recently 2026-09-19, which
 deliberate dispatch (see [deploy](#deploy)) that must wait for them.
 
 1. **the api token.** cloudflare dashboard → my profile → api tokens → create token → custom token.
-   permissions: `account` → `workers scripts` → `edit`, `account` → `workers durable objects` → `edit`,
-   **and `zone` → `workers routes` → `edit` on the `owlette.app` zone** — `wrangler.toml` declares a custom
+   permissions: `account` → `workers scripts` → `edit` (durable objects ride on it; the token editor
+   has no durable-objects permission to add), **and `zone` → `workers routes` → `edit` on the `owlette.app` zone** — `wrangler.toml` declares a custom
    domain per environment, and without the zone permission the deploy fails at the route, after the script
    has already uploaded. account resources: this account only; zone resources: `owlette.app` only.
 2. **the repository secrets.** github → settings → secrets and variables → actions → new repository secret,
@@ -200,8 +200,8 @@ a deploy is a version; rolling back publishes an earlier one. it does **not** to
 
 ```
 cd infra/swoop-signal
-npx wrangler deployments list -e dev      # newest first; copy the version id to go back to
-npx wrangler rollback <version-id> -e dev # prompts for a reason, then publishes it
+npx wrangler deployments list -e dev      # oldest first: the current deployment is the LAST entry
+npx wrangler rollback <version-id> -e dev -y --message "<why>"   # -y and --message keep it non-interactive
 curl -sS -o /dev/null -w '%{http_code}\n' https://<dev origin>/health
 ```
 
@@ -209,14 +209,21 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://<dev origin>/health
 check — a human decides between rolling back and rolling forward, because a red `/health` is as often a
 missing secret or a missing route as it is bad code.
 
-**PENDING [human]** — these steps have never been executed on dev. task 3.4's done-when requires one rehearsal
-(roll back to the previous version, `/health` 200, roll forward again); note the date, the two version ids and
-the result here when it is done.
+**rehearsed 2026-09-23 on dev** with the token in `.claude/.env.local` (workers scripts edit is enough): rolled
+back from `34fcfe4b` (the 2026-09-23 08:22 deploy) to `cf2cab25` (2026-09-22 21:58), `/health` 200 within
+5 s; rolled forward to `34fcfe4b`, `/health` 200 again; `deployments list` shows `34fcfe4b` at 100%. both were
+workflow deploys of the same worker code, so nothing user-visible moved. a `versions list` on this worker
+starts with four 2026-09-18 entries whose source is "Secret Change": those carry no code and are not rollback
+targets.
 
 ## limits
 
 all in `src/messages.ts`, each with its number: 4 KiB token, 64 KiB frame, 4 viewers per room, 10 rings per
-60 s per machine. `jti` is single use, enforced in the room because it is the only verifier here with durable
+60 s per machine. a viewer that has not sent a frame or had a keepalive `ping` answered for 90 s is stale:
+when the room is full it is evicted (`bye` to the host, close `stale`) rather than counted, because a
+browser that vanished without a close keeps its socket in the hibernation set for a long time and four of
+those refused every live viewer as `room_full` (dev, 2026-09-24). the test worker sets
+`SWOOP_VIEWER_STALE_MS` to 1500 for that test. `jti` is single use, enforced in the room because it is the only verifier here with durable
 state.
 
 ### the two budgets a socket spends

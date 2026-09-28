@@ -98,7 +98,7 @@ export interface ServiceStatus {
 
 export interface ServiceCommandOutcome {
   /** `scm` issued directly, `elevated` via a UAC prompt, `noop` already there. */
-  method: 'scm' | 'elevated' | 'noop'
+  method: 'scm' | 'elevated' | 'noop' | 'systemd'
   /**
    * State before the request. An elevated start only confirms the shell
    * accepted it, so callers poll {@link serviceStatus} for the result.
@@ -106,7 +106,7 @@ export interface ServiceCommandOutcome {
   stateBefore: ServiceState
 }
 
-export type TerminateMethod = 'not_found' | 'wm_close' | 'terminated'
+export type TerminateMethod = 'not_found' | 'wm_close' | 'terminated' | 'signaled'
 
 export interface TerminateOutcome {
   method: TerminateMethod
@@ -173,6 +173,16 @@ export function hostname(): Promise<string> {
 /** Whether the run-on-login startup shortcut exists. */
 export function startupLinkEnabled(): Promise<boolean> {
   return invoke<boolean>('startup_link_enabled')
+}
+
+/** macOS's answer on Screen Recording for this app; null off macOS. */
+export function screenRecordingGranted(): Promise<boolean | null> {
+  return invoke<boolean | null>('screen_recording_granted')
+}
+
+/** Open the Screen Recording pane of System Settings (macOS). */
+export function openScreenRecordingSettings(): Promise<void> {
+  return invoke<void>('open_screen_recording_settings')
 }
 
 /** Create or remove the run-on-login shortcut; resolves to the resulting state. */

@@ -557,6 +557,75 @@ describe('POST /api/installer/upload', () => {
     expect(res2.headers.get('Idempotent-Replayed')).toBe('true');
     expect(mockEmitMutation).not.toHaveBeenCalled();
   });
+
+  it('derives the platform from a .pkg and records it on the upload', async () => {
+    authedAsSuperadminWithKey('write');
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-pkg' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.pkg' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.platform).toBe('macos_arm64');
+    expect(body.storagePath).toBe(
+      'agent-installers/versions/3.0.0/Owlette-Installer-v3.0.0.pkg',
+    );
+    expect(docStore[`installer_uploads/${body.uploadId}`]?.data?.platform).toBe('macos_arm64');
+    expect(mockEmitMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attributes: expect.objectContaining({ verb: 'upload_initiated', platform: 'macos_arm64' }),
+      }),
+    );
+  });
+
+  it('refuses a .deb declared as macos_arm64', async () => {
+    authedAsSuperadminWithKey('write');
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-mismatch' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.deb', platform: 'macos_arm64' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.detail).toContain('does not match platform macos_arm64');
+  });
+
+  it('refuses an unknown platform value', async () => {
+    authedAsSuperadminWithKey('write');
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-bad-platform' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe', platform: 'amd64' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.detail).toContain('windows_x64, macos_arm64, linux_x64');
+  });
+
+  it('refuses an unknown extension and names the three accepted ones', async () => {
+    authedAsSuperadminWithKey('write');
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-bad-ext' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.zip' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.detail).toContain('.exe, .pkg or .deb');
+  });
 });
 
 // PUT /api/installer/upload (finalize)
@@ -645,6 +714,134 @@ describe('PUT /api/installer/upload', () => {
     expect(res.status).toBe(412);
     expect(body.code).toBe('checksum_mismatch');
     expect(docStore['installer_metadata/data/versions/3.0.0']).toBeUndefined();
+  });
+
+  const WINDOWS_FILE = {
+    download_url: 'https://storage.example.com/3.0.0.exe',
+    checksum_sha256: 'a'.repeat(64),
+    file_size: 1024,
+    file_name: 'Owlette-Installer-v3.0.0.exe',
+    uploaded_at: 1700000000000,
+  };
+  const MAC_FILE = {
+    download_url: 'https://storage.example.com/3.0.0.pkg',
+    checksum_sha256: 'b'.repeat(64),
+    file_size: 2048,
+    file_name: 'Owlette-Installer-v3.0.0.pkg',
+    uploaded_at: 1700000000001,
+  };
+  const PKG_UPLOAD = {
+    fileName: 'Owlette-Installer-v3.0.0.pkg',
+    storagePath: 'agent-installers/versions/3.0.0/Owlette-Installer-v3.0.0.pkg',
+    platform: 'macos_arm64',
+  };
+
+  it('merges a .pkg into an existing version without touching the windows alias', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', { files: { windows_x64: WINDOWS_FILE } });
+    seedUpload('upload-1', { ...PKG_UPLOAD, setAsLatest: false });
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': 'installer-finalize-pkg' },
+      body: { uploadId: 'upload-1' },
+    });
+    const res = await uploadPUT(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.platform).toBe('macos_arm64');
+    expect(Object.keys(body.files).sort()).toEqual(['macos_arm64', 'windows_x64']);
+    const doc = docStore['installer_metadata/data/versions/3.0.0']?.data as Record<string, unknown>;
+    expect(doc.download_url).toBe(WINDOWS_FILE.download_url);
+    expect(doc.checksum_sha256).toBe(WINDOWS_FILE.checksum_sha256);
+    expect(doc.file_size).toBe(WINDOWS_FILE.file_size);
+    expect(doc.uploaded_by).toBe('admin');
+    const files = doc.files as Record<string, Record<string, unknown>>;
+    expect(files.windows_x64).toEqual(WINDOWS_FILE);
+    expect(files.macos_arm64).toMatchObject({
+      download_url: 'https://storage.example.com/signed',
+      checksum_sha256: STORAGE_SHA256,
+      file_size: 1048576,
+      file_name: 'Owlette-Installer-v3.0.0.pkg',
+    });
+    expect(docStore['installer_metadata/latest']).toBeUndefined();
+  });
+
+  it('refreshes the windows alias on a windows_x64 re-upload and keeps the other platforms', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', { files: { windows_x64: WINDOWS_FILE, macos_arm64: MAC_FILE } });
+    seedUpload('upload-1', { platform: 'windows_x64', setAsLatest: false });
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': 'installer-finalize-exe-again' },
+      body: { uploadId: 'upload-1' },
+    });
+    const res = await uploadPUT(req);
+
+    expect(res.status).toBe(200);
+    const doc = docStore['installer_metadata/data/versions/3.0.0']?.data as Record<string, unknown>;
+    expect(doc.download_url).toBe('https://storage.example.com/signed');
+    expect(doc.checksum_sha256).toBe(STORAGE_SHA256);
+    expect(doc.file_size).toBe(1048576);
+    const files = doc.files as Record<string, Record<string, unknown>>;
+    expect(files.windows_x64.download_url).toBe('https://storage.example.com/signed');
+    expect(files.macos_arm64).toEqual(MAC_FILE);
+  });
+
+  it('writes latest with every platform after a mac upload with setAsLatest', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', {
+      files: { windows_x64: WINDOWS_FILE },
+      release_date: { toDate: () => new Date('2026-04-28T00:00:00.000Z') },
+    });
+    seedUpload('upload-1', { ...PKG_UPLOAD, setAsLatest: true });
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': 'installer-finalize-pkg-latest' },
+      body: { uploadId: 'upload-1' },
+    });
+    const res = await uploadPUT(req);
+
+    expect(res.status).toBe(200);
+    const latest = docStore['installer_metadata/latest']?.data as Record<string, unknown>;
+    expect(latest.version).toBe('3.0.0');
+    expect(latest.download_url).toBe(WINDOWS_FILE.download_url);
+    expect(latest.release_date).toBe('2026-04-28T00:00:00.000Z');
+    expect(latest.promoted_by).toBe('user-superadmin');
+    expect(typeof latest.promoted_at).toBe('number');
+    const files = latest.files as Record<string, Record<string, unknown>>;
+    expect(files.windows_x64).toEqual(WINDOWS_FILE);
+    expect(files.macos_arm64.checksum_sha256).toBe(STORAGE_SHA256);
+  });
+
+  it('revives a soft-deleted version with fresh fields and only the new file', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', {
+      deletedAt: 1234,
+      deletedBy: 'admin',
+      files: { windows_x64: WINDOWS_FILE, macos_arm64: MAC_FILE },
+    });
+    seedUpload('upload-1', { ...PKG_UPLOAD, setAsLatest: false });
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': 'installer-finalize-revive' },
+      body: { uploadId: 'upload-1' },
+    });
+    const res = await uploadPUT(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const doc = docStore['installer_metadata/data/versions/3.0.0']?.data as Record<string, unknown>;
+    expect(doc.deletedAt).toBeNull();
+    expect(doc.deletedBy).toBeUndefined();
+    expect(doc.download_url).toBeUndefined();
+    expect(doc.uploaded_by).toBe('user-superadmin');
+    expect(Object.keys(doc.files as object)).toEqual(['macos_arm64']);
+    expect(Object.keys(body.files)).toEqual(['macos_arm64']);
   });
 });
 

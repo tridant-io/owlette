@@ -1,7 +1,7 @@
 ---
 title: "swoop"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a machine's screen, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "screen sharing", "kvm", "vnc", "rdp", "take over a screen"]
+keywords: ["remote control", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard"]
 ---
 
 swoop puts a machine's screen in your browser, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -47,7 +47,7 @@ a session needs the machine to be online. swoop cannot reach a machine that has 
 | watch | any site member, when `membersMayWatch` is on | site membership |
 | control | site admins and owners | the machine remote-control capability **and** a live second factor |
 
-control is gated on a **step-up**: a fresh second-factor check, prompted in the viewer, which opens a 10-minute window. a remembered device or an old sign-in does not count — the window is bound to the login session it was opened from, so there is a real ceremony behind every controlled session.
+control is gated on a **step-up**: a fresh second-factor check, prompted in the viewer, which opens a 12-hour window for that machine. a remembered device or an old sign-in does not count — the window is bound to the login session it was opened from, so there is a real ceremony behind every controlled session. a tab that holds control keeps it across reconnects for as long as it stays open; a new tab asks again once the window has lapsed.
 
 a viewer that started watch-only stays watch-only. renewing its lease cannot promote it.
 
@@ -65,15 +65,21 @@ the toolbar carries the session state, an **end** button, and:
 - **special keys** — the combinations the browser will not let through
 - **presence** — who else is in the session
 
+over the dark bars around the picture your own pointer shows and nothing reaches the machine, so a click there never lands on the edge of its screen. a drag that runs off the picture keeps going, held at its edge.
+
 a watch-only session is labelled **view only**.
+
+the clipboard is shared both ways: copy on the machine and paste on your computer, or the reverse, with text up to 256 KB and images up to 15 MB. pasting into the machine needs control: ctrl+v (cmd+v on a Mac) in the viewer sends what you copied to the machine and pastes it there, with nothing for the browser to ask.
 
 ---
 
 ## how long a session lasts
 
-- a viewer holds a **5-minute lease**, renewed silently while you are there
-- a session is capped at **12 hours** from the moment it starts. renewals do not move that cap
-- the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
+- a session has **no time limit**: it lasts as long as the tab that started it
+- a dropped network does not end it. after a short drop the same session picks up where it was; after a longer one, a sleeping laptop or a machine that stops answering, the viewer starts a new session on its own, on a growing delay (up to 30 seconds between attempts), and says so while it waits
+- an update or restart of the machine's agent sends the viewer to reconnect too, once the agent is back. agents older than 4.0.4 end the session instead, and so does the update from one of them
+- what does end it: the **end** button, closing the tab, an admin's kill, another tab or device opening swoop on the same machine, or the lease check below refusing
+- a viewer holds a **5-minute lease**, renewed silently while the tab is open. the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
 
 ---
 
@@ -81,7 +87,7 @@ a watch-only session is labelled **view only**.
 
 ending your own session is the **end** button in the toolbar — anyone who may be in the room may leave it.
 
-a site admin can also stop **whatever anyone is running** on a machine (`POST …/swoop/kill`). that one is deliberately not gated on the site's swoop settings: stopping a stream has to work after the feature has been switched off, which is exactly when an operator wants it most.
+a site admin can also stop **whatever anyone is running** on a machine (`POST …/swoop/kill`). that one is deliberately not gated on the site's swoop settings: stopping a stream has to work after the feature has been switched off, which is exactly when an operator wants it most. a kill also closes every second-factor window on that machine, so anyone it cut off — a tab that was reconnecting at the time included — confirms again before taking control.
 
 ---
 
@@ -93,7 +99,7 @@ every session start, every refusal and every end is written to the session's own
 
 ## notes
 
-- **refusal codes** you may see, in the viewer or from the API: `api_key_not_permitted`, `swoop_disabled`, `machine_excluded`, `capability_missing`, `members_may_not_watch`, `step_up_required`, `session_cap_reached`, `machine_offline`
+- **refusal codes** you may see, in the viewer or from the API: `api_key_not_permitted`, `swoop_disabled`, `machine_excluded`, `capability_missing`, `members_may_not_watch`, `step_up_required`, `machine_offline` (the viewer keeps retrying this one until the machine is back)
 - **nothing secret travels in a URL.** the viewer url names a site and a machine; the signalling url names a room. tokens and keys are only ever in a response body
 - **agent version**: the machine must be running an agent that ships the swoop streamer. older agents keep live view
 - **related**: [`owlette swoop`](/docs/cli/reference/swoop) (open the viewer from a terminal), [machine monitoring](/docs/dashboard/machine-monitoring) (the machine cards the entry lives on), [errors](/docs/api/errors) (the problem envelope the codes above arrive in)

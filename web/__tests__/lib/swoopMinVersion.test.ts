@@ -3,12 +3,13 @@
  */
 
 /**
- * `SWOOP_MIN_AGENT_VERSION` (web/lib/versionUtils.ts) is advisory COPY only —
- * the authorization gate is the machine's `capabilities.swoop == 1` heartbeat
- * key, never this string. These assertions pin the two things a copy constant
- * can still get wrong: an unparseable value (which turns every comparison into
- * `null`, and a `=== -1` advisory check into silence) and a value copied from
- * the site-time constant beside it.
+ * `SWOOP_MIN_AGENT_VERSION` (web/lib/versionUtils.ts) is enforced by the
+ * session bundle route (403 `agent_too_old` below it), while the dashboard's
+ * entry stays gated by the machine's `capabilities.swoop == 1` heartbeat key.
+ * These assertions pin what the constant can get wrong: an unparseable value
+ * (which turns every comparison into `null`), a value copied from the
+ * site-time constant beside it, and a floor above the installer that actually
+ * ships the streamer.
  */
 
 import {
@@ -30,7 +31,14 @@ describe('SWOOP_MIN_AGENT_VERSION', () => {
     expect(compareVersions(SWOOP_MIN_AGENT_VERSION, SITE_TIME_MIN_AGENT_VERSION)).toBe(1);
   });
 
-  it('sorts older and newer agents the way the advisory copy reads them', () => {
+  it('admits the first installer that ships the streamer', () => {
+    // 3.3.7 is the first installer carrying owlette-swoop.exe and
+    // websocket-client (owner ruling 2026-09-23). a floor above it refuses
+    // every fielded agent at the bundle route.
+    expect(compareVersions('3.3.7', SWOOP_MIN_AGENT_VERSION)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('sorts older and newer agents the way the bundle route reads them', () => {
     // `compareVersions(agent, MIN) === -1` is the shape every existing advisory
     // uses (lib/scheduleClockCopy.ts, components/ScheduleEditor.tsx).
     expect(compareVersions('3.3.5', SWOOP_MIN_AGENT_VERSION)).toBe(-1);

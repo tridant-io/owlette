@@ -7,27 +7,31 @@
  * the host, and the host is what enforces that — `session.ctl` here only stops
  * a watcher generating denials nobody can act on.
  *
- * three things about this file are not obvious:
+ * four things about this file are not obvious:
  *
- * 1. **the paste keystroke is intercepted, not the `paste` event.** `input.ts`
- *    calls `preventDefault()` on every keydown it forwards, which is what stops
- *    the browser acting on ctrl+v locally — and with it the `paste` event that
- *    would have followed. so the read hangs off a capture-phase keydown on the
- *    window, which runs before the stage's own listeners, and the keystroke is
- *    re-dispatched to the stage **after** the clipboard read settles. the host
- *    must have the clip before it has the ctrl+v, or it pastes what was there
- *    before. the `paste` listener below still exists for the paths that do fire
- *    one, such as the browser's own edit menu.
- * 2. **every key is held while a read is in flight, not just the v.** a keyup
+ * 1. **the clip comes from the `paste` event the real keystroke fires.** a
+ *    capture-phase keydown on the window takes ctrl+v away from `input.ts`,
+ *    which calls `preventDefault()` on every key it forwards, but leaves its
+ *    default alone. that default is the browser's own paste, and it fires
+ *    `paste` on the stage with the clipboard in hand and no permission to ask
+ *    for. `navigator.clipboard.read()` does ask, its prompt is easy to miss and
+ *    unseen in fullscreen, and a refusal is final: the build that read the
+ *    clipboard itself never carried a paste to the host (owner, 2026-09-28).
+ *    the keystroke is re-dispatched to the stage once the clip has gone. the
+ *    host must have the clip before it has the ctrl+v, or it pastes what was
+ *    there before.
+ * 2. **every key is held while a paste is in flight, not just the v.** a keyup
  *    that overtook its keydown would leave the host holding a key down, and a
- *    read that waits on a permission prompt is more than long enough for that.
- * 3. **whether reading the clipboard prompts is unmeasured.** spike 2.12
- *    measured read and write resolving on chrome and edge when permitted, but
- *    automation sets the permission state and so hides the prompt. so nothing
- *    here assumes a silent grant: the read is only ever started from the paste
- *    gesture, it is raced against a timeout so a prompt left open cannot swallow
- *    the keystroke, and a refusal is an ordinary outcome that costs the sync and
- *    nothing else.
+ *    large image takes seconds to send.
+ * 3. **a browser that fires no `paste` still gets its keystroke through**,
+ *    `PASTE_WAIT_MS` later and without a clip. the event is the keystroke's own
+ *    default action, dispatched straight after it, so the wait is only ever
+ *    served in full when it is not coming.
+ * 4. **a transfer is paced by the channel's own buffer.** an image may be 15
+ *    MiB, about 20 once encoded, and sent at once it would overrun chrome's
+ *    16 MiB send buffer and hold the lease and keyframe requests that share
+ *    `swoop-control` behind it. so chunks wait while more than 1 MiB is queued,
+ *    and the held paste keystroke waits until the whole clip has left.
  */
 
 import type { SwoopDetach, SwoopSession } from '@/lib/swoop/features';
@@ -39,8 +43,18 @@ import {
   encodeControlMessage,
 } from '@/lib/swoop/protocol';
 
-/** how long a paste keystroke waits for the clipboard before going without it. */
-const READ_TIMEOUT_MS = 1_500;
+/** how long a paste keystroke waits for the browser's `paste` before going without a clip. */
+const PASTE_WAIT_MS = 300;
+
+/** how much of a transfer may sit in the channel's buffer before the next chunk waits. */
+const SEND_HIGH_WATER_BYTES = 1024 * 1024;
+/** where it goes on: the buffer drained this far. */
+const SEND_LOW_WATER_BYTES = 256 * 1024;
+/**
+ * a buffer that does not drain in this long belongs to a path too slow or too
+ * dead to carry the rest, and the transfer is given up.
+ */
+const DRAIN_TIMEOUT_MS = 30_000;
 
 type ClipFormat = 'text' | 'png';
 
@@ -97,20 +111,56 @@ export function attach(session: SwoopSession): SwoopDetach {
   let inbound: Inbound | null = null;
   /** the newest host clipboard the browser has not accepted yet. */
   let pendingWrite: ClipPayload | null = null;
-  /** the browser refused a read; later pastes no longer wait on one. */
-  let readRefused = false;
   let waiting = false;
+  /** a paste keystroke is held for the `paste` its default fires; this ends the wait. */
+  let pasteWait: number | null = null;
   let held: KeyboardEvent[] = [];
   /** keys this module re-dispatched, so its own listener lets them past. */
   const replayed = new WeakSet<KeyboardEvent>();
 
   // ----------------------------------------------------------- viewer → host
 
-  const sendPayload = (payload: ClipPayload): void => {
+  // true once the channel's buffer is down to `level`; false when the channel
+  // closed or the buffer would not drain in time.
+  const drainedTo = (channel: RTCDataChannel, level: number): Promise<boolean> =>
+    new Promise((resolve) => {
+      if (channel.bufferedAmount <= level) {
+        resolve(true);
+        return;
+      }
+      const settle = (ok: boolean): void => {
+        view.clearTimeout(timer);
+        channel.removeEventListener('bufferedamountlow', onLow);
+        channel.removeEventListener('close', onClose);
+        resolve(ok);
+      };
+      // an event the browser queued under an earlier threshold can land after
+      // this one is set, so the buffer is read rather than the event trusted.
+      const onLow = (): void => {
+        if (channel.bufferedAmount <= level) settle(true);
+      };
+      const onClose = (): void => settle(false);
+      const timer = view.setTimeout(() => settle(false), DRAIN_TIMEOUT_MS);
+      channel.bufferedAmountLowThreshold = level;
+      channel.addEventListener('bufferedamountlow', onLow);
+      channel.addEventListener('close', onClose);
+    });
+
+  const transfer = async (payload: ClipPayload): Promise<void> => {
     if (payload.bytes.length === 0 || payload.bytes.length > capFor(payload.fmt)) return;
+    const channel = session.peer.channel('swoop-control');
+    if (!channel) return;
     seq += 1;
+    const id = seq;
     const chunks = Math.max(1, Math.ceil(payload.bytes.length / CLIPBOARD_MAX_CHUNK_BYTES));
     for (let chunk = 0; chunk < chunks; chunk += 1) {
+      if (detached) return;
+      // paced by the channel's own buffer: a 4k screenshot handed over at once
+      // sits whole in it, past chrome's 16 MiB limit, and the lease and keyframe
+      // requests that share the channel wait behind it.
+      if (channel.bufferedAmount > SEND_HIGH_WATER_BYTES && !(await drainedTo(channel, SEND_LOW_WATER_BYTES))) {
+        return;
+      }
       const start = chunk * CLIPBOARD_MAX_CHUNK_BYTES;
       session.send(
         'swoop-control',
@@ -118,7 +168,7 @@ export function attach(session: SwoopSession): SwoopDetach {
           t: 'clip',
           dir: 'to-host',
           fmt: payload.fmt,
-          seq,
+          seq: id,
           chunk,
           chunks,
           totalBytes: payload.bytes.length,
@@ -126,40 +176,34 @@ export function attach(session: SwoopSession): SwoopDetach {
         }),
       );
     }
+    // the keystroke that pastes this rides another channel, so the clip leaves
+    // this side entirely before the keystroke is let go.
+    await drainedTo(channel, 0);
   };
 
-  const readClipboard = async (): Promise<ClipPayload | null> => {
-    const clipboard = view.navigator?.clipboard;
-    if (!clipboard) return null;
-    // `read()` is the only one that can carry an image. it is tried first and
-    // `readText()` is the fallback for the browsers that have only that.
-    if (typeof clipboard.read === 'function') {
-      try {
-        const items = await clipboard.read();
-        for (const item of items) {
-          if (!item.types.includes('image/png')) continue;
-          const blob = await item.getType('image/png');
-          return { fmt: 'png', bytes: new Uint8Array(await blob.arrayBuffer()) };
-        }
-        for (const item of items) {
-          if (!item.types.includes('text/plain')) continue;
-          const blob = await item.getType('text/plain');
-          return { fmt: 'text', bytes: new TextEncoder().encode(await blob.text()) };
-        }
-        return null;
-      } catch {
-        // falls through: a browser that refuses `read()` may still allow text.
-      }
+  // one transfer at a time: interleaved, two are two corrupt pastes; queued,
+  // the later clipboard still lands last. one that throws must not take every
+  // later paste down with it.
+  let sending: Promise<void> = Promise.resolve();
+  const sendPayload = (payload: ClipPayload): Promise<void> => {
+    sending = sending.then(() => transfer(payload)).catch(() => undefined);
+    return sending;
+  };
+
+  // the clipboard as the browser hands it to a paste, read inside the event,
+  // which is the only place it can be read without asking. an image is
+  // preferred, as the host prefers one.
+  const payloadFrom = (data: DataTransfer | null): Promise<ClipPayload | null> => {
+    if (!data) return Promise.resolve(null);
+    const image = Array.from(data.items).find((item) => item.type === 'image/png')?.getAsFile();
+    if (image) {
+      return image.arrayBuffer().then(
+        (buffer): ClipPayload => ({ fmt: 'png', bytes: new Uint8Array(buffer) }),
+        () => null,
+      );
     }
-    try {
-      const text = await clipboard.readText();
-      return text ? { fmt: 'text', bytes: new TextEncoder().encode(text) } : null;
-    } catch {
-      // a refusal, a prompt the user dismissed, or an insecure context. the
-      // keystroke still goes to the host; only the sync is lost.
-      readRefused = true;
-      return null;
-    }
+    const text = data.getData('text/plain');
+    return Promise.resolve(text ? { fmt: 'text', bytes: new TextEncoder().encode(text) } : null);
   };
 
   const forwardHeld = (): void => {
@@ -191,39 +235,35 @@ export function attach(session: SwoopSession): SwoopDetach {
     if (event.target !== stage && !stage.contains(event.target as Node | null)) return;
 
     if (waiting) {
-      // a read is in flight: everything queues, so the host sees the same
+      // a paste is in flight: everything queues, so the host sees the same
       // order the user typed.
       event.preventDefault();
       event.stopPropagation();
       held.push(event);
       return;
     }
-    if (event.type !== 'keydown' || !isPasteKey(event) || readRefused) return;
+    if (event.type !== 'keydown' || !isPasteKey(event)) return;
 
-    event.preventDefault();
+    // kept from `input.ts` but not prevented: its default is the browser's
+    // paste, and the `paste` that fires is where the clip comes from.
     event.stopPropagation();
     held.push(event);
     waiting = true;
-    let settled = false;
-    const finish = (payload: ClipPayload | null): void => {
-      if (settled) return;
-      settled = true;
-      if (payload) sendPayload(payload);
-      waiting = false;
-      // the clip is on the wire before the keystroke that pastes it.
-      forwardHeld();
-    };
-    const timer = view.setTimeout(() => finish(null), READ_TIMEOUT_MS);
-    void readClipboard().then(
-      (payload) => {
-        view.clearTimeout(timer);
-        finish(payload);
-      },
-      () => {
-        view.clearTimeout(timer);
-        finish(null);
-      },
-    );
+    pasteWait = view.setTimeout(() => settlePaste(null), PASTE_WAIT_MS);
+  };
+
+  // the paste keystroke's wait is over: its clip, if any, goes first and the
+  // held keys follow it.
+  const settlePaste = (payload: Promise<ClipPayload | null> | null): void => {
+    if (pasteWait === null) return;
+    view.clearTimeout(pasteWait);
+    pasteWait = null;
+    void (payload ?? Promise.resolve(null))
+      .then((clip) => (clip ? sendPayload(clip) : undefined))
+      .then(() => {
+        waiting = false;
+        forwardHeld();
+      });
   };
 
   const onCopyOrCut = (event: ClipboardEvent): void => {
@@ -235,18 +275,16 @@ export function attach(session: SwoopSession): SwoopDetach {
 
   const onPaste = (event: ClipboardEvent): void => {
     if (detached || !session.ctl) return;
-    const data = event.clipboardData;
     event.preventDefault();
-    if (!data) return;
-    const image = Array.from(data.items).find((item) => item.type === 'image/png')?.getAsFile();
-    if (image) {
-      void image.arrayBuffer().then((buffer) => {
-        if (!detached) sendPayload({ fmt: 'png', bytes: new Uint8Array(buffer) });
-      });
+    const payload = payloadFrom(event.clipboardData);
+    if (pasteWait !== null) {
+      settlePaste(payload);
       return;
     }
-    const text = data.getData('text/plain');
-    if (text) sendPayload({ fmt: 'text', bytes: new TextEncoder().encode(text) });
+    // a paste with no keystroke held for it, such as the browser's own edit menu.
+    void payload.then((clip) => {
+      if (clip && !detached) void sendPayload(clip);
+    });
   };
 
   // ----------------------------------------------------------- host → viewer
@@ -362,6 +400,8 @@ export function attach(session: SwoopSession): SwoopDetach {
     stage.removeEventListener('paste', onPaste);
     stage.removeEventListener('pointerdown', onActivation, true);
     stage.removeEventListener('keydown', onActivation, true);
+    if (pasteWait !== null) view.clearTimeout(pasteWait);
+    pasteWait = null;
     held = [];
     inbound = null;
     pendingWrite = null;
