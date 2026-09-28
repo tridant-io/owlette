@@ -79,6 +79,10 @@ class FakeProc:
         # makes every identity check raise there and nowhere else.
         return psutil.STATUS_RUNNING
 
+    def environ(self):
+        # the macOS arm reads a watched process's launchd job name off it.
+        return {}
+
 
 def install_process_table(monkeypatch, table):
     """Replace the live process view with `table` ({pid: FakeProc})."""

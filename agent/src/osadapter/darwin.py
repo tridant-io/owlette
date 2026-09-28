@@ -431,10 +431,10 @@ def _watch_session_job(pid: int) -> None:
     try:
         process = psutil.Process(pid)
         label = process.environ().get('XPC_SERVICE_NAME', '')
-        uid = process.uids().real
+        job = (f'gui/{process.uids().real}', label) \
+            if re.fullmatch(_SESSION_LABEL, label) else None
     except psutil.Error:
         return
-    job = (f'gui/{uid}', label) if re.fullmatch(_SESSION_LABEL, label) else None
     with _session_jobs_lock:
         _session_jobs.setdefault(pid, job)
 
