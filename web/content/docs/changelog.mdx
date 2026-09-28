@@ -7,13 +7,16 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
-### fixed — a Mac can open a swoop session
+## [4.0.6] - 2026-09-28
+
+### fixed — a Mac is no longer refused its swoop token
 
 macOS names a machine `Name.local`, and the API's machine id rule allows only
-letters, digits, `_` and `-`, so a Mac paired under that name was refused
-every swoop session. A Mac now takes its id without the `.local` suffix the
+letters, digits, `_` and `-`, so a Mac paired under that name had every swoop
+token request refused. A Mac now takes its id without the `.local` suffix the
 first time it pairs. A Mac already paired as `Name.local` keeps its id, because
-its token is bound to it; re-pair it to move to the short one.
+its token is bound to it; re-pair it to move to the short one. Hosting a swoop
+session on macOS and Linux still waits on the streamer for those platforms.
 
 ### fixed — a process that exits cleanly is no longer a crash
 
