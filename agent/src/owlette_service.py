@@ -74,6 +74,12 @@ MAX_RELAUNCH_ATTEMPTS = 3
 SLEEP_INTERVAL = 5
 TIME_TO_INIT = 60
 
+# An exit code of 0 is never a crash: the app finished, or somebody closed it.
+# One this soon after launch holds the relaunch for the failed-launch cooldown,
+# so a program that quits straight away (a launcher that hands off to another
+# executable) is started once a minute rather than every tick.
+QUICK_EXIT_SECONDS = 60
+
 # Marker the desktop app writes to tmp/app_states.json just before terminating a
 # PID for the operator. It has no Firebase client, so without this the service
 # would read the vanished PID as a `process_crash`; KILLED would silence the
@@ -3769,6 +3775,7 @@ class OwletteService:
         if pid is None:
             return None
 
+        osadapter.watch_exit(pid)
         self.current_timestamp = int(time.time())
 
         # Read existing results from the output file
@@ -3844,7 +3851,7 @@ class OwletteService:
             self._seat_probe = osadapter.console_user() is None
         return self._seat_probe
 
-    def reached_max_relaunch_attempts(self, process):
+    def reached_max_relaunch_attempts(self, process, after_crash=True):
         # The gate before anything else: while a reboot is pending nothing
         # relaunches, and off Windows nothing but a dashboard dismiss ends
         # that. Asking who is at the seat first billed the 5-second loop a
@@ -3854,6 +3861,11 @@ class OwletteService:
         # it, terminating the kiosk app of a machine frozen to preserve it.
         if self._is_restart_prompt_active():
             return True
+        # A process that exited 0 did not crash (see QUICK_EXIT_SECONDS): its
+        # relaunch spends nothing, or an app that exits on a schedule, or one
+        # somebody keeps closing, would escalate to a reboot.
+        if not after_crash:
+            return False
         # A launch that never happened is not a crash, and off Windows a box
         # with nobody at a graphical seat — logged out, at the display
         # manager's greeter, or imaged before its first login — refuses
@@ -4088,15 +4100,15 @@ class OwletteService:
         candidates.sort(key=lambda item: item[0], reverse=True)
         return [path for _, path in candidates[:max_results]]
 
-    def handle_process_launch(self, process):
+    def handle_process_launch(self, process, after_crash=True):
         # Callers decided "needs launching" outside the lock; if a launch lands
         # while we wait that decision is stale. _launch_locked re-checks this
         # against the post-lock value.
         pid_before_lock = self.last_started.get(process.get('id', ''), {}).get('pid')
         with self._launch_lock_for(process.get('id', '')):
-            return self._launch_locked(process, pid_before_lock)
+            return self._launch_locked(process, pid_before_lock, after_crash)
 
-    def _launch_locked(self, process, pid_before_lock):
+    def _launch_locked(self, process, pid_before_lock, after_crash=True):
         process_id = process.get('id', '')
         current_pid = self.last_started.get(process_id, {}).get('pid')
         if (current_pid and current_pid != pid_before_lock
@@ -4140,7 +4152,7 @@ class OwletteService:
             _surface_launch_failed(process_id)
             return None
 
-        if not self.reached_max_relaunch_attempts(process):
+        if not self.reached_max_relaunch_attempts(process, after_crash):
             process_list_id = process['id']
             delay = float(process.get('time_delay', 0))
 
@@ -4308,8 +4320,9 @@ class OwletteService:
 
         else:
             # PID detection can fail on a successful launch, so scan by
-            # exe+cmdline before launching again.
-            if last_info.get('failed'):
+            # exe+cmdline before launching again. A relaunch held after a
+            # quick clean exit waits out the same cooldown.
+            if last_info.get('failed') or last_info.get('clean_exit'):
                 exe_path = process.get('exe_path', '')
                 file_path = process.get('file_path', '')
                 found_pid = self._find_running_process_by_exe(exe_path, file_path) if exe_path else None
@@ -4335,6 +4348,8 @@ class OwletteService:
                         return  # Still cooling down, skip this cycle
 
             if last_pid and Util.is_pid_running(last_pid):
+                # an adopted pid never passed through _record_launch.
+                osadapter.watch_exit(last_pid)
                 last_time = last_info.get('time')
                 time_to_init = float(process.get('time_to_init', 0) or TIME_TO_INIT)
                 if last_time and (self.current_time - last_time).total_seconds() < time_to_init:
@@ -4357,7 +4372,14 @@ class OwletteService:
                     shared_utils.update_process_status_in_json(last_pid, 'RUNNING', self.firebase_client, process_id=process_list_id)
 
             else:
+                # a held relaunch carries its clean exit until the launch.
+                exited_cleanly = last_info.get('clean_exit', False)
+                hold_relaunch = False
                 if last_pid:
+                    # read here, once: the read consumes it, whichever branch runs.
+                    code = osadapter.exit_code(last_pid)
+                    last_time = last_info.get('time')
+                    ran_seconds = (self.current_time - last_time).total_seconds() if last_time else 0
                     # KILLED = service/dashboard kill, RESTARTING = operator via
                     # the local app. Both are intended exits; only RESTARTING
                     # earns an audit event.
@@ -4408,8 +4430,24 @@ class OwletteService:
                                 f"'{Util.get_process_name(process)}' ended with the "
                                 f"graphical session (PID {last_pid}) - not a crash, "
                                 f"launching when somebody signs in")
+                    elif code == 0:
+                        exited_cleanly = True
+                        hold_relaunch = ran_seconds < QUICK_EXIT_SECONDS
+                        process_name = Util.get_process_name(process)
+                        logging.info(f"'{process_name}' (PID {last_pid}) exited normally after {int(ran_seconds)}s")
+                        if self.firebase_client and self.firebase_client.is_connected():
+                            self.firebase_client.log_event(
+                                action='process_exited',
+                                level='info',
+                                process_name=process_name,
+                                details=f'Process exited normally (PID {last_pid}, exit code 0)'
+                            )
                     else:
                         process_name = Util.get_process_name(process)
+                        details = (
+                            f'Process stopped unexpectedly (PID {last_pid} no longer running)'
+                            if code is None else
+                            f'Process stopped unexpectedly (PID {last_pid}, exit code {code})')
 
                         # Best-effort screenshot capture before relaunch
                         crash_screenshot_url = None
@@ -4423,13 +4461,13 @@ class OwletteService:
                                 action='process_crash',
                                 level='error',
                                 process_name=process_name,
-                                details=f'Process stopped unexpectedly (PID {last_pid} no longer running)',
+                                details=details,
                                 screenshot_url=crash_screenshot_url
                             )
                             self.firebase_client.send_process_alert(
-                                process_name, f'Process stopped unexpectedly (PID {last_pid} no longer running)', 'process_crash'
+                                process_name, details, 'process_crash'
                             )
-                        self._write_cortex_event(process_name, f'Process stopped unexpectedly (PID {last_pid} no longer running)', 'process_crash')
+                        self._write_cortex_event(process_name, details, 'process_crash')
 
                 # Re-read: the GUI or Firestore may have changed launch_mode since
                 # the loop iteration began.
@@ -4472,6 +4510,11 @@ class OwletteService:
                         shared_utils.update_process_status_in_json(existing_pid, 'RUNNING', self.firebase_client, process_id=process_list_id, extra=inherit_extra)
                         logging.info(f"[OK] Adopted already-running '{Util.get_process_name(process)}' (PID {existing_pid})")
                         new_pid = None
+                    elif hold_relaunch:
+                        # the cooldown at the top of this method paces the retry.
+                        self.last_started[process_list_id] = {
+                            'time': datetime.datetime.now(), 'pid': None, 'clean_exit': True}
+                        new_pid = None
                     else:
                         # Keep failed markers so missing-exe alerts fire only on
                         # transition; clearing other stale entries makes the
@@ -4480,7 +4523,7 @@ class OwletteService:
                             self._skip_launch_delay.add(process_list_id)
                         else:
                             self.last_started.pop(process_list_id, None)
-                        new_pid = self.handle_process_launch(process)
+                        new_pid = self.handle_process_launch(process, after_crash=not exited_cleanly)
         
         # Real time, not loop-start, so cooldowns measure from the actual launch.
         if new_pid:
