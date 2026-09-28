@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.0.5] - 2026-09-27
+
 ### fixed — swoop shows your own pointer over the bars around the picture
 
 Over the dark bars between the toolbar and a picture that does not fill the
