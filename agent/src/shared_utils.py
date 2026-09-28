@@ -469,6 +469,16 @@ def _seed_machine_id_file(path, machine_id):
         raise
 
 
+def _identity_hostname():
+    """The hostname an identity is taken from. macOS appends `.local`, and the
+    api's machine id rule (letters, digits, `_`, `-`) refuses the dot: a Mac
+    seeded with it pairs but can never open a swoop session."""
+    name = get_hostname()
+    if sys.platform == 'darwin' and name.lower().endswith('.local'):
+        name = name[:-len('.local')]
+    return name
+
+
 def _read_or_seed_machine_id():
     """(identity, persisted) — config/machine_id, created from the current
     hostname when it is missing.
@@ -490,13 +500,13 @@ def _read_or_seed_machine_id():
                     f"Failed to read {MACHINE_ID_FILE}: {e} — using the hostname "
                     f"for this call only"
                 )
-                return get_hostname(), False
+                return _identity_hostname(), False
             time.sleep(MACHINE_ID_READ_BACKOFF)
 
     if persisted:
         return persisted, True
 
-    machine_id = get_hostname()
+    machine_id = _identity_hostname()
     try:
         _seed_machine_id_file(path, machine_id)
         logging.info(f"Machine identity seeded from the hostname: {machine_id}")
@@ -1598,13 +1608,63 @@ def _nvml_warn(message):
     logging.warning(message)
 
 
-def get_gpus():
-    """Live per-GPU readings, or [] when no NVIDIA GPU is visible.
+def _get_gpus_darwin():
+    """Apple GPUs from the IORegistry: name, utilisation, memory in use.
 
+    There is no NVML on a Mac and no VRAM either -- the GPU shares the
+    machine's memory, so `memoryTotal` is the unified pool and `memoryUsed`
+    is what the accelerator driver holds of it. `ioreg` needs no privilege
+    and the counters are the ones Activity Monitor's GPU history draws.
+    """
+    import plistlib
+    try:
+        out = subprocess.run(
+            ['/usr/sbin/ioreg', '-r', '-d', '1', '-c', 'IOAccelerator', '-a'],
+            capture_output=True, timeout=5, check=True,
+        ).stdout
+        entries = plistlib.loads(out) if out.strip() else []
+    except Exception as e:
+        logging.debug(f"[GPU] ioreg unavailable: {e}")
+        return []
+
+    total_mb = psutil.virtual_memory().total / (1024 ** 2)
+    gpus = []
+    for i, entry in enumerate(e for e in entries if isinstance(e, dict)):
+        stats = entry.get('PerformanceStatistics') or {}
+        name = entry.get('model') or entry.get('IOClass') or 'Apple GPU'
+        if isinstance(name, bytes):
+            name = name.decode('utf-8', 'replace').rstrip('\x00')
+        try:
+            load = float(stats.get('Device Utilization %', 0)) / 100.0
+        except (TypeError, ValueError):
+            load = 0.0
+        try:
+            used_mb = float(stats.get('In use system memory', 0)) / (1024 ** 2)
+        except (TypeError, ValueError):
+            used_mb = 0.0
+        gpus.append(GpuReading(
+            id=i,
+            # stable across ticks and reboots, which is all the profile join needs
+            uuid=f'apple-gpu-{i}',
+            name=str(name),
+            load=max(0.0, min(load, 1.0)),
+            memoryTotal=total_mb,
+            memoryUsed=used_mb,
+            memoryFree=max(0.0, total_mb - used_mb),
+        ))
+    return gpus
+
+
+def get_gpus():
+    """Live per-GPU readings, or [] when no GPU is visible.
+
+    NVIDIA through NVML everywhere it runs; Apple GPUs through the IORegistry.
     `load` is 0.0-1.0 and the three memory values are MB. Never raises: callers
     read it inline in the metrics path.
     """
     global _nvml_retry_after
+    if sys.platform == 'darwin':
+        return _get_gpus_darwin()
     if time.monotonic() < _nvml_retry_after:
         return []
     try:
@@ -3344,7 +3404,11 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
 
         # GB, emitted in both snake_case and camelCase for v1 + v2 readers.
         mem = psutil.virtual_memory()
-        mem_used_gb = round(mem.used / (1024**3), 2)
+        # total - available, not psutil's `used`: on macos and linux `used`
+        # leaves out inactive and cached pages while `percent` counts them,
+        # so the pair the card draws (a bar and a figure) disagreed by half.
+        # on windows the two are the same number.
+        mem_used_gb = round((mem.total - mem.available) / (1024**3), 2)
         mem_total_gb = round(mem.total / (1024**3), 2)
         mem_percent = round(mem.percent, 1)
 

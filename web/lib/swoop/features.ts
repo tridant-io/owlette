@@ -35,6 +35,8 @@ import { attach as attachClipboard } from '@/lib/swoop/clipboard';
 import { attach as attachAudio } from '@/lib/swoop/audio';
 import { attach as attachDisplays } from '@/lib/swoop/displays';
 import { attach as attachPresence } from '@/lib/swoop/presence';
+import { attach as attachCursor } from '@/lib/swoop/cursor';
+import { attach as attachWakeLock } from '@/lib/swoop/wakeLock';
 
 /** what `attach` hands back: undo everything it did, idempotently. */
 export type SwoopDetach = () => void;
@@ -97,8 +99,11 @@ export interface SwoopSession {
   renewLease(): Promise<SwoopLease>;
   /** when the lease currently held lapses. */
   leaseExpiresAt(): number;
-  /** end the session: tears down the peer and the page's state. */
-  end(reason: string): void;
+  /**
+   * end the session: tears down the peer and the page's state. `message` is
+   * what the page shows as the reason.
+   */
+  end(reason: string, message?: string): void;
 }
 
 export interface SwoopFeature {
@@ -165,6 +170,13 @@ const feedbackFeature: SwoopFeature = {
         const box = session.contentRect();
         return { widthCss: box.width, heightCss: box.height };
       },
+      // the host stopped answering on a channel that had been working, over a
+      // path that is up. an ice restart would not help — the channels are
+      // what died, and only a new peer gets new ones — so this is the
+      // transient end the hook reconnects from, with the retry ladder it
+      // already has. a path that is down is the peer's to restart instead.
+      onSilence: () => session.end('peer_failed'),
+      linkUp: () => session.peer.linkUp(),
     });
     const offFrame = session.onFrame((observation) => feedback.observeFrame(observation));
     const offMessage = session.onChannelMessage('swoop-feedback', (data) =>
@@ -195,4 +207,6 @@ export const SWOOP_FEATURES: readonly SwoopFeature[] = [
   { name: 'audio', attach: attachAudio },
   { name: 'displays', attach: attachDisplays },
   { name: 'presence', attach: attachPresence },
+  { name: 'cursor', attach: attachCursor },
+  { name: 'wake-lock', attach: attachWakeLock },
 ];

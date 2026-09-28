@@ -199,7 +199,8 @@ def _linux_seat(svc, monkeypatch, *, seat, pid=None):
     monkeypatch.setattr(
         owlette_service, 'osadapter',
         SimpleNamespace(console_user=console_user,
-                        launch_managed_process=lambda spec: pid))
+                        launch_managed_process=lambda spec: pid,
+                        watch_exit=lambda pid: None))
     svc._seat_probe = None  # the top of a loop iteration, on the loop thread
     svc._seat_probe_thread = threading.get_ident()
     return lookups

@@ -1,7 +1,7 @@
-"""Runner-owned sync pipeline smoke test against MinIO.
+"""Runner-owned sync pipeline smoke test against the S3 stand-in.
 
 This is intentionally outside agent/tests so production agent tests stay
-focused on module behavior. The container runner supplies MinIO credentials
+focused on module behavior. The container runner supplies the stand-in's credentials
 through environment variables and this test exercises the existing sync
 modules without importing the Windows service host.
 """
@@ -34,7 +34,7 @@ def _sha256(data: bytes) -> str:
 def _s3_client():
     endpoint = os.environ.get("OWLETTE_R2_ENDPOINT")
     if not endpoint:
-        pytest.skip("OWLETTE_R2_ENDPOINT is not set; MinIO smoke not requested")
+        pytest.skip("OWLETTE_R2_ENDPOINT is not set; S3 smoke not requested")
 
     return boto3.client(
         "s3",
@@ -53,7 +53,7 @@ def _wait_for_bucket(s3, bucket: str) -> None:
         try:
             s3.head_bucket(Bucket=bucket)
             return
-        except Exception as exc:  # pragma: no cover - only hit while MinIO starts
+        except Exception as exc:  # pragma: no cover - only hit while the S3 stand-in starts
             last_error = exc
             time.sleep(1)
     raise AssertionError(f"bucket {bucket!r} was not ready: {last_error}")

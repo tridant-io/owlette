@@ -61,6 +61,10 @@
 //! network is flapping — `NotifyIpInterfaceChange` in particular fires once per
 //! interface, so a VPN coming up is a burst and not an event.
 //!
+//! A link that is still down [`DISCONNECTED_LIMIT`] after it went is given up
+//! on, and the session ends that viewer. Until then the viewer is held,
+//! because a lid, a roam or a page re-dialing the room comes back.
+//!
 //! # Logging
 //!
 //! Nothing here logs. Every decision is returned to the caller, which is the
@@ -77,6 +81,15 @@ pub const PROMOTION_PROBE: Duration = Duration::from_secs(3);
 /// How long `disconnected` may stand before a restart. Consent freshness kills
 /// media at 30 s, so this is early on purpose.
 pub const DISCONNECTED_GRACE: Duration = Duration::from_secs(2);
+
+/// How long `disconnected` may stand before the viewer is given up on. The
+/// clock starts at str0m's `Disconnected` edge, which comes 15–25 s after the
+/// last packet, so the viewer goes 75–85 s after its path fell silent. The
+/// page bounds its own restart at 10 s, counted only while its signalling
+/// socket is open, so a viewer whose whole network dropped can come back
+/// through a re-dial and still find its peer; a path gone for longer is a
+/// new session.
+pub const DISCONNECTED_LIMIT: Duration = Duration::from_secs(60);
 
 /// The floor between two recovery restarts. An ICE restart is a renegotiation
 /// and a fresh gathering; issuing them faster than they can complete is how a
@@ -319,14 +332,16 @@ pub enum RestartReason {
     InterfaceChanged,
 }
 
-/// What the caller is asked to do. One variant today, and an enum anyway
-/// because the caller matches on it rather than on a bool.
+/// What the caller is asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IceAction {
     /// Restart ICE with refreshed candidates. On this crate's side that is a
     /// fresh `accept_offer` once the browser re-offers, which is why the host
     /// asks for it rather than doing it.
     RestartIce(RestartReason),
+    /// The link has been down for [`DISCONNECTED_LIMIT`] in a row: end this
+    /// viewer. Asked once per episode.
+    GiveUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,6 +374,9 @@ enum Link {
 pub struct IcePolicy {
     promotion: Promotion,
     link: Link,
+    /// When the link went down, kept through the restart `link` moves on to,
+    /// so the give-up clock runs from the loss and not from the ask.
+    down_since: Option<Instant>,
     last_restart: Option<Instant>,
     restarts: u32,
 }
@@ -374,9 +392,16 @@ impl IcePolicy {
         Self {
             promotion: Promotion::Idle,
             link: Link::Up,
+            down_since: None,
             last_restart: None,
             restarts: 0,
         }
+    }
+
+    /// How long the link has been down, while it is.
+    pub fn down_for(&self, now: Instant) -> Option<Duration> {
+        self.down_since
+            .map(|since| now.saturating_duration_since(since))
     }
 
     /// Restarts this policy has asked for, over the life of the session.
@@ -394,6 +419,7 @@ impl IcePolicy {
         match event {
             IceEvent::Connected { relayed } | IceEvent::PairChanged { relayed } => {
                 self.link = Link::Up;
+                self.down_since = None;
                 self.arm_promotion(now, relayed);
                 None
             }
@@ -403,6 +429,7 @@ impl IcePolicy {
                 if self.link == Link::Up {
                     self.link = Link::Down(now);
                 }
+                self.down_since.get_or_insert(now);
                 None
             }
             IceEvent::Failed => {
@@ -415,6 +442,13 @@ impl IcePolicy {
 
     /// Run the timers. Cheap enough for the session's own loop.
     pub fn poll(&mut self, now: Instant) -> Option<IceAction> {
+        if self
+            .down_since
+            .is_some_and(|since| now.saturating_duration_since(since) >= DISCONNECTED_LIMIT)
+        {
+            self.down_since = None;
+            return Some(IceAction::GiveUp);
+        }
         if let Link::Down(since) = self.link {
             if now.duration_since(since) >= DISCONNECTED_GRACE {
                 if let Some(action) = self.restart(now, RestartReason::LinkDown) {
@@ -854,6 +888,50 @@ mod tests {
         policy.observe(at(base, 2_000), IceEvent::Connected { relayed: false });
         assert_eq!(policy.poll(at(base, 10_000)), None);
         assert_eq!(policy.restarts(), 0);
+    }
+
+    /// A path down for half the limit keeps its viewer, and one down for
+    /// longer than the limit does not.
+    #[test]
+    fn a_link_down_for_the_limit_gives_the_viewer_up_and_not_before() {
+        let base = Instant::now();
+        let mut policy = IcePolicy::new();
+        policy.observe(base, IceEvent::Connected { relayed: false });
+        policy.observe(at(base, 1_000), IceEvent::Disconnected);
+
+        assert_eq!(
+            policy.poll(at(base, 3_000)),
+            Some(IceAction::RestartIce(RestartReason::LinkDown))
+        );
+        assert_eq!(policy.poll(at(base, 31_000)), None, "30 s down is held");
+        assert_eq!(
+            policy.down_for(at(base, 31_000)),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(policy.poll(at(base, 62_000)), Some(IceAction::GiveUp));
+        assert_eq!(policy.poll(at(base, 90_000)), None, "asked once");
+    }
+
+    #[test]
+    fn a_link_that_comes_back_re_arms_the_give_up_clock() {
+        let base = Instant::now();
+        let mut policy = IcePolicy::new();
+        policy.observe(base, IceEvent::Connected { relayed: false });
+        policy.observe(at(base, 1_000), IceEvent::Disconnected);
+        policy.observe(at(base, 50_000), IceEvent::Connected { relayed: false });
+        assert_eq!(policy.down_for(at(base, 50_000)), None);
+
+        policy.observe(at(base, 55_000), IceEvent::Disconnected);
+        assert_eq!(
+            policy.poll(at(base, 57_000)),
+            Some(IceAction::RestartIce(RestartReason::LinkDown))
+        );
+        assert_eq!(
+            policy.poll(at(base, 100_000)),
+            None,
+            "45 s into the second loss, not 99 s into the first"
+        );
+        assert_eq!(policy.poll(at(base, 115_000)), Some(IceAction::GiveUp));
     }
 
     #[test]

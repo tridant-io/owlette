@@ -59,6 +59,12 @@ const ID_EXIT: &str = "exit";
 const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/normal.png");
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/disconnected.png");
 const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/error.png");
+// macos tints a template (black on alpha) to match the menubar; the eye and the
+// closed eye are templates, the error orb keeps its red so that one state shouts.
+#[cfg(target_os = "macos")]
+const ICON_TEMPLATE_NORMAL: &[u8] = include_bytes!("../icons/tray/template-normal.png");
+#[cfg(target_os = "macos")]
+const ICON_TEMPLATE_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/template-disconnected.png");
 
 /// Monitor granularity; the cadences below are multiples of it, so one thread
 /// drives both the status poll and the error flash.
@@ -354,11 +360,14 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
   let menu = build_menu(app, &view)?;
   let tray = TrayIconBuilder::with_id(TRAY_ID)
     .icon(icon_for(view.code))
-    .tooltip(tooltip(&root, &view))
+    .icon_as_template(icon_is_template(view.code))
+    .tooltip(tooltip(&paths::install_root(), &view))
     .menu(&menu.menu)
     // Windows defaults to the menu on either button; left click must open the
-    // window or there is no one-click way back to it.
-    .show_menu_on_left_click(false)
+    // window or there is no one-click way back to it. macOS is the other way
+    // round: a left click on a menubar icon is the menu, and "open owlette"
+    // is an item in it.
+    .show_menu_on_left_click(cfg!(target_os = "macos"))
     .build(app)?;
 
   tray.on_menu_event(|app, event| {
@@ -370,6 +379,11 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
   });
 
   tray.on_tray_icon_event(|tray, event| {
+    // On macOS the left click is the menu (above); opening the window on it
+    // as well would put the window behind the menu on every click.
+    if cfg!(target_os = "macos") {
+      return;
+    }
     if let TrayIconEvent::Click {
       button: MouseButton::Left,
       button_state: MouseButtonState::Up,
@@ -469,6 +483,10 @@ pub fn show_main_window(app: &AppHandle) {
     log::warn!("no main window to show");
     return;
   };
+  // The Dock icon appears with the window and leaves with it (lib.rs setup
+  // starts the app as an accessory).
+  #[cfg(target_os = "macos")]
+  let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
   let _ = window.unminimize();
   let _ = window.show();
   let _ = window.set_focus();
@@ -484,6 +502,8 @@ pub fn hide_main_window(app: &AppHandle) {
   if let Some(window) = app.get_webview_window("main") {
     let _ = window.hide();
   }
+  #[cfg(target_os = "macos")]
+  let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
   pid_file::remove(&paths::data_root(), GUI_PID_REL);
 }
 
@@ -547,7 +567,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
           last_flash = now;
         }
         apply_menu(&app, &view);
-        wanted_tooltip = Some(tooltip(&root, &view));
+        wanted_tooltip = Some(tooltip(&paths::install_root(), &view));
       }
 
       // Only the Error tier toasts (narrowed 2026-08-14): a Warning is what
@@ -698,7 +718,10 @@ fn set_icon(app: &AppHandle, code: StatusCode) -> Result<(), String> {
   };
   tray
     .set_icon(Some(icon_for(code)))
-    .map_err(|error| format!("could not set the tray icon: {error}"))
+    .map_err(|error| format!("could not set the tray icon: {error}"))?;
+  tray
+    .set_icon_as_template(icon_is_template(code))
+    .map_err(|error| format!("could not set the tray icon template flag: {error}"))
 }
 
 fn set_tooltip(app: &AppHandle, text: &str) -> Result<(), String> {
@@ -713,7 +736,25 @@ fn set_tooltip(app: &AppHandle, text: &str) -> Result<(), String> {
 fn icon_for(code: StatusCode) -> Image<'static> {
   // Bytes are compiled in and decoded by this file's tests: a failure here is a
   // packaging bug, not a runtime condition.
-  Image::from_bytes(code.icon_bytes()).expect("embedded tray icon should decode")
+  Image::from_bytes(icon_bytes_for(code)).expect("embedded tray icon should decode")
+}
+
+/// The template glyph on macos for every state but error; the colour orbs
+/// everywhere else (a windows tray has no template notion).
+fn icon_bytes_for(code: StatusCode) -> &'static [u8] {
+  #[cfg(target_os = "macos")]
+  match code {
+    StatusCode::Normal => return ICON_TEMPLATE_NORMAL,
+    StatusCode::Warning => return ICON_TEMPLATE_DISCONNECTED,
+    StatusCode::Error => {}
+  }
+  code.icon_bytes()
+}
+
+/// Whether macos should tint the icon to the menubar: the eye and the closed
+/// eye blend in, the error orb keeps its red.
+fn icon_is_template(code: StatusCode) -> bool {
+  cfg!(target_os = "macos") && !matches!(code, StatusCode::Error)
 }
 
 
@@ -1001,11 +1042,10 @@ fn notify(app: &AppHandle, title: &str, body: String) {
 
 
 fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
-  let root = paths::data_root();
   let version = MenuItem::with_id(
     app,
     "version",
-    format!("owlette v{}", agent_version(&root)),
+    format!("owlette v{}", agent_version(&paths::install_root())),
     false,
     None::<&str>,
   )?;
@@ -1074,10 +1114,10 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   })
 }
 
-fn tooltip(root: &Path, view: &TrayView) -> String {
+fn tooltip(install_root: &Path, view: &TrayView) -> String {
   let mut text = format!(
     "owlette v{}\nhostname: {}\n{}\n{}",
-    agent_version(root),
+    agent_version(install_root),
     hostname(),
     view.service,
     view.status
@@ -1092,16 +1132,47 @@ fn tooltip(root: &Path, view: &TrayView) -> String {
 /// Version of the agent this app sits alongside — that, not this crate's, is
 /// what the fleet records. Falls back to the crate version on a standalone dev
 /// run with no agent tree.
-fn agent_version(root: &Path) -> String {
-  fs::read_to_string(root.join(AGENT_VERSION_REL))
+fn agent_version(install_root: &Path) -> String {
+  fs::read_to_string(install_root.join(AGENT_VERSION_REL))
     .map(|text| text.trim().to_string())
     .ok()
     .filter(|version| !version.is_empty())
     .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
+/// The machine's name as the fleet records it: `COMPUTERNAME` on Windows;
+/// the kernel's hostname on the other two, the same call the agent's
+/// `socket.gethostname()` makes, so the tray and the machine card agree
+/// (`TEC-MBA.local`). A launchd or systemd child has no `HOSTNAME` in its
+/// environment and macOS has no `/etc/hostname`, so those are fallbacks only.
 pub(crate) fn hostname() -> String {
-  std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string())
+  let from_env = if cfg!(windows) { "COMPUTERNAME" } else { "HOSTNAME" };
+  #[cfg(unix)]
+  if let Some(name) = unix_hostname() {
+    return name;
+  }
+  if let Some(name) = std::env::var(from_env).ok().filter(|name| !name.trim().is_empty()) {
+    return name.trim().to_string();
+  }
+  if !cfg!(windows) {
+    if let Some(name) = fs::read_to_string("/etc/hostname").ok().filter(|name| !name.trim().is_empty()) {
+      return name.trim().to_string();
+    }
+  }
+  "unknown".to_string()
+}
+
+#[cfg(unix)]
+fn unix_hostname() -> Option<String> {
+  let mut buf = [0u8; 256];
+  // SAFETY: the buffer outlives the call and its length is passed with it.
+  let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+  if rc != 0 {
+    return None;
+  }
+  let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+  let name = String::from_utf8_lossy(&buf[..end]).trim().to_string();
+  (!name.is_empty()).then_some(name)
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -1245,6 +1316,17 @@ mod tests {
   /// SCM says up — the precondition for the document being consulted at all.
   const RUNNING: bool = true;
   const STOPPED: bool = false;
+
+  /// A launchd or systemd child carries no HOSTNAME and macOS has no
+  /// /etc/hostname: the kernel's name is what keeps the menu from "unknown".
+  #[cfg(unix)]
+  #[test]
+  fn the_hostname_comes_from_the_kernel_without_an_environment() {
+    std::env::remove_var("HOSTNAME");
+    let name = hostname();
+    assert_ne!(name, "unknown");
+    assert_eq!(Some(name.as_str()), unix_hostname().as_deref());
+  }
 
   fn fresh(value: Value) -> StatusDoc {
     StatusDoc::Fresh(value)

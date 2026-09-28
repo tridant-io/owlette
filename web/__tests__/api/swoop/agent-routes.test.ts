@@ -99,7 +99,6 @@ function seedSession(machineId = MACHINE, sid = SID) {
     state: 'pending',
     createdBy: 'uid-1',
     startedAt: Date.now(),
-    absoluteExpiresAt: Date.now() + 43200_000,
     viewers: [],
   });
 }
@@ -216,7 +215,9 @@ describe('POST /api/agent/swoop/bundle', () => {
     expect(parsed.value.site).toBe(SITE);
     expect(parsed.value.machine).toBe(MACHINE);
     expect(parsed.value.now).toBeGreaterThan(0);
-    expect(parsed.value.enablement.sessionCapSeconds).toBe(43200);
+    // a hundred years: no session reaches it, and a fielded streamer still gets the
+    // required u64 it ends a session at.
+    expect(parsed.value.enablement.sessionCapSeconds).toBe(100 * 365 * 24 * 60 * 60);
     expect(parsed.value.jwtKeys).toHaveLength(1);
   });
 
@@ -311,6 +312,14 @@ describe('POST /api/agent/swoop/bundle', () => {
     const response = await bundlePOST(bundleRequest({ agentVersion: '3.3.5' }));
     expect(response.status).toBe(403);
     expect((await response.json()).code).toBe('agent_too_old');
+  });
+
+  it('serves a 3.3.7 agent, the first installer that ships the streamer', async () => {
+    // the literal, not the constant: the other bundle tests send the constant
+    // itself, which is how a floor above the fielded agents passed unnoticed.
+    agentToken();
+    const response = await bundlePOST(bundleRequest({ agentVersion: '3.3.7' }));
+    expect(response.status).toBe(200);
   });
 });
 
@@ -506,8 +515,8 @@ describe('POST /api/agent/swoop/events', () => {
     /**
      * The audit row is what this endpoint promises and is fail-closed; the
      * mirror is not. A 503 here would have the agent re-post the batch and
-     * duplicate the rows, to fix a record the 12-hour cap and the retention
-     * sweep both close anyway.
+     * duplicate the rows, to fix a record the retention sweep closes anyway
+     * once its lease has lapsed.
      */
     it('still records the audit row when the mirror cannot be written', async () => {
       agentToken();

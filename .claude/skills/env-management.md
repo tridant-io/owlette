@@ -88,5 +88,5 @@ Vercel stores `--sensitive` vars **write-only** — their values can't be read b
 ## Prereqs
 
 - `railway` CLI authed (`railway login`). Services are addressed by flag, so the linked service doesn't matter for reads.
-- `vercel` CLI authed + the `owlette` project linked (`.vercel/` lives in `web/`).
+- `vercel` CLI authed + the `owlette` project linked (`.vercel/` lives in `web/`; scope `tridant-7931a9aa` since 2026-09-24 — `vercel link --yes --project owlette --scope tridant-7931a9aa`).
 - `node` (the script is plain Node, no deps).

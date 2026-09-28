@@ -2,7 +2,7 @@
 
 Owlette is a cloud-connected Windows process management and remote deployment system for managing TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python Windows service (agent) + Next.js web dashboard (web) + Firebase/Firestore backend.
 
-**Version**: 3.3.7 | **License**: FSL-1.1-Apache-2.0
+**Version**: 4.0.6 | **License**: FSL-1.1-Apache-2.0
 
 ---
 
@@ -131,7 +131,7 @@ Agents authenticate via a device code flow — no browser login on the target ma
 
 ## Deployment
 
-**Web**: Push to `dev`/`main` triggers Railway auto-deploy. A Vercel project (`theexperiential/owlette`) is configured as a failover origin for owlette.app behind Cloudflare Load Balancing.
+**Web**: Push to `dev`/`main` triggers Railway auto-deploy. A Vercel project (`owlette` in the `tridant-7931a9aa` team; the Experiential scope it lived in until 2026-09-24 is blocked) is configured as a failover origin for owlette.app behind Cloudflare Load Balancing.
 
 **Env vars** (Railway dev/prod + Vercel prod): managed via `scripts/env-manifest.json` (canonical key registry — keys + metadata, never values) and `node scripts/sync-env.mjs` (`status` / `check` / `diff` / `sync <target>`). Full workflow + the `must-match` secret rules + the Vercel read-back caveat: `.claude/skills/env-management.md`.
 
@@ -272,4 +272,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-09-23
+**Last Updated**: 2026-09-28

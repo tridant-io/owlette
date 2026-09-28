@@ -11,9 +11,10 @@ name: agent tests
 #     a Linux runner could not collect the suite at all. That import is lazy
 #     now and agent/requirements.txt carries sys_platform markers, so a POSIX
 #     regression has to be visible here rather than on a customer's machine;
-#   * the roost sync engine additionally runs against a MinIO stand-in for R2.
-#     That is the only place the manifest-fetch -> chunk-download -> assemble
-#     pipeline is exercised against real S3-compatible storage.
+#   * the roost sync engine additionally runs against an S3 stand-in for R2
+#     (versitygw, test/infra/docker-compose.yml). That is the only place the
+#     manifest-fetch -> chunk-download -> assemble pipeline is exercised
+#     against real S3-compatible storage.
 on:
   pull_request:
     paths:
@@ -148,8 +149,8 @@ jobs:
         run: python -c "import firebase_client, owlette_service, configure_site"
 
   sync-pipeline:
-    name: roost sync engine against minio
-    # ubuntu: MinIO is a Linux container, and docker + compose v2 are
+    name: roost sync engine against an s3 stand-in
+    # ubuntu: the stand-in is a Linux container, and docker + compose v2 are
     # preinstalled here. The tests run on the runner itself — the sys_platform
     # markers in agent/requirements.txt install the sync modules' dependencies
     # on Linux, which is what retired the containerised stub rig this job used
@@ -177,11 +178,10 @@ jobs:
           python -m pip install -r agent/requirements.txt -r test/infra/agent-runner/requirements.txt
 
       # test/infra/docker-compose.yml stays the one definition of the stand-in:
-      # the quay.io image pins (MinIO's Docker Hub images are behind
-      # authentication), the healthcheck --wait blocks on, and the bucket
-      # policy parity check init-buckets runs before any test sees a bucket.
-      - name: start minio
-        run: docker compose -f test/infra/docker-compose.yml up -d --wait minio
+      # the image pins, the healthcheck --wait blocks on, and the deny-anonymous
+      # parity check init-buckets runs before any test sees a bucket.
+      - name: start the s3 stand-in
+        run: docker compose -f test/infra/docker-compose.yml up -d --wait s3
 
       - name: create buckets and check deny-anonymous parity
         run: docker compose -f test/infra/docker-compose.yml run --rm init-buckets
@@ -197,7 +197,7 @@ jobs:
           # arm names /var/lib/owlette; the override names a tree the runner
           # can write.
           OWLETTE_DATA_ROOT: /tmp/owlette-data
-          # Compose publishes MinIO on the runner's loopback, not on a
+          # Compose publishes the stand-in on the runner's loopback, not on a
           # container network, so the endpoint is localhost here.
           OWLETTE_R2_ENDPOINT: http://localhost:9000
           OWLETTE_R2_ACCESS_KEY_ID: minioadmin
@@ -214,14 +214,14 @@ jobs:
           test/infra/agent-runner/tests/test_sync_pipeline_minio.py
           -q
 
-      # MinIO / init-buckets output is not in the pytest output, and an infra
+      # The stand-in's and init-buckets' output is not in the pytest output, and an infra
       # failure (bucket init, healthcheck) looks like an opaque connection
       # error from the test side without it.
       - name: dump compose logs
         if: failure()
         run: docker compose -f test/infra/docker-compose.yml logs --no-color
 
-      # -v drops the named minio-data volume; without it a rerun on a
+      # -v drops the named s3-data volume; without it a rerun on a
       # self-hosted or reused runner would inherit the previous run's chunks.
       - name: tear down
         if: always()

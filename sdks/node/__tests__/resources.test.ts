@@ -727,12 +727,30 @@ describe('owlette.installer', () => {
           uploaded_by: 'u1',
           release_date: '2026-04-28T00:00:00.000Z',
           deletedAt: null,
+          files: {
+            windows_x64: {
+              download_url: 'https://cdn.example/x.exe',
+              checksum_sha256: 'a'.repeat(64),
+              file_size: 123,
+              file_name: 'x.exe',
+              uploaded_at: 1,
+            },
+            linux_x64: {
+              download_url: 'https://cdn.example/x.deb',
+              checksum_sha256: 'b'.repeat(64),
+              file_size: 456,
+              file_name: 'x.deb',
+              uploaded_at: 2,
+            },
+          },
         },
       },
     ]);
     const latest = await owlette.installer.latest();
     expect(calls[0]!.url).toBe('https://dev.test/api/installer/latest');
     expect(latest.version).toBe('2.10.0');
+    expect(latest.files.linux_x64?.file_size).toBe(456);
+    expect(latest.files.macos_arm64).toBeUndefined();
   });
 
   it('upload -> POST, signed-url PUT, finalize with one idempotency key', async () => {
@@ -776,6 +794,52 @@ describe('owlette.installer', () => {
       expect(startHeaders['Idempotency-Key']).toMatch(/^sdk-installer-upload-/);
       expect(finalizeHeaders['Idempotency-Key']).toBe(startHeaders['Idempotency-Key']);
       expect(JSON.parse(String(calls[2]!.init.body)).checksum_sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.parse(String(calls[0]!.init.body)).platform).toBeUndefined();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('upload -> sends platform in the POST body when given', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'owlette-node-installer-test-'));
+    const filePath = join(tempDir, 'Owlette-Installer-v2.11.0.deb');
+    writeFileSync(filePath, Buffer.from('fake installer bytes'));
+    try {
+      const { owlette, calls } = makeOwlette([
+        {
+          status: 200,
+          body: {
+            uploadUrl: 'https://signed.example/upload',
+            uploadId: 'upload-1',
+            storagePath: 'agent-installers/versions/2.11.0/Owlette-Installer-v2.11.0.deb',
+            platform: 'linux_x64',
+            expiresAt: '2026-04-28T00:15:00.000Z',
+          },
+        },
+        { status: 200, body: '' },
+        {
+          status: 200,
+          body: {
+            version: '2.11.0',
+            download_url: 'https://cdn.example/Owlette-Installer-v2.11.0.deb',
+            checksum_sha256: 'a'.repeat(64),
+            file_size: 20,
+            platform: 'linux_x64',
+            files: {},
+          },
+        },
+      ]);
+
+      const result = await owlette.installer.upload({
+        filePath,
+        version: '2.11.0',
+        platform: 'linux_x64',
+      });
+
+      const startBody = JSON.parse(String(calls[0]!.init.body));
+      expect(startBody.fileName).toBe('Owlette-Installer-v2.11.0.deb');
+      expect(startBody.platform).toBe('linux_x64');
+      expect(result.platform).toBe('linux_x64');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

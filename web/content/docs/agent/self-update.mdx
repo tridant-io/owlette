@@ -22,6 +22,8 @@ The self-update is handled by the service command handler in `owlette_service.py
 
 The service does not stop itself and run the installer inline. Task Scheduler owns the installer process so it can continue after the service stops.
 
+On macOS and Linux the same command carries that platform's file instead: the agent downloads it as `owlette-update.pkg` or `owlette-update.deb`, checks that it is that kind of package before verifying the checksum, and hands it to the OS outside its own process — `installer -pkg … -target /` as a run-once launchd job, or `apt-get install` as a transient systemd unit after an `apt-get install --simulate` check passes.
+
 ---
 
 ## triggering an update
@@ -33,7 +35,7 @@ The service does not stop itself and run the installer inline. Task Scheduler ow
 3. Select the machines to update. Only outdated machines are listed, and an offline machine cannot be selected — the agent has to be online to receive the command.
 4. Confirm the update.
 
-The dashboard uses the current latest installer metadata automatically and sends an `update_owlette` command with the installer URL, expected SHA-256 checksum, and target version.
+The dashboard uses the current latest installer metadata automatically and sends an `update_owlette` command with the installer URL, expected SHA-256 checksum, and target version. It picks the file by the machine's platform — the `osFamily_arch` key it reports: `windows_x64`, `macos_arm64` or `linux_x64` (an agent that reports neither is treated as Windows x64). A machine whose platform the latest version has no file for is skipped and named in the result with the reason.
 
 ### on the machine itself
 
@@ -54,10 +56,16 @@ The installer upgrades in place and avoids deleting the ProgramData configuratio
 
 ## update command payload
 
+`installer_url` is the latest version's file for the machine's platform:
+
+- Windows (`windows_x64`): `Owlette-Installer-v2.1.8.exe`
+- macOS (`macos_arm64`): `Owlette-Installer-v2.1.8.pkg`
+- Linux (`linux_x64`): `Owlette-Installer-v2.1.8.deb`
+
 ```json
 {
   "type": "update_owlette",
-  "installer_url": "https://firebasestorage.googleapis.com/.../Owlette-Installer-v2.1.8.exe",
+  "installer_url": "https://firebasestorage.googleapis.com/.../<the file for this machine's platform>",
   "target_version": "2.1.8",
   "checksum_sha256": "2f4c2f0e6d8f0c2f2a4f6f7a8b9c0d1e2f3a4b5c6d7e8f90123456789abcdef0",
   "deployment_id": "deploy_abc123"
@@ -68,7 +76,7 @@ Required fields:
 
 | field | required | notes |
 |-------|----------|-------|
-| `installer_url` | yes | Download URL for the Windows installer. |
+| `installer_url` | yes | Download URL for the installer file for this machine's platform (`.exe`, `.pkg` or `.deb`). |
 | `checksum_sha256` | yes | The command is refused without a checksum. |
 | `target_version` | recommended | Used for post-restart verification. If omitted, the agent tries to infer it from `vX.Y.Z` in the URL or records `unknown`. |
 | `deployment_id` | no | Passed through when updating command progress and completion. |

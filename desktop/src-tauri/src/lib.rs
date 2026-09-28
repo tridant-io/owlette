@@ -9,6 +9,10 @@ mod shell_open;
 mod startup_link;
 mod tray;
 mod watchers;
+#[cfg(unix)]
+mod jobrunner;
+#[cfg(target_os = "macos")]
+mod tcc;
 mod window_state;
 
 use std::sync::Mutex;
@@ -79,6 +83,8 @@ pub fn run() {
       commands::owlette_data_root,
       commands::launch_args,
       commands::hostname,
+      commands::screen_recording_granted,
+      commands::open_screen_recording_settings,
       commands::startup_link_enabled,
       commands::set_startup_link,
       commands::read_owlette_json,
@@ -124,11 +130,25 @@ pub fn run() {
       }
       app.handle().plugin(logger.build())?;
 
+      // A menubar app: no Dock icon until the window is opened (owner ruling,
+      // 2026-09-25). `show_main_window` / `hide_main_window` switch the policy
+      // with the window, so the icon comes and goes with it.
+      #[cfg(target_os = "macos")]
+      app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
       let root = paths::data_root();
 
       // Running agent-CLI children, so a pairing poll can be cancelled from its dialog and
       // none outlive the app.
       app.manage(agent_cli::Runs::default());
+
+      // Off Windows the daemon has no display: captures and notifications
+      // arrive as job files for this app to run (tri-platform 4.3), and on
+      // macOS the daemon is told about this app's Screen Recording grant (4.4).
+      #[cfg(unix)]
+      app.manage(jobrunner::spawn(app.handle().clone(), &root));
+      #[cfg(target_os = "macos")]
+      tcc::spawn(&root);
 
       // Publish our PID so the service stops spawning trays at us. Process-lifetime;
       // `tmp/gui.pid` exists only while the window is up.

@@ -79,7 +79,6 @@ describe('assertNoKeyMaterial', () => {
         state: 'live',
         createdBy: 'uid-1',
         startedAt: 1,
-        absoluteExpiresAt: 2,
         endReason: 'idle',
         viewers: [{ viewerId: 'v1', uid: 'uid-1', ctl: true, joinedAt: 1, leaseExpiresAt: 2 }],
       }),
@@ -95,7 +94,6 @@ describe('writes', () => {
       sid: SID,
       createdBy: 'uid-1',
       startedAt: 1000,
-      absoluteExpiresAt: 2000,
     });
 
     expect(mockPath).toEqual([
@@ -117,8 +115,10 @@ describe('writes', () => {
       machineId: MACHINE,
       sid: SID,
       endReason: 'killed',
+      viewerReason: 'kill',
       endedAt: 5000,
     });
+    expect(mockSet.mock.calls[0][0]).toMatchObject({ viewerReason: 'kill' });
     expect(mockSet.mock.calls[0][0]).toMatchObject({
       state: 'ended',
       endReason: 'killed',
@@ -188,7 +188,6 @@ describe('reads', () => {
       state: 'live',
       createdBy: '',
       startedAt: 0,
-      absoluteExpiresAt: 0,
       viewers: [{ viewerId: 'v1', uid: '', ctl: false, joinedAt: 0, leaseExpiresAt: 0 }],
     });
   });

@@ -59,6 +59,8 @@ A process is considered unexpectedly stopped when:
 - Its stored PID no longer exists.
 - Launch mode is still active, so the agent can relaunch it within the configured restart budget.
 
+The agent then reads how the process ended. An exit code of 0 is a **clean exit**, never a crash: the app finished, or somebody closed it. The agent logs a `process_exited` event and relaunches the process without a crash alert, screenshot or hoot investigation, and without spending its relaunch budget. When the clean exit comes within a minute of launch, the relaunch waits a minute, so a program that quits straight away (a launcher that hands off to another executable) is started once a minute rather than every five seconds. Everything else is a crash: a non-zero exit code (shown in the event details), a signal, or an exit the agent could not read. A process the agent re-adopted after a service restart is read too: on Windows through a handle it holds on the process, on Linux through the kernel's process-exit events, and on macOS through the launchd job the process runs as. The one exit it cannot read is that of a process on macOS that owlette found already running rather than launched.
+
 ### 3. hang detection (multi-stage)
 
 The agent uses a progressive approach to detect frozen applications:
@@ -76,7 +78,7 @@ The agent does not kill on the first failed responsiveness check; it waits until
 
 When a crash is detected and launch mode is active:
 
-1. Agent increments the **relaunch counter**
+1. Agent increments the **relaunch counter** (a clean exit does not)
 2. If under the limit (`relaunch_attempts`), restart the process
 3. Wait `time_delay` seconds before starting
 4. Wait `time_to_init` seconds before monitoring responsiveness

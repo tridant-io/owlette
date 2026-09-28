@@ -23,6 +23,7 @@ import { Fragment, useEffect, useState } from 'react';
 import type { SwoopSession } from '@/lib/swoop/features';
 import type { SwoopStats } from '@/hooks/useSwoopSession';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';
+import type { SwoopCodec } from '@/lib/swoop/protocol';
 
 export interface SwoopStatsOverlayProps {
   session: SwoopSession | null;
@@ -37,6 +38,9 @@ interface Row {
 }
 
 const show = (ms: number | null): string => (ms === null ? '—' : `${ms.toFixed(1)} ms`);
+
+/** the codec the picture is arriving in, from the frame's own meta record. */
+const CODEC_LABEL: Record<SwoopCodec, string> = { h264: 'H.264', hevc: 'HEVC', av1: 'AV1' };
 
 export type SwoopPathProfile = 'direct' | 'relay-udp' | 'relay-tls';
 
@@ -136,9 +140,9 @@ function stageRows(frame: FrameObservation | null, offsetUs: number | null): Row
       { label: 'capture → encode', ms: null },
       { label: 'encode → send', ms: null },
       { label: 'send → arrive', ms: null },
-      { label: 'arrive → decode', ms: null },
-      { label: 'decode → present', ms: null },
-      { label: 'present → display', ms: null },
+      { label: 'decode', ms: null },
+      { label: 'wait for paint', ms: null },
+      { label: 'paint → display', ms: null },
     ];
   }
   const { arrivalMs, decodeMs, presentedMs, expectedDisplayMs } = frame;
@@ -152,12 +156,16 @@ function stageRows(frame: FrameObservation | null, offsetUs: number | null): Row
           ? null
           : (arrivalMs * 1000 + offsetUs - frame.tSendUs) / 1000,
     },
-    { label: 'arrive → decode', ms: decodeMs },
+    // the decoder's own time, as the ua reports it.
+    { label: 'decode', ms: decodeMs },
     {
-      label: 'decode → present',
+      // a decoded frame waits for the next paint: on a 60 hz display this
+      // swings between 0 and one refresh (16.7 ms), and that is not decode.
+      label: 'wait for paint',
       ms: arrivalMs === null || decodeMs === null ? null : presentedMs - (arrivalMs + decodeMs),
     },
-    { label: 'present → display', ms: expectedDisplayMs - presentedMs },
+    // the painted frame reaches the glass one refresh later.
+    { label: 'paint → display', ms: expectedDisplayMs - presentedMs },
   ];
 }
 
@@ -179,9 +187,9 @@ export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayPro
   return (
     <aside
       aria-label="latency breakdown"
-      className="pointer-events-none absolute right-3 top-3 w-60 rounded-md border border-border bg-card/90 p-3 text-xs text-muted-foreground shadow-sm"
+      className="pointer-events-none absolute right-3 top-3 w-72 rounded-md border border-border bg-card/90 p-3 text-xs text-muted-foreground shadow-sm"
     >
-      <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 whitespace-nowrap [&>dd]:tabular-nums">
         {rows.map((row) => (
           <Fragment key={row.label}>
             <dt>{row.label}</dt>
@@ -200,6 +208,8 @@ export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayPro
         <dd className="text-right font-mono text-foreground">
           {presenter.width > 0 ? `${presenter.width}×${presenter.height}` : '—'}
         </dd>
+        <dt>codec</dt>
+        <dd className="text-right font-mono text-foreground">{frame ? CODEC_LABEL[frame.codec] : '—'}</dd>
         <dt>gaps / duplicates</dt>
         <dd className="text-right font-mono text-foreground">
           {presenter.gaps} / {presenter.duplicates}

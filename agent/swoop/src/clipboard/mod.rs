@@ -1,20 +1,23 @@
 //! Clipboard, both directions, text and image.
 //!
-//! Its size cap is derived from the transport's buffering limit, not picked —
+//! Its chunk size is derived from the transport's buffering limit, not picked —
 //! spike 0.2 §13.4. str0m's SCTP sender caps buffering at 128 KiB across
 //! **every** channel at once (`transport::rtc`'s own queue sits at half of it),
 //! and clipboard rides `swoop-control` beside the control traffic rather than
 //! taking a sixth channel, so the budget is shared five ways and not six. One
 //! chunk is therefore 16 KiB — ≈22 KiB once base64 inside JSON, which fits
-//! `session::OUTBOX_BURST_BYTES` with a `swoop-meta` record's room beside it —
-//! and a whole transfer is 256 KiB of text or 2 MiB of image. Nothing here
-//! picked those numbers; they are what the buffer allows, and
-//! `signal::messages::channel` is where they live.
+//! `session::OUTBOX_BURST_BYTES` with a `swoop-meta` record's room beside it.
+//! The buffer bounds a chunk, not a transfer: the session paces the chunks and
+//! holds them back while a viewer's transport queue is full, so a whole
+//! transfer is 256 KiB of text or 15 MiB of image — room for a compressed 4K
+//! screenshot (owner-approved, 2026-09-27). `signal::messages::channel` is
+//! where those numbers live.
 //!
 //! # What is carried, and what is not
 //!
 //! - `CF_UNICODETEXT`, the registered `"PNG"` format, and `CF_DIB`/`CF_DIBV5`
-//!   converted to a PNG by [`formats::dib_to_png`].
+//!   compressed to a PNG by WIC (`wic`), or written by the stored encoder in
+//!   [`formats::dib_to_png`] when WIC fails.
 //! - **`CF_HDROP` is refused**, and a clipboard holding one is left alone
 //!   entirely rather than synced as the text of the paths: §5 carries no file
 //!   lists and this protocol has no file transfer.
@@ -23,10 +26,14 @@
 //!   `OpenInputDesktop` + `GetUserObjectInformationW` rather than taken from
 //!   another feature, so the refusal holds whether or not anything else is
 //!   watching for the switch.
-//! - Host→viewer images go out as PNG; viewer→host images are put back under
-//!   the registered `"PNG"` format only. Rebuilding a `CF_DIB` from a PNG needs
-//!   a decompressor this crate does not carry, and the browsers and image
-//!   editors this is for all read the registered format.
+//! - Host→viewer images go out as PNG. Viewer→host images are put back as the
+//!   registered `"PNG"` format and, decoded by WIC, as a 32-bit `CF_DIBV5`
+//!   beside it, so an application that reads only bitmaps (Paint, most Win32
+//!   tools) can paste them too — Windows makes `CF_DIB` and `CF_BITMAP` from
+//!   the `CF_DIBV5` when one is asked for. The bitmap is promised (delayed
+//!   rendering) and decoded when an application first asks for it, so the
+//!   ctrl+v that follows a clip never waits on the decode. A png WIC cannot
+//!   read renders nothing, and the paste finds `"PNG"` alone.
 //!
 //! # Gating and the audit trail
 //!
@@ -47,6 +54,8 @@
 
 pub mod formats;
 pub mod listener;
+#[cfg(windows)]
+pub mod wic;
 
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -381,6 +390,7 @@ impl Outgoing {
 mod tests {
     use super::*;
     use crate::session::OUTBOX_BURST_BYTES;
+    use crate::signal::messages::channel::CLIPBOARD_IMAGE_MAX_BYTES;
     use base64::prelude::{Engine as _, BASE64_STANDARD};
 
     fn clip(fmt: ClipFormat, seq: u64, chunk: u32, chunks: u32, total: u64, data: &[u8]) -> Clipboard {
@@ -461,7 +471,9 @@ mod tests {
         assert!(assembly.is_refused(3), "the rest of it is dropped in silence");
 
         let mut assembly = Assembly::default();
-        let over = clip(ClipFormat::Png, 4, 0, 256, 3 * 1024 * 1024, b"x");
+        let total = CLIPBOARD_IMAGE_MAX_BYTES + 1;
+        let chunks = total.div_ceil(CLIPBOARD_CHUNK_MAX_BYTES) as u32;
+        let over = clip(ClipFormat::Png, 4, 0, chunks, total, b"x");
         assert_eq!(assembly.accept(&over), Err(Refusal::ClipboardTooLarge));
     }
 

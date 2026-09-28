@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -21,8 +21,20 @@ if TYPE_CHECKING:
 
 
 @dataclass(slots=True)
+class InstallerFile:
+    """One platform's installer within a version."""
+
+    download_url: str
+    checksum_sha256: str | None
+    file_size: int | None
+    file_name: str | None
+    uploaded_at: int | None
+
+
+@dataclass(slots=True)
 class InstallerVersion:
     version: str
+    # the windows installer; an alias of files["windows_x64"].download_url
     download_url: str | None
     checksum_sha256: str | None
     release_notes: str | None
@@ -33,9 +45,23 @@ class InstallerVersion:
     release_date: str | None = None
     promoted_at: int | None = None
     promoted_by: str | None = None
+    # keyed windows_x64 / macos_arm64 / linux_x64; a version uploaded before
+    # per-platform files carries its windows installer under windows_x64
+    files: dict[str, InstallerFile] = field(default_factory=dict)
+
+
+def _parse_file(raw: dict[str, Any]) -> InstallerFile:
+    return InstallerFile(
+        download_url=str(raw.get("download_url", "")),
+        checksum_sha256=raw.get("checksum_sha256"),
+        file_size=raw.get("file_size"),
+        file_name=raw.get("file_name"),
+        uploaded_at=raw.get("uploaded_at"),
+    )
 
 
 def _parse_version(raw: dict[str, Any]) -> InstallerVersion:
+    files = raw.get("files")
     return InstallerVersion(
         version=str(raw.get("version", "")),
         download_url=raw.get("download_url"),
@@ -48,6 +74,11 @@ def _parse_version(raw: dict[str, Any]) -> InstallerVersion:
         release_date=raw.get("release_date"),
         promoted_at=raw.get("promoted_at"),
         promoted_by=raw.get("promoted_by"),
+        files={
+            str(k): _parse_file(v)
+            for k, v in (files.items() if isinstance(files, dict) else ())
+            if isinstance(v, dict)
+        },
     )
 
 
@@ -100,13 +131,17 @@ class Installer:
         file_path: str | os.PathLike[str],
         *,
         version: str,
+        platform: str | None = None,
         release_notes: str | None = None,
         set_as_latest: bool = True,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Upload an installer binary: POST for a signed url → PUT bytes → PUT finalize.
 
-        One ``Idempotency-Key`` covers the POST and the finalize PUT.
+        ``platform`` is ``windows_x64``, ``macos_arm64`` or ``linux_x64``; the api
+        derives it from the file extension (``.exe`` / ``.pkg`` / ``.deb``) when
+        omitted and rejects a mismatch. One ``Idempotency-Key`` covers the POST
+        and the finalize PUT.
         """
         path = Path(file_path)
         binary = path.read_bytes()
@@ -122,6 +157,8 @@ class Installer:
             "fileName": file_name,
             "setAsLatest": set_as_latest,
         }
+        if platform is not None:
+            start_body["platform"] = platform
         if release_notes is not None:
             start_body["releaseNotes"] = release_notes
 
@@ -198,4 +235,4 @@ class Installer:
         return resp.data if isinstance(resp.data, dict) else {}
 
 
-__all__ = ["Installer", "InstallerVersion"]
+__all__ = ["Installer", "InstallerFile", "InstallerVersion"]

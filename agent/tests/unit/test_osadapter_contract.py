@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import plistlib
+import shlex
 import shutil
 import stat
 import subprocess
@@ -64,8 +65,8 @@ SPAWN_UID = 1000
 # the per-OS arms' own.
 POSIX_OPERATIONS = (
     'capture_screen', 'console_user', 'data_root', 'desktop_process_name',
-    'json_lock', 'launch_managed_process', 'notify', 'run_job', 'session_env',
-    'spawn_as_user',
+    'exit_code', 'json_lock', 'launch_managed_process', 'notify', 'run_job',
+    'session_env', 'spawn_as_user', 'watch_exit',
 )
 
 PENDING_REBOOT_KEYS = {
@@ -130,8 +131,8 @@ def _documented(name):
 class TestSurface:
     """The operation list itself."""
 
-    def test_the_surface_is_nineteen_operations(self):
-        assert len(osadapter.OPERATIONS) == 19
+    def test_the_surface_is_twenty_one_operations(self):
+        assert len(osadapter.OPERATIONS) == 21
 
     def test_every_operation_is_implemented(self, adapter):
         missing = [
@@ -165,6 +166,17 @@ def test_a_platform_with_an_arm_runs_what_needs_one():
     the package would otherwise error at setup.
     """
     assert osadapter.get() is not None
+
+
+def test_unread_exit_codes_are_bounded():
+    """A kill the service asked for itself never reads its exit back, so the
+    codes nobody reads must not pile up for the life of the daemon."""
+    codes = {}
+    for pid in range(osadapter.EXIT_CODES_KEPT + 5):
+        osadapter.keep_exit_code(codes, pid, 0)
+
+    assert len(codes) == osadapter.EXIT_CODES_KEPT
+    assert 0 not in codes and osadapter.EXIT_CODES_KEPT + 4 in codes
 
 
 def test_a_platform_with_no_arm_has_nothing_to_stub(monkeypatch):
@@ -221,6 +233,13 @@ class TestBehaviour:
         with pytest.raises(ValueError):
             adapter.service_control('obliterate', 'OwletteService')
 
+    def test_a_process_the_agent_never_watched_has_no_exit_code(self, adapter):
+        """None is "unknown", which the service books as the crash it always did."""
+        child = subprocess.Popen([sys.executable, '-c', ''])
+        child.wait(30)
+
+        assert adapter.exit_code(child.pid) is None
+
 
 @pytest.mark.windows
 class TestWindows:
@@ -228,6 +247,29 @@ class TestWindows:
 
     def test_streamer_capable_is_unconditionally_true(self, win):
         assert win.streamer_capable() is True
+
+    @pytest.mark.parametrize('code', [0, 3])
+    def test_a_watched_process_reports_how_it_ended_once(self, win, code):
+        """The service is not the process's parent - a helper in the user's
+        session launches it and exits - so the code is read through a handle
+        the service took while the process ran."""
+        child = _exits_on_cue()
+        win.watch_exit(child.pid)
+
+        assert win.exit_code(child.pid) is None
+        child.communicate(f'{code}\n', timeout=30)
+        assert win.exit_code(child.pid) == code
+        assert win.exit_code(child.pid) is None
+
+    def test_a_watched_process_that_ended_is_not_still_running(self, win):
+        """A held handle keeps the process object, not the process: the pid
+        check the monitor loop makes must still read it as gone."""
+        child = _exits_on_cue()
+        win.watch_exit(child.pid)
+        child.communicate('0\n', timeout=30)
+
+        assert not psutil.pid_exists(child.pid)
+        assert win.exit_code(child.pid) == 0
 
     def test_desktop_process_name_is_the_tray_image_name(self, win):
         import shared_utils
@@ -1459,6 +1501,46 @@ class TestPosix:
 class TestLinux:
     """The Linux arm: the nine operations the shared POSIX half leaves to it."""
 
+    @pytest.mark.parametrize('code', [0, 3])
+    def test_a_spawned_process_reports_how_it_ended_once(self, linux, posix, code):
+        """Read even when another spawn reaped it first: that release is what
+        stops the pid reading as a live zombie, and it used to drop the code."""
+        child = _exits_on_cue()
+        pid = posix._remember(child)
+
+        assert linux.exit_code(pid) is None
+        child.stdin.write(f'{code}\n')
+        child.stdin.close()
+        _wait_for(lambda: _status(pid) in (psutil.STATUS_ZOMBIE, None))
+        posix._reap_finished()
+
+        assert linux.exit_code(pid) == code
+        assert linux.exit_code(pid) is None
+
+    def test_a_process_ended_by_a_signal_is_not_a_clean_exit(self, linux, posix):
+        child = _exits_on_cue()
+        pid = posix._remember(child)
+        os.kill(pid, 9)
+        _wait_for(lambda: _status(pid) in (psutil.STATUS_ZOMBIE, None))
+
+        assert linux.exit_code(pid) == -9
+
+    @pytest.mark.parametrize('script, code', [
+        ('sleep 2; exit 0', 0),
+        ('sleep 2; exit 3', 3),
+        ('sleep 2; kill -9 $$', -9),
+    ])
+    def test_a_process_adopted_after_a_restart_reports_how_it_ended(
+            self, linux, script, code):
+        """Not the daemon's child - init reaps it - so only the kernel's exit
+        notice says how it ended. Without it, somebody closing an app the
+        daemon re-adopted was booked as a crash after every agent update."""
+        pid = _an_orphan(script)
+        linux.watch_exit(pid)
+        _wait_for(lambda: not psutil.pid_exists(pid), seconds=10)
+
+        assert linux.exit_code(pid) == code
+
     def test_the_seat_is_the_type_logind_reports(self, linux, posix, monkeypatch):
         """logind's Type, and not a variable read off the session leader: on
         GDM that leader is a root-owned PAM worker which declares nothing, so
@@ -1995,6 +2077,112 @@ class TestDarwin:
 
         printed = subprocess.run(['launchctl', 'print', domain], capture_output=True, text=True)
         assert label not in printed.stdout
+
+    @pytest.mark.parametrize('adopted', [False, True])
+    @pytest.mark.parametrize('program, clean', [
+        (['/bin/sleep', '2'], True),
+        (['/bin/sh', '-c', 'sleep 2; exit 3'], False),
+    ])
+    def test_launchd_reports_how_a_session_job_ended(
+            self, darwin, posix, program, clean, adopted):
+        """Measured against launchd itself, which is the only place the status
+        column's format is defined: a clean exit reads 0 and nothing else does.
+        Adopted, the job is found again the way a restarted daemon finds it."""
+        uid = os.getuid()
+        if subprocess.run(['launchctl', 'print', f'gui/{uid}'], capture_output=True).returncode:
+            if os.environ.get('GITHUB_ACTIONS') == 'true':
+                pytest.fail(f'no GUI domain for uid {uid} on the CI runner')
+            pytest.skip(f'no GUI domain for uid {uid} on this machine')
+
+        pid = posix.spawn_as_user(program, uid)
+        if adopted:
+            del darwin._session_jobs[pid]
+            posix.watch_exit(pid)
+        try:
+            _wait_for(lambda: not psutil.pid_exists(pid), seconds=10)
+            code = darwin.exit_code(pid)
+        finally:
+            darwin._sweep_session_jobs(f'gui/{uid}', time.monotonic() + 30)
+
+        assert code is not None
+        assert (code == 0) is clean
+
+    def test_a_session_job_reports_how_it_ended_once(self, darwin, monkeypatch):
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=os.getpid())
+        pid = darwin._spawn_in_gui_domain(['/usr/local/bin/player'], os.getuid(), {})
+        label = launchd.jobs[0][1]['Label']
+
+        launchd.services = f'\t\t{pid}      - \t{label}\n'
+        assert darwin.exit_code(pid) is None
+        launchd.services = f'\t\t       0      0 \t{label}\n'
+        assert darwin.exit_code(pid) == 0
+        assert darwin.exit_code(pid) is None
+
+    def test_a_job_adopted_after_a_restart_is_found_by_its_label(
+            self, darwin, monkeypatch):
+        """A restarted daemon has lost the map from pid to job; launchd names
+        the job in its process's environment, which is how it is found again."""
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=os.getpid())
+        label = f'{darwin.SESSION_JOB_PREFIX}{uuid.uuid4().hex}'
+        monkeypatch.setattr(
+            psutil.Process, 'environ', lambda self: {'XPC_SERVICE_NAME': label})
+        child = _exits_on_cue()
+        try:
+            darwin.watch_exit(child.pid)
+        finally:
+            _stop_child(child)
+        launchd.services = f'\t\t       0      0 \t{label}\n'
+
+        assert darwin.exit_code(child.pid) == 0
+
+    def test_a_process_that_is_no_job_of_ours_is_looked_up_once(
+            self, darwin, monkeypatch):
+        lookups = []
+        monkeypatch.setattr(
+            psutil.Process, 'environ', lambda self: lookups.append(self.pid) or {})
+        child = _exits_on_cue()
+        try:
+            for _ in range(3):
+                darwin.watch_exit(child.pid)
+        finally:
+            _stop_child(child)
+
+        assert lookups == [child.pid]
+        assert darwin.exit_code(child.pid) is None
+        assert child.pid not in darwin._session_jobs
+
+    def test_a_job_whose_login_ended_is_no_longer_tracked(self, darwin, monkeypatch):
+        """Logging out tears the whole GUI domain down, so its jobs never show
+        as exited and their tracking would outlive them for good."""
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=os.getpid())
+        pid = darwin._spawn_in_gui_domain(['/usr/local/bin/player'], os.getuid(), {})
+        launchd.services = ''
+        monkeypatch.setattr(darwin.psutil, 'pid_exists', lambda candidate: candidate != pid)
+
+        assert darwin.exit_code(pid) is None
+        assert pid not in darwin._session_jobs
+
+    def test_an_exit_the_next_spawn_swept_is_still_read(self, darwin, monkeypatch):
+        """Every spawn boots out the exited session jobs first, and another
+        entry's relaunch can land between this one's exit and the tick that
+        reads it: the sweep keeps the status of the job it boots out."""
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=os.getpid())
+        pid = darwin._spawn_in_gui_domain(['/usr/local/bin/player'], os.getuid(), {})
+        label = launchd.jobs[0][1]['Label']
+        launchd.services = f'\t\t       0      3 \t{label}\n'
+
+        # the next job is a process of its own: a job spawned under a pid
+        # whose code is still unread drops that code as its predecessor's.
+        other = _exits_on_cue()
+        try:
+            launchd.pid = other.pid
+            darwin._spawn_in_gui_domain(['/usr/local/bin/kiosk'], os.getuid(), {})
+        finally:
+            _stop_child(other)
+        launchd.services = ''
+
+        assert ['launchctl', 'bootout', f'gui/{os.getuid()}/{label}'] in launchd.calls
+        assert darwin.exit_code(pid) == 3
 
     def test_the_job_carries_the_command_its_directory_and_the_account(
             self, darwin, monkeypatch):
@@ -2733,6 +2921,22 @@ def _stop_child(child):
     child.wait()
 
 
+def _exits_on_cue():
+    """A child that runs until it is handed the exit code to end with."""
+    return subprocess.Popen(
+        [sys.executable, '-c', 'import sys; sys.exit(int(sys.stdin.readline()))'],
+        stdin=subprocess.PIPE, text=True)
+
+
+def _an_orphan(script):
+    """A process whose parent has already exited, as a managed process's has
+    once the daemon that started it restarts."""
+    started = subprocess.run(
+        ['sh', '-c', f'sh -c {shlex.quote(script)} >/dev/null 2>&1 & echo $!'],
+        capture_output=True, text=True, check=True)
+    return int(started.stdout)
+
+
 def _stop_pid(posix, pid):
     """Stop a process the arm spawned, and let the arm reap it as it does.
 
@@ -2843,11 +3047,19 @@ class _FakeJobRunner(threading.Thread):
         self.result = result
         self.delay = delay
         self.seen = None
+        self._served = set()
         self._stopped = threading.Event()
 
     def run(self):
         while not self._stopped.wait(0.02):
             for request in sorted(self.jobs.glob('*.json')):
+                # Once per request, as the real runner does: the daemon removes
+                # the request only after it has read the result, and a runner
+                # that served it again in that gap would rebuild the result
+                # directory the daemon had just removed (macos-15 CI, 2026-09-25).
+                if request.name in self._served:
+                    continue
+                self._served.add(request.name)
                 job = json.loads(request.read_text(encoding='utf-8'))
                 self.seen = job
                 # A runner slower than the caller's patience: the result lands

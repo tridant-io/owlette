@@ -93,6 +93,7 @@ describe('swoop audit rows', () => {
       ...base,
       sid: SID,
       endReason: 'killed',
+      viewerReason: 'kill',
       durationMs: 12_000,
     });
 
@@ -101,6 +102,7 @@ describe('swoop audit rows', () => {
     expect(row.metadata).toMatchObject({
       event: 'session_ended',
       endReason: 'killed',
+      viewerReason: 'kill',
       durationMs: 12_000,
     });
   });

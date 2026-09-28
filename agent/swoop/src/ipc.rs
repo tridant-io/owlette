@@ -10,7 +10,7 @@ use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::bundle::Indicator;
+use crate::bundle::{Indicator, Secret};
 
 /// Process exit codes. These are the plan's names registry, and the agent
 /// reports on them, so they are contract: add, never renumber.
@@ -72,6 +72,10 @@ pub enum LeftReason {
     Timeout,
     LeaseExpired,
     Kill,
+    /// The host is going away to come back: the service stopped, for an
+    /// update or a restart. The page starts its next session, where `Kill` is
+    /// somebody's decision and the page stops.
+    Restart,
 }
 
 /// Why the streamer is exiting, alongside the numeric code.
@@ -176,14 +180,33 @@ pub enum HostEventKind {
 pub enum Control {
     /// End the session and exit 0. `sid` names the session where the service
     /// has one; absent means "kill whatever is running" (§11's sid-only
-    /// contract).
+    /// contract). `reason` is absent on every kill that is somebody's
+    /// decision, and names the service's own stop, which viewers come back
+    /// from.
     Kill {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sid: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<KillReason>,
     },
     /// The answer to a `sas_request`. The service, not the streamer, calls
     /// `SendSAS`.
     SasResult { ok: bool },
+    /// A fresh host token for the room, minted by the service a minute before
+    /// the running one expires (PROTOCOL.md §8: host tokens live 300 s, and the
+    /// streamer holds no credential to mint its own). The streamer re-dials the
+    /// room with it; every viewer keeps its peer and its picture, because the
+    /// room announces nothing when a host socket goes.
+    Token { host_token: Secret },
+}
+
+/// Why the service sent a `kill`, where it says. Closed like every other
+/// vocabulary on this pipe: a reason this build does not know refuses the line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KillReason {
+    /// The service itself is stopping: an update, a restart, a reboot.
+    ServiceStop,
 }
 
 /// stdout, streamer → service. One object per line, drained on a daemon thread
@@ -218,6 +241,14 @@ pub enum Event {
     SasRequest {
         sid: String,
         viewer: String,
+    },
+    /// The signaling socket closed under a live session and the streamer
+    /// holds no credential to redial with: the service answers with a
+    /// `token` control line, which is the same road a scheduled refresh
+    /// takes. Repeated while the room stays unreachable, never faster than
+    /// the streamer's own ask interval.
+    TokenNeeded {
+        sid: String,
     },
     /// One row for `POST /api/agent/swoop/events`. The streamer is the only
     /// place most of these can be observed at all, and the service is the only
@@ -356,11 +387,53 @@ mod tests {
     #[test]
     fn a_kill_without_a_sid_means_whatever_is_running() {
         let control = parse_control(r#"{"type":"kill"}"#).expect("a bare kill is a control line");
-        assert_eq!(control, Control::Kill { sid: None });
+        assert_eq!(
+            control,
+            Control::Kill {
+                sid: None,
+                reason: None
+            }
+        );
         assert_eq!(
             serde_json::to_string(&control).expect("it serialises"),
             r#"{"type":"kill"}"#
         );
+    }
+
+    #[test]
+    fn a_kill_can_name_the_services_own_stop_and_nothing_else() {
+        let line = r#"{"type":"kill","sid":"sid_1","reason":"service_stop"}"#;
+        let control = parse_control(line).expect("a kill with a reason is a control line");
+        assert_eq!(
+            control,
+            Control::Kill {
+                sid: Some("sid_1".to_owned()),
+                reason: Some(KillReason::ServiceStop),
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&control).expect("it serialises"),
+            line
+        );
+
+        assert!(parse_control(r#"{"type":"kill","reason":"session_change"}"#).is_err());
+        assert!(parse_control(r#"{"type":"kill","reason":"service_stop","extra":1}"#).is_err());
+    }
+
+    #[test]
+    fn a_restart_is_its_own_word_on_viewer_left() {
+        assert_eq!(
+            serde_json::to_string(&LeftReason::Restart).expect("it serialises"),
+            r#""restart""#
+        );
+    }
+
+    #[test]
+    fn a_token_line_parses_and_never_prints_the_token() {
+        let control = parse_control(r#"{"type":"token","host_token":"eyJ.refresh.sig"}"#).expect("a token line");
+        let Control::Token { host_token } = &control else { panic!("not a token line") };
+        assert_eq!(host_token.expose(), "eyJ.refresh.sig");
+        assert!(!format!("{control:?}").contains("refresh"));
     }
 
     #[test]
@@ -488,6 +561,12 @@ mod tests {
             line,
             "{\"type\":\"host_event\",\"sid\":\"sid_1\",\"kind\":\"join_refused\"}"
         );
+    }
+
+    #[test]
+    fn a_token_needed_carries_the_sid_and_nothing_else() {
+        let line = serde_json::to_string(&Event::TokenNeeded { sid: "sid_1".to_owned() }).expect("serialise");
+        assert_eq!(line, r#"{"type":"token_needed","sid":"sid_1"}"#);
     }
 
     #[test]

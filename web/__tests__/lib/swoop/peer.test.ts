@@ -11,8 +11,10 @@ if (!('crypto' in globalThis)) {
 
 import { PLAYOUT_DELAY_URI, base64UrlDecode, type SignalingMessage } from '@/lib/swoop/protocol';
 import {
+  ANSWER_TIMEOUT_MS,
   DISCONNECTED_GRACE_MS,
   RELAY_PROBE_MS,
+  RESTART_ANSWER_TIMEOUT_MS,
   SwoopPeer,
   candidateType,
   createSwoopIdentity,
@@ -221,6 +223,8 @@ interface PeerHarness {
   state: FakePeerState;
   sent: SignalingMessage[];
   errors: SwoopPeerError[];
+  /** `error:<code>` and `closed:<reason>`, in the order the page is told. */
+  endings: string[];
   refreshes: number;
 }
 
@@ -235,6 +239,7 @@ afterEach(() => {
 function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): PeerHarness {
   const sent: SignalingMessage[] = [];
   const errors: SwoopPeerError[] = [];
+  const endings: string[] = [];
   const counters = { refreshes: 0, leases: 0 };
 
   const peer = new SwoopPeer({
@@ -247,7 +252,11 @@ function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): P
     refreshToken: async () => {
       counters.refreshes += 1;
     },
-    onError: (code) => errors.push(code),
+    onError: (code) => {
+      errors.push(code);
+      endings.push(`error:${code}`);
+    },
+    onClosed: (reason) => endings.push(`closed:${reason}`),
     leaseToken: async () => `viewer.jwt.${(counters.leases += 1)}`,
     factory: factoryFor(state, IDENTITY.certificate),
   });
@@ -258,6 +267,7 @@ function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): P
     state,
     sent,
     errors,
+    endings,
     get refreshes() {
       return counters.refreshes;
     },
@@ -377,6 +387,72 @@ describe('swoop peer — offer', () => {
     expect(h.state.offers).toHaveLength(1);
   });
 
+  it('does not re-send the offer on a host-ready that lands while the answer is being applied', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+    // the host answers the offer and, on our join, sends host-ready; the two
+    // cross, and the answer is mid-verification when host-ready arrives.
+    const applying = h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+    await h.peer.handleSignal({ type: 'host-ready', sid: SID, to: VIEWER_ID });
+    await applying;
+
+    expect(h.sent.map((m) => m.type)).toEqual(['offer']);
+    expect(h.state.remoteDescriptions).toHaveLength(1);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('gives up on a host that never answers the first offer', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+  });
+
+  it('counts the first offer’s wait from the moment the socket opens', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    // the page offers as soon as the dial is away, before the socket opens.
+    h.peer.signalOpen(false);
+    await h.peer.start();
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS * 3);
+    expect(h.errors).toEqual([]);
+    h.peer.signalOpen(true);
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+  });
+
+  it('a host-ready re-arms the wait: that host is alive and has only now seen the offer', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 5_000);
+    await h.peer.handleSignal({ type: 'host-ready', sid: SID, to: VIEWER_ID });
+    expect(h.sent.map((m) => m.type)).toEqual(['offer', 'offer']);
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+  });
+
+  it('an answer clears the wait for good', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS * 3);
+    expect(h.errors).toEqual([]);
+  });
+
   it('presents the viewer token as the first frame on swoop-control', async () => {
     const h = peerHarness();
     await h.peer.start();
@@ -402,6 +478,18 @@ describe('swoop peer — offer', () => {
     await h.peer.presentLease();
 
     expect(control.sent.map((frame) => JSON.parse(frame).token)).toEqual(['viewer.jwt.1', 'viewer.jwt.2']);
+  });
+
+  it('presents a token the renewer hands it as it is, without minting another', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+    const control = h.state.channels.find((c) => c.label === 'swoop-control')!;
+
+    control.onopen?.();
+    await settlePeer();
+    await h.peer.presentLease('renewed.jwt');
+
+    expect(control.sent.map((frame) => JSON.parse(frame).token)).toEqual(['viewer.jwt.1', 'renewed.jwt']);
   });
 
   it('ignores a host-ready for another session', async () => {
@@ -468,6 +556,29 @@ describe('swoop peer — the host fingerprint mac', () => {
     await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
 
     expect(h.state.remoteDescriptions).toEqual([{ type: 'answer', sdp: answerSdp() }]);
+    expect(h.errors).toEqual([]);
+    expect(h.peer.diagnostics().answered).toBe(true);
+  });
+
+  it('a second copy of the answer, arriving while the first is still being verified, is inert', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    // the host answered a re-sent copy of the offer too; the copies arrive a
+    // couple of ms apart, while the browser is still applying the first.
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+    const apply = pc.setRemoteDescription.bind(pc);
+    pc.setRemoteDescription = async (description: unknown) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await apply(description);
+    };
+    const answer = { type: 'answer' as const, to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC };
+    const first = h.peer.handleSignal(answer);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await h.peer.handleSignal(answer);
+    await first;
+
+    expect(h.state.remoteDescriptions).toHaveLength(1);
     expect(h.errors).toEqual([]);
     expect(h.peer.diagnostics().answered).toBe(true);
   });
@@ -555,9 +666,35 @@ describe('swoop peer — relay promotion', () => {
     expect(h.state.offers[1]).toEqual({ iceRestart: true });
 
     // a relay pair that survives the restart never earns a second one.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'promoted'),
+      mac: HOST_MAC,
+    });
     await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
     expect(h.state.restarts).toBe(1);
     expect(h.peer.diagnostics().iceRestarted).toBe(true);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('rolls back a promotion whose answer never comes, and keeps the relayed session', async () => {
+    jest.useFakeTimers();
+    const h = await connected('relay');
+    (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
+
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS);
+    expect(h.state.restarts).toBe(1);
+
+    // a host whose accept failed answers nothing. ending here would reconnect
+    // onto the same relay and promote again, every time the wait ran out.
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS);
+    expect(h.state.localDescriptions.at(-1)).toEqual({ type: 'rollback' });
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
+
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
+    expect(h.state.restarts).toBe(1);
   });
 
   it('leaves a direct pair alone', async () => {
@@ -628,8 +765,15 @@ describe('swoop peer — stage-2 browser turn', () => {
     expect(h.peer.diagnostics().browserRelayAdded).toBe(true);
 
     // and only once, however long it stays unconnected.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'stage2'),
+      mac: HOST_MAC,
+    });
     await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
     expect(state.configurations).toHaveLength(1);
+    expect(h.errors).toEqual([]);
   });
 
   it('leaves the browser relay out when the host trickled a relay candidate of its own', async () => {
@@ -719,8 +863,15 @@ describe('swoop peer — stage-2 browser turn', () => {
     expect(h.peer.diagnostics().promotionUsed).toBe(true);
 
     // and that is the end of it.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'promoted'),
+      mac: HOST_MAC,
+    });
     await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
     expect(state.restarts).toBe(2);
+    expect(h.errors).toEqual([]);
   });
 });
 
@@ -762,7 +913,7 @@ describe('swoop peer — restart triggers', () => {
     expect(h.state.restarts).toBe(0);
   });
 
-  it('restarts on failed at once, and gives up on the second one', async () => {
+  it('restarts on failed at once, and keeps restarting up a ladder rather than giving up', async () => {
     jest.useFakeTimers();
     const h = await live();
     const pc = h.peer.connection as unknown as FakePeerConnection;
@@ -772,12 +923,29 @@ describe('swoop peer — restart triggers', () => {
     expect(h.state.restarts).toBe(1);
     expect(h.errors).toEqual([]);
 
-    // a second failure with no connection in between is a path that is gone.
+    // the restart is answered and fails again: the second restart waits its
+    // rung (≤ 1 s), the third ≤ 2 s, and none of them ends the session.
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+      mac: HOST_MAC,
+    });
     pc.iceState('failed');
-    await jest.advanceTimersByTimeAsync(0);
-    expect(h.state.restarts).toBe(1);
-    expect(h.errors).toEqual(['ice_failed']);
-    expect(h.state.closed).toBe(1);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(h.state.restarts).toBe(2);
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'third'),
+      mac: HOST_MAC,
+    });
+    pc.iceState('failed');
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(h.state.restarts).toBe(3);
+    expect(h.peer.restartAttempts()).toBe(3);
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
   });
 
   it('earns a fresh restart once the link came back in between', async () => {
@@ -859,6 +1027,109 @@ describe('swoop peer — the restart answer', () => {
       type: 'answer',
       sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
     });
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
+  });
+
+  /** connected on the first answer and still up, with a host-asked restart outstanding. */
+  async function restartingWhileUp(): Promise<PeerHarness> {
+    const h = peerHarness();
+    await h.peer.start();
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'first'),
+      mac: HOST_MAC,
+    });
+    (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
+    await h.peer.handleSignal({ type: 'host-ready', sid: SID, to: VIEWER_ID });
+    expect(h.state.restarts).toBe(1);
+    return h;
+  }
+
+  it('ends as host_silent when a restart on a link that is down goes unanswered with the socket open', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+
+    // the offer reached the room and nothing came back: a host silent with
+    // our socket open is dead or wedged, and there is no working session left
+    // to keep. a new one is right.
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+    expect(h.state.closed).toBe(1);
+  });
+
+  it('waits on a restart only while its answer can come back', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+
+    // the viewer's own path is down: the offer sits queued in signalling, and
+    // the host may well be holding this viewer the whole time.
+    h.peer.signalOpen(false);
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS * 30);
+    expect(h.errors).toEqual([]);
+
+    // back online, the queued offer gets its whole wait from here.
+    h.peer.signalOpen(true);
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS - 1);
+    expect(h.errors).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(h.errors).toEqual(['host_silent']);
+  });
+
+  it('rolls back an unanswered restart on a link that is still up, and restarts again later', async () => {
+    jest.useFakeTimers();
+    const h = await restartingWhileUp();
+
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS);
+    expect(h.state.localDescriptions.at(-1)).toEqual({ type: 'rollback' });
+    expect(h.errors).toEqual([]);
+    expect(h.state.closed).toBe(0);
+
+    // nothing is outstanding now: a link that fails later restarts at once,
+    // from the bottom of the ladder.
+    (h.peer.connection as unknown as FakePeerConnection).iceState('failed');
+    await jest.advanceTimersByTimeAsync(0);
+    expect(h.state.restarts).toBe(2);
+    expect(h.peer.restartAttempts()).toBe(1);
+  });
+
+  it('ends as host_silent when the browser refuses the rollback', async () => {
+    jest.useFakeTimers();
+    const h = await restartingWhileUp();
+    (h.peer.connection as unknown as FakePeerConnection).setLocalDescription = async () => {
+      throw new Error('rollback refused');
+    };
+
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS);
+    expect(h.errors).toEqual(['host_silent']);
+    expect(h.state.closed).toBe(1);
+  });
+
+  it('never rolls back a first offer, whatever ice reports', async () => {
+    jest.useFakeTimers();
+    const h = peerHarness();
+    await h.peer.start();
+    (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
+
+    await jest.advanceTimersByTimeAsync(ANSWER_TIMEOUT_MS);
+    expect(h.errors).toEqual(['host_silent']);
+    expect(h.state.localDescriptions).toHaveLength(1);
+  });
+
+  it('an answered restart clears the wait, and nothing fires after it', async () => {
+    jest.useFakeTimers();
+    const h = await restarting();
+
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'second'),
+      mac: HOST_MAC,
+    });
+    await jest.advanceTimersByTimeAsync(RESTART_ANSWER_TIMEOUT_MS * 2);
     expect(h.errors).toEqual([]);
     expect(h.state.closed).toBe(0);
   });
@@ -1022,6 +1293,42 @@ describe('swoop peer — trickle', () => {
 
     await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
     expect(h.state.remoteDescriptions).toHaveLength(0);
+  });
+});
+
+describe('swoop peer — endings', () => {
+  it('ignores a kill naming another session', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    await h.peer.handleSignal({ type: 'kill', sid: 'sid_someone_else' });
+    expect(h.state.closed).toBe(0);
+    expect(h.endings).toEqual([]);
+  });
+
+  it.each([
+    ['this session', SID],
+    ['no session, which means whatever is running', null],
+  ])('ends on a kill naming %s', async (_what, sid) => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    await h.peer.handleSignal({ type: 'kill', sid });
+    expect(h.state.closed).toBe(1);
+    expect(h.endings).toEqual(['closed:kill']);
+  });
+
+  it('an abort reports its code before it closes', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(),
+      mac: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    });
+    expect(h.endings).toEqual(['error:host_mac_mismatch', 'closed:host_mac_mismatch']);
   });
 });
 

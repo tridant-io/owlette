@@ -69,12 +69,16 @@ class FakeSpawn:
     """Injected ``spawn_backend``: the three calls SwoopManager makes."""
 
     def __init__(self, proc=None, verify_error=None, bundle_error=None, delay=0.0,
-                 post_error=None):
+                 post_error=None, bundle_error_after=None):
         self.proc = proc or FakeProc()
         self.verify_error = verify_error
         self.bundle_error = bundle_error
+        # raise `bundle_error` only from this fetch count on: the spawn's own
+        # fetch succeeds and a later refresh fails
+        self.bundle_error_after = bundle_error_after
         self.delay = delay
         self.spawned = 0
+        self.fetched = 0
         self.post_error = post_error
         self.posted = []
         self.post_attempts = 0
@@ -87,9 +91,14 @@ class FakeSpawn:
         return r'C:\x\swoop\owlette-swoop.exe'
 
     def fetch_bundle(self, sid, site_id, machine_id, auth_manager):
-        if self.bundle_error:
+        self.fetched += 1
+        if self.bundle_error and (self.bundle_error_after is None
+                                  or self.fetched >= self.bundle_error_after):
             raise self.bundle_error
-        return bytearray(json.dumps({'sid': sid, 'sessionKey': BUNDLE_SECRET}).encode())
+        return bytearray(json.dumps({
+            'sid': sid, 'sessionKey': BUNDLE_SECRET,
+            'hostToken': f'host-token-{self.fetched}',
+        }).encode())
 
     def spawn(self, exe_path, log_dir=None):
         self.spawned += 1
@@ -115,6 +124,12 @@ def make_manager(backend, firebase=None, on_refresh=None):
     return SwoopManager(
         firebase_client=firebase, on_refresh=on_refresh, spawn_backend=backend,
     )
+
+
+def session_ends(firebase):
+    """The details of every ``swoop_session_end`` the manager logged, in order."""
+    return [call.kwargs.get('details') for call in firebase.log_event.call_args_list
+            if call.args[0] == 'swoop_session_end']
 
 
 class TestSpawnRefusals:
@@ -168,6 +183,29 @@ class TestSpawnRefusals:
         assert backend.spawned == 0
         details = [call.kwargs.get('details', '') for call in firebase.log_event.call_args_list]
         assert any('spawn_rate_ceiling' in d for d in details)
+
+    def test_clean_exit_does_not_count_toward_the_ceiling(self, firebase):
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        now = time.monotonic()
+        manager._spawn_times = [now] * swoop_manager.SPAWN_CEILING
+
+        with manager._lock:
+            manager._apply_backoff(swoop_spawn.EXIT_OK)
+        assert len(manager._spawn_times) == swoop_manager.SPAWN_CEILING - 1
+
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+        assert manager.status()['lastRefusal'] is None
+
+    def test_crash_exit_keeps_its_spawn_in_the_window(self, firebase):
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager._spawn_times = [time.monotonic()]
+
+        with manager._lock:
+            manager._apply_backoff(20)
+        assert len(manager._spawn_times) == 1
 
     def test_backoff_window_refuses(self, firebase):
         backend = FakeSpawn()
@@ -268,6 +306,158 @@ class TestSessionLifecycle:
         assert proc.bundle_len and proc.bundle_len > 0
 
 
+class TestKillScope:
+    """A kill names the session it ends (PROTOCOL.md section 11): one for a
+    session already gone must not end the one that replaced it."""
+
+    def test_a_kill_for_another_sid_is_ignored_and_logged(self, firebase):
+        proc = FakeProc()
+        backend = FakeSpawn(proc=proc)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: manager.status()['state'] == swoop_manager.STATE_RUNNING)
+
+        manager.kill('swoop_kill sid=sid_0', sid='sid_0')
+        assert wait_for(lambda: any(
+            call.args[0] == 'swoop_kill_ignored' for call in firebase.log_event.call_args_list))
+        assert proc.written == []
+        assert manager.status()['sid'] == 'sid_1'
+        assert manager.status()['state'] == swoop_manager.STATE_RUNNING
+        manager.kill('test')
+
+    def test_a_kill_for_the_running_sid_names_it_on_the_kill_line(self, firebase):
+        proc = FakeProc()
+        backend = FakeSpawn(proc=proc)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+
+        manager.kill('swoop_kill sid=sid_1', sid='sid_1')
+        assert wait_for(lambda: 'close' in proc.ops)
+        assert proc.written == [{'type': 'kill', 'sid': 'sid_1'}]
+
+    def test_the_services_own_stop_says_so_on_the_kill_line(self, firebase):
+        # the streamer tells viewers to come back from this one and from no other.
+        proc = FakeProc()
+        backend = FakeSpawn(proc=proc)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+
+        manager.kill('service_stop')
+        assert wait_for(lambda: 'close' in proc.ops)
+        assert proc.written == [{'type': 'kill', 'reason': 'service_stop'}]
+
+
+class TestEnsureOrder:
+    """A new sid ends the live session only once its own bundle is in hand, and
+    a sid this service already ran never does."""
+
+    def test_a_sid_the_api_no_longer_serves_leaves_the_live_session_alone(self, firebase):
+        proc = FakeProc()
+        backend = FakeSpawn(proc=proc, bundle_error=swoop_spawn.SwoopSpawnError(
+            swoop_spawn.REFUSAL_BUNDLE_UNAVAILABLE, 'bundle fetch failed: 404 Client Error',
+        ), bundle_error_after=2)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: manager.status()['state'] == swoop_manager.STATE_RUNNING)
+
+        manager.ensure_streamer('sid_ended')
+        assert wait_for(
+            lambda: manager.status()['lastRefusal'] == swoop_spawn.REFUSAL_BUNDLE_UNAVAILABLE)
+        assert proc.written == [], 'the live streamer was never told to stop'
+        assert backend.spawned == 1
+        assert manager.status()['sid'] == 'sid_1'
+        assert manager.status()['state'] == swoop_manager.STATE_RUNNING
+        manager.kill('test')
+
+    def test_a_new_sid_replaces_the_live_one_and_the_end_is_logged_once(self, firebase):
+        first = FakeProc()
+        backend = FakeSpawn(proc=first)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+
+        backend.proc = FakeProc()
+        manager.ensure_streamer('sid_2')
+        assert wait_for(lambda: backend.spawned == 2)
+        assert first.written == [{'type': 'kill'}]
+        assert manager.status()['sid'] == 'sid_2'
+        time.sleep(0.2)  # the old reader has had its turn at the end too
+        assert session_ends(firebase) == ['sid=sid_1 reason=session_change exit=0']
+        manager.kill('test')
+
+    def test_a_late_request_for_a_served_sid_leaves_the_live_session_alone(self, firebase):
+        # the polled command for a tab's previous session, landing after the
+        # ring for its next: the api still serves that sid, but it is not new.
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_A')
+        assert wait_for(lambda: backend.spawned == 1)
+
+        live = FakeProc()
+        backend.proc = live
+        manager.ensure_streamer('sid_B')
+        assert wait_for(lambda: manager.status()['sid'] == 'sid_B'
+                        and manager.status()['state'] == swoop_manager.STATE_RUNNING)
+        fetched = backend.fetched
+
+        manager.ensure_streamer('sid_A')
+        assert wait_for(lambda: any(
+            call.args[0] == 'swoop_session_ignored' for call in firebase.log_event.call_args_list))
+        ignored = [call.kwargs.get('details') for call in firebase.log_event.call_args_list
+                   if call.args[0] == 'swoop_session_ignored']
+        assert ignored == ['sid=sid_A reason=served running=sid_B']
+        assert backend.fetched == fetched, 'no bundle was fetched for the old sid'
+        assert backend.spawned == 2
+        assert live.written == [], 'the live streamer was never told to stop'
+        assert manager.status()['sid'] == 'sid_B'
+        assert manager.status()['state'] == swoop_manager.STATE_RUNNING
+        manager.kill('test')
+
+
+class TestSessionEnd:
+    """One end per process, in the streamer's own words when it said any."""
+
+    def test_a_natural_exit_logs_the_streamers_own_reason(self, firebase):
+        proc = FakeProc(lines=['{"type":"exiting","sid":"sid_1","code":0,"reason":"idle"}'])
+        backend = FakeSpawn(proc=proc)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+
+        proc._released.set()  # the streamer closed its stdout
+        assert wait_for(lambda: manager.status()['state'] == swoop_manager.STATE_IDLE)
+        assert session_ends(firebase) == ['sid=sid_1 reason=idle exit=0']
+
+    def test_a_process_is_finished_once_and_a_late_finish_leaves_the_next_alone(self, firebase):
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+        old = manager._proc
+
+        # the reader and the kill both reach the end of the same process.
+        manager._finish_session(old, 'sid_1', 'idle', 0)
+        manager._finish_session(old, 'sid_1', 'normal', 0)
+        assert session_ends(firebase) == ['sid=sid_1 reason=idle exit=0']
+
+        backend.proc = FakeProc()
+        manager.ensure_streamer('sid_2')
+        assert wait_for(lambda: manager._token_timer is not None)
+        timer = manager._token_timer
+        spawns = list(manager._spawn_times)
+
+        # and a reader that arrives after the next streamer is up touches nothing of it.
+        manager._finish_session(old, 'sid_1', 'normal', 0)
+        assert manager.status()['sid'] == 'sid_2'
+        assert manager.status()['state'] == swoop_manager.STATE_RUNNING
+        assert manager._token_timer is timer and not timer.finished.is_set()
+        assert manager._spawn_times == spawns
+        assert session_ends(firebase) == ['sid=sid_1 reason=idle exit=0']
+        manager.kill('test')
+
+
 class TestStdoutEvents:
     """Every event named in PROTOCOL.md section 6 is parsed and queued."""
 
@@ -279,6 +469,7 @@ class TestStdoutEvents:
             '{"type":"viewer_joined","sid":"s","viewer":"v2","ctl":false}',
             '{"type":"status","sid":"s","viewers":2,"fps":60,"path":"direct"}',
             '{"type":"sas_request","sid":"s","viewer":"v1"}',
+            '{"type":"token_needed","sid":"s"}',
             '{"type":"host_event","sid":"s","kind":"input_not_permitted","viewer":"v2"}',
             '{"type":"viewer_left","sid":"s","viewer":"v2","reason":"bye"}',
             '{"type":"exiting","sid":"s","code":0,"reason":"idle"}',
@@ -289,7 +480,7 @@ class TestStdoutEvents:
         events = manager.drain_events()
         assert [e['type'] for e in events] == [
             'ready', 'viewer_joined', 'viewer_joined', 'status',
-            'sas_request', 'host_event', 'viewer_left', 'exiting',
+            'sas_request', 'token_needed', 'host_event', 'viewer_left', 'exiting',
         ]
         status = manager.status()
         assert status['viewers'] == 1
@@ -453,3 +644,89 @@ class TestSpawnCleanup:
         assert wait_for(lambda: 'close' in proc.ops)
         assert manager.status()['state'] == swoop_manager.STATE_IDLE
         assert manager.status()['lastRefusal'] == swoop_spawn.REFUSAL_SPAWN_FAILED
+
+
+class TestHostTokenRefresh:
+    """The host's room token lives 300 s and the streamer cannot mint one: the
+    manager re-mints a minute ahead and hands it over on stdin."""
+
+    def _fast(self, monkeypatch, ttl=2, lead=1, retry=20):
+        import swoop_manager
+        monkeypatch.setattr(swoop_manager, 'TOKEN_TTL_DEFAULT_S', ttl)
+        monkeypatch.setattr(swoop_manager, 'TOKEN_REFRESH_LEAD_S', lead)
+        monkeypatch.setattr(swoop_manager, 'TOKEN_REFRESH_RETRY_S', retry)
+
+    def test_a_fresh_token_reaches_the_streamer_ahead_of_expiry(self, firebase, monkeypatch):
+        self._fast(monkeypatch)
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: any(w.get('type') == 'token' for w in backend.proc.written))
+        line = next(w for w in backend.proc.written if w.get('type') == 'token')
+        # the second mint's token, not the one the bundle carried
+        assert line == {'type': 'token', 'host_token': 'host-token-2'}
+        actions = [call.args[0] for call in firebase.log_event.call_args_list]
+        assert 'swoop_token_refreshed' in actions
+        manager.kill()
+
+    def test_a_token_needed_from_the_streamer_mints_at_once_and_is_floored(self, firebase, monkeypatch):
+        # the scheduled refresh is far away; the streamer lost its room and asks.
+        self._fast(monkeypatch, ttl=300, lead=60, retry=20)
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+        import swoop_manager
+        monkeypatch.setattr(swoop_manager, 'TOKEN_ASK_MIN_INTERVAL_S', 0.5)
+
+        manager._handle_line('{"type":"token_needed","sid":"sid_1"}')
+        assert wait_for(lambda: any(w.get('type') == 'token' for w in backend.proc.written))
+        written = [w for w in backend.proc.written if w.get('type') == 'token']
+        assert written == [{'type': 'token', 'host_token': 'host-token-2'}]
+
+        # a second ask inside the floor is dropped; one after it mints again.
+        manager._handle_line('{"type":"token_needed","sid":"sid_1"}')
+        time.sleep(0.2)
+        assert len([w for w in backend.proc.written if w.get('type') == 'token']) == 1
+        time.sleep(0.5)
+        manager._handle_line('{"type":"token_needed","sid":"sid_1"}')
+        assert wait_for(lambda: len([w for w in backend.proc.written if w.get('type') == 'token']) == 2)
+
+        # an ask for a session that is not the live one is ignored.
+        manager._handle_line('{"type":"token_needed","sid":"sid_other"}')
+        time.sleep(0.2)
+        assert len([w for w in backend.proc.written if w.get('type') == 'token']) == 2
+        manager.kill()
+
+    def test_a_kill_cancels_the_refresh(self, firebase, monkeypatch):
+        self._fast(monkeypatch)
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+        manager.kill()
+        assert wait_for(lambda: manager.status()['state'] == 'idle')
+        time.sleep(1.5)
+        assert backend.fetched == 1
+        assert not any(w.get('type') == 'token' for w in backend.proc.written)
+
+    def test_a_failed_mint_with_no_time_left_is_logged_not_retried_forever(self, firebase, monkeypatch):
+        self._fast(monkeypatch, ttl=2, lead=1, retry=20)
+        backend = FakeSpawn(bundle_error=RuntimeError('api down'), bundle_error_after=2)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: any(
+            call.args[0] == 'swoop_token_refresh_failed' for call in firebase.log_event.call_args_list))
+        assert not any(w.get('type') == 'token' for w in backend.proc.written)
+        manager.kill()
+
+    def test_a_failed_mint_with_time_left_retries(self, firebase, monkeypatch):
+        self._fast(monkeypatch, ttl=4, lead=3, retry=1)
+        backend = FakeSpawn(bundle_error=RuntimeError('blip'), bundle_error_after=2)
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.fetched >= 2)
+        # the second fetch failed; let it recover for the third
+        backend.bundle_error = None
+        assert wait_for(lambda: any(w.get('type') == 'token' for w in backend.proc.written), timeout=4.0)
+        manager.kill()
