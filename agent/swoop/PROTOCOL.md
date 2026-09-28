@@ -291,8 +291,10 @@ its own cursor a css cursor.
 - `png` is always a compressed png. the host sends the clipboard's registered `PNG` format when it has one,
   and otherwise compresses its bitmap (`CF_DIBV5`, else `CF_DIB`); the cap applies to the png, not the
   bitmap. an incoming `png` is set as both `PNG` and a `CF_DIBV5` bitmap (32-bit bottom-up BGRA, straight
-  alpha), so apps that paste only bitmaps can paste it. a bitmap is carried up to 64 Mi pixels (8192 × 8192)
-  either way; an incoming `png` the host cannot decode, or one above that, goes on as `PNG` alone.
+  alpha), so apps that paste only bitmaps can paste it. the bitmap is promised (delayed rendering) and decoded
+  when an app first asks for it, so the paste keystroke behind a clip never waits on the decode. a bitmap is
+  carried up to 64 Mi pixels (8192 × 8192) either way; an incoming `png` the host cannot decode, or one above
+  that, is pasted as `PNG` alone.
 - a sender paces a transfer rather than handing the channel a whole image at once. the host sends through
   its outbox (a 32 KiB burst, then 1 MiB/s) and holds records back while any connected viewer whose path is
   up has more than 32 KiB (half its 64 KiB transport queue) waiting, so the slowest viewer slows a transfer
