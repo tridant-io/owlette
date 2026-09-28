@@ -43,6 +43,13 @@ not be seen at all. ctrl+v now hands the page your clipboard the way a paste
 into any web page does, with nothing to allow, and the page sends it to the
 machine before the keystroke that pastes it.
 
+### fixed — an image pasted into the machine is the one that pastes
+
+The machine decoded a pasted image into a bitmap before it put anything on its
+clipboard, and on a large image the ctrl+v behind it got there first and pasted
+whatever was copied before. The image now goes on at once, and the bitmap that
+apps like Paint read is made when one of them asks for it.
+
 ## [4.0.5] - 2026-09-27
 
 ### fixed — swoop shows your own pointer over the bars around the picture

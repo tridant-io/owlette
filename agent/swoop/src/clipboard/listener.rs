@@ -1,7 +1,8 @@
 //! The clipboard listener: one thread, one message-only window, and every
-//! clipboard call this feature makes. The image conversions either side of
-//! those calls are `super::wic`'s, run on this thread with the clipboard
-//! closed.
+//! clipboard call this feature makes. The image conversions are
+//! `super::wic`'s, run on this thread: a copied bitmap is encoded after the
+//! clipboard is closed, and a pasted png is decoded only when an application
+//! asks for the bitmap promised beside it.
 //!
 //! The thread exists because the clipboard is blocking IO — `OpenClipboard`
 //! fails while another process holds it, `SetClipboardData` needs a window in
@@ -151,6 +152,7 @@ pub fn start() -> anyhow::Result<Listener> {
 
 #[cfg(windows)]
 mod win {
+    use std::cell::RefCell;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::thread::JoinHandle;
@@ -161,7 +163,7 @@ mod win {
     use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::DataExchange::{
         AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData,
-        GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
+        GetClipboardOwner, GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
         RegisterClipboardFormatW, RemoveClipboardFormatListener, SetClipboardData,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -174,7 +176,7 @@ mod win {
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
         PostMessageW, RegisterClassW, HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-        WM_CLIPBOARDUPDATE, WNDCLASSW,
+        WM_CLIPBOARDUPDATE, WM_DESTROYCLIPBOARD, WM_RENDERALLFORMATS, WM_RENDERFORMAT, WNDCLASSW,
     };
 
     use super::super::formats::{
@@ -190,6 +192,12 @@ mod win {
     const WM_APP_WRITE: u32 = WM_APP + 1;
     /// Leave the message loop.
     const WM_APP_QUIT: u32 = WM_APP + 2;
+
+    thread_local! {
+        /// The png whose `CF_DIBV5` this thread's window has promised the
+        /// clipboard and not yet rendered.
+        static PROMISED_BITMAP: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    }
 
     /// Another process holds the clipboard for a few milliseconds at a time.
     const OPEN_ATTEMPTS: u32 = 5;
@@ -270,7 +278,32 @@ mod win {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        match message {
+            // An application asked for the promised bitmap. It holds the
+            // clipboard open while it waits, so the data goes on without
+            // opening it again.
+            WM_RENDERFORMAT if wparam.0 as u32 == CF_DIBV5 => {
+                render_promised_bitmap();
+                LRESULT(0)
+            }
+            // The window is going with the promise outstanding: keep it for
+            // whoever pastes later, if the clipboard is still the one it filled.
+            WM_RENDERALLFORMATS => {
+                if unsafe { OpenClipboard(Some(hwnd)) }.is_ok() {
+                    if unsafe { GetClipboardOwner() }.ok() == Some(hwnd) {
+                        render_promised_bitmap();
+                    }
+                    let _ = unsafe { CloseClipboard() };
+                }
+                LRESULT(0)
+            }
+            // Emptied, by anyone: nothing is promised any more.
+            WM_DESTROYCLIPBOARD => {
+                PROMISED_BITMAP.with_borrow_mut(|promised| *promised = None);
+                LRESULT(0)
+            }
+            _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+        }
     }
 
     fn run(
@@ -513,11 +546,32 @@ mod win {
     }
 
     /// A pasted png as a `CF_DIBV5`, or `None` when WIC cannot read it — and
-    /// then the png goes on alone, as it always did.
+    /// then the paste finds the png alone, as it always did.
     fn png_to_bitmap(png: &[u8]) -> Option<Vec<u8>> {
         wic::png_to_dibv5(png)
             .inspect_err(|e| ::log::debug!("swoop: WIC did not decode a pasted png: {e}"))
             .ok()
+    }
+
+    /// Inside an open, just-emptied clipboard: promise a `CF_DIBV5` made from
+    /// `png` when an application asks for it. A null handle is the promise, and
+    /// `SetClipboardData` returns null for that on success too, so whether it
+    /// took is read back from the clipboard instead.
+    fn promise_bitmap(png: &[u8]) -> Option<()> {
+        let _ = unsafe { SetClipboardData(CF_DIBV5, None) };
+        unsafe { IsClipboardFormatAvailable(CF_DIBV5) }.ok()?;
+        PROMISED_BITMAP.with_borrow_mut(|promised| *promised = Some(png.to_vec()));
+        Some(())
+    }
+
+    /// The promised bitmap, decoded now that it is wanted.
+    fn render_promised_bitmap() {
+        let Some(png) = PROMISED_BITMAP.with_borrow_mut(Option::take) else {
+            return;
+        };
+        if let Some(dib) = png_to_bitmap(&png) {
+            let _ = set_format(CF_DIBV5, &dib);
+        }
     }
 
     /// Put a payload on the clipboard and record the echo it will cause.
@@ -527,12 +581,6 @@ mod win {
             ::log::debug!("swoop: clipboard not written, the input desktop is {desktop:?}");
             return;
         }
-        // decoded before the clipboard is opened, for the reason a bitmap is
-        // only encoded after it is closed.
-        let bitmap = match payload.fmt {
-            ClipFormat::Png => png_to_bitmap(&payload.bytes),
-            ClipFormat::Text => None,
-        };
         let written = with_clipboard(Some(hwnd), || {
             if unsafe { EmptyClipboard() }.is_err() {
                 return None;
@@ -544,15 +592,18 @@ mod win {
                     set_format(CF_UNICODETEXT, &bytes)
                 }
                 // The png as the viewer sent it, for the browsers and image
-                // editors that read the registered format, and the bitmap
-                // beside it for the applications that read nothing else.
+                // editors that read the registered format, and a bitmap
+                // promised beside it for the applications that read nothing
+                // else. Promised rather than made: decoding a 4K png takes
+                // longer than the ctrl+v behind the clip takes to arrive, and
+                // an application that wants the bitmap waits for it.
                 ClipFormat::Png => {
                     let png = if png_format != 0 {
                         set_format(png_format, &payload.bytes)
                     } else {
                         None
                     };
-                    let bitmap = bitmap.and_then(|dib| set_format(CF_DIBV5, &dib));
+                    let bitmap = promise_bitmap(&payload.bytes);
                     png.or(bitmap)
                 }
             }
@@ -671,8 +722,9 @@ mod win {
                 "our own write came back as an update"
             );
 
-            // viewer → host, an image: the png goes on as sent, and the bitmap
-            // Windows makes from the CF_DIBV5 beside it reads back its size.
+            // viewer → host, an image: the png goes on as sent, and asking for
+            // the CF_DIB Windows makes from the promised CF_DIBV5 renders it on
+            // the listener thread and reads back its size.
             let png = crate::cursor::encode_png(&crate::cursor::CursorImage {
                 width: 3,
                 height: 2,

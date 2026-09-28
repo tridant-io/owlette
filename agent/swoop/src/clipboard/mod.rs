@@ -30,8 +30,10 @@
 //!   registered `"PNG"` format and, decoded by WIC, as a 32-bit `CF_DIBV5`
 //!   beside it, so an application that reads only bitmaps (Paint, most Win32
 //!   tools) can paste them too — Windows makes `CF_DIB` and `CF_BITMAP` from
-//!   the `CF_DIBV5` when one is asked for. A png WIC cannot read goes on as
-//!   `"PNG"` alone.
+//!   the `CF_DIBV5` when one is asked for. The bitmap is promised (delayed
+//!   rendering) and decoded when an application first asks for it, so the
+//!   ctrl+v that follows a clip never waits on the decode. A png WIC cannot
+//!   read renders nothing, and the paste finds `"PNG"` alone.
 //!
 //! # Gating and the audit trail
 //!
