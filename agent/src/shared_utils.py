@@ -469,6 +469,16 @@ def _seed_machine_id_file(path, machine_id):
         raise
 
 
+def _identity_hostname():
+    """The hostname an identity is taken from. macOS appends `.local`, and the
+    api's machine id rule (letters, digits, `_`, `-`) refuses the dot: a Mac
+    seeded with it pairs but can never open a swoop session."""
+    name = get_hostname()
+    if sys.platform == 'darwin' and name.lower().endswith('.local'):
+        name = name[:-len('.local')]
+    return name
+
+
 def _read_or_seed_machine_id():
     """(identity, persisted) — config/machine_id, created from the current
     hostname when it is missing.
@@ -490,13 +500,13 @@ def _read_or_seed_machine_id():
                     f"Failed to read {MACHINE_ID_FILE}: {e} — using the hostname "
                     f"for this call only"
                 )
-                return get_hostname(), False
+                return _identity_hostname(), False
             time.sleep(MACHINE_ID_READ_BACKOFF)
 
     if persisted:
         return persisted, True
 
-    machine_id = get_hostname()
+    machine_id = _identity_hostname()
     try:
         _seed_machine_id_file(path, machine_id)
         logging.info(f"Machine identity seeded from the hostname: {machine_id}")
