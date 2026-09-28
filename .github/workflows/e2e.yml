@@ -52,7 +52,7 @@ jobs:
       # Temurin JDK 21 for Firebase emulators (Firestore emulator is a Java
       # binary). The `java` on the stock Ubuntu runner is fine, but pinning
       # to JDK 21 matches the local-dev setup documented in context.md.
-      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v5
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v5
         with:
           distribution: temurin
           java-version: '21'
@@ -180,7 +180,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       # The Firestore emulator is a Java binary; JDK 21 matches local dev.
-      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v5
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v5
         with:
           distribution: temurin
           java-version: '21'
