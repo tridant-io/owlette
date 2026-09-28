@@ -11,6 +11,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — swoop shows your own pointer over the bars around the picture
+
+Over the dark bars between the toolbar and a picture that does not fill the
+window, the page hid your pointer and pinned the machine's to the picture's
+edge, so it looked stuck while your mouse moved on unseen; a click or a scroll
+there reached the machine at that edge. Now your own pointer shows over the
+bars and nothing is sent from them. A drag that starts on the picture and runs
+off it still carries on, held at the edge.
+
 ## [4.0.4] - 2026-09-26
 
 ### fixed — a swoop session stays up for as long as its tab is open
