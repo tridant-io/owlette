@@ -7,7 +7,7 @@
  * the host, and the host is what enforces that — `session.ctl` here only stops
  * a watcher generating denials nobody can act on.
  *
- * three things about this file are not obvious:
+ * four things about this file are not obvious:
  *
  * 1. **the paste keystroke is intercepted, not the `paste` event.** `input.ts`
  *    calls `preventDefault()` on every keydown it forwards, which is what stops
@@ -28,6 +28,11 @@
  *    gesture, it is raced against a timeout so a prompt left open cannot swallow
  *    the keystroke, and a refusal is an ordinary outcome that costs the sync and
  *    nothing else.
+ * 4. **a transfer is paced by the channel's own buffer.** an image may be 15
+ *    MiB, about 20 once encoded, and sent at once it would overrun chrome's
+ *    16 MiB send buffer and hold the lease and keyframe requests that share
+ *    `swoop-control` behind it. so chunks wait while more than 1 MiB is queued,
+ *    and the held paste keystroke waits until the whole clip has left.
  */
 
 import type { SwoopDetach, SwoopSession } from '@/lib/swoop/features';
@@ -41,6 +46,16 @@ import {
 
 /** how long a paste keystroke waits for the clipboard before going without it. */
 const READ_TIMEOUT_MS = 1_500;
+
+/** how much of a transfer may sit in the channel's buffer before the next chunk waits. */
+const SEND_HIGH_WATER_BYTES = 1024 * 1024;
+/** where it goes on: the buffer drained this far. */
+const SEND_LOW_WATER_BYTES = 256 * 1024;
+/**
+ * a buffer that does not drain in this long belongs to a path too slow or too
+ * dead to carry the rest, and the transfer is given up.
+ */
+const DRAIN_TIMEOUT_MS = 30_000;
 
 type ClipFormat = 'text' | 'png';
 
@@ -106,11 +121,47 @@ export function attach(session: SwoopSession): SwoopDetach {
 
   // ----------------------------------------------------------- viewer → host
 
-  const sendPayload = (payload: ClipPayload): void => {
+  // true once the channel's buffer is down to `level`; false when the channel
+  // closed or the buffer would not drain in time.
+  const drainedTo = (channel: RTCDataChannel, level: number): Promise<boolean> =>
+    new Promise((resolve) => {
+      if (channel.bufferedAmount <= level) {
+        resolve(true);
+        return;
+      }
+      const settle = (ok: boolean): void => {
+        view.clearTimeout(timer);
+        channel.removeEventListener('bufferedamountlow', onLow);
+        channel.removeEventListener('close', onClose);
+        resolve(ok);
+      };
+      // an event the browser queued under an earlier threshold can land after
+      // this one is set, so the buffer is read rather than the event trusted.
+      const onLow = (): void => {
+        if (channel.bufferedAmount <= level) settle(true);
+      };
+      const onClose = (): void => settle(false);
+      const timer = view.setTimeout(() => settle(false), DRAIN_TIMEOUT_MS);
+      channel.bufferedAmountLowThreshold = level;
+      channel.addEventListener('bufferedamountlow', onLow);
+      channel.addEventListener('close', onClose);
+    });
+
+  const transfer = async (payload: ClipPayload): Promise<void> => {
     if (payload.bytes.length === 0 || payload.bytes.length > capFor(payload.fmt)) return;
+    const channel = session.peer.channel('swoop-control');
+    if (!channel) return;
     seq += 1;
+    const id = seq;
     const chunks = Math.max(1, Math.ceil(payload.bytes.length / CLIPBOARD_MAX_CHUNK_BYTES));
     for (let chunk = 0; chunk < chunks; chunk += 1) {
+      if (detached) return;
+      // paced by the channel's own buffer: a 4k screenshot handed over at once
+      // sits whole in it, past chrome's 16 MiB limit, and the lease and keyframe
+      // requests that share the channel wait behind it.
+      if (channel.bufferedAmount > SEND_HIGH_WATER_BYTES && !(await drainedTo(channel, SEND_LOW_WATER_BYTES))) {
+        return;
+      }
       const start = chunk * CLIPBOARD_MAX_CHUNK_BYTES;
       session.send(
         'swoop-control',
@@ -118,7 +169,7 @@ export function attach(session: SwoopSession): SwoopDetach {
           t: 'clip',
           dir: 'to-host',
           fmt: payload.fmt,
-          seq,
+          seq: id,
           chunk,
           chunks,
           totalBytes: payload.bytes.length,
@@ -126,6 +177,18 @@ export function attach(session: SwoopSession): SwoopDetach {
         }),
       );
     }
+    // the keystroke that pastes this rides another channel, so the clip leaves
+    // this side entirely before the keystroke is let go.
+    await drainedTo(channel, 0);
+  };
+
+  // one transfer at a time: interleaved, two are two corrupt pastes; queued,
+  // the later clipboard still lands last. one that throws must not take every
+  // later paste down with it.
+  let sending: Promise<void> = Promise.resolve();
+  const sendPayload = (payload: ClipPayload): Promise<void> => {
+    sending = sending.then(() => transfer(payload)).catch(() => undefined);
+    return sending;
   };
 
   const readClipboard = async (): Promise<ClipPayload | null> => {
@@ -208,10 +271,12 @@ export function attach(session: SwoopSession): SwoopDetach {
     const finish = (payload: ClipPayload | null): void => {
       if (settled) return;
       settled = true;
-      if (payload) sendPayload(payload);
-      waiting = false;
-      // the clip is on the wire before the keystroke that pastes it.
-      forwardHeld();
+      // the clip is on the wire before the keystroke that pastes it, and keys
+      // stay held until it is.
+      void (payload ? sendPayload(payload) : Promise.resolve()).then(() => {
+        waiting = false;
+        forwardHeld();
+      });
     };
     const timer = view.setTimeout(() => finish(null), READ_TIMEOUT_MS);
     void readClipboard().then(
@@ -241,12 +306,12 @@ export function attach(session: SwoopSession): SwoopDetach {
     const image = Array.from(data.items).find((item) => item.type === 'image/png')?.getAsFile();
     if (image) {
       void image.arrayBuffer().then((buffer) => {
-        if (!detached) sendPayload({ fmt: 'png', bytes: new Uint8Array(buffer) });
+        if (!detached) void sendPayload({ fmt: 'png', bytes: new Uint8Array(buffer) });
       });
       return;
     }
     const text = data.getData('text/plain');
-    if (text) sendPayload({ fmt: 'text', bytes: new TextEncoder().encode(text) });
+    if (text) void sendPayload({ fmt: 'text', bytes: new TextEncoder().encode(text) });
   };
 
   // ----------------------------------------------------------- host → viewer

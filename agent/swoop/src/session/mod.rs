@@ -168,6 +168,7 @@ use crate::encode::{Codec, CodecCaps};
 use crate::gpu::scale::Limits;
 use crate::ipc::{AudioState, Desktop, DisplayState, HostEventKind};
 use crate::signal::messages::channel::{Channel, DisplayInfo};
+use crate::transport::rtc::OUT_QUEUE_FEATURE_BYTES;
 
 /// A host feature that lives for the length of a session.
 ///
@@ -313,10 +314,12 @@ pub struct Outbound {
 /// it is base64 inside JSON, comfortably under this.
 pub const OUTBOX_BURST_BYTES: usize = 32 * 1024;
 
-/// How fast that allowance comes back: ~4 Mbps, a fifth of the default video
-/// target. A 2 MiB clipboard image therefore takes a few seconds and never
-/// competes with the picture for the link.
-pub const OUTBOX_REFILL_BYTES_PER_SEC: usize = 512 * 1024;
+/// How fast that allowance comes back: ~8 Mbps, two fifths of the default video
+/// target, and only while a feature has something to send. A 15 MiB clipboard
+/// image — about 20 MiB once base64 inside JSON — takes about 20 s, and a
+/// typical compressed 4K screenshot a few. A viewer whose transport queue is
+/// full slows it further (`feature_room`).
+pub const OUTBOX_REFILL_BYTES_PER_SEC: usize = 1024 * 1024;
 
 /// A feature's whole outbound path: a bounded, paced buffer that the session
 /// thread drains and writes.
@@ -406,6 +409,12 @@ impl Outbox {
         self.allowance = (self.allowance + gained).min(OUTBOX_BURST_BYTES);
     }
 
+    /// Hold this turn's sends to `room` ([`feature_room`]). What is refused
+    /// stays with its feature, exactly as for the allowance itself.
+    fn limit_to(&mut self, room: usize) {
+        self.allowance = self.allowance.min(room);
+    }
+
     fn take(&mut self) -> Vec<Outbound> {
         std::mem::take(&mut self.queued)
     }
@@ -416,6 +425,27 @@ impl Outbox {
     fn take_requests(&mut self) -> Vec<FeatureRequest> {
         std::mem::take(&mut self.requests)
     }
+}
+
+/// How much feature output the connected viewers' transport queues can take
+/// this turn: the least room any of them has left under
+/// [`OUT_QUEUE_FEATURE_BYTES`], given what each has queued and whether its
+/// path is up.
+///
+/// A transport queue that fills drops its oldest record, on any channel, and a
+/// clip chunk dropped there is the page throwing away the whole transfer — so
+/// feature records wait here for room instead. The slowest viewer sets the
+/// pace, which is right for a clipboard they all share. A viewer whose path is
+/// down does not: its queue cannot drain until the path is back, and one
+/// watcher's closed lid must not hold everyone else's clipboard up for the
+/// length of its hold. With every path down there is no room at all.
+fn feature_room(viewers: impl IntoIterator<Item = (usize, bool)>) -> usize {
+    viewers
+        .into_iter()
+        .filter(|&(_, up)| up)
+        .map(|(queued, _)| OUT_QUEUE_FEATURE_BYTES.saturating_sub(queued))
+        .min()
+        .unwrap_or(0)
 }
 
 /// What a feature is handed when the session starts it.
@@ -778,9 +808,9 @@ mod host {
     use windows::Win32::System::Performance::QueryPerformanceCounter;
 
     use super::{
-        codec_wire_name, limits_for, pick_codec, tier_encodes, tiers, CaptureGate, Denials,
-        Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining, Outbox, SessionHandle,
-        TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
+        codec_wire_name, feature_room, limits_for, pick_codec, tier_encodes, tiers, CaptureGate,
+        Denials, Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining, Outbox,
+        SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
     use crate::capture::{
@@ -2472,6 +2502,17 @@ mod host {
             }
             let now = Instant::now();
             self.outbox.refill(now);
+            // records wait for transport room, requests do not: a request is not
+            // bytes on the wire, and every feature is still polled for them.
+            self.outbox.limit_to(feature_room(
+                self.viewers
+                    .iter()
+                    .filter(|v| v.connected())
+                    .filter_map(|v| {
+                        let peer = v.peer.as_ref()?;
+                        Some((peer.queued_bytes(), v.ice.down_for(now).is_none()))
+                    }),
+            ));
             // Drained per feature rather than once at the end: a request has to
             // carry who made it, and `sas_result` routed to the wrong feature
             // is a handshake that never completes.
@@ -4716,12 +4757,12 @@ mod tests {
 
         // A turn too short to earn a byte must not throw its remainder away:
         // a hundred of them still add up to the rate.
-        for i in 1..=100u32 {
-            out.refill(start + Duration::from_micros(i as u64));
+        for i in 1..=100u64 {
+            out.refill(start + Duration::from_nanos(i * 500));
         }
         assert!(
             out.send(Channel::SwoopControl, vec![0u8; 50]),
-            "100 us at the refill rate is about 52 bytes"
+            "50 us at the refill rate is about 52 bytes"
         );
 
         out.refill(start + Duration::from_secs(10));
@@ -4760,6 +4801,53 @@ mod tests {
         assert!(out.request(FeatureRequest::Sas));
         assert_eq!(out.take().len(), 1);
         assert_eq!(out.take_requests().len(), 1);
+    }
+
+    /// The transport queue drops its oldest record once it fills, so feature
+    /// records wait for room instead: a turn with a viewer above the gate sends
+    /// none, requests still go, and the records go once that queue drains.
+    #[test]
+    fn feature_records_wait_for_room_in_the_fullest_viewers_queue() {
+        let start = Instant::now();
+        let mut out = Outbox::new(start);
+        // one viewer drained, one holding its whole feature share already.
+        out.limit_to(feature_room([(0, true), (OUT_QUEUE_FEATURE_BYTES, true)]));
+        assert!(
+            !out.send(Channel::SwoopControl, vec![0u8; 1]),
+            "above the gate"
+        );
+        assert!(out.request(FeatureRequest::Sas), "a request is not bytes");
+        assert!(out.take().is_empty());
+
+        // part drained: what fits under the share goes, and no more.
+        out.refill(start + Duration::from_secs(1));
+        out.limit_to(feature_room([
+            (0, true),
+            (OUT_QUEUE_FEATURE_BYTES - 8 * 1024, true),
+        ]));
+        assert!(!out.send(Channel::SwoopControl, vec![0u8; 16 * 1024]));
+        assert!(out.send(Channel::SwoopControl, vec![0u8; 8 * 1024]));
+
+        // drained: the chunk that waited goes on the next turn.
+        out.refill(start + Duration::from_secs(2));
+        out.limit_to(feature_room([(0, true), (0, true)]));
+        assert!(out.send(Channel::SwoopControl, vec![0u8; 16 * 1024]));
+        assert_eq!(out.take().len(), 2);
+        assert_eq!(out.take_requests().len(), 1);
+    }
+
+    /// A viewer whose path is down cannot drain until it is back, so its full
+    /// queue does not hold the others up for the length of its hold; with
+    /// every path down there is nowhere for a record to go.
+    #[test]
+    fn a_viewer_whose_path_is_down_does_not_hold_the_others_up() {
+        let full = OUT_QUEUE_FEATURE_BYTES;
+        assert_eq!(feature_room([(0, true), (full, false)]), full);
+        assert_eq!(
+            feature_room([(8 * 1024, true), (full, false)]),
+            full - 8 * 1024
+        );
+        assert_eq!(feature_room([(0, false)]), 0);
     }
 
     // ------------------------------------------------------- the fan-out ---

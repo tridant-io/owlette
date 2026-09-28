@@ -34,7 +34,8 @@ export const FRAME_FLAG_PARAMETER_SETS_IN_BAND = 0x04;
 
 /** section 5 clipboard caps, checked before the first chunk is buffered. */
 export const CLIPBOARD_MAX_TEXT_BYTES = 256 * 1024;
-export const CLIPBOARD_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+/** a compressed 4k screenshot, with room to spare (owner, 2026-09-27: 10 to 15 MB, never 30). */
+export const CLIPBOARD_MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 export const CLIPBOARD_MAX_CHUNK_BYTES = 16 * 1024;
 /** transfers above this are reported to the audit trail by the host. */
 export const CLIPBOARD_AUDIT_BYTES = 64 * 1024;

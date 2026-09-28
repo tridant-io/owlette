@@ -16,6 +16,20 @@ there reached the machine at that edge. Now your own pointer shows over the
 bars and nothing is sent from them. A drag that starts on the picture and runs
 off it still carries on, held at the edge.
 
+### changed — swoop copies and pastes images both ways, up to 15 MB
+
+An image copied on either side of a session now pastes on the other at
+screenshot sizes. The limit rose from 2 MB to 15 MB, and a bitmap copied on the
+machine, such as a Print Screen or a copy from most Windows apps, is sent as a
+compressed PNG instead of at its raw size, so a 4K screenshot is a few megabytes
+rather than over the limit. An image pasted into the machine now also reaches
+apps that paste only bitmaps, such as Paint.
+
+A large image is sent at the pace the connection can carry, so it never holds up
+the picture or the session's own messages, and the paste reaches the machine
+only after the image has left the browser. The machine needs an agent from this
+release or later for images over 2 MB.
+
 ## [4.0.4] - 2026-09-26
 
 ### fixed — a swoop session stays up for as long as its tab is open

@@ -1,7 +1,7 @@
 ---
 title: "swoop"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a machine's screen, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "screen sharing", "kvm", "vnc", "rdp", "take over a screen"]
+keywords: ["remote control", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard"]
 ---
 
 swoop puts a machine's screen in your browser, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -68,6 +68,8 @@ the toolbar carries the session state, an **end** button, and:
 over the dark bars around the picture your own pointer shows and nothing reaches the machine, so a click there never lands on the edge of its screen. a drag that runs off the picture keeps going, held at its edge.
 
 a watch-only session is labelled **view only**.
+
+the clipboard is shared both ways: copy on the machine and paste on your computer, or the reverse, with text up to 256 KB and images up to 15 MB. pasting into the machine needs control, and the browser may ask to let the page read your clipboard.
 
 ---
 
