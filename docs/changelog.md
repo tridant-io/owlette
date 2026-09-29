@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — groundwork for swoop on macOS
+
+The swoop streamer now builds on macOS and Linux and is tested there in every
+build. It does not stream there yet, so a Mac or a Linux machine still cannot
+host a swoop session. Nothing changes on Windows.
+
 ## [4.0.6] - 2026-09-28
 
 ### fixed — a Mac is no longer refused its swoop token

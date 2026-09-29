@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 1/23 complete
+**Progress**: 2/23 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -36,7 +36,7 @@ add files under it with `git add -f`.
   - Done when: on this box the four Windows commands pass as they did before; `git diff agent/swoop/Cargo.lock` shows additions and no changed version for any crate the Windows build uses; the `swoop-posix` job is green on both legs for a push of the branch; `zizmor` is clean on the workflow (`.github/workflows/zizmor.yml` names the invocation); the log lists the cfg gates added and the versions pinned.
   - Depends on: nothing.
 
-- [ ] **Task 1.2: Mac rig prep** `[agent+human]`
+- [x] **Task 1.2: Mac rig prep** `[agent+human]`
   - Files: `dev/active/swoop-macos/spikes/1.2-mac-rig.md` (create)
   - Do: Over ssh (context.md, "The Mac rig"): install cmake without root through `uv tool install cmake`, and confirm `zsh -lc "cmake --version"` finds it on the login PATH. Push the branch to the mirror and check it out on the Mac. Read `~/Library/LaunchAgents/app.owlette.build-dev.plist` and confirm which checkout and which command it builds; if it names another branch or path, write the corrected plist beside it under a new name rather than editing the one the release flow uses. Do not run a signed build yet if Task 1.1 has not landed: record that instead. Write the memo.
   - Human: two decisions, both reversible, both recorded in the memo with the date. (1) Root for the ssh user on the Mac: a file `/etc/sudoers.d/owlette-dev` holding `<user> ALL=(ALL) NOPASSWD: ALL`, created with `sudo visudo -f`. Without it the owner installs every build and runs every root check by hand. (2) Screen Recording and Accessibility for `/usr/libexec/sshd-keygen-wrapper` in System Settings, Privacy & Security (the plus button, then shift-cmd-G to type the path). It lets a process started over ssh capture the screen and post input, which is what every hardware test in Wave 4 needs. It is a real widening of what an ssh login to that laptop can do, and Task 7.1 removes it. Without it the backends are first exercised at gate M1, through the installed product.
@@ -282,3 +282,20 @@ The memo is `spikes/1.2-mac-rig.md`.
 - The owner's two asks are recorded as open.
 
 *Changelog line:* none. Rig prep ships nothing.
+
+### 2026-09-29
+
+**Task 1.2: done.** The owner answered both asks at the laptop, and each was checked over ssh. The memo has the
+detail.
+- **sudo for the ssh user: yes.** `/etc/sudoers.d/owlette-dev` exists, and `sudo -k; sudo -n true` succeeds.
+- **Screen Recording and Accessibility for the ssh daemon's wrapper: yes to both.** A Swift program that reads
+  the grants and captures nothing printed `screen_recording=true accessibility=false post_event=false` after
+  the first grant and `screen_recording=true accessibility=true post_event=true` after the second.
+  Task 7.1 removes both grants.
+- **The notary profile is back.** The owner re-stored `owlette-notary`. The branch's build job, re-run on
+  `c0971616`, ended `BUILD-EXIT=0`: `status: Accepted`, stapled, and `stapler validate` passes on the pkg.
+
+**Wave 1 is closed.** The wave's changelog entry is under `## [Unreleased]` in both changelogs, from Task
+1.1's line.
+
+*Still open, the owner's call:* the `# v6` comment on the Windows job's checkout line (`rust-build.yml:66`).
