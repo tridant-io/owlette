@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 0/23 complete
+**Progress**: 1/23 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -30,7 +30,7 @@ add files under it with `git add -f`.
 
 ## Wave 1: foundations
 
-- [ ] **Task 1.1: Cargo manifest and CI legs** `[agent]`
+- [x] **Task 1.1: Cargo manifest and CI legs** `[agent]`
   - Files: `agent/swoop/Cargo.toml`, `agent/swoop/Cargo.lock`, `.github/workflows/rust-build.yml`, and under `agent/swoop/src/` only the `#[cfg]` gates the first macOS compile demands
   - Do: In `Cargo.toml`, move `str0m` out of `[dependencies]` into two target tables: `[target.'cfg(windows)'.dependencies]` keeps `str0m = { version = "=0.23.1", default-features = false, features = ["wincrypto-dimpl"] }` with its existing comment, and a new `[target.'cfg(not(windows))'.dependencies]` gets the same version with `features = ["rust-crypto"]`. Give the new line its reason (one pure-Rust backend for macOS and Linux; DTLS is str0m's `dimpl` on both sides; with no provider str0m panics at runtime) and its exit condition (`apple-crypto` if SRTP throughput measures short at gate M1). Add the feature `encode-videotoolbox = []` beside the other `encode-*` features, with a comment that it needs no crate of its own. Add `[target.'cfg(target_os = "macos")'.dependencies]` with exact pins: `objc2 = "=0.6.4"`, `objc2-foundation`, `objc2-core-foundation`, `objc2-core-graphics`, `objc2-core-media`, `objc2-core-video`, `objc2-screen-capture-kit`, `objc2-video-toolbox`, `objc2-app-kit` all `"=0.3.2"`, `block2 = "=0.6.2"`, `dispatch2 = "=0.3.1"`. Keep their default features, so no later task has to edit this file for a missing header. Add `[target.'cfg(unix)'.dependencies] libc = "=0.2.189"` (the version `Cargo.lock` already resolves; it is a direct dependency now because the clock and the interface walk call it). Every pin carries a reason and an exit condition in the file's existing style. Before pinning, run `cargo search <name> --limit 1` for each: the versions above were read on 2026-09-28, and a newer patch release is pinned instead and noted in the log. Keep `[package] version` the first `version = "X.Y.Z"` line in the file (`scripts/sync-versions.js` rewrites only the first match). `build.rs` already returns early off Windows; confirm it and leave it alone. Then make the crate compile and its tests pass on macOS **with the stubs it has today**: add only `#[cfg]` gates, change no behaviour, and list every gate you added in the log. In `rust-build.yml` add a job `swoop-posix` with a matrix over `macos-latest` and `ubuntu-latest`, copying the pins, `permissions`, `concurrency` and `timeout-minutes` shape of the jobs already in the file: toolchain `1.98.1` with clippy, `Swatinem/rust-cache` with the workspace `agent/swoop`, the environment `CMAKE_POLICY_VERSION_MINIMUM: "3.5"`. On macOS run the macOS commands from the standing rules. On ubuntu run `cargo clippy --all-targets --no-default-features -- -D warnings` and `cargo test --locked --no-default-features`, which is the stub. Correct the header comment that says all three crates are Windows-only. Leave the Windows job exactly as it is.
   - Done when: on this box the four Windows commands pass as they did before; `git diff agent/swoop/Cargo.lock` shows additions and no changed version for any crate the Windows build uses; the `swoop-posix` job is green on both legs for a push of the branch; `zizmor` is clean on the workflow (`.github/workflows/zizmor.yml` names the invocation); the log lists the cfg gates added and the versions pinned.
@@ -201,3 +201,84 @@ commands green on the Mac or the CI leg. Do not start this wave before gate M0 s
   ssh daemon's TCC grants (Task 1.2). The second was added while the task text was written and was not part of
   the approval.
 - Not pushed. Nothing here has been built or run.
+
+**Task 1.1: done.** Code is in `45718a8e`. The branch is pushed, with draft PR #256 against dev.
+
+*Pins.* Every version is as written. `cargo search` on 2026-09-28 found no newer patch release of any of them:
+objc2 0.6.4; the eight framework crates 0.3.2; block2 0.6.2; dispatch2 0.3.1. libc's newest 0.2 release is
+0.2.189 (the 1.0 alphas are prereleases). str0m 0.24.0 exists and stays out under its pin's exit condition.
+
+*Finding: `rust-crypto` is not pure Rust* (decision 5 says it is).
+- str0m-rust-crypto 0.6.0 turns on dimpl's `rcgen` feature.
+- In dimpl 0.7.3, `rcgen` also turns on dimpl's `aws-lc-rs` feature, so aws-lc-sys (C) builds on macOS and Linux.
+- None of it reaches Windows. The manifest comment says all of this.
+- `apple-crypto` is still the named alternate.
+
+*Lock.*
+- 95 crates were added, and none of the 151 existing ones changed version or checksum (a script over both locks).
+- The crate's own entry was corrected from 4.0.5 to 4.0.6: `sync-versions.js` leaves that drift behind.
+- `cargo tree --target x86_64-pc-windows-msvc -e normal,build,dev,features` is identical before and after, both
+  with default features (389 lines) and with `audio-opus` (401 lines).
+- `build.rs` returns early off Windows. Confirmed and left alone.
+
+*cfg gates added.* All of them remove code that is dead off Windows, and none changes Windows.
+- `audio/mod.rs` (`mod live`): `use std::time::Duration` gets `cfg(any(windows, test))`.
+- `capture/mod.rs`:
+  - `cfg(windows)`: `use std::time::{Duration, Instant}`, `RECOVERY_GRACE`, `REDUPLICATE_RETRY` and
+    `REDUPLICATE_DEADLINE`.
+  - `cfg(any(windows, test))`: `MOVE_RECT_WORDS`, `DIRTY_RECT_WORDS`, `split_metadata`, `parse_move_rects`,
+    `parse_dirty_rects` and `is_retryable_duplicate_error`. Their unit tests are portable and still run on macOS.
+- `probe.rs`: `VENDOR_NVIDIA`, `VENDOR_INTEL`, `VENDOR_AMD` and `vendor_name` get `cfg(windows)`.
+- `session/mod.rs`:
+  - `cfg(any(windows, test))`: `use crate::transport::rtc::OUT_QUEUE_FEATURE_BYTES`,
+    `Outbox::{refill, limit_to, take, take_requests}` and `feature_room`.
+  - The field `Outbox::refilled_at` gets `cfg_attr(not(windows), allow(dead_code))`, following the precedent at
+    `clipboard/listener.rs:89`.
+- `main.rs` (`mod crash`): `KEEP_DUMPS` gets `cfg(windows)`.
+- **For Task 2.1:** ungating `mod host` makes the `session/` items live on macOS.
+  - The `any(windows, test)` gates then fail to compile, so they cannot be missed.
+  - The `cfg_attr` on `refilled_at` compiles either way, so it must be removed by hand.
+
+*Windows, on this box.* The four commands were green before the change and after it, with the same counts:
+- Default features: 381 passed and 20 ignored, then 1, 1 and 5.
+- `audio-opus`: 390 passed and 21 ignored, then 1, 1 and 5.
+
+*macOS, on the Mac.* rustc 1.98.1, with cmake 4.4.3 from Task 1.2.
+- The macOS clippy command is clean.
+- `cargo test --locked`: 357 passed and 7 ignored in the lib, `dtls_fingerprint` 1 (the DTLS certificate on
+  `rust-crypto`), `protocol_vectors` 5.
+- The stub flags on the Mac: clippy clean, 350 passed and 6 ignored.
+
+*CI, PR #256 on `45718a8e`.* rust-build run 36514545699 is green on all five jobs.
+- `swoop-posix` macOS: 357 passed and 7 ignored, then 1 and 5.
+- `swoop-posix` ubuntu: 350 passed and 6 ignored, then 1 and 5.
+- The Windows `crates` job and both `desktop-posix` legs are green.
+
+*zizmor.*
+- The new job added one `ref-version-mismatch`: checkout's comment said `v6`, but the SHA is `v7.0.1` (tags `v7`
+  and `v7.0.1` on actions/checkout).
+- Corrected in `swoop-posix` and `desktop-posix`.
+- One finding is left: the same comment on the Windows job's own line (`rust-build.yml:66`), which dev already
+  carries. The task says to leave that job exactly as it is, so it waits for the owner's call.
+
+*Unrelated red, since cleared.* agent-tests "unit suite on windows-latest" failed once on
+`test_osadapter_contract.py::TestBehaviour::test_a_process_the_agent_never_watched_has_no_exit_code[win]` with
+`assert 15 is None`.
+- The branch changes no Python, and the rerun of that job is green.
+- Likely cause, not proven: `osadapter/win.py` keeps exits in a module-level `_exits`, so a pid Windows reuses
+  from an earlier test's watched process returns that process's code.
+
+*Changelog line:* "swoop: the streamer crate builds on macOS and Linux (still a stub there), with CI legs for
+both; Windows is unchanged."
+
+**Task 1.2: agent half done, not ticked.** The owner's two answers are part of its done-when, and both are open.
+The memo is `spikes/1.2-mac-rig.md`.
+- cmake 4.4.3 is at `~/.local/bin/cmake` through `uv tool install`, and it is on the login PATH.
+- The branch has its own Mac worktree, `~/src/owlette-swoop-mac`, at `45718a8e`.
+- The release job builds `dev` in `~/src/owlette`. `app.owlette.build-swoop-mac.plist` was written beside it:
+  `RunAtLoad` false, registered, run by kickstart.
+- Its first run (`HEAD=45718a8e`) signed everything and produced the pkg, then ended `BUILD-EXIT=69`: the
+  `owlette-notary` keychain profile is gone again, as it was for 4.0.5. The owner re-stores it before Task 2.5.
+- The owner's two asks are recorded as open.
+
+*Changelog line:* none. Rig prep ships nothing.
