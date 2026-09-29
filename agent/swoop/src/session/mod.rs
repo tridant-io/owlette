@@ -168,6 +168,7 @@ use crate::encode::{Codec, CodecCaps};
 use crate::gpu::scale::Limits;
 use crate::ipc::{AudioState, Desktop, DisplayState, HostEventKind};
 use crate::signal::messages::channel::{Channel, DisplayInfo};
+#[cfg(any(windows, test))]
 use crate::transport::rtc::OUT_QUEUE_FEATURE_BYTES;
 
 /// A host feature that lives for the length of a session.
@@ -342,6 +343,7 @@ pub struct Outbox {
     queued: Vec<Outbound>,
     requests: Vec<FeatureRequest>,
     allowance: usize,
+    #[cfg_attr(not(windows), allow(dead_code))]
     refilled_at: Instant,
     refused: u64,
 }
@@ -394,6 +396,7 @@ impl Outbox {
         self.refused
     }
 
+    #[cfg(any(windows, test))]
     fn refill(&mut self, now: Instant) {
         let elapsed = now.saturating_duration_since(self.refilled_at);
         let gained = OUTBOX_REFILL_BYTES_PER_SEC as u128 * elapsed.as_nanos() / 1_000_000_000;
@@ -411,10 +414,12 @@ impl Outbox {
 
     /// Hold this turn's sends to `room` ([`feature_room`]). What is refused
     /// stays with its feature, exactly as for the allowance itself.
+    #[cfg(any(windows, test))]
     fn limit_to(&mut self, room: usize) {
         self.allowance = self.allowance.min(room);
     }
 
+    #[cfg(any(windows, test))]
     fn take(&mut self) -> Vec<Outbound> {
         std::mem::take(&mut self.queued)
     }
@@ -422,6 +427,7 @@ impl Outbox {
     /// Drained after **each** feature's poll, not after all of them: the
     /// session has to know which feature asked, and a `Sas` whose answer went
     /// to the wrong feature is a handshake that never completes.
+    #[cfg(any(windows, test))]
     fn take_requests(&mut self) -> Vec<FeatureRequest> {
         std::mem::take(&mut self.requests)
     }
@@ -439,6 +445,7 @@ impl Outbox {
 /// down does not: its queue cannot drain until the path is back, and one
 /// watcher's closed lid must not hold everyone else's clipboard up for the
 /// length of its hold. With every path down there is no room at all.
+#[cfg(any(windows, test))]
 fn feature_room(viewers: impl IntoIterator<Item = (usize, bool)>) -> usize {
     viewers
         .into_iter()

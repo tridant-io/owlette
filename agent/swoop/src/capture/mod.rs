@@ -22,6 +22,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 use crate::gpu::Frame;
@@ -48,15 +49,18 @@ pub const ACQUIRE_TIMEOUT_MS: u32 = 8;
 /// back". On a static desktop an image may not arrive for seconds (a genuinely
 /// idle output produced 0.28 frames/s), and the session cannot hold a black
 /// screen that long.
+#[cfg(windows)]
 const RECOVERY_GRACE: Duration = Duration::from_millis(250);
 
 /// `DuplicateOutput` returned E_ACCESSDENIED in 3 of 12 measured mode-change
 /// events and succeeded on the next attempt 50 ms later.
+#[cfg(windows)]
 const REDUPLICATE_RETRY: Duration = Duration::from_millis(50);
 
 /// Bounded, so a duplication that never comes back is exit 12 rather than a
 /// session that hangs. Measured detect → first picture was p50 210 ms, max
 /// 330 ms, so this is ~30x the worst case.
+#[cfg(windows)]
 const REDUPLICATE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// A source of desktop frames.
@@ -199,8 +203,10 @@ pub struct FrameRects {
 }
 
 /// `DXGI_OUTDUPL_MOVE_RECT` is a `POINT` then a `RECT`: six i32, no padding.
+#[cfg(any(windows, test))]
 const MOVE_RECT_WORDS: usize = 6;
 /// `RECT`: four i32.
+#[cfg(any(windows, test))]
 const DIRTY_RECT_WORDS: usize = 4;
 
 /// Desktop Duplication writes both lists into the single
@@ -209,10 +215,12 @@ const DIRTY_RECT_WORDS: usize = 4;
 /// Handing the dirty-rect parser the front of the buffer parses move rects as
 /// RECTs and yields plausible garbage rather than an error, which is why the
 /// API makes the order a requirement.
+#[cfg(any(windows, test))]
 fn split_metadata(words: &[i32], move_words: usize) -> (&[i32], &[i32]) {
     words.split_at(move_words.min(words.len()))
 }
 
+#[cfg(any(windows, test))]
 fn parse_move_rects(words: &[i32]) -> Vec<MoveRect> {
     let (rects, _) = words.as_chunks::<MOVE_RECT_WORDS>();
     rects
@@ -229,6 +237,7 @@ fn parse_move_rects(words: &[i32]) -> Vec<MoveRect> {
         .collect()
 }
 
+#[cfg(any(windows, test))]
 fn parse_dirty_rects(words: &[i32]) -> Vec<Rect> {
     let (rects, _) = words.as_chunks::<DIRTY_RECT_WORDS>();
     rects
@@ -249,6 +258,7 @@ fn parse_dirty_rects(words: &[i32]) -> Vec<Rect> {
 /// cross-adapter pair returned in 4 of 4 measured attempts, i.e. the device is
 /// on the wrong adapter and needs a new device on the output's own adapter, not
 /// another attempt. Retrying it burns the whole deadline and then fails anyway.
+#[cfg(any(windows, test))]
 fn is_retryable_duplicate_error(hresult: u32) -> bool {
     matches!(
         hresult,

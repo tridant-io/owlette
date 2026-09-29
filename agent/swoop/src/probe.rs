@@ -24,8 +24,11 @@ use crate::ipc::Exit;
 
 /// Vendor ids worth naming. Everything else reports its raw id and
 /// `vendor: "other"`.
+#[cfg(windows)]
 const VENDOR_NVIDIA: u32 = 0x10DE;
+#[cfg(windows)]
 const VENDOR_INTEL: u32 = 0x8086;
+#[cfg(windows)]
 const VENDOR_AMD: u32 = 0x1002;
 
 #[derive(Debug, Serialize)]
@@ -111,6 +114,7 @@ fn arch() -> &'static str {
     }
 }
 
+#[cfg(windows)]
 const fn vendor_name(vendor_id: u32) -> &'static str {
     match vendor_id {
         VENDOR_NVIDIA => "nvidia",

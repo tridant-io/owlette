@@ -66,6 +66,7 @@ mod live {
     use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
+    #[cfg(any(windows, test))]
     use std::time::Duration;
 
     use crossbeam_channel::{bounded, Receiver, Sender};

@@ -121,6 +121,7 @@ mod crash {
     /// At most this many dumps in the directory. The cap is enforced by *not
     /// writing* rather than by deleting: nothing in this process removes a file
     /// it did not create in this run.
+    #[cfg(windows)]
     const KEEP_DUMPS: usize = 3;
 
     /// One per process. A panic inside the dump path would otherwise recurse.

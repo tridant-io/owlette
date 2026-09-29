@@ -6,9 +6,11 @@ name: rust build
 # a red unit test could reach dev and main and only surface in
 # build_installer_full.bat, minutes into a release build.
 #
-# All three are Windows-only — host and swoop link against Win32 directly and
-# the desktop crate is a Tauri/WebView2 app — so there is one runner, not a
-# matrix of hosts.
+# The `crates` job builds all three on Windows, where all three ship. Only the
+# host is Windows-only: the desktop crate also ships on macOS and Linux
+# (`desktop-posix`), and the streamer builds on both (`swoop-posix`), where its
+# session is a stub until the macOS backends land (dev/active/swoop-macos) and
+# Linux gets its own plan.
 #
 # Every cargo invocation runs with `working-directory:` set to the crate, never
 # `--manifest-path`. --manifest-path resolves .cargo/config.toml against the
@@ -188,3 +190,52 @@ jobs:
       - name: test owlette-desktop
         working-directory: desktop/src-tauri
         run: cargo test --locked
+
+  # the streamer off windows (swoop-macos task 1.1). macos builds the features
+  # its pkg will ship, videotoolbox and opus; linux builds the stub, which is
+  # all it has until its own plan. no default features on either: the default
+  # is nvenc, which is windows-only.
+  swoop-posix:
+    name: swoop clippy + tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    timeout-minutes: 30
+    env:
+      # audio-opus vendors an opus that cmake 4 refuses without this; see the
+      # audiopus_sys pin in Cargo.toml.
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+        with:
+          toolchain: '1.98.1'
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: agent/swoop
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+
+      - name: clippy owlette-swoop
+        if: runner.os == 'macOS'
+        working-directory: agent/swoop
+        run: cargo clippy --all-targets --no-default-features --features encode-videotoolbox,audio-opus -- -D warnings
+      - name: test owlette-swoop
+        if: runner.os == 'macOS'
+        working-directory: agent/swoop
+        run: cargo test --locked --no-default-features --features encode-videotoolbox,audio-opus
+
+      - name: clippy owlette-swoop (stub)
+        if: runner.os == 'Linux'
+        working-directory: agent/swoop
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+      - name: test owlette-swoop (stub)
+        if: runner.os == 'Linux'
+        working-directory: agent/swoop
+        run: cargo test --locked --no-default-features
