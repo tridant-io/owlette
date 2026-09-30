@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 7/23 complete
+**Progress**: 9/23 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -63,7 +63,7 @@ add files under it with `git add -f`.
   - Done when: `cargo clippy --all-targets -- -D warnings` and `cargo test --locked` pass in `desktop/src-tauri` on this box (the runner is `cfg(unix)`, so here the proof is that the crate still builds) and on the macOS and ubuntu legs of `rust-build.yml`, where unit tests cover: each refusal in the contract's table; a path that escapes the tree through a symlink; a launch of the test script that echoes 4 KB back over the socket; the app's copy of the connection closed after the spawn, shown by the test's accept side reading end of file the moment the script exits; the exit file's shape and mode. `cd desktop && npm run build` is clean, and the banner renders each of its three states in the desktop frontend's existing test setup, or in `tauri dev` if there is none (say which in the log).
   - Depends on: nothing in this wave.
 
-- [ ] **Task 2.4: Web host-aware keyboard** `[agent]`
+- [x] **Task 2.4: Web host-aware keyboard** `[agent]`
   - Files: `web/lib/swoop/keymap.ts`, `web/lib/swoop/input.ts`, `web/lib/swoop/specialKeys.ts`, `web/components/swoop/SwoopSpecialKeys.tsx`, `web/app/swoop/[siteId]/[machineId]/page.tsx`, `web/__tests__/lib/swoop/keymap.test.ts`, `web/__tests__/lib/swoop/input.test.ts`, `web/e2e/specs/swoop/mac-host.spec.ts` (create)
   - Do: Today the viewer converts only a mac viewer's cmd into ctrl (`CmdMapping`, `keymap.ts:108-130`), which is right for a Windows host and wrong for a Mac one. Replace it with one function over the host's system, whether the viewer is a mac, and a two-valued mapping `'swap' | 'passthrough'`, and move `input.ts` and both test files onto it, leaving no second spelling behind. The rule: a Windows or Linux host with a mac viewer is today's behaviour (`swap` turns `MetaLeft/Right` into `ControlLeft/Right`, and is the default); **a macOS host with a viewer that is not a mac** turns `ControlLeft/Right` into `MetaLeft/Right` under `swap`, the default, so ctrl+c on a Windows keyboard copies on the Mac; a macOS host with a mac viewer, and a Windows or Linux host with a viewer that is not a mac, pass everything through. The conversion stays in the browser (PROTOCOL.md §5: the host never guesses). `specialKeys.ts`: the list becomes a function of the host's system. Windows keeps today's list. macOS offers `cmd + tab`, `cmd + space` (hint: spotlight), `cmd + q` (hint: quit app), `cmd + ctrl + q` (hint: lock) and `esc`, and has no ctrl + alt + del. Linux is the Windows list without ctrl + alt + del. Chords from this menu are sent as written and never pass through the mapping. `SwoopSpecialKeys.tsx` takes the host's system as a prop and gains one checkbox item above the list, built on the `DropdownMenuCheckboxItem` already in `web/components/ui/dropdown-menu.tsx`: "ctrl acts as cmd" on a Mac host for a viewer that is not a mac, "cmd acts as ctrl" on a Windows or Linux host for a mac viewer, and no item where there is nothing to map. It drives `setCmdMapping`'s successor on the input capture. `page.tsx` reads the machine's `osFamily` through the narrowest existing hook in `web/hooks/` that yields the machine document (`useMachines(siteId)` if nothing narrower does), treats a missing value as `windows`, and passes it down. No Firestore call outside `web/hooks/`. The e2e spec seeds a machine with `osFamily: 'macos'`, opens its swoop page the way the first test in `session.spec.ts` does, opens the keyboard menu and asserts the Mac chords are listed, ctrl + alt + del is not, and the checkbox reads "ctrl acts as cmd" and is checked.
   - Done when: in `web/`, `npx eslint` is clean on every touched file, `npx tsc --noEmit` is clean, `npm test` passes with the mapping table covered for all four host and viewer combinations, and `npm run e2e` passes locally including the new spec (the `/preflight` skill runs all of it).
@@ -77,7 +77,7 @@ add files under it with `git add -f`.
 
 ## Wave 3: gate M0 and the POSIX wiring test
 
-- [ ] **Task 3.1: Gate M0 — the app's child sees the screen** `[agent+human]`
+- [x] **Task 3.1: Gate M0 — the app's child sees the screen** `[agent+human]`
   - Files: `dev/active/swoop-macos/spikes/3.1-gate-m0.md` (create), `dev/active/swoop-macos/spikes/m0_selfcheck.py` (create)
   - Do: Measure the one assumption the design rests on, with product code, before any backend is written. Build the signed pkg from the branch head through the build job and install it on the Mac (`sudo installer -pkg <pkg> -target /`, or the owner does). Confirm both halves restarted on the new version and that `ipc/tcc.json` holds a fresh `screen_recording: true`. `m0_selfcheck.py` runs as root under the runtime's own interpreter (`/Library/Application Support/Owlette/runtime/python/bin/python3`) with `agent/src` from the runtime on its path; it uses `swoop_spawn_posix`'s own socket and job code with `args: ["selfcheck", "--force"]`, reads one line and prints it beside the launch result. Run it: once as installed; once after the owner has granted Accessibility from the banner's button; once after quitting and reopening the app. As the control, run `owlette-swoop selfcheck --force` from a plain ssh shell and record that too.
   - Human: is at the Mac for the runs, answers any dialog, and reports for each dialog which application it named.
@@ -144,6 +144,13 @@ commands green on the Mac or the CI leg. Do not start this wave before gate M0 s
   - Do: An adversarial review of what Wave 2 built, by a reviewer that did not write it, under the repo's review discipline (`.claude/CLAUDE.md`: severity is a claim that must be substantiated, with an actor, a mechanism and an outcome; a clean review is a valid result). Scope: a member of the POSIX group, or the console user, against the root daemon through the socket, the job file, the exit file and the sweep; a job the app should refuse; the sidecar rule; what `selfcheck` tells whom; the bundle's path from the daemon to the streamer. Read the last ten commits first. Fix what is confirmed, with a failing test first, and record what is accepted and why.
   - Done when: the memo lists each finding with its severity, its evidence by file and line and its outcome, or states that the review is clean; every fix has a test; both suites are green; `git status` shows the memo untracked.
   - Depends on: 2.2, 2.3
+
+- [ ] **Task 4.9: The app notices its Accessibility grant** `[agent+human]` *(added 2026-09-30 from gate M0's finding, on the owner's yes)*
+  - Files: `desktop/src-tauri/src/tcc.rs`, `desktop/src-tauri/src/commands.rs`, `desktop/src/App.tsx`, `desktop/src/components/PermissionBanner.tsx`, `desktop/src/components/PermissionBanner.test.tsx`, `agent/swoop/src/main.rs`, `agent/swoop/src/platform/macos.rs`
+  - Do: Gate M0 found that inside the app, `CGPreflightPostEventAccess` answers the same for the life of the process: neither a grant nor a revocation reached it over three minute ticks, while a plain command-line process followed the same toggle within two seconds, and every streamer the app launched read the truth (`spikes/3.1-gate-m0.md`, "Found on the way", 1). So the notice stays after the user grants Accessibility until the app restarts, which is wrong. Measure the cheap fix first, on the installed product: make the minute check and the `accessibility_granted` command call the preflight on the app's main thread (dispatch to main and wait) instead of the timer thread; build through the signed build job, install (`sudo installer -pkg … -target /`), have the owner toggle owlette in the Accessibility list, and watch `ipc/tcc.json`. If the report follows within a minute in both directions, that is the fix. If it does not, the app asks a fresh process: `selfcheck` gains `--grants`, which prints only `screenCapturePreflight`, `postEventPreflight` and `axTrusted`, calls neither ScreenCaptureKit nor the network, installs no logger and exits 0; on macOS the minute report and the command run the sidecar beside `current_exe()` with that flag, with a 2 s timeout, and a failed run reports the grant as unknown (`null`), never as false. Either way, while the notice is showing, `App.tsx` re-reads the answer every 5 s so the notice clears without a focus change, and stops once granted. Screen Recording's own report does not change: it is asked once per launch by design. Measure the result the same way, with the owner toggling.
+  - Done when: on the Mac, with the app installed from the signed build job, granting owlette Accessibility clears the notice within 10 s with no relaunch and `ipc/tcc.json` reports true at its next tick, and revoking it brings the notice back; `spikes/3.1-gate-m0.md` records which approach worked, with the ticks; desktop clippy and `cargo test --locked` green on this box and on the Mac; vitest green; if `main.rs` or `platform/macos.rs` changed, the four Windows commands and the macOS commands are green and `owlette-swoop selfcheck --grants` from ssh prints exactly the three keys.
+  - Human: toggles owlette in the Accessibility list, off then on, when the agent asks, twice at most (once per approach).
+  - Depends on: 3.1. Task 5.1 edits `platform/macos.rs` later, so this task changes only the `selfcheck` half of it.
 
 ## Wave 5: wiring
 
@@ -423,8 +430,9 @@ green and one red, CodeQL (below).
 - *Changelog line:* "macOS: the pkg carries the swoop streamer inside owlette.app, signed and notarized with the
   app; the build fails if it is missing, the wrong version or not signed by the app's team."
 
-**Task 2.4: code done** (`b91adfae`), **not ticked: the owner's call.** The done-when asks for a local full e2e
-pass, and the best local run is 410 of 411 (the detail is under *e2e* below). CI's full suite passed twice.
+**Task 2.4: done** (`b91adfae`). **Ticked on 2026-09-30 by the owner's decision, on CI's result:** the done-when asks for
+a local full e2e pass, and the best local run is 410 of 411 (the detail is under *e2e* below). CI's full suite
+passed twice.
 - The viewer's mapping is one function, `applyModifierMapping(code, host, viewerIsMac, 'swap' | 'passthrough')`.
   No `CmdMapping` spelling remains. The capture's setter is `setModifierMapping(hostOs, mapping)`: it takes the
   host too, because the capture is attached before the page knows the host.
@@ -507,9 +515,22 @@ to leave it open for Task 4.8, which reviews exactly this boundary.
   `# v6` for the `v7.0.1` SHA, the comment Task 1.1 fixed in `rust-build.yml`.
 - *Changelog line:* none. Test only.
 
-**Task 3.1 (gate M0): prepared, not run.** It needs the owner at the Mac. The memo so far is
-`spikes/3.1-gate-m0.md`; the script is `spikes/m0_selfcheck.py`.
-- The signed build job on `b91adfae` (all of Wave 2) ended `BUILD-EXIT=0`: notarized, stapled, `stapler
-  validate` passes. The pkg waits on the Mac; its sha256 is in the memo.
-- The Mac still runs the released 4.0.6, with no streamer in the app. Nothing has been installed.
-- Wave 4 does not start before this gate says go.
+**Task 3.1 (gate M0): done, verdict go.** Run 2026-09-30 from 08:39 with the owner at the Mac. The memo is
+`spikes/3.1-gate-m0.md` (every run's json, the dialogs, the record of who the Local Network prompt was for) and
+the script is `spikes/m0_selfcheck.py`. The owner read the verdict and said go for Wave 4.
+- The pkg of `b91adfae` installed in 15 s with no dialog; both halves restarted on the new build, the sidecar is
+  in the bundle and signed, `Info.plist` carries the local network text, the runtime carries `swoop_spawn_posix.py`.
+- Runs 1, 1b, 2 and 3 through the real launch job all answered `shareableContent: ok` with `displays: 1`, and
+  the whole path worked: job, pid, peer uid = console uid, exit file with code 0.
+- The Accessibility grant flipped `postEventPreflight` and `axTrusted` together, false to true, in the child.
+- The Local Network prompt appeared at the first LAN send and the owner allowed it; the system's record names
+  `app.owlette.desktop` and nothing names `owlette-swoop`. No dialog named the streamer.
+- *Found, a product bug:* the running app does not see its own Accessibility grant until it restarts
+  (`CGPreflightPostEventAccess` answers from launch time), so the notice stays. The streamer is unaffected. The
+  owner wants it fixed: the fix is a new task below (4.9).
+- *Found, a rig hazard:* Spotlight launched an old build-tree copy of owlette.app when the owner reopened the app.
+  Six such copies sit under `~/src` on the Mac. Open the app from Applications there. The stray copy was quit by
+  pid and the installed app started through its LaunchAgent before run 3.
+- Unverified: the exact text of the Local Network dialog; whether the banner's button raised a dialog of its
+  own; the reboot case.
+- *Changelog line:* none. A measurement.
