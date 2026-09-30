@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useScrollFade } from '@/hooks/useScrollFade'
+import { launchCopy } from '@/lib/launchCopy'
 import { pickDirectory, pickExecutable, pickFile } from '@/lib/pickers'
 import {
   coerceForm,
@@ -185,6 +186,7 @@ export function ProcessDetail({
   // editable — configuring them before switching the mode on is the normal flow.
   const unmanaged = mode === 'off'
   const live = isLive(status)
+  const copy = launchCopy()
 
   useEffect(() => {
     latest.current = process
@@ -445,12 +447,10 @@ export function ProcessDetail({
           <Tooltip>
             <TooltipTrigger asChild>
               <Label htmlFor="exe_path" className="justify-end text-muted-foreground">
-                exe
+                {copy.label}
               </Label>
             </TooltipTrigger>
-            <TooltipContent>
-              the full path to the executable or script to run (.exe, .bat, .cmd)
-            </TooltipContent>
+            <TooltipContent>{copy.tooltip}</TooltipContent>
           </Tooltip>
           <div className="flex min-w-0 items-center gap-2">
             <Button
@@ -458,13 +458,13 @@ export function ProcessDetail({
               className="size-8"
               variant="outline"
               onClick={() => void browse('exe_path')}
-              aria-label="browse for an executable"
+              aria-label={copy.browseAria}
             >
               <FileSearch />
             </Button>
             <PathInput
               id="exe_path"
-              placeholder="the full path to your executable"
+              placeholder={copy.placeholder}
               className="h-8 font-mono text-xs"
               {...field('exe_path')}
             />
@@ -476,9 +476,7 @@ export function ProcessDetail({
                 path / args
               </Label>
             </TooltipTrigger>
-            <TooltipContent>
-              a file for the exe to open (e.g. a .toe project), or extra command-line arguments
-            </TooltipContent>
+            <TooltipContent>{copy.fileTooltip}</TooltipContent>
           </Tooltip>
           <div className="flex min-w-0 items-center gap-2">
             <Button
