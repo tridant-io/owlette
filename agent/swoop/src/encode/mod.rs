@@ -24,6 +24,12 @@ pub mod mf;
 pub mod qsv;
 #[cfg(any(feature = "encode-openh264", feature = "encode-ffmpeg"))]
 pub mod soft;
+#[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]
+pub mod videotoolbox;
+
+// The H.264 SPS reader and its bitstream-restriction rewrite. Plain Rust with
+// no platform in it, so its tests run on every system.
+pub mod h264_sps;
 
 // The chain over whichever of the above are built, and the only module that
 // knows their order. Never gated: with no backend compiled in it still answers,
@@ -46,7 +52,7 @@ pub enum Codec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendCaps {
     /// Backend name as the selection table and the probe JSON spell it —
-    /// "nvenc", "qsv", "amf", "mf", "openh264".
+    /// "nvenc", "qsv", "amf", "mf", "openh264", "videotoolbox".
     pub backend: &'static str,
     /// Per-codec limits. A codec absent from this list is not encodable here.
     pub codecs: Vec<CodecCaps>,
