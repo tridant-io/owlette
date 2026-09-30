@@ -101,6 +101,11 @@ fn open_in_notepad(path: &Path) -> Result<(), String> {
 const SCREEN_RECORDING_SETTINGS: &str =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 
+/// The Accessibility pane, a constant for the same reason.
+#[cfg(target_os = "macos")]
+const ACCESSIBILITY_SETTINGS: &str =
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
 /// Open the Screen Recording pane (macOS); a typed refusal elsewhere.
 pub fn open_screen_recording_settings() -> Result<(), String> {
   #[cfg(target_os = "macos")]
@@ -110,6 +115,18 @@ pub fn open_screen_recording_settings() -> Result<(), String> {
   #[cfg(not(target_os = "macos"))]
   {
     Err("screen recording is a macos setting".to_string())
+  }
+}
+
+/// Open the Accessibility pane (macOS); a typed refusal elsewhere.
+pub fn open_accessibility_settings() -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    open_link(ACCESSIBILITY_SETTINGS)
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    Err("accessibility is a macos setting".to_string())
   }
 }
 

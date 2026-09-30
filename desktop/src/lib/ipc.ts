@@ -185,6 +185,19 @@ export function openScreenRecordingSettings(): Promise<void> {
   return invoke<void>('open_screen_recording_settings')
 }
 
+/** macOS's answer on Accessibility (posting input) for this app; null off macOS. */
+export function accessibilityGranted(): Promise<boolean | null> {
+  return invoke<boolean | null>('accessibility_granted')
+}
+
+/**
+ * Ask macOS for Accessibility and open its pane of System Settings. Only ever
+ * from a click: the ask can raise a system prompt.
+ */
+export function requestAccessibility(): Promise<void> {
+  return invoke<void>('request_accessibility')
+}
+
 /** Create or remove the run-on-login shortcut; resolves to the resulting state. */
 export function setStartupLink(enabled: boolean): Promise<boolean> {
   return invoke<boolean>('set_startup_link', { enabled })

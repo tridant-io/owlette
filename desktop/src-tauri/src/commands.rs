@@ -60,6 +60,32 @@ pub fn screen_recording_granted() -> Option<bool> {
   }
 }
 
+/// Whether macOS lets this app post input (Accessibility), read without
+/// asking. None off macOS: no such permission there.
+#[tauri::command(async)]
+pub fn accessibility_granted() -> Option<bool> {
+  #[cfg(target_os = "macos")]
+  {
+    Some(crate::tcc::accessibility_granted())
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    None
+  }
+}
+
+/// Ask macOS for Accessibility and open its pane. The ask can raise a system
+/// prompt, so this is the permission banner's button and nothing else.
+#[tauri::command(async)]
+pub fn request_accessibility() -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    let asked = crate::tcc::request_accessibility();
+    log::info!("accessibility: asked from the banner, answer now {asked}");
+  }
+  shell_open::open_accessibility_settings()
+}
+
 /// Whether the run-on-login startup shortcut exists.
 #[tauri::command(async)]
 pub fn startup_link_enabled() -> bool {

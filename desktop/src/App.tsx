@@ -41,10 +41,12 @@ import {
 import { classifyOptions, tauriFsProbe } from '@/lib/fsProbe'
 import {
   ARG_PAIR,
+  accessibilityGranted,
   hostname,
   serverFromArgs,
   setStartupLink,
   openScreenRecordingSettings,
+  requestAccessibility,
   screenRecordingGranted,
   startupLinkEnabled,
   writeOwletteJson,
@@ -131,13 +133,15 @@ function App() {
     startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
   }, [])
 
-  // macOS Screen Recording, re-read whenever the window comes back: the grant
-  // takes effect on relaunch, but the banner should at least stop showing
-  // once the user has switched it on and come back.
+  // macOS Screen Recording and Accessibility, re-read whenever the window
+  // comes back: Screen Recording takes effect on relaunch, but the banner
+  // should at least stop showing once the user has switched it on and come back.
   const [screenRecording, setScreenRecording] = useState<boolean | null>(null)
+  const [accessibility, setAccessibility] = useState<boolean | null>(null)
   useEffect(() => {
     const read = () => {
       screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
+      accessibilityGranted().then(setAccessibility, () => setAccessibility(null))
     }
     read()
     window.addEventListener('focus', read)
@@ -494,9 +498,15 @@ function App() {
         </header>
 
         <PermissionBanner
-          granted={screenRecording}
-          onOpenSettings={() => {
+          screenRecording={screenRecording}
+          accessibility={accessibility}
+          onOpenScreenRecordingSettings={() => {
             void openScreenRecordingSettings().catch((cause: unknown) =>
+              toast.error('could not open system settings', { description: message(cause) }),
+            )
+          }}
+          onRequestAccessibility={() => {
+            void requestAccessibility().catch((cause: unknown) =>
               toast.error('could not open system settings', { description: message(cause) }),
             )
           }}

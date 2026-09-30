@@ -14,6 +14,11 @@
 //! and `screencapture` itself never asks — only this call lists the app under
 //! Screen & System Audio Recording. The answer is read on every tick; a grant
 //! only takes effect on the next launch, and the next tick after that reports it.
+//!
+//! Accessibility (posting input, which swoop's control needs) is reported
+//! beside it as `accessibility`, read on the same tick, but **never asked
+//! here**: the ask raises a system prompt, so it is made only from the
+//! permission banner's button ([`request_accessibility`], swoop-macos task 2.3).
 
 use std::fs;
 use std::io::Write;
@@ -30,6 +35,8 @@ const FILE_MODE: u32 = 0o644;
 extern "C" {
   fn CGPreflightScreenCaptureAccess() -> bool;
   fn CGRequestScreenCaptureAccess() -> bool;
+  fn CGPreflightPostEventAccess() -> bool;
+  fn CGRequestPostEventAccess() -> bool;
 }
 
 /// Whether the grant is held right now, without asking.
@@ -45,14 +52,27 @@ pub fn request() -> bool {
   unsafe { CGRequestScreenCaptureAccess() }
 }
 
+/// Whether this app may post input events (Accessibility), without asking.
+pub fn accessibility_granted() -> bool {
+  // SAFETY: a plain CoreGraphics query with no arguments and no state of ours.
+  unsafe { CGPreflightPostEventAccess() }
+}
+
+/// Ask for Accessibility: lists the app in System Settings and may raise the
+/// system prompt, so only a click may call this. Returns the current answer.
+pub fn request_accessibility() -> bool {
+  // SAFETY: as above; the call may show a system prompt, which the click asked for.
+  unsafe { CGRequestPostEventAccess() }
+}
+
 /// The report body, as the daemon parses it.
-pub fn report(granted: bool, checked_at: u64) -> String {
-  format!(r#"{{"screen_recording":{granted},"checked_at":{checked_at}}}"#)
+pub fn report(granted: bool, accessibility: bool, checked_at: u64) -> String {
+  format!(r#"{{"screen_recording":{granted},"accessibility":{accessibility},"checked_at":{checked_at}}}"#)
 }
 
 /// Write the report whole and move it into place: the daemon may read it at
 /// any moment and a half-written file is a report of nothing.
-pub fn write_report(root: &Path, granted: bool) -> std::io::Result<PathBuf> {
+pub fn write_report(root: &Path, granted: bool, accessibility: bool) -> std::io::Result<PathBuf> {
   let path = root.join(TCC_REL);
   if let Some(parent) = path.parent() {
     fs::create_dir_all(parent)?;
@@ -66,20 +86,21 @@ pub fn write_report(root: &Path, granted: bool) -> std::io::Result<PathBuf> {
       .truncate(true)
       .mode(FILE_MODE)
       .open(&temp)?;
-    file.write_all(report(granted, now).as_bytes())?;
+    file.write_all(report(granted, accessibility, now).as_bytes())?;
   }
   fs::rename(&temp, &path)?;
   Ok(path)
 }
 
-/// Ask once, then report every minute for the life of the app.
+/// Ask for Screen Recording once, then report both grants every minute for
+/// the life of the app.
 pub fn spawn(root: &Path) {
   let root = root.to_path_buf();
   let spawned = thread::Builder::new().name("owlette-tcc".into()).spawn(move || {
     let asked = request();
     log::info!("screen recording: asked once at launch, answer now {asked}");
     loop {
-      match write_report(&root, granted()) {
+      match write_report(&root, granted(), accessibility_granted()) {
         Ok(_) => {}
         Err(error) => log::warn!("could not write the screen recording report: {error}"),
       }
@@ -97,18 +118,21 @@ mod tests {
   use std::os::unix::fs::PermissionsExt;
 
   #[test]
-  fn the_report_is_the_two_fields_the_daemon_reads() {
-    assert_eq!(report(true, 1_790_000_000), r#"{"screen_recording":true,"checked_at":1790000000}"#);
+  fn the_report_is_the_fields_the_daemon_reads() {
+    assert_eq!(
+      report(true, false, 1_790_000_000),
+      r#"{"screen_recording":true,"accessibility":false,"checked_at":1790000000}"#
+    );
   }
 
   #[test]
   fn the_report_file_is_the_users_own_and_not_writable_by_others() {
     let root = std::env::temp_dir().join(format!("owlette-tcc-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
-    let path = write_report(&root, false).expect("report");
+    let path = write_report(&root, false, true).expect("report");
     assert_eq!(path, root.join(TCC_REL));
     let text = fs::read_to_string(&path).unwrap();
-    assert!(text.starts_with(r#"{"screen_recording":false,"checked_at":"#), "{text}");
+    assert!(text.starts_with(r#"{"screen_recording":false,"accessibility":true,"checked_at":"#), "{text}");
     assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o022, 0);
     assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1, "no temp file left");
   }
