@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 20/24 complete
+**Progress**: 22/24 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -109,13 +109,13 @@ commands green on the Mac or the CI leg. Do not start this wave before gate M0 s
   - Done when: table tests over injected caps pass on both systems; on the Mac `cargo test … -- --ignored videotoolbox` (synthetic NV12 buffers, so it needs no grant) encodes 120 frames at 1920×1080 in H.264 and in HEVC, prints p50 and p95 of `encode()`, asserts the first frame is an IRAP carrying its parameter sets, asserts the H.264 SPS it emits carries the restriction, and a transfer test halves a two-tone pattern with the halves on the right sides.
   - Depends on: 2.1, 3.1
 
-- [ ] **Task 4.3: Input injector** `[agent]`
+- [x] **Task 4.3: Input injector** `[agent]`
   - Files: `agent/swoop/src/input/mac.rs` (create), `agent/swoop/testdata/keymap-macos.json` (create), `agent/swoop/src/input/mod.rs`
   - Do: The injector receives what the session already resolved: `InputEvent::Key { scancode, extended, down }` in set-1 scancodes, `KeyVirtual`, moves normalised over the captured surface, buttons, and the wheel in `WHEEL_DELTA` units (`input/mod.rs:147-167`). It never sees a browser code. `keymap-macos.json` maps each browser `code` to a macOS virtual keycode (`kVK_*`), with a `note` where the choice needs one; `CgInjector` joins it at construction with the compiled-in `keymap.json` (code to scancode and extended flag) into a table from (scancode, extended) to keycode. `MetaLeft/Right` are the command keys and `AltLeft/Right` the option keys. Dropped, each with one debug line: the extended-42 half of PrintScreen's sequence and PrintScreen itself, and `KeyVirtual` for Pause; no Mac key means either, and F13 to F15 move the brightness on some Macs. Events are made with a HID-state event source and posted at the HID tap. **Every event carries the modifier flags** of the modifiers the injector believes are held, because a synthesised event inherits none. **A move while a button is held is posted as that button's dragged type.** Button presses carry the click count, from the time and distance since the last press of the same button (500 ms, 4 points). Absolute moves: the display is `platform::macos::display_for_pixel_rect(space.rect)`, and the point is that display's point rect scaled by the normalised position. Relative moves post at the current location plus the delta and set the event's integer delta fields. The wheel posts line-unit scroll events, three lines to a notch, carrying fractions over to the next event. At construction read `CGPreflightPostEventAccess()`: when false, log once that accessibility is not granted to the owlette app, then drop every event and count them. `input/mod.rs` gets the `mod` line and the re-export under `cfg`.
   - Done when: a unit test walks every code in `keymap.json` that has a scancode and finds it in `keymap-macos.json` or in a listed exceptions array with a reason; unit tests cover the modifier flags across press, release and release-all, the click count with an injected clock, the wheel's carried fraction and the dragged types; on the Mac `cargo test … -- --ignored input` moves the real pointer to each corner of the main display and types into a text field the human has focused, and the human confirms a double click selects a word, cmd+a selects all, a drag selects text and the wheel scrolls the way a wheel does.
   - Depends on: 2.1, 3.1
 
-- [ ] **Task 4.4: Cursor** `[agent]`
+- [x] **Task 4.4: Cursor** `[agent]`
   - Files: `agent/swoop/src/cursor/mac.rs` (create), `agent/swoop/src/cursor/mod.rs`
   - Do: `CursorSampler` implements `PointerSampler` for one captured display. Position: the location of `CGEventCreate(NULL)` is global points; when it lies on the captured display, convert it to that display's pixels inside `desktop_rect` and report it with `CGCursorIsVisible()`; when it lies on another display, report the position invisible. Every sample carries `clock::now_ticks()`. Shape: at most once every 33 ms read `NSCursor.currentSystem`; take the image's bitmap at the display's scale as 32-bit BGRA with straight alpha (un-premultiply if the representation is premultiplied) and the hot spot in pixels; hash the bytes, since the call is likely to answer a new object each time, and only when the hash changes hand back a `ShapeInfo` of kind `Color` with its pitch, so the existing `CursorTracker::on_shape` and `decode` take it unchanged. `shapes_available()` reads the cursor once at construction and answers whether it got an image. Whether the call works from a child that is not an AppKit app, off the main thread, is unverified: when it does not, the wiring in Task 5.1 captures with the cursor in the frame and this sampler reports every position invisible, so the viewer draws nothing of its own (decision 7).
   - Done when: unit tests cover the point-to-pixel conversion on a 2x display with a negative origin, the premultiplied case and the hash gate; on the Mac `cargo test … -- --ignored cursor` prints `shapes_available`, then each shape change while the human moves over a text field and a link, with fewer distinct shapes than samples.
@@ -843,3 +843,16 @@ un-notarized pkg; the owner chooses to install it or to re-store the profile fir
 - *Rig note:* the owner was asked for the same toggle five times today across builds and mis-timed probes; the
   TCC.db row (`auth_value@last_modified`, readable as root) timestamps a toggle exactly, so a watcher can pair
   it with the report without a second ask.
+
+**Tasks 4.3 and 4.4: human halves done** (2026-09-30, 16:19-16:30, the owner at the Mac). One spoken run
+(`~/src/human-runs.sh` on the Mac said every step aloud, so nothing was asked twice) opened a long page and an
+empty document in TextEdit itself.
+- **4.3:** the injector typed `Swoop typed this. Double click a word` into the focused document exactly, capitals
+  included (the owner pasted it back); the owner reports the double click, cmd+a, the drag and the wheel worked.
+  The test passed in 26 s.
+- **4.4:** in the owner's run the sampler saw the pointer invisible for all 30 s (5,704 samples, one shape): macOS
+  hides the pointer after typing until the mouse moves, and the owner had not moved it yet. Re-run with the
+  test's own sweep (`SWOOP_CURSOR_SWEEP=1`, 20 s, the owner watching the pointer move): 768 samples, 578 visible,
+  760 positions, 14 shape changes over 3 distinct shapes (the arrow and two edge cursors, 46x44 and 48x36,
+  hot spots centred), each later one served from the cache. `sample()` p50 24 us, p95 4.4 ms. The I-beam and the
+  pointing hand were not crossed by the sweep; gate M1 sees them in a real session.
