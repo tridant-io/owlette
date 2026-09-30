@@ -21,6 +21,10 @@
 //! - **`CF_HDROP` is refused**, and a clipboard holding one is left alone
 //!   entirely rather than synced as the text of the paths: §5 carries no file
 //!   lists and this protocol has no file transfer.
+//! - On macOS the same two formats come from the pasteboard (text, and png or
+//!   tiff as a png), file urls are left alone the same way, and host→viewer is
+//!   read only where the system allows it without asking (decision 17). `mac`
+//!   says how.
 //! - Clipboard sync is refused outright while the input desktop is `Winlogon`
 //!   (and on any desktop this process cannot name) — read here with
 //!   `OpenInputDesktop` + `GetUserObjectInformationW` rather than taken from
@@ -54,6 +58,8 @@
 
 pub mod formats;
 pub mod listener;
+#[cfg(target_os = "macos")]
+mod mac;
 #[cfg(windows)]
 pub mod wic;
 
