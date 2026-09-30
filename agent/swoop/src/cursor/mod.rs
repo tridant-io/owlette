@@ -783,6 +783,11 @@ mod win32 {
 #[cfg(windows)]
 pub use win32::{dpi_for_rect, pointer_position, PointerReader};
 
+// The arithmetic half of the macOS sampler is portable, so the Windows suite
+// runs its tests too; the sampler itself is macOS only.
+#[cfg(any(target_os = "macos", test))]
+pub mod mac;
+
 #[cfg(test)]
 mod tests {
     use super::*;
