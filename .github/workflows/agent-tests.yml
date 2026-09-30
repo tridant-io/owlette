@@ -63,11 +63,12 @@ jobs:
           # runs; test_display_enumeration_gate.py imports it inside its bodies
           # and collects, then fails every test on the same assertion.
           #
-          # The fifth is swoop: test_swoop_wiring.py imports win32event at
-          # module scope. Swoop is Windows-only by construction, not yet —
-          # agent/swoop/src/main.rs returns an internal error off Windows and
-          # platform/ holds win.rs alone — so this one does not lift when the
-          # macOS and Linux agents land. It lifts if swoop Wave 9 ever does.
+          # The fifth is swoop's Windows wiring: test_swoop_wiring.py drives
+          # OwletteService's swoop methods on win32event and win32ts, which
+          # exist only there, so it stays out of these legs for good. Its
+          # POSIX twin, test_swoop_wiring_posix.py, is on neither list: it runs
+          # here, starting the streamer through the launch job and a fake
+          # desktop runner, and it is the one that skips on Windows.
           #
           # `-x` aborts the leg on either kind, which is why both are --ignore
           # rather than markers. Everything else gates: a POSIX regression
