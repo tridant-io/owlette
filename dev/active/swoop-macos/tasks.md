@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 17/23 complete
+**Progress**: 19/24 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -175,13 +175,13 @@ commands green on the Mac or the CI leg. Do not start this wave before gate M0 s
   - Done when: the memo has a row per item with the observed result, failures named with their log lines, and the owner's word on whether M1 is met.
   - Depends on: 5.1, 5.2
 
-- [ ] **Task 6.2: Docs, changelogs and PROTOCOL.md** `[agent]`
+- [x] **Task 6.2: Docs, changelogs and PROTOCOL.md** `[agent]`
   - Files: `web/content/docs/dashboard/swoop.mdx`, `web/content/docs/agent/installation.mdx`, `agent/swoop/PROTOCOL.md`, `docs/changelog.md`, `web/content/docs/changelog.mdx`, `.claude/skills/build-system.md`
   - Do: `swoop.mdx` gains a macOS section in the page's own lowercase voice: Apple silicon and macOS 15 or later; someone must be logged in (no login window); the grants and where each is asked (screen recording at the app's launch, accessibility from the app's notice, local network at the first session, "paste from other apps" for the clipboard from the mac); the menu bar's capture indicator; the alert macOS repeats after about thirty days without a capture; what works without accessibility. `installation.mdx`'s macOS part names the same grants once. `PROTOCOL.md` §6: beside the Windows paragraph, the POSIX transport (the daemon's unix socket is the streamer's stdin and stdout; the exit file; still nothing sensitive in a file or on a command line); `status.encoder` gains `videotoolbox`; `status.desktop` is `default` on macOS. No golden vector changes. Both changelogs get their `## [Unreleased]` entries for the whole plan, from the lines the tasks left in the log, including the amendment to how the bundle travels. `build-system.md`: the macOS build now compiles the streamer, needs cmake, and checks the sidecar.
   - Done when: the docs site builds (`cd web && npm run build`); all new copy is lowercase apart from the listed exceptions in `.claude/CLAUDE.md`; both changelogs carry the same entries; `grep -n "videotoolbox" agent/swoop/PROTOCOL.md` finds the field.
   - Depends on: 5.1, 5.2
 
-- [ ] **Task 6.3: Parent plans** `[agent]`
+- [x] **Task 6.3: Parent plans** `[agent]`
   - Files: `dev/active/swoop/tasks.md`, `dev/active/swoop/context.md`, `dev/active/tri-platform-agent/tasks.md`, `dev/active/tri-platform-agent/plan.md`
   - Do: Point the two parent plans here without renumbering anything they reference. swoop Task 9.1: a status line saying it was executed as `dev/active/swoop-macos/` for macOS, with Linux still to come. swoop `context.md`: the verb `selfcheck`, the backend `videotoolbox` and the feature `encode-videotoolbox` added to its names. tri-platform Wave 8: the same pointer and status. tri-platform `plan.md`, under "Amendments recorded after the decisions were written": cross-plan rule C2 amended 2026-09-28: on POSIX the bundle rides a unix socket the daemon listens on, not a `stdin_path` file; the runner's path rule applies to the socket; `desktop_not_running` is a spawn refusal in the agent's log, not an `endReason`.
   - Done when: `grep -rn "swoop-macos" dev/active/swoop dev/active/tri-platform-agent` finds the pointers, and `grep -rn "^<<<<<<<\|^>>>>>>>" dev/active` finds nothing.
@@ -773,3 +773,47 @@ box (226 frames, 1 irap, 122 cpos, 23 cshape); macOS 418 / 20, then 1, 5; the st
 - Stale for 6.2: `firebase_client.py:1574` still says "binary presence only".
 - *Changelog line:* "a mac advertises swoop (`capabilities.swoop: 1`) when the streamer is installed and the
   desktop app reports a fresh screen recording grant; windows is unchanged and linux stays 0."
+
+### 2026-09-30, Wave 6 (the two agent tasks; gate M1 waits for the owner)
+
+**Task 6.2: done** (`169f15e8`).
+- `swoop.mdx` gained `## on macOS` (requirements, the four grants and where each is asked, what works without
+  accessibility, the lit display and the menu-bar indicator, the thirty-day alert, the keyboard mapping and
+  its checkbox, the clipboard's rules and the listing caveat); `installation.mdx`'s macOS step names the grants
+  once; PROTOCOL.md §5 says which side maps ctrl and cmd for which host, §6 has the POSIX transport (the
+  `launch` job, the 0660 socket as stdin and stdout, the peer-uid check, the exit file behind the `exiting`
+  code) and the menu-bar stop's `kill` ending; `status.encoder` names `videotoolbox`; `build-system.md` has
+  "The macOS pkg".
+- Both changelogs' `## [Unreleased]` are rewritten from the log's lines into five entries (a Mac can host a
+  swoop session; the swoop clipboard on a Mac; the macOS app reports its Accessibility grant; the swoop
+  keyboard follows the machine you control; how swoop starts on macOS and Linux, which carries the bundle
+  amendment). The two sections are identical. No version heading: Task 7.1 adds it.
+- The docs site builds (225 pages) once `SESSION_SECRET` is set: the worktree has no `web/.env.local`, and a
+  plain `npm run build` stops at "collect page data" for want of it. CI's non-secret value was used.
+- Documented as intended, still unmeasured: the notice clearing within seconds of the grant (Task 4.9) in
+  swoop.mdx and the Accessibility changelog entry; the pre-15.4 pasteboard read (Task 4.5's deviation).
+- *Finding:* `status.desktop` is sent on no platform, Windows included: its only producer is the `securedesk`
+  stub (the parent plan's Task 6.1), registered under `cfg(windows)`. The docs state the contract ("always
+  `default` on macOS"), not observed output.
+- Stale comments for a later sweep, none in this task's files: `platform/mod.rs:20`,
+  `platform/unsupported.rs:7-8`, `capture/mod.rs:32`, `lib.rs:34-35`, `agent/src/firebase_client.py:1574`,
+  and `agent-tests.yml:102,164` (`# v6` on the v7.0.1 checkout SHA).
+- *Changelog line:* none; the entries are the deliverable.
+
+**Task 6.3: done** (`44722a0b`).
+- swoop Task 9.1 and tri-platform Wave 8 carry dated status lines pointing here; tri-platform `plan.md` records
+  the C2 amendment; `selfcheck`, `videotoolbox` and `encode-videotoolbox` went into swoop `context.md`'s
+  "Dependencies on other plans" (it has no names registry; the registry table is in swoop `plan.md`, outside
+  the task's files).
+- The tri-platform `plan.md`, `decisions.md` and `README.md` are tracked for the first time: until today they
+  were untracked copies living only in the main checkout, the way the first swoop plan was lost.
+- Both greps in the done-when pass (four pointers, no conflict markers).
+- Noted, not changed: the tracked tri-platform `tasks.md` has carried the Apple team id and the Mac's `.local`
+  hostname on line 5 since before this plan; swoop `context.md` still asks for the Windows half of the C2
+  amendment; the tri-platform README lists two spike files that do not exist.
+- This file has 24 task blocks since 4.9 was added; the header's denominator is corrected below.
+- *Changelog line:* none.
+
+**Task 6.1 (gate M1): not started.** It needs the head installed on the Mac and the owner at both machines. The
+signed build of `33311e99` ended `BUILD-EXIT=69` again (the notary profile is still gone), leaving a signed,
+un-notarized pkg; the owner chooses to install it or to re-store the profile first.
