@@ -23,7 +23,9 @@ const ACCESSIBILITY_RECHECK_MS = 5_000
  * the window losing and regaining focus. The callback must keep its identity
  * across renders, or the interval restarts before it ever fires.
  *
- * Each answer is null off macOS and before the first answer: nothing to say.
+ * Each answer is null off macOS and before the first answer, and
+ * Accessibility's is null when the app could not find out (`tcc.rs`):
+ * nothing to say.
  */
 export function PermissionBanner({
   screenRecording,
@@ -73,8 +75,11 @@ function Notice({
   onOpenSettings: () => void
   children: ReactNode
 }) {
+  // the button makes the row taller than a line of text, so the icon is
+  // centred on the row rather than set against the first line, and loses the
+  // nudge that lines it up with that line
   return (
-    <InlineNotice data-testid={testId}>
+    <InlineNotice data-testid={testId} className="items-center [&>svg]:mt-0">
       <div className="flex flex-1 items-center justify-between gap-4">
         <p className="text-sm">{children}</p>
         <Button variant="outline" size="sm" className="shrink-0" onClick={onOpenSettings}>
