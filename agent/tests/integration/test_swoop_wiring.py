@@ -252,6 +252,7 @@ class FakeStreamerBackend:
 
     def __init__(self):
         self.procs = []
+        self.sids = []
         self.bundles = 0
 
     def __getattr__(self, name):
@@ -265,7 +266,8 @@ class FakeStreamerBackend:
         return bytearray(
             json.dumps({'sid': sid, 'sessionKey': BUNDLE_SENTINEL}).encode())
 
-    def spawn(self, exe_path, log_dir=None):
+    def spawn(self, exe_path, log_dir=None, *, sid=None):
+        self.sids.append(sid)
         popen = subprocess.Popen(
             [sys.executable, exe_path, 'run'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -411,6 +413,7 @@ def test_a_ring_spawns_the_streamer_and_a_service_stop_kills_it(wired):
     assert wait_for(lambda: svc.swoop_manager.status()['state'] == 'running')
     assert proc.is_running()
     assert backend.bundles == 1
+    assert backend.sids == ['sid-1'], "the ring's sid never reached the spawn"
 
     svc.graceful_shutdown('svc_stop')
 

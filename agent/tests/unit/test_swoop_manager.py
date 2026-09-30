@@ -7,6 +7,7 @@ bundle never reaches a log record.
 """
 
 import json
+import os
 import threading
 import time
 
@@ -78,6 +79,7 @@ class FakeSpawn:
         self.bundle_error_after = bundle_error_after
         self.delay = delay
         self.spawned = 0
+        self.sids = []
         self.fetched = 0
         self.post_error = post_error
         self.posted = []
@@ -100,8 +102,9 @@ class FakeSpawn:
             'hostToken': f'host-token-{self.fetched}',
         }).encode())
 
-    def spawn(self, exe_path, log_dir=None):
+    def spawn(self, exe_path, log_dir=None, *, sid=None):
         self.spawned += 1
+        self.sids.append(sid)
         return self.proc
 
     def post_host_events(self, events, site_id, machine_id, auth_manager):
@@ -251,6 +254,7 @@ class TestSessionLifecycle:
         assert wait_for(lambda: backend.spawned == 1)
         assert wait_for(lambda: manager.status()['state'] == swoop_manager.STATE_RUNNING)
         assert manager.status()['sid'] == 'sid_1'
+        assert backend.sids == ['sid_1'], 'the spawn is told which session it serves'
         actions = [call.args[0] for call in firebase.log_event.call_args_list]
         assert 'swoop_session_start' in actions
         manager.kill('test')
@@ -644,6 +648,44 @@ class TestSpawnCleanup:
         assert wait_for(lambda: 'close' in proc.ops)
         assert manager.status()['state'] == swoop_manager.STATE_IDLE
         assert manager.status()['lastRefusal'] == swoop_spawn.REFUSAL_SPAWN_FAILED
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='the POSIX arm of the worker and the side effects')
+class TestOffWindows:
+    """Off Windows the leftovers of an earlier run are swept once, before the
+    first spawn, and the two Windows side effects are never attempted."""
+
+    def test_the_worker_sweeps_once_before_its_first_spawn(self, firebase, monkeypatch):
+        import swoop_spawn_posix
+
+        order = []
+        monkeypatch.setattr(swoop_spawn_posix, 'sweep_stale', lambda: order.append('sweep'))
+        backend = FakeSpawn()
+        verify = backend.verify_install
+        backend.verify_install = lambda: (order.append('verify'), verify())[1]
+        manager = make_manager(backend, firebase)
+
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+        backend.proc = FakeProc()
+        manager.ensure_streamer('sid_2')
+        assert wait_for(lambda: backend.spawned == 2)
+        manager.kill('test')
+
+        assert order == ['sweep', 'verify', 'verify']
+
+    def test_the_side_effects_are_never_attempted(self, monkeypatch):
+        calls = []
+        for name in ('_read_side_effect_state', '_run_powershell', '_read_sas_value',
+                     '_write_sas_value', '_delete_sas_value'):
+            monkeypatch.setattr(swoop_manager, name,
+                                lambda *args, _name=name, **kwargs: calls.append(_name))
+        manager = make_manager(FakeSpawn())
+
+        manager._do_side_effects(True)
+        manager._do_side_effects(False)
+
+        assert calls == []
 
 
 class TestHostTokenRefresh:

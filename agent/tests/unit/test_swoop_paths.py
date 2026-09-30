@@ -3,7 +3,8 @@ Unit tests for the swoop path surface in shared_utils.
 
 Five names are the interface every Wave-2 swoop module imports:
 SWOOP_EXE_NAME, SWOOP_LOG_DIR, SWOOP_IPC_DIR, get_swoop_dir() and
-get_swoop_exe_path(). These tests pin their resolution and, more importantly,
+get_swoop_exe_path(). These tests pin their resolution -- from the install root
+on Windows, from a fixed path per platform elsewhere -- and, more importantly,
 two deliberate omissions that a later "cleanup" would otherwise undo:
 
   * get_swoop_dir() NEVER creates the directory, and {app}\\swoop is NOT in
@@ -24,6 +25,7 @@ rather than reloading the one the rest of the suite shares.
 
 import importlib.util
 import os
+import sys
 import time
 
 import pytest
@@ -88,8 +90,13 @@ def touch_old(path, age_seconds=AGE_90_DAYS + 3600):
 class TestSwoopConstants:
     """The three module-level names, resolved under a fake %PROGRAMDATA%."""
 
+    @pytest.mark.windows
     def test_exe_name_is_the_registered_spelling(self, isolated):
         assert isolated.SWOOP_EXE_NAME == 'owlette-swoop.exe'
+
+    @pytest.mark.skipif(os.name == 'nt', reason='the POSIX spelling')
+    def test_exe_name_has_no_extension_off_windows(self, isolated):
+        assert isolated.SWOOP_EXE_NAME == 'owlette-swoop'
 
     def test_log_dir_under_program_data(self, isolated, tmp_path):
         assert isolated.SWOOP_LOG_DIR == str(tmp_path / 'Owlette' / 'logs' / 'swoop')
@@ -121,6 +128,7 @@ class TestEnsureDataDirectories:
         assert (data_root / 'logs' / 'swoop').is_dir()
         assert (data_root / 'ipc' / 'swoop').is_dir()
 
+    @pytest.mark.windows
     def test_does_not_create_the_install_directory(self, data_root, install_root):
         """Spike 0.7 L2: only the installer may create {app}\\swoop."""
         shared_utils.ensure_data_directories()
@@ -131,6 +139,7 @@ class TestEnsureDataDirectories:
 
 # get_swoop_dir / get_swoop_exe_path
 
+@pytest.mark.windows
 class TestSwoopInstallPaths:
     """Resolution from the install root, and the never-create rule."""
 
@@ -159,6 +168,45 @@ class TestSwoopInstallPaths:
         exe.write_bytes(b'MZ')
 
         assert shared_utils.get_swoop_exe_path() == str(exe)
+
+
+class TestPosixSwoopInstallPaths:
+    """Off Windows the streamer sits at one fixed path per platform, and counts
+    as installed only when the file is there."""
+
+    @pytest.fixture
+    def posix_path(self, tmp_path, monkeypatch):
+        """This platform's entry pointed at a temp path, with the POSIX rule on."""
+        exe = tmp_path / 'owlette.app' / 'Contents' / 'MacOS' / 'owlette-swoop'
+        monkeypatch.setattr(shared_utils, '_IS_WINDOWS', False)
+        monkeypatch.setitem(shared_utils._POSIX_SWOOP_PATHS, sys.platform, str(exe))
+        return exe
+
+    def test_the_fixed_paths(self):
+        assert shared_utils._POSIX_SWOOP_PATHS == {
+            'darwin': '/Applications/owlette.app/Contents/MacOS/owlette-swoop',
+            'linux': '/opt/owlette/swoop/owlette-swoop',
+        }
+
+    def test_exe_path_is_none_when_the_file_is_absent(self, posix_path):
+        assert shared_utils.get_swoop_exe_path() is None
+        assert not posix_path.parent.exists(), 'nothing was created'
+
+    def test_exe_path_is_the_fixed_path_when_installed(self, posix_path):
+        posix_path.parent.mkdir(parents=True)
+        posix_path.write_bytes(b'\xcf\xfa\xed\xfe')
+
+        assert shared_utils.get_swoop_exe_path() == str(posix_path)
+
+    def test_dir_is_the_directory_of_the_fixed_path(self, posix_path):
+        assert shared_utils.get_swoop_dir() == str(posix_path.parent)
+
+    def test_a_platform_without_a_path_has_no_streamer(self, monkeypatch):
+        monkeypatch.setattr(shared_utils, '_IS_WINDOWS', False)
+        monkeypatch.delitem(shared_utils._POSIX_SWOOP_PATHS, sys.platform, raising=False)
+
+        assert shared_utils.get_swoop_exe_path() is None
+        assert shared_utils.get_swoop_dir() is None
 
 
 # cleanup_old_logs
