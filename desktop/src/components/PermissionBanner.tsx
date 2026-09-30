@@ -1,6 +1,9 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { InlineNotice } from '@/components/ui/inline-notice'
+
+/** How often a showing accessibility notice asks again whether it still applies. */
+const ACCESSIBILITY_RECHECK_MS = 5_000
 
 /**
  * Says so, one notice per missing grant, when macOS has not granted this app
@@ -14,7 +17,11 @@ import { InlineNotice } from '@/components/ui/inline-notice'
  *
  * Without Accessibility swoop shows the screen but its input is dropped. The
  * app never asks for it on its own: the ask raises a system prompt, so it is
- * made only by this notice's button, which also opens the pane.
+ * made only by this notice's button, which also opens the pane. That grant
+ * takes effect at once, so while its notice shows it calls
+ * `onRecheckAccessibility` every five seconds, and the notice clears without
+ * the window losing and regaining focus. The callback must keep its identity
+ * across renders, or the interval restarts before it ever fires.
  *
  * Each answer is null off macOS and before the first answer: nothing to say.
  */
@@ -23,13 +30,22 @@ export function PermissionBanner({
   accessibility,
   onOpenScreenRecordingSettings,
   onRequestAccessibility,
+  onRecheckAccessibility,
 }: {
   screenRecording: boolean | null
   accessibility: boolean | null
   onOpenScreenRecordingSettings: () => void
   onRequestAccessibility: () => void
+  onRecheckAccessibility: () => void
 }) {
-  if (screenRecording !== false && accessibility !== false) return null
+  const accessibilityMissing = accessibility === false
+  useEffect(() => {
+    if (!accessibilityMissing) return
+    const timer = window.setInterval(onRecheckAccessibility, ACCESSIBILITY_RECHECK_MS)
+    return () => window.clearInterval(timer)
+  }, [accessibilityMissing, onRecheckAccessibility])
+
+  if (screenRecording !== false && !accessibilityMissing) return null
   return (
     <div className="m-3 space-y-3">
       {screenRecording === false && (
@@ -38,7 +54,7 @@ export function PermissionBanner({
           this screen. switch it on in system settings, then quit and reopen owlette.
         </Notice>
       )}
-      {accessibility === false && (
+      {accessibilityMissing && (
         <Notice testId="accessibility-banner" onOpenSettings={onRequestAccessibility}>
           accessibility is off for owlette on this mac: swoop can show this screen but cannot
           control it. switch it on in system settings.

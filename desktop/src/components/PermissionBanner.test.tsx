@@ -1,20 +1,29 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PermissionBanner } from '@/components/PermissionBanner'
 
 function banner(screenRecording: boolean | null, accessibility: boolean | null) {
   const openScreenRecording = vi.fn()
   const requestAccessibility = vi.fn()
-  const rendered = render(
+  const recheckAccessibility = vi.fn()
+  const element = (recording: boolean | null, access: boolean | null) => (
     <PermissionBanner
-      screenRecording={screenRecording}
-      accessibility={accessibility}
+      screenRecording={recording}
+      accessibility={access}
       onOpenScreenRecordingSettings={openScreenRecording}
       onRequestAccessibility={requestAccessibility}
-    />,
+      onRecheckAccessibility={recheckAccessibility}
+    />
   )
-  return { ...rendered, openScreenRecording, requestAccessibility }
+  const rendered = render(element(screenRecording, accessibility))
+  const answer = (recording: boolean | null, access: boolean | null) =>
+    rendered.rerender(element(recording, access))
+  return { ...rendered, answer, openScreenRecording, requestAccessibility, recheckAccessibility }
 }
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('PermissionBanner', () => {
   it('says nothing off macos or before the first answer', () => {
@@ -56,5 +65,36 @@ describe('PermissionBanner', () => {
     expect(openScreenRecording).not.toHaveBeenCalled()
     fireEvent.click(buttons[0])
     expect(openScreenRecording).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks again every five seconds while the accessibility notice shows, and stops once granted', () => {
+    vi.useFakeTimers()
+    const { answer, recheckAccessibility } = banner(true, false)
+    vi.advanceTimersByTime(4_999)
+    expect(recheckAccessibility).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(recheckAccessibility).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(5_000)
+    expect(recheckAccessibility).toHaveBeenCalledTimes(2)
+
+    answer(true, true)
+    expect(screen.queryByTestId('accessibility-banner')).toBeNull()
+    vi.advanceTimersByTime(60_000)
+    expect(recheckAccessibility).toHaveBeenCalledTimes(2)
+  })
+
+  it('never asks again on a timer when there is no accessibility notice', () => {
+    vi.useFakeTimers()
+    for (const [screenRecording, accessibility] of [
+      [null, null],
+      [true, true],
+      [false, true],
+      [false, null],
+    ] as const) {
+      const { recheckAccessibility, unmount } = banner(screenRecording, accessibility)
+      vi.advanceTimersByTime(60_000)
+      expect(recheckAccessibility).not.toHaveBeenCalled()
+      unmount()
+    }
   })
 })

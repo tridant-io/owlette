@@ -19,7 +19,11 @@
 //! beside it as `accessibility`, read on the same tick, but **never asked
 //! here**: the ask raises a system prompt, so it is made only from the
 //! permission banner's button ([`request_accessibility`], swoop-macos task 2.3).
+//! Unlike Screen Recording its grant takes effect at once, so the answer is
+//! read on the main thread (swoop-macos task 4.9): read on this module's own
+//! thread it kept its launch-time value through a grant and a revocation.
 
+use std::ffi::c_void;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -39,6 +43,20 @@ extern "C" {
   fn CGRequestPostEventAccess() -> bool;
 }
 
+/// libdispatch's queue object, opaque here.
+#[repr(C)]
+struct DispatchQueue {
+  _private: [u8; 0],
+}
+
+// libdispatch, part of libSystem. `dispatch_get_main_queue()` is a C macro
+// over this symbol.
+extern "C" {
+  #[link_name = "_dispatch_main_q"]
+  static DISPATCH_MAIN_QUEUE: DispatchQueue;
+  fn dispatch_sync_f(queue: *const DispatchQueue, context: *mut c_void, work: extern "C" fn(*mut c_void));
+}
+
 /// Whether the grant is held right now, without asking.
 pub fn granted() -> bool {
   // SAFETY: a plain CoreGraphics query with no arguments and no state of ours.
@@ -53,9 +71,33 @@ pub fn request() -> bool {
 }
 
 /// Whether this app may post input events (Accessibility), without asking.
+/// Read on the main thread, and waits for it: callers are the report's thread
+/// and the command's worker; the main thread itself is answered directly
+/// rather than deadlocked.
 pub fn accessibility_granted() -> bool {
-  // SAFETY: a plain CoreGraphics query with no arguments and no state of ours.
-  unsafe { CGPreflightPostEventAccess() }
+  // SAFETY: reads whether the calling thread is the main one; no arguments.
+  if unsafe { libc::pthread_main_np() } != 0 {
+    // SAFETY: a plain CoreGraphics query with no arguments and no state of ours.
+    return unsafe { CGPreflightPostEventAccess() };
+  }
+  let mut answer = false;
+  // SAFETY: the main queue is a static the process always has; the context
+  // is `answer`, which outlives the call because `dispatch_sync_f` returns
+  // only once the work has run.
+  unsafe {
+    dispatch_sync_f(
+      std::ptr::addr_of!(DISPATCH_MAIN_QUEUE),
+      std::ptr::addr_of_mut!(answer).cast(),
+      read_post_event_access,
+    )
+  };
+  answer
+}
+
+extern "C" fn read_post_event_access(context: *mut c_void) {
+  // SAFETY: `context` is the `bool` `accessibility_granted` waits on, and a
+  // plain CoreGraphics query with no arguments.
+  unsafe { *context.cast::<bool>() = CGPreflightPostEventAccess() };
 }
 
 /// Ask for Accessibility: lists the app in System Settings and may raise the
@@ -93,7 +135,8 @@ pub fn write_report(root: &Path, granted: bool, accessibility: bool) -> std::io:
 }
 
 /// Ask for Screen Recording once, then report both grants every minute for
-/// the life of the app.
+/// the life of the app. The main thread's run loop serves the Accessibility
+/// read, so a tick made before it runs waits for it.
 pub fn spawn(root: &Path) {
   let root = root.to_path_buf();
   let spawned = thread::Builder::new().name("owlette-tcc".into()).spawn(move || {

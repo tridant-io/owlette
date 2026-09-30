@@ -136,17 +136,22 @@ function App() {
   // macOS Screen Recording and Accessibility, re-read whenever the window
   // comes back: Screen Recording takes effect on relaunch, but the banner
   // should at least stop showing once the user has switched it on and come back.
+  // Accessibility takes effect at once, so its notice also re-reads it on a
+  // timer while it shows.
   const [screenRecording, setScreenRecording] = useState<boolean | null>(null)
   const [accessibility, setAccessibility] = useState<boolean | null>(null)
+  const readAccessibility = useCallback(() => {
+    accessibilityGranted().then(setAccessibility, () => setAccessibility(null))
+  }, [])
   useEffect(() => {
     const read = () => {
       screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
-      accessibilityGranted().then(setAccessibility, () => setAccessibility(null))
+      readAccessibility()
     }
     read()
     window.addEventListener('focus', read)
     return () => window.removeEventListener('focus', read)
-  }, [])
+  }, [readAccessibility])
 
   // The webview's native menu (Back/Refresh/Print/Inspect) is browser chrome, not
   // this app. Suppressed in built apps except on editable fields; `tauri dev` keeps
@@ -510,6 +515,7 @@ function App() {
               toast.error('could not open system settings', { description: message(cause) }),
             )
           }}
+          onRecheckAccessibility={readAccessibility}
         />
 
         {config.error && (
