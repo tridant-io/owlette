@@ -120,7 +120,10 @@ SCStream's audio output into the existing Opus path.
    process is gone. `close()` signals only an identity-confirmed process (`psutil`, pinned by create time),
    never a bare pid. The app drops its own copy of the socket after the spawn so the daemon sees EOF.
 5. **Crypto off Windows is str0m `rust-crypto`.** One backend for macOS and, later, Linux; DTLS is str0m's
-   `dimpl` either way. `apple-crypto` is the measured alternate if SRTP throughput disappoints.
+   `dimpl` either way. `apple-crypto` is the measured alternate if SRTP throughput disappoints. *Corrected
+   2026-09-29 (Task 1.1):* it is not pure Rust. str0m-rust-crypto turns on dimpl's `rcgen` feature, which in
+   dimpl 0.7.3 also turns on `aws-lc-rs`, so aws-lc-sys (C) builds on macOS and Linux; it built cleanly on the
+   Mac and on both CI legs, and none of it reaches Windows. The decision stands; only the wording was wrong.
 6. **No openh264 on macOS.** VideoToolbox's software H.264 is the no-GPU floor. `encode-openh264` stays for
    Linux.
 7. **The cursor stays an overlay.** The viewer has no in-frame mode and the wire is frozen, so SCK captures
