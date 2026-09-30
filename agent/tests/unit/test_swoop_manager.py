@@ -438,7 +438,11 @@ class TestSessionEnd:
         backend = FakeSpawn()
         manager = make_manager(backend, firebase)
         manager.ensure_streamer('sid_1')
-        assert wait_for(lambda: backend.spawned == 1)
+        # a start ends with the token timer, after the process is assigned and
+        # the state is running. finishing before that leaves the worker to arm
+        # sid_1's timer after the finish cleared it, and sid_2's wait below
+        # would then snapshot the stale one. under load the gap is real.
+        assert wait_for(lambda: manager._proc is not None and manager._token_timer is not None)
         old = manager._proc
 
         # the reader and the kill both reach the end of the same process.
@@ -448,7 +452,9 @@ class TestSessionEnd:
 
         backend.proc = FakeProc()
         manager.ensure_streamer('sid_2')
-        assert wait_for(lambda: manager._token_timer is not None)
+        assert wait_for(lambda: manager.status()['sid'] == 'sid_2'
+                        and manager.status()['state'] == swoop_manager.STATE_RUNNING
+                        and manager._token_timer is not None)
         timer = manager._token_timer
         spawns = list(manager._spawn_times)
 
