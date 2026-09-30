@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 15/23 complete
+**Progress**: 17/23 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -154,13 +154,13 @@ commands green on the Mac or the CI leg. Do not start this wave before gate M0 s
 
 ## Wave 5: wiring
 
-- [ ] **Task 5.1: `platform/macos.rs` for real, and probe** `[agent]`
+- [x] **Task 5.1: `platform/macos.rs` for real, and probe** `[agent]`
   - Files: `agent/swoop/src/platform/macos.rs`, `agent/swoop/src/probe.rs`, and for the two owner decisions of 2026-09-30 only: `agent/swoop/src/capture/sck.rs` (the menu-bar stop) and, if the session loop needs a hook for a clean end, `agent/swoop/src/session/mod.rs`
   - Do: Replace the stub's types with the real ones under the seam names (context.md's two tables). `CaptureSource::open(output, signal)` builds a `CursorSampler` for the output and opens `ScreenCapture` with `cursor_in_frame` set to the negation of `shapes_available()`. `DesktopWatcher` never switches: `follow()` answers false and `name()` answers `default`. `InputInjector` is `CgInjector`, `Downscaler` and `ScaleError` are `PixelTransfer`'s, `enumerate_outputs` is `displays::mac::outputs`, `dpi_for_rect` is 96 times the scale of the display the rect belongs to. The display helpers, the clock and `selfcheck` stay as they are. `probe.rs`: on macOS `sources()` is the display names and `adapters()` is one row (description `apple gpu`, vendor `apple`, vendor id `0x106b`, the display count, not software); the encoders already come from `select::probe_all()`. `probe` needs no grant and must not ask for one. *Added 2026-09-30, the owner's decisions 6 and 7 (plan.md):* **(a)** a session wakes the display and holds it awake while it runs: `CaptureSource::open` declares user activity (`IOPMAssertionDeclareUserActivity`) and takes a `PreventUserIdleDisplaySleep` assertion (`IOPMAssertionCreateWithName`, IOKit, `extern "C"` per decision 15) that is released when the source is dropped, so the display is lit for the session and free after it; nothing is taken by `probe` or `selfcheck`. **(b)** a stop from the menu bar's capture indicator (`stream:didStopWithError:` with -3817, the user-stopped code) ends the session instead of being rebuilt: `capture/sck.rs` distinguishes that code from the other stops and reports it, and the session ends cleanly through whatever end path the loop already has for a host-side stop (as `kill` does, with `exiting` carrying the reason `normal` and code 0, and one log line saying the person at the Mac stopped it); only if the loop has no such path does it fall back to an error exit, and then the log entry says so for Task 6.2 to document. Every other stop code is still rebuilt.
   - Done when: the macOS commands pass; on the Mac, from a plain ssh shell, `owlette-swoop probe` prints the displays and `videotoolbox` and exits 0; under the ssh grant `cargo test … --lib session::host::tests::end_to_end_picture -- --ignored --nocapture` captures, encodes and reports a cursor stream on the Mac; the Windows commands pass on this box; the display assertion is visible in `pmset -g assertions` while that test runs and gone after it; a unit test covers the -3817 branch and a hardware note says how the menu-bar stop was or was not exercised.
   - Depends on: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
 
-- [ ] **Task 5.2: The capability flip** `[agent]`
+- [x] **Task 5.2: The capability flip** `[agent]`
   - Files: `agent/src/swoop_capability.py`, `agent/tests/unit/test_swoop_capability.py`
   - Do: `streamer_capable()` is still the local Windows-only answer its docstring calls temporary. Make it `osadapter.streamer_capable()`, inside a `try` that answers False on any exception: this runs on the heartbeat path, where an exception would reach `ConnectionManager` as a Firestore error. `swoop_capability_value()` does not change: the binary present AND that answer. On macOS that is a fresh Screen Recording report from the app (`darwin.py:310`); on Linux nothing ships the binary yet, so the value stays 0.
   - Done when: a table test pins Windows true, macOS over the three states of the report (true, false, none), Linux with no binary, and an adapter that raises; the agent suite is green on this box and on the POSIX legs.
@@ -708,3 +708,68 @@ owlette switched off at 11:41:13 and the old app (pid 29737) still reporting tru
 *Wave 4 open items for the owner:* the display-sleep and menu-bar-stop decisions (4.1), the clipboard listing
 gap and the pre-15.4 read (4.5), the 4.9 build, the two human runs (4.3, 4.4), and the three CodeQL dismissals
 (4.8).
+
+### 2026-09-30, Wave 5
+
+Two agents, one Mac worktree each. The combined head (`cd2b7473`) is green on both systems: Windows 394 passed /
+20 ignored (403 / 21 with `audio-opus`), then 1, 1, 5, and the Windows hardware `end_to_end_picture` on this
+box (226 frames, 1 irap, 122 cpos, 23 cshape); macOS 418 / 20, then 1, 5; the stub 403 / 17.
+
+**Task 5.1: done** (`cd2b7473`). `platform/macos.rs`, `probe.rs`, `capture/sck.rs`, `session/mod.rs`.
+- The seam is real: `CaptureSource` wraps `ScreenCapture` with a `CursorSampler` (`cursor_in_frame` is the
+  negation of `shapes_available()`), `InputInjector` is `CgInjector`, `Downscaler`/`ScaleError` are
+  `PixelTransfer`'s, `enumerate_outputs` is `displays::mac::outputs`; `DesktopWatcher` and `process` stay the
+  `unsupported` ones, which already do what the task says.
+- **`end_to_end_picture` on the Mac, under the ssh grant:** `(3420, 2214) -> (3420, 2214) hevc, 74 frames (1
+  irap, 907709 bytes), 15 cpos, 8 cshape`. The pause test: `35 frames still, 0 while paused, 37 after the
+  resume`.
+- **`probe` from a plain ssh shell:** exit 0; `apple gpu`, vendor `apple`, id 0x106b, 1 output, not software;
+  `sources: ["display-1"]`; encoders `videotoolbox` for h265 and h264; it takes no assertion and wakes nothing
+  (with the display asleep it lists `sources: []`).
+- **Owner decision 6, the display:** `CaptureSource::open` holds `PreventUserIdleDisplaySleep` named
+  "owlette swoop session" until the source is dropped (`pmset -g assertions` shows it during the test and not
+  after, for the test binary and for `run`); the user-activity declaration wakes the display and is released as
+  soon as it is listed, so macOS is not told somebody is at the Mac all session long. Measured: a `run` on a
+  display put to sleep with `pmset displaysleepnow` logged `the display was asleep and woke in 16 ms` (68 ms
+  on a rerun), captured at 3420x2214 and sent `ready`. `caffeinate` is no longer needed for a session.
+- **Owner decision 7, the menu-bar stop:** `capture/sck.rs` tells -3817 (stopped by the user) from every other
+  stop code; the session ends through the kill's own path, `teardown(Exit::Ok, ExitReason::Kill,
+  LeftReason::Kill)`: `exiting` carries `{"code":0,"reason":"kill"}`, viewers get `viewer_left` with `kill`,
+  the agent books `kill exit=0`, and the log says the person at the mac stopped the capture. It is a portable
+  hook (`session::StoppedAtHost`) that no Windows source returns. A unit test feeds the stop callback -3817 (and
+  -3805, -3815, -3811, -3821, which rebuild). The real click is for Task 6.1.
+- Deviations: the reason is `kill`, not `normal` (the streamer's vocabulary is `idle|kill|signal_lost|
+  session_cap|error`; a new word is a protocol, agent and web change); `enumerate_outputs` also wakes a
+  sleeping display, because `drive` enumerates before it opens capture and would otherwise still exit 12; the
+  activity declaration is released after the wake; `sck.rs` imports `session::StoppedAtHost`; Task 4.7's three
+  stale Windows-only lines in `session/mod.rs` are reworded.
+- *For Task 6.1:* the menu-bar stop (expect the log line, `exiting 0 (Kill)`, the page ending as a kill, the
+  agent booking `kill exit=0`; what the audio stream does on -3817 is unmeasured); a session started on a
+  sleeping display; a session held past the rig's 10-minute display sleep; unverified: whether the screensaver
+  or auto-lock starts under the hold, and a lid closed mid-session (expected exit 12 after the 10 s rebuild
+  deadline).
+- *For Task 6.2:* stale comments in `platform/mod.rs`, `platform/unsupported.rs` and `capture/mod.rs:32` that
+  still say macOS borrows its stubs; PROTOCOL.md section 6 gets the menu-bar stop's `kill` ending.
+- *Changelog line:* "swoop on macOS: sessions capture, encode, inject and draw the cursor on the Mac backends; a
+  session wakes the Mac's display and keeps it lit while it captures, and stopping the capture from the menu
+  bar ends the session cleanly instead of restarting it; `probe` lists the Mac's displays and its GPU."
+
+**Task 5.2: done** (`b4b1e04d`, three files: the heartbeat test joined the list with the orchestrator's yes).
+- `streamer_capable()` is `osadapter.streamer_capable()` inside a `try` that answers False on any exception.
+  Windows answers as before (its arm is always True); Linux stays 0 without a binary.
+- The darwin arm's "fresh" is decision 8's: the report must be a regular file owned by the console user, not
+  writable by group or others, no more than 300 s old and no more than 60 s ahead of the daemon's clock; the
+  app rewrites it every 60 s; the read is in-process, no spawn on the heartbeat.
+- The installed report, read at 1790803160: `{"screen_recording":true,"accessibility":true,"checked_at":
+  1790803149}`, 11 s old, uid 501, mode 0644: the arm answers True for it. The installed agent still runs the
+  old module, so the Mac reports 0 until a pkg with this change is installed.
+- *Plan gap:* `test_firebase_client_heartbeat.py` faked Windows through `sys.platform`, which the cached arm no
+  longer reads; it now stubs `swoop_capability.streamer_capable` beside that fake (red first on the Mac: 0 == 1).
+- This box: 2121 passed, 366 skipped (22 old capability tests out, 21 in plus 3 darwin-only skips); the Mac,
+  macos-15 row: 1826 passed, 251 skipped, the rig's two launchd cases deselected. The ubuntu leg is CI's.
+- *For Task 6.1:* expect `capabilities.swoop: 1` within one heartbeat of the app's relaunch on a new install
+  (5 s with the window open, up to 120 s idle); it stays 0 without the sidecar, with nobody at the console, with
+  a stale or wrongly-owned report, or after a grant given without a relaunch.
+- Stale for 6.2: `firebase_client.py:1574` still says "binary presence only".
+- *Changelog line:* "a mac advertises swoop (`capabilities.swoop: 1`) when the streamer is installed and the
+  desktop app reports a fresh screen recording grant; windows is unchanged and linux stays 0."
