@@ -1292,6 +1292,13 @@ mod win32 {
 #[cfg(windows)]
 pub use win32::{virtual_screen, SendInputInjector};
 
+// The keymap half of the macOS injector is portable, so the Windows suite
+// walks both keymaps too; the injector itself is macOS only.
+#[cfg(any(target_os = "macos", test))]
+pub mod mac;
+#[cfg(target_os = "macos")]
+pub use mac::CgInjector;
+
 #[cfg(test)]
 mod tests {
     use super::*;

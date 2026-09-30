@@ -1,0 +1,618 @@
+{
+  "version": 1,
+  "note": "KeyboardEvent.code -> macos virtual keycode for CGEventCreateKeyboardEvent. keycode is decimal; name is its kVK_* constant in HIToolbox/Events.h. the host joins this file with keymap.json by code into one table from (scancode, extended) to keycode: the session hands the injector set-1 scancodes and never a code, so the two files must agree on every code. every code keymap.json gives a scancode is in codes or in exceptions with its reason, and input/mac.rs tests that it is. injection is by keycode, so the host's keyboard layout decides what a key types, as the scancode does on windows.",
+  "dropped": "never reaching this table: PrintScreen, whose sequence is e0 2a e0 37 (no mac key means it, and the conventional F13 moves the brightness on some macs), and Pause, a virtual key (the conventional F15 does the same). the injector drops both, and any scancode not here, with a debug line.",
+  "codes": {
+    "Backquote": {
+      "keycode": 50,
+      "name": "kVK_ANSI_Grave"
+    },
+    "Backslash": {
+      "keycode": 42,
+      "name": "kVK_ANSI_Backslash"
+    },
+    "BracketLeft": {
+      "keycode": 33,
+      "name": "kVK_ANSI_LeftBracket"
+    },
+    "BracketRight": {
+      "keycode": 30,
+      "name": "kVK_ANSI_RightBracket"
+    },
+    "Comma": {
+      "keycode": 43,
+      "name": "kVK_ANSI_Comma"
+    },
+    "Digit0": {
+      "keycode": 29,
+      "name": "kVK_ANSI_0"
+    },
+    "Digit1": {
+      "keycode": 18,
+      "name": "kVK_ANSI_1"
+    },
+    "Digit2": {
+      "keycode": 19,
+      "name": "kVK_ANSI_2"
+    },
+    "Digit3": {
+      "keycode": 20,
+      "name": "kVK_ANSI_3"
+    },
+    "Digit4": {
+      "keycode": 21,
+      "name": "kVK_ANSI_4"
+    },
+    "Digit5": {
+      "keycode": 23,
+      "name": "kVK_ANSI_5"
+    },
+    "Digit6": {
+      "keycode": 22,
+      "name": "kVK_ANSI_6"
+    },
+    "Digit7": {
+      "keycode": 26,
+      "name": "kVK_ANSI_7"
+    },
+    "Digit8": {
+      "keycode": 28,
+      "name": "kVK_ANSI_8"
+    },
+    "Digit9": {
+      "keycode": 25,
+      "name": "kVK_ANSI_9"
+    },
+    "Equal": {
+      "keycode": 24,
+      "name": "kVK_ANSI_Equal"
+    },
+    "IntlBackslash": {
+      "keycode": 10,
+      "name": "kVK_ISO_Section",
+      "note": "the iso key beside left shift, as chromium maps it. an iso mac reports the key left of 1 under this keycode too, so the two can swap there, the same as in a browser on that mac."
+    },
+    "IntlRo": {
+      "keycode": 94,
+      "name": "kVK_JIS_Underscore"
+    },
+    "IntlYen": {
+      "keycode": 93,
+      "name": "kVK_JIS_Yen"
+    },
+    "KeyA": {
+      "keycode": 0,
+      "name": "kVK_ANSI_A"
+    },
+    "KeyB": {
+      "keycode": 11,
+      "name": "kVK_ANSI_B"
+    },
+    "KeyC": {
+      "keycode": 8,
+      "name": "kVK_ANSI_C"
+    },
+    "KeyD": {
+      "keycode": 2,
+      "name": "kVK_ANSI_D"
+    },
+    "KeyE": {
+      "keycode": 14,
+      "name": "kVK_ANSI_E"
+    },
+    "KeyF": {
+      "keycode": 3,
+      "name": "kVK_ANSI_F"
+    },
+    "KeyG": {
+      "keycode": 5,
+      "name": "kVK_ANSI_G"
+    },
+    "KeyH": {
+      "keycode": 4,
+      "name": "kVK_ANSI_H"
+    },
+    "KeyI": {
+      "keycode": 34,
+      "name": "kVK_ANSI_I"
+    },
+    "KeyJ": {
+      "keycode": 38,
+      "name": "kVK_ANSI_J"
+    },
+    "KeyK": {
+      "keycode": 40,
+      "name": "kVK_ANSI_K"
+    },
+    "KeyL": {
+      "keycode": 37,
+      "name": "kVK_ANSI_L"
+    },
+    "KeyM": {
+      "keycode": 46,
+      "name": "kVK_ANSI_M"
+    },
+    "KeyN": {
+      "keycode": 45,
+      "name": "kVK_ANSI_N"
+    },
+    "KeyO": {
+      "keycode": 31,
+      "name": "kVK_ANSI_O"
+    },
+    "KeyP": {
+      "keycode": 35,
+      "name": "kVK_ANSI_P"
+    },
+    "KeyQ": {
+      "keycode": 12,
+      "name": "kVK_ANSI_Q"
+    },
+    "KeyR": {
+      "keycode": 15,
+      "name": "kVK_ANSI_R"
+    },
+    "KeyS": {
+      "keycode": 1,
+      "name": "kVK_ANSI_S"
+    },
+    "KeyT": {
+      "keycode": 17,
+      "name": "kVK_ANSI_T"
+    },
+    "KeyU": {
+      "keycode": 32,
+      "name": "kVK_ANSI_U"
+    },
+    "KeyV": {
+      "keycode": 9,
+      "name": "kVK_ANSI_V"
+    },
+    "KeyW": {
+      "keycode": 13,
+      "name": "kVK_ANSI_W"
+    },
+    "KeyX": {
+      "keycode": 7,
+      "name": "kVK_ANSI_X"
+    },
+    "KeyY": {
+      "keycode": 16,
+      "name": "kVK_ANSI_Y"
+    },
+    "KeyZ": {
+      "keycode": 6,
+      "name": "kVK_ANSI_Z"
+    },
+    "Minus": {
+      "keycode": 27,
+      "name": "kVK_ANSI_Minus"
+    },
+    "Period": {
+      "keycode": 47,
+      "name": "kVK_ANSI_Period"
+    },
+    "Quote": {
+      "keycode": 39,
+      "name": "kVK_ANSI_Quote"
+    },
+    "Semicolon": {
+      "keycode": 41,
+      "name": "kVK_ANSI_Semicolon"
+    },
+    "Slash": {
+      "keycode": 44,
+      "name": "kVK_ANSI_Slash"
+    },
+    "AltLeft": {
+      "keycode": 58,
+      "name": "kVK_Option",
+      "note": "option."
+    },
+    "AltRight": {
+      "keycode": 61,
+      "name": "kVK_RightOption",
+      "note": "right option."
+    },
+    "Backspace": {
+      "keycode": 51,
+      "name": "kVK_Delete",
+      "note": "the mac names backspace delete; forward delete is Delete's keycode."
+    },
+    "CapsLock": {
+      "keycode": 57,
+      "name": "kVK_CapsLock"
+    },
+    "ContextMenu": {
+      "keycode": 110,
+      "name": "kVK_ContextualMenu",
+      "note": "the pc menu key, as chromium maps it; few mac apps act on it."
+    },
+    "ControlLeft": {
+      "keycode": 59,
+      "name": "kVK_Control"
+    },
+    "ControlRight": {
+      "keycode": 62,
+      "name": "kVK_RightControl"
+    },
+    "Enter": {
+      "keycode": 36,
+      "name": "kVK_Return"
+    },
+    "MetaLeft": {
+      "keycode": 55,
+      "name": "kVK_Command",
+      "note": "command. the viewer has already moved ctrl to cmd where its swap setting asks (keymap.ts), so this is the key the viewer meant."
+    },
+    "MetaRight": {
+      "keycode": 54,
+      "name": "kVK_RightCommand",
+      "note": "right command."
+    },
+    "ShiftLeft": {
+      "keycode": 56,
+      "name": "kVK_Shift"
+    },
+    "ShiftRight": {
+      "keycode": 60,
+      "name": "kVK_RightShift"
+    },
+    "Space": {
+      "keycode": 49,
+      "name": "kVK_Space"
+    },
+    "Tab": {
+      "keycode": 48,
+      "name": "kVK_Tab"
+    },
+    "Lang1": {
+      "keycode": 104,
+      "name": "kVK_JIS_Kana",
+      "note": "the kana key of a jis mac keyboard."
+    },
+    "Lang2": {
+      "keycode": 102,
+      "name": "kVK_JIS_Eisu",
+      "note": "the eisu (alphanumeric) key of a jis mac keyboard."
+    },
+    "Delete": {
+      "keycode": 117,
+      "name": "kVK_ForwardDelete"
+    },
+    "End": {
+      "keycode": 119,
+      "name": "kVK_End"
+    },
+    "Home": {
+      "keycode": 115,
+      "name": "kVK_Home"
+    },
+    "Insert": {
+      "keycode": 114,
+      "name": "kVK_Help",
+      "note": "a mac has no insert: an apple extended keyboard puts help where insert is, and a pc keyboard's insert reaches a mac as help. chromium maps it the same way."
+    },
+    "PageDown": {
+      "keycode": 121,
+      "name": "kVK_PageDown"
+    },
+    "PageUp": {
+      "keycode": 116,
+      "name": "kVK_PageUp"
+    },
+    "ArrowDown": {
+      "keycode": 125,
+      "name": "kVK_DownArrow"
+    },
+    "ArrowLeft": {
+      "keycode": 123,
+      "name": "kVK_LeftArrow"
+    },
+    "ArrowRight": {
+      "keycode": 124,
+      "name": "kVK_RightArrow"
+    },
+    "ArrowUp": {
+      "keycode": 126,
+      "name": "kVK_UpArrow"
+    },
+    "NumLock": {
+      "keycode": 71,
+      "name": "kVK_ANSI_KeypadClear",
+      "note": "a mac has no num lock; keypad clear sits where it is, and a pc keyboard's num lock reaches a mac as clear."
+    },
+    "Numpad0": {
+      "keycode": 82,
+      "name": "kVK_ANSI_Keypad0"
+    },
+    "Numpad1": {
+      "keycode": 83,
+      "name": "kVK_ANSI_Keypad1"
+    },
+    "Numpad2": {
+      "keycode": 84,
+      "name": "kVK_ANSI_Keypad2"
+    },
+    "Numpad3": {
+      "keycode": 85,
+      "name": "kVK_ANSI_Keypad3"
+    },
+    "Numpad4": {
+      "keycode": 86,
+      "name": "kVK_ANSI_Keypad4"
+    },
+    "Numpad5": {
+      "keycode": 87,
+      "name": "kVK_ANSI_Keypad5"
+    },
+    "Numpad6": {
+      "keycode": 88,
+      "name": "kVK_ANSI_Keypad6"
+    },
+    "Numpad7": {
+      "keycode": 89,
+      "name": "kVK_ANSI_Keypad7"
+    },
+    "Numpad8": {
+      "keycode": 91,
+      "name": "kVK_ANSI_Keypad8"
+    },
+    "Numpad9": {
+      "keycode": 92,
+      "name": "kVK_ANSI_Keypad9"
+    },
+    "NumpadAdd": {
+      "keycode": 69,
+      "name": "kVK_ANSI_KeypadPlus"
+    },
+    "NumpadComma": {
+      "keycode": 95,
+      "name": "kVK_JIS_KeypadComma"
+    },
+    "NumpadDecimal": {
+      "keycode": 65,
+      "name": "kVK_ANSI_KeypadDecimal"
+    },
+    "NumpadDivide": {
+      "keycode": 75,
+      "name": "kVK_ANSI_KeypadDivide"
+    },
+    "NumpadEnter": {
+      "keycode": 76,
+      "name": "kVK_ANSI_KeypadEnter"
+    },
+    "NumpadEqual": {
+      "keycode": 81,
+      "name": "kVK_ANSI_KeypadEquals"
+    },
+    "NumpadMultiply": {
+      "keycode": 67,
+      "name": "kVK_ANSI_KeypadMultiply"
+    },
+    "NumpadSubtract": {
+      "keycode": 78,
+      "name": "kVK_ANSI_KeypadMinus"
+    },
+    "Escape": {
+      "keycode": 53,
+      "name": "kVK_Escape"
+    },
+    "F1": {
+      "keycode": 122,
+      "name": "kVK_F1"
+    },
+    "F2": {
+      "keycode": 120,
+      "name": "kVK_F2"
+    },
+    "F3": {
+      "keycode": 99,
+      "name": "kVK_F3"
+    },
+    "F4": {
+      "keycode": 118,
+      "name": "kVK_F4"
+    },
+    "F5": {
+      "keycode": 96,
+      "name": "kVK_F5"
+    },
+    "F6": {
+      "keycode": 97,
+      "name": "kVK_F6"
+    },
+    "F7": {
+      "keycode": 98,
+      "name": "kVK_F7"
+    },
+    "F8": {
+      "keycode": 100,
+      "name": "kVK_F8"
+    },
+    "F9": {
+      "keycode": 101,
+      "name": "kVK_F9"
+    },
+    "F10": {
+      "keycode": 109,
+      "name": "kVK_F10"
+    },
+    "F11": {
+      "keycode": 103,
+      "name": "kVK_F11"
+    },
+    "F12": {
+      "keycode": 111,
+      "name": "kVK_F12"
+    },
+    "F13": {
+      "keycode": 105,
+      "name": "kVK_F13",
+      "note": "a real key on an apple extended keyboard; on some macs it moves the brightness."
+    },
+    "F14": {
+      "keycode": 107,
+      "name": "kVK_F14",
+      "note": "a real key on an apple extended keyboard; on some macs it moves the brightness."
+    },
+    "F15": {
+      "keycode": 113,
+      "name": "kVK_F15",
+      "note": "a real key on an apple extended keyboard; on some macs it moves the brightness."
+    },
+    "F16": {
+      "keycode": 106,
+      "name": "kVK_F16"
+    },
+    "F17": {
+      "keycode": 64,
+      "name": "kVK_F17"
+    },
+    "F18": {
+      "keycode": 79,
+      "name": "kVK_F18"
+    },
+    "F19": {
+      "keycode": 80,
+      "name": "kVK_F19"
+    },
+    "F20": {
+      "keycode": 90,
+      "name": "kVK_F20"
+    },
+    "AudioVolumeDown": {
+      "keycode": 73,
+      "name": "kVK_VolumeDown",
+      "note": "the keycode older apple keyboards sent for this key. current macs send volume as a system-defined media event instead, so what a mac does with it is not established."
+    },
+    "AudioVolumeMute": {
+      "keycode": 74,
+      "name": "kVK_Mute",
+      "note": "the keycode older apple keyboards sent for this key. current macs send volume as a system-defined media event instead, so what a mac does with it is not established."
+    },
+    "AudioVolumeUp": {
+      "keycode": 72,
+      "name": "kVK_VolumeUp",
+      "note": "the keycode older apple keyboards sent for this key. current macs send volume as a system-defined media event instead, so what a mac does with it is not established."
+    }
+  },
+  "exceptions": [
+    {
+      "code": "Convert",
+      "reason": "a japanese pc key with no mac key or kVK_* (a jis mac keyboard has eisu and kana, which are Lang2 and Lang1)."
+    },
+    {
+      "code": "KanaMode",
+      "reason": "a japanese pc key with no mac key or kVK_* (a jis mac keyboard has eisu and kana, which are Lang2 and Lang1)."
+    },
+    {
+      "code": "NonConvert",
+      "reason": "a japanese pc key with no mac key or kVK_* (a jis mac keyboard has eisu and kana, which are Lang2 and Lang1)."
+    },
+    {
+      "code": "Lang3",
+      "reason": "a japanese pc key with no mac key or kVK_*."
+    },
+    {
+      "code": "Lang4",
+      "reason": "a japanese pc key with no mac key or kVK_*."
+    },
+    {
+      "code": "F21",
+      "reason": "a mac's function keys stop at F20; there is no kVK_F21."
+    },
+    {
+      "code": "F22",
+      "reason": "a mac's function keys stop at F20; there is no kVK_F22."
+    },
+    {
+      "code": "F23",
+      "reason": "a mac's function keys stop at F20; there is no kVK_F23."
+    },
+    {
+      "code": "F24",
+      "reason": "a mac's function keys stop at F20; there is no kVK_F24."
+    },
+    {
+      "code": "ScrollLock",
+      "reason": "no mac key means scroll lock. a pc keyboard's scroll lock reaches a mac as F14, which moves the brightness on some macs, so it is not injected as that either."
+    },
+    {
+      "code": "BrowserBack",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "BrowserFavorites",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "BrowserForward",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "BrowserHome",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "BrowserRefresh",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "BrowserSearch",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "BrowserStop",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "Eject",
+      "reason": "a system-defined event on a mac (the eject media key), not a virtual keycode."
+    },
+    {
+      "code": "LaunchApp1",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "LaunchApp2",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "LaunchMail",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "MediaPlayPause",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "MediaSelect",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "MediaStop",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "MediaTrackNext",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "MediaTrackPrevious",
+      "reason": "a media or launch key: a mac sends these as system-defined events, not virtual keycodes, and has no kVK_* for it."
+    },
+    {
+      "code": "Power",
+      "reason": "a system power key: a mac has no virtual keycode for it, and a viewer should not reach it anyway."
+    },
+    {
+      "code": "Sleep",
+      "reason": "a system power key: a mac has no virtual keycode for it, and a viewer should not reach it anyway."
+    },
+    {
+      "code": "WakeUp",
+      "reason": "a system power key: a mac has no virtual keycode for it, and a viewer should not reach it anyway."
+    }
+  ]
+}
