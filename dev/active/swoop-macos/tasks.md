@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 2/23 complete
+**Progress**: 6/23 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -45,19 +45,19 @@ add files under it with `git add -f`.
 
 ## Wave 2: seams, transport, launch, packaging, web
 
-- [ ] **Task 2.1: Streamer seams, the capture-thread refactor, `selfcheck`** `[agent]`
+- [x] **Task 2.1: Streamer seams, the capture-thread refactor, `selfcheck`** `[agent]`
   - Files: `agent/swoop/src/platform/mod.rs`, `agent/swoop/src/platform/win.rs`, `agent/swoop/src/platform/macos.rs` (create), `agent/swoop/src/platform/unsupported.rs` (create), `agent/swoop/src/session/mod.rs`, `agent/swoop/src/capture/mod.rs`, `agent/swoop/src/cursor/mod.rs`, `agent/swoop/src/gpu/scale.rs`, `agent/swoop/src/transport/rtc.rs`, `agent/swoop/src/log.rs`, `agent/swoop/src/main.rs`, `agent/swoop/src/lib.rs`
   - Do: Build the seam context.md describes, with **no change to what Windows does**. (1) `cursor/mod.rs`: add the portable `PointerSample` and `PointerSampler` exactly as context.md spells them, and move `OutputGeometry::for_output` out of `mod win32` into the portable part, taking its dpi from `crate::platform::dpi_for_rect`. (2) `capture/mod.rs`: `Duplication` owns its `PointerReader`. `next_frame_with` and `capture_loop` take an observer `&mut dyn FnMut(&PointerSample)`; `step` builds the sample while the frame is held, from the same three reads the session makes today (`session/mod.rs:3625-3645`): `ts_ticks = info.LastMouseUpdateTime`, `position = cursor::pointer_position(info)`, `shape = reader.shape(dup, info)`, with a failed shape read logged as `swoop: cursor shape read: {e}` and carried as `None`. The observer still runs on every acquired frame, including the ones with no picture, and before the frame is released. Update the hardware tests in `capture` and `cursor` that call the old signature. (3) `session/mod.rs`: remove `#[cfg(windows)]` from `pub use host::run` and `mod host`; replace every Win32 and concrete-type import with the names from `crate::platform`; `qpc_now()`'s body becomes `platform::clock::now_ticks()` and `drive()` reads `platform::clock::hz()`; `capture_pass` opens `CaptureSource`, drops its own `PointerReader`, and its observer closure feeds `tracker.on_position` and `tracker.on_shape` from the sample with `clock.us(sample.ts_ticks)`; `input_thread` builds `InputInjector`. Port the two hardware tests `end_to_end_picture` and `pause_closes_the_duplication_and_the_floor_holds_a_still_desktop` to the platform names so they run on both systems; a test that needs Win32 itself gets `#[cfg(windows)]`. (4) `platform/win.rs` re-exports the existing types under the seam names and holds the clock (QPC and QPF, moved from `session/mod.rs` and `transport/rtc.rs`) and `process::prepare` (today's `pin_dll_search_path`). (5) `gpu/scale.rs`: `ScaleError` is part of the seam; if it can move out of the Windows block without carrying a Win32 type, move it, otherwise each platform module exports its own with the same `exit()` and `Display`. (6) `platform/unsupported.rs` and the first `platform/macos.rs` are stubs with the same method names: `enumerate_outputs()` answers an empty list, so `drive()` exits 12 before it dials anything, and `CaptureSource::open` is an error naming the platform. `platform/macos.rs` also carries the display helpers from context.md (CoreGraphics only, no TCC) and `selfcheck`. (7) `transport/rtc.rs`: `qpc_hz()` goes; `PeerConfig::qpc_hz` keeps its name and its doc says ticks per second of `platform::clock`. (8) `log.rs`: the directory is `OWLETTE_DATA_ROOT` joined with `logs/swoop` when that variable is set, else `%PROGRAMDATA%\Owlette\logs\swoop` on Windows, `/Library/Application Support/Owlette/logs/swoop` on macOS, `/var/lib/owlette/logs/swoop` elsewhere, as one pure function over the two environment values with a unit test (the rule in `desktop/src-tauri/src/paths.rs::data_root_from`). (9) `main.rs`: `platform::process::prepare()` is the first call; `session_exit` is one ungated function; the minidump stays Windows-only; a fourth verb `selfcheck`, macOS only, prints the one json line context.md names and exits 0. It calls `CGPreflightScreenCaptureAccess`, and `SCShareableContent` only when that answered true or `--force` was given, so it never raises a prompt on an unattended Mac; then `CGPreflightPostEventAccess`, `AXIsProcessTrusted`, and one UDP datagram of one byte to `224.0.0.251:5353`. No private API. On every other system `selfcheck` is the usage error.
   - Done when: on this box the four Windows commands pass and `git status agent/swoop/testdata` is clean; these hardware tests pass here, with their output pasted in the log (they capture the real desktop and move the real pointer): `cargo test --lib session::host::tests::end_to_end_picture -- --ignored --nocapture`, `cargo test --lib session::host::tests::pause_closes_the_duplication -- --ignored --nocapture`, `cargo test -- --ignored capture`, `cargo test -- --ignored cursor`; `grep -n "cfg(windows)" agent/swoop/src/session/mod.rs` shows no gate on `mod host` or on `pub use host::run`; `grep -rn "windows::" agent/swoop/src` finds nothing outside a `#[cfg(windows)]` item. On the Mac or the CI leg the macOS commands pass, `owlette-swoop version` prints the version, `owlette-swoop selfcheck` prints one json line from a plain ssh shell, and `owlette-swoop run` exits 12 with the platform named in the log when its stdin is `testdata/protocol/bundle/bundle-valid.json` collapsed to one line with `agentVersion` set to the build's own version (as it stands the vector says 3.4.0, which is exit 11 before capture is ever asked for).
   - Depends on: 1.1
 
-- [ ] **Task 2.2: Agent POSIX spawn** `[agent]`
+- [x] **Task 2.2: Agent POSIX spawn** `[agent]`
   - Files: `agent/src/swoop_spawn.py`, `agent/src/swoop_spawn_posix.py` (create), `agent/src/shared_utils.py`, `agent/src/swoop_manager.py`, `agent/tests/unit/test_swoop_spawn_posix.py` (create), `agent/tests/unit/test_swoop_paths.py`, `agent/tests/unit/test_swoop_manager.py`, `agent/tests/integration/test_swoop_wiring.py`
   - Do: Give the agent a second way to start the streamer that presents the object `SwoopManager` already drives. `shared_utils.py`: `SWOOP_EXE_NAME` is `owlette-swoop.exe` on Windows and `owlette-swoop` elsewhere; `get_swoop_exe_path()` keeps its Windows rule and answers `/Applications/owlette.app/Contents/MacOS/owlette-swoop` on macOS and `/opt/owlette/swoop/owlette-swoop` on Linux, each only when the file exists (the pattern is `_POSIX_PYTHON_PATHS`, `shared_utils.py:1268`); `get_swoop_dir()` is that file's directory off Windows. `swoop_spawn.py`: `verify_install` and `spawn` hand over to `swoop_spawn_posix` when `os.name != 'nt'`; `spawn(exe_path, log_dir=None, *, sid=None)` takes `sid` keyword-only and the Windows arm ignores it; add `REFUSAL_DESKTOP_NOT_RUNNING = 'desktop_not_running'`. `swoop_manager.py`: `_do_ensure` passes `sid=sid`; the side effects (`_enable_side_effects`, `_disable_side_effects`: a firewall rule and the SAS policy) return at once off Windows; on POSIX the worker's start calls `swoop_spawn_posix.sweep_stale()` once. Update the two spawn doubles (`test_swoop_manager.py:103`, `test_swoop_wiring.py:268`) to the new signature and assert the manager passes the sid. `swoop_spawn_posix.py`, following context.md's launch job contract: `verify_install` refuses `not_installed` when the file is absent, `install_unverified` unless the file, `Contents/MacOS`, `Contents` and the bundle are each owned by root and not writable by group or others, and `version_mismatch` through the shared `read_streamer_version`. `spawn`: generate the id; bind and listen on `ipc/swoop/<id>.sock`, `chmod 0660`, `chown` to the gid of the `ipc/swoop` directory itself; submit the `launch` job through `osadapter.run_job` with the log level from the existing `_configured_log_level`; a `desktop_not_running` result is that refusal, any other error is `spawn_failed` carrying the runner's code; accept one connection within 10 s; read the peer's uid (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS) and refuse unless it is the console user's; unlink the socket file; pin the process with `psutil.Process(pid)`. `PosixSwoopProcess` has the six members the manager uses. `write_bundle` appends the newline, sends, and wipes the caller's buffer as the Windows one does. `iter_lines` yields decoded lines and remembers the `code` of a line whose `type` is `exiting`. `wait(timeout)` returns `None` while the pinned process runs; once it is gone or a zombie, the remembered code, else the exit file's code polled for up to 2 s, else `EXIT_INTERNAL`. `close` kills only when the pinned process is still that process, closes the socket, and unlinks the socket path and the exit file by their exact paths. `sweep_stale` unlinks entries of `ipc/swoop` whose names end `.sock` or `.exit.json`, one by one, never following a link. Nothing here logs the bundle or anything read from the socket. Tests run with `OWLETTE_DATA_ROOT` at a short temporary path (a socket path is limited to 104 bytes on macOS) and a fake `run_job` that connects from a thread; they are skipped on Windows with a reason. Cover: the bundle arrives whole and the buffer is wiped; a control line round trip; the `exiting` code wins over a missing exit file; the exit-file fallback; gone with neither is 20; a peer of another uid is refused; `desktop_not_running` maps to its refusal; a group-writable executable is refused; the socket file is gone after the accept; `close` does not signal when the create time differs; the sweep removes only the two suffixes.
   - Done when: `agent/.venv/Scripts/python -m pytest agent/tests/` is green on this box with the POSIX tests reported as skips; the new tests run and pass on the CI macos-15 and ubuntu-24.04 legs of `agent-tests.yml`; `grep -n "log" agent/src/swoop_spawn_posix.py` shows no call that carries the bundle, a token or socket data.
   - Depends on: nothing in this wave. The job it emits is context.md's contract, which Task 2.3 implements from the same text.
 
-- [ ] **Task 2.3: Desktop launch job and the Accessibility check** `[agent]`
+- [x] **Task 2.3: Desktop launch job and the Accessibility check** `[agent]`
   - Files: `desktop/src-tauri/src/jobrunner.rs`, `desktop/src-tauri/src/tcc.rs`, `desktop/src-tauri/src/commands.rs`, `desktop/src-tauri/src/lib.rs`, `desktop/src-tauri/src/shell_open.rs`, `desktop/src-tauri/Info.plist` (create), `desktop/src/lib/ipc.ts`, `desktop/src/components/PermissionBanner.tsx`, `desktop/src/App.tsx`
   - Do: Implement context.md's launch job contract in `jobrunner.rs`, which refuses `launch` as `unsupported_job` today. `Job` gains `program`, `args`, `socket`, `stderr`, `exit_file` and `env`, all defaulted; `JobResult` gains `pid: Option<u32>`, left out of the json when absent, so the existing capture assertion still holds. The directory the program is resolved in and the uid a socket must belong to are **parameters** of the launch function: production passes the directory of `std::env::current_exe()` and 0, tests pass a temporary directory holding a script named `owlette-swoop` and their own uid. Nothing but the allow-list ever names a program. Use `std::os::unix::net::UnixStream`, two `OwnedFd`s from the one connection for stdin and stdout, `CommandExt::process_group(0)`, the working directory `/`, and **drop the `Command` right after the spawn**: it holds the two descriptors until then, and the daemon's end of file depends on the app holding none. A thread waits on the child and writes the exit file whole, then renames it into place. No new crate. `tcc.rs`: declare `CGPreflightPostEventAccess` and `CGRequestPostEventAccess` beside the two CoreGraphics functions already there; the minute report gains `"accessibility": <bool>` from the preflight; the request is **never** called at launch. `commands.rs` and `lib.rs`: two commands, `accessibility_granted` and `request_accessibility`; the second calls the request and opens `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` (add the pane beside the one in `shell_open.rs:102`). `PermissionBanner.tsx` shows one notice per missing grant. The new copy: "accessibility is off for owlette on this mac: swoop can show this screen but cannot control it. switch it on in system settings." with the button "open system settings", which calls `request_accessibility`. `App.tsx` reads both answers on the same schedule it reads the first. `Info.plist` holds one key, `NSLocalNetworkUsageDescription`: "owlette connects directly to viewers on your network during a swoop session." Tauri merges a `src-tauri/Info.plist` into the bundle's own.
   - Done when: `cargo clippy --all-targets -- -D warnings` and `cargo test --locked` pass in `desktop/src-tauri` on this box (the runner is `cfg(unix)`, so here the proof is that the crate still builds) and on the macOS and ubuntu legs of `rust-build.yml`, where unit tests cover: each refusal in the contract's table; a path that escapes the tree through a symlink; a launch of the test script that echoes 4 KB back over the socket; the app's copy of the connection closed after the spawn, shown by the test's accept side reading end of file the moment the script exits; the exit file's shape and mode. `cd desktop && npm run build` is clean, and the banner renders each of its three states in the desktop frontend's existing test setup, or in `tauri dev` if there is none (say which in the log).
@@ -69,7 +69,7 @@ add files under it with `git add -f`.
   - Done when: in `web/`, `npx eslint` is clean on every touched file, `npx tsc --noEmit` is clean, `npm test` passes with the mapping table covered for all four host and viewer combinations, and `npm run e2e` passes locally including the new spec (the `/preflight` skill runs all of it).
   - Depends on: nothing in this wave.
 
-- [ ] **Task 2.5: Packaging** `[agent]`
+- [x] **Task 2.5: Packaging** `[agent]`
   - Files: `agent/build/macos/build.sh`, `desktop/src-tauri/tauri.macos.conf.json`, `desktop/src-tauri/binaries/.gitignore` (create), `.github/workflows/build-installer.yml`, `.github/workflows/rust-build.yml`
   - Do: Put the streamer inside the app bundle, signed by the same pass that signs the app. `tauri.macos.conf.json` gains `"bundle": { "externalBin": ["binaries/owlette-swoop"] }`; Tauri then copies `binaries/owlette-swoop-<target triple>` into `Contents/MacOS/owlette-swoop` and signs it with the app's identity and the hardened runtime. `binaries/.gitignore` ignores everything but itself. `build.sh` gains a section before "the app": build the streamer with `cargo build --release --locked --no-default-features --features encode-videotoolbox,audio-opus` from `agent/swoop` with `CMAKE_POLICY_VERSION_MINIMUM=3.5`, and copy `target/release/owlette-swoop` to `desktop/src-tauri/binaries/owlette-swoop-aarch64-apple-darwin`. After the Tauri build it checks three things and fails the build on any of them: the sidecar exists in the bundle; `owlette-swoop version` prints the version `build.sh` read from `agent/VERSION`; and, when an identity is set, `codesign --verify --strict` passes on the sidecar, with the hardened runtime flag and the app's own team identifier in `codesign -dv`. Say in the script's header that `--skip-app` reuses the last bundle, sidecar included. `build-installer.yml`'s macOS job adds `agent/swoop` to its rust-cache workspaces and sets `CMAKE_POLICY_VERSION_MINIMUM` on the build step. `rust-build.yml`'s `desktop-posix` job, on macOS only and before its clippy step, builds the streamer the same way and stages it under the triple `rustc -vV` reports, because `tauri-build` wants a declared sidecar present at compile time; add `agent/swoop` to that leg's cache. The Windows and Linux builds are not touched.
   - Done when: the signed build job on the Mac ends `BUILD-EXIT=0` and its pkg, expanded with `pkgutil --expand` into a fresh directory, holds `owlette.app/Contents/MacOS/owlette-swoop`; `codesign --verify --strict` passes on the sidecar and on the app; the `desktop-posix` macOS leg is green with the sidecar declared; on this box `cd desktop && npx tauri build --no-bundle` still succeeds.
@@ -299,3 +299,165 @@ detail.
 1.1's line.
 
 *Still open, the owner's call:* the `# v6` comment on the Windows job's checkout line (`rust-build.yml:66`).
+
+**Owner's answers, same day.** The `# v6` comment is fixed (`277e0fa6`). Decision 5 keeps `rust-crypto`, with
+its wording corrected in plan.md. Wave 2 was started on the owner's go.
+
+### 2026-09-29, Wave 2
+
+Five agents ran in parallel in this worktree, one per task, each with its own worktree on the Mac. A usage limit
+stopped all five mid-task; each was resumed with its context and finished. CI is PR #256 on `b91adfae`: 22 checks
+green and one red, CodeQL (below).
+
+**Task 2.1: done** (`4d189960`).
+- The seam is `platform/{mod,win,macos,unsupported}.rs`. The capture observer takes a `PointerSample`, `mod host`
+  is ungated, and the clock, `process::prepare` and the log directory are per OS.
+- Task 1.1's gates in `session/mod.rs` are gone, the `cfg_attr` on `Outbox::refilled_at` included. The gates in
+  `capture/mod.rs`, `probe.rs` and `main.rs` (`KEEP_DUMPS`) stay: those items are still Windows-only.
+- *Windows, on this box.* The four commands are green, run by the agent and again by the orchestrator on the
+  committed tree: 382 passed / 20 ignored, and 391 / 21 with `audio-opus`, then 1, 1 and 5. Each lib count is one
+  above Wave 1: the new log-directory test. `git status agent/swoop/testdata` is clean.
+- *Hardware tests, on this box.*
+  - `end_to_end_picture`: `(1920, 1080) -> (1920, 1080) hevc, 270 frames (1 irap, 3922425 bytes), 92 cpos, 27 cshape`.
+  - `pause_closes_the_duplication`: `89 frames still, 0 while paused, 362 after the resume`. The desktop was
+    busy, so the floor half passed on live frames and did not prove the floor.
+  - `--ignored capture`: DISPLAY1 1920x1080 Identity and DISPLAY2 3840x2160 Rotate270, each `observed=2 pointer_news=1`.
+  - `--ignored cursor`: `acquired=699 no_pointer_update=656 cpos=42 shape_updates=6 cshape=6 distinct=4`.
+  - The first two `end_to_end_picture` runs failed with 0 cpos, and so did the base commit's build: DXGI had
+    dropped DISPLAY2 while the pointer sat on it. Both passed once the display was back.
+- *macOS, on the Mac.* Clippy clean; 365 passed / 9 ignored, then 1 and 5 (357 / 7 before: the host's 7 unit
+  tests now run there, plus the log test, plus 2 ignored hardware tests). `version` prints 4.0.6.
+  - `selfcheck` from a plain ssh shell: `{"screenCapturePreflight":true,"shareableContent":"ok","displays":1,
+    "postEventPreflight":true,"axTrusted":true,"localNetworkSend":"ok","pid":24852}`. That is the ssh session's
+    own grants, not the app's child: gate M0 is still to run.
+  - `run` with the valid bundle at the build's version: exit 12, `exiting` line `code 12`, and the log says
+    `swoop: capture is not built for macos yet`.
+- *CI.* `swoop-posix` is green on macOS and on ubuntu, which is the first build of the `unsupported` selection.
+- Deviations:
+  - `gpu/scale.rs` is untouched: `ScaleError::D3d` carries a Win32 error, so each platform exports its own.
+  - macOS re-exports its stubs from `unsupported.rs` (one `pub use` line for Task 5.1 to replace). The stubs are
+    uninhabited types, so they must be replaced, not filled in.
+  - `clock::hz()` stays a `Result`, so `drive()`'s error path is unchanged.
+  - On Windows `OWLETTE_DATA_ROOT` now moves the streamer's log, and an unset `PROGRAMDATA` falls back to
+    `C:\ProgramData` instead of the temp directory. The task asked for that rule.
+- *Changelog line:* "swoop: the streamer's session loop runs on per-OS platform seams (Windows unchanged); on
+  macOS `run` exits 12 until capture lands, a new `selfcheck` verb reports Screen Recording, Accessibility and
+  local-network state without raising a prompt, and the streamer's log follows `OWLETTE_DATA_ROOT`."
+
+**Task 2.2: done** (`1cb87ab9`, and `f44c9e5c` for two test files the Files list missed).
+- `swoop_spawn_posix.py` is the daemon's half of the launch job contract. `swoop_spawn.py` hands over off
+  Windows, `shared_utils.py` answers the per-OS streamer path, and the manager passes the sid and sweeps once.
+- *Plan gap, closed by the orchestrator.* The task's own changes broke 7 tests on the POSIX legs in
+  `test_swoop_spawn.py` and `test_swoop_side_effects.py`, which are not in the Files list. The agent stopped and
+  left a patch. It pins the existing `on_windows` fixture on four Windows-arm tests and marks three
+  `set_enabled` tests Windows-only. Applied as `f44c9e5c`.
+- *This box.* `agent/.venv/Scripts/python -m pytest agent/tests/`: 2122 passed, 362 skipped (2117 / 342 before:
+  +17 POSIX spawn tests, +2 `TestOffWindows` and +1 exe-name test as skips, +5 path tests that run everywhere).
+- *The Mac.* The macos-15 row: 1817 passed, 250 skipped. The new file passed 17 of 17 in five repeat runs.
+  - Two `test_osadapter_contract.py::TestDarwin::test_launchd_reports_how_a_session_job_ended` cases fail on
+    that rig before any change and were deselected there. They pass on CI. Not investigated.
+- *CI.* The macos-15, ubuntu-24.04 and windows legs of agent-tests are green, so the Linux `SO_PEERCRED` arm ran.
+- Deviations:
+  - The Windows-only gate sits in `_do_side_effects`, the one caller, not inside the two side-effect functions.
+  - Beyond the task text, for Task 4.8: `_pin` refuses a pid that is not the console user's; the exit file is
+    opened with `O_NOFOLLOW`, must be a regular file and must carry the pinned pid; a runner error code reaches
+    the log only when it matches `[a-z_]{1,64}`.
+- *Open, for Tasks 3.2 and 4.8:* `osadapter.run_job` waits up to 120 s, not the job's 10 s. A live but wedged
+  app holds the manager's worker thread (never the service loop) for that long. A bounded wait is outside this
+  task's files.
+- *Seen once, not this task's:* `test_swoop_manager.py::TestSessionEnd::test_a_process_is_finished_once_and_a_late_finish_leaves_the_next_alone`
+  failed once under load and passed six reruns. It reads `manager._proc` before the spawn has assigned it.
+- *Changelog line:* "swoop: the agent can start the streamer on macOS and Linux through the desktop app, over a
+  unix socket the bundle rides (it never touches disk); a Mac still advertises no swoop until the capture
+  backends land."
+
+**Task 2.3: done** (`33e03ede`).
+- `jobrunner.rs` runs the `launch` job to context.md's table. `tcc.rs` reports `accessibility` every minute and
+  never asks at launch; `CGRequestPostEventAccess` is reachable only from the `request_accessibility` command.
+  The banner shows one notice per missing grant, and `Info.plist` carries `NSLocalNetworkUsageDescription`.
+- *This box.* Desktop clippy clean; `cargo test --locked` 119 passed, 1 ignored (the runner is `cfg(unix)`, so
+  this proves only that the crate builds); `npm run build` clean; vitest 494 of 494, the banner's states
+  included (vitest, not `tauri dev`).
+- *The Mac.* Clippy clean and `cargo test --locked` 128 of 128, at `277e0fa6` and again with Task 2.5's
+  `externalBin` in the tree and a placeholder sidecar staged. A mutation that leaked the connection made the
+  end-of-file test fail at its 10 s timeout, so that test can fail.
+- *CI.* `desktop-posix` is green on ubuntu and on macOS.
+- Unverified: the banner in a real app, and Tauri merging `Info.plist` into the bundle (Task 3.1's install shows both).
+- Deviations:
+  - `PermissionBanner.test.tsx` was edited though it is not in the Files list: the component's props changed.
+  - One rule beyond the table: an existing stderr path that is not a regular file is `launch_refused`, because
+    a fifo would block the open and the runner with it.
+  - An unknown app directory is `launch_failed`, never a lookup on PATH.
+  - The child inherits the app's environment plus the job's `OWLETTE_SWOOP_LOG`. That is how
+    `OWLETTE_DATA_ROOT` is passed on.
+- *For Task 4.8, observations:* macOS has no protected hardlinks, and the stderr file's link count is not
+  checked. A failed exit-file write can leave `<exit_file>.<app pid>.tmp`, which the daemon's sweep (two
+  suffixes only) does not remove.
+- *Found on the way:* `desktop/src-tauri/Cargo.lock` recorded the crate at 4.0.5 against a 4.0.6 manifest, so a
+  bare `cargo test --locked` failed. CI missed it because its clippy step, which runs without `--locked`,
+  rewrites the lock first. Corrected by the orchestrator in `372f0fed`.
+- *Changelog line:* "desktop (macOS): the app launches the swoop sidecar for the daemon through a checked
+  `launch` job (its own binary only, allow-listed arguments, socket and log paths pinned to the data tree),
+  reports its Accessibility grant beside Screen Recording, and shows a notice whose button asks for it; the app
+  declares why it uses the local network."
+
+**Task 2.5: done** (`c224da77`).
+- The sidecar is declared only in `tauri.macos.conf.json`. `build.sh` builds the streamer first and stages it,
+  then fails the build if the sidecar is missing from the bundle, is the wrong version, or (when signed) fails
+  `codesign --verify --strict`, lacks the hardened runtime, or carries another team than the app's.
+- *Signed build job, on `c224da77`.* `BUILD-EXIT=0`, notarized and stapled, about 6 minutes. The pkg's Bom lists
+  `owlette.app/Contents/MacOS/owlette-swoop`. `codesign --verify --strict` passes on the sidecar and on the app.
+- **context.md's unverified row is settled: Tauri signs the sidecar with the hardened runtime and the team
+  identity.** `codesign -dv` on the shipped sidecar shows `flags=0x10000(runtime)`, the app's own
+  `TeamIdentifier`, a Developer ID Application authority and `Identifier=owlette-swoop`. It has no entitlements.
+- *The version check fails the build:* with `agent/VERSION` set to 9.9.9, `build.sh --skip-app` ended
+  `BUILD-EXIT=1`. The two signed-path failure branches were not exercised.
+- *Risk 5, measured:* without the sidecar staged, `cargo check` of the desktop crate on macOS fails with
+  "resource path `binaries/owlette-swoop-aarch64-apple-darwin` doesn't exist".
+- *CI.* `desktop-posix` on macOS is green with the sidecar built and staged. zizmor adds no finding.
+- *This box.* `cd desktop && npx tauri build --no-bundle` succeeds with Tasks 2.3 and 2.5 both in the tree (run
+  by the orchestrator).
+- Deviation: `build-installer.yml` sets `CMAKE_POLICY_VERSION_MINIMUM` as the task says, but `build.sh` sets it
+  on its own cargo call, so the workflow's copy has no effect.
+- *For Task 6.2:* `.claude/skills/build-system.md` has no macOS section yet.
+- *Changelog line:* "macOS: the pkg carries the swoop streamer inside owlette.app, signed and notarized with the
+  app; the build fails if it is missing, the wrong version or not signed by the app's team."
+
+**Task 2.4: code done** (`b91adfae`), **not ticked: no local full e2e run has passed in one piece yet.**
+- The viewer's mapping is one function, `applyModifierMapping(code, host, viewerIsMac, 'swap' | 'passthrough')`.
+  No `CmdMapping` spelling remains. The capture's setter is `setModifierMapping(hostOs, mapping)`: it takes the
+  host too, because the capture is attached before the page knows the host.
+- `specialKeysFor(hostOs)` replaces the list. The menu's checkbox sits above the "send keys" label.
+- The page reads `osFamily` through `useMachines(siteId)`: no hook in `web/hooks/` subscribes to one machine
+  document. So the swoop page now holds the site's machines listeners.
+- eslint clean on every touched file; `npx tsc --noEmit` clean; `npm test` 6233 passed, 1 skipped (+13), with
+  the mapping table covered for all four host and viewer pairs under both mappings.
+- *e2e.* The new spec passed in every run.
+  - CI, full suite on `b91adfae`: 411 passed.
+  - Local, full suite, while four other agents were building: 404 passed, 7 failed (timeouts in roosts, api-keys
+    and sites specs). Those five files alone: 24 passed.
+  - Local, full suite again, with one agent still running tests: 408 passed, 3 failed
+    (`dashboard/process-duplicate-names`, `dispatch/retry-deployment`, `time-travel/apply-ack-before-deadline`).
+    Those three files alone: 7 passed.
+  - The failures differ between the runs and none touches this change. A third run on a quiet box decides the tick.
+- Deviations:
+  - `web/__tests__/lib/swoop/specialKeys.test.ts` was edited though it is not in the Files list: it imported the
+    removed `SPECIAL_KEYS`.
+  - The e2e spec relies on the chromium project's `Desktop Chrome` device, whose user agent says Windows, for
+    its "viewer that is not a mac" premise.
+- *For Task 6.1:* swap converts one way only, as the task says. From a PC under swap, both ctrl and the Windows
+  key send cmd, so the Mac's own control key can only be sent with the box unticked. M1 should judge whether
+  swap needs to exchange the two.
+- *For Task 6.2:* PROTOCOL.md §5 still says only that a mac client maps cmd to `ControlLeft`. The Linux menu
+  keeps the Windows labels, as the task says; that is for the Linux plan.
+- *Changelog line:* "swoop: from a PC, ctrl now acts as cmd on a Mac (a checkbox in the keyboard menu turns it
+  off; a Mac viewing Windows keeps cmd acting as ctrl), and the keyboard menu lists the machine's own shortcuts:
+  cmd chords on a Mac, and no ctrl + alt + del on a Mac or on Linux."
+
+**Wave 2's changelog entries** are under `## [Unreleased]` in both changelogs: the groundwork entry extended,
+"the macOS app reports its Accessibility grant" and "the swoop keyboard follows the machine you control".
+
+**CodeQL, red on the PR, open by the owner's decision.** Alert 388, `py/overly-permissive-file`, high, at
+`swoop_spawn_posix.py`'s `os.chmod(socket_path, SOCKET_MODE)`. The mode is the contract's `0660 root:<ipc group>`:
+the app's user reaches the socket through the group, and the daemon then checks the peer's uid. The owner chose
+to leave it open for Task 4.8, which reviews exactly this boundary.

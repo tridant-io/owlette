@@ -10,8 +10,30 @@ description: "All notable changes to owlette are documented here. The format is 
 ### changed — groundwork for swoop on macOS
 
 The swoop streamer now builds on macOS and Linux and is tested there in every
-build. It does not stream there yet, so a Mac or a Linux machine still cannot
-host a swoop session. Nothing changes on Windows.
+build, and its session loop runs on per-platform seams. On a Mac the agent can
+start the streamer through the desktop app, over a unix socket that carries the
+session bundle, so the bundle never touches disk. The macOS installer carries
+the streamer inside owlette.app, signed and notarized with it, and the build
+fails if it is missing, the wrong version or signed by another team. A new
+`selfcheck` verb reports a Mac's Screen Recording, Accessibility and local
+network state without raising a prompt. The streamer does not capture on macOS
+yet, so a Mac or a Linux machine still cannot host a swoop session. Nothing
+changes on Windows.
+
+### added — the macOS app reports its Accessibility grant
+
+The app now checks its Accessibility grant beside Screen Recording and shows a
+notice when it is off. The notice's button asks macOS for the grant and opens
+the right pane in System Settings; nothing asks without that click. Swoop needs
+the grant to control a Mac, and can show the screen without it.
+
+### changed — the swoop keyboard follows the machine you control
+
+From a PC, ctrl now acts as cmd on a Mac, so ctrl + c copies there. A checkbox
+in the keyboard menu turns that off. A Mac viewing a Windows machine keeps cmd
+acting as ctrl. The keyboard menu lists the machine's own shortcuts: cmd chords
+on a Mac, and no ctrl + alt + del on a Mac or on Linux. This takes effect once a
+Mac can host a session.
 
 ## [4.0.6] - 2026-09-28
 
