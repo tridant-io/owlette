@@ -15,6 +15,8 @@ describe('launchCopyFor', () => {
         { name: 'all files', extensions: ['*'] },
       ],
       filePickerTitle: 'select a file to open with this executable',
+      missingTarget: 'the executable',
+      missingTouchDesigner: 'TouchDesigner.exe',
     })
   })
 
@@ -28,6 +30,8 @@ describe('launchCopyFor', () => {
       pickerTitle: 'select an app, program or script',
       pickerFilters: [],
       filePickerTitle: 'select a file to open with this app',
+      missingTarget: 'the app',
+      missingTouchDesigner: 'TouchDesigner.app',
     })
   })
 
@@ -41,6 +45,8 @@ describe('launchCopyFor', () => {
       pickerTitle: 'select a program or script',
       pickerFilters: [],
       filePickerTitle: 'select a file to open with this program',
+      missingTarget: 'the program',
+      missingTouchDesigner: 'touchdesigner',
     })
   })
 

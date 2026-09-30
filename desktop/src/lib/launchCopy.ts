@@ -20,6 +20,10 @@ export interface LaunchCopy {
   pickerFilters: DialogFilter[]
   /** the path / args row's picker */
   filePickerTitle: string
+  /** what a drop with no program found is told to point at */
+  missingTarget: string
+  /** the same, for a touchdesigner project whose touchdesigner was not found */
+  missingTouchDesigner: string
 }
 
 const COPY: Record<DesktopOs, LaunchCopy> = {
@@ -35,6 +39,8 @@ const COPY: Record<DesktopOs, LaunchCopy> = {
       { name: 'all files', extensions: ['*'] },
     ],
     filePickerTitle: 'select a file to open with this executable',
+    missingTarget: 'the executable',
+    missingTouchDesigner: 'TouchDesigner.exe',
   },
   // no filters on macos or linux: the dialog plugin (rfd) cannot say "all files"
   // there. macos merges every filter into one allow-list where `*` is a literal
@@ -50,6 +56,8 @@ const COPY: Record<DesktopOs, LaunchCopy> = {
     pickerTitle: 'select an app, program or script',
     pickerFilters: [],
     filePickerTitle: 'select a file to open with this app',
+    missingTarget: 'the app',
+    missingTouchDesigner: 'TouchDesigner.app',
   },
   linux: {
     label: 'program',
@@ -60,6 +68,8 @@ const COPY: Record<DesktopOs, LaunchCopy> = {
     pickerTitle: 'select a program or script',
     pickerFilters: [],
     filePickerTitle: 'select a file to open with this program',
+    missingTarget: 'the program',
+    missingTouchDesigner: 'touchdesigner',
   },
 }
 
