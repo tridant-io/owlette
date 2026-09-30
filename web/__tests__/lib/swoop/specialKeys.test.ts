@@ -1,8 +1,9 @@
-import { SPECIAL_KEYS, sendSpecialKey } from '@/lib/swoop/specialKeys';
+import { MACHINE_OS_FAMILIES } from '@/lib/machineOs';
+import { sendSpecialKey, specialKeysFor } from '@/lib/swoop/specialKeys';
 
 describe('sendSpecialKey', () => {
   const key = (id: string) => {
-    const found = SPECIAL_KEYS.find((k) => k.id === id);
+    const found = specialKeysFor('windows').find((k) => k.id === id);
     if (!found) throw new Error(`no special key ${id}`);
     return found;
   };
@@ -28,11 +29,17 @@ describe('sendSpecialKey', () => {
     expect(sendSpecialKey({ send, capture: null }, key('win'))).toBe(false);
   });
 
-  it('every entry is either a chord of KeyboardEvent codes or the sas', () => {
-    for (const entry of SPECIAL_KEYS) {
+  it.each(MACHINE_OS_FAMILIES)('every %s entry is either a chord of KeyboardEvent codes or the sas', (osFamily) => {
+    const keys = specialKeysFor(osFamily);
+    for (const entry of keys) {
       expect(Boolean(entry.sas) !== Boolean(entry.codes?.length)).toBe(true);
       for (const code of entry.codes ?? []) expect(code).toMatch(/^[A-Z][A-Za-z0-9]+$/);
     }
-    expect(new Set(SPECIAL_KEYS.map((k) => k.id)).size).toBe(SPECIAL_KEYS.length);
+    expect(new Set(keys.map((k) => k.id)).size).toBe(keys.length);
+  });
+
+  it('offers ctrl+alt+del on windows alone, and linux the rest of the windows list', () => {
+    expect(specialKeysFor('macos').some((k) => k.sas)).toBe(false);
+    expect(specialKeysFor('linux')).toEqual(specialKeysFor('windows').filter((k) => !k.sas));
   });
 });

@@ -38,11 +38,12 @@
  * the releases are queued.
  */
 
+import type { MachineOsFamily } from '@/lib/machineOs';
 import {
-  applyCmdMapping,
-  defaultCmdMapping,
+  applyModifierMapping,
   isInjectable,
-  type CmdMapping,
+  isMacViewer,
+  type ModifierMapping,
 } from '@/lib/swoop/keymap';
 import { encodeInputMessage, type InputMessage } from '@/lib/swoop/protocol';
 
@@ -73,8 +74,12 @@ export interface InputCaptureOptions {
   target: HTMLElement;
   /** one encoded message. wave 5 passes the `swoop-input` channel's `send`. */
   send: (payload: string) => void;
-  /** defaults per platform: ctrl on a mac, win everywhere else. */
-  cmdMapping?: CmdMapping;
+  /** the machine's system. defaults to windows, as a machine that reports none is. */
+  hostOs?: MachineOsFamily;
+  /** defaults to what the browser says about itself. */
+  viewerIsMac?: boolean;
+  /** defaults to `'swap'`. */
+  modifierMapping?: ModifierMapping;
   /**
    * the box absolute moves normalise against, in client coordinates. defaults
    * to the target's rect; the stage passes the letterboxed video rect once it
@@ -98,7 +103,12 @@ export interface InputCapture {
   readonly pointerOutside: boolean;
   /** called whenever `pointerOutside` changes; returns the unsubscribe. */
   onPointerOutsideChange(listener: () => void): () => void;
-  setCmdMapping(mapping: CmdMapping): void;
+  /**
+   * the machine's system and the mapping, together: the capture is attached
+   * before the page has read the system off the machine document, and the
+   * keyboard menu owns the mapping from then on.
+   */
+  setModifierMapping(hostOs: MachineOsFamily, mapping: ModifierMapping): void;
   /**
    * relative mode. `unadjustedMovement` asks for raw deltas with no pointer
    * acceleration, which is the whole point for a remote desktop. whether the
@@ -117,7 +127,8 @@ export interface InputCapture {
   /**
    * a combination the browser would keep for itself, pressed in order and
    * released in reverse, through the same queue as a typed key so it takes
-   * its place in the channel's sequence.
+   * its place in the channel's sequence. it is sent as written: the menu
+   * already names the host's own keys, so the modifier mapping never applies.
    */
   pressChord(codes: readonly string[]): void;
   detach(): void;
@@ -156,7 +167,9 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   const nowUs = options.nowUs ?? defaultNowUs;
   const rect = options.rect ?? (() => target.getBoundingClientRect());
 
-  let cmdMapping = options.cmdMapping ?? defaultCmdMapping();
+  let hostOs = options.hostOs ?? 'windows';
+  const viewerIsMac = options.viewerIsMac ?? isMacViewer();
+  let modifierMapping = options.modifierMapping ?? 'swap';
   let seq = 1;
   let composing = false;
   let locked = false;
@@ -263,7 +276,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     if (event.code === 'Escape') lastEscapeMs = nowMs();
     else event.preventDefault();
 
-    const code = applyCmdMapping(event.code, cmdMapping);
+    const code = applyModifierMapping(event.code, hostOs, viewerIsMac, modifierMapping);
     if (!isInjectable(code)) return;
     // auto-repeat is forwarded: SendInput injects discrete events, so nothing
     // on the host side repeats a held key for us.
@@ -275,7 +288,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     if (BROWSER_RESERVED.has(event.code)) return;
     if (event.code !== 'Escape') event.preventDefault();
 
-    const code = applyCmdMapping(event.code, cmdMapping);
+    const code = applyModifierMapping(event.code, hostOs, viewerIsMac, modifierMapping);
     if (!isInjectable(code)) return;
     // a key we never saw go down still gets its release: the host tracks state,
     // and a spurious release is cheaper than a stuck key.
@@ -439,12 +452,13 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       };
     },
 
-    setCmdMapping(mapping: CmdMapping): void {
-      if (mapping === cmdMapping) return;
+    setModifierMapping(nextHostOs: MachineOsFamily, mapping: ModifierMapping): void {
+      if (nextHostOs === hostOs && mapping === modifierMapping) return;
       // the emitted code changes under us, so anything held would never be
       // released under the code the host has down.
       releaseAll();
-      cmdMapping = mapping;
+      hostOs = nextHostOs;
+      modifierMapping = mapping;
     },
 
     async requestPointerLock(): Promise<boolean> {

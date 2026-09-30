@@ -7,10 +7,11 @@ import {
   EXTENDED_CODES,
   KEYMAP,
   KEYMAP_VERSION,
-  applyCmdMapping,
-  defaultCmdMapping,
+  applyModifierMapping,
   isInjectable,
+  isMacViewer,
   lookupCode,
+  modifierSwap,
 } from '@/lib/swoop/keymap';
 import { decodeInputMessage, encodeInputMessage } from '@/lib/swoop/protocol';
 
@@ -94,28 +95,48 @@ describe('keymap.json parity', () => {
   });
 });
 
-describe('cmd mapping', () => {
-  it('maps cmd to ctrl when configured', () => {
-    expect(applyCmdMapping('MetaLeft', 'ctrl')).toBe('ControlLeft');
-    expect(applyCmdMapping('MetaRight', 'ctrl')).toBe('ControlRight');
+describe('modifier mapping', () => {
+  const MODIFIERS = ['MetaLeft', 'MetaRight', 'ControlLeft', 'ControlRight'] as const;
+  const sent = (host: 'windows' | 'macos' | 'linux', viewerIsMac: boolean, mapping: 'swap' | 'passthrough') =>
+    MODIFIERS.map((code) => applyModifierMapping(code, host, viewerIsMac, mapping));
+
+  // every host and viewer, under both mappings: [host, viewer, what swap sends for MODIFIERS].
+  it.each([
+    ['windows', 'mac', ['ControlLeft', 'ControlRight', 'ControlLeft', 'ControlRight']],
+    ['linux', 'mac', ['ControlLeft', 'ControlRight', 'ControlLeft', 'ControlRight']],
+    ['macos', 'pc', ['MetaLeft', 'MetaRight', 'MetaLeft', 'MetaRight']],
+    ['macos', 'mac', [...MODIFIERS]],
+    ['windows', 'pc', [...MODIFIERS]],
+    ['linux', 'pc', [...MODIFIERS]],
+  ] as const)('a %s host and a %s viewer: swap sends %j, passthrough every key as pressed', (host, viewer, swapped) => {
+    expect(sent(host, viewer === 'mac', 'swap')).toEqual(swapped);
+    expect(sent(host, viewer === 'mac', 'passthrough')).toEqual([...MODIFIERS]);
   });
 
-  it('passes cmd through as the windows key when configured', () => {
-    expect(applyCmdMapping('MetaLeft', 'win')).toBe('MetaLeft');
-    expect(applyCmdMapping('MetaRight', 'win')).toBe('MetaRight');
+  it('names the one conversion each host and viewer has, and none where they agree', () => {
+    expect(modifierSwap('windows', true)).toBe('cmd-to-ctrl');
+    expect(modifierSwap('linux', true)).toBe('cmd-to-ctrl');
+    expect(modifierSwap('macos', false)).toBe('ctrl-to-cmd');
+    expect(modifierSwap('macos', true)).toBeNull();
+    expect(modifierSwap('windows', false)).toBeNull();
+    expect(modifierSwap('linux', false)).toBeNull();
   });
 
-  it('leaves every other code alone under both mappings', () => {
+  it('leaves every other code alone for every host and viewer', () => {
     for (const code of Object.keys(source.codes)) {
-      if (code === 'MetaLeft' || code === 'MetaRight') continue;
-      expect(applyCmdMapping(code, 'ctrl')).toBe(code);
-      expect(applyCmdMapping(code, 'win')).toBe(code);
+      if ((MODIFIERS as readonly string[]).includes(code)) continue;
+      for (const host of ['windows', 'macos', 'linux'] as const) {
+        for (const viewerIsMac of [true, false]) {
+          expect(applyModifierMapping(code, host, viewerIsMac, 'swap')).toBe(code);
+        }
+      }
     }
   });
 
-  it('defaults to ctrl on a mac and win elsewhere', () => {
-    expect(defaultCmdMapping('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBe('ctrl');
-    expect(defaultCmdMapping('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe('win');
-    expect(defaultCmdMapping('Mozilla/5.0 (X11; Linux x86_64)')).toBe('win');
+  it('tells a mac viewer from the rest by its user agent', () => {
+    expect(isMacViewer('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBe(true);
+    expect(isMacViewer('Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)')).toBe(true);
+    expect(isMacViewer('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe(false);
+    expect(isMacViewer('Mozilla/5.0 (X11; Linux x86_64)')).toBe(false);
   });
 });

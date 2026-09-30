@@ -4,8 +4,13 @@
  * same path as a typed key, so it takes its place in the channel's sequence —
  * except ctrl+alt+del, which is a control message the host turns into a real
  * secure-attention sequence (PROTOCOL §5 `sas`, requires `ctl`).
+ *
+ * the list is the host's: each chord names the host's own keys and is sent as
+ * written, never through the modifier mapping. only windows has a
+ * secure-attention sequence.
  */
 
+import type { MachineOsFamily } from '@/lib/machineOs';
 import type { InputCapture } from './input';
 import { encodeControlMessage } from './protocol';
 
@@ -20,7 +25,7 @@ export interface SpecialKey {
   sas?: true;
 }
 
-export const SPECIAL_KEYS: readonly SpecialKey[] = [
+const WINDOWS_KEYS: readonly SpecialKey[] = [
   { id: 'sas', label: 'ctrl + alt + del', sas: true },
   { id: 'win', label: 'windows key', codes: ['MetaLeft'] },
   { id: 'alt-tab', label: 'alt + tab', codes: ['AltLeft', 'Tab'] },
@@ -32,6 +37,23 @@ export const SPECIAL_KEYS: readonly SpecialKey[] = [
   { id: 'print', label: 'print screen', codes: ['PrintScreen'] },
   { id: 'esc', label: 'esc', codes: ['Escape'] },
 ];
+
+const MACOS_KEYS: readonly SpecialKey[] = [
+  { id: 'cmd-tab', label: 'cmd + tab', codes: ['MetaLeft', 'Tab'] },
+  { id: 'cmd-space', label: 'cmd + space', hint: 'spotlight', codes: ['MetaLeft', 'Space'] },
+  { id: 'cmd-q', label: 'cmd + q', hint: 'quit app', codes: ['MetaLeft', 'KeyQ'] },
+  { id: 'cmd-ctrl-q', label: 'cmd + ctrl + q', hint: 'lock', codes: ['MetaLeft', 'ControlLeft', 'KeyQ'] },
+  { id: 'esc', label: 'esc', codes: ['Escape'] },
+];
+
+const LINUX_KEYS: readonly SpecialKey[] = WINDOWS_KEYS.filter((key) => !key.sas);
+
+/** the menu for a machine running `hostOs`. */
+export function specialKeysFor(hostOs: MachineOsFamily): readonly SpecialKey[] {
+  if (hostOs === 'macos') return MACOS_KEYS;
+  if (hostOs === 'linux') return LINUX_KEYS;
+  return WINDOWS_KEYS;
+}
 
 export interface SpecialKeyTarget {
   /** the session's control channel send. */

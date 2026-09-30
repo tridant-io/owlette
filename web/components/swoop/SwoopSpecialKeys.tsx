@@ -3,32 +3,51 @@
 /**
  * the keyboard menu: the combinations the browser or the viewer's own windows
  * keeps for itself, sent as chords on the input channel, and ctrl+alt+del as
- * the secure-attention control message. all of it needs `ctl`; a view-only
- * session sees the menu disabled rather than absent, so the affordance is
- * learnable.
+ * the secure-attention control message. the list is the host's own, by its
+ * system, and above it sits the one modifier choice this host and viewer have,
+ * when they have one; it drives the input capture's mapping. all of it needs
+ * `ctl`; a view-only session sees the menu disabled rather than absent, so the
+ * affordance is learnable.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Keyboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import type { MachineOsFamily } from '@/lib/machineOs';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
+import { isMacViewer, modifierSwap, type ModifierMapping, type ModifierSwap } from '@/lib/swoop/keymap';
 import { decodeControlMessage } from '@/lib/swoop/protocol';
-import { SPECIAL_KEYS, sendSpecialKey } from '@/lib/swoop/specialKeys';
+import { sendSpecialKey, specialKeysFor } from '@/lib/swoop/specialKeys';
+
+const SWAP_LABELS: Readonly<Record<ModifierSwap, string>> = {
+  'ctrl-to-cmd': 'ctrl acts as cmd',
+  'cmd-to-ctrl': 'cmd acts as ctrl',
+};
+
+const subscribeNever = (): (() => void) => () => {};
+const onServer = (): boolean => false;
 
 export interface SwoopSpecialKeysProps {
   session: SwoopSession | null;
+  /** the machine's system; windows when it reports none. */
+  osFamily: MachineOsFamily;
 }
 
-export function SwoopSpecialKeys({ session }: SwoopSpecialKeysProps) {
+export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
   const [note, setNote] = useState<string | null>(null);
+  const [mapping, setMapping] = useState<ModifierMapping>('swap');
+  // the server has no navigator; hydration fills it in.
+  const viewerIsMac = useSyncExternalStore(subscribeNever, isMacViewer, onServer);
+  const swap = modifierSwap(osFamily, viewerIsMac);
 
   // the host answers a sas with sas-result; a refusal is the one outcome the
   // viewer cannot see on the screen, so it is said here.
@@ -41,6 +60,12 @@ export function SwoopSpecialKeys({ session }: SwoopSpecialKeysProps) {
     });
   }, [session]);
 
+  // each session attaches a capture of its own, and the machine's system can
+  // arrive after it did, so the choice is handed over again on every change.
+  useEffect(() => {
+    swoopInputCapture(session)?.setModifierMapping(osFamily, mapping);
+  }, [session, osFamily, mapping]);
+
   const enabled = session !== null && session.ctl;
 
   return (
@@ -51,8 +76,19 @@ export function SwoopSpecialKeys({ session }: SwoopSpecialKeysProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
+        {swap && (
+          <>
+            <DropdownMenuCheckboxItem
+              checked={mapping === 'swap'}
+              onCheckedChange={(checked) => setMapping(checked ? 'swap' : 'passthrough')}
+            >
+              {SWAP_LABELS[swap]}
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuLabel>send keys</DropdownMenuLabel>
-        {SPECIAL_KEYS.map((key) => (
+        {specialKeysFor(osFamily).map((key) => (
           <DropdownMenuItem
             key={key.id}
             className="cursor-pointer justify-between"

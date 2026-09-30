@@ -32,7 +32,9 @@ function harness(options: Partial<Parameters<typeof attachInputCapture>[0]> = {}
   const capture = attachInputCapture({
     target,
     send: (payload) => payloads.push(payload),
-    cmdMapping: 'win',
+    // a pc viewing a windows machine: nothing to map, whatever jsdom's agent says.
+    hostOs: 'windows',
+    viewerIsMac: false,
     nowUs: () => TS_US,
     rect: () => ({ left: 0, top: 0, width: 200, height: 100 }),
     schedule: (flush) => {
@@ -305,26 +307,52 @@ describe('keyboard', () => {
   });
 });
 
-describe('cmd mapping', () => {
-  it('sends ctrl for cmd when configured that way', () => {
-    const h = harness({ cmdMapping: 'ctrl' });
+describe('modifier mapping', () => {
+  const codes = (h: Harness) => h.sent().map((m) => (m.t === 'k' ? m.code : m.t));
+
+  it("sends a mac viewer's cmd to a windows host as ctrl by default", () => {
+    const h = harness({ hostOs: 'windows', viewerIsMac: true });
     h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
     h.target.dispatchEvent(keyEvent('keyup', 'MetaLeft'));
     h.target.dispatchEvent(keyEvent('keydown', 'MetaRight'));
 
-    expect(h.sent().map((m) => (m.t === 'k' ? m.code : m.t))).toEqual([
-      'ControlLeft',
-      'ControlLeft',
-      'ControlRight',
-    ]);
+    expect(codes(h)).toEqual(['ControlLeft', 'ControlLeft', 'ControlRight']);
   });
 
-  it('sends the windows key for cmd when configured that way', () => {
-    const h = harness({ cmdMapping: 'win' });
-    h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
-    h.target.dispatchEvent(keyEvent('keydown', 'MetaRight'));
+  it("sends a pc viewer's ctrl to a mac host as cmd by default, so ctrl+c copies there", () => {
+    const h = harness({ hostOs: 'macos', viewerIsMac: false });
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    h.target.dispatchEvent(keyEvent('keydown', 'KeyC'));
+    h.target.dispatchEvent(keyEvent('keyup', 'KeyC'));
+    h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlRight'));
 
-    expect(h.sent().map((m) => (m.t === 'k' ? m.code : m.t))).toEqual(['MetaLeft', 'MetaRight']);
+    expect(codes(h)).toEqual(['MetaLeft', 'KeyC', 'KeyC', 'MetaLeft', 'MetaRight']);
+  });
+
+  it('sends every key as pressed under passthrough', () => {
+    const h = harness({ hostOs: 'macos', viewerIsMac: false, modifierMapping: 'passthrough' });
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
+
+    expect(codes(h)).toEqual(['ControlLeft', 'MetaLeft']);
+  });
+
+  it('sends every key as pressed where the viewer and the host agree', () => {
+    const mac = harness({ hostOs: 'macos', viewerIsMac: true });
+    const pc = harness({ hostOs: 'windows', viewerIsMac: false });
+    for (const h of [mac, pc]) {
+      h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      expect(codes(h)).toEqual(['MetaLeft', 'ControlLeft']);
+    }
+  });
+
+  it('sends a chord from the menu as written, never through the mapping', () => {
+    const h = harness({ hostOs: 'macos', viewerIsMac: false });
+    h.capture.pressChord(['MetaLeft', 'ControlLeft', 'KeyQ']);
+
+    expect(codes(h)).toEqual(['MetaLeft', 'ControlLeft', 'KeyQ', 'KeyQ', 'ControlLeft', 'MetaLeft']);
   });
 
   it('presses a chord in order and releases it in reverse, inside the one sequence', () => {
@@ -343,12 +371,38 @@ describe('cmd mapping', () => {
   });
 
   it('releases what is held before the mapping changes under it', () => {
-    const h = harness({ cmdMapping: 'win' });
+    const h = harness({ hostOs: 'windows', viewerIsMac: true, modifierMapping: 'passthrough' });
     h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
     h.clear();
 
-    h.capture.setCmdMapping('ctrl');
+    h.capture.setModifierMapping('windows', 'swap');
     expect(h.sent()).toEqual([{ t: 'k', code: 'MetaLeft', down: false, seq: 2, tsUs: TS_US }]);
+    h.clear();
+
+    h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
+    expect(codes(h)).toEqual(['ControlLeft']);
+  });
+
+  it('takes the machine it learns after attach, releasing what is held first', () => {
+    const h = harness({ viewerIsMac: false });
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    h.clear();
+
+    h.capture.setModifierMapping('macos', 'swap');
+    expect(h.sent()).toEqual([{ t: 'k', code: 'ControlLeft', down: false, seq: 2, tsUs: TS_US }]);
+    h.clear();
+
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    expect(codes(h)).toEqual(['MetaLeft']);
+  });
+
+  it('releases nothing when neither the machine nor the mapping changes', () => {
+    const h = harness({ hostOs: 'macos', viewerIsMac: false });
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    h.clear();
+
+    h.capture.setModifierMapping('macos', 'swap');
+    expect(h.sent()).toEqual([]);
   });
 });
 
