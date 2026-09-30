@@ -309,7 +309,8 @@ mod tests {
         feature = "encode-amf",
         feature = "encode-mf",
         feature = "encode-openh264",
-        feature = "encode-ffmpeg"
+        feature = "encode-ffmpeg",
+        feature = "encode-videotoolbox"
     )))]
     #[test]
     fn a_build_with_no_backend_exits_13() {
