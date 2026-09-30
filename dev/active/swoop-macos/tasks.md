@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 19/24 complete
+**Progress**: 20/24 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -145,7 +145,7 @@ commands green on the Mac or the CI leg. Do not start this wave before gate M0 s
   - Done when: the memo lists each finding with its severity, its evidence by file and line and its outcome, or states that the review is clean; every fix has a test; both suites are green; `git status` shows the memo untracked.
   - Depends on: 2.2, 2.3
 
-- [ ] **Task 4.9: The app notices its Accessibility grant** `[agent+human]` *(added 2026-09-30 from gate M0's finding, on the owner's yes)*
+- [x] **Task 4.9: The app notices its Accessibility grant** `[agent+human]` *(added 2026-09-30 from gate M0's finding, on the owner's yes)*
   - Files: `desktop/src-tauri/src/tcc.rs`, `desktop/src-tauri/src/commands.rs`, `desktop/src/App.tsx`, `desktop/src/components/PermissionBanner.tsx`, `desktop/src/components/PermissionBanner.test.tsx`, `agent/swoop/src/main.rs`, `agent/swoop/src/platform/macos.rs`
   - Do: Gate M0 found that inside the app, `CGPreflightPostEventAccess` answers the same for the life of the process: neither a grant nor a revocation reached it over three minute ticks, while a plain command-line process followed the same toggle within two seconds, and every streamer the app launched read the truth (`spikes/3.1-gate-m0.md`, "Found on the way", 1). So the notice stays after the user grants Accessibility until the app restarts, which is wrong. Measure the cheap fix first, on the installed product: make the minute check and the `accessibility_granted` command call the preflight on the app's main thread (dispatch to main and wait) instead of the timer thread; build through the signed build job, install (`sudo installer -pkg … -target /`), have the owner toggle owlette in the Accessibility list, and watch `ipc/tcc.json`. If the report follows within a minute in both directions, that is the fix. If it does not, the app asks a fresh process: `selfcheck` gains `--grants`, which prints only `screenCapturePreflight`, `postEventPreflight` and `axTrusted`, calls neither ScreenCaptureKit nor the network, installs no logger and exits 0; on macOS the minute report and the command run the sidecar beside `current_exe()` with that flag, with a 2 s timeout, and a failed run reports the grant as unknown (`null`), never as false. Either way, while the notice is showing, `App.tsx` re-reads the answer every 5 s so the notice clears without a focus change, and stops once granted. Screen Recording's own report does not change: it is asked once per launch by design. Measure the result the same way, with the owner toggling.
   - Done when: on the Mac, with the app installed from the signed build job, granting owlette Accessibility clears the notice within 10 s with no relaunch and `ipc/tcc.json` reports true at its next tick, and revoking it brings the notice back; `spikes/3.1-gate-m0.md` records which approach worked, with the ticks; desktop clippy and `cargo test --locked` green on this box and on the Mac; vitest green; if `main.rs` or `platform/macos.rs` changed, the four Windows commands and the macOS commands are green and `owlette-swoop selfcheck --grants` from ssh prints exactly the three keys.
@@ -817,3 +817,29 @@ box (226 frames, 1 irap, 122 cpos, 23 cshape); macOS 418 / 20, then 1, 5; the st
 **Task 6.1 (gate M1): not started.** It needs the head installed on the Mac and the owner at both machines. The
 signed build of `33311e99` ended `BUILD-EXIT=69` again (the notary profile is still gone), leaving a signed,
 un-notarized pkg; the owner chooses to install it or to re-store the profile first.
+
+**Task 4.9: done** (`d7630c27`, `db593f16`, `a1e3e6a5`; approach 1 was `b6b0d8ea`).
+- **Approach 1 failed on the product.** The un-notarized pkg of `33311e99` was installed at 15:05:55 (the owner's
+  "install it"); the owner switched owlette on at 15:16:40 (TCC.db `2@1790806600`) and the app's report stayed
+  `accessibility: false` at 15:17:12, 15:18:12 and 15:32:42, the notice with it. The process keeps its
+  launch-time answer whichever thread asks.
+- **Approach 2 works.** The app runs its own sidecar, `owlette-swoop selfcheck --grants` (the two preflights and
+  `AXIsProcessTrusted`; no ScreenCaptureKit, no network, no logger), with a 2 s timeout, for the minute report
+  and the `accessibility_granted` command; a failed run reports `null`, never false; the notice re-reads every
+  5 s while it shows. The main-thread dispatch was dropped. Built, notarized (`BUILD-EXIT=0`: the notary profile
+  was back), installed at 15:36:50 (daemon 53847, app 53850 from /Applications).
+- **Measured with the owner at the Mac (15:40):** owlette switched off at 15:40:02 (TCC.db `0@1790808002`); the
+  owner clicked the window and the notice appeared; owlette switched on at 15:40:20 (`2@1790808020`) and, with
+  no click, the notice cleared on its own. The minute report never caught the 18 s off window (its ticks at
+  15:40:51 and after read true), so the report's proof is the sidecar line from ssh
+  (`{"screenCapturePreflight":true,"postEventPreflight":true,"axTrusted":true}`) plus the owner's eyes.
+- The notice's "!" icon is now vertically centred on the row (`db593f16`, the owner's request).
+- Checks: desktop clippy and tests green on this box (119 / 1) and the Mac (131 / 0, the real sidecar staged);
+  vitest 496 / 496; `npm run build` clean; the four Windows streamer commands green (394 / 20, 403 / 21);
+  the macOS streamer commands green (419 / 20). `ipc/tcc.json`'s `accessibility` can now be `null`; context.md's
+  names table says bool (a note for the sweep).
+- *Changelog line:* "macOS: the owlette app notices an accessibility grant or revocation while it runs, and its
+  notice clears within seconds of the grant, with no relaunch."
+- *Rig note:* the owner was asked for the same toggle five times today across builds and mis-timed probes; the
+  TCC.db row (`auth_value@last_modified`, readable as root) timestamps a toggle exactly, so a watcher can pair
+  it with the report without a second ask.
