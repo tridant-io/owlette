@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 6/23 complete
+**Progress**: 7/23 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -85,7 +85,7 @@ add files under it with `git add -f`.
   - Done when: the memo holds the json of every run, every dialog seen and the application it named, which of `postEventPreflight` and `axTrusted` tracked the Accessibility grant, whether the Local Network prompt appeared and for whom, and the word go or no-go; the owner has read it.
   - Depends on: 2.1, 2.2, 2.3, 2.5
 
-- [ ] **Task 3.2: POSIX wiring test** `[agent]`
+- [x] **Task 3.2: POSIX wiring test** `[agent]`
   - Files: `agent/tests/integration/test_swoop_wiring_posix.py` (create), `agent/tests/integration/fake_runner.py` (create), `.github/workflows/agent-tests.yml`
   - Do: The POSIX twin of `test_swoop_wiring.py`, whose head comment states the rule: nothing here mocks the wiring it is testing. `fake_runner.py` plays the desktop app on a thread: it polls `<data_root>/ipc/jobs`, answers a `launch` by connecting to the job's socket and starting `fake_streamer.py` with its stdin and stdout on that connection, writes `result.json` with the pid, closes its own copy, and writes the exit file when the child ends. The test drives the real `SwoopManager` over the real `swoop_spawn` on POSIX. Three things are replaced and named as such in the module doc: the bundle fetch, `verify_install` (the fake streamer is not root's), and whatever `osadapter` reads to decide the desktop app is running. Assert: a request reaches `ready`; `kill` ends it with `exiting` and the manager books code 0 with the reason the line gave; a streamer that dies without `exiting` is booked from the exit file; with the runner stopped the spawn is refused `desktop_not_running` and the manager is idle; a `token` line reaches the streamer; `ConnectionManager` is never touched. In `agent-tests.yml`, rewrite the comment on the swoop entry of the two ignore lists: the Windows wiring test stays out of the POSIX legs, and the POSIX one runs there.
   - Done when: the new test is green on the CI macos-15 and ubuntu-24.04 legs and skipped on Windows with a clear reason; `agent/.venv/Scripts/python -m pytest agent/tests/` is green on this box.
@@ -423,7 +423,8 @@ green and one red, CodeQL (below).
 - *Changelog line:* "macOS: the pkg carries the swoop streamer inside owlette.app, signed and notarized with the
   app; the build fails if it is missing, the wrong version or not signed by the app's team."
 
-**Task 2.4: code done** (`b91adfae`), **not ticked: no local full e2e run has passed in one piece yet.**
+**Task 2.4: code done** (`b91adfae`), **not ticked: the owner's call.** The done-when asks for a local full e2e
+pass, and the best local run is 410 of 411 (the detail is under *e2e* below). CI's full suite passed twice.
 - The viewer's mapping is one function, `applyModifierMapping(code, host, viewerIsMac, 'swap' | 'passthrough')`.
   No `CmdMapping` spelling remains. The capture's setter is `setModifierMapping(hostOs, mapping)`: it takes the
   host too, because the capture is attached before the page knows the host.
@@ -433,13 +434,19 @@ green and one red, CodeQL (below).
 - eslint clean on every touched file; `npx tsc --noEmit` clean; `npm test` 6233 passed, 1 skipped (+13), with
   the mapping table covered for all four host and viewer pairs under both mappings.
 - *e2e.* The new spec passed in every run.
-  - CI, full suite on `b91adfae`: 411 passed.
+  - CI, full suite: 411 passed on `b91adfae`, and green again on `bb3109dd`.
   - Local, full suite, while four other agents were building: 404 passed, 7 failed (timeouts in roosts, api-keys
     and sites specs). Those five files alone: 24 passed.
   - Local, full suite again, with one agent still running tests: 408 passed, 3 failed
     (`dashboard/process-duplicate-names`, `dispatch/retry-deployment`, `time-travel/apply-ack-before-deadline`).
     Those three files alone: 7 passed.
-  - The failures differ between the runs and none touches this change. A third run on a quiet box decides the tick.
+  - Local, third attempt, 2026-09-30: no test ran. Playwright timed out waiting 60 s for the web server to start.
+  - Local, fourth attempt, on a quiet box (1% CPU load when sampled): 410 passed, 1 failed,
+    `time-travel/apply-ack-before-deadline.spec.ts:68`. It is the same failure as in the second run: a 10 s
+    click timeout waiting for `display-recall-button` in the display layout panel.
+  - So one display spec fails in full runs on this box, passes alone here, and passes in CI's full runs. That
+    spec and the display panel are not touched by this branch. The other failures differed between runs.
+    Whether that spec also fails in a full local run on dev was not measured.
 - Deviations:
   - `web/__tests__/lib/swoop/specialKeys.test.ts` was edited though it is not in the Files list: it imported the
     removed `SPECIAL_KEYS`.
@@ -461,3 +468,48 @@ green and one red, CodeQL (below).
 `swoop_spawn_posix.py`'s `os.chmod(socket_path, SOCKET_MODE)`. The mode is the contract's `0660 root:<ipc group>`:
 the app's user reaches the socket through the group, and the daemon then checks the peer's uid. The owner chose
 to leave it open for Task 4.8, which reviews exactly this boundary.
+- The same alert is why the "no live vulnerability on this branch" check went red one push later: once GitHub
+  registered the alert as open, `check-security-alerts.mjs` counted it (`BLOCKED by 1 item(s)`). It is one
+  cause with two red checks, and it has no ack entry: the owner chose to leave it open, not to acknowledge it.
+
+### 2026-09-30, Wave 3
+
+**Task 3.2: done** (`bb3109dd`).
+- `test_swoop_wiring_posix.py` drives the real `SwoopManager` over the real `swoop_spawn`, `swoop_spawn_posix`
+  and `osadapter.run_job`, a real socket and a real child. `fake_runner.py` plays the desktop app on a thread.
+  `agent-tests.yml` changed in its comment only: the new file is on neither ignore list.
+- *This box.* `agent/.venv/Scripts/python -m pytest agent/tests/`: 2122 passed, 363 skipped. The one new skip is
+  the module, with the reason "the POSIX swoop wiring: a unix socket, the job seam and the desktop runner;
+  test_swoop_wiring.py is the Windows twin".
+- *The Mac.* The macos-15 row: 1823 passed, 250 skipped, with the rig's known launchd cases deselected. The new
+  file: five runs in a row and 20 rounds of two concurrent runs, 6 of 6 every time, about 2 s a run.
+- *CI, on `bb3109dd`.* The new file ran 6 of 6 on both POSIX legs: macos-15 1827 passed / 250 skipped,
+  ubuntu-24.04 1811 passed / 266 skipped. The Windows leg is green.
+- *Mutants, on the Mac.* With the runner never writing the exit file, three tests fail (the crash is booked 20
+  instead of 137, the kill 20 instead of 0). With a token line sent without its newline, the token test fails.
+- Deviations:
+  - **Four things are replaced, not three.** The bundle fetch, `verify_install`, what `osadapter` reads to
+    decide the app is running (`osadapter.posix._desktop_pid`), and the console user
+    (`osadapter.console_user`). The fourth is needed because the daemon admits only a peer running as the
+    console user, and a CI runner may have nobody at the console. The module doc names all four.
+  - **"Books code 0 with the reason the line gave" is met from the exit file, not the line.**
+    `fake_streamer.py`'s `exiting` line carries no `code` and no `reason`, so the kill's code 0 comes from the
+    runner's exit file (the mutant shows it), and the booked reason is the kill's own. The rule that the
+    `exiting` code comes first is covered only by the unit test
+    `test_the_exiting_code_wins_over_a_missing_exit_file`.
+  - **"A `token` line reaches the streamer" is shown indirectly.** `fake_streamer.py` reacts only to `kill`. The
+    test sends the token, then a kill, and asserts the kill is still answered: the token crossed the socket as
+    a whole line of its own. Its content arriving is not proven.
+- *Follow-up, not done (outside the Files list):* make `fake_streamer.py` match PROTOCOL.md §6, with `code` and
+  `reason` on `exiting` and an answer to a `token` line. Then this test could prove both rules end to end.
+- *Seen, not this task's:* `test_swoop_manager.py::TestHostTokenRefresh::test_a_failed_mint_with_no_time_left_is_logged_not_retried_forever`
+  failed once under load on this box and passed every rerun. `agent-tests.yml`'s two checkout lines still say
+  `# v6` for the `v7.0.1` SHA, the comment Task 1.1 fixed in `rust-build.yml`.
+- *Changelog line:* none. Test only.
+
+**Task 3.1 (gate M0): prepared, not run.** It needs the owner at the Mac. The memo so far is
+`spikes/3.1-gate-m0.md`; the script is `spikes/m0_selfcheck.py`.
+- The signed build job on `b91adfae` (all of Wave 2) ended `BUILD-EXIT=0`: notarized, stapled, `stapler
+  validate` passes. The pkg waits on the Mac; its sha256 is in the memo.
+- The Mac still runs the released 4.0.6, with no streamer in the app. Nothing has been installed.
+- Wave 4 does not start before this gate says go.
