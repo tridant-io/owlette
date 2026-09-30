@@ -247,8 +247,14 @@ Full task text: [tasks.md](tasks.md).
 1. **Approved 2026-09-28**: the plan; the crates (objc2 0.6.4; objc2-foundation, -core-foundation,
    -core-graphics, -core-media, -core-video, -screen-capture-kit, -video-toolbox, -app-kit 0.3.2; block2 0.6.2;
    dispatch2 0.3.1; libc; str0m's `rust-crypto` feature); macOS before Linux.
-2. **Open**: `sudo` for the ssh user on the Mac, or an owner install per iteration (Task 1.2).
-3. **Open**: Screen Recording and Accessibility for the ssh daemon's wrapper on the Mac while the port runs, so
-   hardware tests can run over ssh (Task 1.2). Added while the task text was written; not part of the approval.
+2. **Yes, 2026-09-29**: `sudo` for the ssh user on the Mac (Task 1.2).
+3. **Yes, 2026-09-29**: Screen Recording and Accessibility for the ssh daemon's wrapper on the Mac while the port
+   runs (Task 1.2). Task 7.1 removes both.
 4. **Open**: release version, 4.1.0 proposed (Task 7.1).
 5. **Deferred**: the Linux codec, to the Linux plan.
+6. **Yes, 2026-09-30**: a session wakes the Mac's display and holds it awake while it runs, because an asleep
+   display is listed by neither CoreGraphics nor ScreenCaptureKit (Task 4.1's finding; Task 5.1 does it).
+7. **Yes, 2026-09-30**: a stop from the menu bar's capture indicator ends the session instead of being rebuilt
+   over the person at the Mac (Task 4.1's finding; Task 5.1 does it).
+8. **Left open for Task 4.8, 2026-09-30**: CodeQL alert 388 on the socket's 0660 mode. The review ruled it the
+   correct boundary; the owner dismisses it, and the two on the test double, on GitHub.
