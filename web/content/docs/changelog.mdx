@@ -7,33 +7,85 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
-### changed — groundwork for swoop on macOS
+### added — a Mac can host a swoop session
 
-The swoop streamer now builds on macOS and Linux and is tested there in every
-build, and its session loop runs on per-platform seams. On a Mac the agent can
-start the streamer through the desktop app, over a unix socket that carries the
-session bundle, so the bundle never touches disk. The macOS installer carries
-the streamer inside owlette.app, signed and notarized with it, and the build
-fails if it is missing, the wrong version or signed by another team. A new
-`selfcheck` verb reports a Mac's Screen Recording, Accessibility and local
-network state without raising a prompt. The streamer does not capture on macOS
-yet, so a Mac or a Linux machine still cannot host a swoop session. Nothing
-changes on Windows.
+A Mac on Apple silicon with macOS 15 or later can now host swoop. The streamer
+captures a display through ScreenCaptureKit at its native pixel size, encodes it
+with VideoToolbox (H.264 or HEVC in hardware, with Apple's software H.264 on a
+Mac without H.264 hardware), and takes the viewer's keyboard, mouse, double
+clicks, drags and wheel through CoreGraphics. The cursor overlay is drawn from
+the Mac's own cursor, and where the streamer cannot read the cursor's shape the
+pointer stays in the picture instead. System audio rides the same Opus track and
+mute as on Windows, and swoop never creates or switches an audio device. Every
+H.264 stream a Mac sends declares zero frame reordering, rewritten where the
+encoder leaves it out, so the browser's decoder never holds a frame back. A Mac
+resolves a viewer's `.local` candidates and restarts ICE when its network
+interfaces change, and the streamer's `probe` lists the Mac's displays and GPU.
+
+A session wakes the Mac's display and keeps it lit while it captures. macOS
+shows its screen recording indicator in the menu bar meanwhile, and stopping the
+capture from that indicator ends the session cleanly, as a kill, instead of
+restarting it over the person at the Mac. Somebody must be logged in: macOS
+does not let swoop reach the login window.
+
+A Mac offers swoop (`capabilities.swoop: 1`) once the streamer is installed and
+the owlette app reports a fresh Screen Recording grant, which takes effect when
+the app is reopened after the grant. The app asks for Screen Recording when it
+starts, as before; Accessibility, which control needs, is asked only from the
+app's notice; and the first session raises macOS's Local Network prompt, in
+owlette's name. Windows is unchanged, and a Linux machine still offers no swoop.
+
+### added — the swoop clipboard on a Mac
+
+The clipboard syncs with a Mac as it does with Windows: text and images both
+ways, up to 256 KB of text and 15 MB for an image. An image copied on the Mac
+as a TIFF reaches the viewer as a PNG, and copied files are not synced. The
+clipboard from the Mac reaches the viewer only where macOS lets owlette read it
+without asking, with owlette set to always allow under Privacy & Security →
+Paste from Other Apps, because any other read raises a paste alert at the Mac
+and swoop never raises a dialog there. Each session reads that setting once,
+when it starts. macOS lists an app under that setting only after the app has
+raised the paste alert once, which owlette never does, so on a Mac that does not
+list owlette the clipboard from the Mac stays off. macOS before 15.4 has neither
+the setting nor the alert, and syncs both ways. A paste from the viewer reaches
+the Mac whatever the setting.
 
 ### added — the macOS app reports its Accessibility grant
 
 The app now checks its Accessibility grant beside Screen Recording and shows a
 notice when it is off. The notice's button asks macOS for the grant and opens
-the right pane in System Settings; nothing asks without that click. Swoop needs
-the grant to control a Mac, and can show the screen without it.
+the right pane in System Settings; nothing asks without that click. The app
+notices a grant or a revocation while it runs, and the notice clears within
+seconds of the grant, with no relaunch. Swoop needs the grant to control a Mac,
+and can show the screen without it. The app also declares why it uses the local
+network.
 
 ### changed — the swoop keyboard follows the machine you control
 
 From a PC, ctrl now acts as cmd on a Mac, so ctrl + c copies there. A checkbox
 in the keyboard menu turns that off. A Mac viewing a Windows machine keeps cmd
 acting as ctrl. The keyboard menu lists the machine's own shortcuts: cmd chords
-on a Mac, and no ctrl + alt + del on a Mac or on Linux. This takes effect once a
-Mac can host a session.
+on a Mac, and no ctrl + alt + del on a Mac or on Linux. The Print Screen and
+Pause keys, which a Mac has no key for, are dropped there.
+
+### changed — how swoop starts on macOS and Linux
+
+The swoop streamer now builds on macOS and Linux and is tested there in every
+build, and its session loop runs on per-platform seams; Windows sessions run as
+before. On macOS and Linux the agent runs as root with no display of its own,
+so it asks the desktop app to start the streamer, through a checked `launch`
+job: the app starts only its own streamer, with allow-listed arguments and its
+socket and log paths pinned to owlette's data folder, as its own child, which is
+what gives the streamer the app's Screen Recording and Accessibility grants. The
+session bundle rides a unix socket the agent listens on, as the streamer's stdin
+and stdout, rather than a file the app would read, so it never touches disk, and
+the agent accepts the connection only from the logged-in user. When the app is
+not running, the agent logs the refusal `desktop_not_running` and starts
+nothing. The macOS installer carries the streamer inside owlette.app, signed and
+notarized with it, and the build fails if it is missing, the wrong version or
+signed by another team. A new `selfcheck` verb reports a Mac's Screen Recording,
+Accessibility and local network state without raising a prompt, and the
+streamer's log follows `OWLETTE_DATA_ROOT`.
 
 ## [4.0.6] - 2026-09-28
 

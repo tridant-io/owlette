@@ -56,7 +56,7 @@ Apple silicon only, macOS 15 or later. The package is signed and notarized.
 sudo installer -pkg Owlette-Installer-v<version>.pkg -target /
 ```
 
-3. Grant **Screen Recording** to the owlette app when macOS asks; the app shows a notice until it is granted.
+3. Grant **Screen Recording** to the owlette app when macOS asks, then quit and reopen owlette; the app shows a notice until it is granted. [swoop](/docs/dashboard/swoop#on-macos) needs three more grants, each given at the Mac: **Accessibility**, to control it, asked only from the app's notice; **Local Network**, which macOS asks for at the first swoop session; and, for the clipboard from the Mac, owlette set to always allow under **Paste from Other Apps**.
 4. Pair from the owlette app after installing — the phrase and its link are shown there, and you authorize as in the Windows steps above.
 
 ### linux
