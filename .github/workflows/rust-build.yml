@@ -162,6 +162,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            workspaces: desktop/src-tauri
+          # the macos leg builds the swoop sidecar too (below)
+          - os: macos-latest
+            workspaces: |
+              desktop/src-tauri
+              agent/swoop
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -175,7 +183,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: desktop/src-tauri
+          workspaces: ${{ matrix.workspaces }}
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: tauri prerequisites
@@ -183,6 +191,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      # tauri.macos.conf.json declares the streamer as a sidecar (externalBin)
+      # and tauri-build refuses to compile without the file under the host's
+      # triple; built as agent/build/macos/build.sh builds it (swoop-macos
+      # task 2.5). the policy floor is the swoop-posix job's, for audio-opus.
+      - name: stage the swoop sidecar
+        if: runner.os == 'macOS'
+        working-directory: agent/swoop
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: |
+          cargo build --release --locked --no-default-features --features encode-videotoolbox,audio-opus
+          triple="$(rustc -vV | sed -n 's/^host: //p')"
+          cp target/release/owlette-swoop "../../desktop/src-tauri/binaries/owlette-swoop-${triple}"
 
       - name: clippy owlette-desktop
         working-directory: desktop/src-tauri

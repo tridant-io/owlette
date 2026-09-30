@@ -1,12 +1,18 @@
 #!/bin/zsh
 # the owlette installer for macOS (tri-platform 5.1): one .pkg carrying the
 # service runtime, the two launchd plists and the app. runs on an Apple silicon
-# Mac with the Command Line Tools, node and cargo; nothing here needs root.
+# Mac with the Command Line Tools, node, cargo and cmake (the streamer's opus
+# build); nothing here needs root.
 #
 #   agent/build/macos/build.sh [--skip-app]
 #                              [--installer-identity "Developer ID Installer: …"]
 #                              [--notarize <notarytool keychain profile> |
 #                               --notary-key <path.p8> --notary-key-id <id> --notary-issuer <uuid>]
+#
+# the swoop streamer rides inside the app as a Tauri sidecar
+# (`bundle.externalBin` in tauri.macos.conf.json), so the pass that signs the
+# app signs it too. --skip-app reuses the last app bundle, sidecar included:
+# neither the app nor the streamer is rebuilt.
 #
 # with APPLE_SIGNING_IDENTITY in the environment the app (Tauri) and every
 # mach-o in the runtime are signed with it; unsigned by default, which installs on a box that allows it and is what the
@@ -120,6 +126,19 @@ cp "${PACKAGING}/app.owlette.agent.plist" "${PAYLOAD}/root/Library/LaunchDaemons
 cp "${PACKAGING}/app.owlette.desktop.plist" "${PAYLOAD}/root/Library/LaunchAgents/"
 chmod 644 "${PAYLOAD}/root/Library/LaunchDaemons/"*.plist "${PAYLOAD}/root/Library/LaunchAgents/"*.plist
 
+# --- the swoop streamer, staged as the app's sidecar ---------------------------
+# tauri-build will not compile the app without the file under its target
+# triple, and the bundler copies it to Contents/MacOS/owlette-swoop. the
+# default feature (nvenc) is windows-only; cmake 4 refuses the opus that
+# audio-opus vendors without the policy floor.
+if [ "${SKIP_APP}" = "0" ]; then
+  say "building the swoop streamer"
+  ( cd "${REPO}/agent/swoop" && CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      cargo build --release --locked --no-default-features --features encode-videotoolbox,audio-opus )
+  cp "${REPO}/agent/swoop/target/release/owlette-swoop" \
+    "${REPO}/desktop/src-tauri/binaries/owlette-swoop-aarch64-apple-darwin"
+fi
+
 # --- the app ---------------------------------------------------------------------
 APP="${REPO}/desktop/src-tauri/target/release/bundle/macos/owlette.app"
 if [ "${SKIP_APP}" = "0" ]; then
@@ -127,6 +146,26 @@ if [ "${SKIP_APP}" = "0" ]; then
   ( cd "${REPO}/desktop" && npm ci --no-audit --no-fund --silent && npx tauri build --bundles app --ci )
 fi
 [ -d "${APP}" ] || { echo "build.sh: no app bundle at ${APP}" >&2; exit 1; }
+# the sidecar must be in the bundle, be this version (the agent refuses a
+# mismatched streamer at spawn) and, when signed, carry the app's signature:
+# the hardened runtime and the app's own team.
+SIDECAR="${APP}/Contents/MacOS/owlette-swoop"
+[ -x "${SIDECAR}" ] || { echo "build.sh: no swoop streamer at ${SIDECAR}" >&2; exit 1; }
+SIDECAR_VERSION="$("${SIDECAR}" version)"
+[ "${SIDECAR_VERSION}" = "${VERSION}" ] \
+  || { echo "build.sh: the bundled streamer is ${SIDECAR_VERSION}, agent/VERSION is ${VERSION}" >&2; exit 1; }
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  codesign --verify --strict "${SIDECAR}"
+  SIDECAR_SIG="$(codesign -dv "${SIDECAR}" 2>&1)"
+  APP_TEAM="$(codesign -dv "${APP}" 2>&1 | sed -n 's/^TeamIdentifier=//p' || true)"
+  grep -q '^CodeDirectory .*flags=0x[0-9a-f]*([^)]*runtime' <<< "${SIDECAR_SIG}" \
+    || { echo "build.sh: the bundled streamer is signed without the hardened runtime" >&2; exit 1; }
+  [ -n "${APP_TEAM}" ] && [ "${APP_TEAM}" != "not set" ] \
+    && grep -qx "TeamIdentifier=${APP_TEAM}" <<< "${SIDECAR_SIG}" \
+    || { echo "build.sh: the bundled streamer is not signed by the app's team (${APP_TEAM:-none})" >&2; exit 1; }
+  say "streamer signature verified: hardened runtime, team ${APP_TEAM}"
+fi
+say "bundled streamer ${SIDECAR_VERSION}"
 cp -R "${APP}" "${PAYLOAD}/app/"
 
 # --- the packages ----------------------------------------------------------------

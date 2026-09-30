@@ -327,10 +327,13 @@ jobs:
         with:
           toolchain: '1.98.1'
 
-      # same scoping as the windows job's cache: written from main only.
+      # same scoping as the windows job's cache: written from main only. two
+      # workspaces: build.sh builds the swoop streamer, the app's sidecar, first.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: desktop/src-tauri
+          workspaces: |
+            agent/swoop
+            desktop/src-tauri
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # a throwaway keychain holding the two developer id identities, and the
@@ -380,6 +383,9 @@ jobs:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          # the streamer's audio-opus vendors an opus that cmake 4 refuses
+          # without this; see the audiopus_sys pin in agent/swoop/Cargo.toml.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: |
           identity() {
             security find-identity -v -p "$1" "$KEYCHAIN" \
