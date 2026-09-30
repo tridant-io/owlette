@@ -2,9 +2,11 @@
 Swoop capability + platform normalisation for the heartbeat.
 
 Everything here runs on the 5-second heartbeat path, so it stays to dict
-lookups plus the single exe-path check that answers "is the streamer
-installed". The streamer's own `probe` verb is the source of encoder truth and
-is deliberately NOT run here — it would be a process spawn per heartbeat.
+lookups, the single exe-path check that answers "is the streamer installed",
+and the osadapter arm's in-process answer for this OS (on macOS, a read of the
+desktop app's small grant report). The streamer's own `probe` verb is the
+source of encoder truth and is deliberately NOT run here — it would be a
+process spawn per heartbeat.
 
 `capabilities.swoop == 1` is the gate the dashboard reads; the minimum-version
 constant in web/lib/versionUtils.ts is advisory copy only.
@@ -13,6 +15,7 @@ constant in web/lib/versionUtils.ts is advisory copy only.
 import platform
 import sys
 
+import osadapter
 import shared_utils
 
 
@@ -47,20 +50,26 @@ def arch():
 
 
 def streamer_capable():
-    """True when a swoop streamer backend exists for this OS.
+    """True when this machine can drive a swoop session, as its osadapter arm
+    answers: every Windows machine, and a Mac whose desktop app last reported
+    a fresh Screen Recording grant.
 
-    Local on purpose: agent/src/osadapter does not exist on dev. The
-    tri-platform plan's Wave 4 folds this into osadapter.streamer_capable()
-    when the macOS/Linux backends land; until then Windows is the only one.
+    False whenever asking fails, a platform with no arm included: an exception
+    here would reach the heartbeat's own handler, which reports it to
+    ConnectionManager as a Firestore error and cycles the connection.
     """
-    return os_family() == 'windows'
+    try:
+        return osadapter.streamer_capable()
+    except Exception:
+        return False
 
 
 def swoop_capability_value():
     """1 when this machine can be swooped into, else 0.
 
-    Binary presence only. get_swoop_exe_path() -> None is how "swoop is not
-    installed" reaches the heartbeat.
+    The binary is present AND the arm says this machine can stream; never a
+    probe. get_swoop_exe_path() -> None is how "swoop is not installed"
+    reaches the heartbeat.
     """
     try:
         installed = shared_utils.get_swoop_exe_path() is not None

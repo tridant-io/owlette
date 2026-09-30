@@ -26,6 +26,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import shared_utils
+import swoop_capability
 
 # pre-mock win32 so the import works on non-windows CI as well as locally.
 _MOCK_MODULES = {
@@ -212,6 +213,9 @@ def _heartbeat_payload(fc):
 
 def test_heartbeat_carries_the_swoop_and_platform_keys(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
+    # the answer is the osadapter arm's, which sys.platform no longer reaches
+    # once the arm is cached; test_swoop_capability pins it per platform.
+    monkeypatch.setattr(swoop_capability, "streamer_capable", lambda: True)
     monkeypatch.setattr(
         shared_utils, "get_swoop_exe_path",
         lambda: r"C:\ProgramData\Owlette\swoop\owlette-swoop.exe",
