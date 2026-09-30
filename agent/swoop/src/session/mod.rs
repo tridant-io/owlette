@@ -134,6 +134,15 @@
 //! (a second one means the startup rebuild came back), and a cursor stream
 //! that answers the pointer moves the test injects.
 //!
+//! On a Mac, run the same command with `CMAKE_POLICY_VERSION_MINIMUM=3.5` and
+//! `--no-default-features --features encode-videotoolbox,audio-opus`, from a
+//! shell that holds Screen Recording and Accessibility. A sleeping display
+//! needs no `caffeinate`: the session wakes it. Expected on the rig
+//! (MacBook Air, macOS 26.6): `swoop capture: (3420, 2214) -> (3420, 2214)
+//! hevc, 74 frames (1 irap, 907709 bytes), 15 cpos, 8 cshape`, and while it
+//! runs `pmset -g assertions` lists `PreventUserIdleDisplaySleep named:
+//! "owlette swoop session"` for its pid, gone once it ends.
+//!
 //! The pause and the floor have their own hardware test, which wants a still
 //! desktop — its invocation and its expected line are on
 //! `pause_closes_the_duplication_and_the_floor_holds_a_still_desktop`.
@@ -169,6 +178,15 @@ use crate::gpu::scale::Limits;
 use crate::ipc::{AudioState, Desktop, DisplayState, HostEventKind};
 use crate::signal::messages::channel::{Channel, DisplayInfo};
 use crate::transport::rtc::OUT_QUEUE_FEATURE_BYTES;
+
+/// A capture source's answer when the person at the machine stopped the
+/// capture with the system's own control, which on macOS is the menu bar's
+/// capture indicator (swoop-macos owner decision 7). The session ends on it
+/// as it does on a `kill`, with code 0, rather than capturing again over them.
+/// Desktop Duplication has no such control, so no Windows source returns it.
+#[derive(Debug, thiserror::Error)]
+#[error("the person at the machine stopped the capture")]
+pub struct StoppedAtHost;
 
 /// A host feature that lives for the length of a session.
 ///
@@ -940,6 +958,9 @@ mod host {
         Opened { width: u32, height: u32 },
         /// Capture or encode could not start at all.
         Failed(Exit),
+        /// The source answered [`super::StoppedAtHost`]: the person at the
+        /// machine ended the capture, and the session ends as a `kill` does.
+        StoppedAtHost,
         Frame(Box<EncodedFrame>),
         Cursor(channel::Cursor),
         /// The source's texture size changed under a rebuild; the session
@@ -1383,7 +1404,7 @@ mod host {
             ifwatch: match InterfaceWatcher::start() {
                 Ok(watcher) => Some(watcher),
                 Err(rc) => {
-                    ::log::warn!("swoop: no interface-change notifications (win32 {rc})");
+                    ::log::warn!("swoop: no interface-change notifications (os error {rc})");
                     None
                 }
             },
@@ -1504,8 +1525,9 @@ mod host {
         service_rx: Receiver<FromService>,
         resolver_tx: Sender<ToResolver>,
         resolved_rx: Receiver<FromResolver>,
-        /// `NotifyIpInterfaceChange`, as a flag this loop reads. A machine that
-        /// would not let us register carries on without the trigger rather than
+        /// The interface watcher (`NotifyIpInterfaceChange` on Windows, a
+        /// `getifaddrs` walk elsewhere), as a flag this loop reads. A machine
+        /// that would not start it carries on without the trigger rather than
         /// failing the session.
         ifwatch: Option<InterfaceWatcher>,
         bind_addr: SocketAddr,
@@ -2109,6 +2131,11 @@ mod host {
                     Ok(FromWorker::Failed(exit)) => {
                         ::log::error!("swoop: capture stopped: exit {}", exit.code());
                         return Some(self.teardown(exit, ExitReason::Error, LeftReason::Timeout));
+                    }
+                    // The kill's own ending: a decision, not a failure, and the
+                    // page stops rather than starting the next session.
+                    Ok(FromWorker::StoppedAtHost) => {
+                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, LeftReason::Kill));
                     }
                     Ok(FromWorker::Opened { .. }) => {}
                     Err(TryRecvError::Empty) => return None,
@@ -3641,6 +3668,11 @@ mod host {
 
             let frame = match acquired {
                 Ok(frame) => frame,
+                // The source logged who stopped it; the session ends cleanly.
+                Err(e) if e.is::<super::StoppedAtHost>() => {
+                    let _ = ctx.tx.try_send(FromWorker::StoppedAtHost);
+                    return Pass::Done;
+                }
                 Err(e) => {
                     ::log::error!("swoop: capture failed: {e}");
                     let _ = ctx.tx.try_send(FromWorker::Failed(Exit::NoCaptureSource));
@@ -3856,9 +3888,10 @@ mod host {
     /// The viewer's candidates, admitted off the session thread.
     ///
     /// This thread exists for one call: `SystemResolver::resolve` goes to the
-    /// Windows DNS client for a `*.local` name and blocks until it answers or
-    /// gives up. On the session thread that would be a stall in the loop that
-    /// drives the peer; here it costs nothing but this thread.
+    /// system resolver (the DNS client on Windows, mDNSResponder on macOS) for
+    /// a `*.local` name and blocks until it answers or gives up. On the
+    /// session thread that would be a stall in the loop that drives the peer;
+    /// here it costs nothing but this thread.
     fn resolver_thread(rx: Receiver<ToResolver>, tx: Sender<FromResolver>) {
         let resolver = SystemResolver;
         while let Ok(work) = rx.recv() {

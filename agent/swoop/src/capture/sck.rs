@@ -36,6 +36,12 @@
 //! source does after an ACCESS_LOST. Only a rebuild that never comes back is
 //! an error, because the session reads any error as exit 12.
 //!
+//! One stop is not rebuilt: the person at the Mac stopping the capture from
+//! the menu bar's capture indicator (-3817, `SCStreamErrorUserStopped`).
+//! Rebuilding would override them, so the next call answers
+//! [`StoppedAtHost`] instead, which the session ends on as it does on a
+//! `kill`, with code 0 (swoop-macos owner decision 7).
+//!
 //! # Hardware test
 //!
 //! ```text
@@ -53,8 +59,8 @@
 //! saved. The menu bar shows the system's capture indicator while it runs.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context};
@@ -82,6 +88,7 @@ use crate::cursor::{PointerSample, PointerSampler};
 use crate::displays::mac as displays;
 use crate::gpu::Frame;
 use crate::platform::clock;
+use crate::session::StoppedAtHost;
 
 /// How long any ScreenCaptureKit completion handler is waited for. They
 /// answer in well under a second when they answer at all; this bounds a hang.
@@ -185,7 +192,8 @@ impl ScreenCapture {
     ///
     /// The sample comes first and on every call, so the cursor moves on a
     /// static desktop too. A stale stream is rebuilt here and answers
-    /// `Ok(None)`; otherwise this waits up to `timeout_ms` for a picture.
+    /// `Ok(None)`; one the person at the Mac stopped answers [`StoppedAtHost`];
+    /// otherwise this waits up to `timeout_ms` for a picture.
     pub fn next_frame_with(
         &mut self,
         timeout_ms: u32,
@@ -193,11 +201,11 @@ impl ScreenCapture {
     ) -> anyhow::Result<Option<Frame>> {
         observer(&self.sampler.sample());
 
-        let stopped = self
+        let ended = self
             .live
             .as_ref()
-            .is_none_or(|live| live.shared.stopped.load(Ordering::Acquire));
-        if stopped || self.generation != self.signal.generation() {
+            .map_or(Some(Ended::BySystem), |live| live.shared.ended());
+        if must_rebuild(ended, self.generation != self.signal.generation())? {
             self.rebuild()?;
             return Ok(None);
         }
@@ -398,10 +406,44 @@ struct Delivered {
     height: u32,
 }
 
+/// How a stream stopped, as its delegate heard it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    /// Anything the system did: a display that went, a server that
+    /// restarted. Rebuilt inside the source.
+    BySystem,
+    /// The person at the Mac, from the menu bar's capture indicator. The
+    /// session ends.
+    ByUser,
+}
+
+impl Ended {
+    fn from_code(code: isize) -> Self {
+        if code == SCStreamErrorCode::UserStopped.0 {
+            Self::ByUser
+        } else {
+            Self::BySystem
+        }
+    }
+}
+
+/// Whether the capture thread rebuilds the stream before its next picture:
+/// yes for a stream the system stopped or one the signal marked stale, and
+/// [`StoppedAtHost`] for one the person at the Mac stopped, because a rebuild
+/// would start it again over them.
+fn must_rebuild(ended: Option<Ended>, stale: bool) -> anyhow::Result<bool> {
+    match ended {
+        Some(Ended::ByUser) => Err(StoppedAtHost.into()),
+        Some(Ended::BySystem) => Ok(true),
+        None => Ok(stale),
+    }
+}
+
 /// What the output handler and the capture thread share for one stream.
 struct Shared {
     frames: Newest<Delivered>,
-    stopped: AtomicBool,
+    /// Set once, by the delegate: a stream stops at most once.
+    ended: OnceLock<Ended>,
     statuses: [AtomicU64; STATUS_NAMES.len()],
     hz: i64,
 }
@@ -410,10 +452,15 @@ impl Shared {
     fn new(hz: i64) -> Self {
         Self {
             frames: Newest::new(QUEUED_FRAMES),
-            stopped: AtomicBool::new(false),
+            ended: OnceLock::new(),
             statuses: Default::default(),
             hz,
         }
+    }
+
+    /// How the stream stopped, or `None` while it runs.
+    fn ended(&self) -> Option<Ended> {
+        self.ended.get().copied()
     }
 
     /// The output handler. Runs on the stream's queue and must not panic.
@@ -450,9 +497,18 @@ impl Shared {
         drop(self.frames.push(delivered));
     }
 
+    /// The delegate's `stream:didStopWithError:`, with the error's code.
     fn stopped(&self, code: isize) {
-        self.stopped.store(true, Ordering::Release);
-        ::log::warn!("swoop: the capture stream stopped (screencapturekit {code})");
+        let ended = Ended::from_code(code);
+        match ended {
+            Ended::ByUser => ::log::info!(
+                "swoop: the person at the mac stopped the capture from the menu bar, so the session ends"
+            ),
+            Ended::BySystem => {
+                ::log::warn!("swoop: the capture stream stopped (screencapturekit {code})");
+            }
+        }
+        let _ = self.ended.set(ended);
     }
 
     fn status_counts(&self) -> String {
@@ -787,6 +843,42 @@ mod tests {
         assert_eq!(queue.recv_timeout(Duration::ZERO), Some(2));
         assert_eq!(queue.recv_timeout(Duration::ZERO), Some(3));
         assert_eq!(queue.recv_timeout(Duration::ZERO), None);
+    }
+
+    /// Owner decision 7: -3817 is the delegate's word for the person at the
+    /// Mac stopping the capture from the menu bar. That ends the session and
+    /// is never rebuilt, even over a stale signal; every other stop is.
+    #[test]
+    fn a_stop_from_the_menu_bar_ends_the_session_and_any_other_is_rebuilt() {
+        let running = Shared::new(1_000_000_000);
+        assert_eq!(must_rebuild(running.ended(), false).ok(), Some(false));
+        assert_eq!(must_rebuild(running.ended(), true).ok(), Some(true));
+
+        let by_user = Shared::new(1_000_000_000);
+        by_user.stopped(-3817);
+        for stale in [false, true] {
+            let error = must_rebuild(by_user.ended(), stale).expect_err("the session ends");
+            assert!(error.is::<StoppedAtHost>(), "{error:#}");
+        }
+
+        for code in [
+            SCStreamErrorCode::FailedApplicationConnectionInterrupted,
+            SCStreamErrorCode::NoCaptureSource,
+            SCStreamErrorCode::InternalError,
+            SCStreamErrorCode::SystemStoppedStream,
+        ] {
+            let shared = Shared::new(1_000_000_000);
+            shared.stopped(code.0);
+            assert_eq!(
+                must_rebuild(shared.ended(), false).ok(),
+                Some(true),
+                "{code:?} is rebuilt"
+            );
+        }
+
+        // A stream stops once; a later word does not rewrite the first.
+        by_user.stopped(SCStreamErrorCode::InternalError.0);
+        assert_eq!(by_user.ended(), Some(Ended::ByUser));
     }
 
     #[test]

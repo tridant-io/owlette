@@ -1,10 +1,23 @@
-//! macOS: the seam's names, the host clock, the display helpers and `selfcheck`.
+//! macOS: the seam's names over ScreenCaptureKit, VideoToolbox and
+//! CoreGraphics, the host clock, the display helpers and `selfcheck`.
 //!
-//! Capture, scaling, injection and the desktop watcher are still the stubs in
-//! [`super::unsupported`] — Wave 4 writes the backends and Task 5.1 wires them
-//! here — so `run` exits 12 with a line that names the OS. What is real already
-//! needs no privacy grant: the clock, and the display geometry CoreGraphics
-//! answers without Screen Recording.
+//! Capture is [`ScreenCapture`] behind [`CaptureSource`], which adds what a
+//! session needs of a Mac beyond the picture: the pointer, from a
+//! [`CursorSampler`] (drawn into the picture instead when the system cursor
+//! has no image for this process, decision 7), and a lit display. Scaling is
+//! VideoToolbox's pixel transfer, injection is CoreGraphics' `CgInjector`,
+//! and the desktop watcher never switches: the streamer runs inside the
+//! console user's own session, which has one desktop. The process setup and
+//! the watcher are the ones [`super::unsupported`] already has.
+//!
+//! **A session keeps the display lit** (owner decision 6). An asleep display
+//! is listed by neither CoreGraphics nor ScreenCaptureKit, so a session on a
+//! sleeping Mac would find nothing to capture. [`enumerate_outputs`] wakes the
+//! display when it finds none, and every [`CaptureSource`] declares the user
+//! active, which lights the display, and holds a `PreventUserIdleDisplaySleep`
+//! assertion until it is dropped: from the session's start to the pause after
+//! its last viewer, and again from the next viewer on. `probe` and `selfcheck`
+//! take nothing.
 //!
 //! Decision 13: an `OutputInfo.desktop_rect` is in **pixels** — a display's
 //! point origin times its scale, and its pixel size. On a mixed-scale layout
@@ -14,9 +27,10 @@
 
 use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use block2::RcBlock;
+use objc2_core_foundation::CFString;
 use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGError, CGGetActiveDisplayList,
     CGPreflightPostEventAccess, CGPreflightScreenCaptureAccess,
@@ -25,12 +39,185 @@ use objc2_foundation::NSError;
 use objc2_screen_capture_kit::{SCShareableContent, SCStreamErrorCode};
 use serde::Serialize;
 
-pub use super::unsupported::{
-    enumerate_outputs, process, CaptureSource, DesktopWatcher, Downscaler, InputInjector,
-    ScaleError,
-};
-use crate::capture::Rect;
-use crate::cursor::DEFAULT_DPI;
+pub use super::unsupported::{process, DesktopWatcher};
+pub use crate::gpu::vt_transfer::{PixelTransfer as Downscaler, ScaleError};
+pub use crate::input::CgInjector as InputInjector;
+
+use crate::capture::sck::ScreenCapture;
+use crate::capture::{FrameRects, OutputInfo, RebuildSignal, Rect, Source};
+use crate::cursor::mac::CursorSampler;
+use crate::cursor::{PointerSample, DEFAULT_DPI};
+use crate::displays::mac as displays;
+use crate::gpu::Frame;
+
+// ------------------------------------------------------------------ capture ---
+
+/// A capture of one display, with its pointer and a hold on the display.
+pub struct CaptureSource {
+    capture: ScreenCapture,
+    /// Declared after the capture, so it is released after the stream stops.
+    _awake: DisplayAwake,
+}
+
+impl CaptureSource {
+    /// Light the display and hold it lit, then open the capture. The pointer
+    /// is the viewer's overlay when the system cursor has an image for this
+    /// process, and part of the picture when it has none (decision 7).
+    pub fn open(output: &OutputInfo, signal: RebuildSignal) -> anyhow::Result<Self> {
+        // A pause lets the display sleep, so the next viewer's capture can
+        // find it gone from the list until the wake lands.
+        let id = displays::display_id(output);
+        let awake = wake(|ids| id.is_none_or(|id| ids.contains(&id)));
+        let sampler = CursorSampler::new(output);
+        let cursor_in_frame = !sampler.shapes_available();
+        let capture = ScreenCapture::open_with(output, signal, Box::new(sampler), cursor_in_frame)?;
+        Ok(Self {
+            capture,
+            _awake: awake,
+        })
+    }
+
+    pub fn output(&self) -> &OutputInfo {
+        self.capture.output()
+    }
+
+    pub fn last_rects(&self) -> &FrameRects {
+        self.capture.last_rects()
+    }
+
+    pub fn take_idr_request(&mut self) -> bool {
+        self.capture.take_idr_request()
+    }
+
+    pub fn request_rebuild(&self) {
+        self.capture.request_rebuild();
+    }
+
+    pub fn next_frame_with(
+        &mut self,
+        timeout_ms: u32,
+        observer: &mut dyn FnMut(&PointerSample),
+    ) -> anyhow::Result<Option<Frame>> {
+        self.capture.next_frame_with(timeout_ms, observer)
+    }
+}
+
+impl Source for CaptureSource {
+    fn next_frame(&mut self, timeout_ms: u32) -> anyhow::Result<Option<Frame>> {
+        self.capture.next_frame(timeout_ms)
+    }
+
+    fn size(&self) -> (u32, u32) {
+        self.capture.size()
+    }
+}
+
+/// Every active display, in pixels. A Mac whose display sleeps lists none, so
+/// when the list is empty the display is woken first and waited for. The hold
+/// ends here: the capture takes its own a moment later.
+pub fn enumerate_outputs() -> anyhow::Result<Vec<OutputInfo>> {
+    if display_ids().is_empty() {
+        drop(wake(|ids| !ids.is_empty()));
+    }
+    displays::outputs()
+}
+
+// ------------------------------------------------------------ display sleep ---
+
+/// How long a woken display is waited for before capture goes on without it.
+const WAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const WAKE_POLL: Duration = Duration::from_millis(50);
+
+/// What `pmset -g assertions` shows beside the streamer's pid.
+const ASSERTION_NAME: &str = "owlette swoop session";
+
+/// `kIOPMAssertionTypePreventUserIdleDisplaySleep`.
+const PREVENT_USER_IDLE_DISPLAY_SLEEP: &str = "PreventUserIdleDisplaySleep";
+/// `kIOPMAssertionLevelOn`.
+const ASSERTION_LEVEL_ON: u32 = 255;
+/// `kIOPMUserActiveLocal`: the kind of activity that lights the display.
+const USER_ACTIVE_LOCAL: u32 = 0;
+/// `kIOPMNullAssertionID`, and what a failed call leaves.
+const NULL_ASSERTION: u32 = 0;
+
+// IOKit's power assertions. No objc2 crate exports them (decision 15).
+#[link(name = "IOKit", kind = "framework")]
+unsafe extern "C" {
+    fn IOPMAssertionDeclareUserActivity(name: &CFString, user_type: u32, id: &mut u32) -> i32;
+    fn IOPMAssertionCreateWithName(
+        kind: &CFString,
+        level: u32,
+        name: &CFString,
+        id: &mut u32,
+    ) -> i32;
+    fn IOPMAssertionRelease(id: u32) -> i32;
+}
+
+/// The display's idle sleep, held off until this is dropped. Null when IOKit
+/// refused, and capture goes on: a lit display captures without it.
+struct DisplayAwake(u32);
+
+impl Drop for DisplayAwake {
+    fn drop(&mut self) {
+        release(self.0);
+    }
+}
+
+/// Declare the user active, which lights a sleeping display, and hold off its
+/// idle sleep. When the display list did not satisfy `lit` before, poll it
+/// until it does or [`WAKE_TIMEOUT`] passes; the caller reads the list again
+/// either way. The declaration is let go once the wake is over, as
+/// `caffeinate -u` lets go of its own: held for a session, it would tell the
+/// system somebody is at the Mac for as long as anybody watches it.
+fn wake(lit: impl Fn(&[u32]) -> bool) -> DisplayAwake {
+    let asleep = !lit(&display_ids());
+    let name = CFString::from_static_str(ASSERTION_NAME);
+    let kind = CFString::from_static_str(PREVENT_USER_IDLE_DISPLAY_SLEEP);
+    // SAFETY: the strings outlive both calls, and each writes one id.
+    let activity = assertion("declare the user active", |id| unsafe {
+        IOPMAssertionDeclareUserActivity(&name, USER_ACTIVE_LOCAL, id)
+    });
+    // SAFETY: as above.
+    let awake = DisplayAwake(assertion("hold the display awake", |id| unsafe {
+        IOPMAssertionCreateWithName(&kind, ASSERTION_LEVEL_ON, &name, id)
+    }));
+    if asleep {
+        let started = Instant::now();
+        while !lit(&display_ids()) && started.elapsed() < WAKE_TIMEOUT {
+            std::thread::sleep(WAKE_POLL);
+        }
+        if lit(&display_ids()) {
+            ::log::info!(
+                "swoop: the display was asleep and woke in {} ms",
+                started.elapsed().as_millis()
+            );
+        } else {
+            ::log::warn!("swoop: the display was asleep and did not wake within {WAKE_TIMEOUT:?}");
+        }
+    }
+    release(activity);
+    awake
+}
+
+/// One IOKit assertion call: the id it wrote, or the null id and a log line
+/// when it refused.
+fn assertion(what: &str, call: impl FnOnce(&mut u32) -> i32) -> u32 {
+    let mut id = NULL_ASSERTION;
+    match call(&mut id) {
+        0 => id,
+        code => {
+            ::log::warn!("swoop: could not {what} (iokit {code:#x})");
+            NULL_ASSERTION
+        }
+    }
+}
+
+fn release(id: u32) {
+    if id != NULL_ASSERTION {
+        // SAFETY: an id an assertion call wrote and nothing has released.
+        unsafe { IOPMAssertionRelease(id) };
+    }
+}
 
 pub mod clock {
     /// Nanoseconds of `CLOCK_UPTIME_RAW`, the clock `mach_absolute_time` counts
