@@ -61,13 +61,14 @@ pub fn screen_recording_granted() -> Option<bool> {
 }
 
 /// Whether macOS lets this app post input (Accessibility), read without
-/// asking and on the main thread (`tcc.rs`), so a grant made while the app
-/// runs is seen. None off macOS: no such permission there.
+/// asking by the swoop sidecar (`tcc.rs`), so a grant made while the app runs
+/// is seen. None off macOS, where there is no such permission, and when the
+/// sidecar could not say.
 #[tauri::command(async)]
 pub fn accessibility_granted() -> Option<bool> {
   #[cfg(target_os = "macos")]
   {
-    Some(crate::tcc::accessibility_granted())
+    crate::tcc::accessibility_granted()
   }
   #[cfg(not(target_os = "macos"))]
   {

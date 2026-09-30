@@ -14,7 +14,7 @@ use owlette_swoop::{ipc::exit, log as swoop_log, probe};
 use zeroize::Zeroize;
 
 #[cfg(target_os = "macos")]
-const USAGE: &str = "usage: owlette-swoop <run|probe|version|selfcheck [--force]>";
+const USAGE: &str = "usage: owlette-swoop <run|probe|version|selfcheck [--force|--grants]>";
 #[cfg(not(target_os = "macos"))]
 const USAGE: &str = "usage: owlette-swoop <run|probe|version>";
 
@@ -58,12 +58,18 @@ fn main() -> ExitCode {
 /// The `selfcheck` verb: one JSON line, exit 0 whatever it says. No logger —
 /// like `probe`, it is read by a caller that must not create directories.
 /// `--force` also asks ScreenCaptureKit when the preflight says no, which may
-/// raise the Screen Recording dialog; without it nothing here can.
+/// raise the Screen Recording dialog; without it nothing here can. `--grants`
+/// prints the three grant answers alone and touches neither ScreenCaptureKit
+/// nor the network: the desktop app asks it on a timer, because its own
+/// process keeps the Accessibility answer it had at launch.
 #[cfg(target_os = "macos")]
 fn selfcheck() -> ExitCode {
-    let force = std::env::args().nth(2).as_deref() == Some("--force");
-    let report = owlette_swoop::platform::macos::selfcheck(force);
-    match serde_json::to_string(&report) {
+    use owlette_swoop::platform::macos;
+    let line = match std::env::args().nth(2).as_deref() {
+        Some("--grants") => serde_json::to_string(&macos::grants()),
+        flag => serde_json::to_string(&macos::selfcheck(flag == Some("--force"))),
+    };
+    match line {
         Ok(json) => {
             println!("{json}");
             ExitCode::from(exit::OK)

@@ -358,11 +358,37 @@ pub fn selfcheck(force: bool) -> SelfCheck {
         shareable_content,
         displays,
         post_event_preflight: CGPreflightPostEventAccess(),
-        // SAFETY: no arguments; it reads the caller's own trust.
-        ax_trusted: unsafe { AXIsProcessTrusted() } != 0,
+        ax_trusted: ax_trusted(),
         local_network_send: local_network_send(),
         pid: std::process::id(),
     }
+}
+
+/// `selfcheck --grants`: the three grant answers and nothing else.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Grants {
+    pub screen_capture_preflight: bool,
+    pub post_event_preflight: bool,
+    pub ax_trusted: bool,
+}
+
+/// The grants alone, for a caller that asks often: three reads that never
+/// ask, and neither ScreenCaptureKit nor a packet (swoop-macos task 4.9). A
+/// fresh process reads its grants as they are now, which the desktop app's
+/// own long-lived process does not.
+pub fn grants() -> Grants {
+    Grants {
+        screen_capture_preflight: CGPreflightScreenCaptureAccess(),
+        post_event_preflight: CGPreflightPostEventAccess(),
+        ax_trusted: ax_trusted(),
+    }
+}
+
+fn ax_trusted() -> bool {
+    // SAFETY: no arguments; it reads the caller's own trust.
+    let trusted = unsafe { AXIsProcessTrusted() };
+    trusted != 0
 }
 
 /// ScreenCaptureKit's display count, or why there is none.
@@ -397,5 +423,24 @@ fn local_network_send() -> String {
     match sent {
         Ok(_) => "ok".to_owned(),
         Err(e) => format!("error:{}", e.raw_os_error().unwrap_or(0)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The desktop app reads this line every few seconds: exactly these keys.
+    #[test]
+    fn the_grants_line_is_the_three_answers_alone() {
+        let grants = Grants {
+            screen_capture_preflight: true,
+            post_event_preflight: false,
+            ax_trusted: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&grants).unwrap(),
+            r#"{"screenCapturePreflight":true,"postEventPreflight":false,"axTrusted":true}"#
+        );
     }
 }
