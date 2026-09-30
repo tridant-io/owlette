@@ -168,7 +168,6 @@ use crate::encode::{Codec, CodecCaps};
 use crate::gpu::scale::Limits;
 use crate::ipc::{AudioState, Desktop, DisplayState, HostEventKind};
 use crate::signal::messages::channel::{Channel, DisplayInfo};
-#[cfg(any(windows, test))]
 use crate::transport::rtc::OUT_QUEUE_FEATURE_BYTES;
 
 /// A host feature that lives for the length of a session.
@@ -343,7 +342,6 @@ pub struct Outbox {
     queued: Vec<Outbound>,
     requests: Vec<FeatureRequest>,
     allowance: usize,
-    #[cfg_attr(not(windows), allow(dead_code))]
     refilled_at: Instant,
     refused: u64,
 }
@@ -396,7 +394,6 @@ impl Outbox {
         self.refused
     }
 
-    #[cfg(any(windows, test))]
     fn refill(&mut self, now: Instant) {
         let elapsed = now.saturating_duration_since(self.refilled_at);
         let gained = OUTBOX_REFILL_BYTES_PER_SEC as u128 * elapsed.as_nanos() / 1_000_000_000;
@@ -414,12 +411,10 @@ impl Outbox {
 
     /// Hold this turn's sends to `room` ([`feature_room`]). What is refused
     /// stays with its feature, exactly as for the allowance itself.
-    #[cfg(any(windows, test))]
     fn limit_to(&mut self, room: usize) {
         self.allowance = self.allowance.min(room);
     }
 
-    #[cfg(any(windows, test))]
     fn take(&mut self) -> Vec<Outbound> {
         std::mem::take(&mut self.queued)
     }
@@ -427,7 +422,6 @@ impl Outbox {
     /// Drained after **each** feature's poll, not after all of them: the
     /// session has to know which feature asked, and a `Sas` whose answer went
     /// to the wrong feature is a handshake that never completes.
-    #[cfg(any(windows, test))]
     fn take_requests(&mut self) -> Vec<FeatureRequest> {
         std::mem::take(&mut self.requests)
     }
@@ -445,7 +439,6 @@ impl Outbox {
 /// down does not: its queue cannot drain until the path is back, and one
 /// watcher's closed lid must not hold everyone else's clipboard up for the
 /// length of its hold. With every path down there is no room at all.
-#[cfg(any(windows, test))]
 fn feature_room(viewers: impl IntoIterator<Item = (usize, bool)>) -> usize {
     viewers
         .into_iter()
@@ -799,10 +792,8 @@ pub fn tier_encodes(
         .collect()
 }
 
-#[cfg(windows)]
 pub use host::run;
 
-#[cfg(windows)]
 mod host {
     use std::io::{self, BufRead};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
@@ -812,7 +803,6 @@ mod host {
     use std::time::{Duration, Instant};
 
     use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
-    use windows::Win32::System::Performance::QueryPerformanceCounter;
 
     use super::{
         codec_wire_name, feature_room, limits_for, pick_codec, tier_encodes, tiers, CaptureGate,
@@ -820,20 +810,19 @@ mod host {
         SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
-    use crate::capture::{
-        self, DesktopWatcher, Duplication, OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS,
-    };
-    use crate::cursor::{self, CursorTracker, OutputGeometry, PointerReader};
+    use crate::capture::{OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS};
+    use crate::cursor::{CursorTracker, OutputGeometry};
     use crate::encode::{
         select, BackendCaps, Codec, CodecCaps, EncodedFrame, Encoder, EncoderConfig,
     };
-    use crate::gpu::scale::{self, Downscaler, Plan};
+    use crate::gpu::scale::{self, Plan};
     use crate::gpu::Frame;
-    use crate::input::{InputEvent, Injector, PointerSpace, SendInputInjector};
+    use crate::input::{InputEvent, Injector, PointerSpace};
     use crate::ipc::{
         self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, KillReason,
         LeftReason, MediaPath,
     };
+    use crate::platform::{self, CaptureSource, DesktopWatcher, Downscaler, InputInjector};
     use crate::bundle::Secret;
     use crate::signal::client::{Effect, SignalTransport};
     use crate::signal::messages::channel::{
@@ -851,7 +840,7 @@ mod host {
         admit_remote, ifwatch::InterfaceWatcher, Admission, DropReason, IceAction, IceEvent,
         IcePolicy, SystemResolver, DISCONNECTED_LIMIT,
     };
-    use crate::transport::rtc::{qpc_hz, PeerConfig, PeerEvent, PeerState, RtcPeer};
+    use crate::transport::rtc::{PeerConfig, PeerEvent, PeerState, RtcPeer};
     use crate::transport::VideoSink;
     use crate::viewers::lease::LeaseLedger;
     use crate::viewers::roster::Roster;
@@ -900,14 +889,11 @@ mod host {
     // ------------------------------------------------------------- clock ---
 
     fn qpc_now() -> i64 {
-        let mut ticks = 0i64;
-        // SAFETY: writes one i64. QueryPerformanceCounter cannot fail on any
-        // Windows this binary runs on, and a zero is a timestamp, not a crash.
-        let _ = unsafe { QueryPerformanceCounter(&mut ticks) };
-        ticks
+        platform::clock::now_ticks()
     }
 
-    /// QPC ticks → §4's microseconds since `streamerEpoch`.
+    /// `platform::clock` ticks (QPC on Windows) → §4's microseconds since
+    /// `streamerEpoch`.
     ///
     /// The base is read once from the bundle's time anchor, so it carries the
     /// api's clock and never the kiosk's. A second of error in it is a constant
@@ -1053,7 +1039,7 @@ mod host {
 
     fn drive(bundle: Bundle, stdin: impl BufRead + Send + 'static) -> (Exit, ExitReason) {
         let started = Instant::now();
-        let hz = match qpc_hz() {
+        let hz = match platform::clock::hz() {
             Ok(hz) => hz,
             Err(e) => {
                 ::log::error!("swoop: no performance counter: {e}");
@@ -1070,7 +1056,7 @@ mod host {
 
         // Locally before the network: a box that cannot capture or encode
         // should say so with 12 or 13 rather than after a room round trip.
-        let outputs = match capture::enumerate_outputs() {
+        let outputs = match platform::enumerate_outputs() {
             Ok(outputs) if !outputs.is_empty() => outputs,
             Ok(_) => {
                 ::log::error!("swoop: no attached output to duplicate");
@@ -3543,7 +3529,7 @@ mod host {
     /// One open duplication, from the first acquire to a pause or an exit.
     fn capture_pass(ctx: &mut CaptureCtx) -> Pass {
         let signal = RebuildSignal::new();
-        let mut source = match Duplication::open(&ctx.output, signal) {
+        let mut source = match CaptureSource::open(&ctx.output, signal) {
             Ok(source) => source,
             Err(e) => {
                 ::log::error!("swoop: could not duplicate {}: {e}", ctx.output.device_name);
@@ -3570,7 +3556,6 @@ mod host {
         }
         ctx.reported = Some(size);
 
-        let mut reader = PointerReader::new();
         let mut tracker = CursorTracker::new();
         let mut geometry = OutputGeometry::for_output(source.output(), size);
         // One encoder per tier, opened from whatever the session last asked for
@@ -3626,32 +3611,27 @@ mod host {
             let acquired = {
                 let geometry = &geometry;
                 let tracker = &mut tracker;
-                let reader = &mut reader;
                 let pointer = &mut pointer;
                 let clock = ctx.clock;
-                source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |dup, info| {
+                source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
                     // Most cursor news arrives on frames that carry no picture
                     // at all, and the shape is only legal to read while the
                     // frame is held — which is why this is an observer.
                     //
-                    // `LastMouseUpdateTime` is qpc ticks; §5's `tsUs` is the
+                    // `ts_ticks` is `platform::clock` ticks; §5's `tsUs` is the
                     // same epoch as every other stamp the viewer is sent.
-                    let ts_us = clock.us(info.LastMouseUpdateTime) as i64;
-                    if let Some(at) = cursor::pointer_position(info) {
+                    let ts_us = clock.us(sample.ts_ticks) as i64;
+                    if let Some(at) = sample.position {
                         if let Some(message) = tracker.on_position(at, geometry, ts_us) {
                             pointer.push(message);
                         }
                     }
-                    match reader.shape(dup, info) {
-                        Ok(Some((shape, bytes))) => {
-                            match tracker.on_shape(&shape, bytes) {
-                                Ok(Some(message)) => pointer.push(message),
-                                Ok(None) => {}
-                                Err(e) => ::log::warn!("swoop: cursor shape: {e}"),
-                            }
+                    if let Some((shape, bytes)) = sample.shape {
+                        match tracker.on_shape(&shape, bytes) {
+                            Ok(Some(message)) => pointer.push(message),
+                            Ok(None) => {}
+                            Err(e) => ::log::warn!("swoop: cursor shape: {e}"),
                         }
-                        Ok(None) => {}
-                        Err(e) => ::log::warn!("swoop: cursor shape read: {e}"),
                     }
                 })
             };
@@ -3841,7 +3821,7 @@ mod host {
         // Same reason as the capture thread: the initial attach is not a
         // switch, and there is nothing held to release on it.
         watcher.follow();
-        let mut injector = SendInputInjector::new(space);
+        let mut injector = InputInjector::new(space);
 
         while !stop.load(Ordering::Relaxed) {
             // Trigger 4 of `release_all`. `follow` switches and reports in one
@@ -4192,7 +4172,7 @@ mod host {
         #[test]
         #[ignore = "captures this box's real desktop, opens its encoder and moves the pointer"]
         fn end_to_end_picture() {
-            let outputs = capture::enumerate_outputs().expect("dxgi enumerates");
+            let outputs = platform::enumerate_outputs().expect("the platform enumerates its outputs");
             assert!(!outputs.is_empty(), "no attached output to duplicate");
             let output = primary(&outputs).clone();
             let space = output.clone();
@@ -4207,7 +4187,7 @@ mod host {
             let limits = limits_for(&caps, codec).expect("the codec it just reported");
 
             let clock = HostClock::new(
-                qpc_hz().expect("a performance counter"),
+                platform::clock::hz().expect("a host clock"),
                 crate::bundle::TimeAnchor::new(0),
                 0,
             );
@@ -4245,7 +4225,7 @@ mod host {
             // the clock and not on frames: a busy desktop delivers 60 frames a
             // second and an idle one delivers none, and the pointer has to move
             // somewhere it was not already sitting either way.
-            let mut injector = SendInputInjector::new(PointerSpace::from_output(&space));
+            let mut injector = InputInjector::new(PointerSpace::from_output(&space));
             let spots = [(0.25f32, 0.25f32), (0.75, 0.65), (0.4, 0.8), (0.6, 0.2)];
             let mut spot = 0usize;
             let mut next_move = Instant::now();
@@ -4259,7 +4239,7 @@ mod host {
                     spot += 1;
                     injector
                         .inject(&InputEvent::MouseMove { x, y })
-                        .expect("sendinput reaches this desktop");
+                        .expect("the injector reaches this desktop");
                     next_move = Instant::now() + Duration::from_millis(200);
                 }
                 match rx.recv_timeout(Duration::from_millis(100)) {
@@ -4312,7 +4292,7 @@ mod host {
         #[test]
         #[ignore = "captures this box's real desktop and opens its encoder"]
         fn pause_closes_the_duplication_and_the_floor_holds_a_still_desktop() {
-            let outputs = capture::enumerate_outputs().expect("dxgi enumerates");
+            let outputs = platform::enumerate_outputs().expect("the platform enumerates its outputs");
             assert!(!outputs.is_empty(), "no attached output to duplicate");
             let output = primary(&outputs).clone();
 
@@ -4326,7 +4306,7 @@ mod host {
             let limits = limits_for(&caps, codec).expect("the codec it just reported");
 
             let clock = HostClock::new(
-                qpc_hz().expect("a performance counter"),
+                platform::clock::hz().expect("a host clock"),
                 crate::bundle::TimeAnchor::new(0),
                 0,
             );

@@ -51,7 +51,7 @@
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use serde::Serialize;
 
-use crate::capture::{Rect, Rotation};
+use crate::capture::{OutputInfo, Rect, Rotation};
 use crate::input::PointerSpace;
 use crate::signal::messages::channel::Cursor;
 
@@ -198,6 +198,27 @@ pub struct PointerPosition {
     pub visible: bool,
 }
 
+/// What one capture step knows about the pointer, handed to the capture
+/// source's observer while the frame it came with is still held.
+///
+/// Portable so the session's cursor path reads the same thing on every OS:
+/// Desktop Duplication builds it from the frame info and its own pointer
+/// reader, and a platform whose pointer is not on the frame asks a
+/// [`PointerSampler`] instead.
+pub struct PointerSample<'a> {
+    /// `None`: this sample carries no pointer news.
+    pub position: Option<PointerPosition>,
+    /// `platform::clock` ticks.
+    pub ts_ticks: i64,
+    /// `Some` only when the shape changed.
+    pub shape: Option<(ShapeInfo, &'a [u8])>,
+}
+
+/// A pointer source for a capture backend whose frames carry no pointer data.
+pub trait PointerSampler: Send {
+    fn sample(&mut self) -> PointerSample<'_>;
+}
+
 /// One output's geometry, as the cursor path needs it.
 ///
 /// The three spaces Desktop Duplication hands out are not interchangeable
@@ -215,6 +236,17 @@ pub struct OutputGeometry {
 }
 
 impl OutputGeometry {
+    /// `texture` is the acquired texture's size, which on a rotated output
+    /// is not the mode's — see [`crate::capture::Rotation::swap_axes`].
+    pub fn for_output(output: &OutputInfo, texture: (u32, u32)) -> Self {
+        Self {
+            desktop_rect: output.desktop_rect,
+            rotation: output.rotation,
+            texture,
+            dpi: crate::platform::dpi_for_rect(&output.desktop_rect),
+        }
+    }
+
     /// Host pixels per css pixel on this output.
     pub fn scale(&self) -> f64 {
         if self.dpi == 0 {
@@ -659,10 +691,7 @@ mod win32 {
     use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
     use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 
-    use super::{
-        OutputGeometry, PointerPosition, Rect, ShapeInfo, ShapeKind, DEFAULT_DPI,
-    };
-    use crate::capture::OutputInfo;
+    use super::{PointerPosition, Rect, ShapeInfo, ShapeKind, DEFAULT_DPI};
 
     /// The pointer position a frame carries, or `None` when it carries none.
     ///
@@ -696,24 +725,10 @@ mod win32 {
         }
     }
 
-    impl OutputGeometry {
-        /// `texture` is the acquired texture's size, which on a rotated output
-        /// is not the mode's — see [`crate::capture::Rotation::swap_axes`].
-        pub fn for_output(output: &OutputInfo, texture: (u32, u32)) -> Self {
-            Self {
-                desktop_rect: output.desktop_rect,
-                rotation: output.rotation,
-                texture,
-                dpi: dpi_for_rect(&output.desktop_rect),
-            }
-        }
-    }
-
     /// Reads pointer shapes off a duplication, reusing one buffer.
     ///
-    /// The duplication is passed in rather than held: there is one per output
-    /// and it belongs to [`crate::capture::Duplication`], which acquires the
-    /// frame this shape came with.
+    /// The duplication is passed in rather than held: [`crate::capture::Duplication`]
+    /// owns both, and only it holds the frame this shape came with.
     #[derive(Debug, Default)]
     pub struct PointerReader {
         buffer: Vec<u8>,
@@ -1207,7 +1222,6 @@ mod tests {
         let output = outputs.first().expect("an attached output");
         let mut source = Duplication::open(output, RebuildSignal::new()).expect("duplicate output");
 
-        let mut reader = PointerReader::new();
         let mut tracker = CursorTracker::new();
         let (mut acquired, mut no_update, mut positions) = (0u32, 0u32, 0u32);
         let (mut shape_updates, mut shape_messages) = (0u32, 0u32);
@@ -1218,9 +1232,9 @@ mod tests {
             // has been emitted, and the pointer arrives before that.
             let geometry = OutputGeometry::for_output(source.output(), source.size());
             source
-                .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |dup, info| {
+                .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
                     acquired += 1;
-                    match pointer_position(info) {
+                    match sample.position {
                         None => no_update += 1,
                         Some(at) => {
                             if tracker.on_position(at, &geometry, 0).is_some() {
@@ -1228,7 +1242,7 @@ mod tests {
                             }
                         }
                     }
-                    if let Some((shape, bytes)) = reader.shape(dup, info).expect("read shape") {
+                    if let Some((shape, bytes)) = sample.shape {
                         shape_updates += 1;
                         if tracker
                             .on_shape(&shape, bytes)

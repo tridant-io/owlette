@@ -11,6 +11,7 @@
 //! Nothing that touches the bundle, a token, a key or a viewer JWT is ever
 //! passed to this module, at any level, including debug.
 
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -21,9 +22,8 @@ const MAX_BYTES: u64 = 4 * 1024 * 1024;
 const KEEP: usize = 3;
 const BASENAME: &str = "swoop.log";
 
-/// `%PROGRAMDATA%\Owlette\logs\swoop`, the directory `shared_utils.SWOOP_LOG_DIR`
-/// names on the agent side. Off Windows there is no ProgramData and no service
-/// yet, so a temp directory keeps the crate runnable for Wave 9's port.
+/// `logs/swoop` under the owlette data root, the directory
+/// `shared_utils.SWOOP_LOG_DIR` names on the agent side.
 ///
 /// Public because the crash dump lands beside the log and there must not be a
 /// second spelling of where that is.
@@ -32,10 +32,29 @@ pub fn dir() -> PathBuf {
 }
 
 fn log_dir() -> PathBuf {
-    match std::env::var_os("PROGRAMDATA") {
-        Some(root) => PathBuf::from(root).join("Owlette").join("logs").join("swoop"),
-        None => std::env::temp_dir().join("owlette").join("logs").join("swoop"),
-    }
+    dir_from(
+        std::env::var_os("OWLETTE_DATA_ROOT").as_deref(),
+        std::env::var_os("PROGRAMDATA").as_deref(),
+    )
+}
+
+/// The data root rule the agent's `osadapter` and the desktop app's
+/// `paths::data_root_from` follow, so all three write one tree:
+/// `OWLETTE_DATA_ROOT` when it is set, else `%PROGRAMDATA%\Owlette` on
+/// Windows, `/Library/Application Support/Owlette` on macOS and
+/// `/var/lib/owlette` elsewhere. Split from [`dir`] so the rule is testable
+/// without touching the process environment.
+fn dir_from(override_root: Option<&OsStr>, program_data: Option<&OsStr>) -> PathBuf {
+    let root = match override_root.filter(|value| !value.is_empty()) {
+        Some(root) => PathBuf::from(root),
+        None if cfg!(windows) => program_data
+            .filter(|value| !value.is_empty())
+            .map_or_else(|| PathBuf::from("C:\\ProgramData"), PathBuf::from)
+            .join("Owlette"),
+        None if cfg!(target_os = "macos") => PathBuf::from("/Library/Application Support/Owlette"),
+        None => PathBuf::from("/var/lib/owlette"),
+    };
+    root.join("logs").join("swoop")
 }
 
 struct Rotating {
@@ -166,5 +185,32 @@ mod tests {
         assert_eq!(count, KEEP, "the directory never grows past KEEP files");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_log_directory_is_logs_swoop_under_the_data_root() {
+        let program_data = Some(OsStr::new("D:\\PD"));
+        assert_eq!(
+            dir_from(Some(OsStr::new("/tmp/owlette-21")), program_data),
+            PathBuf::from("/tmp/owlette-21").join("logs").join("swoop"),
+            "the override wins on every os"
+        );
+        assert_eq!(
+            dir_from(Some(OsStr::new("")), program_data),
+            dir_from(None, program_data),
+            "an empty override is no override"
+        );
+        let native = if cfg!(windows) {
+            assert_eq!(
+                dir_from(None, None),
+                PathBuf::from("C:\\ProgramData\\Owlette\\logs\\swoop")
+            );
+            "D:\\PD\\Owlette\\logs\\swoop"
+        } else if cfg!(target_os = "macos") {
+            "/Library/Application Support/Owlette/logs/swoop"
+        } else {
+            "/var/lib/owlette/logs/swoop"
+        };
+        assert_eq!(dir_from(None, program_data), PathBuf::from(native));
     }
 }

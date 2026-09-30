@@ -2,7 +2,9 @@
 //!
 //! Three verbs (plan.md's names registry): `run` takes the session bundle on
 //! stdin, `probe` reports capture and encode capability as JSON, `version`
-//! prints the build's version so the service can refuse a stale streamer.
+//! prints the build's version so the service can refuse a stale streamer. On
+//! macOS a fourth, `selfcheck`, reports what the privacy system credits this
+//! process with, as one JSON line.
 
 use std::io::{self, BufRead, BufReader};
 use std::process::ExitCode;
@@ -11,11 +13,15 @@ use owlette_swoop::bundle::{Bundle, BuildVersions};
 use owlette_swoop::{ipc::exit, log as swoop_log, probe};
 use zeroize::Zeroize;
 
+#[cfg(target_os = "macos")]
+const USAGE: &str = "usage: owlette-swoop <run|probe|version|selfcheck [--force]>";
+#[cfg(not(target_os = "macos"))]
+const USAGE: &str = "usage: owlette-swoop <run|probe|version>";
+
 fn main() -> ExitCode {
     // First, before any dependency has a chance to load a DLL.
-    #[cfg(windows)]
-    if let Err(e) = owlette_swoop::platform::win::pin_dll_search_path() {
-        eprintln!("owlette-swoop: could not pin the dll search path: {e}");
+    if let Err(e) = owlette_swoop::platform::process::prepare() {
+        eprintln!("owlette-swoop: {e:#}");
         return ExitCode::from(exit::INTERNAL);
     }
 
@@ -40,8 +46,30 @@ fn main() -> ExitCode {
             }
         }
         Some("run") => run(),
+        #[cfg(target_os = "macos")]
+        Some("selfcheck") => selfcheck(),
         _ => {
-            eprintln!("usage: owlette-swoop <run|probe|version>");
+            eprintln!("{USAGE}");
+            ExitCode::from(exit::INTERNAL)
+        }
+    }
+}
+
+/// The `selfcheck` verb: one JSON line, exit 0 whatever it says. No logger —
+/// like `probe`, it is read by a caller that must not create directories.
+/// `--force` also asks ScreenCaptureKit when the preflight says no, which may
+/// raise the Screen Recording dialog; without it nothing here can.
+#[cfg(target_os = "macos")]
+fn selfcheck() -> ExitCode {
+    let force = std::env::args().nth(2).as_deref() == Some("--force");
+    let report = owlette_swoop::platform::macos::selfcheck(force);
+    match serde_json::to_string(&report) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::from(exit::OK)
+        }
+        Err(e) => {
+            eprintln!("owlette-swoop: selfcheck failed: {e}");
             ExitCode::from(exit::INTERNAL)
         }
     }
@@ -94,17 +122,8 @@ fn run() -> ExitCode {
     ExitCode::from(exit)
 }
 
-#[cfg(windows)]
 fn session_exit(bundle: Bundle, stdin: impl BufRead + Send + 'static) -> u8 {
     owlette_swoop::session::run(bundle, stdin).code()
-}
-
-/// Wave 9 brings the macOS and Linux backends; until then a `run` on anything
-/// else is an honest internal error rather than a silent no-op.
-#[cfg(not(windows))]
-fn session_exit(_bundle: Bundle, _stdin: impl BufRead + Send + 'static) -> u8 {
-    ::log::error!("owlette-swoop: the session is windows-only until wave 9");
-    exit::INTERNAL
 }
 
 /// The panic path.
