@@ -132,7 +132,7 @@ ed25519-dalek = "=3.0.0"
 zeroize = { version = "=1.9.0", features = ["derive"] }
 
 # Single-use `jti` values and DTLS/ICE nonces.
-rand = "=0.10.2"
+rand = "=0.10.3"
 
 # capture → encode → per-viewer sender hand-offs. Bounded channels with
 # try_send are how a slow viewer drops frames instead of stalling capture.
