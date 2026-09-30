@@ -9,7 +9,7 @@ pytest-asyncio==1.4.0
 
 # Code Quality
 black==26.5.1
-flake8==7.3.0
+flake8==7.4.0
 
 # Testing Utilities
 responses==0.26.3  # Mock HTTP requests
