@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 9/23 complete
+**Progress**: 15/23 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -97,13 +97,13 @@ Every task here adds files that compile only on macOS, plus `mod` lines in one e
 with the Windows commands green on this box (nothing Windows compiles changed in behaviour) and the macOS
 commands green on the Mac or the CI leg. Do not start this wave before gate M0 says go.
 
-- [ ] **Task 4.1: Capture and displays** `[agent]`
+- [x] **Task 4.1: Capture and displays** `[agent]`
   - Files: `agent/swoop/src/capture/sck.rs` (create), `agent/swoop/src/displays/mac.rs` (create), `agent/swoop/src/capture/mod.rs`, `agent/swoop/src/displays/mod.rs`, `agent/swoop/src/displays/enumerate.rs`
   - Do: `displays/mac.rs`: `outputs()` walks `platform::macos::display_ids()` and builds an `OutputInfo` per display: `device_name` is `display-<id>`, `desktop_rect` is `display_pixel_rect(id)` (decision 13: pixels), `rotation` is `Rotation::Identity` because macOS hands the picture out already rotated (no rotated panel on the rig: say in the module doc that this is untested). `entries()` enriches each into a `DisplayEntry` (name, refresh from the current mode with 0 read as 60, dpi as 96 times the scale, primary from `CGDisplayIsMain`), and `displays/enumerate.rs`'s non-Windows `enumerate()` gets a macOS arm that calls it. Selection is one display at a time; the spanned canvas is deferred. `capture/sck.rs`: `ScreenCapture` with the `CaptureSource` methods from context.md and `impl capture::Source`. Open: `SCShareableContent` (its completion handler answers onto a channel, 5 s bound), the `SCDisplay` whose `displayID` matches, a filter for that display excluding no windows, and a configuration with the display's pixel size, pixel format `420v`, the colour space and matrix set to BT.709, `minimumFrameInterval` 1/60, `queueDepth` 4, `capturesAudio` false and `showsCursor` equal to the `cursor_in_frame` argument. A refusal (TCC's -3801) or a display that is not there is an error from `open_with`, which the session turns into exit 12. The output handler runs on a serial dispatch queue: it reads the frame's status from the sample buffer's attachments, passes on only `complete` frames (count the others at debug level and report which arrive on a static desktop), retains the image buffer and sends it with its presentation time, converted to `platform::clock` ticks, into a bounded channel of 2 where the newest wins. `next_frame_with` first calls the sampler and hands its sample to the observer, then waits up to `timeout_ms` for a frame. **The last delivered buffer stays retained until a newer picture or a rebuild**: the session's floor re-sends that handle after an empty poll (`session/mod.rs:3690-3706`). A stream that stops (`stream:didStopWithError:`) or a bumped `RebuildSignal` is rebuilt **inside** the source on the next call: retry every 50 ms for up to 10 s, re-read the display's size, drop the held buffer, set the IDR request, answer `Ok(None)`. Only a rebuild that never comes back is an `Err`, because the session treats any error as exit 12 (`:3658`). `last_rects()` answers the whole frame.
   - Done when: unit tests cover the rect and scale arithmetic and the newest-wins channel; on the Mac `cargo test … -- --ignored capture` captures a frame from each attached display, prints its size and the gap between its timestamp and `clock::now_ticks()` (under 100 ms), holds the same handle across three empty polls, and survives a rebuild forced through the signal.
   - Depends on: 2.1, 3.1
 
-- [ ] **Task 4.2: VideoToolbox encoder, pixel transfer and the SPS check** `[agent]`
+- [x] **Task 4.2: VideoToolbox encoder, pixel transfer and the SPS check** `[agent]`
   - Files: `agent/swoop/src/encode/videotoolbox/mod.rs` (create), `agent/swoop/src/encode/h264_sps.rs` (create), `agent/swoop/src/gpu/vt_transfer.rs` (create), `agent/swoop/src/encode/mod.rs`, `agent/swoop/src/encode/select.rs`, `agent/swoop/src/gpu/mod.rs`, `agent/swoop/src/ipc.rs`
   - Do: Implement `encode::Encoder` over a `VTCompressionSession`, behind `#[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]`, exposing `probe()` and `create()` at the module root as every backend does. `probe()`: `VTCopyVideoEncoderList` says which codecs exist and whether hardware backs them, and nothing about sizes, so sizes are found by creating a session at each candidate (4096×2304, 4096×4096, 7680×4320, 8192×8192) and keeping the largest that opens; cache the answer for the life of the process. `accepts_bgra_texture` is true in the sense the selector uses it (no convert pass in front: the capture already hands NV12); `concurrent_sessions` is the list's instance limit when it carries one, else 4; the backend name is `videotoolbox`. `create()`: hardware required first, then Apple's software encoder for H.264 when no hardware answers; the source attributes name `420v`; properties `RealTime` true, `AllowFrameReordering` false, `MaxKeyFrameInterval` at its maximum with `ForceKeyFrame` on the frames the session asks an IDR for, `AverageBitRate` with `DataRateLimits` over one frame interval, `ExpectedFrameRate`, `MaxFrameDelayCount` 0, `PrioritizeEncodingSpeedOverQuality` true, profile H.264 Main or HEVC Main at automatic level, and `EnableLowLatencyRateControl` in the encoder specification where the session accepts it (try it for both codecs and record which refuse). `encode()` submits the frame with its capture ticks as the frame's reference value and forces it out with `VTCompressionSessionCompleteFrames`, so the frame's bits return from the call that submitted it; `encoded` ticks are read in the output callback. The output is length-prefixed; convert it to Annex-B and put the parameter sets (VPS, SPS, PPS from the format description) in front of every IRAP. A frame is an IRAP when its sample attachments do not say `NotSync`. `set_bitrate` moves the two rate properties without a new session. `h264_sps.rs` parses an SPS through its VUI (removing emulation prevention) and can rewrite it to carry `bitstream_restriction_flag = 1` with `max_num_reorder_frames = 0` and `max_dec_frame_buffering` equal to the reference count; `agent/swoop/spikes/bakeoff-host/src/nal.rs` has a parser to read first. The encoder checks its first SPS and rewrites every SPS only if the restriction is missing; without it Chrome's decoder holds a full picture buffer (208 ms against 8 ms, the swoop plan's D5). `select.rs`: `CHAIN` becomes a slice per system (Windows as it is, macOS `["videotoolbox"]`, elsewhere `["openh264"]`), `probe_all` and `create` gain the macOS arm, the tests that pin the Windows chain become `#[cfg(windows)]` and a macOS table test is added. `ipc.rs`: the `encoder` field's doc names `videotoolbox`. `gpu/vt_transfer.rs`: `PixelTransfer` with `open`, `target` and `scale` over a `VTPixelTransferSession` and a pixel buffer pool of `420v` IOSurface buffers at the target size; a scaled frame's handle is valid until the next `scale`. `gpu/mod.rs`: the `mod` line, and `Frame::handle`'s doc says what it is on macOS.
   - Done when: table tests over injected caps pass on both systems; on the Mac `cargo test … -- --ignored videotoolbox` (synthetic NV12 buffers, so it needs no grant) encodes 120 frames at 1920×1080 in H.264 and in HEVC, prints p50 and p95 of `encode()`, asserts the first frame is an IRAP carrying its parameter sets, asserts the H.264 SPS it emits carries the restriction, and a transfer test halves a two-tone pattern with the halves on the right sides.
@@ -121,25 +121,25 @@ commands green on the Mac or the CI leg. Do not start this wave before gate M0 s
   - Done when: unit tests cover the point-to-pixel conversion on a 2x display with a negative origin, the premultiplied case and the hash gate; on the Mac `cargo test … -- --ignored cursor` prints `shapes_available`, then each shape change while the human moves over a text field and a link, with fewer distinct shapes than samples.
   - Depends on: 2.1, 3.1
 
-- [ ] **Task 4.5: Clipboard** `[agent]`
+- [x] **Task 4.5: Clipboard** `[agent]`
   - Files: `agent/swoop/src/clipboard/mac.rs` (create), `agent/swoop/src/clipboard/mod.rs`, `agent/swoop/src/clipboard/listener.rs`
   - Do: `listener.rs`: the `Listener`'s thread handle is the platform's (`win::Thread` on Windows, `mac::Thread` on macOS, none elsewhere) and `start()` gains the macOS arm; the Windows arm does not change. `mac.rs`: a thread that polls `NSPasteboard.general`'s `changeCount` every 250 ms and applies queued writes. **Reading content is gated** (decision 17): read the pasteboard's access behaviour; only under always-allow does the thread read content on a change; under any other answer it never reads, logs once that the clipboard from this mac is off until owlette is allowed under "paste from other apps" in system settings, and host-to-viewer sync stays off for the session. When it may read: a string as text; PNG as it is; TIFF converted to PNG through `NSBitmapImageRep`; a pasteboard holding file URLs is left alone entirely, as `CF_HDROP` is on Windows; the existing caps and the existing `Echo` apply, keyed by the change count a write produced. Writing never needs the gate: clear the contents, then set the string, or the PNG with a TIFF made from it beside it, the way Windows puts `CF_DIBV5` beside `"PNG"`. `formats.rs`'s DIB code is not used here and is not touched. Nothing logs content.
   - Done when: unit tests cover the gate's three answers and the echo by change count; on the Mac `cargo test … -- --ignored clipboard` (it overwrites the Mac's clipboard; the module doc says so) round-trips text and a PNG through a write, and through a read when the behaviour allows one, and reports the behaviour it found.
   - Depends on: 2.1, 3.1
 
-- [ ] **Task 4.6: Audio** `[agent]`
+- [x] **Task 4.6: Audio** `[agent]`
   - Files: `agent/swoop/src/audio/sck.rs` (create), `agent/swoop/src/audio/mod.rs`
   - Do: `audio/mod.rs`'s capture path is Windows-only today (`Stream` holds a `wasapi::Loopback`; the other arm only waits to be stopped, `:351`). Make the device the platform's: `Loopback` is `wasapi::Loopback` on Windows and `sck::Loopback` on macOS, both with `open()` and `drain(&mut Vec<i16>)`, and the endpoint probe is the platform's `render_endpoint_present()`. `Stream`, the frame clock, `broadcast` and the mute path become common to both; every other system keeps the waiting stub. `sck.rs`: a second `SCStream`, separate from the picture's, with `capturesAudio` true, 48 kHz, two channels, `excludesCurrentProcessAudio` true, the smallest video configuration the API accepts and only the audio output added; the handler converts each buffer (float, expected planar: assert the layout it finds) to interleaved 16-bit and pushes it into a bounded queue that `drain` empties. `render_endpoint_present()` asks CoreAudio for the default output device through one `extern "C"` call (`AudioObjectGetPropertyData` on the system object). The feature never creates a device and never moves the default, as on Windows.
   - Done when: the existing audio unit tests pass on both systems; on the Mac `cargo test … --lib -- --ignored audio::live --nocapture` counts packets for one second while something plays, and again on silence, where the frame clock still produces frames.
   - Depends on: 2.1, 3.1
 
-- [ ] **Task 4.7: ICE arms** `[agent]`
+- [x] **Task 4.7: ICE arms** `[agent]`
   - Files: `agent/swoop/src/transport/ice_policy.rs`
   - Do: Two arms are Windows-only for no reason the code needs. `SystemResolver::resolve` on Windows is already plain `to_socket_addrs` (`:236-246`); make that the one body on every system, since macOS resolves `.local` through the same call. `ifwatch` off Windows is a stub that never reports a change (`:598`): give unix a watcher that walks `getifaddrs` every 2 s on its own thread, hashes the set of interface names and addresses, and answers `take_changed()` when the hash moved. The Windows watcher is not touched.
   - Done when: the existing resolver table tests pass on both systems; a unit test over an injected interface list detects an added and a removed address and ignores a reordering; on the Mac an `#[ignore]`d test prints the interface set.
   - Depends on: 2.1
 
-- [ ] **Task 4.8: Security review of the macOS trust boundaries** `[agent]`
+- [x] **Task 4.8: Security review of the macOS trust boundaries** `[agent]`
   - Files: `dev/active/swoop-macos/research/review-2-security.md` (create; **local and uncommitted** until the release that carries its fixes has shipped), and the files its findings fix: `agent/src/swoop_spawn_posix.py`, `desktop/src-tauri/src/jobrunner.rs`, their tests
   - Do: An adversarial review of what Wave 2 built, by a reviewer that did not write it, under the repo's review discipline (`.claude/CLAUDE.md`: severity is a claim that must be substantiated, with an actor, a mechanism and an outcome; a clean review is a valid result). Scope: a member of the POSIX group, or the console user, against the root daemon through the socket, the job file, the exit file and the sweep; a job the app should refuse; the sidecar rule; what `selfcheck` tells whom; the bundle's path from the daemon to the streamer. Read the last ten commits first. Fix what is confirmed, with a failing test first, and record what is accepted and why.
   - Done when: the memo lists each finding with its severity, its evidence by file and line and its outcome, or states that the review is clean; every fix has a test; both suites are green; `git status` shows the memo untracked.
@@ -534,3 +534,177 @@ the script is `spikes/m0_selfcheck.py`. The owner read the verdict and said go f
 - Unverified: the exact text of the Local Network dialog; whether the banner's button raised a dialog of its
   own; the reboot case.
 - *Changelog line:* none. A measurement.
+
+### 2026-09-30, Wave 4
+
+Two batches of agents in this worktree, one Mac worktree each: 4.1, 4.2, 4.3, 4.9, then 4.4, 4.5, 4.6, 4.7,
+4.8. A usage limit stopped the second batch once; each agent was resumed with its context. The combined head
+(`448ff19e`) is green on both systems: Windows 394 passed / 20 ignored (403 / 21 with `audio-opus`), then 1, 1,
+5; macOS in the entry after the tasks. Every agent ran its Windows commands on a copy of HEAD plus its own
+files, because the shared tree held the others' work in progress; the counts here are the combined head's.
+
+**Task 4.1: done** (`5dd3d4df`). `capture/sck.rs` and `displays/mac.rs`.
+- Mac hardware test: display-1 at 3420x2214 (the 2880x1864 panel's scaled-mode backing store, which decision 13
+  captures), opened in about 230 ms, first picture after 4 calls, one handle held across 3 empty polls, rebuild
+  through the signal in 170-265 ms, timestamps 0-3.5 ms behind delivery over 48 pictures. `--ignored displays`:
+  one primary display, 192 dpi, 60 Hz.
+- *context.md row, frame statuses:* measured on the lock screen only: over 3 s, `complete` 41-45 and `idle` 78-81;
+  blank, suspended, started and stopped 0. An unlocked static desktop is unmeasured. *Rotation row:* untested,
+  no rotated panel on the rig.
+- *Findings:* (1) **an asleep display is listed by neither CoreGraphics nor ScreenCaptureKit**, so a session on
+  a sleeping Mac exits 12 with no attached output; a screen that sleeps mid-session probably ends it after the
+  10 s rebuild deadline (unverified). The owner decides whether a session wakes the display and holds it awake
+  (`IOPMAssertionDeclareUserActivity`, `PreventUserIdleDisplaySleep`): for Task 5.1. (2) **Raw presentation
+  times run ahead of delivery** (min -10.7, p50 -1.1, max +10.7 ms; 27 of 47 in the future: vsync times), so
+  each stamp is clamped to its delivery. (3) A stop from the menu bar's capture indicator (-3817) is rebuilt like
+  any stop, overriding the person at the Mac: the owner decides, for Task 5.1. (4) A resolution change is
+  re-read only on a rebuild; whether SCK stops the stream on one is unverified.
+- Deviations: the clamp; a Screen Recording preflight before every SCK call so neither an open nor a rebuild can
+  prompt; display names are "built-in display" / "external display" (`NSScreen.localizedName` is main-thread
+  only); dpi through `platform::dpi_for_rect`.
+- *Changelog line:* "swoop: on macOS the streamer can capture a display through ScreenCaptureKit at its native
+  pixel size and lists the Mac's displays in pixels; sessions use it once Task 5.1 wires it."
+
+**Task 4.2: done** (`8a01ba79`, and `d0ac65de` for the probe test gate, a one-line patch outside its files).
+`encode/videotoolbox/mod.rs`, `encode/h264_sps.rs`, `gpu/vt_transfer.rs`.
+- Mac hardware test, 120 frames at 1920x1080: H.264 hardware p50 8.5-9.2 ms / p95 9.3-10.6 ms; HEVC hardware
+  p50 9.3-10.5 / p95 9.9-11.2; software H.264 p50 10.7-10.9 / p95 15.6-16.4. IRAPs at frames 0 and 90 (the
+  forced one), each with its parameter sets in front. The transfer test halves a two-tone pattern correctly.
+- *context.md rows:* `EnableLowLatencyRateControl` refused by no hardware codec at 1080p (low-latency H.264
+  tops out at 4096x2160, HEVC at 8192x4320; only software H.264 refuses it). The H.264 SPS carries the
+  restriction from hardware (flag 1, reorder 0, `max_dec_frame_buffering` 4), not from software, whose SPS is
+  rewritten (buffering 2). Under low latency both hardware encoders refuse `MaxFrameDelayCount` and
+  `PrioritizeEncodingSpeedOverQuality`; software also refuses `DataRateLimits`. No session advertises a
+  `MaxKeyFrameInterval` maximum; `i32::MAX` is accepted.
+- Deviations: opening a session proves no size (H.264 opens at 8192x8192 and fails its first frame), so every
+  session encodes one discarded warm-up frame and the probe tries candidates largest first; software H.264 is
+  the floor only on a Mac with no H.264 hardware, never a per-size fallback; `DataRateLimits` is optional;
+  `h264_sps` compiles everywhere (+7 Windows tests); `max_fps` is 0.
+- *For Task 6.1:* keyframes are about 820 KB against 17-19 KB deltas at 20 Mbps on a noisy pattern (about 330
+  ms of link per IDR); the probe costs about 0.5 s and up to 100 MB transient at session start; HEVC at
+  8192x4320 under `RealTime` dropped every frame after the first at 60 fps; the rewritten-SPS path reaches
+  Chrome only from a Mac without H.264 hardware.
+- *Changelog line:* "swoop: on macOS the streamer encodes H.264 and HEVC with VideoToolbox (hardware, with
+  Apple's software H.264 as the floor on a Mac without H.264 hardware) and scales with a VideoToolbox pixel
+  transfer; every H.264 SPS it sends declares zero reordering, rewritten where the encoder leaves it out."
+
+**Task 4.3: code done** (`20a532a5`), **not ticked: the human half is pending.** `input/mac.rs`,
+`testdata/keymap-macos.json` (119 codes mapped, 29 exceptions with reasons).
+- The keymap walk runs on both systems and catches a missing exception and a duplicate keycode. Unit tests
+  cover the modifier flags, click counts, the wheel's fraction, dragged types and the 2x conversion.
+- Mac corner run: the pointer reached each corner of the 1710x1107-point main display exactly, a relative move
+  past the edge was clamped, shift posted as a key reached the system's modifier state.
+- *context.md rows:* a synthesised event from the HID-state source **does** inherit shift (`0x20020002`), so the
+  plan's premise was wrong; the injector sets its own flags on every event regardless. Natural scrolling:
+  unmeasured until the human run (the rig has it on; a 3-line event reads back as delta 3, 30 pixels).
+- Deviations: relative moves are clamped to the captured display (the window server does not clamp a posted
+  location); flags are adjusted, not set from scratch (CoreGraphics adds the numeric-pad, fn and caps-lock bits
+  an arrow or caps lock carries); clicks and the wheel post at the injector's last posted position; the display
+  for absolute moves is looked up once per space; the human half is a separate test behind
+  `SWOOP_INPUT_HUMAN=1`, so a plain `--ignored input` never types into a window; horizontal wheel direction is
+  unmeasured. Key choices to review at 6.1: Insert to `kVK_Help`, NumLock to keypad clear, IntlBackslash to
+  `kVK_ISO_Section`, the old `kVK_Volume*` codes.
+- *Pending, the owner at the Mac with a text field focused and a long page open:* the command is in the module
+  doc (`SWOOP_INPUT_HUMAN=1 ... -- --ignored --nocapture a_human`): it types a line, double clicks, presses
+  cmd+a, drags, scrolls; the owner confirms each.
+- *Changelog line:* "swoop on macos: a viewer's keyboard, mouse, double clicks, drags and wheel reach a mac host
+  through CoreGraphics; PrintScreen and Pause, which a mac has no key for, are dropped."
+
+**Task 4.4: code done** (`af0a9f57`), **not ticked: the human half is pending.** `cursor/mac.rs`.
+- Unit tests (both systems): the 2x conversion at a negative origin, the premultiplied case, the 33 ms and hash
+  gate. Mac, at the lock screen: `shapes_available=true`; the arrow is 28x40 points (drawn at 2x as 56x80, hot
+  spot (10,10)); a 10 s watch and a 768-move sweep each saw one distinct shape; `sample()` costs p50 15-24 us
+  in a debug build, a shape read 0.14 ms in release.
+- *context.md row:* `NSCursor.currentSystemCursor` **works from a non-AppKit process off the main thread**
+  (macOS 26.6, screen locked), and drawing it through a `CGBitmapContext` works there too. Not measured: the
+  app's child (6.1), and a real shape change, because the lock screen never changes the cursor.
+- *Finding:* objc2-app-kit marks `currentSystemCursor` deprecated ("will always be nil in a future version of
+  macOS") and `CGCursorIsVisible` "no longer supported" (it answered true on every sample). A macOS that answers
+  nil falls into decision 7's fallback through `shapes_available`.
+- Deviations: the bitmap is drawn at the display's scale into a BGRA `CGBitmapContext` (any representation
+  type works) and always un-premultiplied; the display's rects are re-read on the 33 ms cadence; off the
+  captured display the position is reported invisible, not clamped; the test has `SWOOP_CURSOR_SWEEP=1` and
+  `SWOOP_CURSOR_SECS` knobs.
+- *Pending, the owner at the unlocked Mac with a text field and a link visible:* the 30 s watch (the command is
+  in the module doc); expected an I-beam and a pointing hand, `distinct` below `samples`.
+- *Changelog line:* "swoop: on macOS the streamer reads the pointer's position and the system cursor's shape for
+  the viewer's overlay, and says when it cannot, so the pointer can stay in the picture instead."
+
+**Task 4.5: done** (`bead2ee8`). `clipboard/mac.rs`, `listener.rs` (the thread is the platform's; the Windows
+code is unchanged).
+- Mac hardware test, twice, the clipboard saved and restored around it: behaviour `always allow (Some(2))`;
+  text and PNG written and read back; a TIFF arrives as PNG; file URLs are left alone; the listener's own
+  writes never come back as updates.
+- *context.md row:* settled for an ssh process (the behaviour is reported; reads under always-allow raise
+  nothing visible from ssh); the app's child is for 6.1 (read the streamer log's `pasteboard access:` line).
+  `accessBehavior` exists in objc2-app-kit 0.3.2. `NSPasteboard.general` works from a non-main thread in a
+  non-app process. Setting data after `clearContents` does not move the change count.
+- *Product gap, the owner's call:* Apple lists an app under "Paste from Other Apps" only after it has raised
+  the paste alert once, and the streamer never does. On a fresh Mac the owner may have no way to switch owlette
+  to always-allow, and Mac-to-viewer clipboard would stay off. A click-driven read in the app (a new task)
+  would list it.
+- Deviations: on macOS 15.0-15.3 the setting does not exist and there is no alert, so the thread reads
+  (`None => true` in `may_read`; the task said always-allow only: the owner accepts or vetoes); the echo is
+  keyed by the change count's low 32 bits; `Mailbox` is `pub(super)`; with reads off the change count is not
+  polled; the over-cap line leaves out the byte count.
+- *Changelog line:* "swoop on macOS syncs the clipboard: text and images from the viewer to the mac always, and
+  from the mac to the viewer where macos lets owlette read the pasteboard without asking (privacy & security >
+  paste from other apps)."
+
+**Task 4.6: done** (`448ff19e`). `audio/sck.rs`; `audio/mod.rs` shares `Stream`, the clock, `broadcast`, the
+mute path and `probe` between Windows and macOS. Task 1.1's `Duration` gate is live.
+- Windows hardware run: 197 frames in 2 s on a silent desktop (unchanged). Mac: with `afplay` looping, 169
+  frames in 2 s at about 107 kbps (85 packets/s over the window because the stream takes 290-450 ms to open,
+  then 100/s); on silence 171 frames, about 2 kbps of filler.
+- *context.md row settled:* SCK delivers `lpcm 48000 Hz, 2 channels, 32-bit float, planar`. Nothing arrives
+  while nothing plays; an app holding an output stream sends zeros. 1x1 is refused (error 1003); 2x2 is the
+  smallest picture the API accepts. First samples 12-26 ms after open; at most 40 ms in one drain.
+- Deviations: the CoreAudioTypes values are written into `sck.rs` (the defining crate arrives only through
+  objc2-core-media); a wrong layout is refused and logged once, never a panic in the handler; the `[wasapi]` doc
+  link is plain code; `starts_and_stops_on_any_machine` opens a real SCK stream on a Mac with the grant.
+- *For Task 6.1:* audio starts 0.3-0.5 s after the session opens and runs 10-20 ms later than on Windows plus
+  up to 40 ms of SCK batching; listen for clicks and drift over the 5.5-minute hold; mute drops the bitrate to
+  0; the capture indicator shows while audio is captured.
+- *Changelog line:* "swoop (macOS): the streamer captures the Mac's system audio through ScreenCaptureKit into
+  the same Opus track and mute as Windows; it never creates or switches an audio device."
+
+**Task 4.7: done** (`d4dbe42b`). `transport/ice_policy.rs`.
+- One `to_socket_addrs` resolver everywhere. The unix watcher walks `getifaddrs` every 2 s on `swoop-ifwatch`
+  and hashes a sorted set of (name, address) pairs, both families; the Mac's idle set (12 entries, awdl0, llw0
+  and utun0-3 included) held one hash over 90 s. Tested on Windows, the Mac, the Mac stub and the kiosk VM
+  (364 / 9 there, tests only: clippy is not on the VM's toolchain; a fresh directory `~/t47-swoop-...` was left).
+- *For Task 6.1:* a Wi-Fi change to a new subnet triggers the ICE restart, but the session's socket stays bound
+  to the first address (`session/mod.rs` around 1889 and 1963), so the viewer recovers only by its 60 s give-up
+  and re-dial. Windows has the same design. `.local` resolution on the Mac goes through mDNSResponder under the
+  app's Local Network grant: unverified until a same-LAN viewer.
+- Stale wording for 5.1 or 6.2: the "win32 {rc}" warn line and two Windows-only docs in `session/mod.rs`.
+- *Changelog line:* "swoop on macOS resolves a viewer's `.local` candidates and restarts ICE when the Mac's
+  network interfaces change."
+
+**Task 4.8: done, verdict clean.** Memo `research/review-2-security.md`, gitignored and untracked. No code
+changed; both suites green on this box (pytest 2122 / 363; desktop cargo 119 / 1); the Mac was not re-run since
+nothing changed.
+- Eight boundaries verified within the settled model. Three low notes for a later hardening task: the daemon
+  checks the peer's uid, not its pid (a console-user process racing a start could receive the host token,
+  inside the console-user boundary); a second `_owlette` member can disrupt a session start; a failed exit-file
+  write leaves a `.tmp` the sweep does not remove. The stderr hardlink note is accepted (`O_NOFOLLOW`, the
+  console user's own inodes, log text).
+- *Rulings:* CodeQL 388 is the correct boundary, dismiss as by design (text in the memo); 389 and 390 are
+  test-double noise at the production mode 0640, dismiss (no change to `fake_runner.py`); the 120 s `run_job`
+  wait is a robustness backlog item (bound the launch wait in `osadapter.posix`), not a finding.
+- *For Task 7.1:* its criterion "the security review's findings are fixed or accepted in writing" is met; the
+  branch's security check stays red until the owner dismisses 388.
+- *Changelog line:* none.
+
+**Task 4.9: code done** (`b6b0d8ea`), **not ticked: the measurement is pending.** Approach 1 (the preflight read on
+the app's main thread; the notice re-reads every 5 s while shown) is committed: desktop clippy and tests green
+on both boxes, vitest 496 of 496. The signed build of it ended `BUILD-EXIT=69`: **the notary profile vanished
+for the third time.** Nothing installed, nothing measured. The owner chooses: install the signed, un-notarized
+pkg of `b6b0d8ea`, or re-store the profile and rebuild. Then two toggles at the Mac. A TCC.db read showed
+owlette switched off at 11:41:13 and the old app (pid 29737) still reporting true at 12:04: 23 minutes blind.
+- *Changelog line, if approach 1 holds:* "macOS: the owlette app notices an accessibility grant or revocation
+  while it runs, and its notice clears within seconds of the grant, with no relaunch."
+
+*Wave 4 open items for the owner:* the display-sleep and menu-bar-stop decisions (4.1), the clipboard listing
+gap and the pre-15.4 read (4.5), the 4.9 build, the two human runs (4.3, 4.4), and the three CodeQL dismissals
+(4.8).
