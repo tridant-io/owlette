@@ -29,6 +29,9 @@ use std::time::{Duration, Instant};
 use crate::cursor::PointerSample;
 use crate::gpu::Frame;
 
+// macOS captures through ScreenCaptureKit; Task 5.1 wires it under the seam.
+#[cfg(target_os = "macos")]
+pub mod sck;
 pub mod testpattern;
 
 /// Blocking `AcquireNextFrame` timeout in milliseconds.
