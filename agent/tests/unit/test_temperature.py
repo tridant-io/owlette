@@ -151,7 +151,8 @@ class TestPynvmlFallback:
     def test_pynvml_fallback_when_lhm_empty(self):
         shutdown_calls = []
         fake = self._fake_pynvml([66.0, 71.0], shutdown_calls)
-        with patch.object(shared_utils, 'read_config', return_value=None):
+        with patch.object(shared_utils, 'read_config', return_value=None), \
+                patch.object(shared_utils, '_IS_MACOS', False):
             with patch.dict(sys.modules, {
                 'temp_sensors': _mock_temp_sensors(gpus=[]),
                 'pynvml': fake,
@@ -162,6 +163,20 @@ class TestPynvmlFallback:
                 ]
         # nvmlShutdown ran exactly once (finally-guarded).
         assert shutdown_calls == [1]
+
+    def test_macos_never_tries_nvml(self):
+        # no nvidia driver exists for macos, so the read could only fail, and it
+        # logged a warning on every metrics pass
+        shutdown_calls = []
+        fake = self._fake_pynvml([66.0], shutdown_calls)
+        with patch.object(shared_utils, 'read_config', return_value=None), \
+                patch.object(shared_utils, '_IS_MACOS', True):
+            with patch.dict(sys.modules, {
+                'temp_sensors': _mock_temp_sensors(gpus=[]),
+                'pynvml': fake,
+            }):
+                assert shared_utils.get_gpu_temperatures() == []
+        assert shutdown_calls == []
 
 
 class TestConfigDefaults:

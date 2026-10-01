@@ -743,7 +743,10 @@ def get_gpu_temperatures():
     except Exception as e:
         logging.debug(f"[TEMP] sensor error: {e}")
 
-    # 2. pynvml — NVIDIA only
+    # 2. pynvml — NVIDIA only. macos has no nvidia driver, so the read could only
+    # fail there, with a warning on every metrics pass.
+    if _IS_MACOS:
+        return []
     try:
         from pynvml import nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetTemperature, nvmlShutdown, NVML_TEMPERATURE_GPU
 
