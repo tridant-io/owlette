@@ -26,11 +26,10 @@ interface AppMenuProps {
   onLeaveSite: () => void
   onReportIssue: () => void
   /**
-   * Restart the service without elevation (restart.flag on windows, the polkit
-   * rule's `systemctl restart` on linux). Absent on macos, where this app has
-   * no way to restart launchd's agent, so the row is not shown.
+   * Restart the service without elevation: restart.flag on windows, the polkit
+   * rule's `systemctl restart` on linux, a request to the daemon on macos.
    */
-  onRestartService?: () => void
+  onRestartService: () => void
   /** Run-on-login state — null until the host answers, hiding the row. */
   startOnLogin: boolean | null
   onStartOnLoginChange: (enabled: boolean) => void
@@ -128,12 +127,10 @@ export function AppMenu({
         )}
         {/* Recovery pair, escalating: the same restart the tray asks for,
             surfaced here for operators who never right-click a tray icon. */}
-        {onRestartService && (
-          <DropdownMenuItem data-testid="menu-restart-service" onSelect={onRestartService}>
-            <RotateCcw aria-hidden className="size-4" />
-            restart service
-          </DropdownMenuItem>
-        )}
+        <DropdownMenuItem data-testid="menu-restart-service" onSelect={onRestartService}>
+          <RotateCcw aria-hidden className="size-4" />
+          restart service
+        </DropdownMenuItem>
         {/* Safe last resort: every pane is a view over service-owned files, so a
             reload rebuilds from disk truth. */}
         <DropdownMenuItem data-testid="menu-reload" onSelect={() => window.location.reload()}>

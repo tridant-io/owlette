@@ -491,24 +491,20 @@ function App() {
                 toast.error('could not change start on login', { description: message(cause) }),
               )
             }}
-            // macos: launchd runs the agent and this app has no way to restart it
-            // yet, so the row is left out rather than offered and refused.
-            onRestartService={
-              IS_MAC
-                ? undefined
-                : () => {
-                    // Windows: the service polls for this file each loop, exits 42,
-                    // and the host relaunches it. Linux: the daemon ignores a flag
-                    // it did not write, so it is the polkit rule's `systemctl
-                    // restart`. No elevation either way, no dashboard flap.
-                    const restart = IS_LINUX ? serviceRestart() : writeOwletteJson('tmp/restart.flag', {})
-                    void restart.then(
-                      () => toast.success('restarting the owlette service'),
-                      (cause: unknown) =>
-                        toast.error('could not restart the service', { description: message(cause) }),
-                    )
-                  }
-            }
+            onRestartService={() => {
+              // Windows: the service polls for this file each loop, exits 42, and
+              // the host relaunches it. Off it the daemon ignores a flag it did
+              // not write: linux runs the polkit rule's `systemctl restart`, and
+              // macos asks the daemon through its request seam. No elevation
+              // anywhere, no dashboard flap.
+              const restart =
+                IS_MAC || IS_LINUX ? serviceRestart() : writeOwletteJson('tmp/restart.flag', {})
+              void restart.then(
+                () => toast.success('restarting the owlette service'),
+                (cause: unknown) =>
+                  toast.error('could not restart the service', { description: message(cause) }),
+              )
+            }}
           />
           {!IS_MAC && <WindowControls />}
         </header>
@@ -647,7 +643,8 @@ function App() {
           onClose={() => setMenuDialog(null)}
           onLeft={handleLeft}
           onHold={health.hold}
-          dashboardOnly={IS_MAC || IS_LINUX}
+          serviceLeaves={IS_MAC || IS_LINUX}
+          onJoin={() => setMenuDialog('join')}
         />
         <ReportIssueDialog open={menuDialog === 'report'} onClose={() => setMenuDialog(null)} />
         <RestartCountdown open={restartPrompt.armed} onClose={restartPrompt.dismiss} />

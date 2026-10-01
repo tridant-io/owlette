@@ -4,6 +4,8 @@ mod json_io;
 mod paths;
 mod pid_file;
 mod process_ctl;
+#[cfg(unix)]
+mod seam;
 mod service_ctl;
 mod shell_open;
 mod startup_link;

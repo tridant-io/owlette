@@ -243,9 +243,9 @@ export function serviceStop(): Promise<ServiceCommandOutcome> {
 }
 
 /**
- * Restart the agent on linux (`systemctl restart`, allowed by the packaged
- * polkit rule). Not registered on windows, which restarts through
- * `tmp/restart.flag`, and refused on macos.
+ * Restart the agent off windows: `systemctl restart` on linux, allowed by the
+ * packaged polkit rule, and a request to the daemon on macos. Not registered
+ * on windows, which restarts through `tmp/restart.flag`.
  */
 export function serviceRestart(): Promise<ServiceCommandOutcome> {
   return invoke<ServiceCommandOutcome>('service_restart')

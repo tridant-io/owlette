@@ -68,6 +68,7 @@ desktop/
    ├─ src/json_io.rs     # named-mutex + atomic JSON read/write
    ├─ src/watchers.rs    # directory watchers for the three seam files
    ├─ src/service_ctl.rs # OwletteService SCM state / start / stop
+   ├─ src/seam.rs        # macos / linux: requests to the root daemon (pair, leave, restart, reboot)
    ├─ src/process_ctl.rs # WM_CLOSE-then-terminate with an identity check
    ├─ src/pid_file.rs    # tmp/tray.pid + tmp/gui.pid
    ├─ src/tray.rs        # notification-area icon, menu, status monitor
@@ -183,6 +184,21 @@ Rules the host enforces, all sourced from `agent/src/shared_utils.py`:
 
 `src/lib/ipc.ts` is the only place allowed to call `invoke` — one typed function
 per command, plus the event subscriptions.
+
+### The request seam (macOS and Linux)
+
+Off Windows this app runs as the console user, who can neither use the token
+store nor control the root daemon. Joining a site, leaving it, restarting the
+machine and dismissing a pending reboot — and, on macOS, restarting the service
+— are requests the daemon carries out (`src-tauri/src/seam.rs`; the daemon half
+is "The privileged-request seam" in `agent/src/configure_site.py`). The app
+writes `{"verb", "nonce"}` 0600 to `ipc/requests/<id>.json.tmp`, renames it into
+place, and reads the daemon's JSON-line answer from `<id>.result` until a
+terminal event — the same stream the Windows helper prints, forwarded as the
+same `owlette://agent-cli` events. No sudo, no prompt; every request is audited
+by the daemon in `logs/privileged_requests.log`. Linux restarts the service with
+`systemctl restart` under the packaged polkit rule instead, which also works
+when the daemon is down.
 
 ### The two markers this app writes
 

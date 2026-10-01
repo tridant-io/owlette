@@ -141,8 +141,9 @@ pub fn service_stop() -> Result<ServiceCommandOutcome, String> {
   service_ctl::stop()
 }
 
-/// Restart the agent off windows (`systemctl restart` on linux; macos refuses).
-/// Windows asks the service itself through `tmp/restart.flag` instead.
+/// Restart the agent off windows (`systemctl restart` on linux, a request to
+/// the daemon on macos). Windows asks the service itself through
+/// `tmp/restart.flag` instead.
 #[cfg(unix)]
 #[tauri::command(async)]
 pub fn service_restart() -> Result<ServiceCommandOutcome, String> {

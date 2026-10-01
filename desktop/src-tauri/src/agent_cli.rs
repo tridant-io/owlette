@@ -17,6 +17,12 @@
 //!
 //! The frontend names one of [`MODES`] and this module builds the argv, so
 //! nothing the webview can say becomes an argument to the interpreter.
+//!
+//! Off Windows this app is the console user, and an interpreter it spawned
+//! could neither use the token store nor control the daemon. There the modes
+//! that need root are requests to the daemon instead ([`crate::seam`]): its
+//! answer is the same JSON-line stream, forwarded as the same events, so the
+//! frontend runs one flow on every platform.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
@@ -34,6 +40,8 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::paths;
+#[cfg(unix)]
+use crate::seam::{self, Seam, Verb};
 
 /// Emitted for every line the agent CLI writes, and once more when it exits.
 pub const EVENT_AGENT_CLI: &str = "owlette://agent-cli";
@@ -115,6 +123,29 @@ pub struct AgentCliEvent {
 pub struct Runs {
   next: AtomicU64,
   children: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
+  /// Requests the daemon is still answering, keyed by run id.
+  #[cfg(unix)]
+  seam: Mutex<HashMap<String, SeamRun>>,
+}
+
+/// One run carried out by the daemon rather than a child of this app.
+#[cfg(unix)]
+struct SeamRun {
+  verb: Verb,
+  cancelled: bool,
+}
+
+/// The daemon's verb for a mode that needs root off Windows. `report-issue`
+/// stays this app's own child.
+#[cfg(unix)]
+fn seam_verb(mode: &str) -> Option<Verb> {
+  match mode {
+    MODE_JOIN => Some(Verb::Pair),
+    "leave" => Some(Verb::Leave),
+    "reboot-now" => Some(Verb::Reboot),
+    "dismiss-reboot" => Some(Verb::DismissReboot),
+    _ => None,
+  }
 }
 
 /// Translate a mode name into the flag it runs.
@@ -159,19 +190,21 @@ fn build_arguments(
     arguments.push(payload_path.to_string_lossy().into_owned());
   }
 
-  match (mode == MODE_JOIN, server) {
-    (true, Some(server)) => {
-      if !SERVERS.contains(&server) {
-        return Err(format!("unknown server: {server}"));
-      }
-      arguments.push("--server".to_string());
-      arguments.push(server.to_string());
-    }
-    (false, Some(_)) => return Err(format!("the {mode} mode takes no server")),
-    (_, None) => {}
+  if let Some(server) = vetted_server(mode, server)? {
+    arguments.push("--server".to_string());
+    arguments.push(server.to_string());
   }
 
   Ok(arguments)
+}
+
+/// The server a run may name: only `join` names one, and only from [`SERVERS`].
+fn vetted_server<'a>(mode: &str, server: Option<&'a str>) -> Result<Option<&'a str>, String> {
+  match (mode == MODE_JOIN, server) {
+    (true, Some(server)) if !SERVERS.contains(&server) => Err(format!("unknown server: {server}")),
+    (false, Some(_)) => Err(format!("the {mode} mode takes no server")),
+    (_, server) => Ok(server),
+  }
 }
 
 /// Spawn one agent CLI run and start streaming it. Returns the run id.
@@ -185,6 +218,15 @@ pub fn start(
   server: Option<&str>,
 ) -> Result<String, String> {
   let flag = flag_for(mode)?;
+
+  #[cfg(unix)]
+  if let Some(verb) = seam_verb(mode) {
+    if payload.is_some() {
+      return Err(format!("the {mode} mode takes no payload"));
+    }
+    return start_seam_run(app, runs, mode, verb, vetted_server(mode, server)?);
+  }
+
   let root = paths::data_root();
   // the interpreter and the scripts are the agent's own files: the install
   // root, which is the data root on windows and its own place elsewhere.
@@ -253,11 +295,113 @@ pub fn start(
   Ok(run)
 }
 
+/// Ask the daemon for `verb` and forward its answer as this run's stdout,
+/// then one `exit` — the events a spawned helper produces, so the frontend
+/// cannot tell the two apart. A request the daemon never answered becomes the
+/// run's `error` line.
+#[cfg(unix)]
+fn start_seam_run(
+  app: &AppHandle,
+  runs: &Runs,
+  mode: &str,
+  verb: Verb,
+  server: Option<&str>,
+) -> Result<String, String> {
+  let run = format!("{mode}-{}", runs.next.fetch_add(1, Ordering::Relaxed));
+  runs
+    .seam
+    .lock()
+    .map_err(|_| "the agent run table is poisoned".to_string())?
+    .insert(run.clone(), SeamRun { verb, cancelled: false });
+
+  let (app, id, server) = (app.clone(), run.clone(), server.map(str::to_owned));
+  let spawned = thread::Builder::new()
+    .name("owlette-seam".into())
+    .spawn(move || {
+      let line = |line: String| AgentCliEvent {
+        run: id.clone(),
+        stream: "stdout".to_string(),
+        line: Some(line),
+        code: None,
+      };
+      let answer = Seam::new(paths::data_root()).ask(verb, server.as_deref(), &mut |text| {
+        emit(&app, line(text.to_string()))
+      });
+      let code = match answer {
+        Ok(terminal) => i32::from(seam::is_error(&terminal)),
+        Err(message) => {
+          log::warn!("the owlette service did not carry out {}: {message}", verb.name());
+          emit(&app, line(serde_json::json!({ "event": "error", "value": message }).to_string()));
+          1
+        }
+      };
+      if let Some(app_runs) = app.try_state::<Runs>() {
+        if let Ok(mut seam_runs) = app_runs.seam.lock() {
+          seam_runs.remove(&id);
+        }
+      }
+      emit(
+        &app,
+        AgentCliEvent {
+          run: id,
+          stream: "exit".to_string(),
+          line: None,
+          code: Some(code),
+        },
+      );
+    });
+  if let Err(error) = spawned {
+    if let Ok(mut seam_runs) = runs.seam.lock() {
+      seam_runs.remove(&run);
+    }
+    return Err(format!("could not ask the owlette service: {error}"));
+  }
+  Ok(run)
+}
+
+/// A seam run is the daemon's, not a child of this app to kill. A pairing is
+/// ended by asking for that too — the daemon then answers the pairing's own run
+/// with the error that ends it — and a leave or a reboot, once asked for, is
+/// not taken back. None when `run` is no seam run.
+#[cfg(unix)]
+fn cancel_seam_run(runs: &Runs, run: &str) -> Result<Option<bool>, String> {
+  let mut seam_runs = runs
+    .seam
+    .lock()
+    .map_err(|_| "the agent run table is poisoned".to_string())?;
+  let Some(entry) = seam_runs.get_mut(run) else {
+    return Ok(None);
+  };
+  if entry.verb != Verb::Pair || entry.cancelled {
+    return Ok(Some(false));
+  }
+  entry.cancelled = true;
+  drop(seam_runs);
+
+  // answered on the daemon's next tick; nothing here waits for it.
+  thread::Builder::new()
+    .name("owlette-seam-cancel".into())
+    .spawn(|| {
+      match Seam::new(paths::data_root()).ask(Verb::CancelPair, None, &mut |_| {}) {
+        Ok(terminal) if !seam::is_error(&terminal) => log::info!("pairing cancelled"),
+        Ok(terminal) => log::warn!("could not cancel the pairing: {}", seam::error_message(&terminal)),
+        Err(error) => log::warn!("could not cancel the pairing: {error}"),
+      }
+    })
+    .map_err(|error| format!("could not cancel the pairing: {error}"))?;
+  Ok(Some(true))
+}
+
 /// Kill a running child. `false` when the run had already finished.
 ///
 /// Cancelling a pairing run just abandons the device code; it expires
 /// server-side ten minutes later, so there is nothing to tell the server.
 pub fn cancel(runs: &Runs, run: &str) -> Result<bool, String> {
+  #[cfg(unix)]
+  if let Some(cancelled) = cancel_seam_run(runs, run)? {
+    return Ok(cancelled);
+  }
+
   let child = runs
     .children
     .lock()
@@ -280,7 +424,9 @@ pub fn cancel(runs: &Runs, run: &str) -> Result<bool, String> {
 }
 
 /// Kill everything still running. Called when the app exits, so a ten-minute
-/// pairing poll does not outlive the window that started it.
+/// pairing poll does not outlive the window that started it. A seam run is the
+/// daemon's and is left to it: a pairing still polling ends when its phrase
+/// expires.
 pub fn cancel_all(runs: &Runs) {
   let Ok(mut children) = runs.children.lock() else {
     return;
@@ -497,6 +643,40 @@ mod tests {
         "{mode} should refuse a server"
       );
     }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn off_windows_every_mode_that_needs_root_is_asked_of_the_daemon() {
+    let routed: Vec<(&str, Option<Verb>)> = MODES.iter().map(|(mode, _)| (*mode, seam_verb(mode))).collect();
+    assert_eq!(
+      routed,
+      [
+        ("join", Some(Verb::Pair)),
+        ("leave", Some(Verb::Leave)),
+        ("report-issue", None),
+        ("reboot-now", Some(Verb::Reboot)),
+        ("dismiss-reboot", Some(Verb::DismissReboot)),
+      ]
+    );
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn only_a_pairing_still_running_is_cancelled_through_the_daemon() {
+    let runs = Runs::default();
+    {
+      let mut seam_runs = runs.seam.lock().unwrap();
+      seam_runs.insert("leave-0".to_string(), SeamRun { verb: Verb::Leave, cancelled: false });
+      seam_runs.insert("join-1".to_string(), SeamRun { verb: Verb::Pair, cancelled: true });
+    }
+
+    // a leave asked for is not taken back, and a pairing is cancelled once.
+    assert_eq!(cancel_seam_run(&runs, "leave-0"), Ok(Some(false)));
+    assert_eq!(cancel_seam_run(&runs, "join-1"), Ok(Some(false)));
+    // anything else is a child of this app's, cancelled the way it always was.
+    assert_eq!(cancel_seam_run(&runs, "report-issue-2"), Ok(None));
+    assert_eq!(cancel(&runs, "report-issue-2"), Ok(false));
   }
 
   #[test]

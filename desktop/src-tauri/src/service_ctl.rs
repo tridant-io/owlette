@@ -195,13 +195,34 @@ pub fn stop() -> Result<ServiceCommandOutcome, String> {
 }
 
 /// linux: `systemctl restart`, which the same polkit rule allows and which
-/// starts a stopped unit too. the daemon ignores a `tmp/restart.flag` it did
-/// not write off windows, so this is the app's restart there. macos: refused
-/// like start and stop until the app asks through the daemon's `ipc/requests`
-/// seam.
+/// starts a stopped or wedged unit too — the cases a restart is for — where the
+/// daemon's request seam needs a daemon alive to read it. the daemon ignores a
+/// `tmp/restart.flag` it did not write off windows. macos has no such rule:
+/// the restart is a request the daemon carries out ([`crate::seam`]), audited
+/// and held to one per five minutes there.
 #[cfg(unix)]
 pub fn restart() -> Result<ServiceCommandOutcome, String> {
+  if cfg!(target_os = "macos") {
+    return restart_through_seam();
+  }
   control("restart", None)
+}
+
+#[cfg(unix)]
+fn restart_through_seam() -> Result<ServiceCommandOutcome, String> {
+  use crate::seam::{self, Seam, Verb};
+
+  let before = status(Path::new("/nonexistent"))
+    .map(|status| status.state)
+    .unwrap_or_else(|_| "unknown".to_string());
+  let terminal = Seam::new(crate::paths::data_root()).ask(Verb::Restart, None, &mut |_| {})?;
+  if seam::is_error(&terminal) {
+    return Err(seam::error_message(&terminal));
+  }
+  Ok(ServiceCommandOutcome {
+    method: "seam".to_string(),
+    state_before: before,
+  })
 }
 
 /// `already` is the state that makes the verb a no-op; a restart has none.

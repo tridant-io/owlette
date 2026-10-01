@@ -19,9 +19,9 @@
 //!   ([`crate::startup_link`]) rather than the service start type — no UAC
 //!   prompt, and it cannot leave the machine unsupervised.
 //! * "restart service" leaves this app running; single-instance means the
-//!   service's post-restart launch folds back into this process. macOS has no
-//!   such item: the agent is a system launchd job this app cannot restart
-//!   until it asks through the daemon's `ipc/requests` seam.
+//!   service's post-restart launch folds back into this process. On macOS the
+//!   agent is a system launchd job, so the restart is a request the daemon
+//!   carries out ([`crate::seam`]).
 //!
 //! Every menu action runs on its own thread: menu events arrive on the main
 //! thread and both the tray and window setters marshal back to it, so inline
@@ -1030,7 +1030,8 @@ fn degraded_notification(view: &TrayView) -> (&'static str, String) {
     ),
     _ => (
       "owlette — service stopped",
-      // macos has no restart item to point at; launchd brings the agent back.
+      // macos: the restart item is a request a stopped daemon cannot hear;
+      // launchd is what brings the agent back.
       if cfg!(target_os = "macos") {
         "the service is not running.\nmacos starts it again on its own — if it stays down, reinstall owlette."
       } else {
@@ -1101,12 +1102,13 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   if let Some(swoop) = &swoop {
     items.push(swoop);
   }
-  items.extend([&separator as &dyn tauri::menu::IsMenuItem<Wry>, &open]);
-  // macos: launchd owns the agent and this app cannot restart it (module note)
-  if !cfg!(target_os = "macos") {
-    items.push(&restart);
-  }
-  items.extend([&start_on_login as &dyn tauri::menu::IsMenuItem<Wry>, &exit]);
+  items.extend([
+    &separator as &dyn tauri::menu::IsMenuItem<Wry>,
+    &open,
+    &restart,
+    &start_on_login,
+    &exit,
+  ]);
 
   let menu = Menu::with_items(app, &items)?;
 
@@ -1214,9 +1216,9 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
   }
 }
 
-/// Off windows `systemctl restart`, which the packaged polkit rule allows the
-/// console user and which starts a stopped unit too — the daemon ignores a
-/// restart flag it did not write. Never reached on macos, which has no item.
+/// Off windows the daemon ignores a restart flag it did not write: linux runs
+/// `systemctl restart` under the packaged polkit rule, and macos asks the
+/// daemon through its request seam ([`service_ctl::restart`]).
 #[cfg(unix)]
 fn restart_service(app: &AppHandle) {
   match service_ctl::restart() {
