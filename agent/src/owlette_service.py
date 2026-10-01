@@ -4128,7 +4128,8 @@ class OwletteService:
             _surface_launch_failed(process_id)
             return None
 
-        if not os.path.isfile(exe_path):
+        # a mac .app is a directory; what must exist is the binary it names
+        if not os.path.isfile(shared_utils.resolve_exec_target(exe_path)):
             process_name = Util.get_process_name(process)
             logging.error(f"Cannot launch '{process_name}': Executable path does not exist: {exe_path}")
             last_info = self.last_started.get(process_id, {})
