@@ -17,6 +17,15 @@ describe('launchCopyFor', () => {
       filePickerTitle: 'select a file to open with this executable',
       missingTarget: 'the executable',
       missingTouchDesigner: 'TouchDesigner.exe',
+      pathName: 'exe path',
+      pathRequired: 'an exe path is required before a launch mode can be set',
+      folderRefusal: 'this folder is not a unity build (no <name>.exe beside a <name>_Data folder)',
+      dropHint:
+        'drag an app, a script, a touchdesigner project or a unity build folder anywhere in this window to add it',
+      priorityTooltip:
+        'windows cpu priority for this process — leave normal unless it must outrank everything else',
+      visibilityTooltip:
+        'window visibility on launch — hidden suppresses the console window (ideal for background scripts); apps that create their own windows stay visible',
     })
   })
 
@@ -32,6 +41,14 @@ describe('launchCopyFor', () => {
       filePickerTitle: 'select a file to open with this app',
       missingTarget: 'the app',
       missingTouchDesigner: 'TouchDesigner.app',
+      pathName: 'app path',
+      pathRequired: 'an app path is required before a launch mode can be set',
+      folderRefusal: 'this folder is not an app — drop the .app itself',
+      dropHint: 'drag an app or a touchdesigner project anywhere in this window to add it',
+      priorityTooltip:
+        'owlette sets cpu priority on windows only — on this machine the process runs at normal priority',
+      visibilityTooltip:
+        'owlette hides console windows on windows only — on this machine the process opens as it normally would',
     })
   })
 
@@ -47,12 +64,20 @@ describe('launchCopyFor', () => {
       filePickerTitle: 'select a file to open with this program',
       missingTarget: 'the program',
       missingTouchDesigner: 'touchdesigner',
+      pathName: 'program path',
+      pathRequired: 'a program path is required before a launch mode can be set',
+      folderRefusal: 'owlette does not know how to launch a folder',
+      dropHint: 'drag a python script anywhere in this window to add it',
+      priorityTooltip:
+        'owlette sets cpu priority on windows only — on this machine the process runs at normal priority',
+      visibilityTooltip:
+        'owlette hides console windows on windows only — on this machine the process opens as it normally would',
     })
   })
 
   it('never shows windows words off windows', () => {
     for (const os of ['macos', 'linux'] as const) {
-      expect(JSON.stringify(launchCopyFor(os))).not.toMatch(/\bexe\b|executable|\.bat|\.cmd/)
+      expect(JSON.stringify(launchCopyFor(os))).not.toMatch(/\bexe\b|executable|\.bat|\.cmd|unity build/)
     }
   })
 })

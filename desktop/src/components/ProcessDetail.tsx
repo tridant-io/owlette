@@ -737,10 +737,7 @@ export function ProcessDetail({
                       priority
                     </Label>
                   </TooltipTrigger>
-                  <TooltipContent>
-                    windows cpu priority for this process — leave normal unless it must outrank
-                    everything else
-                  </TooltipContent>
+                  <TooltipContent>{copy.priorityTooltip}</TooltipContent>
                 </Tooltip>
                 <Select
                   value={priorityOf(process)}
@@ -764,10 +761,7 @@ export function ProcessDetail({
                       visibility
                     </Label>
                   </TooltipTrigger>
-                  <TooltipContent>
-                    window visibility on launch — hidden suppresses the console window (ideal for
-                    background scripts); apps that create their own windows stay visible
-                  </TooltipContent>
+                  <TooltipContent>{copy.visibilityTooltip}</TooltipContent>
                 </Tooltip>
                 <Select
                   value={visibilityOf(process)}

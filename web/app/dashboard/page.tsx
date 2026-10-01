@@ -585,7 +585,7 @@ export default function DashboardPage() {
     });
   };
 
-  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath);
+  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath, launchCopyOf);
 
   const handleSaveProcess = async () => {
     if (!editProcessForm.name || !editProcessForm.name.trim()) {

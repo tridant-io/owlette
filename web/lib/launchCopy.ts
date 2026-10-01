@@ -10,12 +10,14 @@ export interface LaunchCopy {
   /** the field's label; the editor's toasts name the field with it too */
   label: string;
   placeholder: string;
+  /** the launch target itself, for the toast when an agent cannot find it */
+  target: string;
 }
 
 const COPY: Record<MachineOsFamily, LaunchCopy> = {
-  windows: { label: 'executable path', placeholder: 'C:\\Program Files\\...\\app.exe' },
-  macos: { label: 'app path', placeholder: '/Applications/YourApp.app' },
-  linux: { label: 'program path', placeholder: '/usr/bin/your-program' },
+  windows: { label: 'executable path', placeholder: 'C:\\Program Files\\...\\app.exe', target: 'executable' },
+  macos: { label: 'app path', placeholder: '/Applications/YourApp.app', target: 'app' },
+  linux: { label: 'program path', placeholder: '/usr/bin/your-program', target: 'program' },
 };
 
 /** an agent that reports no `osFamily` is a windows one */

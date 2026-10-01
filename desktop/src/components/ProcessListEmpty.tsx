@@ -1,4 +1,5 @@
 import { FilePlus2 } from 'lucide-react'
+import { launchCopy } from '@/lib/launchCopy'
 import { cn } from '@/lib/utils'
 
 interface ProcessListEmptyProps {
@@ -31,10 +32,7 @@ export function ProcessListEmpty({ dragOver = false, className }: ProcessListEmp
         className={cn('size-6 text-muted-foreground', dragOver && 'text-primary')}
       />
       <p className="text-sm font-medium">no processes yet</p>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        drag an app, a script, a touchdesigner project or a unity build folder anywhere in this
-        window to add it
-      </p>
+      <p className="text-xs leading-relaxed text-muted-foreground">{launchCopy().dropHint}</p>
       <p className="text-xs text-muted-foreground/70">or use add process, above</p>
     </div>
   )
