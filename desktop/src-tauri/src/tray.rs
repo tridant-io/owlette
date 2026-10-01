@@ -58,15 +58,21 @@ const ID_EXIT: &str = "exit";
 
 /// 64 px downsamples of `agent/icons/*.png`. Embedded rather than read from
 /// `{app}\agent\icons` so the app still has an icon with no agent tree.
+#[cfg(not(target_os = "macos"))]
 const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/normal.png");
+#[cfg(not(target_os = "macos"))]
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/disconnected.png");
+#[cfg(not(target_os = "macos"))]
 const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/error.png");
 // macos tints a template (black on alpha) to match the menubar; the eye and the
-// closed eye are templates, the error orb keeps its red so that one state shouts.
+// closed eye are templates. error is the same eye glyph in flat system red, not a
+// template, so that one state shouts without breaking the menubar's style.
 #[cfg(target_os = "macos")]
-const ICON_TEMPLATE_NORMAL: &[u8] = include_bytes!("../icons/tray/template-normal.png");
+const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/template-normal.png");
 #[cfg(target_os = "macos")]
-const ICON_TEMPLATE_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/template-disconnected.png");
+const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/template-disconnected.png");
+#[cfg(target_os = "macos")]
+const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/glyph-error.png");
 
 /// Monitor granularity; the cadences below are multiples of it, so one thread
 /// drives both the status poll and the error flash.
@@ -738,23 +744,11 @@ fn set_tooltip(app: &AppHandle, text: &str) -> Result<(), String> {
 fn icon_for(code: StatusCode) -> Image<'static> {
   // Bytes are compiled in and decoded by this file's tests: a failure here is a
   // packaging bug, not a runtime condition.
-  Image::from_bytes(icon_bytes_for(code)).expect("embedded tray icon should decode")
-}
-
-/// The template glyph on macos for every state but error; the colour orbs
-/// everywhere else (a windows tray has no template notion).
-fn icon_bytes_for(code: StatusCode) -> &'static [u8] {
-  #[cfg(target_os = "macos")]
-  match code {
-    StatusCode::Normal => return ICON_TEMPLATE_NORMAL,
-    StatusCode::Warning => return ICON_TEMPLATE_DISCONNECTED,
-    StatusCode::Error => {}
-  }
-  code.icon_bytes()
+  Image::from_bytes(code.icon_bytes()).expect("embedded tray icon should decode")
 }
 
 /// Whether macos should tint the icon to the menubar: the eye and the closed
-/// eye blend in, the error orb keeps its red.
+/// eye blend in, the red error glyph keeps its colour.
 fn icon_is_template(code: StatusCode) -> bool {
   cfg!(target_os = "macos") && !matches!(code, StatusCode::Error)
 }
@@ -1709,9 +1703,11 @@ mod tests {
 
   #[test]
   fn every_embedded_icon_decodes() {
+    // 36 px is the menubar's 18 pt at 2x; the orbs are 64 px
+    let edge = if cfg!(target_os = "macos") { 36 } else { 64 };
     for code in [StatusCode::Normal, StatusCode::Warning, StatusCode::Error] {
       let image = Image::from_bytes(code.icon_bytes()).expect("icon should decode");
-      assert_eq!((image.width(), image.height()), (64, 64));
+      assert_eq!((image.width(), image.height()), (edge, edge));
     }
   }
 
