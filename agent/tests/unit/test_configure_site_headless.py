@@ -19,6 +19,7 @@ import stat
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -994,14 +995,24 @@ class TestRequestSeam:
         monkeypatch.setattr(configure_site, '_pairing_child', None)
         return tmp_path
 
-    def _request(self, seam, verb, nonce, *, name='req', mode=0o600):
+    def _request(self, seam, verb, nonce, *, name='req', mode=0o600, **fields):
         path = seam / 'ipc' / 'requests' / f'{name}.json'
-        path.write_text(json.dumps({'verb': verb, 'nonce': nonce}))
+        path.write_text(json.dumps({'verb': verb, 'nonce': nonce, **fields}))
         os.chmod(path, mode)
         return path
 
     def _reply(self, seam, name='req'):
         return seam / 'ipc' / 'requests' / f'{name}.result'
+
+    def _answer(self, seam, name='req'):
+        """Every line of one answer, parsed."""
+        path = self._reply(seam, name)
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    def _events(self, seam, name='req'):
+        return [line['event'] for line in self._answer(seam, name)]
 
     def _audit(self, seam):
         path = seam / 'logs' / 'privileged_requests.log'
@@ -1040,14 +1051,21 @@ class TestRequestSeam:
 
     def test_a_well_formed_restart_is_executed_and_audited(self, seam, monkeypatch):
         controls = []
-        monkeypatch.setattr(configure_site, '_service_control',
-                            lambda verb: controls.append(verb) or True)
+
+        def control(verb):
+            # A restart that works ends this process before it can write
+            # another line, so the app's terminal event is already there.
+            controls.append((verb, self._events(seam)))
+            return True
+
+        monkeypatch.setattr(configure_site, '_service_control', control)
         request = self._request(seam, 'restart', configure_site._request_nonce())
 
         rows = configure_site.drain_privileged_requests()
 
-        assert controls == ['restart']
+        assert controls == [('restart', ['status', 'done'])]
         assert [(row['verb'], row['outcome']) for row in rows] == [('restart', 'executed')]
+        assert rows[0]['uid'] == os.getuid()
         assert self._audit(seam) == rows
         assert not request.exists()
         assert stat.S_IMODE(self._reply(seam).stat().st_mode) == 0o640
@@ -1061,9 +1079,9 @@ class TestRequestSeam:
         assert [row['outcome'] for row in rows] == ['failed']
         assert [row['outcome'] for row in self._audit(seam)] == ['executed', 'failed']
         # The answer is a line protocol appended to, not a file overwritten:
-        # the status the app was already rendering survives the outcome.
+        # what the app was already shown survives the outcome.
         answer = self._reply(seam).read_text().splitlines()
-        assert [json.loads(line)['event'] for line in answer] == ['status', 'error']
+        assert [json.loads(line)['event'] for line in answer] == ['status', 'done', 'error']
         assert 'could not restart the service' in answer[-1]
 
     def test_a_pair_request_spawns_the_headless_run_into_the_answer(
@@ -1137,6 +1155,329 @@ class TestRequestSeam:
             ('reboot', 1, configure_site._REBOOT_MESSAGE),
         ]
         assert rows[0]['outcome'] == 'executed'
+        # The shutdown is scheduled rather than immediate, so there is time to
+        # tell the app it was.
+        assert self._events(seam) == ['status', 'done']
+
+    def test_a_pair_request_may_name_the_server_it_pairs_against(self, seam, monkeypatch):
+        # The installer opens the app with `--pair --server <dev|prod>`; off
+        # Windows that choice reaches the pairing run through the request.
+        spawned = {}
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda argv, **kwargs: spawned.update(argv=argv) or MagicMock())
+        self._request(seam, 'pair', configure_site._request_nonce(), server='dev')
+
+        assert configure_site.drain_privileged_requests()[0]['outcome'] == 'executed'
+        assert spawned['argv'][2:] == [
+            '--json-progress', '--no-service-restart', '--server', 'dev']
+
+    @pytest.mark.parametrize('verb, server', [
+        ('pair', 'staging'),
+        ('pair', '--leave'),
+        ('pair', ['dev']),
+        ('restart', 'dev'),
+    ])
+    def test_a_server_that_is_not_one_of_the_two_never_reaches_an_argv(
+            self, seam, monkeypatch, verb, server):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda argv, **kwargs: pytest.fail(f'spawned {argv}'))
+        monkeypatch.setattr(configure_site, '_service_control',
+                            lambda verb: pytest.fail('ran a request it should have refused'))
+        request = self._request(seam, verb, configure_site._request_nonce(), server=server)
+
+        assert configure_site.drain_privileged_requests() == []
+        assert not request.exists()
+        assert self._events(seam) == ['error']
+
+    def test_cancelling_a_pairing_ends_it_and_answers_the_run_it_ended(
+            self, seam, monkeypatch):
+        # On Windows the app's cancel kills its own pairing child. Off it the
+        # child is root's, so the cancel is a request too — without one a
+        # cancelled phrase stayed live, and the next join was refused as
+        # already pairing for the ten minutes it polled.
+        child = MagicMock()
+        child.poll.return_value = None
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda argv, **kwargs: child)
+        self._request(seam, 'pair', configure_site._request_nonce(), name='pair')
+        configure_site.drain_privileged_requests()
+
+        self._request(seam, 'cancel_pair', configure_site._request_nonce(), name='cancel')
+        rows = configure_site.drain_privileged_requests()
+
+        child.terminate.assert_called_once()
+        assert rows[0]['outcome'] == 'executed'
+        assert self._answer(seam, 'pair')[-1] == {
+            'event': 'error', 'value': 'pairing was cancelled'}
+        assert self._answer(seam, 'cancel') == [
+            {'event': 'done', 'value': {'cancelled': True}}]
+
+    def test_cancelling_with_no_pairing_in_flight_says_so(self, seam):
+        self._request(seam, 'cancel_pair', configure_site._request_nonce())
+
+        configure_site.drain_privileged_requests()
+
+        assert self._answer(seam) == [{'event': 'done', 'value': {'cancelled': False}}]
+
+    def test_a_dismiss_reboot_request_runs_the_dismissal_into_the_answer(
+            self, seam, monkeypatch):
+        # Clearing the cloud flag reads the token store, which off Windows is
+        # root's alone, so the app's own `--dismiss-reboot` could never do it.
+        spawned = {}
+
+        def fake_popen(argv, **kwargs):
+            spawned['argv'] = argv
+            os.write(kwargs['stdout'], b'{"event": "done", "value": {"cleared": true}}\n')
+            return MagicMock()
+
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen', fake_popen)
+        self._request(seam, 'dismiss_reboot', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert rows[0]['outcome'] == 'executed'
+        assert spawned['argv'][1:] == [
+            shared_utils.get_path('configure_site.py'), '--dismiss-reboot']
+        assert self._events(seam) == ['done']
+
+    # leave
+
+    LEAVE_STEPS = ('disable', 'cache', 'detach', 'deregister', 'tokens', 'machine_id')
+
+    @pytest.fixture
+    def paired(self, seam, monkeypatch):
+        """A paired machine in the scratch tree, its cloud and credentials faked.
+
+        `trail` records what reached the cloud, the token store and the service,
+        in order, with the local state each found — the order is the contract.
+        """
+        import secure_storage
+
+        config = seam / 'config' / 'config.json'
+        config.parent.mkdir()
+        config.write_text(json.dumps(TestLeaveSite.CONFIG))
+        monkeypatch.setattr(shared_utils, 'CONFIG_PATH', str(config))
+        (seam / 'cache').mkdir()
+        (seam / 'cache' / 'firebase_cache.json').write_text('{}')
+        (seam / 'config' / 'machine_id').write_text('TEC-MBA.local')
+        monkeypatch.setattr(shared_utils, '_machine_id', None)
+        monkeypatch.setattr(configure_site, 'LEAVE_DETACH_POLL_SECONDS', 0.01)
+
+        state = SimpleNamespace(trail=[], resolved=[], detaches=True, tokens=True)
+
+        def detached():
+            firebase = json.loads(config.read_text())['firebase']
+            cache = (seam / 'cache' / 'firebase_cache.json').exists()
+            state.trail.append(('detached', firebase['enabled'], cache))
+            return state.detaches
+
+        def resolve(project_id, api_base, site_id):
+            state.resolved.append((project_id, api_base, site_id))
+            return state.client, state.document
+
+        def clear_tokens():
+            state.trail.append(('cleared', (seam / 'config' / 'machine_id').exists()))
+            state.tokens = False
+            return True
+
+        def control(verb):
+            state.trail.append((verb, self._events(seam)))
+            return True
+
+        state.client = MagicMock()
+        state.document = MagicMock()
+        state.document.delete.side_effect = lambda: state.trail.append(
+            ('deleted', state.tokens))
+        state.storage = SimpleNamespace(clear_tokens=clear_tokens)
+        state.detached = detached
+        state.config = config
+        monkeypatch.setattr(configure_site, '_machine_document', resolve)
+        monkeypatch.setattr(secure_storage, 'get_storage', lambda: state.storage)
+        monkeypatch.setattr(configure_site, '_service_control', control)
+        return state
+
+    def _ran(self, seam, paired):
+        """Which leave steps, and whether the restart, went through."""
+        reached = {entry[0] for entry in paired.trail}
+        ran = [step for step, mark in (('detach', 'detached'), ('deregister', 'deleted'),
+                                       ('tokens', 'cleared')) if mark in reached]
+        if list((seam / 'config').glob('machine_id.left-*')):
+            ran.append('machine_id')
+        if 'restart' in reached:
+            ran.append('restart')
+        return ran
+
+    def test_a_leave_unpairs_in_an_order_that_never_leaves_a_half_state(
+            self, seam, paired):
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert [(row['verb'], row['outcome']) for row in rows] == [('leave', 'executed')]
+        # Config off and the cache gone before the daemon's own cloud client is
+        # waited out; that client gone before the document is deleted, or its
+        # next heartbeat writes the row back; the document deleted while the
+        # credentials still work; the restart only once the app has its answer.
+        assert paired.trail[:3] == [
+            ('detached', False, False),
+            ('deleted', True),
+            ('cleared', True),
+        ]
+        assert paired.trail[3] == ('restart', ['status'] * 7 + ['done'])
+        assert len(paired.trail) == 4
+        assert [line['value'] for line in self._answer(seam)
+                if line['event'] == 'status'] == [
+            'disabling cloud sync',
+            'removing the cached cloud config',
+            'stopping the cloud connection',
+            'deregistering this machine',
+            'clearing the credentials',
+            'retiring the machine id',
+            'restarting the service',
+        ]
+        assert self._answer(seam)[-1] == {
+            'event': 'done', 'value': {'siteId': 'default_site', 'deregistered': True}}
+        # The site captured before the config was blanked is the one deleted.
+        assert paired.resolved == [
+            ('owlette-dev-3838a', 'https://dev.owlette.app/api', 'default_site')]
+        paired.client.close.assert_called_once()
+        firebase = json.loads(paired.config.read_text())['firebase']
+        assert (firebase['enabled'], firebase['site_id']) == (False, '')
+
+    def test_the_machine_id_is_moved_aside_never_deleted(self, seam, paired):
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        configure_site.drain_privileged_requests(paired.detached)
+
+        assert not (seam / 'config' / 'machine_id').exists()
+        assert [path.read_text() for path in
+                (seam / 'config').glob('machine_id.left-*')] == ['TEC-MBA.local']
+
+    def test_every_leave_is_audited_with_the_uid_that_asked(self, seam, paired):
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert self._audit(seam) == rows
+        assert [(row['verb'], row['outcome'], row['uid']) for row in rows] == [
+            ('leave', 'executed', os.getuid())]
+
+    @pytest.mark.parametrize('step, failure', [
+        ('disable', 'could not disable cloud sync'),
+        ('cache', 'could not remove the cached cloud config'),
+        ('detach', 'the cloud connection did not stop'),
+        ('deregister', 'could not deregister this machine'),
+        ('tokens', 'could not clear the credentials'),
+        ('machine_id', 'could not retire the machine id'),
+    ])
+    def test_a_step_that_fails_stops_the_leave_there_and_says_which(
+            self, seam, paired, monkeypatch, step, failure):
+        if step == 'disable':
+            # write_json_to_file logs a failed write and returns, so the step
+            # has to read its own write back to know.
+            monkeypatch.setattr(shared_utils, 'save_config', lambda config=None: None)
+        elif step == 'cache':
+            cache = seam / 'cache' / 'firebase_cache.json'
+            cache.unlink()
+            cache.mkdir()
+        elif step == 'detach':
+            monkeypatch.setattr(configure_site, 'LEAVE_DETACH_TIMEOUT_SECONDS', 0.05)
+            paired.detaches = False
+        elif step == 'deregister':
+            paired.document.delete.side_effect = RuntimeError('403 Forbidden')
+        elif step == 'tokens':
+            paired.storage.clear_tokens = lambda: False
+        else:
+            monkeypatch.setattr(shared_utils, 'retire_machine_id',
+                                MagicMock(side_effect=PermissionError(13, 'Permission denied')))
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        answer = self._answer(seam)
+        assert answer[-1]['event'] == 'error'
+        assert answer[-1]['value'].startswith(f'{failure}: ')
+        assert [row['outcome'] for row in self._audit(seam)] == ['executed', 'failed']
+        assert rows[-1]['detail'].startswith(f'{failure}: ')
+        later = set(self.LEAVE_STEPS[self.LEAVE_STEPS.index(step) + 1:]) | {'restart'}
+        assert not later & set(self._ran(seam, paired))
+        if step != 'machine_id':
+            assert (seam / 'config' / 'machine_id').read_text() == 'TEC-MBA.local'
+
+    def test_leaving_an_unpaired_machine_is_refused_before_anything_is_touched(
+            self, seam, paired):
+        paired.config.write_text(json.dumps({'firebase': {'enabled': False, 'site_id': ''}}))
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        configure_site.drain_privileged_requests(paired.detached)
+
+        assert self._answer(seam) == [
+            {'event': 'error', 'value': 'this machine is not paired with a site'}]
+        assert paired.trail == []
+        assert (seam / 'cache' / 'firebase_cache.json').exists()
+
+    def test_a_leave_is_refused_while_a_pairing_is_polling(self, seam, paired, monkeypatch):
+        # The pairing would write the token store and the config the leave has
+        # just cleared, the moment someone approved its phrase.
+        child = MagicMock()
+        child.poll.return_value = None
+        monkeypatch.setattr(configure_site, '_pairing_child', child)
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert rows[0]['outcome'] == 'in_progress'
+        assert 'pairing' in self._answer(seam)[-1]['value']
+        assert json.loads(paired.config.read_text())['firebase']['enabled'] is True
+
+    def test_one_leave_per_nonce(self, seam, paired):
+        nonce = configure_site._request_nonce()
+        self._request(seam, 'leave', nonce, name='a')
+        self._request(seam, 'leave', nonce, name='b')
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert [(row['verb'], row['outcome']) for row in rows] == [('leave', 'executed')]
+        assert 'nonce' in self._answer(seam, 'b')[-1]['value']
+
+    def test_a_drain_with_nothing_to_wait_the_cloud_client_out_goes_no_further(
+            self, seam, paired):
+        # Only the service can say its own client has wound down; a drain run
+        # without that answer must not delete a document a live client is
+        # about to write back.
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        configure_site.drain_privileged_requests()
+
+        assert self._answer(seam)[-1]['value'].startswith('the cloud connection did not stop')
+        assert self._ran(seam, paired) == []
+
+    @pytest.mark.parametrize('verb', ['leave', 'dismiss_reboot', 'cancel_pair'])
+    def test_the_new_verbs_answer_to_the_same_three_rules(
+            self, seam, monkeypatch, verb):
+        monkeypatch.setattr(configure_site, '_execute_request',
+                            lambda *args, **kwargs: pytest.fail(f'ran a {verb} it should refuse'))
+        stale = self._request(seam, verb, 'a-nonce-from-an-earlier-session', name='stale')
+        loose = self._request(seam, verb, configure_site._request_nonce(), name='loose',
+                              mode=0o660)
+
+        assert configure_site.drain_privileged_requests() == []
+        assert not stale.exists() and not loose.exists()
+
+        other = _other_account()
+        if other is None:
+            pytest.skip('no second local account to stand in for another user')
+        monkeypatch.setattr(configure_site.osadapter, 'console_user', lambda: other)
+        foreign = self._request(seam, verb, configure_site._request_nonce(), name='foreign')
+
+        assert configure_site.drain_privileged_requests() == []
+        assert not foreign.exists()
 
     # what is refused
 
@@ -1368,16 +1709,16 @@ class TestRequestSeam:
 
     # the negative control
 
-    def test_a_hand_written_leave_request_is_refused(self, seam, monkeypatch, caplog):
-        monkeypatch.setattr(configure_site, 'run_leave_site',
-                            lambda: pytest.fail('the seam deregistered this machine'))
-        request = self._request(seam, 'leave', configure_site._request_nonce())
+    def test_a_verb_the_daemon_does_not_execute_is_refused(self, seam, monkeypatch, caplog):
+        monkeypatch.setattr(configure_site, '_execute_request',
+                            lambda *args, **kwargs: pytest.fail('ran a verb nobody defined'))
+        request = self._request(seam, 'uninstall', configure_site._request_nonce())
 
         with caplog.at_level(logging.WARNING):
             assert configure_site.drain_privileged_requests() == []
 
         assert not request.exists()
-        assert "asks for 'leave'" in caplog.text
+        assert "asks for 'uninstall'" in caplog.text
 
 
     def test_a_fifo_at_the_answer_does_not_wedge_the_drain(self, seam):
@@ -1441,11 +1782,12 @@ class TestRequestSeam:
 
 
 class TestRequestSeamVerbs:
-    def test_leave_is_not_a_verb_the_daemon_executes(self):
-        """The negative control for the seam: deregistration stays an
-        uninstall-time root operation (`prerm` / `uninstall.sh`) and a dashboard
-        command. Adding a `leave` handler fails here first."""
-        assert set(configure_site.REQUEST_VERBS) == {'pair', 'restart', 'reboot'}
+    def test_the_verbs_are_exactly_what_the_app_may_ask_root_for(self):
+        """The negative control for the seam: what the console user can make
+        root do. Widening it fails here first, so a new verb is a decision
+        rather than a drift."""
+        assert set(configure_site.REQUEST_VERBS) == {
+            'pair', 'cancel_pair', 'restart', 'reboot', 'leave', 'dismiss_reboot'}
 
     @pytest.mark.skipif(sys.platform != 'win32',
                         reason='the Windows half of the seam gate')

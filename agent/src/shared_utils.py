@@ -434,6 +434,25 @@ def get_machine_id():
         return machine_id
 
 
+def retire_machine_id():
+    """Move config/machine_id aside so the next pairing seeds a fresh identity.
+
+    The identity belongs to the document a leave deletes. Renamed to
+    `machine_id.left-<epoch>` rather than removed, so a support case can still
+    read what the machine was known as; the cached identity goes with it, or
+    this process would keep answering with the old one until it restarted. No
+    persisted identity is nothing to move. Raises OSError when the rename fails.
+    """
+    global _machine_id
+    path = get_data_path(MACHINE_ID_FILE)
+    with _machine_id_lock:
+        try:
+            os.rename(path, f"{path}.left-{int(time.time())}")
+        except FileNotFoundError:
+            pass
+        _machine_id = None
+
+
 def _read_machine_id_file(path):
     """The persisted id, or None when the file is missing or empty.
 

@@ -122,6 +122,33 @@ def test_a_mac_already_registered_with_the_suffix_keeps_its_identity(data_root, 
     assert shared_utils.get_machine_id() == 'TEC-MBA.local'
 
 
+def test_a_leave_moves_the_identity_aside_so_the_next_pairing_seeds_a_fresh_one(
+        data_root, monkeypatch):
+    """The identity belongs to the document a leave deletes. Moved aside rather
+    than deleted, so a support case can still read what the machine was — and a
+    Mac registered as `Name.local` comes back without the suffix."""
+    (data_root / 'config').mkdir()
+    (data_root / 'config' / 'machine_id').write_text('TEC-MBA.local', encoding='utf-8')
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'darwin')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'TEC-MBA.local')
+    assert shared_utils.get_machine_id() == 'TEC-MBA.local'
+
+    shared_utils.retire_machine_id()
+
+    retired = list((data_root / 'config').glob('machine_id.left-*'))
+    assert [path.read_text(encoding='utf-8') for path in retired] == ['TEC-MBA.local']
+    assert retired[0].name[len('machine_id.left-'):].isdigit()
+    # the cached identity went with the file, or this process would keep
+    # answering with the old one until it restarted.
+    assert shared_utils.get_machine_id() == 'TEC-MBA'
+
+
+def test_retiring_an_identity_that_was_never_persisted_is_not_an_error(data_root):
+    shared_utils.retire_machine_id()
+
+    assert not (data_root / 'config' / 'machine_id').exists()
+
+
 def test_an_existing_identity_is_read_rather_than_reseeded(data_root, monkeypatch):
     """The upgrade path: a machine already registered keeps the document it has."""
     (data_root / 'config').mkdir()
