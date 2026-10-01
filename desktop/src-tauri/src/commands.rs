@@ -141,6 +141,14 @@ pub fn service_stop() -> Result<ServiceCommandOutcome, String> {
   service_ctl::stop()
 }
 
+/// Restart the agent off windows (`systemctl restart` on linux; macos refuses).
+/// Windows asks the service itself through `tmp/restart.flag` instead.
+#[cfg(unix)]
+#[tauri::command(async)]
+pub fn service_restart() -> Result<ServiceCommandOutcome, String> {
+  service_ctl::restart()
+}
+
 /// Close `pid` gracefully, then terminate it — but only if it is still running
 /// `expected_exe`.
 #[tauri::command(async)]

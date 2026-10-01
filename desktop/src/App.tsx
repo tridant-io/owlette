@@ -15,7 +15,7 @@ import { SidebarDivider } from '@/components/SidebarDivider'
 import { StatusFooter } from '@/components/StatusFooter'
 import { WindowControls } from '@/components/WindowControls'
 import { PermissionBanner } from '@/components/PermissionBanner'
-import { IS_MAC } from '@/lib/platform'
+import { IS_LINUX, IS_MAC } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import { InlineNotice } from '@/components/ui/inline-notice'
 import { Toaster } from '@/components/ui/sonner'
@@ -48,6 +48,7 @@ import {
   openScreenRecordingSettings,
   requestAccessibility,
   screenRecordingGranted,
+  serviceRestart,
   startupLinkEnabled,
   writeOwletteJson,
 } from '@/lib/ipc'
@@ -490,14 +491,24 @@ function App() {
                 toast.error('could not change start on login', { description: message(cause) }),
               )
             }}
-            onRestartService={() => {
-              // The service polls for this file each loop, exits 42, and the host
-              // relaunches it. No elevation, no dashboard flap.
-              void writeOwletteJson('tmp/restart.flag', {}).then(
-                () => toast.success('restarting the owlette service'),
-                (cause: unknown) => toast.error('could not restart the service', { description: message(cause) }),
-              )
-            }}
+            // macos: launchd runs the agent and this app has no way to restart it
+            // yet, so the row is left out rather than offered and refused.
+            onRestartService={
+              IS_MAC
+                ? undefined
+                : () => {
+                    // Windows: the service polls for this file each loop, exits 42,
+                    // and the host relaunches it. Linux: the daemon ignores a flag
+                    // it did not write, so it is the polkit rule's `systemctl
+                    // restart`. No elevation either way, no dashboard flap.
+                    const restart = IS_LINUX ? serviceRestart() : writeOwletteJson('tmp/restart.flag', {})
+                    void restart.then(
+                      () => toast.success('restarting the owlette service'),
+                      (cause: unknown) =>
+                        toast.error('could not restart the service', { description: message(cause) }),
+                    )
+                  }
+            }
           />
           {!IS_MAC && <WindowControls />}
         </header>
@@ -610,7 +621,8 @@ function App() {
           config={config.config}
           hostname={host}
           starting={health.starting}
-          onStart={() => void health.start()}
+          // macos: launchd keeps the agent running; this app cannot start it
+          onStart={IS_MAC ? undefined : () => void health.start()}
           onJoin={() => setMenuDialog('join')}
         />
 
@@ -635,6 +647,7 @@ function App() {
           onClose={() => setMenuDialog(null)}
           onLeft={handleLeft}
           onHold={health.hold}
+          dashboardOnly={IS_MAC || IS_LINUX}
         />
         <ReportIssueDialog open={menuDialog === 'report'} onClose={() => setMenuDialog(null)} />
         <RestartCountdown open={restartPrompt.armed} onClose={restartPrompt.dismiss} />

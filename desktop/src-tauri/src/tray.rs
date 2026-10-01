@@ -19,7 +19,9 @@
 //!   ([`crate::startup_link`]) rather than the service start type — no UAC
 //!   prompt, and it cannot leave the machine unsupervised.
 //! * "restart service" leaves this app running; single-instance means the
-//!   service's post-restart launch folds back into this process.
+//!   service's post-restart launch folds back into this process. macOS has no
+//!   such item: the agent is a system launchd job this app cannot restart
+//!   until it asks through the daemon's `ipc/requests` seam.
 //!
 //! Every menu action runs on its own thread: menu events arrive on the main
 //! thread and both the tray and window setters marshal back to it, so inline
@@ -39,9 +41,9 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::paths::{
-  self, AGENT_VERSION_REL, GUI_PID_REL, RESTART_FLAG_REL, SERVICE_STATUS_REL, TRAY_PID_REL,
-};
+#[cfg(windows)]
+use crate::paths::RESTART_FLAG_REL;
+use crate::paths::{self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL};
 use crate::pid_file;
 use crate::service_ctl;
 use crate::startup_link;
@@ -1028,8 +1030,13 @@ fn degraded_notification(view: &TrayView) -> (&'static str, String) {
     ),
     _ => (
       "owlette — service stopped",
-      "the service is not running.\nclick 'restart service' to start it again."
-        .to_string(),
+      // macos has no restart item to point at; launchd brings the agent back.
+      if cfg!(target_os = "macos") {
+        "the service is not running.\nmacos starts it again on its own — if it stays down, reinstall owlette."
+      } else {
+        "the service is not running.\nclick 'restart service' to start it again."
+      }
+      .to_string(),
     ),
   }
 }
@@ -1094,13 +1101,12 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   if let Some(swoop) = &swoop {
     items.push(swoop);
   }
-  items.extend([
-    &separator as &dyn tauri::menu::IsMenuItem<Wry>,
-    &open,
-    &restart,
-    &start_on_login,
-    &exit,
-  ]);
+  items.extend([&separator as &dyn tauri::menu::IsMenuItem<Wry>, &open]);
+  // macos: launchd owns the agent and this app cannot restart it (module note)
+  if !cfg!(target_os = "macos") {
+    items.push(&restart);
+  }
+  items.extend([&start_on_login as &dyn tauri::menu::IsMenuItem<Wry>, &exit]);
 
   let menu = Menu::with_items(app, &items)?;
 
@@ -1208,10 +1214,32 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
   }
 }
 
+/// Off windows `systemctl restart`, which the packaged polkit rule allows the
+/// console user and which starts a stopped unit too — the daemon ignores a
+/// restart flag it did not write. Never reached on macos, which has no item.
+#[cfg(unix)]
+fn restart_service(app: &AppHandle) {
+  match service_ctl::restart() {
+    Ok(outcome) => {
+      log::info!("service restart issued ({})", outcome.method);
+      notify(
+        app,
+        "owlette — restarting",
+        "restarting service — will return momentarily".to_string(),
+      );
+    }
+    Err(error) => {
+      log::error!("could not restart the service: {error}");
+      notify(app, "restart failed", error);
+    }
+  }
+}
+
 /// Restart the service without a UAC prompt: a running agent is asked to exit
 /// 42 via `tmp/restart.flag`, which owlette-host turns into a relaunch. A
 /// stopped service has no loop to read the flag, so it is started directly —
 /// the one path here that can raise an elevation prompt.
+#[cfg(windows)]
 fn restart_service(app: &AppHandle) {
   let root = paths::data_root();
   let running = service_ctl::status(&root.join(SERVICE_STATUS_REL))

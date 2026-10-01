@@ -13,13 +13,13 @@ vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => toastError(..
 
 const { AppMenu, DOCS_URL, LOGS_DIR } = await import('./AppMenu')
 
-function setup(paired: boolean) {
+function setup(paired: boolean, restartable = true) {
   const props = {
     paired,
     onJoinSite: vi.fn(),
     onLeaveSite: vi.fn(),
     onReportIssue: vi.fn(),
-    onRestartService: vi.fn(),
+    onRestartService: restartable ? vi.fn() : undefined,
     startOnLogin: true,
     onStartOnLoginChange: vi.fn(),
   }
@@ -52,6 +52,14 @@ describe('AppMenu', () => {
       'restart service',
       'reload window',
     ])
+  })
+
+  it('leaves out restart service where the app has no way to restart it', async () => {
+    setup(true, false)
+
+    const items = await screen.findAllByRole('menuitem')
+    expect(items.map((item) => item.textContent)).not.toContain('restart service')
+    expect(screen.queryByTestId('menu-restart-service')).toBeNull()
   })
 
   it('offers joining when the machine has no site, and leaving when it has one', async () => {

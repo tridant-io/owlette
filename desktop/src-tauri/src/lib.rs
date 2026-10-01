@@ -94,6 +94,8 @@ pub fn run() {
       commands::service_status,
       commands::service_start,
       commands::service_stop,
+      #[cfg(unix)]
+      commands::service_restart,
       commands::terminate_pid,
       commands::agent_cli_start,
       commands::agent_cli_cancel,

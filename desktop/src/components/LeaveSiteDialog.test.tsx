@@ -443,3 +443,22 @@ describe('LeaveSiteDialog', () => {
     expect(copy()).toContain('no longer monitored')
   })
 })
+
+describe('LeaveSiteDialog off windows', () => {
+  it('says where a machine leaves its site and offers no leave of its own', () => {
+    const { onClose } = open({ dashboardOnly: true })
+
+    expect(copy()).toContain(
+      'to take this machine out of TEC, remove it on the dashboard, or uninstall owlette from this machine.',
+    )
+    expect(copy()).not.toMatch(/sudo|launchctl|systemctl|terminal|windows/)
+    expect(screen.queryByRole('button', { name: 'leave site' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'close' }))
+
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(serviceStatus).not.toHaveBeenCalled()
+    expect(serviceStop).not.toHaveBeenCalled()
+    expect(startAgentRun).not.toHaveBeenCalled()
+  })
+})

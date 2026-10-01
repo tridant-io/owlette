@@ -28,6 +28,13 @@ interface LeaveSiteDialogProps {
    * else restarts it mid-leave. Returns the release, always called.
    */
   onHold: () => () => void
+  /**
+   * True off windows. There a machine leaves its site from the dashboard or by
+   * an uninstall, never from this app — `leave` is deliberately not a verb of
+   * the daemon's request seam (`configure_site.py`) — so the dialog says so
+   * instead of offering a leave that can only fail.
+   */
+  dashboardOnly?: boolean
 }
 
 type Phase = 'confirm' | 'working' | 'left' | 'failed'
@@ -213,6 +220,7 @@ export function LeaveSiteDialog({
   onClose,
   onLeft,
   onHold,
+  dashboardOnly = false,
 }: LeaveSiteDialogProps) {
   const [phase, setPhase] = useState<Phase>('confirm')
   const [status, setStatus] = useState('')
@@ -317,6 +325,26 @@ export function LeaveSiteDialog({
       release()
     }
   }, [onHold, onLeft])
+
+  if (dashboardOnly) {
+    return (
+      <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+        <DialogContent className="sm:max-w-md" showCloseButton={false} data-testid="leave-site-dialog">
+          <DialogHeader>
+            <DialogTitle>leave site</DialogTitle>
+            <DialogDescription>
+              {`to take this machine out of ${site}, remove it on the dashboard, or uninstall owlette from this machine.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>
+              close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+  }
 
   return (
     <Dialog

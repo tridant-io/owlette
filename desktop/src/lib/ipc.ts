@@ -243,6 +243,15 @@ export function serviceStop(): Promise<ServiceCommandOutcome> {
 }
 
 /**
+ * Restart the agent on linux (`systemctl restart`, allowed by the packaged
+ * polkit rule). Not registered on windows, which restarts through
+ * `tmp/restart.flag`, and refused on macos.
+ */
+export function serviceRestart(): Promise<ServiceCommandOutcome> {
+  return invoke<ServiceCommandOutcome>('service_restart')
+}
+
+/**
  * Close a process gracefully (WM_CLOSE, then terminate), but only if the pid is
  * still running `expectedExe` — a recycled pid rejects rather than killing an
  * unrelated process.
