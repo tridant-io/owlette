@@ -135,13 +135,13 @@ struct SeamRun {
   cancelled: bool,
 }
 
-/// The daemon's verb for a mode that needs root off Windows. `report-issue`
-/// stays this app's own child.
+/// The daemon's verb for a mode that needs root off Windows: every mode does.
 #[cfg(unix)]
 fn seam_verb(mode: &str) -> Option<Verb> {
   match mode {
     MODE_JOIN => Some(Verb::Pair),
     "leave" => Some(Verb::Leave),
+    MODE_REPORT_ISSUE => Some(Verb::ReportIssue),
     "reboot-now" => Some(Verb::Reboot),
     "dismiss-reboot" => Some(Verb::DismissReboot),
     _ => None,
@@ -221,10 +221,16 @@ pub fn start(
 
   #[cfg(unix)]
   if let Some(verb) = seam_verb(mode) {
-    if payload.is_some() {
-      return Err(format!("the {mode} mode takes no payload"));
-    }
-    return start_seam_run(app, runs, mode, verb, vetted_server(mode, server)?);
+    let server = vetted_server(mode, server)?;
+    // the report goes in the request itself: a file staged in the owlette tree
+    // would be the console user's, and the daemon's run is root's.
+    let fields = match (verb, payload) {
+      (Verb::ReportIssue, Some(payload)) => Some(payload),
+      (Verb::ReportIssue, None) => return Err("a feedback report needs a payload".to_string()),
+      (_, Some(_)) => return Err(format!("the {mode} mode takes no payload")),
+      (_, None) => server.map(|server| serde_json::json!({ "server": server })),
+    };
+    return start_seam_run(app, runs, mode, verb, fields);
   }
 
   let root = paths::data_root();
@@ -305,7 +311,7 @@ fn start_seam_run(
   runs: &Runs,
   mode: &str,
   verb: Verb,
-  server: Option<&str>,
+  fields: Option<Value>,
 ) -> Result<String, String> {
   let run = format!("{mode}-{}", runs.next.fetch_add(1, Ordering::Relaxed));
   runs
@@ -314,7 +320,7 @@ fn start_seam_run(
     .map_err(|_| "the agent run table is poisoned".to_string())?
     .insert(run.clone(), SeamRun { verb, cancelled: false });
 
-  let (app, id, server) = (app.clone(), run.clone(), server.map(str::to_owned));
+  let (app, id) = (app.clone(), run.clone());
   let spawned = thread::Builder::new()
     .name("owlette-seam".into())
     .spawn(move || {
@@ -324,7 +330,7 @@ fn start_seam_run(
         line: Some(line),
         code: None,
       };
-      let answer = Seam::new(paths::data_root()).ask(verb, server.as_deref(), &mut |text| {
+      let answer = Seam::new(paths::data_root()).ask(verb, fields.as_ref(), &mut |text| {
         emit(&app, line(text.to_string()))
       });
       let code = match answer {
@@ -654,7 +660,7 @@ mod tests {
       [
         ("join", Some(Verb::Pair)),
         ("leave", Some(Verb::Leave)),
-        ("report-issue", None),
+        ("report-issue", Some(Verb::ReportIssue)),
         ("reboot-now", Some(Verb::Reboot)),
         ("dismiss-reboot", Some(Verb::DismissReboot)),
       ]

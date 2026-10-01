@@ -2,15 +2,16 @@
 //!
 //! Off Windows this app runs as the console user: it can neither use the token
 //! store nor control the daemon, so pairing, leaving the site, restarting the
-//! service or the machine, and dismissing a pending reboot are requests it
-//! drops into `ipc/requests/` for the daemon to carry out
+//! service or the machine, dismissing a pending reboot and filing a bug report
+//! are requests it drops into `ipc/requests/` for the daemon to carry out
 //! (`agent/src/configure_site.py`, "The privileged-request seam"). No sudo and
 //! no prompt: a request is the app's because the console user owns it, nobody
 //! else can write it, and it quotes the one-shot nonce the daemon last issued.
 //!
-//! A request is `{"verb", "nonce"}`, plus `server` on a `pair`, written 0600 as
-//! `<id>.json.tmp` and renamed into place — the daemon reads a `.json` the
-//! moment it appears. The answer is `<id>.result`, the JSON-line protocol the
+//! A request is `{"verb", "nonce"}`, plus `server` on a `pair` and `category`
+//! and `description` on a `report_issue`, written 0600 as `<id>.json.tmp` and
+//! renamed into place — the daemon reads a `.json` the moment it appears. The
+//! answer is `<id>.result`, the JSON-line protocol the
 //! agent's headless modes write to stdout, read as it grows until a terminal
 //! event (`authorized`, `done` or `error`). Only then is it removed: a `pair`
 //! keeps writing into it for the ten minutes it polls.
@@ -50,6 +51,7 @@ pub enum Verb {
   Reboot,
   Leave,
   DismissReboot,
+  ReportIssue,
 }
 
 impl Verb {
@@ -61,17 +63,19 @@ impl Verb {
       Verb::Reboot => "reboot",
       Verb::Leave => "leave",
       Verb::DismissReboot => "dismiss_reboot",
+      Verb::ReportIssue => "report_issue",
     }
   }
 
   /// How long a started answer may take to reach its terminal event. A pairing
   /// polls for ten minutes; a leave waits out the daemon's cloud client (60 s)
   /// and one Firestore delete; a dismissal starts an interpreter and makes one
-  /// write. The rest answer at once.
+  /// write; a report starts one, collects the logs and posts them. The rest
+  /// answer at once.
   pub fn budget(self) -> Duration {
     match self {
       Verb::Pair => Duration::from_secs(660),
-      Verb::Leave => Duration::from_secs(180),
+      Verb::Leave | Verb::ReportIssue => Duration::from_secs(180),
       Verb::DismissReboot => Duration::from_secs(90),
       Verb::CancelPair | Verb::Restart | Verb::Reboot => Duration::from_secs(30),
     }
@@ -99,22 +103,23 @@ impl Seam {
     }
   }
 
-  /// Ask the daemon for `verb` and wait for its answer, handing every line to
-  /// `on_line` as it lands. The terminal event on success — which may itself be
-  /// the daemon's `error`; `Err` means no answer at all.
+  /// Ask the daemon for `verb`, with `fields` (an object) beside the verb and
+  /// the nonce, and wait for its answer, handing every line to `on_line` as it
+  /// lands. The terminal event on success — which may itself be the daemon's
+  /// `error`; `Err` means no answer at all.
   pub fn ask(
     &self,
     verb: Verb,
-    server: Option<&str>,
+    fields: Option<&Value>,
     on_line: &mut dyn FnMut(&str),
   ) -> Result<Value, String> {
-    self.ask_within(verb, server, verb.budget(), on_line)
+    self.ask_within(verb, fields, verb.budget(), on_line)
   }
 
   fn ask_within(
     &self,
     verb: Verb,
-    server: Option<&str>,
+    fields: Option<&Value>,
     budget: Duration,
     on_line: &mut dyn FnMut(&str),
   ) -> Result<Value, String> {
@@ -126,10 +131,13 @@ impl Seam {
     let mut answer = {
       let _asking = ASKING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
       let nonce = self.nonce()?;
-      let mut body = json!({ "verb": verb.name(), "nonce": nonce });
-      if let Some(server) = server {
-        body["server"] = Value::from(server);
-      }
+      // the verb and the nonce last, so no field can stand in for them.
+      let mut body = match fields {
+        Some(Value::Object(fields)) => Value::Object(fields.clone()),
+        _ => json!({}),
+      };
+      body["verb"] = Value::from(verb.name());
+      body["nonce"] = Value::from(nonce);
       write_request(&requests, &id, &body)?;
       match self.await_answer(&result) {
         Some(answer) => answer,
@@ -427,12 +435,29 @@ mod tests {
 
     let terminal = root
       .seam()
-      .ask(Verb::Pair, Some("dev"), &mut |line| seen_lines.push(line.to_string()))
+      .ask(Verb::Pair, Some(&json!({ "server": "dev" })), &mut |line| {
+        seen_lines.push(line.to_string())
+      })
       .expect("answered");
 
     assert_eq!(daemon.join().unwrap().body, json!({ "verb": "pair", "nonce": "n-1", "server": "dev" }));
     assert_eq!(event_names(&seen_lines), ["status", "phrase", "status", "authorized"]);
     assert_eq!(terminal["value"]["siteId"], "site-abc");
+  }
+
+  #[test]
+  fn a_report_carries_its_fields_but_never_in_place_of_the_verb_or_the_nonce() {
+    let root = Root::new("report");
+    let daemon = fake_daemon(&root, lines(&[r#"{"event": "done", "value": {"category": "bug"}}"#]), Duration::ZERO);
+    let report = json!({ "category": "bug", "description": "it broke", "verb": "reboot", "nonce": "planted" });
+
+    let terminal = root.seam().ask(Verb::ReportIssue, Some(&report), &mut |_| {}).expect("answered");
+
+    assert_eq!(
+      daemon.join().unwrap().body,
+      json!({ "verb": "report_issue", "nonce": "n-1", "category": "bug", "description": "it broke" })
+    );
+    assert_eq!(terminal["event"], "done");
   }
 
   #[test]

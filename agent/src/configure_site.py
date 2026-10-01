@@ -42,6 +42,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import argparse
 from pathlib import Path
@@ -1202,6 +1203,9 @@ def _group_add_command() -> Optional[str]:
 # console user's explicit click, as it can on Windows. Every leave is audited
 # with the uid that asked, and the dashboard's remove and the uninstall-time
 # deregistration (`prerm` / `uninstall.sh`) work as they always did.
+# `report_issue` carries the operator's category and description: building the
+# report reads root's logs and posting it takes the machine's own token, so the
+# app's own `--report-issue` could do neither.
 #
 # The daemon answers beside the request, in `<id>.result` and the same JSON-line
 # protocol the headless modes write to stdout. The answer is the app's to remove
@@ -1221,11 +1225,13 @@ REQUEST_REPLY_MODE = 0o640
 REQUEST_AUDIT_MODE = 0o600
 REQUEST_SUFFIX = '.json'
 REQUEST_REPLY_SUFFIX = '.result'
-# A request is one verb and one nonce, and a `pair` may name its server. The
-# directory is group-writable, so the size of what turns up in it is not the
-# daemon's to trust: without a bound the drain reads whatever was planted there
-# straight into memory.
-REQUEST_MAX_BYTES = 4096
+# A request is one verb and one nonce, a `pair` may name its server, and a
+# `report_issue` carries a description the app caps at 1000 UTF-16 units. JSON
+# grows a unit to at most six bytes (a control character as \u00XX), so a
+# report is under 6.2 KB. The directory is group-writable, so the size of what
+# turns up in it is not the daemon's to trust: without a bound the drain reads
+# whatever was planted there straight into memory.
+REQUEST_MAX_BYTES = 8192
 # How far back the rate limit reads. Every accepted request appends a row and
 # nothing ages the file out, so an app asking on every tick grows it for as long
 # as the machine is up: the check reads a fixed tail rather than the whole file,
@@ -1238,7 +1244,9 @@ REQUEST_AUDIT_TAIL_BYTES = 64 * 1024
 # needs a pairing in between, which needs someone to approve it on the web.
 REQUEST_RATE_LIMIT_SECONDS = 300
 
-REQUEST_VERBS = ('pair', 'cancel_pair', 'restart', 'reboot', 'leave', 'dismiss_reboot')
+# `report_issue` has no window of its own: the web route rate-limits reports.
+REQUEST_VERBS = ('pair', 'cancel_pair', 'restart', 'reboot', 'leave', 'dismiss_reboot',
+                 'report_issue')
 _RATE_LIMITED_VERBS = frozenset({'restart', 'reboot'})
 # The servers a `pair` may name; main() turns the token into its environment.
 _PAIR_SERVERS = ('dev', 'prod')
@@ -1322,8 +1330,8 @@ def drain_privileged_requests(cloud_detached: Optional[Callable[[], bool]] = Non
 
 
 def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Optional[dict]:
-    """What one request asks for — its verb and, for a `pair`, its server — or
-    None when it is not the app's to ask.
+    """What one request asks for — its verb, a `pair`'s server and a
+    `report_issue`'s report — or None when it is not the app's to ask.
 
     Every refusal unlinks the request: one the daemon will not execute must not
     be left for the next drain to reconsider. A request that fails the ownership
@@ -1373,11 +1381,17 @@ def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Option
         return _refuse(path, reply_path, f'names a server, which a {verb} does not take')
     if server is not None and server not in _PAIR_SERVERS:
         return _refuse(path, reply_path, f'names the server {server!r}, not dev or prod')
+    report = None
+    if verb == 'report_issue':
+        report = {'category': payload.get('category'),
+                  'description': payload.get('description')}
+        if not all(isinstance(value, (str, type(None))) for value in report.values()):
+            return _refuse(path, reply_path, 'carries a report field that is not text')
     if not nonce or payload.get('nonce') != nonce:
         return _refuse(
             path, reply_path, 'does not quote the nonce the daemon last issued')
     _discard(path)
-    return {'verb': verb, 'server': server}
+    return {'verb': verb, 'server': server, 'report': report}
 
 
 def _read_request(fd: int) -> object:
@@ -1551,6 +1565,13 @@ def _execute_request(request: dict, reply_path: str, uid: int, cloud_detached) -
             _write_reply(reply_path, ('done', {'rebooting': True}))
         elif verb == 'dismiss_reboot':
             _spawn_into_reply(reply_path, '--dismiss-reboot')
+        elif verb == 'report_issue':
+            staged = _stage_report(request['report'])
+            try:
+                _spawn_into_reply(reply_path, '--report-issue', staged)
+            except Exception:
+                os.unlink(staged)
+                raise
         else:
             failure = _leave_from_seam(reply_path, cloud_detached)
             if failure:
@@ -1699,6 +1720,16 @@ def _spawn_into_reply(reply_path: str, *flags: str) -> subprocess.Popen:
     finally:
         os.close(fd)
     return child
+
+
+def _stage_report(report: dict) -> str:
+    """The report as a root-only file for `--report-issue`, which deletes it
+    once read. In the system temp directory rather than the owlette tree, whose
+    `tmp/` is the group's to write."""
+    fd, path = tempfile.mkstemp(prefix='owlette-feedback-', suffix='.json')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        json.dump(report, f)
+    return path
 
 
 def _open_reply(path: str) -> int:

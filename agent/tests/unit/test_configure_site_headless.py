@@ -1246,6 +1246,61 @@ class TestRequestSeam:
             shared_utils.get_path('configure_site.py'), '--dismiss-reboot']
         assert self._events(seam) == ['done']
 
+    def test_a_report_request_files_the_report_from_a_root_only_copy(
+            self, seam, monkeypatch):
+        # Building the report reads root's logs and posting it takes the
+        # machine's token, so the app's own `--report-issue` could do neither.
+        spawned = {}
+
+        def fake_popen(argv, **kwargs):
+            spawned['argv'] = argv
+            staged = argv[-1]
+            spawned['mode'] = stat.S_IMODE(os.stat(staged).st_mode)
+            with open(staged, encoding='utf-8') as f:
+                spawned['report'] = json.load(f)
+            os.unlink(staged)  # what the real run does once it has read it
+            os.write(kwargs['stdout'], b'{"event": "done", "value": {"category": "bug"}}\n')
+            return MagicMock()
+
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen', fake_popen)
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='the kiosk froze at noon')
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert rows[0]['outcome'] == 'executed'
+        assert spawned['argv'][1:3] == [
+            shared_utils.get_path('configure_site.py'), '--report-issue']
+        assert spawned['mode'] == 0o600
+        assert spawned['report'] == {'category': 'bug',
+                                     'description': 'the kiosk froze at noon'}
+        assert self._events(seam) == ['done']
+        audit = (seam / 'logs' / 'privileged_requests.log').read_text()
+        assert 'kiosk froze' not in audit
+
+    def test_a_report_field_that_is_not_text_is_refused(self, seam, monkeypatch):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda *a, **k: pytest.fail('filed a report it could not read'))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description={'text': 'nested'})
+
+        assert configure_site.drain_privileged_requests() == []
+        assert self._events(seam) == ['error']
+
+    def test_a_report_at_the_apps_cap_fits_the_request_bound(self, seam, monkeypatch):
+        # 1000 UTF-16 units, each escaped to the six bytes JSON can make of one.
+        monkeypatch.setattr(configure_site, '_spawn_into_reply',
+                            lambda reply, *flags: os.unlink(flags[-1]))
+        path = self._request(seam, 'report_issue', configure_site._request_nonce(),
+                             category='performance', description='\u0001' * 1000)
+        assert path.stat().st_size > 6000
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert [row['outcome'] for row in rows] == ['executed']
+
     # leave
 
     LEAVE_STEPS = ('disable', 'cache', 'detach', 'deregister', 'tokens', 'machine_id')
@@ -1827,7 +1882,8 @@ class TestRequestSeamVerbs:
         root do. Widening it fails here first, so a new verb is a decision
         rather than a drift."""
         assert set(configure_site.REQUEST_VERBS) == {
-            'pair', 'cancel_pair', 'restart', 'reboot', 'leave', 'dismiss_reboot'}
+            'pair', 'cancel_pair', 'restart', 'reboot', 'leave', 'dismiss_reboot',
+            'report_issue'}
 
     @pytest.mark.skipif(sys.platform != 'win32',
                         reason='the Windows half of the seam gate')
