@@ -6,8 +6,9 @@
 //!
 //! **Position.** The location of a `CGEventCreate(NULL)` event is where the
 //! pointer is, in global points. On the captured display it becomes a pixel of
-//! that display (decision 13: `desktop_rect` is pixels), counted from its
-//! top-left pixel as the session's normalisation expects, and it is visible
+//! the picture, which is the display's size in points
+//! (`platform::macos::picture_size`), counted from its top-left pixel as the
+//! session's normalisation over the picture expects, and it is visible
 //! whenever it is there. On any other display the last pixel it had here is
 //! reported invisible, so the overlay hides without sliding along an edge.
 //! The display's two rects are read again with every shape read, since a mode
@@ -77,9 +78,9 @@ pub use appkit::CursorSampler;
 /// changed.
 const SHAPE_PERIOD_TICKS: i64 = 33_000_000;
 
-/// A global point as a pixel of the display whose pixel rect is `pixels` and
-/// whose point rect (`CGDisplayBounds`: x, y, width, height) is `points`,
-/// counted from the display's top-left pixel. `None` off that display.
+/// A global point as a cell of the grid `pixels` laid over the display whose
+/// point rect (`CGDisplayBounds`: x, y, width, height) is `points`, counted
+/// from the display's top-left cell. `None` off that display.
 ///
 /// The inverse of the injector's pixel-to-point step in `input::mac`, floored
 /// rather than rounded: a pixel is the cell a point falls in, so the point
@@ -174,14 +175,16 @@ mod appkit {
         PointerPosition, PointerSample, PointerSampler, ShapeInfo, ShapeKind, MAX_SHAPE_DIM,
     };
     use crate::platform::clock;
-    use crate::platform::macos::{display_for_pixel_rect, display_pixel_rect, display_point_rect};
+    use crate::platform::macos::{display_for_pixel_rect, display_point_rect, picture_size};
 
     /// The pointer over one captured display.
     pub struct CursorSampler {
         /// `None` when no attached display had the output's pixel rect; every
         /// position is then off the display, so invisible.
         display: Option<u32>,
-        pixels: Rect,
+        /// The picture's grid: the display's size in points, as capture
+        /// opens it.
+        picture: Rect,
         /// `CGDisplayBounds`: x, y, width, height in global points.
         points: (f64, f64, f64, f64),
         shapes: bool,
@@ -215,7 +218,7 @@ mod appkit {
             }
             Self {
                 display,
-                pixels: output.desktop_rect,
+                picture: picture_grid(points),
                 points,
                 shapes,
                 gate: ShapeGate::new(),
@@ -235,7 +238,7 @@ mod appkit {
         fn position(&mut self) -> Option<PointerPosition> {
             let event = CGEvent::new(None)?;
             let at = CGEvent::location(Some(&*event));
-            Some(match local_pixel((at.x, at.y), &self.pixels, self.points) {
+            Some(match local_pixel((at.x, at.y), &self.picture, self.points) {
                 Some((x, y)) => {
                     self.last = (x, y);
                     PointerPosition {
@@ -261,14 +264,25 @@ mod appkit {
         }
     }
 
+    /// The picture's size as a rect at the origin, for `local_pixel`.
+    fn picture_grid(points: (f64, f64, f64, f64)) -> Rect {
+        let (width, height) = picture_size(points);
+        Rect {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        }
+    }
+
     impl PointerSampler for CursorSampler {
         fn sample(&mut self) -> PointerSample<'_> {
             let now = clock::now_ticks();
             let due = self.gate.due(now);
             if due {
                 if let Some(id) = self.display {
-                    self.pixels = display_pixel_rect(id);
                     self.points = display_point_rect(id);
+                    self.picture = picture_grid(self.points);
                 }
             }
             let position = self.position();
@@ -398,6 +412,16 @@ mod tests {
         };
         assert_eq!(local_pixel((0.0, 0.0), &gone, (0.0, 0.0, 0.0, 0.0)), None);
         assert_eq!(local_pixel((-720.0, 250.0), &gone, POINTS), None);
+
+        // On the picture's grid, the display's size in points, a point is the
+        // cell it falls in: the middle of a 1440x900 display is (720, 450).
+        let picture = Rect {
+            left: 0,
+            top: 0,
+            right: 1440,
+            bottom: 900,
+        };
+        assert_eq!(local_pixel((-720.0, 250.0), &picture, POINTS), Some((720, 450)));
     }
 
     #[test]

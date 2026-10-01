@@ -86,6 +86,7 @@ use objc2_screen_capture_kit::{
 use super::{FrameRects, OutputInfo, RebuildSignal, Rect, Source};
 use crate::cursor::{PointerSample, PointerSampler};
 use crate::displays::mac as displays;
+use crate::platform::macos::{display_point_rect, picture_size};
 use crate::gpu::Frame;
 use crate::platform::clock;
 use crate::session::StoppedAtHost;
@@ -268,7 +269,7 @@ impl ScreenCapture {
             bail!("screen recording is not granted to this process");
         }
         let output = displays::output(self.display);
-        let size = point_size(crate::platform::macos::display_point_rect(self.display));
+        let size = picture_size(display_point_rect(self.display));
         if size.0 == 0 || size.1 == 0 {
             bail!("{} is not attached", output.device_name);
         }
@@ -602,7 +603,14 @@ impl<T> Newest<T> {
     }
 }
 
-/// The capture configuration: [`point_size`], NV12 video range, BT.709.
+/// The capture configuration: the display's size in points
+/// (`platform::macos::picture_size`), NV12 video range, BT.709. At gate M1 a
+/// full Retina picture (3420x2214) encoded in 24 ms at p50 and 37 ms at p95, so
+/// a session that waits on each frame ran at 25-40 fps and smeared on every
+/// window move; shrunk to its size in points after capture it stopped smearing
+/// but still dropped frames. Captured at that size, ScreenCaptureKit scales in
+/// the compositor and nothing here pays for it. Input still maps through the
+/// pixel rect; only the picture is smaller.
 fn configuration(size: (u32, u32), cursor_in_frame: bool) -> Retained<SCStreamConfiguration> {
     // SAFETY: plain setters on a fresh configuration; the two colour names
     // are the frameworks' own constants.
@@ -721,18 +729,6 @@ fn ticks_from(time: CMTime, hz: i64) -> Option<i64> {
     i64::try_from(ticks).ok()
 }
 
-/// The size a stream is opened at: the display's size in points, each side
-/// made even for 4:2:0. At gate M1 a full Retina picture (3420x2214) encoded in
-/// 24 ms at p50 and 37 ms at p95, so a session that waits on each frame ran at
-/// 25-40 fps and smeared on every window move; shrunk to its size in points
-/// after capture it stopped smearing but still dropped frames. Captured at that
-/// size, ScreenCaptureKit scales in the compositor and nothing here pays for
-/// it. Positions and input still map through the pixel rect; only the picture
-/// is smaller.
-fn point_size(points: (f64, f64, f64, f64)) -> (u32, u32) {
-    let even = |side: f64| (side.max(0.0) as u32) & !1;
-    (even(points.2), even(points.3))
-}
 
 fn whole_frame(size: (u32, u32)) -> FrameRects {
     FrameRects {
@@ -801,9 +797,9 @@ mod tests {
     /// side even, and its one dirty rect is the whole of that picture.
     #[test]
     fn a_stream_is_opened_at_the_size_in_points_and_reports_the_whole_frame() {
-        let size = point_size((-1512.0, -120.0, 1512.0, 982.0));
+        let size = picture_size((-1512.0, -120.0, 1512.0, 982.0));
         assert_eq!(size, (1512, 982));
-        assert_eq!(point_size((0.0, 0.0, 1710.0, 1107.0)), (1710, 1106));
+        assert_eq!(picture_size((0.0, 0.0, 1710.0, 1107.0)), (1710, 1106));
         let rects = whole_frame(size);
         assert!(rects.moves.is_empty());
         assert_eq!(
@@ -995,7 +991,7 @@ mod tests {
                 .expect("an attached display");
             assert_eq!(
                 (frame.width, frame.height),
-                point_size(crate::platform::macos::display_point_rect(id)),
+                picture_size(display_point_rect(id)),
                 "the picture is not the display's size in points"
             );
             println!(
