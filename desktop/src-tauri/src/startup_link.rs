@@ -93,26 +93,129 @@ fn startup_dir() -> Result<PathBuf, String> {
   Ok(config.join("autostart"))
 }
 
-/// The LaunchAgent the owlette installer puts in place for every login
-/// (`agent/packaging/macos/app.owlette.desktop.plist`). It carries the same
-/// label a per-user entry would, and launchd refuses a second job under one
-/// label, so while it exists it *is* the login item: enabled, and not this
-/// app's to switch off. None off macOS and on a Mac without the package.
+/// The login item the owlette installer puts in place for every user: the
+/// LaunchAgent in `/Library/LaunchAgents` on macos
+/// (`agent/packaging/macos/app.owlette.desktop.plist`), and on linux the user
+/// unit the package enables with `systemctl --global enable`
+/// (`agent/packaging/linux/owlette-desktop.service`). While it exists it *is*
+/// the login item, so on and off become this user's own override of it —
+/// root put it there, and the toggle has to work without root or a prompt.
 #[cfg(target_os = "macos")]
+const INSTALLER_ITEM: &str = "/Library/LaunchAgents/app.owlette.desktop.plist";
+#[cfg(all(unix, not(target_os = "macos")))]
+const INSTALLER_ITEM: &str = "/usr/lib/systemd/user/owlette-desktop.service";
+
+/// The label of the installer's LaunchAgent, which a per-user plist carries too.
+#[cfg(unix)]
+const LAUNCHD_LABEL: &str = "app.owlette.desktop";
+
+/// The user unit the linux package enables for every login.
+#[cfg(all(unix, not(target_os = "macos")))]
+const USER_UNIT: &str = "owlette-desktop.service";
+
+#[cfg(unix)]
 fn managed_by_installer() -> Option<PathBuf> {
-  let path = PathBuf::from("/Library/LaunchAgents/app.owlette.desktop.plist");
+  let path = PathBuf::from(INSTALLER_ITEM);
   path.is_file().then_some(path)
 }
 
+/// macos: the override lives in this user's own launchd database, keyed on the
+/// label in `gui/<uid>`, so it also covers a per-user plist under that label.
+#[cfg(target_os = "macos")]
+fn installer_item_enabled() -> Result<bool, String> {
+  let listing = run("launchctl", &["print-disabled", &gui_domain()])?;
+  Ok(!launchd_disabled(&listing, LAUNCHD_LABEL))
+}
+
+/// `launchctl disable` takes effect at the next login and leaves the running
+/// app alone; `enable` undoes it.
+#[cfg(target_os = "macos")]
+fn set_installer_item(enabled: bool) -> Result<(), String> {
+  let verb = if enabled { "enable" } else { "disable" };
+  run("launchctl", &[verb, &format!("{}/{LAUNCHD_LABEL}", gui_domain())]).map(drop)
+}
+
+#[cfg(target_os = "macos")]
+fn gui_domain() -> String {
+  // SAFETY: getuid cannot fail and touches no memory.
+  format!("gui/{}", unsafe { libc::getuid() })
+}
+
+/// linux: `is-enabled` exits non-zero for every state but enabled, so the
+/// answer is its output rather than its status.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn managed_by_installer() -> Option<PathBuf> {
-  None
+fn installer_item_enabled() -> Result<bool, String> {
+  let output = std::process::Command::new("systemctl")
+    .args(["--user", "is-enabled", USER_UNIT])
+    .output()
+    .map_err(|error| format!("could not run systemctl: {error}"))?;
+  let state = String::from_utf8_lossy(&output.stdout);
+  if state.trim().is_empty() {
+    return Err(format!(
+      "systemctl --user is-enabled {USER_UNIT} gave no answer: {}",
+      String::from_utf8_lossy(&output.stderr).trim()
+    ));
+  }
+  Ok(unit_enabled(&state))
+}
+
+/// A mask is the only per-user override of a unit enabled with `--global`:
+/// `disable` would only remove this user's own symlinks, and there are none.
+/// Like the macos override it leaves the running app alone.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn set_installer_item(enabled: bool) -> Result<(), String> {
+  let verb = if enabled { "unmask" } else { "mask" };
+  run("systemctl", &["--user", verb, USER_UNIT]).map(drop)
+}
+
+#[cfg(unix)]
+fn run(program: &str, args: &[&str]) -> Result<String, String> {
+  let output = std::process::Command::new(program)
+    .args(args)
+    .output()
+    .map_err(|error| format!("could not run {program}: {error}"))?;
+  if !output.status.success() {
+    return Err(format!(
+      "{program} {} failed ({}): {}",
+      args.join(" "),
+      output.status,
+      String::from_utf8_lossy(&output.stderr).trim()
+    ));
+  }
+  Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Whether `launchctl print-disabled` lists `label` as switched off: current
+/// macos spells it `"label" => disabled`, older releases `=> true`. A label
+/// with no line has no override, so its plist decides — and the installer's
+/// plist is enabled.
+#[cfg(any(test, target_os = "macos"))]
+fn launchd_disabled(listing: &str, label: &str) -> bool {
+  let quoted = format!("\"{label}\"");
+  listing.lines().any(|line| {
+    line
+      .split_once("=>")
+      .is_some_and(|(key, value)| key.trim() == quoted && matches!(value.trim(), "disabled" | "true"))
+  })
+}
+
+/// Whether `systemctl --user is-enabled` says the unit starts with the
+/// session. `masked` is this user's override; `disabled` means the package's
+/// global enable is gone.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn unit_enabled(state: &str) -> bool {
+  matches!(state.trim(), "enabled" | "enabled-runtime")
 }
 
 #[cfg(unix)]
 pub fn is_enabled() -> bool {
   if managed_by_installer().is_some() {
-    return true;
+    // the tray asks every second, so a failed read is a debug line rather than
+    // a warning per tick; the installer's own state is on.
+    return installer_item_enabled().unwrap_or_else(|error| {
+      log::debug!("could not read this user's login-item override: {error}");
+      true
+    });
   }
   match link_path() {
     Ok(path) => path.is_file(),
@@ -126,10 +229,14 @@ pub fn is_enabled() -> bool {
 #[cfg(unix)]
 pub fn enable() -> Result<PathBuf, String> {
   if let Some(system) = managed_by_installer() {
+    set_installer_item(true)?;
     return Ok(system);
   }
   let path = link_path()?;
-  let exe = std::env::current_exe().map_err(|error| format!("could not locate this exe: {error}"))?;
+  let exe = std::env::current_exe().map_err(|error| {
+    let what = if cfg!(target_os = "macos") { "the owlette app" } else { "the owlette program" };
+    format!("could not locate {what}: {error}")
+  })?;
   if let Some(parent) = path.parent() {
     std::fs::create_dir_all(parent)
       .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
@@ -139,13 +246,13 @@ pub fn enable() -> Result<PathBuf, String> {
   Ok(path)
 }
 
+/// Off is the override when the installer's item is there, and our own entry
+/// goes either way: one left from before the package would still start the
+/// app at login beside the masked unit on linux.
 #[cfg(unix)]
 pub fn disable() -> Result<(), String> {
-  if let Some(system) = managed_by_installer() {
-    return Err(format!(
-      "start on login is set for every user by the owlette installer ({}); it is not this app's to turn off",
-      system.display()
-    ));
+  if managed_by_installer().is_some() {
+    set_installer_item(false)?;
   }
   let path = link_path()?;
   match std::fs::remove_file(&path) {
@@ -165,7 +272,7 @@ fn login_item(exe: &Path) -> String {
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
        <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
        <plist version=\"1.0\">\n<dict>\n\
-       \t<key>Label</key>\n\t<string>app.owlette.desktop</string>\n\
+       \t<key>Label</key>\n\t<string>{LAUNCHD_LABEL}</string>\n\
        \t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>{exe}</string>\n\t\t<string>{TRAY_ARG}</string>\n\t</array>\n\
        \t<key>RunAtLoad</key>\n\t<true/>\n\
        </dict>\n</plist>\n"
@@ -354,6 +461,43 @@ mod unix_tests {
     let text = login_item(Path::new("/opt/owlette/app/owlette-desktop"));
     assert!(text.contains("/opt/owlette/app/owlette-desktop"), "{text}");
     assert!(text.contains(TRAY_ARG), "{text}");
+  }
+}
+
+/// The override parsers, on every platform: the listings are text and the
+/// commands that print them run only on the Mac and the kiosk.
+#[cfg(test)]
+mod override_tests {
+  use super::*;
+
+  const LABEL: &str = "app.owlette.desktop";
+
+  #[test]
+  fn launchd_reads_both_spellings_of_an_override() {
+    let current = "\tdisabled services = {\n\t\t\"com.apple.Siri.agent\" => disabled\n\t\t\"app.owlette.desktop\" => disabled\n\t}\n";
+    assert!(launchd_disabled(current, LABEL));
+    let older = "\tdisabled services = {\n\t\t\"app.owlette.desktop\" => true\n\t}\n";
+    assert!(launchd_disabled(older, LABEL));
+    assert!(!launchd_disabled(&current.replace("=> disabled\n\t}", "=> enabled\n\t}"), LABEL));
+    assert!(!launchd_disabled(&older.replace("=> true", "=> false"), LABEL));
+  }
+
+  #[test]
+  fn a_label_with_no_override_line_is_not_disabled() {
+    let listing = "\tdisabled services = {\n\t\t\"com.apple.Siri.agent\" => disabled\n\t\t\"app.owlette.desktop-spike\" => disabled\n\t}\n";
+    assert!(!launchd_disabled(listing, LABEL));
+    assert!(!launchd_disabled("", LABEL));
+    assert!(!launchd_disabled("\"app.owlette.desktop\"\n", LABEL));
+  }
+
+  #[test]
+  fn only_an_enabled_unit_starts_with_the_session() {
+    assert!(unit_enabled("enabled\n"));
+    assert!(unit_enabled("enabled-runtime\n"));
+    assert!(!unit_enabled("masked\n"));
+    assert!(!unit_enabled("masked-runtime\n"));
+    assert!(!unit_enabled("disabled\n"));
+    assert!(!unit_enabled(""));
   }
 }
 
