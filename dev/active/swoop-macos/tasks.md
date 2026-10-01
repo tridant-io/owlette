@@ -891,3 +891,15 @@ done-when, so each is logged here for Task 7.1's changelog.
   `CGWarpMouseCursorPosition`, `CGPostMouseEvent`). The sampler now reports the pointer shown whenever it is on
   the captured display instead of asking `CGCursorIsVisible()`. *Changelog:* "macOS: the pointer stays drawn in a
   swoop session after you type."
+- **Smear and frame rate in a Mac session** (gate M1, the owner on Brave with its flags reset; Windows hosts do
+  not smear the same way). Ruled out on the rig: resolution (1080p smeared too), codec (H.264 smeared too), slices
+  (one per frame), timestamps, keyframe requests; a looser `DataRateLimits` window and `MaxAllowedFrameQP` changed
+  nothing measurable. Fixed: a settle keyframe a second after the last frame over its share of the rate
+  (`013395b1`, retimed in `404640ec`: the first version waited for a still screen, which a menu-bar meter
+  prevents); the owner sees the picture come clean 0.4-1 s after motion. Measured: a full Retina picture
+  (3420x2214) encodes in 24 ms p50 / 37 ms p95 against 7-9 ms at 1668x1080, and the capture loop waits on each
+  encode, so a session ran at 25-40 fps. `native` on a Mac is now the display's size in points (`ae4b6033`).
+  **Still open (owner, 2026-10-01: "we should be able to do a 4k stream reasonably"):**
+  smear while things move, and full-size streaming at 60 fps; the route is to stop waiting on each encode
+  (VideoToolbox frames in flight, which the shared `Encoder` contract does not allow today), then re-measure
+  low-latency rate control off (3.2 vs 6.8 ms at 1080p, 11-27 ms at full size, power-state noisy).
