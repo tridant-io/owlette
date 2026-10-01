@@ -686,6 +686,8 @@ export function ProcessDetail({
           {/*
             Tune-once fields — recovery attempts, priority, visibility — behind
             their own disclosure so the everyday view stays name / what / when.
+            Priority and visibility exist on windows only: the service applies
+            neither on macos or linux, so they are not offered there.
             Two or three columns when the pane is wide enough; the label gutter
             repeats per column.
           */}
@@ -731,53 +733,63 @@ export function ProcessDetail({
                   {...field('relaunch_attempts')}
                 />
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor="priority" className="justify-end text-muted-foreground">
-                      priority
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>{copy.priorityTooltip}</TooltipContent>
-                </Tooltip>
-                <Select
-                  value={priorityOf(process)}
-                  onValueChange={(value) => onPriority(value as Priority)}
-                >
-                  <SelectTrigger id="priority" className="h-8 w-32" data-testid="priority">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PRIORITIES.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {option.toLowerCase()}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {copy.launchOptions && (
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Label htmlFor="priority" className="justify-end text-muted-foreground">
+                          priority
+                        </Label>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        windows cpu priority for this process — leave normal unless it must outrank
+                        everything else
+                      </TooltipContent>
+                    </Tooltip>
+                    <Select
+                      value={priorityOf(process)}
+                      onValueChange={(value) => onPriority(value as Priority)}
+                    >
+                      <SelectTrigger id="priority" className="h-8 w-32" data-testid="priority">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PRIORITIES.map((option) => (
+                          <SelectItem key={option} value={option}>
+                            {option.toLowerCase()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor="visibility" className="justify-end text-muted-foreground">
-                      visibility
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>{copy.visibilityTooltip}</TooltipContent>
-                </Tooltip>
-                <Select
-                  value={visibilityOf(process)}
-                  onValueChange={(value) => onVisibility(value as Visibility)}
-                >
-                  <SelectTrigger id="visibility" className="h-8 w-32" data-testid="visibility">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VISIBILITIES.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {option.toLowerCase()}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Label htmlFor="visibility" className="justify-end text-muted-foreground">
+                          visibility
+                        </Label>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        window visibility on launch — hidden suppresses the console window (ideal for
+                        background scripts); apps that create their own windows stay visible
+                      </TooltipContent>
+                    </Tooltip>
+                    <Select
+                      value={visibilityOf(process)}
+                      onValueChange={(value) => onVisibility(value as Visibility)}
+                    >
+                      <SelectTrigger id="visibility" className="h-8 w-32" data-testid="visibility">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {VISIBILITIES.map((option) => (
+                          <SelectItem key={option} value={option}>
+                            {option.toLowerCase()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
+                )}
               </div>
             </CollapsibleContent>
           </Collapsible>

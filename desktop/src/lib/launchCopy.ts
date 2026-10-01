@@ -32,18 +32,12 @@ export interface LaunchCopy {
   folderRefusal: string
   /** the empty process list's drop hint, naming only what a drop can add here */
   dropHint: string
-  /** the priority row's tooltip — the service sets priority on windows only */
-  priorityTooltip: string
-  /** the visibility row's tooltip — windows only too */
-  visibilityTooltip: string
-}
-
-/** posix launches ignore priority and visibility (`osadapter.posix.launch_managed_process`) */
-const WINDOWS_ONLY_FIELDS = {
-  priorityTooltip:
-    'owlette sets cpu priority on windows only — on this machine the process runs at normal priority',
-  visibilityTooltip:
-    'owlette hides console windows on windows only — on this machine the process opens as it normally would',
+  /**
+   * whether the priority and visibility controls exist here: the service applies
+   * both on windows only (`osadapter.posix.launch_managed_process` ignores them),
+   * so elsewhere they are not shown at all
+   */
+  launchOptions: boolean
 }
 
 const COPY: Record<DesktopOs, LaunchCopy> = {
@@ -66,10 +60,7 @@ const COPY: Record<DesktopOs, LaunchCopy> = {
     folderRefusal: 'this folder is not a unity build (no <name>.exe beside a <name>_Data folder)',
     dropHint:
       'drag an app, a script, a touchdesigner project or a unity build folder anywhere in this window to add it',
-    priorityTooltip:
-      'windows cpu priority for this process — leave normal unless it must outrank everything else',
-    visibilityTooltip:
-      'window visibility on launch — hidden suppresses the console window (ideal for background scripts); apps that create their own windows stay visible',
+    launchOptions: true,
   },
   // no filters on macos or linux: the dialog plugin (rfd) cannot say "all files"
   // there. macos merges every filter into one allow-list where `*` is a literal
@@ -91,7 +82,7 @@ const COPY: Record<DesktopOs, LaunchCopy> = {
     pathRequired: 'an app path is required before a launch mode can be set',
     folderRefusal: 'this folder is not an app — drop the .app itself',
     dropHint: 'drag an app or a touchdesigner project anywhere in this window to add it',
-    ...WINDOWS_ONLY_FIELDS,
+    launchOptions: false,
   },
   linux: {
     label: 'program',
@@ -108,7 +99,7 @@ const COPY: Record<DesktopOs, LaunchCopy> = {
     pathRequired: 'a program path is required before a launch mode can be set',
     folderRefusal: 'owlette does not know how to launch a folder',
     dropHint: 'drag a python script anywhere in this window to add it',
-    ...WINDOWS_ONLY_FIELDS,
+    launchOptions: false,
   },
 }
 

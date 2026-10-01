@@ -12,12 +12,19 @@ export interface LaunchCopy {
   placeholder: string;
   /** the launch target itself, for the toast when an agent cannot find it */
   target: string;
+  /** whether the editor offers priority and visibility: only a windows agent applies them */
+  launchOptions: boolean;
 }
 
 const COPY: Record<MachineOsFamily, LaunchCopy> = {
-  windows: { label: 'executable path', placeholder: 'C:\\Program Files\\...\\app.exe', target: 'executable' },
-  macos: { label: 'app path', placeholder: '/Applications/YourApp.app', target: 'app' },
-  linux: { label: 'program path', placeholder: '/usr/bin/your-program', target: 'program' },
+  windows: {
+    label: 'executable path',
+    placeholder: 'C:\\Program Files\\...\\app.exe',
+    target: 'executable',
+    launchOptions: true,
+  },
+  macos: { label: 'app path', placeholder: '/Applications/YourApp.app', target: 'app', launchOptions: false },
+  linux: { label: 'program path', placeholder: '/usr/bin/your-program', target: 'program', launchOptions: false },
 };
 
 /** an agent that reports no `osFamily` is a windows one */

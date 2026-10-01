@@ -1415,6 +1415,8 @@ export default function DashboardPage() {
               />
             </div>
 
+            {/* priority and visibility apply on windows only; a mac or linux agent ignores both */}
+            {editLaunchCopy.launchOptions && (
             <div className="grid grid-cols-3 gap-4">
               {/* Priority */}
               <div className="space-y-2">
@@ -1456,6 +1458,7 @@ export default function DashboardPage() {
               {/* Empty space for alignment */}
               <div></div>
             </div>
+            )}
 
             <div className="grid grid-cols-3 gap-4">
               {/* Time Delay */}

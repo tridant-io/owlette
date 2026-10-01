@@ -6,16 +6,19 @@ describe('launchCopy', () => {
       label: 'executable path',
       placeholder: 'C:\\Program Files\\...\\app.exe',
       target: 'executable',
+      launchOptions: true,
     });
     expect(launchCopy('macos')).toEqual({
       label: 'app path',
       placeholder: '/Applications/YourApp.app',
       target: 'app',
+      launchOptions: false,
     });
     expect(launchCopy('linux')).toEqual({
       label: 'program path',
       placeholder: '/usr/bin/your-program',
       target: 'program',
+      launchOptions: false,
     });
   });
 
