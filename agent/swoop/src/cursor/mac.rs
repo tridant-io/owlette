@@ -8,9 +8,17 @@
 //! pointer is, in global points. On the captured display it becomes a pixel of
 //! that display (decision 13: `desktop_rect` is pixels), counted from its
 //! top-left pixel as the session's normalisation expects, and it is visible
-//! when `CGCursorIsVisible()` says so. On any other display the last pixel it
-//! had here is reported invisible, so the overlay hides without sliding along
-//! an edge. The display's two rects are read again with every shape read,
+//! whenever it is there. On any other display the last pixel it had here is
+//! reported invisible, so the overlay hides without sliding along an edge.
+//!
+//! **Not `CGCursorIsVisible()`.** macOS hides the pointer while someone types
+//! until the mouse moves, and only a physical mouse clears that: measured on
+//! the rig on 2026-09-30 with the pointer hidden by typing, moves posted at the
+//! HID and session taps (with and without their deltas),
+//! `CGWarpMouseCursorPosition` and `CGPostMouseEvent` all left it hidden. A
+//! viewer that typed would lose the pointer for the rest of the session while
+//! its moves and clicks still landed, so the viewer draws it as other remote
+//! tools do. The person at the Mac sees it again once they touch their mouse. The display's two rects are read again with every shape read,
 //! since a mode change moves its pixels under the same id.
 //!
 //! **Shape.** At most every 33 ms, `NSCursor.currentSystemCursor`'s image is
@@ -36,8 +44,6 @@
 //! at 56x80 pixels with the hot spot at (10, 10). In a release build a shape
 //! read costs 0.14 ms at p50 (0.3 ms at p95), 0.12 ms of it the call itself; a
 //! sample without one costs 15 µs at p50 even in a debug build.
-//! `CGCursorIsVisible()`, deprecated too, answered true on every sample; a
-//! pointer hidden while typing is unmeasured.
 //!
 //! Hardware test, with the working directory `agent/swoop`:
 //!
@@ -229,11 +235,11 @@ mod appkit {
             Some(match local_pixel((at.x, at.y), &self.pixels, self.points) {
                 Some((x, y)) => {
                     self.last = (x, y);
-                    // Deprecated without a successor; the module doc says what
-                    // it was measured to answer.
-                    #[allow(deprecated)]
-                    let visible = self.shapes && objc2_core_graphics::CGCursorIsVisible();
-                    PointerPosition { x, y, visible }
+                    PointerPosition {
+                        x,
+                        y,
+                        visible: self.shapes,
+                    }
                 }
                 None => PointerPosition {
                     x: self.last.0,
