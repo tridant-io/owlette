@@ -881,4 +881,13 @@ done-when, so each is logged here for Task 7.1's changelog.
 - **Dev pairing links named `localhost:8080`** (`57e1b66a`): not a Mac bug. `publicOrigin()` falls back to the
   request's own origin when `NEXT_PUBLIC_BASE_URL` is unset, and on Railway that is the listen address. The
   registry now lists the key for `railway-dev`; the value itself (`https://dev.owlette.app`) is the owner's to set,
-  since it is a config change to dev. Until then dev's alert emails and download redirect also fall back to prod.
+  since it is a config change to dev. The owner said set it; done 21:36, dev redeployed green.
+- **Submit bug report** (`7ce3d628`): off Windows the report is the daemon's, through the request seam's new
+  `report_issue` verb (root's logs, the machine's token); the request bound is 8 KiB for a 1000-unit description.
+  *Changelog:* "macOS and Linux: submit bug report works from the app."
+- **The pointer vanished in a session after the viewer typed** (`6c7d40b3`, gate M1, the owner's report): macOS
+  hides the pointer while someone types until the mouse moves, and no injected move clears it (measured with
+  the pointer hidden by typing in VS Code: HID- and session-tap moves with and without deltas,
+  `CGWarpMouseCursorPosition`, `CGPostMouseEvent`). The sampler now reports the pointer shown whenever it is on
+  the captured display instead of asking `CGCursorIsVisible()`. *Changelog:* "macOS: the pointer stays drawn in a
+  swoop session after you type."
