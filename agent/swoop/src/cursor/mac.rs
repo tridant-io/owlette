@@ -10,6 +10,8 @@
 //! top-left pixel as the session's normalisation expects, and it is visible
 //! whenever it is there. On any other display the last pixel it had here is
 //! reported invisible, so the overlay hides without sliding along an edge.
+//! The display's two rects are read again with every shape read, since a mode
+//! change moves its pixels under the same id.
 //!
 //! **Not `CGCursorIsVisible()`.** macOS hides the pointer while someone types
 //! until the mouse moves, and only a physical mouse clears that: measured on
@@ -18,12 +20,13 @@
 //! `CGWarpMouseCursorPosition` and `CGPostMouseEvent` all left it hidden. A
 //! viewer that typed would lose the pointer for the rest of the session while
 //! its moves and clicks still landed, so the viewer draws it as other remote
-//! tools do. The person at the Mac sees it again once they touch their mouse. The display's two rects are read again with every shape read,
-//! since a mode change moves its pixels under the same id.
+//! tools do. The person at the Mac sees it again once they touch their mouse.
 //!
 //! **Shape.** At most every 33 ms, `NSCursor.currentSystemCursor`'s image is
-//! drawn at the display's scale into a 32-bit BGRA bitmap, with the hot spot
-//! in the same pixels. CoreGraphics draws only into premultiplied bitmaps, so
+//! drawn at one pixel per point into a 32-bit BGRA bitmap, with the hot spot
+//! in the same pixels: the viewer sizes a shape against the picture, and a Mac
+//! streams at its size in points by default (`session::native_height`). Drawn
+//! at a 2x panel's scale it showed twice the size at gate M1. CoreGraphics draws only into premultiplied bitmaps, so
 //! the alpha is made straight before the bytes leave: that is the `Color`
 //! shape [`super::CursorTracker::on_shape`] and [`super::decode`] already take
 //! from Desktop Duplication. The call answers a new object every time, so the
@@ -40,8 +43,8 @@
 //!
 //! Measured on the rig (macOS 26.6, a 2x panel), from a test thread of a
 //! process started over ssh, with the screen locked: the call answers the
-//! arrow, 28x40 points with representations at 1x, 2x, 5x and 10x, drawn here
-//! at 56x80 pixels with the hot spot at (10, 10). In a release build a shape
+//! arrow, 28x40 points with representations at 1x, 2x, 5x and 10x, drawn then
+//! at the panel's 2x as 56x80 pixels with the hot spot at (10, 10). In a release build a shape
 //! read costs 0.14 ms at p50 (0.3 ms at p95), 0.12 ms of it the call itself; a
 //! sample without one costs 15 µs at p50 even in a debug build.
 //!
@@ -202,7 +205,7 @@ mod appkit {
             }
             let points = display.map_or((0.0, 0.0, 0.0, 0.0), display_point_rect);
             let mut bitmap = Vec::new();
-            let shapes = read_shape(scale(&output.desktop_rect, points), &mut bitmap).is_some();
+            let shapes = read_shape(SHAPE_SCALE, &mut bitmap).is_some();
             if shapes {
                 ::log::info!("swoop: the pointer is drawn by the viewer from the system cursor");
             } else {
@@ -250,7 +253,7 @@ mod appkit {
         }
 
         fn shape(&mut self) -> Option<(ShapeInfo, &[u8])> {
-            let info = read_shape(scale(&self.pixels, self.points), &mut self.bitmap)?;
+            let info = read_shape(SHAPE_SCALE, &mut self.bitmap)?;
             let bytes = &self.bitmap[..];
             self.gate
                 .changed(shape_hash(&info, bytes))
@@ -282,15 +285,8 @@ mod appkit {
         }
     }
 
-    /// Pixels per point, from the display's two rects; 1 for a display that
-    /// has gone.
-    fn scale(pixels: &Rect, points: (f64, f64, f64, f64)) -> f64 {
-        if points.2 > 0.0 && pixels.width() > 0 {
-            f64::from(pixels.width()) / points.2
-        } else {
-            1.0
-        }
-    }
+    /// Pixels per point a shape is drawn at (the module doc's **Shape**).
+    const SHAPE_SCALE: f64 = 1.0;
 
     /// Draw the system cursor at `scale` into `out` as straight BGRA, and
     /// describe it. `None` when the system answers no cursor, or an image
