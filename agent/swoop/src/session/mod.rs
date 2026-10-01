@@ -576,17 +576,25 @@ impl Default for IdrPolicy {
 /// bytes, so 2 Hz costs nothing and is well inside every stall threshold.
 pub const FLOOR_INTERVAL: Duration = Duration::from_millis(500);
 
-/// The floor repeat a second after the last fresh picture, counted from zero.
-const SETTLE_FLOOR: u32 = 1;
+/// How long after the last big move a Mac tier sends its settle keyframe.
+const SETTLE_AFTER: Duration = Duration::from_secs(1);
 
-/// Whether this floor repeat goes out as a keyframe: on macOS, once per still
-/// spell, a second in. At gate M1 (2026-09-30) leftovers of earlier content
-/// stayed on a still Mac screen through the repeats: they do not win back the
-/// detail VideoToolbox's per-frame cap cut while the picture moved. One
-/// keyframe once the picture settles replaces the smear with a clean frame.
-/// Windows keeps its repeats as they were.
-pub fn settles(still_floors: u32) -> bool {
-    cfg!(target_os = "macos") && still_floors == SETTLE_FLOOR
+/// Whether a frame took more than its share of the rate: something big moved.
+/// A caret, a clock or a menu-bar meter stays well under it.
+pub fn moved(bytes: usize, bitrate_bps: u32, fps: u32) -> bool {
+    bytes > (bitrate_bps / 8 / fps.max(1)) as usize
+}
+
+/// Whether the next frame goes out as a keyframe: on macOS, once, a second
+/// after the last big move. At gate M1 (2026-09-30) smear from motion stayed
+/// on the Mac's picture once it settled: the later frames do not win back the
+/// detail VideoToolbox's per-frame cap cut while it moved. Timed from the last
+/// big frame rather than from a still screen, because a Mac's screen is seldom
+/// still (a menu-bar meter or a caret changes it every second). Windows keeps
+/// its frames as they were.
+pub fn settles(moved_at: Option<Instant>, now: Instant) -> bool {
+    cfg!(target_os = "macos")
+        && moved_at.is_some_and(|at| now.saturating_duration_since(at) >= SETTLE_AFTER)
 }
 
 /// When the last frame was handed to the encoder, and whether the floor is due.
@@ -837,7 +845,8 @@ mod host {
 
     use super::{
         codec_wire_name, feature_room, limits_for, pick_codec, tier_encodes, tiers, CaptureGate,
-        settles, Denials, Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining, Outbox,
+        moved, settles, Denials, Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining,
+        Outbox,
         SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
@@ -3467,8 +3476,9 @@ mod host {
         /// frame-rate gate, and for the floor.
         floor: FloorTimer,
         last_encode: Option<Instant>,
-        /// Floor repeats since the last fresh picture, for [`settles`].
-        still_floors: u32,
+        /// When this tier last sent a frame over its share of the rate, for
+        /// [`settles`]; cleared by the keyframe that settles it.
+        moved_at: Option<Instant>,
     }
 
     impl TierPass {
@@ -3482,7 +3492,7 @@ mod host {
                 force_irap: true,
                 floor: FloorTimer::new(now),
                 last_encode: None,
-                still_floors: 0,
+                moved_at: None,
             }
         }
 
@@ -3759,8 +3769,10 @@ mod host {
                     }
                 } else if !tier.floor.due(now) {
                     continue;
-                } else if settles(tier.still_floors) {
+                }
+                if settles(tier.moved_at, now) {
                     tier.force_irap = true;
+                    tier.moved_at = None;
                 }
 
                 let (width, height) = (tier.want.width, tier.want.height);
@@ -3831,9 +3843,12 @@ mod host {
                         // desktop.
                         tier.floor.fed(now);
                         tier.last_encode = Some(now);
-                        tier.still_floors =
-                            if fresh { 0 } else { tier.still_floors.saturating_add(1) };
                         if let Some(encoded) = encoded {
+                            if !encoded.is_irap
+                                && moved(encoded.data.len(), tier.want.bitrate_bps, TARGET_FPS)
+                            {
+                                tier.moved_at = Some(now);
+                            }
                             tier.force_irap = false;
                             // A full queue means the session thread fell behind.
                             // The frame is dropped rather than stalling capture,
@@ -4703,13 +4718,23 @@ mod tests {
     /// acquire times out, and the floor is the only thing that feeds the
     /// encoder.
     #[test]
-    fn a_still_picture_settles_with_one_keyframe_on_macos_only() {
-        let settled: Vec<bool> = (0..5).map(settles).collect();
-        if cfg!(target_os = "macos") {
-            assert_eq!(settled, [false, true, false, false, false]);
-        } else {
-            assert_eq!(settled, [false; 5]);
-        }
+    fn a_frame_over_its_share_of_the_rate_is_a_move() {
+        // 20 mbps at 60 fps is 41_666 bytes a frame
+        assert!(!moved(41_666, 20_000_000, 60));
+        assert!(moved(41_667, 20_000_000, 60));
+        assert!(!moved(900, 20_000_000, 60), "a caret or a menu-bar meter");
+    }
+
+    #[test]
+    fn a_mac_settles_a_second_after_the_last_big_move_and_windows_never() {
+        let at = Instant::now();
+        let settled = [
+            settles(None, at + Duration::from_secs(5)),
+            settles(Some(at), at + Duration::from_millis(999)),
+            settles(Some(at), at + SETTLE_AFTER),
+        ];
+        let expected = if cfg!(target_os = "macos") { [false, false, true] } else { [false; 3] };
+        assert_eq!(settled, expected);
     }
 
     #[test]
