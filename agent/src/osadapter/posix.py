@@ -53,6 +53,10 @@ else:
 
 DESKTOP_PROCESS_NAME = 'owlette-desktop'
 
+# Launch Services' command line: what opens a macOS application bundle the way
+# Finder does (_managed_command).
+OPEN_COMMAND = '/usr/bin/open'
+
 # A session is a seat only when it is active and of a graphical type: a tty or
 # ssh login is listed exactly the same way and has no display to reach.
 _GRAPHICAL_SESSION_TYPES = frozenset({'x11', 'wayland'})
@@ -339,7 +343,11 @@ def launch_managed_process(spec: dict) -> int | None:
     consumes on Windows: `exe_path`, an optional `file_path` carrying the
     argument or file to open, and an optional `cwd`. It is launched as the
     console user and never as root — a kiosk application started by the daemon
-    would have no display and would own its files to the wrong account.
+    would have no display and would own its files to the wrong account. A
+    macOS application bundle is opened through Launch Services, and the pid is
+    the application's (darwin._open_application). The row's `visibility` and
+    `priority` are the Windows launcher's window state and priority class:
+    neither is applied off Windows, where the app does not offer them.
     """
     user = console_user()
     if user is None:
@@ -350,7 +358,7 @@ def launch_managed_process(spec: dict) -> int | None:
         return None
     try:
         account = pwd.getpwnam(user)
-        argv = _managed_argv(spec)
+        argv, application = _managed_command(spec)
         cwd = _managed_cwd(spec)
     except (KeyError, OSError, ValueError) as e:
         logger.error(f"Cannot launch {spec.get('exe_path')!r}: {e}")
@@ -358,7 +366,13 @@ def launch_managed_process(spec: dict) -> int | None:
 
     logger.info(f"Launching: {' '.join(argv)} as {user}")
     try:
-        pid = _spawn(argv, account.pw_uid, session_env(account.pw_uid), cwd=cwd)
+        env = session_env(account.pw_uid)
+        if application is None:
+            pid = _spawn(argv, account.pw_uid, env, cwd=cwd)
+        else:
+            from . import darwin
+
+            pid = darwin._open_application(argv, application, account.pw_uid, env, cwd)
     except (OSError, ValueError) as e:
         logger.error(f"Process launch failed: {e}")
         return None
@@ -974,29 +988,40 @@ def _exits_in(data: bytes) -> Iterator[tuple[int, int]]:
         offset += (length + 3) & ~3
 
 
-def _managed_argv(spec: dict) -> list[str]:
-    """The command line a managed process row asks for.
+def _managed_command(spec: dict) -> tuple[list[str], str | None]:
+    """The command line a managed process row asks for, and the image of the
+    application it opens — None when the command is the program itself.
 
-    A macOS application bundle is launched as the binary inside it — the image
-    supervision later finds by path — and never through `open`, which hands the
-    launch to LaunchServices and leaves no pid of ours to supervise.
+    A macOS application bundle is opened through Launch Services, `open -a
+    <bundle>`, the way Finder opens one, and never by exec'ing the binary
+    inside it from a launchd job: macOS kills its own applications started
+    that way (their launch constraints admit Launch Services alone), and any
+    other misses the activation and document handling an application launch
+    gets. No `-n`, so a running instance is activated rather than started
+    twice. The program to supervise is the binary the bundle names, which
+    Launch Services starts.
     """
     import shared_utils
 
     exe_path = _validated((spec.get('exe_path') or '').strip(), 'executable path')
     if not exe_path:
         raise ValueError('the process has no exe_path')
-    exe_path = shared_utils.resolve_exec_target(exe_path)
-    if not os.path.isfile(exe_path):
-        raise FileNotFoundError(f"executable path not found: {exe_path}")
-    arguments = (spec.get('file_path') or '').strip()
-    if not arguments:
-        return [exe_path]
+    image = shared_utils.resolve_exec_target(exe_path)
+    if not os.path.isfile(image):
+        raise FileNotFoundError(f"executable path not found: {image}")
+    # only an application bundle resolves to a path other than its own.
+    application = image if image != exe_path else None
+    command = [OPEN_COMMAND, '-a', exe_path] if application else [exe_path]
     # The field holds either one file to open or a command line, the same way it
-    # does on Windows; a path that exists is never re-split on its spaces.
+    # does on Windows; a path that exists is never re-split on its spaces. An
+    # application is handed the file as a document, and the command line
+    # after --args.
+    arguments = (spec.get('file_path') or '').strip()
     if os.path.isfile(arguments):
-        return [exe_path, _validated(arguments, 'file path')]
-    return [exe_path, *shlex.split(arguments)]
+        command.append(_validated(arguments, 'file path'))
+    elif arguments:
+        command += [*(['--args'] if application else []), *shlex.split(arguments)]
+    return command, application
 
 
 def _managed_cwd(spec: dict) -> str | None:

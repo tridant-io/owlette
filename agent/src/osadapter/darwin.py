@@ -7,9 +7,10 @@ the spawn into it are answered by posix's own helpers, which carry the macOS
 mechanism beside the Linux one, because the shared operations resolve those
 helpers inside `posix` and an override here would never be reached. This file
 is what macOS does differently — launchd for service control, IOPlatformUUID
-for identity, application bundles for the software inventory, BSD `shutdown`
-for the reboot subsystem, and a capture that answers to the desktop app's
-Screen Recording grant rather than to a display server.
+for identity, application bundles for the software inventory and Launch
+Services for the managed ones, BSD `shutdown` for the reboot subsystem, and a
+capture that answers to the desktop app's Screen Recording grant rather than
+to a display server.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import os
 import plistlib
 import pwd
 import re
+import select
 import stat
 import subprocess
 import tempfile
@@ -99,6 +101,26 @@ _SPAWN_BUDGET_SECONDS = 10
 # not yet kickstarted is exactly that; managed entries launch under locks of
 # their own, and hoot beside them.
 _session_spawn_lock = threading.Lock()
+# How often an application `open` asked for is looked for. One look reads
+# every process's owner and, for the user's own, its image: about 10 ms on a
+# machine running 700 processes.
+_APPLICATION_POLL_SECONDS = 0.05
+
+# How a process that is no session job of ours ends — an application Launch
+# Services started, or one adopted after a restart — read off the kernel. A
+# kqueue reports the exit status of any process its reader may signal, which
+# for the root daemon is every one; launchd keeps none for an application's
+# job, which leaves the domain the moment its process exits. Watched pids are
+# kept until their exit is, and the statuses go where a session job's do.
+_NOTE_EXITSTATUS = 0x04000000
+_EXIT_EVENTS_PER_READ = 16
+_exit_watched = set()
+_exit_recorded = threading.Condition(_session_jobs_lock)
+# None until the first watch opens it; False once it cannot be had.
+_exit_queue = None
+# The kernel posts an exit before the pid reads as gone, but the reader may not
+# have run yet when the monitor loop asks.
+_EXIT_EVENT_WAIT_SECONDS = 0.5
 
 # BSD shutdown(8): with a countdown it forks a scheduler that calls setsid(),
 # is adopted by launchd, sleeps the countdown out and then reboots through
@@ -328,7 +350,7 @@ def _platform_uuid() -> str:
     return platform_uuid
 
 
-def _spawn_in_gui_domain(argv, uid, env, cwd=None) -> int:
+def _spawn_in_gui_domain(argv, uid, env, cwd=None, *, deadline=None, await_exec=True) -> int:
     """Start `argv` as a launchd job in `uid`'s GUI domain; returns its pid.
 
     launchd starts the job inside that login's own bootstrap namespace and
@@ -350,18 +372,21 @@ def _spawn_in_gui_domain(argv, uid, env, cwd=None) -> int:
     the program leaves running when it exits is its own business, as it is on
     Windows and Linux, rather than launchd's to kill. Raises OSError when
     launchd refuses the job, the program never starts, or the spawn outruns
-    its budget.
+    its budget — `deadline`, when a caller spends the budget on more than the
+    spawn. A caller that never hands the pid on, and judges the job by its
+    exit status instead, passes `await_exec=False`.
     """
-    deadline = time.monotonic() + _SPAWN_BUDGET_SECONDS
-    if not _session_spawn_lock.acquire(timeout=_SPAWN_BUDGET_SECONDS):
+    if deadline is None:
+        deadline = time.monotonic() + _SPAWN_BUDGET_SECONDS
+    if not _session_spawn_lock.acquire(timeout=_remaining(deadline)):
         raise OSError('another spawn into a session did not finish in time')
     try:
-        return _spawn_job(argv, uid, env, cwd, deadline)
+        return _spawn_job(argv, uid, env, cwd, deadline, await_exec)
     finally:
         _session_spawn_lock.release()
 
 
-def _spawn_job(argv, uid, env, cwd, deadline) -> int:
+def _spawn_job(argv, uid, env, cwd, deadline, await_exec=True) -> int:
     """The spawn itself, under the session-spawn lock and within `deadline`."""
     domain = f'gui/{uid}'
     _sweep_session_jobs(domain, deadline)
@@ -388,7 +413,8 @@ def _spawn_job(argv, uid, env, cwd, deadline) -> int:
         if not reported.isdigit():
             raise OSError(f"launchctl kickstart named no pid for {service}: {reported!r}")
         pid = int(reported)
-        _await_exec(pid, uid, deadline)
+        if await_exec:
+            _await_exec(pid, uid, deadline)
     except OSError:
         _run(['launchctl', 'bootout', service], _remaining(deadline, floor=1))
         raise
@@ -396,6 +422,98 @@ def _spawn_job(argv, uid, env, cwd, deadline) -> int:
         _session_exits.pop(pid, None)
         _session_jobs[pid] = (domain, label)
     return pid
+
+
+def _open_application(argv, image, uid, env, cwd=None) -> int:
+    """Run `argv`, an `open -a <bundle>`, in `uid`'s session; returns the pid
+    of the application it opens, the process of `uid` whose image is `image`.
+
+    `open` asks Launch Services, which has launchd start the application as a
+    job of its own, so the session job's pid is `open`'s and never the one to
+    supervise. The application started after this call did, and it is running
+    by the time `open` returns; `cwd` is where `open` runs, while the
+    application starts in /, as every application Launch Services starts does.
+    The wait for it shares the one spawn budget, so a launch holds the monitor
+    loop no longer than an exec'd one can. Raises OSError when `open` fails
+    and nothing started, the application is not found within the budget, or a
+    running instance cannot be told apart from the others.
+    """
+    deadline = time.monotonic() + _SPAWN_BUDGET_SECONDS
+    launched_at = time.time()
+    opener = _spawn_in_gui_domain(argv, uid, env, cwd, deadline=deadline, await_exec=False)
+    try:
+        return _await_application(argv, image, uid, launched_at, opener, deadline)
+    finally:
+        # open is nothing to supervise; its job goes with the next sweep.
+        with _session_jobs_lock:
+            _session_jobs.pop(opener, None)
+            _session_exits.pop(opener, None)
+
+
+def _await_application(argv, image, uid, launched_at, opener, deadline) -> int:
+    """The application `opener` opened, looked for until `deadline`.
+
+    A process started at or after `launched_at` is the one Launch Services
+    started. With none, an application that was already running was activated
+    instead, which is known once `open` has returned — it returns once what it
+    launched is running, so the processes are read after it is seen gone: the
+    one instance running is adopted, and with several, which one was activated
+    is not known, so none is. With nothing started, open's exit status says
+    whether Launch Services refused.
+    """
+    opened = False
+    while True:
+        returned = opened or not psutil.pid_exists(opener)
+        instances = _instances(image, uid)
+        started = [pid for began, pid in instances if began >= launched_at]
+        if started:
+            _watch_opened(started[0])
+            return started[0]
+        if returned and not opened:
+            opened = True
+            code = _session_job_exit_code(opener, _remaining(deadline))
+            if code not in (0, None):
+                raise OSError(f"{' '.join(argv)} exited {code}")
+        if opened and len(instances) == 1:
+            pid = instances[0][1]
+            logger.info(
+                f"{image} was already running (PID {pid}): Launch Services "
+                f"activated it rather than starting another")
+            return pid
+        if opened and instances:
+            raise OSError(
+                f"{len(instances)} instances of {image} are running as uid {uid}, "
+                f"and which one Launch Services activated is not known")
+        if time.monotonic() >= deadline:
+            raise OSError(
+                f"Launch Services started no {image} as uid {uid} within "
+                f"{_SPAWN_BUDGET_SECONDS}s")
+        time.sleep(_APPLICATION_POLL_SECONDS)
+
+
+def _instances(image: str, uid: int) -> list[tuple[float, int]]:
+    """Every process of `uid` running `image`, as (start time, pid), oldest
+    first. Each one is read afresh: psutil keeps the first image it reads for
+    a pid, and a process launchd has only just spawned is still xpcproxy."""
+    found = []
+    for pid in psutil.pids():
+        try:
+            process = psutil.Process(pid)
+            with process.oneshot():
+                if process.uids().real == uid and process.exe() == image:
+                    found.append((process.create_time(), pid))
+        except psutil.Error:
+            continue
+    return sorted(found)
+
+
+def _watch_opened(pid: int) -> None:
+    """Watch an application Launch Services just started for us: no session
+    job, and anything kept under its pid before is a predecessor's."""
+    with _session_jobs_lock:
+        _session_exits.pop(pid, None)
+        _session_jobs[pid] = None
+    _watch_exit_status(pid)
 
 
 def _sweep_session_jobs(domain: str, deadline: float) -> None:
@@ -424,7 +542,8 @@ def _watch_session_job(pid: int) -> None:
     """posix.watch_exit's macOS half: re-attach a process the daemon adopted
     after a restart to the session job it runs as, which launchd names in its
     environment, so the job's exit status can still be read. Anything else is
-    kept as no job of ours, so it is looked up once."""
+    kept as no job of ours, so it is looked up once, and its exit status is
+    the kernel's to report."""
     with _session_jobs_lock:
         if pid in _session_jobs:
             return
@@ -437,23 +556,98 @@ def _watch_session_job(pid: int) -> None:
         return
     with _session_jobs_lock:
         _session_jobs.setdefault(pid, job)
+    if job is None:
+        _watch_exit_status(pid)
 
 
-def _session_job_exit_code(pid: int) -> int | None:
-    """posix.exit_code's macOS half: launchd's last exit status for the
-    session job `pid` runs as, read once."""
+def _session_job_exit_code(
+        pid: int, timeout_seconds: float = _EXIT_STATUS_TIMEOUT_SECONDS) -> int | None:
+    """posix.exit_code's macOS half, read once: launchd's last exit status for
+    the session job `pid` runs as, or the kernel's for a process that is none."""
     with _session_jobs_lock:
         job = _session_jobs.get(pid)
     if job is not None:
-        printed = _run(['launchctl', 'print', job[0]], _EXIT_STATUS_TIMEOUT_SECONDS)
+        printed = _run(['launchctl', 'print', job[0]], timeout_seconds)
         if printed is not None and printed.returncode == 0:
             _keep_session_exits(printed.stdout)
-    with _session_jobs_lock:
+    with _exit_recorded:
         if not psutil.pid_exists(pid):
+            _exit_recorded.wait_for(
+                lambda: pid not in _exit_watched, timeout=_EXIT_EVENT_WAIT_SECONDS)
             # gone without launchd showing it exit: its login ended and took
             # the domain with it, or it was booted out. It never will now.
             _session_jobs.pop(pid, None)
         return _session_exits.pop(pid, None)
+
+
+def _watch_exit_status(pid: int) -> None:
+    """Have the kernel report how `pid` ends. One that is gone already, or is
+    not the daemon's to watch, ends unknown."""
+    queue = _exit_status_queue()
+    if queue is None:
+        return
+    with _session_jobs_lock:
+        # first, so an exit the kernel reports at once is still kept.
+        _exit_watched.add(pid)
+    try:
+        queue.control([select.kevent(
+            pid, select.KQ_FILTER_PROC, select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+            select.KQ_NOTE_EXIT | _NOTE_EXITSTATUS)], 0, 0)
+    except OSError as e:
+        with _session_jobs_lock:
+            _exit_watched.discard(pid)
+        logger.debug(f"How PID {pid} ends cannot be watched: {e}")
+
+
+def _exit_status_queue():
+    """The kqueue exits are reported on, its reader started with it; None when
+    there is none to be had."""
+    global _exit_queue
+    with _session_jobs_lock:
+        if _exit_queue is None:
+            try:
+                queue = select.kqueue()
+            except OSError as e:
+                logger.warning(
+                    f"No process exit statuses ({e}): how an application or an "
+                    f"adopted process ends cannot be read")
+                _exit_queue = False
+            else:
+                threading.Thread(
+                    target=_read_exit_statuses, args=(queue,),
+                    name='exit-statuses', daemon=True).start()
+                _exit_queue = queue
+        return _exit_queue or None
+
+
+def _read_exit_statuses(queue) -> None:
+    """Keep the exit status of every watched pid the kernel reports ending, as
+    a Popen returncode carries it: negative for a signal."""
+    global _exit_queue
+    while True:
+        try:
+            events = queue.control(None, _EXIT_EVENTS_PER_READ)
+        except OSError as e:
+            logger.warning(f"Process exit statuses stopped: {e}")
+            with _exit_recorded:
+                _exit_queue = False
+                _exit_watched.clear()
+                _exit_recorded.notify_all()
+            queue.close()
+            return
+        with _exit_recorded:
+            for event in events:
+                if event.ident not in _exit_watched:
+                    continue
+                _exit_watched.discard(event.ident)
+                if event.flags & select.KQ_EV_ERROR:
+                    continue
+                try:
+                    code = os.waitstatus_to_exitcode(event.data)
+                except ValueError:
+                    continue
+                keep_exit_code(_session_exits, event.ident, code)
+            _exit_recorded.notify_all()
 
 
 def _keep_session_exits(services: str) -> None:

@@ -2148,8 +2148,27 @@ class TestDarwin:
             _stop_child(child)
 
         assert lookups == [child.pid]
-        assert darwin.exit_code(child.pid) is None
+        # how it ended is the kernel's to say, launchd having no job to ask.
+        assert darwin.exit_code(child.pid) == -9
         assert child.pid not in darwin._session_jobs
+
+    @pytest.mark.parametrize('script, code', [
+        ('sleep 2; exit 0', 0),
+        ('sleep 2; exit 3', 3),
+        ('sleep 2; kill -9 $$', -9),
+    ])
+    def test_how_a_process_that_is_no_session_job_ended_is_read_off_the_kernel(
+            self, darwin, script, code):
+        """An application Launch Services started is a launchd job of its own,
+        which launchd drops from the domain, status and all, the moment it
+        exits; one adopted after a restart may be nobody's job at all. Neither
+        is the daemon's child, so without the kernel's word somebody quitting
+        either was booked as a crash."""
+        pid = _an_orphan(script)
+        darwin.watch_exit(pid)
+        _wait_for(lambda: not psutil.pid_exists(pid), seconds=10)
+
+        assert darwin.exit_code(pid) == code
 
     def test_a_job_whose_login_ended_is_no_longer_tracked(self, darwin, monkeypatch):
         """Logging out tears the whole GUI domain down, so its jobs never show
@@ -2343,6 +2362,181 @@ class TestDarwin:
 
         assert time.monotonic() - started < 3
         assert max(timeouts) <= 1
+
+    def test_an_application_bundle_is_opened_through_launch_services(
+            self, darwin, posix, monkeypatch, tmp_path, private_executable):
+        """Exec'ing the binary inside a bundle from a session job had macOS
+        kill its own applications on the spot: Calculator died of a launch
+        constraint violation, launched by launchd rather than by Launch
+        Services. The bundle is opened as Finder opens it, and the pid handed
+        back is the application Launch Services started — the console user's
+        process running the bundle's binary that began after the launch did,
+        never an older instance of it."""
+        bundle, binary = _runnable_bundle(tmp_path, private_executable)
+        monkeypatch.setattr(
+            posix, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        older = subprocess.Popen([str(binary)])
+        launchd = _LaunchServices(monkeypatch, darwin, application=binary)
+        try:
+            _wait_for(lambda: _exe(older.pid) == str(binary))
+            pid = posix.launch_managed_process(
+                {'exe_path': str(bundle), 'cwd': str(tmp_path)})
+            image = _exe(pid)
+        finally:
+            _stop_child(older)
+            launchd.stop()
+
+        job = launchd.jobs[0][1]
+        assert job['ProgramArguments'] == ['/usr/bin/open', '-a', str(bundle)]
+        # open runs where the row says; the application starts in /, as every
+        # application Launch Services starts does.
+        assert job['WorkingDirectory'] == str(tmp_path)
+        assert pid == launchd.started[0].pid
+        assert image == str(binary)
+
+    def test_a_document_is_opened_and_a_command_line_follows_args(
+            self, darwin, posix, monkeypatch, tmp_path, private_executable):
+        """The field holds one file to open or a command line, as on Windows:
+        the file is handed to the application as a document, and the command
+        line reaches it as its arguments."""
+        bundle, binary = _runnable_bundle(tmp_path, private_executable)
+        document = tmp_path / 'show plan.toe'
+        document.write_bytes(b'')
+        monkeypatch.setattr(
+            posix, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        commands, launched = [], []
+        for file_path in (str(document), '--fullscreen --display 2'):
+            launchd = _LaunchServices(monkeypatch, darwin, application=binary)
+            try:
+                pid = posix.launch_managed_process(
+                    {'exe_path': str(bundle), 'file_path': file_path})
+            finally:
+                launchd.stop()
+            commands.append(launchd.jobs[0][1]['ProgramArguments'])
+            launched.append(pid == launchd.started[0].pid)
+
+        assert commands == [
+            ['/usr/bin/open', '-a', str(bundle), str(document)],
+            ['/usr/bin/open', '-a', str(bundle), '--args', '--fullscreen', '--display', '2'],
+        ]
+        assert launched == [True, True]
+
+    def test_an_application_already_running_is_adopted(
+            self, darwin, posix, monkeypatch, tmp_path, private_executable, caplog):
+        """Without -n, Launch Services activates a running instance rather
+        than starting another, and that instance is the one to supervise."""
+        bundle, binary = _runnable_bundle(tmp_path, private_executable)
+        monkeypatch.setattr(
+            posix, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        running = subprocess.Popen([str(binary)])
+        _LaunchServices(monkeypatch, darwin, application=None)
+        try:
+            _wait_for(lambda: _exe(running.pid) == str(binary))
+            with caplog.at_level(logging.INFO):
+                pid = posix.launch_managed_process({'exe_path': str(bundle)})
+        finally:
+            _stop_child(running)
+
+        assert pid == running.pid
+        assert 'already running' in caplog.text
+
+    def test_with_several_instances_running_none_is_adopted(
+            self, darwin, posix, monkeypatch, tmp_path, private_executable, caplog):
+        """Which one Launch Services activated is not known, and a stranger
+        adopted is one the daemon would later kill."""
+        bundle, binary = _runnable_bundle(tmp_path, private_executable)
+        monkeypatch.setattr(
+            posix, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        running = [subprocess.Popen([str(binary)]) for _ in range(2)]
+        _LaunchServices(monkeypatch, darwin, application=None)
+        try:
+            _wait_for(lambda: all(_exe(child.pid) == str(binary) for child in running))
+            with caplog.at_level(logging.ERROR):
+                pid = posix.launch_managed_process({'exe_path': str(bundle)})
+        finally:
+            for child in running:
+                _stop_child(child)
+
+        assert pid is None
+        assert 'instances of' in caplog.text
+
+    def test_an_application_that_never_starts_is_a_failed_launch_within_the_budget(
+            self, darwin, posix, monkeypatch, tmp_path, private_executable, caplog):
+        """The monitor loop launches managed processes itself: the wait for the
+        application is held to the spawn budget an exec'd launch has."""
+        bundle, binary = _runnable_bundle(tmp_path, private_executable)
+        monkeypatch.setattr(
+            posix, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        monkeypatch.setattr(darwin, '_SPAWN_BUDGET_SECONDS', 0.5)
+        _LaunchServices(monkeypatch, darwin, application=None)
+        started = time.monotonic()
+
+        with caplog.at_level(logging.ERROR):
+            pid = posix.launch_managed_process({'exe_path': str(bundle)})
+
+        assert pid is None
+        assert time.monotonic() - started < 3
+        assert f'Launch Services started no {binary}' in caplog.text
+
+    def test_an_open_that_fails_is_a_failed_launch_at_once(
+            self, darwin, posix, monkeypatch, tmp_path, private_executable, caplog):
+        """open's exit status is how Launch Services answered: a refusal
+        fails the launch then, not when the budget runs out."""
+        bundle, binary = _runnable_bundle(tmp_path, private_executable)
+        monkeypatch.setattr(
+            posix, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        _LaunchServices(monkeypatch, darwin, application=None, status=1)
+        started = time.monotonic()
+
+        with caplog.at_level(logging.ERROR):
+            pid = posix.launch_managed_process({'exe_path': str(bundle)})
+
+        assert pid is None
+        assert time.monotonic() - started < darwin._SPAWN_BUDGET_SECONDS / 2
+        assert 'exited 1' in caplog.text
+
+        # The negative control: an application that did start is the launch,
+        # whatever open said about the document it was handed.
+        launchd = _LaunchServices(monkeypatch, darwin, application=binary, status=1)
+        try:
+            pid = posix.launch_managed_process({'exe_path': str(bundle)})
+        finally:
+            launchd.stop()
+        assert pid == launchd.started[0].pid
+
+    def test_an_opened_application_reports_how_it_ended(
+            self, darwin, posix, monkeypatch, tmp_path, private_executable):
+        """launchd keeps no status for the job Launch Services started it as,
+        so the kernel's is what tells a quit from a crash."""
+        bundle, binary = _runnable_bundle(tmp_path, private_executable)
+        monkeypatch.setattr(
+            posix, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        launchd = _LaunchServices(monkeypatch, darwin, application=binary)
+        try:
+            pid = posix.launch_managed_process({'exe_path': str(bundle)})
+            darwin.watch_exit(pid)
+            launchd.started[0].terminate()
+            launchd.started[0].wait(10)
+        finally:
+            launchd.stop()
+
+        assert darwin.exit_code(pid) == -15
+
+    def test_a_target_that_is_no_bundle_is_still_the_session_job(
+            self, darwin, posix, monkeypatch, tmp_path):
+        """Scripts and plain binaries are exec'd as they always were, and the
+        pid is the job's own."""
+        program = tmp_path / 'player'
+        program.write_bytes(b'')
+        monkeypatch.setattr(
+            posix, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        launchd = _SessionLaunchd(monkeypatch, darwin, pid=os.getpid())
+
+        pid = posix.launch_managed_process(
+            {'exe_path': str(program), 'file_path': '--fullscreen'})
+
+        assert pid == os.getpid()
+        assert launchd.jobs[0][1]['ProgramArguments'] == [str(program), '--fullscreen']
 
     def test_the_inventory_is_the_application_bundles_on_disk(
             self, darwin, monkeypatch, tmp_path):
@@ -2645,6 +2839,47 @@ class _SessionLaunchd:
         if verb == 'kickstart':
             return _completed(0, '' if self.pid is None else f'{self.pid}\n')
         return _completed(0, '')
+
+
+class _LaunchServices(_SessionLaunchd):
+    """launchctl as an `open -a` job meets it: kickstarting the job is Launch
+    Services starting `application` (nothing for None), and the pid it names
+    is an `open` that has already returned `status`."""
+
+    def __init__(self, monkeypatch, darwin, application, status=0):
+        super().__init__(monkeypatch, darwin, pid=_a_finished_pid())
+        self.application = application
+        self.status = status
+        self.started = []
+
+    def _run(self, command, timeout_seconds):
+        if command[1] == 'kickstart':
+            if self.application is not None:
+                self.started.append(subprocess.Popen([str(self.application)]))
+            label = self.jobs[-1][1]['Label']
+            self.services = f'\t\t       0      {self.status} \t{label}\n'
+        return super()._run(command, timeout_seconds)
+
+    def stop(self):
+        for child in self.started:
+            _stop_child(child)
+
+
+def _a_finished_pid():
+    """The pid of a process that has exited and been reaped."""
+    finished = subprocess.Popen(['/usr/bin/true'])
+    finished.wait()
+    return finished.pid
+
+
+def _runnable_bundle(tmp_path, private_executable):
+    """An application bundle whose binary runs until it is killed: the
+    bundle, and that binary."""
+    bundle = tmp_path / 'Kiosk.app'
+    _app(bundle)
+    (bundle / 'Contents' / 'MacOS').mkdir()
+    binary = private_executable('Kiosk').rename(bundle / 'Contents' / 'MacOS' / 'Kiosk')
+    return bundle, binary
 
 
 def _completed(returncode, stdout):
