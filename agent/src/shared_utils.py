@@ -1413,8 +1413,9 @@ def ensure_data_directories():
 
 
 def grant_data_group(path):
-    """Give a file the daemon wrote in the data root to the group that reaches
-    it. A no-op on Windows, where the tree is ACL'd rather than grouped."""
+    """Give a file the daemon wrote in the data root, by path or by the
+    descriptor it holds open, to the group that reaches it. A no-op on Windows,
+    where the tree is ACL'd rather than grouped."""
     if _IS_WINDOWS:
         return
     from osadapter import posix

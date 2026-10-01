@@ -1646,6 +1646,46 @@ class TestRequestSeam:
         assert json.loads(
             self._reply(seam).read_text().splitlines()[0])['event'] == 'status'
 
+    @pytest.mark.parametrize('seam_file', ['ipc/requests/req.result', 'ipc/request_nonce'])
+    def test_the_group_goes_to_the_file_the_daemon_wrote_not_its_name(
+            self, seam, monkeypatch, seam_file):
+        # Both live in a group-writable directory, so their name can be taken
+        # over once the daemon has closed the file: the group handover has to
+        # land on what was written, not on whatever the name points at by then.
+        from osadapter import posix
+
+        monkeypatch.setattr(configure_site, '_service_control', lambda verb: True)
+        elsewhere = seam / 'elsewhere'
+        elsewhere.write_text('')
+        target = seam / seam_file
+        self._request(seam, 'restart', configure_site._request_nonce())
+        written = []
+        real_close = os.close
+
+        def close(fd):
+            info = os.fstat(fd)
+            real_close(fd)
+            if not written and stat.S_ISREG(info.st_mode) and target.exists() \
+                    and os.lstat(target).st_ino == info.st_ino:
+                written.append(info.st_ino)
+                os.unlink(target)
+                os.link(elsewhere, target)
+
+        handed = []
+        monkeypatch.setattr(posix, '_group_gid', lambda: os.getgid() + 4242)
+        with monkeypatch.context() as patched:
+            patched.setattr(os, 'chown', lambda path, uid, gid, **kw: handed.append(
+                os.fstat(path).st_ino if isinstance(path, int) else os.lstat(path).st_ino))
+            patched.setattr(os, 'fchown', lambda fd, uid, gid: handed.append(
+                os.fstat(fd).st_ino))
+            patched.setattr(os, 'close', close)
+
+            configure_site.drain_privileged_requests()
+
+        assert written, f'{seam_file} was never written'
+        assert elsewhere.stat().st_ino not in handed
+        assert written[0] in handed
+
     def test_nothing_is_honoured_with_nobody_at_a_graphical_session(
             self, seam, monkeypatch, caplog):
         monkeypatch.setattr(configure_site.osadapter, 'console_user', lambda: None)

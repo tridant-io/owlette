@@ -448,17 +448,29 @@ def harden_data_root(root, directories) -> None:
     _chgrp_tree(os.path.join(root, CLI_CACHE_DIR), gid)
 
 
-def adopt_into_group(path: str) -> None:
+def adopt_into_group(path: str | int) -> None:
     """Give one file the daemon wrote into the tree to the group.
 
     The mode table is applied when the daemon starts; anything it writes there
     afterwards — the cortex CLI binary above all, which is 0o750 — has to be
     handed over as it is written, or the console user cannot reach it until the
     next start.
+
+    A descriptor is handed over itself: in a group-writable directory the name
+    can be swapped for a hard link once the daemon has closed the file, and the
+    group would go to whatever that link names.
     """
     gid = _group_gid()
-    if gid is not None:
+    if gid is None:
+        return
+    if not isinstance(path, int):
         _chgrp(path, gid)
+        return
+    try:
+        if os.fstat(path).st_gid != gid:
+            os.fchown(path, -1, gid)
+    except OSError as e:
+        logger.debug(f"Could not give descriptor {path} to group {GROUP}: {e}")
 
 
 def _directory_mode(relative: str) -> int:

@@ -1493,12 +1493,14 @@ def _issue_request_nonce() -> str:
         try:
             os.fchmod(fd, REQUEST_NONCE_MODE)
             os.write(fd, nonce.encode())
+            # by descriptor: `ipc/` is group-writable, so the name may not be
+            # this file any more once it is closed.
+            shared_utils.grant_data_group(fd)
         finally:
             os.close(fd)
     except OSError as e:
         logging.warning(f"Could not issue a request nonce: {e}")
         return ''
-    shared_utils.grant_data_group(path)
     return nonce
 
 
@@ -1696,12 +1698,13 @@ def _spawn_into_reply(reply_path: str, *flags: str) -> subprocess.Popen:
             stdin=subprocess.DEVNULL, start_new_session=True)
     finally:
         os.close(fd)
-    shared_utils.grant_data_group(reply_path)
     return child
 
 
 def _open_reply(path: str) -> int:
-    """A descriptor on one request's answer, owned by the daemon and 0640.
+    """A descriptor on one request's answer, owned by the daemon, 0640 and
+    already the group's — handed over here rather than by name once it is
+    closed, when the name may be somebody else's link.
 
     Appended to and never truncated: the answer is a line protocol, and a `pair`
     hands this same descriptor to the subprocess that writes the rest of it.
@@ -1723,6 +1726,7 @@ def _open_reply(path: str) -> int:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NONBLOCK,
                      REQUEST_REPLY_MODE)
     os.fchmod(fd, REQUEST_REPLY_MODE)
+    shared_utils.grant_data_group(fd)
     return fd
 
 
@@ -1737,8 +1741,6 @@ def _write_reply(path: str, *events) -> None:
             os.close(fd)
     except OSError as e:
         logging.warning(f"Could not answer {os.path.basename(path)}: {e}")
-        return
-    shared_utils.grant_data_group(path)
 
 
 def _audit(verb: str, outcome: str, detail: str, uid: int) -> dict:
