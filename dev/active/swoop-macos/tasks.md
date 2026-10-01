@@ -856,3 +856,29 @@ empty document in TextEdit itself.
   760 positions, 14 shape changes over 3 distinct shapes (the arrow and two edge cursors, 46x44 and 48x36,
   hot spots centred), each later one served from the cache. `sample()` p50 24 us, p95 4.4 ms. The I-beam and the
   pointing hand were not crossed by the sweep; gate M1 sees them in a real session.
+
+### 2026-09-30, the owner's findings in the mac app (outside the task list)
+The owner used the installed app on the Mac between the rig runs and reported each of these; none is a task's
+done-when, so each is logged here for Task 7.1's changelog.
+- **Platform wording** (`6c68acd0`, `71af18d4`, `2c6a4a14`): the launch target is an executable on Windows, an
+  app on macOS and a program on Linux, in the app and the dashboard; no "exe" is left on a Mac screen.
+  *Changelog:* "the app and the dashboard name a process's launch target the way each system does."
+- **Start on login** (`87ff103e`): toggles per user on macOS and Linux as an override of the installer's login
+  item, instead of refusing. *Changelog:* "macOS and Linux: start on login can be turned off and on per user."
+- **Leave site, join a site, restart service, reboot** (`c56e57c9`, `0f55497f`, `395e7a7c`, `576638ab`): the app
+  asks the daemon through the request seam (console user's uid, one-shot nonce, audited with the uid); leave
+  moves the machine id aside as `machine_id.left-<epoch>`. The owner left the site and re-paired the Mac as
+  `TEC-MBA` at 20:10 (audit lines `leave` and `pair`, uid 501). *Changelog:* "macOS and Linux: leave site, join a
+  site, restart service and reboot work from the app."
+- **Mac apps as managed processes** (`700be1e2`, `65acb73e`, `6eb91ddf`): a `.app` bundle is launched through
+  Launch Services, so macOS no longer kills Calculator with a launch constraint violation, and its process is
+  found, restarted and stopped. *Changelog:* "macOS: an app bundle can be a managed process."
+- **Priority and visibility** (`cba05593`): offered on Windows only, since no Mac or Linux agent applies them.
+- **Menubar icon** (`1e00df85`): the error state is the same eye glyph as the others in flat system red, not the
+  gradient orb. *Changelog:* "macOS: the menubar icon keeps one style in every state."
+- **Service log** (`a5956691`): the agent no longer tries NVIDIA's temperature read on a Mac, which can only fail
+  there and logged a warning twice every six seconds.
+- **Dev pairing links named `localhost:8080`** (`57e1b66a`): not a Mac bug. `publicOrigin()` falls back to the
+  request's own origin when `NEXT_PUBLIC_BASE_URL` is unset, and on Railway that is the listen address. The
+  registry now lists the key for `railway-dev`; the value itself (`https://dev.owlette.app`) is the owner's to set,
+  since it is a config change to dev. Until then dev's alert emails and download redirect also fall back to prod.
