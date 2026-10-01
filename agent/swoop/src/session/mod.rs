@@ -576,6 +576,19 @@ impl Default for IdrPolicy {
 /// bytes, so 2 Hz costs nothing and is well inside every stall threshold.
 pub const FLOOR_INTERVAL: Duration = Duration::from_millis(500);
 
+/// The floor repeat a second after the last fresh picture, counted from zero.
+const SETTLE_FLOOR: u32 = 1;
+
+/// Whether this floor repeat goes out as a keyframe: on macOS, once per still
+/// spell, a second in. At gate M1 (2026-09-30) leftovers of earlier content
+/// stayed on a still Mac screen through the repeats: they do not win back the
+/// detail VideoToolbox's per-frame cap cut while the picture moved. One
+/// keyframe once the picture settles replaces the smear with a clean frame.
+/// Windows keeps its repeats as they were.
+pub fn settles(still_floors: u32) -> bool {
+    cfg!(target_os = "macos") && still_floors == SETTLE_FLOOR
+}
+
 /// When the last frame was handed to the encoder, and whether the floor is due.
 #[derive(Debug)]
 pub struct FloorTimer {
@@ -824,7 +837,7 @@ mod host {
 
     use super::{
         codec_wire_name, feature_room, limits_for, pick_codec, tier_encodes, tiers, CaptureGate,
-        Denials, Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining, Outbox,
+        settles, Denials, Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining, Outbox,
         SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
@@ -3454,6 +3467,8 @@ mod host {
         /// frame-rate gate, and for the floor.
         floor: FloorTimer,
         last_encode: Option<Instant>,
+        /// Floor repeats since the last fresh picture, for [`settles`].
+        still_floors: u32,
     }
 
     impl TierPass {
@@ -3467,6 +3482,7 @@ mod host {
                 force_irap: true,
                 floor: FloorTimer::new(now),
                 last_encode: None,
+                still_floors: 0,
             }
         }
 
@@ -3743,6 +3759,8 @@ mod host {
                     }
                 } else if !tier.floor.due(now) {
                     continue;
+                } else if settles(tier.still_floors) {
+                    tier.force_irap = true;
                 }
 
                 let (width, height) = (tier.want.width, tier.want.height);
@@ -3813,6 +3831,8 @@ mod host {
                         // desktop.
                         tier.floor.fed(now);
                         tier.last_encode = Some(now);
+                        tier.still_floors =
+                            if fresh { 0 } else { tier.still_floors.saturating_add(1) };
                         if let Some(encoded) = encoded {
                             tier.force_irap = false;
                             // A full queue means the session thread fell behind.
@@ -4682,6 +4702,16 @@ mod tests {
     /// output measured 0.28 frames/s. The loop below is that case: every
     /// acquire times out, and the floor is the only thing that feeds the
     /// encoder.
+    #[test]
+    fn a_still_picture_settles_with_one_keyframe_on_macos_only() {
+        let settled: Vec<bool> = (0..5).map(settles).collect();
+        if cfg!(target_os = "macos") {
+            assert_eq!(settled, [false, true, false, false, false]);
+        } else {
+            assert_eq!(settled, [false; 5]);
+        }
+    }
+
     #[test]
     fn the_floor_feeds_the_encoder_on_a_timeout_only_capture_loop() {
         let start = Instant::now();
