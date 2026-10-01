@@ -724,6 +724,29 @@ pub fn limits_for(caps: &[CodecCaps], codec: Codec) -> Option<Limits> {
     })
 }
 
+/// The height `native` streams at on a Mac: the display's own size in points
+/// (1107 on a 3420x2214 panel at 2x), not its backing pixels. At gate M1 a
+/// full Retina picture encoded in 24 ms at p50 and 37 ms at p95, so a session
+/// that waits on each frame ran at 25-40 fps, and the browser shrinks that
+/// picture to its window anyway. The menu's explicit caps still reach past it.
+/// `None` off macOS and for a source no display has the pixel size of.
+#[cfg(target_os = "macos")]
+fn native_height(source: (u32, u32)) -> Option<u32> {
+    use crate::platform::macos::{display_ids, display_pixel_rect, display_scale};
+    display_ids()
+        .into_iter()
+        .find(|&id| {
+            let rect = display_pixel_rect(id);
+            (rect.width(), rect.height()) == (source.0 as i32, source.1 as i32)
+        })
+        .map(|id| (f64::from(source.1) / display_scale(id).max(1.0)).round() as u32)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_height(_source: (u32, u32)) -> Option<u32> {
+    None
+}
+
 /// The one estimate of this machine's uplink, split across every viewer by
 /// [`UplinkBudget`](crate::transport::governor::UplinkBudget).
 ///
@@ -812,7 +835,12 @@ pub fn tier_encodes(
             let resolution = members()
                 .map(|rate| rate.rung.resolution)
                 .min_by_key(|cap| cap.max_height().unwrap_or(u32::MAX))?;
-            let limits = resolution.narrow(limits_for(caps, tier.codec)?);
+            let mut limits = resolution.narrow(limits_for(caps, tier.codec)?);
+            if resolution == quality::ResolutionCap::Native {
+                if let Some(height) = native_height(source) {
+                    limits.max_height = limits.max_height.min(height);
+                }
+            }
             let (width, height) = match crate::gpu::scale::plan(source, limits) {
                 crate::gpu::scale::Plan::AsIs => source,
                 crate::gpu::scale::Plan::Downscale { width, height } => (width, height),
@@ -4451,6 +4479,25 @@ mod host {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_on_a_mac_is_each_displays_height_in_points() {
+        use crate::platform::macos::{display_ids, display_pixel_rect, display_point_rect};
+        for id in display_ids() {
+            let rect = display_pixel_rect(id);
+            let (.., points_high) = display_point_rect(id);
+            let source = (rect.width() as u32, rect.height() as u32);
+            assert_eq!(super::native_height(source), Some(points_high.round() as u32));
+        }
+        assert_eq!(super::native_height((7, 5)), None, "no display is 7x5");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn native_off_a_mac_is_no_cap() {
+        assert_eq!(super::native_height((3840, 2160)), None);
+    }
+
     use std::fs;
     use std::path::PathBuf;
 
