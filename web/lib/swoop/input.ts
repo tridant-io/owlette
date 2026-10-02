@@ -131,6 +131,13 @@ export interface InputCapture {
    * already names the host's own keys, so the modifier mapping never applies.
    */
   pressChord(codes: readonly string[]): void;
+  /**
+   * a modifier held down until the next typed key's release, for the super
+   * key outside keyboard lock, which the viewer's own system keeps for itself.
+   * sent as written, never through the mapping; released with everything
+   * else by `releaseAll`.
+   */
+  holdNextKey(code: string): void;
   detach(): void;
 }
 
@@ -180,6 +187,8 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   const queue: InputMessage[] = [];
   const heldKeys = new Set<string>();
   const heldButtons = new Set<number>();
+  /** the modifier `holdNextKey` has down, until the next key's release. */
+  let armed: string | null = null;
 
   // off the picture — over its letterbox bars or off the stage — with nothing
   // held. nothing reaches the host from there: a move pinned to the edge drags
@@ -259,8 +268,23 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     const tsUs = nowUs();
     for (const code of heldKeys) enqueue({ t: 'k', code, down: false, tsUs });
     heldKeys.clear();
+    armed = null;
     releaseButtons();
     flush();
+  };
+
+  const holdNextKey = (code: string): void => {
+    if (armed === code) return;
+    armed = code;
+    heldKeys.add(code);
+    key(code, true, nowUs());
+  };
+
+  const releaseArmed = (): void => {
+    if (armed === null) return;
+    const code = armed;
+    armed = null;
+    if (heldKeys.delete(code)) key(code, false, nowUs());
   };
 
   const pressChord = (codes: readonly string[]): void => {
@@ -294,6 +318,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     // and a spurious release is cheaper than a stuck key.
     heldKeys.delete(code);
     key(code, false, nowUs());
+    if (code !== armed) releaseArmed();
   };
 
   const onPointerMove = (event: PointerEvent): void => {
@@ -488,6 +513,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     flush,
     releaseAll,
     pressChord,
+    holdNextKey,
 
     detach(): void {
       if (detached) return;

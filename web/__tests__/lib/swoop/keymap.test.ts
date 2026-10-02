@@ -96,15 +96,15 @@ describe('keymap.json parity', () => {
 });
 
 describe('modifier mapping', () => {
-  const MODIFIERS = ['MetaLeft', 'MetaRight', 'ControlLeft', 'ControlRight'] as const;
+  const MODIFIERS = ['MetaLeft', 'MetaRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight'] as const;
   const sent = (host: 'windows' | 'macos' | 'linux', viewerIsMac: boolean, mapping: 'swap' | 'passthrough') =>
     MODIFIERS.map((code) => applyModifierMapping(code, host, viewerIsMac, mapping));
 
   // every host and viewer, under both mappings: [host, viewer, what swap sends for MODIFIERS].
   it.each([
-    ['windows', 'mac', ['ControlLeft', 'ControlRight', 'ControlLeft', 'ControlRight']],
-    ['linux', 'mac', ['ControlLeft', 'ControlRight', 'ControlLeft', 'ControlRight']],
-    ['macos', 'pc', ['MetaLeft', 'MetaRight', 'MetaLeft', 'MetaRight']],
+    ['windows', 'mac', ['ControlLeft', 'ControlRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight']],
+    ['linux', 'mac', ['ControlLeft', 'ControlRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight']],
+    ['macos', 'pc', ['MetaLeft', 'MetaRight', 'MetaLeft', 'MetaRight', 'AltLeft', 'AltRight']],
     ['macos', 'mac', [...MODIFIERS]],
     ['windows', 'pc', [...MODIFIERS]],
     ['linux', 'pc', [...MODIFIERS]],

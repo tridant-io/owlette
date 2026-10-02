@@ -1,40 +1,57 @@
 'use client';
 
 /**
- * the keyboard menu: the combinations the browser or the viewer's own windows
- * keeps for itself, sent as chords on the input channel, and ctrl+alt+del as
- * the secure-attention control message. the list is the host's own, by its
- * system, and above it sits the one modifier choice this host and viewer have,
- * when they have one; it drives the input capture's mapping. all of it needs
- * `ctl`; a view-only session sees the menu disabled rather than absent, so the
- * affordance is learnable.
+ * the keyboard menu: the modifier setting (shortcuts match, or keys match)
+ * with a legend of what the three modifiers do on this machine under it; the
+ * combinations the browser or the viewer's own windows keeps for itself, sent
+ * as chords on the input channel, and ctrl+alt+del as the secure-attention
+ * control message; and, outside fullscreen, a sticky super key, since the
+ * viewer's own system keeps that key until keyboard lock is held. the list is
+ * the host's own, by its system. all of it needs `ctl`; a view-only session
+ * sees the menu disabled rather than absent, so the affordance is learnable.
  */
 
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { Fragment, useEffect, useState, useSyncExternalStore } from 'react';
 import { Keyboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { MachineOsFamily } from '@/lib/machineOs';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
+import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
 import { isMacViewer, modifierSwap, type ModifierMapping, type ModifierSwap } from '@/lib/swoop/keymap';
+import { modifierLegend } from '@/lib/swoop/modifierLegend';
 import { decodeControlMessage } from '@/lib/swoop/protocol';
 import { sendSpecialKey, specialKeysFor } from '@/lib/swoop/specialKeys';
 
-const SWAP_LABELS: Readonly<Record<ModifierSwap, string>> = {
-  'ctrl-to-cmd': 'ctrl acts as cmd',
-  'cmd-to-ctrl': 'cmd acts as ctrl',
+/** the two settings, named for what each keeps the same. */
+const SETTING_LABELS: Readonly<Record<ModifierSwap, Readonly<Record<ModifierMapping, string>>>> = {
+  'ctrl-to-cmd': {
+    swap: 'shortcuts match: ctrl acts as cmd',
+    passthrough: 'keys match: ctrl is control',
+  },
+  'cmd-to-ctrl': {
+    swap: 'shortcuts match: cmd acts as ctrl',
+    passthrough: 'keys match: cmd is the windows key',
+  },
 };
 
 const subscribeNever = (): (() => void) => () => {};
 const onServer = (): boolean => false;
+const subscribeFullscreen = (listener: () => void): (() => void) => {
+  document.addEventListener('fullscreenchange', listener);
+  return () => document.removeEventListener('fullscreenchange', listener);
+};
+// a browser without the api has no element, which is not fullscreen either
+const inFullscreen = (): boolean => Boolean(document.fullscreenElement);
 
 export interface SwoopSpecialKeysProps {
   session: SwoopSession | null;
@@ -45,12 +62,13 @@ export interface SwoopSpecialKeysProps {
 export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
   const [note, setNote] = useState<string | null>(null);
   const [mapping, setMapping] = useState<ModifierMapping>('swap');
-  // the server has no navigator; hydration fills it in.
   const viewerIsMac = useSyncExternalStore(subscribeNever, isMacViewer, onServer);
+  const keyboardLock = useSyncExternalStore(subscribeNever, hasKeyboardLock, onServer);
+  const fullscreen = useSyncExternalStore(subscribeFullscreen, inFullscreen, onServer);
   const swap = modifierSwap(osFamily, viewerIsMac);
+  const legend = modifierLegend(osFamily, viewerIsMac, mapping);
+  const superKey = viewerIsMac ? 'cmd' : 'the windows key';
 
-  // the host answers a sas with sas-result; a refusal is the one outcome the
-  // viewer cannot see on the screen, so it is said here.
   useEffect(() => {
     if (!session) return;
     return session.onChannelMessage('swoop-control', (data) => {
@@ -60,8 +78,6 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
     });
   }, [session]);
 
-  // each session attaches a capture of its own, and the machine's system can
-  // arrive after it did, so the choice is handed over again on every change.
   useEffect(() => {
     swoopInputCapture(session)?.setModifierMapping(osFamily, mapping);
   }, [session, osFamily, mapping]);
@@ -75,20 +91,41 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
           <Keyboard aria-hidden />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
+      <DropdownMenuContent align="end" className="w-72">
         {swap && (
           <>
-            <DropdownMenuCheckboxItem
-              checked={mapping === 'swap'}
-              onCheckedChange={(checked) => setMapping(checked ? 'swap' : 'passthrough')}
+            <DropdownMenuLabel>modifier keys</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={mapping}
+              onValueChange={(value) => setMapping(value === 'passthrough' ? 'passthrough' : 'swap')}
             >
-              {SWAP_LABELS[swap]}
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuSeparator />
+              <DropdownMenuRadioItem value="swap">{SETTING_LABELS[swap].swap}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="passthrough">{SETTING_LABELS[swap].passthrough}</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
           </>
         )}
+        <dl
+          className="grid grid-cols-[auto_1fr] gap-x-4 px-2 py-1.5 text-xs text-muted-foreground"
+          aria-label="what your keys do on the machine"
+          data-testid="modifier-legend"
+        >
+          {legend.map((row) => (
+            <Fragment key={row.press}>
+              <dt>{row.press}</dt>
+              <dd>{row.gets}</dd>
+            </Fragment>
+          ))}
+        </dl>
+        {!fullscreen && (
+          <p className="px-2 pb-1.5 text-xs text-muted-foreground" data-testid="super-key-note">
+            {keyboardLock
+              ? `${superKey} reaches the machine in fullscreen`
+              : `this browser keeps ${superKey} for itself`}
+          </p>
+        )}
+        <DropdownMenuSeparator />
         <DropdownMenuLabel>send keys</DropdownMenuLabel>
-        {specialKeysFor(osFamily).map((key) => (
+        {specialKeysFor(osFamily, fullscreen).map((key) => (
           <DropdownMenuItem
             key={key.id}
             className="cursor-pointer justify-between"

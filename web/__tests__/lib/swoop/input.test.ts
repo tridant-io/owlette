@@ -307,6 +307,33 @@ describe('keyboard', () => {
   });
 });
 
+describe('a held modifier', () => {
+  it('holds an armed modifier through the next key and releases it after', () => {
+    const h = harness({ hostOs: 'macos' });
+    h.capture.holdNextKey('MetaLeft');
+    h.target.dispatchEvent(keyEvent('keydown', 'KeyC'));
+    h.target.dispatchEvent(keyEvent('keyup', 'KeyC'));
+
+    const keys = h.sent().filter((m) => m.t === 'k');
+    expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual([
+      'MetaLeft:down',
+      'KeyC:down',
+      'KeyC:up',
+      'MetaLeft:up',
+    ]);
+  });
+
+  it('releases an armed modifier with everything else, and never arms it twice', () => {
+    const h = harness();
+    h.capture.holdNextKey('MetaLeft');
+    h.capture.holdNextKey('MetaLeft');
+    h.capture.releaseAll();
+
+    const keys = h.sent().filter((m) => m.t === 'k');
+    expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual(['MetaLeft:down', 'MetaLeft:up']);
+  });
+});
+
 describe('modifier mapping', () => {
   const codes = (h: Harness) => h.sent().map((m) => (m.t === 'k' ? m.code : m.t));
 
