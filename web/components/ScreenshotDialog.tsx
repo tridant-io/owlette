@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Camera, Loader2, AlertTriangle, Download, ClipboardCopy, Check, Maximize2, X as XIcon, PanelLeftClose, PanelLeftOpen, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
+import { ImageLightbox } from '@/components/ImageLightbox';
 import {
   Dialog,
   DialogContent,
@@ -64,6 +65,7 @@ export function ScreenshotDialog({
   const [clearingAll, setClearingAll] = useState(false);
   const [confirmClearAll, setConfirmClearAll] = useState(false);
   const captureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   const { screenshots: historyScreenshots, loading: historyLoading } = useScreenshotHistory(
     siteId, machineId, open
@@ -234,16 +236,6 @@ export function ScreenshotDialog({
     }
   }, [siteId, machineId]);
 
-  // Close fullscreen on Escape key
-  useEffect(() => {
-    if (!fullscreen) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setFullscreen(false);
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [fullscreen]);
-
   // Auto-capture on first open if no existing screenshot
   useEffect(() => {
     if (open && !screenshot && isOnline && !isCapturing) {
@@ -268,173 +260,61 @@ export function ScreenshotDialog({
 
   return (
     <>
-    {/* Fullscreen overlay */}
-    {fullscreen && displayedScreenshot && (
-      <div
-        className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center cursor-pointer"
-        onClick={() => setFullscreen(false)}
-      >
-        <Button
-          variant="ghost"
-          size="icon"
-          className="absolute top-4 right-4 text-white hover:bg-white/20 z-10"
-          onClick={(e) => { e.stopPropagation(); setFullscreen(false); }}
-        >
-          <XIcon className="h-6 w-6" />
-        </Button>
-        <img
-          src={displayedScreenshot.url}
-          alt={`Screenshot of ${machineName}`}
-          className="max-w-[95vw] max-h-[95vh] object-contain"
-          onClick={(e) => e.stopPropagation()}
-        />
-      </div>
+    {displayedScreenshot && (
+      <ImageLightbox
+        src={fullscreen ? displayedScreenshot.url : null}
+        alt={`screenshot of ${machineName}`}
+        onClose={() => setFullscreen(false)}
+      />
     )}
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="bg-card border-border w-[calc(100vw-2rem)] sm:max-w-none max-w-none p-0 gap-0 h-[calc(100vh-4rem)]">
-        <div className="flex h-full overflow-hidden">
-
-          {/* Collapsible left sidebar — history */}
-          {showHistory && (
-            <div className="w-52 flex-shrink-0 border-r border-border flex flex-col">
-              <div className="px-3 py-2 border-b border-border flex flex-col gap-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">history</span>
-                  <div className="flex items-center gap-1">
-                    {historyScreenshots.length > 0 && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 text-muted-foreground hover:text-red-400"
-                        onClick={() => setConfirmClearAll(true)}
-                        disabled={clearingAll}
-                      >
-                        {clearingAll ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                      </Button>
-                    )}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 text-muted-foreground"
-                          onClick={() => setShowHistory(false)}
-                        >
-                          <PanelLeftClose className="h-3.5 w-3.5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>hide history</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
-                <TimezoneChip tz={machineTimezone} source="machine" prefix="captured in" />
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                {historyLoading ? (
-                  <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    loading...
-                  </div>
-                ) : historyScreenshots.length === 0 ? (
-                  <p className="text-xs text-muted-foreground p-3">no history yet</p>
-                ) : (
-                  <div className="py-1">
-                    {historyScreenshots.map((hs, index) => {
-                      const isSelected = selectedHistorical?.id === hs.id;
-                      const isLatest = !selectedHistorical && index === 0;
-                      const isDeleting = deletingId === hs.id;
-                      return (
-                        <div
-                          key={hs.id}
-                          className={`group flex items-center transition-colors ${
-                            isSelected || isLatest
-                              ? 'bg-primary/10 border-l-2 border-primary'
-                              : 'border-l-2 border-transparent hover:bg-muted/50'
-                          }`}
-                        >
-                          <button
-                            className={`flex-1 text-left px-3 py-2 text-xs min-w-0 ${
-                              isSelected || isLatest ? 'text-primary' : 'text-muted-foreground'
-                            }`}
-                            onClick={() => setSelectedHistorical(isLatest ? null : hs)}
-                          >
-                            <div className="font-medium truncate">{formatTimestamp(hs.timestamp)}</div>
-                            <div className="text-[10px] mt-0.5 opacity-70">
-                              {formatRelativeTime((hs.timestamp as { seconds?: number } | null | undefined)?.seconds ?? Math.floor((typeof hs.timestamp === 'number' ? hs.timestamp : 0) / 1000))} · {hs.sizeKB}KB
-                            </div>
-                          </button>
-                          <button
-                            className="opacity-0 group-hover:opacity-100 p-1.5 mr-1 text-muted-foreground hover:text-red-400 transition-opacity"
-                            onClick={(e) => { e.stopPropagation(); handleDeleteScreenshot(hs.id); }}
-                            disabled={isDeleting}
-                          >
-                            {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-              {/* Capture button at bottom of sidebar */}
-              <div className="p-2 border-t border-border">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCapture}
-                  disabled={isCapturing || !isOnline}
-                  className="w-full bg-secondary border-border hover:bg-accent"
-                >
-                  {isCapturing ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <Camera className="h-4 w-4 mr-2" />
-                  )}
-                  {isCapturing ? 'capturing...' : 'capture'}
-                </Button>
-              </div>
-            </div>
-          )}
+      <DialogContent
+        showCloseButton={false}
+        // the first tabbable control carries a tooltip, and radix's default focus would
+        // open it: that tooltip then takes the first escape press instead of the dialog
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          closeButtonRef.current?.focus();
+        }}
+        className="bg-card border-border w-[calc(100vw-2rem)] sm:max-w-none max-w-none p-0 gap-0 h-[calc(100dvh-4rem)]"
+      >
+        {/* below md the history stacks under the screenshot, so the image keeps the
+            dialog's full width; from md it is a sidebar on the left */}
+        <div className="flex h-full flex-col overflow-hidden md:flex-row">
 
           {/* Main content — screenshot display */}
-          <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1 flex flex-col min-w-0 min-h-0">
             {/* Header */}
             <DialogHeader className="px-4 py-2 border-b border-border flex-shrink-0">
               <DialogTitle className="flex items-center gap-2">
                 {!showHistory && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground"
-                        onClick={() => setShowHistory(true)}
-                      >
-                        <PanelLeftOpen className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>show history</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label="show history"
+                    variant="ghost"
+                    className="size-7 text-muted-foreground"
+                    onClick={() => setShowHistory(true)}
+                  >
+                    <PanelLeftOpen className="h-4 w-4" />
+                  </IconButton>
                 )}
-                <Camera className="h-5 w-5" />
-                screenshot — {machineName}
+                <Camera className="h-5 w-5 shrink-0" />
+                <span className="truncate">screenshot — {machineName}</span>
                 {selectedHistorical && (
-                  <span className="text-xs font-normal text-muted-foreground ml-2">
+                  <span className="hidden text-xs font-normal text-muted-foreground ml-2 sm:inline">
                     (viewing {formatTimestamp(selectedHistorical.timestamp)})
                   </span>
                 )}
-                <Button
+                {/* no tooltip: this takes focus on open (see onOpenAutoFocus) */}
+                <IconButton
+                  ref={closeButtonRef}
+                  label="close"
+                  tooltip={false}
                   variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-muted-foreground ml-auto"
+                  className="size-7 text-muted-foreground ml-auto"
                   onClick={() => onOpenChange(false)}
                 >
                   <XIcon className="h-4 w-4" />
-                </Button>
+                </IconButton>
               </DialogTitle>
             </DialogHeader>
 
@@ -462,9 +342,10 @@ export function ScreenshotDialog({
               )}
 
               {displayedScreenshot && !isCapturing && (
+                // eslint-disable-next-line @next/next/no-img-element -- signed storage url, not a static asset
                 <img
                   src={displayedScreenshot.url}
-                  alt={`Screenshot of ${machineName}`}
+                  alt={`screenshot of ${machineName}`}
                   className="absolute inset-0 w-full h-full object-contain cursor-pointer"
                   onClick={() => setFullscreen(true)}
                 />
@@ -472,65 +353,44 @@ export function ScreenshotDialog({
             </div>
 
             {/* Footer — info + action buttons */}
-            <div className="flex items-center justify-between px-4 py-2 border-t border-border flex-shrink-0">
-              <div className="text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-t border-border flex-shrink-0">
+              <div className="min-w-0 text-xs text-muted-foreground">
                 {displayedScreenshot && (
                   <>
                     captured {formatTimestamp(displayedScreenshot.timestamp)} ({displayedScreenshot.sizeKB}KB)
                   </>
                 )}
-                <span className="ml-2 text-muted-foreground/60">
+                <span className="ml-2 text-muted-foreground/80">
                   screenshots may contain sensitive content
                 </span>
               </div>
               <div className="flex items-center gap-1">
                 {displayedScreenshot && (
                   <>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={handleDownload}
-                        >
-                          <Download className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>download screenshot</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={handleCopy}
-                        >
-                          {copied ? <Check className="h-4 w-4 text-green-500" /> : <ClipboardCopy className="h-4 w-4" />}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>copy to clipboard</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => setFullscreen(true)}
-                        >
-                          <Maximize2 className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>fullscreen</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    <IconButton
+                      label="download screenshot"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={handleDownload}
+                    >
+                      <Download className="h-4 w-4" />
+                    </IconButton>
+                    <IconButton
+                      label={copied ? 'copied' : 'copy to clipboard'}
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={handleCopy}
+                    >
+                      {copied ? <Check className="h-4 w-4 text-green-500" /> : <ClipboardCopy className="h-4 w-4" />}
+                    </IconButton>
+                    <IconButton
+                      label="fullscreen"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setFullscreen(true)}
+                    >
+                      <Maximize2 className="h-4 w-4" />
+                    </IconButton>
                   </>
                 )}
                 {!showHistory && !isCapturing && (
@@ -548,6 +408,109 @@ export function ScreenshotDialog({
               </div>
             </div>
           </div>
+
+          {/* Collapsible history — after the screenshot in the DOM, so focus order
+              matches the phone layout; md:order-first puts it on the left from md */}
+          {showHistory && (
+            <div className="max-h-[40%] flex flex-col border-t border-border md:order-first md:max-h-none md:w-52 md:flex-shrink-0 md:border-t-0 md:border-r">
+              <div className="px-3 py-2 border-b border-border flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">history</span>
+                  <div className="flex items-center gap-1">
+                    {historyScreenshots.length > 0 && (
+                      <IconButton
+                        label="clear history"
+                        variant="ghost-destructive"
+                        className="size-6"
+                        onClick={() => setConfirmClearAll(true)}
+                        disabled={clearingAll}
+                      >
+                        {clearingAll ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                      </IconButton>
+                    )}
+                    <IconButton
+                      label="hide history"
+                      variant="ghost"
+                      className="size-6 text-muted-foreground"
+                      onClick={() => setShowHistory(false)}
+                    >
+                      <PanelLeftClose className="h-3.5 w-3.5" />
+                    </IconButton>
+                  </div>
+                </div>
+                <TimezoneChip tz={machineTimezone} source="machine" prefix="captured in" />
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                {historyLoading ? (
+                  <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    loading...
+                  </div>
+                ) : historyScreenshots.length === 0 ? (
+                  <p className="text-xs text-muted-foreground p-3">no history yet</p>
+                ) : (
+                  <div className="py-1">
+                    {historyScreenshots.map((hs, index) => {
+                      const isSelected = selectedHistorical?.id === hs.id;
+                      const isLatest = !selectedHistorical && index === 0;
+                      const isDeleting = deletingId === hs.id;
+                      return (
+                        <div
+                          key={hs.id}
+                          className={`group flex items-center transition-colors ${
+                            isSelected || isLatest
+                              ? 'bg-primary/10 border-l-2 border-primary'
+                              : 'border-l-2 border-transparent hover:bg-muted/50'
+                          }`}
+                        >
+                          <button
+                            className={`flex-1 text-left px-3 py-2 text-xs min-w-0 ${
+                              isSelected || isLatest ? 'text-primary' : 'text-muted-foreground'
+                            }`}
+                            aria-current={isSelected || isLatest || undefined}
+                            onClick={() => setSelectedHistorical(isLatest ? null : hs)}
+                          >
+                            <div className="font-medium truncate">{formatTimestamp(hs.timestamp)}</div>
+                            <div className="text-[10px] mt-0.5">
+                              {formatRelativeTime((hs.timestamp as { seconds?: number } | null | undefined)?.seconds ?? Math.floor((typeof hs.timestamp === 'number' ? hs.timestamp : 0) / 1000))} · {hs.sizeKB}KB
+                            </div>
+                          </button>
+                          {/* hover-revealed for a mouse; always shown to touch, which has
+                              no hover, and to keyboard focus */}
+                          <IconButton
+                            label="delete screenshot"
+                            variant="ghost-destructive"
+                            className="size-7 mr-1 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
+                            onClick={(e) => { e.stopPropagation(); handleDeleteScreenshot(hs.id); }}
+                            disabled={isDeleting}
+                          >
+                            {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                          </IconButton>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              {/* Capture button at bottom of sidebar */}
+              <div className="p-2 border-t border-border">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCapture}
+                  disabled={isCapturing || !isOnline}
+                  className="w-full bg-secondary border-border hover:bg-accent"
+                >
+                  {isCapturing ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Camera className="h-4 w-4 mr-2" />
+                  )}
+                  {isCapturing ? 'capturing...' : 'capture'}
+                </Button>
+              </div>
+            </div>
+          )}
 
         </div>
       </DialogContent>
@@ -577,7 +540,7 @@ export function ScreenshotDialog({
               await handleClearAll();
             }}
             disabled={clearingAll}
-            className="bg-red-600 hover:bg-red-700"
+            variant="destructive"
           >
             {clearingAll ? 'clearing...' : 'clear all'}
           </Button>

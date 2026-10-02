@@ -5,6 +5,7 @@
  * machine cards and table rows.
  */
 
+import { memo } from 'react';
 import { AreaChart, Area, ResponsiveContainer, YAxis } from 'recharts';
 import { cn } from '@/lib/utils';
 
@@ -33,7 +34,9 @@ const gradientIds: Record<MetricColor, string> = {
   temp: 'sparkline-gradient-temp',
 };
 
-export function SparklineChart({
+// memo: every card and row renders four of these, and a parent re-render would
+// otherwise rebuild each recharts tree even when its data is unchanged
+export const SparklineChart = memo(function SparklineChart({
   data,
   color = 'cpu',
   height = 48,
@@ -99,4 +102,4 @@ export function SparklineChart({
       </ResponsiveContainer>
     </div>
   );
-}
+});

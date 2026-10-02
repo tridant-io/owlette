@@ -26,7 +26,6 @@ interface WeekSummaryBarProps {
 export default function WeekSummaryBar({ schedules, className, tall }: WeekSummaryBarProps) {
   const barHeight = tall ? 'h-16' : 'h-10';
   const barWidth = tall ? 'w-5' : 'w-4';
-  const labelSize = tall ? 'text-[10px]' : 'text-[9px]';
 
   // Build a map of day -> list of active ranges with block color index
   const dayRanges: Record<string, { top: number; height: number; colorIndex: number }[]> = {};
@@ -75,7 +74,7 @@ export default function WeekSummaryBar({ schedules, className, tall }: WeekSumma
         // Use the first block's color for the label, or default
         const labelColor = isActive
           ? BLOCK_COLORS[ranges[0].colorIndex % BLOCK_COLORS.length].label
-          : 'text-muted-foreground/50';
+          : 'text-muted-foreground/80';
         return (
           <div key={day} className="flex flex-col items-center gap-0.5">
             <div
@@ -91,7 +90,7 @@ export default function WeekSummaryBar({ schedules, className, tall }: WeekSumma
                 />
               ))}
             </div>
-            <span className={`${labelSize} font-medium leading-none ${labelColor}`}>
+            <span className={`text-[10px] font-medium leading-none ${labelColor}`}>
               {DAY_LABELS[i]}
             </span>
           </div>
