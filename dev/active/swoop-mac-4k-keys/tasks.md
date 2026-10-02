@@ -195,6 +195,15 @@ cuts on its own. Tests: the window-noise case added, the existing gap tests unch
 macOS. The owner reported no smear in this run. The next session from dev.owlette.app, read the same way, shows
 whether the target now stays near 50 Mbps.
 
+**Read again after the fix (build `58dc3f6d`, installed 08:50, the owner's drag test):** the first session ran
+five minutes at 57 fps sent, target 50000 kbps, 0 cuts, 0 gaps, governor at the ceiling throughout. The owner
+ended it and opened a second: 40 s the same, then a 50 s spell at 14-18 fps sent and under 200 kbps (a still
+screen sends only what changes), during which the browser's dropped-frame count still rose by a few, then back
+to 51-57 fps with one cut in the whole two minutes, against 11 in 40 s before. The gap tolerance holds; the one
+remaining cut is a window with three or more drops, which is what the rule still treats as loss. Open note: the
+browser drops a frame or two even while the stream is quiet, so `framesDropped` is noisier than a path signal
+should be; a delay-rise-only rule stays an option if that ever matters.
+
 The viewer-side changes (Tasks 3.1, 3.2, Wave 4) cannot be run by the owner yet: a passkey is bound to
 dev.owlette.app and cannot sign in on localhost, and dev.owlette.app serves `dev`, not this branch. They are
 covered by unit tests and wait for the branch on `dev` (the owner's merge of PR #256).
