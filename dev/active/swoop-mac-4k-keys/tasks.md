@@ -227,9 +227,20 @@ never overwrites one. Desktop tests 150 on the Mac (the new one runs `defaults` 
 leaves nothing), 124 on Windows; not yet in an installed build, since an install would drop the owner's live
 session for no visible change on the rig.
 
-Ctrl shortcuts: "ctrl acts as cmd" has been the default on dev.owlette.app all along, so Ctrl+C, Ctrl+V,
-Ctrl+Z and Ctrl+A on the Mac are testable there now; Win+C outside fullscreen opens Copilot because Windows
-owns the key until keyboard lock, which rides fullscreen.
+**Correction, 2026-10-02: Ctrl shortcuts are NOT on dev.** The log first said "ctrl acts as cmd" had been the
+default on dev.owlette.app all along, and the owner was told so; the owner then reported that Ctrl+C and Ctrl+V
+forward nothing. The ctrl-to-cmd mapping for a Mac host is this branch's own Task 2.4 (`b91adfae`):
+`origin/dev`'s `keymap.ts` has no `modifierSwap`, so dev sends Ctrl as the Mac's Control key. The claim was made
+from the branch's code without checking what dev serves (`git branch -r --contains b91adfae` answers it in one
+line). Win+C outside fullscreen opens Copilot because Windows owns the key until keyboard lock, which rides
+fullscreen.
+
+**The pull request could not be merged or checked:** dev had moved 17 changes on, PR #256 was `CONFLICTING`,
+and with no merge ref GitHub had run nothing but the Vercel preview on any recent push. `origin/dev` merged into
+the branch (`6ef0fde1`): four conflicts, all where dev's escape-twice (`58a562b9`) landed on this branch's
+`setModifierMapping`; the input capture and its tests keep both, the swoop page takes both imports, the process
+editor keeps the Windows-only wrapper with dev's responsive grid. On the merged tree: tsc and eslint clean, jest
+6333, streamer 398, agent 2126. The PR is `MERGEABLE` again and its checks are running.
 
 The viewer-side changes (Tasks 3.1, 3.2, Wave 4) cannot be run by the owner yet: a passkey is bound to
 dev.owlette.app and cannot sign in on localhost, and dev.owlette.app serves `dev`, not this branch. They are
