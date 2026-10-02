@@ -84,12 +84,25 @@ test('a mac host gets the mac chords and ctrl acting as cmd, on by default', asy
 
   await page.getByRole('button', { name: 'send a key combination' }).click();
   const menu = page.getByRole('menu');
-  for (const label of ['cmd + tab', 'cmd + space', 'cmd + q', 'cmd + ctrl + q', 'esc']) {
+  // outside fullscreen the sticky cmd sits above the five chords: the viewer's
+  // own windows keeps the super key until keyboard lock is held.
+  for (const label of [
+    'hold cmd for the next key',
+    'cmd + tab',
+    'cmd + space',
+    'cmd + q',
+    'cmd + ctrl + q',
+    'esc',
+  ]) {
     await expect(menu.getByText(label, { exact: true })).toBeVisible();
   }
-  await expect(menu.getByRole('menuitem')).toHaveCount(5);
+  await expect(menu.getByRole('menuitem')).toHaveCount(6);
   await expect(menu.getByText('ctrl + alt + del')).toHaveCount(0);
-  await expect(menu.getByRole('menuitemcheckbox', { name: 'ctrl acts as cmd' })).toBeChecked();
+  // the two settings by name, shortcuts match on by default, and the legend it gives
+  await expect(menu.getByRole('menuitemradio', { name: 'shortcuts match: ctrl acts as cmd' })).toBeChecked();
+  await expect(menu.getByRole('menuitemradio', { name: 'keys match: ctrl is control' })).not.toBeChecked();
+  await expect(menu.getByTestId('modifier-legend')).toHaveText(/ctrl\s*cmd\s*windows key\s*cmd\s*alt\s*option/);
+  await expect(menu.getByTestId('super-key-note')).toContainText('the windows key');
 
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: /end session/i }).click();
