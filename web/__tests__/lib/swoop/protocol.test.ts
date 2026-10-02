@@ -675,3 +675,14 @@ describe('the bundle is refused rather than repaired', () => {
     }
   });
 });
+
+describe('hello-host clipboardReads', () => {
+  const hello = { t: 'hello-host', codec: 'h264', width: 1, height: 1, displays: [], streamerEpoch: 0, protocolVersion: 1 };
+
+  it('takes an older host\'s silence as true, and reads false when the host says so', () => {
+    const silent = decodeControlMessage(JSON.stringify(hello), { ctl: false });
+    expect(silent.ok && silent.value.t === 'hello-host' && silent.value.clipboardReads).toBe(true);
+    const off = decodeControlMessage(JSON.stringify({ ...hello, clipboardReads: false }), { ctl: false });
+    expect(off.ok && off.value.t === 'hello-host' && off.value.clipboardReads).toBe(false);
+  });
+});

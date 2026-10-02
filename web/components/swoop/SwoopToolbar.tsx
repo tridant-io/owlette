@@ -27,6 +27,7 @@ import { Eye, Gauge, Maximize, Minimize, PowerOff, RotateCcw } from 'lucide-reac
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { swoopClipboard } from '@/lib/swoop/clipboard';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock, keyboardLock } from '@/lib/swoop/keyboardLock';
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
@@ -59,6 +60,9 @@ function badgeFor(
   }
   return null;
 }
+
+/** before attach, and on the server: nothing to say. */
+const hostReadsUnknown = (): boolean => true;
 
 export interface SwoopToolbarProps {
   session: SwoopSession | null;
@@ -100,6 +104,12 @@ export function SwoopToolbar({
 }: SwoopToolbarProps) {
   const [fullscreen, setFullscreen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const clipboard = swoopClipboard(session);
+  const hostReads = useSyncExternalStore(
+    clipboard ? clipboard.subscribe : subscribeNever,
+    clipboard ? clipboard.get : hostReadsUnknown,
+    hostReadsUnknown,
+  );
   // a capability probe, not state: the server has no `navigator`, so it renders
   // the supported case and hydration corrects it once, without a second render
   // pass on every browser that does support it.
@@ -176,6 +186,12 @@ export function SwoopToolbar({
       )}
 
       {notice && <span className="text-xs text-muted-foreground">{notice}</span>}
+      {!hostReads && (
+        <span className="text-xs text-muted-foreground" data-testid="clipboard-notice">
+          the machine&apos;s clipboard is not shared: on a mac, allow owlette under paste from other apps in
+          system settings
+        </span>
+      )}
 
       <div className="ml-auto flex items-center gap-1">
         {children}

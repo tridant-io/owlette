@@ -22,10 +22,16 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use crate::cursor::PointerSample;
 use crate::gpu::Frame;
 
+// macOS captures through ScreenCaptureKit; Task 5.1 wires it under the seam.
+#[cfg(target_os = "macos")]
+pub mod sck;
 pub mod testpattern;
 
 /// Blocking `AcquireNextFrame` timeout in milliseconds.
@@ -48,15 +54,18 @@ pub const ACQUIRE_TIMEOUT_MS: u32 = 8;
 /// back". On a static desktop an image may not arrive for seconds (a genuinely
 /// idle output produced 0.28 frames/s), and the session cannot hold a black
 /// screen that long.
+#[cfg(windows)]
 const RECOVERY_GRACE: Duration = Duration::from_millis(250);
 
 /// `DuplicateOutput` returned E_ACCESSDENIED in 3 of 12 measured mode-change
 /// events and succeeded on the next attempt 50 ms later.
+#[cfg(windows)]
 const REDUPLICATE_RETRY: Duration = Duration::from_millis(50);
 
 /// Bounded, so a duplication that never comes back is exit 12 rather than a
 /// session that hangs. Measured detect → first picture was p50 210 ms, max
 /// 330 ms, so this is ~30x the worst case.
+#[cfg(windows)]
 const REDUPLICATE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// A source of desktop frames.
@@ -199,8 +208,10 @@ pub struct FrameRects {
 }
 
 /// `DXGI_OUTDUPL_MOVE_RECT` is a `POINT` then a `RECT`: six i32, no padding.
+#[cfg(any(windows, test))]
 const MOVE_RECT_WORDS: usize = 6;
 /// `RECT`: four i32.
+#[cfg(any(windows, test))]
 const DIRTY_RECT_WORDS: usize = 4;
 
 /// Desktop Duplication writes both lists into the single
@@ -209,10 +220,12 @@ const DIRTY_RECT_WORDS: usize = 4;
 /// Handing the dirty-rect parser the front of the buffer parses move rects as
 /// RECTs and yields plausible garbage rather than an error, which is why the
 /// API makes the order a requirement.
+#[cfg(any(windows, test))]
 fn split_metadata(words: &[i32], move_words: usize) -> (&[i32], &[i32]) {
     words.split_at(move_words.min(words.len()))
 }
 
+#[cfg(any(windows, test))]
 fn parse_move_rects(words: &[i32]) -> Vec<MoveRect> {
     let (rects, _) = words.as_chunks::<MOVE_RECT_WORDS>();
     rects
@@ -229,6 +242,7 @@ fn parse_move_rects(words: &[i32]) -> Vec<MoveRect> {
         .collect()
 }
 
+#[cfg(any(windows, test))]
 fn parse_dirty_rects(words: &[i32]) -> Vec<Rect> {
     let (rects, _) = words.as_chunks::<DIRTY_RECT_WORDS>();
     rects
@@ -249,6 +263,7 @@ fn parse_dirty_rects(words: &[i32]) -> Vec<Rect> {
 /// cross-adapter pair returned in 4 of 4 measured attempts, i.e. the device is
 /// on the wrong adapter and needs a new device on the output's own adapter, not
 /// another attempt. Retrying it burns the whole deadline and then fails anyway.
+#[cfg(any(windows, test))]
 fn is_retryable_duplicate_error(hresult: u32) -> bool {
     matches!(
         hresult,
@@ -642,6 +657,9 @@ pub struct Duplication {
     /// desktop image.
     recovering: Option<Instant>,
     idr_requested: bool,
+    /// The shape is only readable while this duplication holds the frame, so
+    /// the reader lives beside it.
+    reader: crate::cursor::PointerReader,
 }
 
 #[cfg(windows)]
@@ -659,6 +677,7 @@ impl Duplication {
             metadata: Vec::new(),
             recovering: None,
             idr_requested: false,
+            reader: crate::cursor::PointerReader::new(),
         };
         // The first duplication takes the same retry as a rebuild: a session can
         // be asked for while the desktop is still settling, and those failures
@@ -730,38 +749,33 @@ impl Duplication {
     /// runs before `ReleaseFrame` because `GetFramePointerShape` is only legal
     /// while the frame is held.
     ///
-    /// The duplication is lent for the call rather than handed out: there is
-    /// one per output per process, and the calls it is wanted for are invalid
-    /// outside this window.
-    ///
-    /// The call site Wave 5's capture thread wants, with `cursor` owning both
-    /// helpers and the tracker:
+    /// The sample is built here, from the frame info and this duplication's
+    /// own pointer reader, so the observer never sees a Win32 type: the
+    /// session's cursor path is the same on every platform. A shape that
+    /// cannot be read is logged and carried as `None`.
     ///
     /// ```text
-    /// let mut reader = cursor::PointerReader::new();
-    /// let frame = source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |dup, info| {
+    /// let frame = source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
     ///     // None when the frame carried no pointer news at all (20.4% of
     ///     // frames); the position on those is stale, not (0,0).
-    ///     if let Some(at) = cursor::pointer_position(info) {
-    ///         if let Some(msg) = tracker.on_position(at, &geometry, ts_us) {
+    ///     if let Some(at) = sample.position {
+    ///         if let Some(msg) = tracker.on_position(at, &geometry, clock.us(sample.ts_ticks)) {
     ///             send(msg);
     ///         }
     ///     }
-    ///     match reader.shape(dup, info) {
-    ///         Ok(Some((shape, bytes))) => match tracker.on_shape(&shape, bytes) {
+    ///     if let Some((shape, bytes)) = sample.shape {
+    ///         match tracker.on_shape(&shape, bytes) {
     ///             Ok(Some(msg)) => send(msg),
     ///             Ok(None) => {}          // a shape the viewer already has
     ///             Err(e) => log_and_continue(e),
-    ///         },
-    ///         Ok(None) => {}              // no shape change on this frame
-    ///         Err(e) => log_and_continue(e),
+    ///         }
     ///     }
     /// })?;
     /// ```
     pub fn next_frame_with(
         &mut self,
         timeout_ms: u32,
-        observer: &mut dyn FnMut(&IDXGIOutputDuplication, &DXGI_OUTDUPL_FRAME_INFO),
+        observer: &mut dyn FnMut(&PointerSample),
     ) -> anyhow::Result<Option<Frame>> {
         if self.live.is_none() || self.generation != self.signal.generation() {
             self.rebuild()?;
@@ -780,7 +794,7 @@ impl Duplication {
     fn step(
         &mut self,
         timeout_ms: u32,
-        observer: &mut dyn FnMut(&IDXGIOutputDuplication, &DXGI_OUTDUPL_FRAME_INFO),
+        observer: &mut dyn FnMut(&PointerSample),
     ) -> anyhow::Result<Step> {
         let Self {
             size,
@@ -788,6 +802,7 @@ impl Duplication {
             rects,
             metadata,
             recovering,
+            reader,
             ..
         } = self;
         let Some(live) = live.as_mut() else {
@@ -808,7 +823,19 @@ impl Duplication {
         // Before anything else and before `ReleaseFrame`: the pointer news on a
         // frame with no desktop image is still pointer news, and the shape can
         // only be read while the frame is held.
-        observer(&live.dup, &info);
+        let shape = match reader.shape(&live.dup, &info) {
+            Ok(shape) => shape,
+            Err(e) => {
+                ::log::warn!("swoop: cursor shape read: {e}");
+                None
+            }
+        };
+        observer(&PointerSample {
+            position: crate::cursor::pointer_position(&info),
+            // qpc ticks, the clock `platform::clock` reads on windows.
+            ts_ticks: info.LastMouseUpdateTime,
+            shape,
+        });
 
         let Some(resource) = resource else {
             let _ = unsafe { live.dup.ReleaseFrame() };
@@ -862,7 +889,7 @@ impl Source for Duplication {
     /// [`Duplication::next_frame_with`] instead — the pointer data is on the
     /// same acquire and cannot be read afterwards.
     fn next_frame(&mut self, timeout_ms: u32) -> anyhow::Result<Option<Frame>> {
-        self.next_frame_with(timeout_ms, &mut |_, _| {})
+        self.next_frame_with(timeout_ms, &mut |_| {})
     }
 
     /// The acquired texture's size, never the mode's: they differ on a rotated
@@ -982,13 +1009,13 @@ pub fn capture_loop(
     watcher: &mut DesktopWatcher,
     stop: &std::sync::atomic::AtomicBool,
     mut on_frame: impl FnMut(&Frame),
-    mut on_pointer: impl FnMut(&IDXGIOutputDuplication, &DXGI_OUTDUPL_FRAME_INFO),
+    on_pointer: &mut dyn FnMut(&PointerSample),
 ) -> anyhow::Result<()> {
     while !stop.load(Ordering::Relaxed) {
         if watcher.follow() {
             source.request_rebuild();
         }
-        if let Some(frame) = source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut on_pointer)? {
+        if let Some(frame) = source.next_frame_with(ACQUIRE_TIMEOUT_MS, on_pointer)? {
             on_frame(&frame);
         }
     }
@@ -1182,9 +1209,9 @@ mod tests {
             let (mut observed, mut pointer_news) = (0usize, 0usize);
             while Instant::now() < deadline {
                 let frame = source
-                    .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |_dup, info| {
+                    .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
                         observed += 1;
-                        if info.LastMouseUpdateTime != 0 {
+                        if sample.position.is_some() {
                             pointer_news += 1;
                         }
                     })

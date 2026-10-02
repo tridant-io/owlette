@@ -16,6 +16,7 @@ const {
   owletteDataRoot,
   readOwletteJson,
   serverFromArgs,
+  serviceRestart,
   serviceStart,
   serviceStatus,
   serviceStop,
@@ -102,16 +103,19 @@ describe('service commands', () => {
     await serviceStatus()
     await serviceStart(false)
     await serviceStop()
+    await serviceRestart()
 
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
       'service_status',
       'service_start',
       'service_stop',
+      'service_restart',
     ])
     // Start carries the elevation gate; the others take no arguments.
     expect(invoke.mock.calls[0][1]).toBeUndefined()
     expect(invoke.mock.calls[1][1]).toEqual({ allowElevation: false })
     expect(invoke.mock.calls[2][1]).toBeUndefined()
+    expect(invoke.mock.calls[3][1]).toBeUndefined()
   })
 
   it('treats a stale status file as the service being down', () => {

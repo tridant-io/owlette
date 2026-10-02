@@ -296,9 +296,10 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         test_override: Option<String>,
         /// Which encoder backend the selection chain opened on — `nvenc`,
-        /// `qsv`, `amf`, `mf` or `openh264`. Absent until a viewer's offer has
-        /// named a codec and the first encoder is open, because until then
-        /// nothing has been selected.
+        /// `qsv`, `amf`, `mf` or `openh264` on Windows, `videotoolbox` on
+        /// macOS. Absent until a viewer's offer has named a codec and the
+        /// first encoder is open, because until then nothing has been
+        /// selected.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         encoder: Option<String>,
         /// How many encode sessions the viewers cost this machine — plan.md

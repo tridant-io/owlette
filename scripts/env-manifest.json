@@ -99,7 +99,7 @@
     "LLM_ENCRYPTION_KEY": { "class": "must-match", "targets": ["railway-dev", "railway-prod", "vercel-prod"], "note": "mismatch between railway-prod and vercel-prod breaks decryption of stored LLM provider keys" },
     "MFA_ENCRYPTION_KEY": { "class": "must-match", "targets": ["railway-dev", "railway-prod", "vercel-prod"], "note": "mismatch locks out every 2FA user on failover — values must be byte-identical across mirror targets" },
     "NEXT_PUBLIC_APP_URL": { "class": "public", "targets": [], "note": "stray alias — its only read is the health-check base-url fallback (web/lib/healthChecks.server.ts:55). NEXT_PUBLIC_BASE_URL is the canonical public origin, so prefer deleting that read over setting this" },
-    "NEXT_PUBLIC_BASE_URL": { "class": "public", "targets": ["railway-prod", "vercel-prod"] },
+    "NEXT_PUBLIC_BASE_URL": { "class": "public", "targets": ["railway-dev", "railway-prod", "vercel-prod"], "note": "unset, the server falls back to its own listen address (http://localhost:8080 on railway) for pairing links, or to prod for email links" },
     "NEXT_PUBLIC_FIREBASE_API_KEY": { "class": "public", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
     "NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY": { "class": "public", "targets": [], "note": "App Check stays inert until this reCAPTCHA Enterprise site key is set (web/lib/firebase.ts:126) and is always skipped against the emulator. Deliberately deferred — move to all three targets during the rollout (docs/runbooks/app-check-rollout.md:63,146), not before" },
     "NEXT_PUBLIC_FIREBASE_APP_ID": { "class": "public", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },

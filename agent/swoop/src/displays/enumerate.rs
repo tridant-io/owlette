@@ -141,9 +141,15 @@ pub fn enumerate() -> anyhow::Result<Vec<DisplayEntry>> {
     Ok(outputs.into_iter().map(win32::enrich).collect())
 }
 
-/// Wave 9 brings the macOS and Linux siblings; until then a non-Windows build
-/// enumerates nothing and the feature reports headless, which is true of it.
-#[cfg(not(windows))]
+/// Every active display, from CoreGraphics, in pixels (see [`super::mac`]).
+#[cfg(target_os = "macos")]
+pub fn enumerate() -> anyhow::Result<Vec<DisplayEntry>> {
+    super::mac::entries()
+}
+
+/// Linux gets its own plan; until then it enumerates nothing and the feature
+/// reports headless, which is true of a build that cannot capture.
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn enumerate() -> anyhow::Result<Vec<DisplayEntry>> {
     Ok(Vec::new())
 }

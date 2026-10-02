@@ -1231,24 +1231,47 @@ class TestApplicationBundles:
         for bundle in (linked_macos.parent, linked_binary, linked_plist):
             assert shared_utils.resolve_exec_target(str(bundle)) == str(bundle)
 
-    def test_a_managed_bundle_launches_as_the_binary_inside_it(self, tmp_path):
-        """A launch of the bundle directory was refused as an executable that
-        does not exist. The binary is what is spawned, since it is what
-        supervision later finds by path; `open -a` would hand the launch to
-        LaunchServices and leave no pid of ours at all."""
+    def test_a_managed_bundle_is_opened_through_launch_services(self, tmp_path):
+        """Exec'ing the binary inside a bundle from a launchd job had macOS
+        kill its own applications outright (a launch constraint admits Launch
+        Services alone) and left any other without the activation and
+        document handling an application launch gets. The bundle is opened as
+        Finder opens it, and the binary is the image the launch then finds."""
         from osadapter import posix
 
         bundle = self._bundle(tmp_path, {'CFBundleExecutable': 'Kiosk'})
+        binary = str(bundle / 'Contents' / 'MacOS' / 'Kiosk')
+        document = tmp_path / 'show plan.toe'
+        document.write_bytes(b'')
 
-        assert posix._managed_argv(
-            {'exe_path': str(bundle), 'file_path': '--fullscreen'}
-        ) == [str(bundle / 'Contents' / 'MacOS' / 'Kiosk'), '--fullscreen']
+        assert posix._managed_command({'exe_path': str(bundle)}) == (
+            ['/usr/bin/open', '-a', str(bundle)], binary)
+        # one file is a document to open, never split on its spaces.
+        assert posix._managed_command(
+            {'exe_path': str(bundle), 'file_path': str(document)}
+        ) == (['/usr/bin/open', '-a', str(bundle), str(document)], binary)
+        assert posix._managed_command(
+            {'exe_path': f'{bundle}/', 'file_path': '--fullscreen --display 2'}
+        ) == (['/usr/bin/open', '-a', str(bundle), '--args', '--fullscreen', '--display', '2'],
+              binary)
 
         # The negative control: a bundle naming no binary of its own is still
-        # refused, and never launched as the directory.
+        # refused, and never opened.
         (bundle / 'Contents' / 'MacOS' / 'Kiosk').unlink()
         with pytest.raises(FileNotFoundError):
-            posix._managed_argv({'exe_path': str(bundle)})
+            posix._managed_command({'exe_path': str(bundle)})
+
+    def test_a_target_that_is_no_bundle_is_its_own_command(self, tmp_path):
+        """Scripts and plain binaries are exec'd as they always were: the
+        process the spawn reports is the program."""
+        from osadapter import posix
+
+        program = tmp_path / 'player'
+        program.write_bytes(b'')
+
+        assert posix._managed_command(
+            {'exe_path': str(program), 'file_path': '--fullscreen'}
+        ) == ([str(program), '--fullscreen'], None)
 
     def test_a_running_bundle_is_found_by_the_path_the_operator_configured(
             self, tmp_path, monkeypatch, private_executable):

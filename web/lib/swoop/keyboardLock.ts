@@ -1,5 +1,6 @@
 /**
- * the keyboard lock api, chromium-only and switched off in brave: `navigator.keyboard`
+ * the keyboard lock api, chromium-only (brave included: measured 2026-10-01 on
+ * the owner's pc, where it exposes `navigator.keyboard.lock`): `navigator.keyboard`
  * is not in the dom lib, so this is the half swoop uses. shared by the toolbar,
  * which takes the lock with fullscreen, and the stage, which says how to leave.
  */

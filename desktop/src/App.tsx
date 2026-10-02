@@ -15,7 +15,7 @@ import { SidebarDivider } from '@/components/SidebarDivider'
 import { StatusFooter } from '@/components/StatusFooter'
 import { WindowControls } from '@/components/WindowControls'
 import { PermissionBanner } from '@/components/PermissionBanner'
-import { IS_MAC } from '@/lib/platform'
+import { IS_LINUX, IS_MAC } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import { InlineNotice } from '@/components/ui/inline-notice'
 import { Toaster } from '@/components/ui/sonner'
@@ -41,11 +41,16 @@ import {
 import { classifyOptions, tauriFsProbe } from '@/lib/fsProbe'
 import {
   ARG_PAIR,
+  accessibilityGranted,
+  clipboardSharing,
   hostname,
   serverFromArgs,
   setStartupLink,
   openScreenRecordingSettings,
+  requestAccessibility,
+  requestClipboardSharing,
   screenRecordingGranted,
+  serviceRestart,
   startupLinkEnabled,
   writeOwletteJson,
 } from '@/lib/ipc'
@@ -131,18 +136,30 @@ function App() {
     startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
   }, [])
 
-  // macOS Screen Recording, re-read whenever the window comes back: the grant
-  // takes effect on relaunch, but the banner should at least stop showing
-  // once the user has switched it on and come back.
+  // macOS Screen Recording and Accessibility, re-read whenever the window
+  // comes back: Screen Recording takes effect on relaunch, but the banner
+  // should at least stop showing once the user has switched it on and come back.
+  // Accessibility takes effect at once, so its notice also re-reads it on a
+  // timer while it shows.
   const [screenRecording, setScreenRecording] = useState<boolean | null>(null)
+  const [accessibility, setAccessibility] = useState<boolean | null>(null)
+  const readAccessibility = useCallback(() => {
+    accessibilityGranted().then(setAccessibility, () => setAccessibility(null))
+  }, [])
+  const [clipboardShared, setClipboardShared] = useState<boolean | null>(null)
+  const readClipboardSharing = useCallback(() => {
+    clipboardSharing().then(setClipboardShared, () => setClipboardShared(null))
+  }, [])
   useEffect(() => {
     const read = () => {
       screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
+      readAccessibility()
+      readClipboardSharing()
     }
     read()
     window.addEventListener('focus', read)
     return () => window.removeEventListener('focus', read)
-  }, [])
+  }, [readAccessibility, readClipboardSharing])
 
   // The webview's native menu (Back/Refresh/Print/Inspect) is browser chrome, not
   // this app. Suppressed in built apps except on editable fields; `tauri dev` keeps
@@ -482,11 +499,17 @@ function App() {
               )
             }}
             onRestartService={() => {
-              // The service polls for this file each loop, exits 42, and the host
-              // relaunches it. No elevation, no dashboard flap.
-              void writeOwletteJson('tmp/restart.flag', {}).then(
+              // Windows: the service polls for this file each loop, exits 42, and
+              // the host relaunches it. Off it the daemon ignores a flag it did
+              // not write: linux runs the polkit rule's `systemctl restart`, and
+              // macos asks the daemon through its request seam. No elevation
+              // anywhere, no dashboard flap.
+              const restart =
+                IS_MAC || IS_LINUX ? serviceRestart() : writeOwletteJson('tmp/restart.flag', {})
+              void restart.then(
                 () => toast.success('restarting the owlette service'),
-                (cause: unknown) => toast.error('could not restart the service', { description: message(cause) }),
+                (cause: unknown) =>
+                  toast.error('could not restart the service', { description: message(cause) }),
               )
             }}
           />
@@ -494,12 +517,26 @@ function App() {
         </header>
 
         <PermissionBanner
-          granted={screenRecording}
-          onOpenSettings={() => {
+          screenRecording={screenRecording}
+          accessibility={accessibility}
+          onOpenScreenRecordingSettings={() => {
             void openScreenRecordingSettings().catch((cause: unknown) =>
               toast.error('could not open system settings', { description: message(cause) }),
             )
           }}
+          onRequestAccessibility={() => {
+            void requestAccessibility().catch((cause: unknown) =>
+              toast.error('could not open system settings', { description: message(cause) }),
+            )
+          }}
+          onRecheckAccessibility={readAccessibility}
+          clipboardSharing={clipboardShared}
+          onRequestClipboardSharing={() => {
+            void requestClipboardSharing().catch((cause: unknown) =>
+              toast.error('could not open system settings', { description: message(cause) }),
+            )
+          }}
+          onRecheckClipboardSharing={readClipboardSharing}
         />
 
         {config.error && (
@@ -594,7 +631,8 @@ function App() {
           config={config.config}
           hostname={host}
           starting={health.starting}
-          onStart={() => void health.start()}
+          // macos: launchd keeps the agent running; this app cannot start it
+          onStart={IS_MAC ? undefined : () => void health.start()}
           onJoin={() => setMenuDialog('join')}
         />
 
@@ -619,6 +657,8 @@ function App() {
           onClose={() => setMenuDialog(null)}
           onLeft={handleLeft}
           onHold={health.hold}
+          serviceLeaves={IS_MAC || IS_LINUX}
+          onJoin={() => setMenuDialog('join')}
         />
         <ReportIssueDialog open={menuDialog === 'report'} onClose={() => setMenuDialog(null)} />
         <RestartCountdown open={restartPrompt.armed} onClose={restartPrompt.dismiss} />

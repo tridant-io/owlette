@@ -24,9 +24,14 @@ use crate::ipc::Exit;
 
 /// Vendor ids worth naming. Everything else reports its raw id and
 /// `vendor: "other"`.
+#[cfg(windows)]
 const VENDOR_NVIDIA: u32 = 0x10DE;
+#[cfg(windows)]
 const VENDOR_INTEL: u32 = 0x8086;
+#[cfg(windows)]
 const VENDOR_AMD: u32 = 0x1002;
+#[cfg(target_os = "macos")]
+const VENDOR_APPLE: u32 = 0x106B;
 
 #[derive(Debug, Serialize)]
 pub struct Report {
@@ -37,7 +42,7 @@ pub struct Report {
     pub os_family: &'static str,
     /// The heartbeat's spelling (`x64` / `arm64`).
     pub arch: &'static str,
-    /// Every DXGI adapter, in enumeration order.
+    /// Every DXGI adapter, in enumeration order; on a Mac, its one GPU.
     pub adapters: Vec<Adapter>,
     /// Whether anything can be captured at all — an output attached to the
     /// desktop on an adapter that can duplicate one.
@@ -60,7 +65,7 @@ pub struct Report {
 #[derive(Debug, Serialize)]
 pub struct Adapter {
     pub description: String,
-    /// `nvidia` / `intel` / `amd` / `other`.
+    /// `nvidia` / `intel` / `amd` / `apple` / `other`.
     pub vendor: &'static str,
     pub vendor_id: u32,
     /// Outputs attached to the desktop on this adapter. Zero is the shape a
@@ -111,6 +116,7 @@ fn arch() -> &'static str {
     }
 }
 
+#[cfg(windows)]
 const fn vendor_name(vendor_id: u32) -> &'static str {
     match vendor_id {
         VENDOR_NVIDIA => "nvidia",
@@ -159,7 +165,20 @@ fn adapters() -> Vec<Adapter> {
     adapters
 }
 
-#[cfg(not(windows))]
+/// A Mac has one GPU, and nothing short of Metal, which this crate does not
+/// link, would name it: one row, driving the displays CoreGraphics lists.
+#[cfg(target_os = "macos")]
+fn adapters() -> Vec<Adapter> {
+    vec![Adapter {
+        description: "apple gpu".to_owned(),
+        vendor: "apple",
+        vendor_id: VENDOR_APPLE,
+        outputs: crate::platform::macos::display_ids().len() as u32,
+        software: false,
+    }]
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn adapters() -> Vec<Adapter> {
     Vec::new()
 }
@@ -168,17 +187,23 @@ fn adapters() -> Vec<Adapter> {
 ///
 /// Capture availability is this walk, not an opened duplication: `probe` can
 /// run while a session is streaming, and taking a duplication away from it to
-/// answer a question would be worse than the answer is good.
-#[cfg(windows)]
+/// answer a question would be worse than the answer is good. On a Mac it is
+/// CoreGraphics' list, which needs no grant: nothing here asks
+/// ScreenCaptureKit or wakes the display, so an asleep display is not in it.
+#[cfg(any(windows, target_os = "macos"))]
 fn sources() -> Vec<String> {
-    crate::capture::enumerate_outputs()
+    #[cfg(windows)]
+    let outputs = crate::capture::enumerate_outputs();
+    #[cfg(target_os = "macos")]
+    let outputs = crate::displays::mac::outputs();
+    outputs
         .unwrap_or_default()
         .into_iter()
         .map(|output| output.device_name)
         .collect()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn sources() -> Vec<String> {
     Vec::new()
 }
@@ -275,6 +300,22 @@ mod tests {
         }
     }
 
+    /// A Mac is one Apple GPU, driving the displays `sources` names.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_reports_one_apple_gpu_for_its_displays() {
+        let json = serde_json::to_value(report()).expect("the report serialises");
+        let adapters = json["adapters"].as_array().expect("an adapters array");
+        assert_eq!(adapters.len(), 1);
+        let gpu = &adapters[0];
+        assert_eq!(gpu["description"], "apple gpu");
+        assert_eq!(gpu["vendor"], "apple");
+        assert_eq!(gpu["vendor_id"], 0x106B);
+        assert_eq!(gpu["software"], false);
+        let sources = json["sources"].as_array().expect("a sources array");
+        assert_eq!(gpu["outputs"], sources.len());
+    }
+
     #[test]
     fn a_machine_with_no_encoder_exits_13() {
         let report = empty_report();
@@ -305,7 +346,8 @@ mod tests {
         feature = "encode-amf",
         feature = "encode-mf",
         feature = "encode-openh264",
-        feature = "encode-ffmpeg"
+        feature = "encode-ffmpeg",
+        feature = "encode-videotoolbox"
     )))]
     #[test]
     fn a_build_with_no_backend_exits_13() {

@@ -2,7 +2,9 @@
 //!
 //! Three verbs (plan.md's names registry): `run` takes the session bundle on
 //! stdin, `probe` reports capture and encode capability as JSON, `version`
-//! prints the build's version so the service can refuse a stale streamer.
+//! prints the build's version so the service can refuse a stale streamer. On
+//! macOS a fourth, `selfcheck`, reports what the privacy system credits this
+//! process with, as one JSON line.
 
 use std::io::{self, BufRead, BufReader};
 use std::process::ExitCode;
@@ -11,11 +13,15 @@ use owlette_swoop::bundle::{Bundle, BuildVersions};
 use owlette_swoop::{ipc::exit, log as swoop_log, probe};
 use zeroize::Zeroize;
 
+#[cfg(target_os = "macos")]
+const USAGE: &str = "usage: owlette-swoop <run|probe|version|selfcheck [--force|--grants]>";
+#[cfg(not(target_os = "macos"))]
+const USAGE: &str = "usage: owlette-swoop <run|probe|version>";
+
 fn main() -> ExitCode {
     // First, before any dependency has a chance to load a DLL.
-    #[cfg(windows)]
-    if let Err(e) = owlette_swoop::platform::win::pin_dll_search_path() {
-        eprintln!("owlette-swoop: could not pin the dll search path: {e}");
+    if let Err(e) = owlette_swoop::platform::process::prepare() {
+        eprintln!("owlette-swoop: {e:#}");
         return ExitCode::from(exit::INTERNAL);
     }
 
@@ -40,8 +46,39 @@ fn main() -> ExitCode {
             }
         }
         Some("run") => run(),
+        #[cfg(target_os = "macos")]
+        Some("selfcheck") => selfcheck(),
         _ => {
-            eprintln!("usage: owlette-swoop <run|probe|version>");
+            eprintln!("{USAGE}");
+            ExitCode::from(exit::INTERNAL)
+        }
+    }
+}
+
+/// The `selfcheck` verb: one JSON line, exit 0 whatever it says. No logger —
+/// like `probe`, it is read by a caller that must not create directories.
+/// `--force` also asks ScreenCaptureKit when the preflight says no, which may
+/// raise the Screen Recording dialog; without it nothing here can. `--grants`
+/// prints the three grant answers alone and touches neither ScreenCaptureKit
+/// nor the network: the desktop app asks it on a timer, because its own
+/// process keeps the Accessibility answer it had at launch. `--paste-once`
+/// reads the pasteboard one time, which under *ask* raises macOS's paste
+/// alert: only the desktop app's own button runs it, on a click.
+#[cfg(target_os = "macos")]
+fn selfcheck() -> ExitCode {
+    use owlette_swoop::platform::macos;
+    let line = match std::env::args().nth(2).as_deref() {
+        Some("--grants") => serde_json::to_string(&macos::grants()),
+        Some("--paste-once") => serde_json::to_string(&macos::paste_once()),
+        flag => serde_json::to_string(&macos::selfcheck(flag == Some("--force"))),
+    };
+    match line {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::from(exit::OK)
+        }
+        Err(e) => {
+            eprintln!("owlette-swoop: selfcheck failed: {e}");
             ExitCode::from(exit::INTERNAL)
         }
     }
@@ -94,17 +131,8 @@ fn run() -> ExitCode {
     ExitCode::from(exit)
 }
 
-#[cfg(windows)]
 fn session_exit(bundle: Bundle, stdin: impl BufRead + Send + 'static) -> u8 {
     owlette_swoop::session::run(bundle, stdin).code()
-}
-
-/// Wave 9 brings the macOS and Linux backends; until then a `run` on anything
-/// else is an honest internal error rather than a silent no-op.
-#[cfg(not(windows))]
-fn session_exit(_bundle: Bundle, _stdin: impl BufRead + Send + 'static) -> u8 {
-    ::log::error!("owlette-swoop: the session is windows-only until wave 9");
-    exit::INTERNAL
 }
 
 /// The panic path.
@@ -121,6 +149,7 @@ mod crash {
     /// At most this many dumps in the directory. The cap is enforced by *not
     /// writing* rather than by deleting: nothing in this process removes a file
     /// it did not create in this run.
+    #[cfg(windows)]
     const KEEP_DUMPS: usize = 3;
 
     /// One per process. A panic inside the dump path would otherwise recurse.

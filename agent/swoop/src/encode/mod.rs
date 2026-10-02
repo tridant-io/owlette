@@ -24,6 +24,12 @@ pub mod mf;
 pub mod qsv;
 #[cfg(any(feature = "encode-openh264", feature = "encode-ffmpeg"))]
 pub mod soft;
+#[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]
+pub mod videotoolbox;
+
+// The H.264 SPS reader and its bitstream-restriction rewrite. Plain Rust with
+// no platform in it, so its tests run on every system.
+pub mod h264_sps;
 
 // The chain over whichever of the above are built, and the only module that
 // knows their order. Never gated: with no backend compiled in it still answers,
@@ -46,7 +52,7 @@ pub enum Codec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendCaps {
     /// Backend name as the selection table and the probe JSON spell it —
-    /// "nvenc", "qsv", "amf", "mf", "openh264".
+    /// "nvenc", "qsv", "amf", "mf", "openh264", "videotoolbox".
     pub backend: &'static str,
     /// Per-codec limits. A codec absent from this list is not encodable here.
     pub codecs: Vec<CodecCaps>,
@@ -103,11 +109,23 @@ pub struct EncodedFrame {
     pub encoded_qpc: i64,
 }
 
+/// Where an asynchronous backend hands finished frames, from whatever thread
+/// finishes them. Answers whether the frame was taken: one refused leaves a
+/// hole, and the backend forces its next frame to an IRAP.
+pub type Sink = Box<dyn Fn(EncodedFrame) -> bool + Send + Sync>;
+
 /// A live encode session.
 pub trait Encoder: Send {
     /// Submit a captured frame. Returning `Ok(None)` is normal — an encoder
-    /// running asynchronously has not produced output for this input yet.
+    /// running asynchronously has not produced output for this input yet, or
+    /// hands it to its [`Sink`] instead.
     fn encode(&mut self, frame: &Frame, force_irap: bool) -> anyhow::Result<Option<EncodedFrame>>;
+
+    /// Deliver finished frames through `sink` as they complete instead of
+    /// answering them from `encode`, so the next capture overlaps this
+    /// encode. A backend that encodes asynchronously takes it (VideoToolbox);
+    /// the rest answer from `encode`, which is what the default keeps.
+    fn set_sink(&mut self, _sink: Sink) {}
 
     /// Move the CBR target. Called by the rate governor, several times a
     /// second, and must not restart the session.

@@ -15,6 +15,7 @@
  */
 
 import { use, useCallback, useRef, useState } from 'react';
+import { useMachines } from '@/hooks/useFirestore';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
@@ -37,6 +38,11 @@ export default function SwoopPage({
     siteId,
     machineId,
   );
+  // the keyboard follows the machine's system. no hook reads one machine
+  // document, so this takes it off the site's list; an agent that reports no
+  // system is a windows one.
+  const { machines } = useMachines(siteId);
+  const osFamily = machines.find((machine) => machine.machineId === machineId)?.osFamily ?? 'windows';
   // the overlay covers the picture, so it is off until asked for — and the
   // toolbar is out of reach once fullscreen holds, so the choice is made here.
   const [statsOpen, setStatsOpen] = useState(false);
@@ -64,7 +70,7 @@ export default function SwoopPage({
         <SwoopDisplayPicker session={session} />
         <SwoopQualityMenu session={session} />
         <SwoopAudioToggle session={session} />
-        <SwoopSpecialKeys session={session} />
+        <SwoopSpecialKeys session={session} osFamily={osFamily} />
       </SwoopToolbar>
 
       <div className="min-h-0 flex-1">

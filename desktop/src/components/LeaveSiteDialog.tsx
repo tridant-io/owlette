@@ -28,6 +28,15 @@ interface LeaveSiteDialogProps {
    * else restarts it mid-leave. Returns the release, always called.
    */
   onHold: () => () => void
+  /**
+   * True off windows, where the owlette service carries out the whole leave —
+   * the app asks it through its request seam (`agent/src/configure_site.py`)
+   * and it restarts itself once the machine is out. The dialog neither stops
+   * nor starts it there, and nothing asks for approval.
+   */
+  serviceLeaves?: boolean
+  /** Open the pairing dialog; offered once a leave off windows has finished. */
+  onJoin?: () => void
 }
 
 type Phase = 'confirm' | 'working' | 'left' | 'failed'
@@ -206,6 +215,10 @@ function failedCopy(failure: Failure, site: string, result: Result): string {
  * on. The host elevates (`service_ctl.rs`); declining the prompt aborts before
  * `config.json` is touched. Steps are shown live — a fifteen-second freeze
  * looks broken.
+ *
+ * Off windows ({@link LeaveSiteDialogProps.serviceLeaves}) the same `leave` run
+ * is a request the service carries out from start to finish, in an order that
+ * needs no stop around it; the dialog only confirms, watches and reports.
  */
 export function LeaveSiteDialog({
   open,
@@ -213,6 +226,8 @@ export function LeaveSiteDialog({
   onClose,
   onLeft,
   onHold,
+  serviceLeaves = false,
+  onJoin,
 }: LeaveSiteDialogProps) {
   const [phase, setPhase] = useState<Phase>('confirm')
   const [status, setStatus] = useState('')
@@ -318,6 +333,48 @@ export function LeaveSiteDialog({
     }
   }, [onHold, onLeft])
 
+  /** The leave off windows: the service runs every step, restart included. */
+  const leaveThroughService = useCallback(async () => {
+    setPhase('working')
+    setStatus('asking the owlette service')
+    setError(null)
+    setResult({ deregistered: true, serviceDown: false })
+
+    const release = onHold()
+    leaveLog('started — the service carries it out')
+    try {
+      let outcome: HelperOutcome
+      try {
+        outcome = await runLeaveHelper((status) => {
+          leaveLog(`service: ${status}`)
+          setStatus(status)
+        })
+      } catch (cause) {
+        outcome = { ok: false, deregistered: false, error: message(cause) }
+      }
+      if (!outcome.ok) {
+        leaveLog(`the service did not finish: ${outcome.error}`, 'error')
+        setFailure('leave')
+        setError(outcome.error)
+        setPhase('failed')
+        return
+      }
+      leaveLog('done')
+      setResult({ deregistered: outcome.deregistered, serviceDown: false })
+      setPhase('left')
+      onLeft()
+    } finally {
+      release()
+    }
+  }, [onHold, onLeft])
+
+  const confirmCopy = serviceLeaves
+    ? `remove this machine from ${site}? owlette takes it off the dashboard, then restarts its service. pairing it again needs a new phrase.`
+    : `remove this machine from ${site}? the owlette service is stopped while the machine is deregistered, then started again — windows will ask you to approve that. pairing it again needs a new phrase.`
+  const workingCopy = serviceLeaves
+    ? 'this takes a few seconds. owlette restarts its service once the machine is out of the site.'
+    : 'this takes a few seconds. the owlette service is stopped while it happens, then started again.'
+
   return (
     <Dialog
       open={open}
@@ -331,12 +388,12 @@ export function LeaveSiteDialog({
           <DialogTitle>leave site</DialogTitle>
           <DialogDescription>
             {phase === 'confirm'
-              ? `remove this machine from ${site}? the owlette service is stopped while the machine is deregistered, then started again — windows will ask you to approve that. pairing it again needs a new phrase.`
+              ? confirmCopy
               : phase === 'left'
                 ? leftCopy(site, result)
                 : phase === 'failed'
                   ? failedCopy(failure, site, result)
-                  : 'this takes a few seconds. the owlette service is stopped while it happens, then started again.'}
+                  : workingCopy}
           </DialogDescription>
         </DialogHeader>
 
@@ -358,7 +415,10 @@ export function LeaveSiteDialog({
               <Button variant="outline" onClick={onClose}>
                 cancel
               </Button>
-              <Button variant="destructive" onClick={() => void leave()}>
+              <Button
+                variant="destructive"
+                onClick={() => void (serviceLeaves ? leaveThroughService() : leave())}
+              >
                 leave site
               </Button>
             </>
@@ -372,6 +432,9 @@ export function LeaveSiteDialog({
                 <Button variant="destructive" onClick={() => void leave()}>
                   try again
                 </Button>
+              )}
+              {phase === 'left' && serviceLeaves && onJoin && (
+                <Button onClick={onJoin}>join a site</Button>
               )}
             </>
           )}

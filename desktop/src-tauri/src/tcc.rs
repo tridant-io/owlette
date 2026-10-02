@@ -14,22 +14,43 @@
 //! and `screencapture` itself never asks — only this call lists the app under
 //! Screen & System Audio Recording. The answer is read on every tick; a grant
 //! only takes effect on the next launch, and the next tick after that reports it.
+//!
+//! Accessibility (posting input, which swoop's control needs) is reported
+//! beside it as `accessibility`, on the same tick, but **never asked here**:
+//! the ask raises a system prompt, so it is made only from the permission
+//! banner's button ([`request_accessibility`], swoop-macos task 2.3). Its
+//! grant takes effect at once, but not for this process: gate M0 and task 4.9
+//! measured `CGPreflightPostEventAccess` here keeping its launch-time answer
+//! through a grant and a revocation, on this module's thread and on the main
+//! thread alike, while every process this app started read the truth. So the
+//! answer comes from a fresh one, the swoop sidecar's `selfcheck --grants`,
+//! which macOS credits with this app's grants. A sidecar that does not answer
+//! is `null`, unknown: a notice must never appear because a child timed out.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const TCC_REL: &str = "ipc/tcc.json";
 const REPORT_EVERY: Duration = Duration::from_secs(60);
 const FILE_MODE: u32 = 0o644;
+/// The swoop sidecar, beside this app's own executable.
+const SIDECAR: &str = "owlette-swoop";
+const GRANTS_ARGS: [&str; 2] = ["selfcheck", "--grants"];
+const PASTE_ONCE_ARGS: [&str; 2] = ["selfcheck", "--paste-once"];
+/// Past this the sidecar's answer is unknown. It answers in milliseconds.
+const GRANTS_TIMEOUT: Duration = Duration::from_secs(2);
+const GRANTS_POLL: Duration = Duration::from_millis(20);
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
   fn CGPreflightScreenCaptureAccess() -> bool;
   fn CGRequestScreenCaptureAccess() -> bool;
+  fn CGRequestPostEventAccess() -> bool;
 }
 
 /// Whether the grant is held right now, without asking.
@@ -45,14 +66,147 @@ pub fn request() -> bool {
   unsafe { CGRequestScreenCaptureAccess() }
 }
 
-/// The report body, as the daemon parses it.
-pub fn report(granted: bool, checked_at: u64) -> String {
-  format!(r#"{{"screen_recording":{granted},"checked_at":{checked_at}}}"#)
+/// Whether this app may post input events (Accessibility), without asking, as
+/// the sidecar reads it now; None when it could not say. Blocks for up to
+/// [`GRANTS_TIMEOUT`], so never on the main thread.
+pub fn accessibility_granted() -> Option<bool> {
+  accessibility_from(&sidecar_path()?, GRANTS_TIMEOUT)
+}
+
+/// macOS's pasteboard access for this app, as `selfcheck --grants` reports it:
+/// `Some(true)` under *allow* and on a system with no such setting (`null`),
+/// `Some(false)` under anything else, `None` when the sidecar gave no answer
+/// or predates the key.
+pub fn clipboard_sharing() -> Option<bool> {
+  clipboard_sharing_from(&sidecar_path()?, GRANTS_TIMEOUT)
+}
+
+/// The grants sidecar beside this app's own binary; `None` when that path is
+/// unknown.
+fn sidecar_path() -> Option<PathBuf> {
+  match std::env::current_exe() {
+    Ok(exe) => Some(exe.parent().unwrap_or(Path::new("")).join(SIDECAR)),
+    Err(error) => {
+      log::warn!("grants: this app's own path is unknown: {error}");
+      None
+    }
+  }
+}
+
+/// [`ask_sidecar`]'s `postEventPreflight`, with a failure logged and answered
+/// as unknown.
+fn accessibility_from(program: &Path, timeout: Duration) -> Option<bool> {
+  let answer = ask_sidecar(program, timeout).and_then(|grants| {
+    grants
+      .get("postEventPreflight")
+      .and_then(serde_json::Value::as_bool)
+      .ok_or_else(|| "its answer carries no postEventPreflight".to_owned())
+  });
+  match answer {
+    Ok(granted) => Some(granted),
+    Err(error) => {
+      log::warn!("accessibility: {} gave no answer: {error}", program.display());
+      None
+    }
+  }
+}
+
+/// [`ask_sidecar`]'s `pasteboardAccess`, with a failure logged and answered
+/// as unknown.
+fn clipboard_sharing_from(program: &Path, timeout: Duration) -> Option<bool> {
+  let grants = match ask_sidecar(program, timeout) {
+    Ok(grants) => grants,
+    Err(error) => {
+      log::warn!("clipboard sharing: {} gave no answer: {error}", program.display());
+      None?
+    }
+  };
+  match grants.get("pasteboardAccess") {
+    Some(serde_json::Value::Null) => Some(true),
+    Some(serde_json::Value::String(access)) => Some(access == "allow"),
+    _ => None,
+  }
+}
+
+/// Run `program selfcheck --grants` and read its one line of json: the
+/// answers the streamer's own reads give now.
+fn ask_sidecar(program: &Path, timeout: Duration) -> Result<serde_json::Value, String> {
+  let mut child = Command::new(program)
+    .args(GRANTS_ARGS)
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .current_dir("/")
+    .spawn()
+    .map_err(|error| format!("could not start it: {error}"))?;
+  let deadline = Instant::now() + timeout;
+  let status = loop {
+    match child.try_wait() {
+      Ok(Some(status)) => break status,
+      Ok(None) if Instant::now() < deadline => thread::sleep(GRANTS_POLL),
+      waited => {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(match waited {
+          Err(error) => format!("could not wait for it: {error}"),
+          _ => format!("no answer within {timeout:?}"),
+        });
+      }
+    }
+  };
+  if !status.success() {
+    return Err(format!("it exited with {status}"));
+  }
+  let mut line = String::new();
+  child
+    .stdout
+    .take()
+    .ok_or("its output was not captured")?
+    .read_to_string(&mut line)
+    .map_err(|error| format!("could not read its answer: {error}"))?;
+  serde_json::from_str::<serde_json::Value>(line.trim())
+    .map_err(|error| format!("its answer is not json: {error}"))
+}
+
+/// Ask for Accessibility: lists the app in System Settings and may raise the
+/// system prompt, so only a click may call this. Returns this process's
+/// answer, which is its launch-time one.
+pub fn request_accessibility() -> bool {
+  // SAFETY: as above; the call may show a system prompt, which the click asked for.
+  unsafe { CGRequestPostEventAccess() }
+}
+
+/// One deliberate pasteboard read by the sidecar, from the notice's button:
+/// macOS lists an app under Paste from Other Apps only once it has read, so
+/// under *ask* this raises the paste alert at the person who clicked. Spawned
+/// and reaped on its own thread: the read returns only once the alert is
+/// answered, and that can take as long as it takes.
+pub fn request_clipboard_sharing() -> Result<(), String> {
+  let program = sidecar_path().ok_or("this app's own path is unknown")?;
+  let mut child = Command::new(&program)
+    .args(PASTE_ONCE_ARGS)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .current_dir("/")
+    .spawn()
+    .map_err(|error| format!("could not start {}: {error}", program.display()))?;
+  thread::spawn(move || {
+    let _ = child.wait();
+  });
+  Ok(())
+}
+
+/// The report body, as the daemon parses it. An unknown Accessibility answer
+/// is `null`.
+pub fn report(granted: bool, accessibility: Option<bool>, checked_at: u64) -> String {
+  let accessibility = accessibility.map_or("null".to_owned(), |held| held.to_string());
+  format!(r#"{{"screen_recording":{granted},"accessibility":{accessibility},"checked_at":{checked_at}}}"#)
 }
 
 /// Write the report whole and move it into place: the daemon may read it at
 /// any moment and a half-written file is a report of nothing.
-pub fn write_report(root: &Path, granted: bool) -> std::io::Result<PathBuf> {
+pub fn write_report(root: &Path, granted: bool, accessibility: Option<bool>) -> std::io::Result<PathBuf> {
   let path = root.join(TCC_REL);
   if let Some(parent) = path.parent() {
     fs::create_dir_all(parent)?;
@@ -66,20 +220,21 @@ pub fn write_report(root: &Path, granted: bool) -> std::io::Result<PathBuf> {
       .truncate(true)
       .mode(FILE_MODE)
       .open(&temp)?;
-    file.write_all(report(granted, now).as_bytes())?;
+    file.write_all(report(granted, accessibility, now).as_bytes())?;
   }
   fs::rename(&temp, &path)?;
   Ok(path)
 }
 
-/// Ask once, then report every minute for the life of the app.
+/// Ask for Screen Recording once, then report both grants every minute for
+/// the life of the app.
 pub fn spawn(root: &Path) {
   let root = root.to_path_buf();
   let spawned = thread::Builder::new().name("owlette-tcc".into()).spawn(move || {
     let asked = request();
     log::info!("screen recording: asked once at launch, answer now {asked}");
     loop {
-      match write_report(&root, granted()) {
+      match write_report(&root, granted(), accessibility_granted()) {
         Ok(_) => {}
         Err(error) => log::warn!("could not write the screen recording report: {error}"),
       }
@@ -95,21 +250,95 @@ pub fn spawn(root: &Path) {
 mod tests {
   use super::*;
   use std::os::unix::fs::PermissionsExt;
+  use std::sync::atomic::{AtomicUsize, Ordering};
 
   #[test]
-  fn the_report_is_the_two_fields_the_daemon_reads() {
-    assert_eq!(report(true, 1_790_000_000), r#"{"screen_recording":true,"checked_at":1790000000}"#);
+  fn the_report_is_the_fields_the_daemon_reads() {
+    assert_eq!(
+      report(true, Some(false), 1_790_000_000),
+      r#"{"screen_recording":true,"accessibility":false,"checked_at":1790000000}"#
+    );
+    assert_eq!(
+      report(true, None, 1_790_000_000),
+      r#"{"screen_recording":true,"accessibility":null,"checked_at":1790000000}"#
+    );
   }
 
   #[test]
   fn the_report_file_is_the_users_own_and_not_writable_by_others() {
     let root = std::env::temp_dir().join(format!("owlette-tcc-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
-    let path = write_report(&root, false).expect("report");
+    let path = write_report(&root, false, Some(true)).expect("report");
     assert_eq!(path, root.join(TCC_REL));
     let text = fs::read_to_string(&path).unwrap();
-    assert!(text.starts_with(r#"{"screen_recording":false,"checked_at":"#), "{text}");
+    assert!(text.starts_with(r#"{"screen_recording":false,"accessibility":true,"checked_at":"#), "{text}");
     assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o022, 0);
     assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1, "no temp file left");
+  }
+
+  /// A stand-in sidecar running `body` when it is asked exactly
+  /// `selfcheck --grants`, and exiting 9 on anything else. In a fresh
+  /// directory, never removed, because nothing here deletes a tree.
+  fn sidecar(body: &str) -> PathBuf {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+      "owlette-tcc-sidecar-{}-{}",
+      std::process::id(),
+      NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&dir).expect("a scratch directory");
+    let program = dir.join(SIDECAR);
+    fs::write(&program, format!("#!/bin/sh\n[ \"$*\" = \"selfcheck --grants\" ] || exit 9\n{body}\n")).unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    program
+  }
+
+  #[test]
+  fn the_sidecars_post_event_answer_is_the_accessibility_answer() {
+    let granted = sidecar(r#"echo '{"screenCapturePreflight":false,"postEventPreflight":true,"axTrusted":true}'"#);
+    assert_eq!(accessibility_from(&granted, GRANTS_TIMEOUT), Some(true));
+    let refused = sidecar(r#"echo '{"screenCapturePreflight":true,"postEventPreflight":false,"axTrusted":true}'"#);
+    assert_eq!(accessibility_from(&refused, GRANTS_TIMEOUT), Some(false));
+  }
+
+  #[test]
+  fn a_sidecar_that_does_not_answer_is_unknown_never_false() {
+    let missing = std::env::temp_dir().join(format!("owlette-tcc-none-{}", std::process::id())).join(SIDECAR);
+    assert_eq!(accessibility_from(&missing, GRANTS_TIMEOUT), None, "no sidecar");
+    assert_eq!(accessibility_from(&sidecar("exit 3"), GRANTS_TIMEOUT), None, "a failed run");
+    assert_eq!(accessibility_from(&sidecar("echo not json"), GRANTS_TIMEOUT), None, "not json");
+    assert_eq!(
+      accessibility_from(&sidecar(r#"echo '{"axTrusted":false}'"#), GRANTS_TIMEOUT),
+      None,
+      "no postEventPreflight"
+    );
+    assert_eq!(
+      accessibility_from(&sidecar(r#"echo '{"postEventPreflight":"false"}'"#), GRANTS_TIMEOUT),
+      None,
+      "not a bool"
+    );
+  }
+
+  #[test]
+  fn the_sidecars_pasteboard_answer_is_the_clipboard_sharing_answer() {
+    let allow = sidecar(r#"echo '{"postEventPreflight":true,"pasteboardAccess":"allow"}'"#);
+    assert_eq!(clipboard_sharing_from(&allow, GRANTS_TIMEOUT), Some(true));
+    let ask = sidecar(r#"echo '{"postEventPreflight":true,"pasteboardAccess":"ask"}'"#);
+    assert_eq!(clipboard_sharing_from(&ask, GRANTS_TIMEOUT), Some(false));
+    let older_system = sidecar(r#"echo '{"postEventPreflight":true,"pasteboardAccess":null}'"#);
+    assert_eq!(clipboard_sharing_from(&older_system, GRANTS_TIMEOUT), Some(true), "nothing to allow");
+    let older_sidecar = sidecar(r#"echo '{"postEventPreflight":true}'"#);
+    assert_eq!(clipboard_sharing_from(&older_sidecar, GRANTS_TIMEOUT), None, "no pasteboardAccess");
+    assert_eq!(clipboard_sharing_from(&sidecar("exit 3"), GRANTS_TIMEOUT), None, "a failed run");
+  }
+
+  #[test]
+  fn a_sidecar_that_hangs_is_stopped_at_the_timeout() {
+    let hangs = sidecar("exec sleep 30");
+    let started = Instant::now();
+    assert_eq!(accessibility_from(&hangs, Duration::from_millis(300)), None);
+    let took = started.elapsed();
+    assert!(took >= Duration::from_millis(300), "gave up early, after {took:?}");
+    assert!(took < Duration::from_secs(5), "waited for the child, {took:?}");
   }
 }

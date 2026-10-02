@@ -257,8 +257,13 @@ those repeats are what an attack in progress looks like in the audit trail.
 the host maps `code` through [`testdata/keymap.json`](testdata/keymap.json) to a ps/2 set-1 scancode plus an
 extended flag. **the host keys on `code` and never on `key`**: the numpad and the control/arrow pad share
 scancode low bytes and are told apart only by `extended`. left and right modifiers stay distinct on the wire.
-a mac client maps cmd → `ControlLeft` **in the browser**, before it sends, so the host never guesses.
-`PrintScreen` and `Pause` are sequences, not single scancodes; keymap.json's `sequences` object holds them.
+the shortcut modifier is mapped **in the browser**, before it sends, so the host never guesses: a mac client maps
+cmd → `ControlLeft` / `ControlRight` for a windows or linux host, and a client that is not a mac maps ctrl →
+`MetaLeft` / `MetaRight` for a macos host. the viewer may turn either off, and then every key goes as pressed.
+`PrintScreen` and `Pause` are sequences, not single scancodes; keymap.json's `sequences` object holds them. a
+macos host goes on from the scancode to the mac's virtual keycode through
+[`testdata/keymap-macos.json`](testdata/keymap-macos.json), so the host's keyboard layout decides what a key
+types, as it does on windows, and it drops `PrintScreen` and `Pause`, which a mac has no key for.
 
 ### cursor — `swoop-cursor`, host → viewer
 
@@ -311,9 +316,13 @@ viewer → host: `quality` (`preset`, `maxBitrateKbps`, `maxFps` — per viewer,
 `display` (`index` — shared state, requires `ctl`), `idr`, `sas` (ctrl+alt+del, requires `ctl`),
 `mute` (`on`), `lease` (`token`, section 10).
 
-host → viewer: `hello-host` (`codec`, `width`, `height`, `displays[]`, `streamerEpoch`, `protocolVersion`),
-`sas-result` (`ok`), `lease-ok` (`expiresAt`), `ended` (`reason`), `roster` (`viewers[]` of
-`{id, name, ctl}`, `tsUs`).
+host → viewer: `hello-host` (`codec`, `width`, `height`, `displays[]`, `streamerEpoch`, `protocolVersion`,
+`clipboardReads`), `sas-result` (`ok`), `lease-ok` (`expiresAt`), `ended` (`reason`), `roster` (`viewers[]`
+of `{id, name, ctl}`, `tsUs`).
+
+`clipboardReads` says whether the host reads its own clipboard, so what is copied there reaches a viewer:
+false on a Mac whose pasteboard access is not *allow* (decision 17), when only the viewer's clips cross. A
+viewer takes an older host's silence as true.
 
 `roster` is who is connected and who holds control, sent **whole on every change** rather than as a delta —
 this channel is ordered and reliable, but a viewer that joined late has no earlier state to apply a delta to.
@@ -342,9 +351,21 @@ golden vectors: `messages/msg-input-batch.json`, `messages/msg-input-no-ctl.json
 
 ## 6. the stdin/stdout pipe protocol
 
-the service spawns `owlette-swoop.exe run` with its own system token retargeted to the console session, over
-**inherited anonymous pipes**. there are no files between the service and the streamer, and nothing sensitive
-is ever on a command line.
+on windows the service spawns `owlette-swoop.exe run` with its own system token retargeted to the console
+session, over **inherited anonymous pipes**. there are no files between the service and the streamer, and
+nothing sensitive is ever on a command line.
+
+on macos and linux the service is a root daemon with no display of its own, so it does not spawn the streamer:
+it asks the desktop app to, with a `launch` job that names the program `owlette-swoop` and allow-listed
+arguments, never a path, and the app resolves the program next to its own executable. the daemon first binds a
+**unix socket** under `ipc/swoop` (mode 0660, root and the ipc group); the app connects to it, starts the
+streamer as its own child with **stdin and stdout both on that one connection**, and drops its own copy of it.
+the daemon accepts that one connection, admits it only from a peer running as the console user, and unlinks the
+socket file. everything below then holds unchanged: line 1 is the bundle, and eof is the daemon's end closing.
+the one file is `ipc/swoop/<id>.exit.json`, where the app writes the child's `pid` and exit `code` once it has
+gone; the daemon, which is not the streamer's parent, books the `exiting` line's `code` first and reads that
+file only for an exit that sent none. the bundle is still never on disk, and nothing sensitive is in that file,
+in the job file or on a command line.
 
 ### stdin, service → streamer
 
@@ -384,6 +405,10 @@ loop.
 `input_not_permitted`, `join_refused`, `clipboard_audit` — so a name added here has to be added there too, or
 the route answers 400 for the whole batch. `viewer` is absent when the refusal is not attributable to one.
 
+`exiting` is the last line before the process exits, and its `code` is the one it exits with. on macos a stop
+from the menu bar's capture indicator ends the session the way a `kill` does: viewers leave with `kill`, and
+`exiting` carries code 0 and reason `kill`.
+
 `status` carries fifteen **optional** fields, each omitted when it has nothing to say: a session whose
 features are all quiet and whose peers are all down emits exactly the nine-field line above, which is what
 the golden vector holds.
@@ -396,14 +421,14 @@ out. with a single viewer every one of these is the number it always was.
 
 | field | meaning |
 |---|---|
-| `desktop` | the input desktop: `default` \| `winlogon` \| `screensaver` \| `unknown`. an `OpenInputDesktop` that failed is `unknown` and is **never** reported as a lock. |
+| `desktop` | the input desktop: `default` \| `winlogon` \| `screensaver` \| `unknown`. an `OpenInputDesktop` that failed is `unknown` and is **never** reported as a lock. on macos it is always `default`: the streamer runs in the console user's own session, which has one desktop. |
 | `audio` | the render endpoint: `ok` \| `no_endpoint`. swoop never creates a device and never moves the default. |
 | `displays` | `ok` \| `headless` — headless is no attached output, or a duplication that yields nothing but black. |
 | `inputDropped` | the input rate limiter's cumulative drop count. **absent means zero**, not unknown. |
 | `denials` | the control gate's cumulative refusals, including every one suppressed behind a single `host_event`. absent means zero. |
 | `testOverride` | the bundle's test-only `overrides`, named so an overridden session cannot pass for a real one in `logs/swoop`. absent on every release build, which refuses such a bundle with exit 10. |
 | `idrs` | keyframes the host actually forced since `ready`, **after** section 4's coalescing — not the number of requests, which a receiver in a loss storm raises on every record. absent means zero. |
-| `encoder` | which backend of the fallback chain the session is encoding on: `nvenc` \| `qsv` \| `amf` \| `mf` \| `openh264`. absent until a viewer's offer has named a codec and the first encoder is open, and absent again once the last viewer leaves — the pause closes the encoders with the duplication. `ready`'s `codecs[]` says what the machine *can* do; this says what it did. |
+| `encoder` | which backend of the fallback chain the session is encoding on: `nvenc` \| `qsv` \| `amf` \| `mf` \| `openh264` \| `videotoolbox` (macos's only one). absent until a viewer's offer has named a codec and the first encoder is open, and absent again once the last viewer leaves — the pause closes the encoders with the duplication. `ready`'s `codecs[]` says what the machine *can* do; this says what it did. |
 | `tiers` | how many encode sessions the viewers are costing this machine: `min(distinct codec classes present, the measured encoder budget)`. **absent means one**, which is every session whose viewers all negotiated the same codec, and a session with nobody watching. one capture feeds all of them, so this is the whole of what multi-viewer costs the gpu. |
 
 the five below are the rate governor's, and they ride a `status` **only while at least one viewer's peer is
@@ -431,7 +456,7 @@ bundle never appears on stdout, on stderr, in a log, or in an error message — 
 
 | code | meaning |
 |---|---|
-| 0 | normal exit: killed, idle-timed-out, or stdin closed |
+| 0 | normal exit: killed (a mac's menu-bar stop included), idle-timed-out, or stdin closed |
 | 10 | bundle invalid — malformed, missing a required field, or carrying `overrides` without the `testhooks` build |
 | 11 | version mismatch — `protocolVersion` or `agentVersion` differs from this binary |
 | 12 | no capture source |

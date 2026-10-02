@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type LaunchMode, type ScheduleBlock } from '@/hooks/useFirestore';
 import { DEFAULT_SCHEDULE } from '@/lib/scheduleDefaults';
 import { scheduleClockLabel } from '@/lib/scheduleClockCopy';
+import { launchCopy } from '@/lib/launchCopy';
 import { useSchedulePresets } from '@/hooks/useSchedulePresets';
 import { useDeployments } from '@/hooks/useDeployments';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
@@ -512,9 +513,13 @@ export default function DashboardPage() {
     }
   };
 
+  // the launch target is an .exe, an .app or a binary depending on the machine
+  const launchCopyOf = (machineId: string) => launchCopy(machines.find((m) => m.machineId === machineId)?.osFamily);
+
   const handleSetLaunchMode = async (machineId: string, processId: string, processName: string, mode: 'off' | 'always' | 'scheduled', exePath: string, schedules?: ScheduleBlock[] | null, schedulePresetId?: string | null, successMessage?: string) => {
     if (mode !== 'off' && (!exePath || exePath.trim() === '')) {
-      toast.error(`cannot enable launch mode for "${processName}": executable path is not set. please edit the process and set a valid executable path.`);
+      const { label } = launchCopyOf(machineId);
+      toast.error(`cannot enable launch mode for "${processName}": ${label} is not set. please edit the process and set a valid ${label}.`);
       return;
     }
 
@@ -611,7 +616,7 @@ export default function DashboardPage() {
     });
   };
 
-  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath);
+  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath, launchCopyOf);
 
   const handleSaveProcess = async () => {
     if (!editProcessForm.name || !editProcessForm.name.trim()) {
@@ -620,7 +625,7 @@ export default function DashboardPage() {
     }
 
     if (!editProcessForm.exe_path || !editProcessForm.exe_path.trim()) {
-      toast.error('executable path is required');
+      toast.error(`${launchCopyOf(editingMachineId).label} is required`);
       return;
     }
 
@@ -931,6 +936,7 @@ export default function DashboardPage() {
   }, 0);
 
   const currentSite = sites.find(s => s.id === currentSiteId);
+  const editLaunchCopy = launchCopyOf(editingMachineId);
 
   return (
     <div className="relative min-h-screen pb-24 animate-in fade-in duration-300">
@@ -1439,13 +1445,13 @@ export default function DashboardPage() {
 
             {/* Executable Path */}
             <div className="space-y-2">
-              <Label htmlFor="edit-exe-path" className="text-foreground">executable path</Label>
+              <Label htmlFor="edit-exe-path" className="text-foreground">{editLaunchCopy.label}</Label>
               <Input
                 id="edit-exe-path"
                 value={editProcessForm.exe_path}
                 onChange={(e) => setEditProcessForm({ ...editProcessForm, exe_path: e.target.value })}
                 className="border-border bg-card text-foreground"
-                placeholder="C:/Program Files/..."
+                placeholder={editLaunchCopy.placeholder}
               />
             </div>
 
@@ -1473,6 +1479,8 @@ export default function DashboardPage() {
               />
             </div>
 
+            {/* priority and visibility apply on windows only; a mac or linux agent ignores both */}
+            {editLaunchCopy.launchOptions && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Priority */}
               <div className="space-y-2">
@@ -1511,6 +1519,7 @@ export default function DashboardPage() {
                 </Select>
               </div>
             </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Time Delay */}

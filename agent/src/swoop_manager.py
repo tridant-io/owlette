@@ -238,6 +238,11 @@ class SwoopManager:
             self._worker.start()
 
     def _worker_loop(self):
+        if os.name != 'nt':
+            # a socket or exit file an earlier run left behind names a streamer
+            # that is gone; clear them before this run's first spawn.
+            import swoop_spawn_posix
+            swoop_spawn_posix.sweep_stale()
         while True:
             action, payload = self._work.get()
             try:
@@ -300,7 +305,7 @@ class SwoopManager:
                 return
 
         try:
-            proc = self._spawn.spawn(exe_path)
+            proc = self._spawn.spawn(exe_path, sid=sid)
         except swoop_spawn.SwoopSpawnError as e:
             _wipe(bundle)
             self._refuse(e.reason, str(e))
@@ -655,6 +660,10 @@ class SwoopManager:
     # side effects
 
     def _do_side_effects(self, enabled):
+        # the firewall rule and the SAS policy are windows' own; off windows
+        # there is nothing to apply and nothing to undo.
+        if os.name != 'nt':
+            return
         if enabled:
             self._enable_side_effects()
         else:

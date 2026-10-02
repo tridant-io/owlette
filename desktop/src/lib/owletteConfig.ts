@@ -12,6 +12,8 @@
  * file format, not a place to invent a nicer one.
  */
 
+import { launchCopy } from '@/lib/launchCopy'
+
 /** `off` is unmanaged, `always` is 24/7 with crash recovery, `scheduled` runs windows. */
 export type LaunchMode = 'off' | 'always' | 'scheduled'
 
@@ -253,7 +255,7 @@ export function setSchedules(process: ProcessEntry, schedules: ScheduleBlock[]):
  */
 export function launchModeBlockedReason(process: ProcessEntry): string | null {
   if (!text(process.name).trim()) return 'name is required before a launch mode can be set'
-  if (!text(process.exe_path).trim()) return 'an exe path is required before a launch mode can be set'
+  if (!text(process.exe_path).trim()) return launchCopy().pathRequired
   return null
 }
 

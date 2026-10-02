@@ -58,6 +58,10 @@ encode-amf = []
 # Media Foundation needs no new crate, only more of the windows bindings.
 encode-mf = ["windows/Win32_Media_MediaFoundation"]
 encode-openh264 = []
+# VideoToolbox is a system framework reached through objc2-video-toolbox, which
+# the macOS dependency table below always carries, so the feature needs no
+# crate of its own.
+encode-videotoolbox = []
 # Host-side TURN (plan.md D13, Task 7.4) is written on std UDP — str0m has no
 # TURN client and we are not adding a second stack for one.
 turn = []
@@ -74,32 +78,9 @@ testhooks = []
 # constraint and what lifts it; the rest carry the standing exit condition — the
 # dependency-currency review each release cycle (.claude/CLAUDE.md), which moves
 # them unless a named constraint says otherwise.
-
-# WebRTC, sans-IO (plan.md D4). G1 chose arm B — an RTP media track rendered
-# into a <video> — which is str0m's mature path: the libwebrtc GoogCC port,
-# NACK/RTX, the RFC 7798 H.265 packetizer and per-packet header extensions
-# (which is how playout-delay is set). No [patch] table: arm A's sctp-proto
-# patches are not on the chosen path and stay in the spike.
-# 0.23.1 exactly because that is the release the bake-off measured end to end
-# against Chrome 153. Exit condition: 0.24, re-measured on the LAN row.
 #
-# default-features = false drops aws-lc-rs (needs NASM on Windows) and the
-# `examples` feature (rouille + rustls). No OpenSSL and nothing new in the
-# installer — but a C toolchain IS required to build this crate and has been
-# since the rustls pin below: it brings `ring 0.17.14`, which compiles C and
-# assembly through `cc 1.4.6`. `audio-opus` adds cmake on top of that; see
-# `audiopus_sys`.
-#
-# `wincrypto-dimpl`, NOT `wincrypto`: the plain feature does DTLS through
-# SChannel, and against Chrome 153 every handshake fails with "crypto error:
-# decryption failed" (spike 0.2 §13.4). `wincrypto-dimpl` keeps Windows CNG for
-# SRTP and hashing and does DTLS in str0m's own `dimpl`. Exit condition: str0m
-# PR #1038 removes SChannel outright, and the feature name goes with it.
-#
-# Carried forward, not solved here: str0m's pacer is unusable as configured —
-# BWE on measured 1015.6 ms p50 of pacer queue with zero loss, PLI or NACK, so
-# it presents as latency and never as loss. That lands on Tasks 3.8 and 4.7.
-str0m = { version = "=0.23.1", default-features = false, features = ["wincrypto-dimpl"] }
+# str0m is not in this table: its crypto provider differs by system, so it has
+# one line per target below.
 
 # The bundle, the stdin/stdout event lines, the signaling messages and `probe`
 # output are all JSON. `derive` because every one of those is a struct.
@@ -231,9 +212,35 @@ audiopus = { version = "=0.3.0-rc.0", optional = true, features = ["encoder"] }
 audiopus_sys = { version = "=0.2.2", optional = true, features = ["static"] }
 
 # Windows-only, declared here so `cargo check` still resolves on a macOS or
-# Linux host (Wave 9 adds the siblings, and until then the modules that use
-# these bindings are behind #[cfg(windows)]).
+# Linux host. The modules that use these bindings are behind #[cfg(windows)];
+# the macOS and Linux siblings are the tables after this one.
 [target.'cfg(windows)'.dependencies]
+# WebRTC, sans-IO (plan.md D4). G1 chose arm B — an RTP media track rendered
+# into a <video> — which is str0m's mature path: the libwebrtc GoogCC port,
+# NACK/RTX, the RFC 7798 H.265 packetizer and per-packet header extensions
+# (which is how playout-delay is set). No [patch] table: arm A's sctp-proto
+# patches are not on the chosen path and stay in the spike.
+# 0.23.1 exactly because that is the release the bake-off measured end to end
+# against Chrome 153. Exit condition: 0.24, re-measured on the LAN row.
+#
+# default-features = false drops aws-lc-rs (needs NASM on Windows) and the
+# `examples` feature (rouille + rustls). No OpenSSL and nothing new in the
+# installer — but a C toolchain IS required to build this crate and has been
+# since the rustls pin in [dependencies]: it brings `ring 0.17.14`, which
+# compiles C and assembly through `cc 1.4.6`. `audio-opus` adds cmake on top of
+# that; see `audiopus_sys`.
+#
+# `wincrypto-dimpl`, NOT `wincrypto`: the plain feature does DTLS through
+# SChannel, and against Chrome 153 every handshake fails with "crypto error:
+# decryption failed" (spike 0.2 §13.4). `wincrypto-dimpl` keeps Windows CNG for
+# SRTP and hashing and does DTLS in str0m's own `dimpl`. Exit condition: str0m
+# PR #1038 removes SChannel outright, and the feature name goes with it.
+#
+# Carried forward, not solved here: str0m's pacer is unusable as configured —
+# BWE on measured 1015.6 ms p50 of pacer queue with zero loss, PLI or NACK, so
+# it presents as latency and never as loss. That lands on Tasks 3.8 and 4.7.
+str0m = { version = "=0.23.1", default-features = false, features = ["wincrypto-dimpl"] }
+
 # Every Win32 subsystem this crate's modules use, declared up front because a
 # Wave 3+ task must not edit this manifest: Direct3D11/DXGI for capture and the
 # GPU convert/scale path, Gdi + HiDpi for display geometry, KeyboardAndMouse for
@@ -285,6 +292,56 @@ windows = { version = "=0.62.2", features = [
 # sets this crate's MSRV. Exit condition: read its changelog at the
 # dependency-currency review; a bump re-runs spike 0.9's validation.
 moq-nvenc = { version = "=0.0.5", optional = true }
+
+[target.'cfg(not(windows))'.dependencies]
+# str0m off Windows: the version, the default-features reasoning and the pacer
+# note are the Windows line's. The provider is `rust-crypto`, one backend for
+# macOS and Linux alike, and DTLS is str0m's own `dimpl` here exactly as under
+# `wincrypto-dimpl`, so the handshake Chrome sees is the one the bake-off
+# measured. It is not pure Rust: str0m-rust-crypto 0.6.0 turns on dimpl's
+# `rcgen` feature for the DTLS certificate, and in dimpl 0.7.3 that feature
+# also turns on its `aws-lc-rs` one, so aws-lc-sys (a C library) compiles on
+# these two systems. None of it reaches the Windows graph. The provider is
+# chosen at build time and str0m panics at runtime with none compiled in, so
+# this feature is not optional. Exit condition: `apple-crypto` on macOS if SRTP
+# throughput measures short at gate M1 (dev/active/swoop-macos), or a dimpl
+# whose `rcgen` no longer implies `aws-lc-rs`.
+str0m = { version = "=0.23.1", default-features = false, features = ["rust-crypto"] }
+
+[target.'cfg(unix)'.dependencies]
+# Direct for the POSIX clock (`clock_gettime`, swoop-macos Task 2.1) and the
+# interface walk (`getifaddrs`, Task 4.7). 0.2.189 is what Cargo.lock already
+# resolved through the rest of the graph, so this adds no version. Exit condition: the standing
+# dependency-currency review; libc 1.0 is a deliberate re-pin, not a bump.
+libc = "=0.2.189"
+
+# The macOS backends (dev/active/swoop-macos): ScreenCaptureKit captures the
+# picture and the system audio, VideoToolbox encodes and scales, CoreGraphics
+# answers displays and posts input and cursor positions, AppKit gives the
+# cursor image and the pasteboard, CoreMedia and CoreVideo carry the sample and
+# pixel buffers between them, Foundation and CoreFoundation the types all of
+# those take. block2 is for their completion handlers, dispatch2 for the serial
+# queues SCK delivers on.
+#
+# objc2 is the maintained binding generation for Apple's frameworks, and the
+# framework crates are its 0.3 line: the set moves together or the traits do
+# not line up, the way the RustCrypto trio above does. Default features on
+# purpose: each framework crate's defaults enable every header it has, so no
+# later task edits this manifest for a missing one. The newest release of each
+# on 2026-09-28. Exit condition: the standing dependency-currency review,
+# moving the set as one.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-foundation = "=0.3.2"
+objc2-core-foundation = "=0.3.2"
+objc2-core-graphics = "=0.3.2"
+objc2-core-media = "=0.3.2"
+objc2-core-video = "=0.3.2"
+objc2-screen-capture-kit = "=0.3.2"
+objc2-video-toolbox = "=0.3.2"
+objc2-app-kit = "=0.3.2"
+block2 = "=0.6.2"
+dispatch2 = "=0.3.1"
 
 [build-dependencies]
 # Embeds the VERSIONINFO resource and icon (see build.rs). Same crate agent/host

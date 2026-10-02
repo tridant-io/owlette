@@ -238,7 +238,50 @@ describe('unity builds', () => {
 
     const result = expectUnsupported(await classifyOne('C:\\media\\clips', fs))
 
+    expect(result.reason).toBe(
+      'this folder is not a unity build (no <name>.exe beside a <name>_Data folder)',
+    )
+  })
+
+  it('treats a folder named .app as a folder on windows', async () => {
+    const fs = makeFs({ files: ['C:\\tools\\viewer.app\\readme.txt'] })
+
+    const result = expectUnsupported(await classifyOne('C:\\tools\\viewer.app', fs))
+
     expect(result.reason).toContain('unity build')
+  })
+})
+
+describe('macos app bundles', () => {
+  it('runs a dropped .app as the app, from its own folder', async () => {
+    const fs = makeFs({ dirs: ['/Applications/Resolume Arena.app/Contents/MacOS'] })
+
+    const result = expectClassified(
+      await classifyOne('/Applications/Resolume Arena.app', fs, { os: 'macos' }),
+    )
+
+    expect(result.kind).toBe('executable')
+    expect(result.entry.name).toBe('resolume arena')
+    expect(result.entry.exe_path).toBe('/Applications/Resolume Arena.app')
+    expect(result.entry.file_path).toBe('')
+    expect(result.entry.cwd).toBe('/Applications')
+    expect(result.needsInput).toEqual([])
+  })
+
+  it('names the app, not an exe, when the folder is not one', async () => {
+    const fs = makeFs({ files: ['/Users/kiosk/media/intro.mp4'] })
+
+    const result = expectUnsupported(await classifyOne('/Users/kiosk/media', fs, { os: 'macos' }))
+
+    expect(result.reason).toBe('this folder is not an app — drop the .app itself')
+  })
+
+  it('refuses a folder on linux without windows words', async () => {
+    const fs = makeFs({ files: ['/home/kiosk/media/intro.mp4'] })
+
+    const result = expectUnsupported(await classifyOne('/home/kiosk/media', fs, { os: 'linux' }))
+
+    expect(result.reason).toBe('owlette does not know how to launch a folder')
   })
 })
 

@@ -185,6 +185,36 @@ export function openScreenRecordingSettings(): Promise<void> {
   return invoke<void>('open_screen_recording_settings')
 }
 
+/** macOS's answer on Accessibility (posting input) for this app; null off macOS. */
+export function accessibilityGranted(): Promise<boolean | null> {
+  return invoke<boolean | null>('accessibility_granted')
+}
+
+/**
+ * Ask macOS for Accessibility and open its pane of System Settings. Only ever
+ * from a click: the ask can raise a system prompt.
+ */
+export function requestAccessibility(): Promise<void> {
+  return invoke<void>('request_accessibility')
+}
+
+/**
+ * macOS's answer on sharing this app's clipboard (Paste from Other Apps, since
+ * macOS 15.4); null off macOS, on an unknown answer, and true where there is
+ * no such setting.
+ */
+export function clipboardSharing(): Promise<boolean | null> {
+  return invoke<boolean | null>('clipboard_sharing')
+}
+
+/**
+ * Make one pasteboard read, which raises macOS's paste alert and lists this
+ * app under Paste from Other Apps, and open that pane. Only ever from a click.
+ */
+export function requestClipboardSharing(): Promise<void> {
+  return invoke<void>('request_clipboard_sharing')
+}
+
 /** Create or remove the run-on-login shortcut; resolves to the resulting state. */
 export function setStartupLink(enabled: boolean): Promise<boolean> {
   return invoke<boolean>('set_startup_link', { enabled })
@@ -227,6 +257,15 @@ export function serviceStart(allowElevation: boolean): Promise<ServiceCommandOut
 /** Stop OwletteService. May raise a UAC prompt; poll {@link serviceStatus}. */
 export function serviceStop(): Promise<ServiceCommandOutcome> {
   return invoke<ServiceCommandOutcome>('service_stop')
+}
+
+/**
+ * Restart the agent off windows: `systemctl restart` on linux, allowed by the
+ * packaged polkit rule, and a request to the daemon on macos. Not registered
+ * on windows, which restarts through `tmp/restart.flag`.
+ */
+export function serviceRestart(): Promise<ServiceCommandOutcome> {
+  return invoke<ServiceCommandOutcome>('service_restart')
 }
 
 /**

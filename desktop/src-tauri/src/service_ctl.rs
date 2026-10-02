@@ -182,27 +182,59 @@ pub fn status(status_file: &Path) -> Result<ServiceStatus, String> {
 /// linux: `systemctl start --no-block`, bounded — the polkit rule packaging
 /// ships (5.2) is what lets the kiosk user do this without a prompt, and a
 /// call that hangs past the bound is that rule missing. macos: the agent is a
-/// system launchd job the app cannot start from a user session; the
-/// installer's job, said as a refusal rather than a hang.
+/// system launchd job the app cannot start from a user session; launchd keeps
+/// it running, said as a refusal rather than a hang.
 #[cfg(unix)]
 pub fn start(_allow_elevation: bool) -> Result<ServiceCommandOutcome, String> {
-  control("start", "active")
+  control("start", Some("active"))
 }
 
 #[cfg(unix)]
 pub fn stop() -> Result<ServiceCommandOutcome, String> {
-  control("stop", "inactive")
+  control("stop", Some("inactive"))
+}
+
+/// linux: `systemctl restart`, which the same polkit rule allows and which
+/// starts a stopped or wedged unit too — the cases a restart is for — where the
+/// daemon's request seam needs a daemon alive to read it. the daemon ignores a
+/// `tmp/restart.flag` it did not write off windows. macos has no such rule:
+/// the restart is a request the daemon carries out ([`crate::seam`]), audited
+/// and held to one per five minutes there.
+#[cfg(unix)]
+pub fn restart() -> Result<ServiceCommandOutcome, String> {
+  if cfg!(target_os = "macos") {
+    return restart_through_seam();
+  }
+  control("restart", None)
 }
 
 #[cfg(unix)]
-fn control(verb: &str, already: &str) -> Result<ServiceCommandOutcome, String> {
+fn restart_through_seam() -> Result<ServiceCommandOutcome, String> {
+  use crate::seam::{self, Seam, Verb};
+
+  let before = status(Path::new("/nonexistent"))
+    .map(|status| status.state)
+    .unwrap_or_else(|_| "unknown".to_string());
+  let terminal = Seam::new(crate::paths::data_root()).ask(Verb::Restart, None, &mut |_| {})?;
+  if seam::is_error(&terminal) {
+    return Err(seam::error_message(&terminal));
+  }
+  Ok(ServiceCommandOutcome {
+    method: "seam".to_string(),
+    state_before: before,
+  })
+}
+
+/// `already` is the state that makes the verb a no-op; a restart has none.
+#[cfg(unix)]
+fn control(verb: &str, already: Option<&str>) -> Result<ServiceCommandOutcome, String> {
   if cfg!(target_os = "macos") {
     return Err(format!(
-      "{verb}ing the agent on macos is launchd's job: run `sudo launchctl kickstart -k system/{SERVICE_NAME}`"
+      "the owlette service on macos is run by the system, which keeps it running — this app cannot {verb} it"
     ));
   }
   let before = status(Path::new("/nonexistent"))?.state;
-  if before == already {
+  if Some(before.as_str()) == already {
     return Ok(ServiceCommandOutcome {
       method: "noop".to_string(),
       state_before: before,

@@ -373,6 +373,37 @@ def test_a_launch_never_attempted_for_want_of_a_seat_surfaces_nothing(
     assert svc.last_started['proc-1']['failed'] is True
 
 
+def test_a_mac_app_bundle_is_launched_not_called_missing(
+        state_file, config, tmp_path, monkeypatch):
+    """On macOS an .app is a directory; the existence check asked of the
+    configured path refused every bundle as a missing executable and raised
+    exe_missing before the adapter, which resolves the bundle, ever ran."""
+    import plistlib
+
+    import owlette_service
+
+    monkeypatch.setattr(shared_utils, '_IS_MACOS', True)
+    monkeypatch.setattr(
+        owlette_service, 'osadapter',
+        SimpleNamespace(console_user=lambda: 'kiosk'))
+    bundle = tmp_path / 'Kiosk.app'
+    (bundle / 'Contents' / 'MacOS').mkdir(parents=True)
+    (bundle / 'Contents' / 'MacOS' / 'Kiosk').write_bytes(b'')
+    (bundle / 'Contents' / 'Info.plist').write_bytes(
+        plistlib.dumps({'CFBundleExecutable': 'Kiosk'}))
+    svc = make_launch_service()
+    svc.firebase_client = MagicMock()
+    svc._find_sibling_executables = MagicMock(return_value=[])
+    svc.launch_process_as_user.return_value = 4321
+
+    assert svc._launch_locked(dict(ENTRY, exe_path=str(bundle)), None) == 4321
+
+    svc.launch_process_as_user.assert_called_once()
+    assert all(c.args[0] != 'exe_missing'
+               for c in svc.firebase_client.send_alert.call_args_list)
+    assert svc.last_started['proc-1']['pid'] == 4321
+
+
 def test_repeated_launch_failures_do_not_duplicate_rows(state_file):
     write_states(state_file, {'4242': dead_row()})
     svc = make_launch_service()

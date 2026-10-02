@@ -434,6 +434,25 @@ def get_machine_id():
         return machine_id
 
 
+def retire_machine_id():
+    """Move config/machine_id aside so the next pairing seeds a fresh identity.
+
+    The identity belongs to the document a leave deletes. Renamed to
+    `machine_id.left-<epoch>` rather than removed, so a support case can still
+    read what the machine was known as; the cached identity goes with it, or
+    this process would keep answering with the old one until it restarted. No
+    persisted identity is nothing to move. Raises OSError when the rename fails.
+    """
+    global _machine_id
+    path = get_data_path(MACHINE_ID_FILE)
+    with _machine_id_lock:
+        try:
+            os.rename(path, f"{path}.left-{int(time.time())}")
+        except FileNotFoundError:
+            pass
+        _machine_id = None
+
+
 def _read_machine_id_file(path):
     """The persisted id, or None when the file is missing or empty.
 
@@ -724,7 +743,10 @@ def get_gpu_temperatures():
     except Exception as e:
         logging.debug(f"[TEMP] sensor error: {e}")
 
-    # 2. pynvml — NVIDIA only
+    # 2. pynvml — NVIDIA only. macos has no nvidia driver, so the read could only
+    # fail there, with a warning on every metrics pass.
+    if _IS_MACOS:
+        return []
     try:
         from pynvml import nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetTemperature, nvmlShutdown, NVML_TEMPERATURE_GPU
 
@@ -1394,8 +1416,9 @@ def ensure_data_directories():
 
 
 def grant_data_group(path):
-    """Give a file the daemon wrote in the data root to the group that reaches
-    it. A no-op on Windows, where the tree is ACL'd rather than grouped."""
+    """Give a file the daemon wrote in the data root, by path or by the
+    descriptor it holds open, to the group that reaches it. A no-op on Windows,
+    where the tree is ACL'd rather than grouped."""
     if _IS_WINDOWS:
         return
     from osadapter import posix
@@ -1778,34 +1801,52 @@ def is_cortex_enabled(config=None):
         config = read_config()
     return bool(config.get('cortex', {}).get('enabled', False))
 
-# Swoop (remote KVM streamer) paths. The streamer is installed at
-# {app}\swoop\owlette-swoop.exe by the installer and spawned by the service.
-SWOOP_EXE_NAME = 'owlette-swoop.exe'
+# Swoop (remote KVM streamer) paths. On Windows the streamer is installed at
+# {app}\swoop\owlette-swoop.exe by the installer and spawned by the service;
+# elsewhere it is the desktop app's sidecar, launched by the app.
+SWOOP_EXE_NAME = 'owlette-swoop.exe' if _IS_WINDOWS else 'owlette-swoop'
 # The streamer rotates this directory itself; cleanup_old_logs() is
 # deliberately non-recursive and must stay that way.
 SWOOP_LOG_DIR = get_data_path('logs/swoop')
 SWOOP_IPC_DIR = get_data_path('ipc/swoop')
 
+# Where the streamer is installed on each POSIX platform: inside the app bundle
+# on macOS, which is what lets the app launch it as its own child. Fixed
+# prefixes, like _POSIX_PYTHON_PATHS.
+_POSIX_SWOOP_PATHS = {
+    'darwin': '/Applications/owlette.app/Contents/MacOS/owlette-swoop',
+    'linux': '/opt/owlette/swoop/owlette-swoop',
+}
+
 
 def get_swoop_dir():
-    """Install directory of the swoop streamer — <install root>\\swoop.
+    """Install directory of the swoop streamer — <install root>\\swoop on
+    Windows, the directory of the platform's fixed path elsewhere (None where
+    there is none).
 
     Never creates it, and must not be made to. The installer lays it down as
     SYSTEM with a protected DACL, and that ownership is what the spawn path
     trusts; creating it here would hand that trust to whatever already sits at
     the path. Absent means swoop is not installed.
     """
+    if not _IS_WINDOWS:
+        candidate = _POSIX_SWOOP_PATHS.get(sys.platform)
+        return os.path.dirname(candidate) if candidate else None
     install_root = os.path.dirname(os.path.dirname(get_path()))
     return os.path.join(install_root, 'swoop')
 
 
 def get_swoop_exe_path():
     """Full path to the swoop streamer, or None when not installed. Resolved
-    from the install root like get_desktop_exe_path(), so a relocated install
-    works. None is how "swoop unavailable" reaches the capability heartbeat.
+    from the install root like get_desktop_exe_path() on Windows, so a
+    relocated install works. None is how "swoop unavailable" reaches the
+    capability heartbeat.
     """
-    candidate = os.path.join(get_swoop_dir(), SWOOP_EXE_NAME)
-    return candidate if os.path.exists(candidate) else None
+    if _IS_WINDOWS:
+        candidate = os.path.join(get_swoop_dir(), SWOOP_EXE_NAME)
+    else:
+        candidate = _POSIX_SWOOP_PATHS.get(sys.platform)
+    return candidate if candidate and os.path.exists(candidate) else None
 
 # LOGGING
 def get_log_level_from_config():

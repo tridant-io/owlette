@@ -2623,12 +2623,18 @@ class OwletteService:
         """Hand any pending desktop-app requests to a drain worker.
 
         `configure_site`'s POSIX seam: off Windows the app runs as the console
-        user and can neither write the token store nor control the daemon, so
-        pairing, an agent restart and a machine reboot are requests the daemon
-        executes. Gated exactly like the hoot queue beside it — a platform that
-        has no seam, a single-flight worker and one directory listing — because
-        a `pair` polls for ten minutes and a `restart` ends this process, and
-        neither is the 5s tick's to hold.
+        user and can neither use the token store nor control the daemon, so
+        pairing, leaving the site, an agent restart, a machine reboot and
+        dismissing a pending one are requests the daemon executes. Gated exactly
+        like the hoot queue beside it — a platform that has no seam, a
+        single-flight worker and one directory listing — because a `pair` polls
+        for ten minutes and a `restart` ends this process, and neither is the 5s
+        tick's to hold.
+
+        The worker is handed the one thing a leave needs from this loop: whether
+        the cloud client the loop stops on the enabled -> disabled transition is
+        gone yet. A leave waits on it before deleting the machine document,
+        which a live client would write straight back.
         """
         thread = self._privileged_requests_thread
         if thread is not None and thread.is_alive():
@@ -2639,6 +2645,7 @@ class OwletteService:
 
         t = threading.Thread(
             target=configure_site.drain_privileged_requests,
+            args=(lambda: self.firebase_client is None,),
             daemon=True,
             name='ipc-requests',
         )
@@ -4128,7 +4135,8 @@ class OwletteService:
             _surface_launch_failed(process_id)
             return None
 
-        if not os.path.isfile(exe_path):
+        # a mac .app is a directory; what must exist is the binary it names
+        if not os.path.isfile(shared_utils.resolve_exec_target(exe_path)):
             process_name = Util.get_process_name(process)
             logging.error(f"Cannot launch '{process_name}': Executable path does not exist: {exe_path}")
             last_info = self.last_started.get(process_id, {})

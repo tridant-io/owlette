@@ -59,7 +59,9 @@ const SERVICE_SETTLE_TIMEOUT_MS = 45_000
  * the legacy GUI's Cancel did.
  *
  * No token handling here — the helper writes `.tokens.enc` and restarts the
- * service; this window only watches.
+ * service; this window only watches. Off windows the pairing is the daemon's
+ * own run (`src-tauri/src/seam.rs`): cancel asks it to end the run, and the
+ * service takes the new site up without a restart.
  */
 export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoined }: JoinSiteDialogProps) {
   const [phase, setPhase] = useState<Phase>('starting')

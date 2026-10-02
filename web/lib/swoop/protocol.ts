@@ -856,6 +856,8 @@ export type ControlMessage =
       displays: { index: number; width: number; height: number; primary: boolean }[];
       streamerEpoch: number;
       protocolVersion: number;
+      /** whether the host reads its own clipboard; an older host's silence means true. */
+      clipboardReads: boolean;
     }
   | { t: 'sas-result'; ok: boolean }
   | { t: 'lease-ok'; expiresAt: number }
@@ -952,6 +954,7 @@ export function decodeControlMessage(
       const height = int(o, 'height');
       const streamerEpoch = int(o, 'streamerEpoch');
       const protocolVersion = int(o, 'protocolVersion');
+      const clipboardReads = bool(o, 'clipboardReads') ?? true;
       const rawDisplays = o.displays;
       if (
         codec === undefined ||
@@ -984,6 +987,7 @@ export function decodeControlMessage(
         displays,
         streamerEpoch,
         protocolVersion,
+        clipboardReads,
       });
     }
     case 'sas-result': {

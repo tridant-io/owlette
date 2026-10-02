@@ -871,3 +871,27 @@ def test_the_daemons_own_restart_flag_still_restarts_the_agent(tmp_path):
 def test_no_restart_flag_is_not_a_restart(tmp_path):
     assert _bound('_restart_requested', SimpleNamespace())(
         str(tmp_path / 'nothing')) is False
+
+
+def test_the_drain_hears_when_the_daemons_own_cloud_client_has_wound_down(monkeypatch):
+    """A leave deletes the machine document only once this process's cloud
+    client is gone — the loop stops it on the enabled -> disabled transition the
+    leave starts with, and a client still alive writes the row straight back.
+    The drain runs off the loop, so the service hands it the question rather
+    than the client."""
+    import configure_site
+
+    asked = []
+    monkeypatch.setattr(configure_site, 'poll_request_seam', lambda: True)
+    monkeypatch.setattr(configure_site, 'drain_privileged_requests',
+                        lambda cloud_detached: asked.append(cloud_detached()))
+    svc = SimpleNamespace(_privileged_requests_thread=None, firebase_client=object())
+
+    _bound('_process_privileged_requests', svc)()
+    svc._privileged_requests_thread.join(5)
+    svc.firebase_client = None
+    svc._privileged_requests_thread = None
+    _bound('_process_privileged_requests', svc)()
+    svc._privileged_requests_thread.join(5)
+
+    assert asked == [False, True]

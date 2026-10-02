@@ -33,7 +33,9 @@ pub const GUI_PID_REL: &str = "tmp/gui.pid";
 pub const TRAY_PID_REL: &str = "tmp/tray.pid";
 
 /// Touched to ask a running service to exit 42 so NSSM restarts it
-/// (`owlette_service.main`, the restart-flag branch).
+/// (`owlette_service.main`, the restart-flag branch). Windows only: off it the
+/// daemon ignores a flag it did not write itself.
+#[cfg(windows)]
 pub const RESTART_FLAG_REL: &str = "tmp/restart.flag";
 
 /// The agent's version file, under the install root. On Windows the install

@@ -4,6 +4,25 @@ Roughly prioritized. Not a commitment — just a living list of what's next.
 
 ---
 
+## next up — right after swoop on macOS ships
+
+- **hoot drives a machine through swoop.** *Extremely important: the owner's pick for the sprint that follows
+  swoop on macOS (2026-09-30).* With an admin's explicit authorization, hoot sees a machine's screen and sends it
+  clicks and keys through the swoop streamer, so it can operate any app on the machine, not only the processes
+  owlette manages. Swoop already has what this needs on Windows and macOS: screen capture, input injection, the
+  machine's own permission model (Screen Recording and Accessibility on a Mac), and an agent that starts the
+  streamer on demand. The shape to design: hoot as a special viewer in a swoop session or a local API on the
+  streamer; screenshots on request rather than video; actions as structured calls (click at, type, key chord,
+  scroll). The rules decide whether it is safe, so they are in the plan from the start:
+  - off by default, enabled per machine by an admin, and revocable;
+  - a visible indicator on the machine while hoot is in control, and a one-click stop there and in the dashboard;
+  - every action logged with the user who authorized the session;
+  - limits hoot cannot lift itself: no passkey step-up on its own, no change to its own authorization.
+
+  Plan it with `/plan` as its own initiative once swoop on macOS (`dev/active/swoop-macos`) is released.
+
+---
+
 ## infrastructure / ops
 
 - **Log TTL** — site event logs (`sites/{id}/logs`) and machine logs (`machines/{id}/logs`) have no expiry. Add a cleanup cron to delete entries older than 30-90 days. Low urgency (negligible cost), good hygiene.

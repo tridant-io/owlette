@@ -443,3 +443,77 @@ describe('LeaveSiteDialog', () => {
     expect(copy()).toContain('no longer monitored')
   })
 })
+
+describe('LeaveSiteDialog off windows', () => {
+  // The service carries out the whole leave there — the app asks it through its
+  // request seam — so the dialog neither stops nor starts it, and prompts for
+  // nothing.
+
+  it('asks before doing anything, and promises no prompt', () => {
+    open({ serviceLeaves: true })
+
+    expect(copy()).toContain('remove this machine from TEC?')
+    expect(copy()).not.toMatch(/windows|sudo|launchctl|systemctl|terminal|approve/)
+    expect(startAgentRun).not.toHaveBeenCalled()
+  })
+
+  it('leaves through the service without stopping or starting it, step by step', async () => {
+    const run = fakeRun()
+    const props = open({ serviceLeaves: true })
+
+    await startLeave()
+
+    expect(startAgentRun).toHaveBeenCalledWith('leave', expect.anything())
+    expect(serviceStatus).not.toHaveBeenCalled()
+    expect(serviceStop).not.toHaveBeenCalled()
+
+    run.emit({ event: 'status', value: 'deregistering this machine' })
+    expect(screen.getByTestId('leave-status').textContent).toContain('deregistering this machine')
+
+    await run.finish({ event: 'done', value: { siteId: 'default_site', deregistered: true } })
+
+    expect(serviceStart).not.toHaveBeenCalled()
+    expect(copy()).toContain('this machine has left TEC and is no longer monitored.')
+    expect(props.onLeft).toHaveBeenCalledOnce()
+    expect(props.release).toHaveBeenCalledOnce()
+  })
+
+  it('offers a join once the machine has left', async () => {
+    const run = fakeRun()
+    const props = open({ serviceLeaves: true, onJoin: vi.fn() })
+
+    await startLeave()
+    await run.finish({ event: 'done', value: { siteId: 'default_site', deregistered: true } })
+    fireEvent.click(screen.getByRole('button', { name: 'join a site' }))
+
+    expect(props.onJoin).toHaveBeenCalledOnce()
+  })
+
+  it('names the step the service stopped at, and offers no join', async () => {
+    const run = fakeRun()
+    open({ serviceLeaves: true, onJoin: vi.fn() })
+
+    await startLeave()
+    await run.finish({ event: 'error', value: 'could not deregister this machine: 403 Forbidden' }, 1)
+
+    expect(screen.getByTestId('leave-error').textContent).toContain(
+      'could not deregister this machine: 403 Forbidden',
+    )
+    expect(copy()).toContain('leaving TEC did not finish.')
+    expect(copy()).not.toContain('start service')
+    expect(screen.queryByRole('button', { name: 'join a site' })).toBeNull()
+    expect(serviceStart).not.toHaveBeenCalled()
+  })
+
+  it('offers no join on windows, whose leave is unchanged', async () => {
+    fakeService()
+    const run = fakeRun()
+    open({ onJoin: vi.fn() })
+
+    await startLeave()
+    await run.finish({ event: 'done', value: { siteId: 'default_site', deregistered: true } })
+
+    expect(copy()).toContain('no longer monitored')
+    expect(screen.queryByRole('button', { name: 'join a site' })).toBeNull()
+  })
+})

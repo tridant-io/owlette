@@ -25,7 +25,10 @@ interface AppMenuProps {
   onJoinSite: () => void
   onLeaveSite: () => void
   onReportIssue: () => void
-  /** Ask the service to restart itself (restart.flag — no elevation). */
+  /**
+   * Restart the service without elevation: restart.flag on windows, the polkit
+   * rule's `systemctl restart` on linux, a request to the daemon on macos.
+   */
   onRestartService: () => void
   /** Run-on-login state — null until the host answers, hiding the row. */
   startOnLogin: boolean | null
@@ -122,7 +125,7 @@ export function AppMenu({
             start on login
           </DropdownMenuCheckboxItem>
         )}
-        {/* Recovery pair, escalating: the same restart.flag the tray writes,
+        {/* Recovery pair, escalating: the same restart the tray asks for,
             surfaced here for operators who never right-click a tray icon. */}
         <DropdownMenuItem data-testid="menu-restart-service" onSelect={onRestartService}>
           <RotateCcw aria-hidden className="size-4" />

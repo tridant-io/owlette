@@ -19,7 +19,9 @@
 //!   ([`crate::startup_link`]) rather than the service start type — no UAC
 //!   prompt, and it cannot leave the machine unsupervised.
 //! * "restart service" leaves this app running; single-instance means the
-//!   service's post-restart launch folds back into this process.
+//!   service's post-restart launch folds back into this process. On macOS the
+//!   agent is a system launchd job, so the restart is a request the daemon
+//!   carries out ([`crate::seam`]).
 //!
 //! Every menu action runs on its own thread: menu events arrive on the main
 //! thread and both the tray and window setters marshal back to it, so inline
@@ -39,9 +41,9 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::paths::{
-  self, AGENT_VERSION_REL, GUI_PID_REL, RESTART_FLAG_REL, SERVICE_STATUS_REL, TRAY_PID_REL,
-};
+#[cfg(windows)]
+use crate::paths::RESTART_FLAG_REL;
+use crate::paths::{self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL};
 use crate::pid_file;
 use crate::service_ctl;
 use crate::startup_link;
@@ -56,15 +58,21 @@ const ID_EXIT: &str = "exit";
 
 /// 64 px downsamples of `agent/icons/*.png`. Embedded rather than read from
 /// `{app}\agent\icons` so the app still has an icon with no agent tree.
+#[cfg(not(target_os = "macos"))]
 const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/normal.png");
+#[cfg(not(target_os = "macos"))]
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/disconnected.png");
+#[cfg(not(target_os = "macos"))]
 const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/error.png");
 // macos tints a template (black on alpha) to match the menubar; the eye and the
-// closed eye are templates, the error orb keeps its red so that one state shouts.
+// closed eye are templates. error is the same eye glyph in flat system red, not a
+// template, so that one state shouts without breaking the menubar's style.
 #[cfg(target_os = "macos")]
-const ICON_TEMPLATE_NORMAL: &[u8] = include_bytes!("../icons/tray/template-normal.png");
+const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/template-normal.png");
 #[cfg(target_os = "macos")]
-const ICON_TEMPLATE_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/template-disconnected.png");
+const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/template-disconnected.png");
+#[cfg(target_os = "macos")]
+const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/glyph-error.png");
 
 /// Monitor granularity; the cadences below are multiples of it, so one thread
 /// drives both the status poll and the error flash.
@@ -356,6 +364,10 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     swoop: None,
     start_on_login: startup_link::is_enabled(),
   };
+
+  // before the item exists: appkit reads its saved position when it is created
+  #[cfg(target_os = "macos")]
+  crate::menu_bar_position::seed(&app.config().identifier);
 
   let menu = build_menu(app, &view)?;
   let tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -736,23 +748,11 @@ fn set_tooltip(app: &AppHandle, text: &str) -> Result<(), String> {
 fn icon_for(code: StatusCode) -> Image<'static> {
   // Bytes are compiled in and decoded by this file's tests: a failure here is a
   // packaging bug, not a runtime condition.
-  Image::from_bytes(icon_bytes_for(code)).expect("embedded tray icon should decode")
-}
-
-/// The template glyph on macos for every state but error; the colour orbs
-/// everywhere else (a windows tray has no template notion).
-fn icon_bytes_for(code: StatusCode) -> &'static [u8] {
-  #[cfg(target_os = "macos")]
-  match code {
-    StatusCode::Normal => return ICON_TEMPLATE_NORMAL,
-    StatusCode::Warning => return ICON_TEMPLATE_DISCONNECTED,
-    StatusCode::Error => {}
-  }
-  code.icon_bytes()
+  Image::from_bytes(code.icon_bytes()).expect("embedded tray icon should decode")
 }
 
 /// Whether macos should tint the icon to the menubar: the eye and the closed
-/// eye blend in, the error orb keeps its red.
+/// eye blend in, the red error glyph keeps its colour.
 fn icon_is_template(code: StatusCode) -> bool {
   cfg!(target_os = "macos") && !matches!(code, StatusCode::Error)
 }
@@ -1028,8 +1028,14 @@ fn degraded_notification(view: &TrayView) -> (&'static str, String) {
     ),
     _ => (
       "owlette — service stopped",
-      "the service is not running.\nclick 'restart service' to start it again."
-        .to_string(),
+      // macos: the restart item is a request a stopped daemon cannot hear;
+      // launchd is what brings the agent back.
+      if cfg!(target_os = "macos") {
+        "the service is not running.\nmacos starts it again on its own — if it stays down, reinstall owlette."
+      } else {
+        "the service is not running.\nclick 'restart service' to start it again."
+      }
+      .to_string(),
     ),
   }
 }
@@ -1208,10 +1214,32 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
   }
 }
 
+/// Off windows the daemon ignores a restart flag it did not write: linux runs
+/// `systemctl restart` under the packaged polkit rule, and macos asks the
+/// daemon through its request seam ([`service_ctl::restart`]).
+#[cfg(unix)]
+fn restart_service(app: &AppHandle) {
+  match service_ctl::restart() {
+    Ok(outcome) => {
+      log::info!("service restart issued ({})", outcome.method);
+      notify(
+        app,
+        "owlette — restarting",
+        "restarting service — will return momentarily".to_string(),
+      );
+    }
+    Err(error) => {
+      log::error!("could not restart the service: {error}");
+      notify(app, "restart failed", error);
+    }
+  }
+}
+
 /// Restart the service without a UAC prompt: a running agent is asked to exit
 /// 42 via `tmp/restart.flag`, which owlette-host turns into a relaunch. A
 /// stopped service has no loop to read the flag, so it is started directly —
 /// the one path here that can raise an elevation prompt.
+#[cfg(windows)]
 fn restart_service(app: &AppHandle) {
   let root = paths::data_root();
   let running = service_ctl::status(&root.join(SERVICE_STATUS_REL))
@@ -1679,9 +1707,11 @@ mod tests {
 
   #[test]
   fn every_embedded_icon_decodes() {
+    // 36 px is the menubar's 18 pt at 2x; the orbs are 64 px
+    let edge = if cfg!(target_os = "macos") { 36 } else { 64 };
     for code in [StatusCode::Normal, StatusCode::Warning, StatusCode::Error] {
       let image = Image::from_bytes(code.icon_bytes()).expect("icon should decode");
-      assert_eq!((image.width(), image.height()), (64, 64));
+      assert_eq!((image.width(), image.height()), (edge, edge));
     }
   }
 

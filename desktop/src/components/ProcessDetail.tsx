@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useScrollFade } from '@/hooks/useScrollFade'
+import { launchCopy } from '@/lib/launchCopy'
 import { pickDirectory, pickExecutable, pickFile } from '@/lib/pickers'
 import {
   coerceForm,
@@ -185,6 +186,7 @@ export function ProcessDetail({
   // editable — configuring them before switching the mode on is the normal flow.
   const unmanaged = mode === 'off'
   const live = isLive(status)
+  const copy = launchCopy()
 
   useEffect(() => {
     latest.current = process
@@ -445,12 +447,10 @@ export function ProcessDetail({
           <Tooltip>
             <TooltipTrigger asChild>
               <Label htmlFor="exe_path" className="justify-end text-muted-foreground">
-                exe
+                {copy.label}
               </Label>
             </TooltipTrigger>
-            <TooltipContent>
-              the full path to the executable or script to run (.exe, .bat, .cmd)
-            </TooltipContent>
+            <TooltipContent>{copy.tooltip}</TooltipContent>
           </Tooltip>
           <div className="flex min-w-0 items-center gap-2">
             <Button
@@ -458,13 +458,13 @@ export function ProcessDetail({
               className="size-8"
               variant="outline"
               onClick={() => void browse('exe_path')}
-              aria-label="browse for an executable"
+              aria-label={copy.browseAria}
             >
               <FileSearch />
             </Button>
             <PathInput
               id="exe_path"
-              placeholder="the full path to your executable"
+              placeholder={copy.placeholder}
               className="h-8 font-mono text-xs"
               {...field('exe_path')}
             />
@@ -476,9 +476,7 @@ export function ProcessDetail({
                 path / args
               </Label>
             </TooltipTrigger>
-            <TooltipContent>
-              a file for the exe to open (e.g. a .toe project), or extra command-line arguments
-            </TooltipContent>
+            <TooltipContent>{copy.fileTooltip}</TooltipContent>
           </Tooltip>
           <div className="flex min-w-0 items-center gap-2">
             <Button
@@ -688,6 +686,8 @@ export function ProcessDetail({
           {/*
             Tune-once fields — recovery attempts, priority, visibility — behind
             their own disclosure so the everyday view stays name / what / when.
+            Priority and visibility exist on windows only: the service applies
+            neither on macos or linux, so they are not offered there.
             Two or three columns when the pane is wide enough; the label gutter
             repeats per column.
           */}
@@ -733,59 +733,63 @@ export function ProcessDetail({
                   {...field('relaunch_attempts')}
                 />
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor="priority" className="justify-end text-muted-foreground">
-                      priority
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    windows cpu priority for this process — leave normal unless it must outrank
-                    everything else
-                  </TooltipContent>
-                </Tooltip>
-                <Select
-                  value={priorityOf(process)}
-                  onValueChange={(value) => onPriority(value as Priority)}
-                >
-                  <SelectTrigger id="priority" className="h-8 w-32" data-testid="priority">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PRIORITIES.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {option.toLowerCase()}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {copy.launchOptions && (
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Label htmlFor="priority" className="justify-end text-muted-foreground">
+                          priority
+                        </Label>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        windows cpu priority for this process — leave normal unless it must outrank
+                        everything else
+                      </TooltipContent>
+                    </Tooltip>
+                    <Select
+                      value={priorityOf(process)}
+                      onValueChange={(value) => onPriority(value as Priority)}
+                    >
+                      <SelectTrigger id="priority" className="h-8 w-32" data-testid="priority">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PRIORITIES.map((option) => (
+                          <SelectItem key={option} value={option}>
+                            {option.toLowerCase()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor="visibility" className="justify-end text-muted-foreground">
-                      visibility
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    window visibility on launch — hidden suppresses the console window (ideal for
-                    background scripts); apps that create their own windows stay visible
-                  </TooltipContent>
-                </Tooltip>
-                <Select
-                  value={visibilityOf(process)}
-                  onValueChange={(value) => onVisibility(value as Visibility)}
-                >
-                  <SelectTrigger id="visibility" className="h-8 w-32" data-testid="visibility">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VISIBILITIES.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {option.toLowerCase()}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Label htmlFor="visibility" className="justify-end text-muted-foreground">
+                          visibility
+                        </Label>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        window visibility on launch — hidden suppresses the console window (ideal for
+                        background scripts); apps that create their own windows stay visible
+                      </TooltipContent>
+                    </Tooltip>
+                    <Select
+                      value={visibilityOf(process)}
+                      onValueChange={(value) => onVisibility(value as Visibility)}
+                    >
+                      <SelectTrigger id="visibility" className="h-8 w-32" data-testid="visibility">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {VISIBILITIES.map((option) => (
+                          <SelectItem key={option} value={option}>
+                            {option.toLowerCase()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
+                )}
               </div>
             </CollapsibleContent>
           </Collapsible>

@@ -4,6 +4,8 @@ mod json_io;
 mod paths;
 mod pid_file;
 mod process_ctl;
+#[cfg(unix)]
+mod seam;
 mod service_ctl;
 mod shell_open;
 mod startup_link;
@@ -11,6 +13,8 @@ mod tray;
 mod watchers;
 #[cfg(unix)]
 mod jobrunner;
+#[cfg(target_os = "macos")]
+mod menu_bar_position;
 #[cfg(target_os = "macos")]
 mod tcc;
 mod window_state;
@@ -85,6 +89,10 @@ pub fn run() {
       commands::hostname,
       commands::screen_recording_granted,
       commands::open_screen_recording_settings,
+      commands::accessibility_granted,
+      commands::request_accessibility,
+      commands::clipboard_sharing,
+      commands::request_clipboard_sharing,
       commands::startup_link_enabled,
       commands::set_startup_link,
       commands::read_owlette_json,
@@ -92,6 +100,8 @@ pub fn run() {
       commands::service_status,
       commands::service_start,
       commands::service_stop,
+      #[cfg(unix)]
+      commands::service_restart,
       commands::terminate_pid,
       commands::agent_cli_start,
       commands::agent_cli_cancel,
@@ -142,9 +152,10 @@ pub fn run() {
       // none outlive the app.
       app.manage(agent_cli::Runs::default());
 
-      // Off Windows the daemon has no display: captures and notifications
-      // arrive as job files for this app to run (tri-platform 4.3), and on
-      // macOS the daemon is told about this app's Screen Recording grant (4.4).
+      // Off Windows the daemon has no display: captures, notifications and the
+      // swoop sidecar's launch arrive as job files for this app to run
+      // (tri-platform 4.3, swoop-macos 2.3), and on macOS the daemon is told
+      // about this app's Screen Recording and Accessibility grants (4.4).
       #[cfg(unix)]
       app.manage(jobrunner::spawn(app.handle().clone(), &root));
       #[cfg(target_os = "macos")]

@@ -4,7 +4,7 @@
 
 import { TextDecoder, TextEncoder } from 'node:util';
 
-import { attach } from '@/lib/swoop/clipboard';
+import { attach, swoopClipboard } from '@/lib/swoop/clipboard';
 import type { SwoopSession } from '@/lib/swoop/features';
 import {
   encodeControlMessage,
@@ -51,6 +51,7 @@ interface Harness {
   /** one inbound `swoop-control` frame, as the data channel delivers it. */
   deliver(frame: ControlChannelMessage): void;
   detach(): void;
+  session: SwoopSession;
 }
 
 function harness(options: { ctl?: boolean; buffering?: boolean } = {}): Harness {
@@ -102,6 +103,7 @@ function harness(options: { ctl?: boolean; buffering?: boolean } = {}): Harness 
     order,
     deliver: (frame) => handler?.(encodeControlMessage(frame)),
     detach,
+    session,
   };
 }
 
@@ -181,6 +183,35 @@ describe('paste interception', () => {
     expect(clip).toMatchObject({ t: 'clip', dir: 'to-host', fmt: 'text', chunk: 0, chunks: 1 });
     expect(atob(clip.data)).toBe('pasted from the browser');
     expect(h.forwarded.map((event) => event.code)).toEqual(['KeyV']);
+  });
+
+  it('does not push a clip the host just sent, so a copy made on the host is not pasted over', async () => {
+    const h = attached();
+    h.deliver(toHost('copied on the host'));
+    await flush();
+
+    pasteWith(h, { text: 'copied on the host' });
+    await flush();
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.order).toEqual(['key']);
+  });
+
+  it('does not push the same clip twice, and does push a different one', async () => {
+    const h = attached();
+    pasteWith(h, { text: 'once' });
+    await flush();
+    expect(h.sent).toHaveLength(1);
+
+    pasteWith(h, { text: 'once' });
+    await flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.order).toEqual(['clip', 'key', 'key']);
+
+    pasteWith(h, { text: 'twice' });
+    await flush();
+    expect(h.sent).toHaveLength(2);
+    expect(atob((JSON.parse(h.sent[1]) as ClipboardMessage).data)).toBe('twice');
   });
 
   it('never reads the clipboard itself, so no permission prompt stands in the way', async () => {
@@ -453,5 +484,29 @@ describe('applying the host clipboard', () => {
     h.deliver({ t: 'idr' });
     await flush();
     expect(writes).toHaveLength(0);
+  });
+});
+
+describe('the host clipboard status', () => {
+  it('reads true until hello-host says the machine cannot read its own clipboard', () => {
+    const h = attached();
+    const store = swoopClipboard(h.session);
+    expect(store?.get()).toBe(true);
+    const changed = jest.fn();
+    store?.subscribe(changed);
+
+    h.deliver({
+      t: 'hello-host',
+      codec: 'h264',
+      width: 1920,
+      height: 1080,
+      displays: [],
+      streamerEpoch: 0,
+      protocolVersion: 1,
+      clipboardReads: false,
+    });
+
+    expect(store?.get()).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(1);
   });
 });

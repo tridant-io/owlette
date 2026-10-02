@@ -60,7 +60,58 @@ pub fn screen_recording_granted() -> Option<bool> {
   }
 }
 
+/// Whether macOS lets this app post input (Accessibility), read without
+/// asking by the swoop sidecar (`tcc.rs`), so a grant made while the app runs
+/// is seen. None off macOS, where there is no such permission, and when the
+/// sidecar could not say.
+#[tauri::command(async)]
+pub fn accessibility_granted() -> Option<bool> {
+  #[cfg(target_os = "macos")]
+  {
+    crate::tcc::accessibility_granted()
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    None
+  }
+}
+
+/// Ask macOS for Accessibility and open its pane. The ask can raise a system
+/// prompt, so this is the permission banner's button and nothing else.
+#[tauri::command(async)]
+pub fn request_accessibility() -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    let asked = crate::tcc::request_accessibility();
+    log::info!("accessibility: asked from the banner, answer now {asked}");
+  }
+  shell_open::open_accessibility_settings()
+}
+
 /// Whether the run-on-login startup shortcut exists.
+#[tauri::command(async)]
+pub fn clipboard_sharing() -> Option<bool> {
+  #[cfg(target_os = "macos")]
+  {
+    crate::tcc::clipboard_sharing()
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    None
+  }
+}
+
+#[tauri::command(async)]
+pub fn request_clipboard_sharing() -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    if let Err(error) = crate::tcc::request_clipboard_sharing() {
+      log::warn!("clipboard sharing: the read from the banner did not start: {error}");
+    }
+  }
+  shell_open::open_clipboard_settings()
+}
+
 #[tauri::command(async)]
 pub fn startup_link_enabled() -> bool {
   crate::startup_link::is_enabled()
@@ -111,6 +162,15 @@ pub fn service_start(allow_elevation: bool) -> Result<ServiceCommandOutcome, Str
 #[tauri::command(async)]
 pub fn service_stop() -> Result<ServiceCommandOutcome, String> {
   service_ctl::stop()
+}
+
+/// Restart the agent off windows (`systemctl restart` on linux, a request to
+/// the daemon on macos). Windows asks the service itself through
+/// `tmp/restart.flag` instead.
+#[cfg(unix)]
+#[tauri::command(async)]
+pub fn service_restart() -> Result<ServiceCommandOutcome, String> {
+  service_ctl::restart()
 }
 
 /// Close `pid` gracefully, then terminate it — but only if it is still running

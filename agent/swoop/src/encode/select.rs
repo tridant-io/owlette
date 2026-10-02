@@ -18,6 +18,9 @@
 //! that is off — which is the default build. `probe_all` then returns NVENC
 //! alone, or nothing at all on a machine without it, and the table still
 //! resolves.
+//!
+//! The chain is per system: the one above on Windows, VideoToolbox alone on
+//! macOS, and the software floor alone everywhere else.
 
 use thiserror::Error;
 
@@ -33,7 +36,18 @@ use crate::ipc::Exit;
 /// the machine has, so it is still hardware on a box whose vendor SDK we did
 /// not build. `openh264` is last because it is the only rung that costs the
 /// machine's own CPU — these are signage boxes running TouchDesigner.
-pub const CHAIN: [&str; 5] = ["nvenc", "qsv", "amf", "mf", "openh264"];
+#[cfg(windows)]
+pub const CHAIN: &[&str] = &["nvenc", "qsv", "amf", "mf", "openh264"];
+
+/// macOS: one rung. VideoToolbox carries the hardware encoders and Apple's
+/// software H.264 behind one session, and that software encoder is the no-GPU
+/// floor there, so nothing sits below it (swoop-macos decision 6).
+#[cfg(target_os = "macos")]
+pub const CHAIN: &[&str] = &["videotoolbox"];
+
+/// Everywhere else: the software floor, until that system's own plan.
+#[cfg(not(any(windows, target_os = "macos")))]
+pub const CHAIN: &[&str] = &["openh264"];
 
 /// A backend's tier, or `None` for a name this build's chain does not know.
 pub fn tier(backend: &str) -> Option<usize> {
@@ -164,6 +178,8 @@ pub fn probe_all() -> Vec<BackendCaps> {
     caps.push(crate::encode::mf::probe());
     #[cfg(any(feature = "encode-openh264", feature = "encode-ffmpeg"))]
     caps.push(crate::encode::soft::probe());
+    #[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]
+    caps.push(crate::encode::videotoolbox::probe());
     caps
 }
 
@@ -192,6 +208,10 @@ fn create_on(backend: &str, cfg: &EncoderConfig) -> Option<anyhow::Result<Box<dy
     #[cfg(any(feature = "encode-openh264", feature = "encode-ffmpeg"))]
     if backend == "openh264" {
         return Some(crate::encode::soft::create(cfg));
+    }
+    #[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]
+    if backend == "videotoolbox" {
+        return Some(crate::encode::videotoolbox::create(cfg));
     }
     None
 }
@@ -249,6 +269,7 @@ mod tests {
     }
 
     /// An RTX-class part: HEVC to 8192, H.264 to the codec's own 4096.
+    #[cfg(windows)]
     fn nvidia() -> Vec<BackendCaps> {
         vec![caps(
             "nvenc",
@@ -257,6 +278,7 @@ mod tests {
         )]
     }
 
+    #[cfg(windows)]
     fn intel() -> Vec<BackendCaps> {
         vec![caps(
             "qsv",
@@ -266,10 +288,23 @@ mod tests {
     }
 
     /// A VM: the software floor at its measured 720p ceiling, one session.
+    #[cfg(windows)]
     fn no_gpu() -> Vec<BackendCaps> {
         vec![caps("openh264", &[(Codec::H264, 1280, 720)], 1)]
     }
 
+    /// A Mac with Apple silicon, as the rig's probe answered: HEVC to 8192x8192
+    /// and H.264 to 4096x4096 in hardware.
+    #[cfg(target_os = "macos")]
+    fn apple_silicon() -> Vec<BackendCaps> {
+        vec![caps(
+            "videotoolbox",
+            &[(Codec::H265, 8192, 8192), (Codec::H264, 4096, 4096)],
+            4,
+        )]
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
     struct Case {
         name: &'static str,
         caps: Vec<BackendCaps>,
@@ -279,6 +314,16 @@ mod tests {
         want: Option<(&'static str, Codec)>,
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
+    fn run(cases: Vec<Case>) {
+        for case in cases {
+            let got = select(&case.caps, &case.codecs, case.width, case.height)
+                .map(|s| (s.backend, s.codec));
+            assert_eq!(got, case.want, "{}", case.name);
+        }
+    }
+
+    #[cfg(windows)]
     #[test]
     fn the_table_picks_the_highest_rung_that_fits() {
         let cases = vec![
@@ -358,14 +403,71 @@ mod tests {
                 want: None,
             },
         ];
-
-        for case in cases {
-            let got = select(&case.caps, &case.codecs, case.width, case.height)
-                .map(|s| (s.backend, s.codec));
-            assert_eq!(got, case.want, "{}", case.name);
-        }
+        run(cases);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_table_is_videotoolbox_alone() {
+        assert_eq!(CHAIN, ["videotoolbox"]);
+        run(vec![
+            Case {
+                name: "hevc preferred",
+                caps: apple_silicon(),
+                codecs: vec![Codec::H265, Codec::H264],
+                width: 1920,
+                height: 1080,
+                want: Some(("videotoolbox", Codec::H265)),
+            },
+            Case {
+                name: "a viewer that decodes h264 only",
+                caps: apple_silicon(),
+                codecs: vec![Codec::H264],
+                width: 2880,
+                height: 1864,
+                want: Some(("videotoolbox", Codec::H264)),
+            },
+            Case {
+                name: "a 5k display above the h264 ceiling falls to hevc",
+                caps: apple_silicon(),
+                codecs: vec![Codec::H264, Codec::H265],
+                width: 5120,
+                height: 2880,
+                want: Some(("videotoolbox", Codec::H265)),
+            },
+            Case {
+                name: "a 5k display, h264 only",
+                caps: apple_silicon(),
+                codecs: vec![Codec::H264],
+                width: 5120,
+                height: 2880,
+                want: None,
+            },
+            Case {
+                name: "no hardware: apple's software h264 is the floor",
+                caps: vec![caps("videotoolbox", &[(Codec::H264, 4096, 2304)], 4)],
+                codecs: vec![Codec::H265, Codec::H264],
+                width: 1920,
+                height: 1080,
+                want: Some(("videotoolbox", Codec::H264)),
+            },
+            Case {
+                name: "no backend at all",
+                caps: Vec::new(),
+                codecs: vec![Codec::H265, Codec::H264],
+                width: 1920,
+                height: 1080,
+                want: None,
+            },
+        ]);
+
+        // a name this chain does not know still sorts below it
+        let answered = [caps("vt", &[(Codec::H264, 4096, 4096)], 2), apple_silicon().remove(0)];
+        assert_eq!(chain_for(&answered, Codec::H264, 1920, 1080), vec!["videotoolbox", "vt"]);
+        assert_eq!(budget(&apple_silicon()), 4);
+    }
+
+    #[cfg(windows)]
     #[test]
     fn the_chain_is_tier_order_whatever_order_the_probes_answered_in() {
         let caps = vec![
@@ -385,6 +487,7 @@ mod tests {
         assert!(chain_for(&caps, Codec::H265, 1920, 1080).is_empty());
     }
 
+    #[cfg(windows)]
     #[test]
     fn an_unknown_backend_is_a_last_resort_rather_than_a_silent_drop() {
         let caps = vec![
@@ -395,6 +498,7 @@ mod tests {
         assert_eq!(chain_for(&caps, Codec::H264, 1920, 1080), vec!["nvenc", "vt"]);
     }
 
+    #[cfg(windows)]
     #[test]
     fn the_budget_is_the_top_rungs_and_never_a_sum() {
         assert_eq!(budget(&nvidia()), 8);
@@ -410,7 +514,7 @@ mod tests {
 
     /// The whole point of the injected table: no rung of this one is compiled
     /// into any build, so the test never touches a driver whatever the feature
-    /// set — "vt" is Wave 9's VideoToolbox name and does not exist yet.
+    /// set. No backend is named "vt" (VideoToolbox's is "videotoolbox").
     #[test]
     fn a_backend_this_build_does_not_carry_is_exit_13() {
         let cfg = EncoderConfig {

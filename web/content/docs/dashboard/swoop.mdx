@@ -60,7 +60,7 @@ the toolbar carries the session state, an **end** button, and:
 - **fullscreen with keyboard and mouse capture** — takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so
 - **latency stats** — an overlay, off by default because it covers the picture
 - **display picker** — which of the machine's monitors you are looking at
-- **quality ceiling** — bandwidth (auto, or 5 to 50 mbps), resolution (native, 1440p, 1080p, 720p) and frame rate (60 or 30)
+- **quality ceiling** — bandwidth (auto, or 5 to 100 mbps), resolution (native, 1440p, 1080p, 720p) and frame rate (60 or 30)
 - **audio** — off unless you ask for it
 - **special keys** — the combinations the browser will not let through
 - **presence** — who else is in the session
@@ -94,6 +94,31 @@ a site admin can also stop **whatever anyone is running** on a machine (`POST �
 ## what is recorded
 
 every session start, every refusal and every end is written to the session's own audit trail, with the actor, the machine and whether control was held. a session whose audit row cannot be written is not started.
+
+---
+
+## on macOS
+
+a Mac hosts swoop on Apple silicon with macOS 15 or later. a session there works as it does on Windows, apart from what follows.
+
+**someone must be logged in.** swoop shows and controls the logged-in user's desktop, and macOS does not let it reach the login window. logging out or switching users ends the session.
+
+**four grants**, each switched on at the Mac in **system settings** → **privacy & security**:
+
+| grant | what it is for | where it is asked |
+|---|---|---|
+| **screen recording** (the **screen & system audio recording** list) | the picture and the audio. without it the Mac offers no swoop | the owlette app asks when it starts, and shows a notice while it is off. the grant takes effect once owlette is quit and reopened; the swoop entry appears within a couple of minutes of that |
+| **accessibility** | your keyboard and mouse | only from the owlette app's notice, whose **open system settings** button asks macOS and opens the pane. the notice clears within seconds of the grant, with no restart, and control works from the next session |
+| **local network** | a viewer on the same network reaching the Mac directly | macOS asks, in owlette's name, at the first session. until someone at the Mac allows it, a viewer on the same network cannot reach the Mac directly |
+| **paste from other apps** | the clipboard from the Mac to you | never asked: set owlette to always allow. see the clipboard below |
+
+without accessibility you can still watch: the picture, the cursor, the audio and the clipboard from the Mac all work, but your keyboard and mouse are dropped, so a paste reaches the Mac's clipboard without being pasted.
+
+- **the screen stays lit.** a session wakes the Mac's display and keeps it from sleeping while it captures
+- **the menu bar shows the capture.** while a session captures, macOS shows its own screen recording indicator in the menu bar, and owlette cannot hide it. stopping the capture from that indicator ends the session for everyone, as an admin's kill does, rather than restarting it over the person at the Mac
+- **macOS asks again after about thirty days** without a capture whether owlette may keep recording the screen. someone at the Mac has to answer it; owlette can neither answer it nor turn it off
+- **the keyboard follows the Mac.** from a PC, ctrl acts as cmd, so ctrl+c copies on the Mac. the **ctrl acts as cmd** checkbox in the special keys menu turns that off; while it is on, ctrl and the Windows key both send cmd, so untick it to send the Mac's own control key. a Mac viewing a Windows machine does the reverse: cmd acts as ctrl. the special keys menu lists the Mac's own shortcuts (cmd+tab, cmd+space, cmd+q, and cmd+ctrl+q to lock) in place of ctrl+alt+del, print screen and pause are dropped because a Mac has no key for them, and the Mac's keyboard layout decides what a key types
+- **the clipboard** carries text and images both ways, within the limits above. an image the Mac copied as a TIFF reaches you as a PNG, and copied files are never carried. what you paste into the Mac arrives whatever macOS is set to. what the Mac copies reaches you only while owlette is set to always allow under **paste from other apps**, because any other answer has macOS raise a paste alert at the Mac, and swoop never raises one; each session reads the setting once, when it starts. macOS lists an app there only after the app has raised that alert once, which owlette never does, so on a Mac that does not list owlette the clipboard from the Mac stays off. macOS before 15.4 has no such setting, and there the clipboard travels both ways
 
 ---
 

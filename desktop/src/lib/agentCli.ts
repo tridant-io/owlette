@@ -5,7 +5,9 @@
  * and encrypted token store, which this app deliberately does not have. The
  * host spawns `agent/src/configure_site.py` (`src-tauri/src/agent_cli.rs`) and
  * forwards every line as an `owlette://agent-cli` event; this module turns that
- * stream into one promise per run.
+ * stream into one promise per run. Off windows every mode but `report-issue` is
+ * a request the daemon carries out instead (`src-tauri/src/seam.rs`), answered
+ * in the same stream.
  *
  * Wire format is one JSON object per line:
  * `{"event": "phrase"|"status"|"authorized"|"done"|"error", "value": …}`.

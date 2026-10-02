@@ -134,6 +134,15 @@
 //! (a second one means the startup rebuild came back), and a cursor stream
 //! that answers the pointer moves the test injects.
 //!
+//! On a Mac, run the same command with `CMAKE_POLICY_VERSION_MINIMUM=3.5` and
+//! `--no-default-features --features encode-videotoolbox,audio-opus`, from a
+//! shell that holds Screen Recording and Accessibility. A sleeping display
+//! needs no `caffeinate`: the session wakes it. Expected on the rig
+//! (MacBook Air, macOS 26.6): `swoop capture: (3420, 2214) -> (3420, 2214)
+//! hevc, 74 frames (1 irap, 907709 bytes), 15 cpos, 8 cshape`, and while it
+//! runs `pmset -g assertions` lists `PreventUserIdleDisplaySleep named:
+//! "owlette swoop session"` for its pid, gone once it ends.
+//!
 //! The pause and the floor have their own hardware test, which wants a still
 //! desktop — its invocation and its expected line are on
 //! `pause_closes_the_duplication_and_the_floor_holds_a_still_desktop`.
@@ -169,6 +178,15 @@ use crate::gpu::scale::Limits;
 use crate::ipc::{AudioState, Desktop, DisplayState, HostEventKind};
 use crate::signal::messages::channel::{Channel, DisplayInfo};
 use crate::transport::rtc::OUT_QUEUE_FEATURE_BYTES;
+
+/// A capture source's answer when the person at the machine stopped the
+/// capture with the system's own control, which on macOS is the menu bar's
+/// capture indicator (swoop-macos owner decision 7). The session ends on it
+/// as it does on a `kill`, with code 0, rather than capturing again over them.
+/// Desktop Duplication has no such control, so no Windows source returns it.
+#[derive(Debug, thiserror::Error)]
+#[error("the person at the machine stopped the capture")]
+pub struct StoppedAtHost;
 
 /// A host feature that lives for the length of a session.
 ///
@@ -263,6 +281,9 @@ pub struct FeatureStatus {
     pub audio: Option<AudioState>,
     /// `displays`: whether this machine has a usable output at all.
     pub displays: Option<DisplayState>,
+    /// `clipboard`: whether this machine reads its own clipboard, so what is
+    /// copied here reaches a viewer. `None` until the feature has started.
+    pub clipboard: Option<bool>,
 }
 
 /// What a feature may ask the session to do on its behalf.
@@ -558,6 +579,27 @@ impl Default for IdrPolicy {
 /// bytes, so 2 Hz costs nothing and is well inside every stall threshold.
 pub const FLOOR_INTERVAL: Duration = Duration::from_millis(500);
 
+/// How long after the last big move a Mac tier sends its settle keyframe.
+const SETTLE_AFTER: Duration = Duration::from_secs(1);
+
+/// Whether a frame took more than its share of the rate: something big moved.
+/// A caret, a clock or a menu-bar meter stays well under it.
+pub fn moved(bytes: usize, bitrate_bps: u32, fps: u32) -> bool {
+    bytes > (bitrate_bps / 8 / fps.max(1)) as usize
+}
+
+/// Whether the next frame goes out as a keyframe: on macOS, once, a second
+/// after the last big move. At gate M1 (2026-09-30) smear from motion stayed
+/// on the Mac's picture once it settled: the later frames do not win back the
+/// detail VideoToolbox's per-frame cap cut while it moved. Timed from the last
+/// big frame rather than from a still screen, because a Mac's screen is seldom
+/// still (a menu-bar meter or a caret changes it every second). Windows keeps
+/// its frames as they were.
+pub fn settles(moved_at: Option<Instant>, now: Instant) -> bool {
+    cfg!(target_os = "macos")
+        && moved_at.is_some_and(|at| now.saturating_duration_since(at) >= SETTLE_AFTER)
+}
+
 /// When the last frame was handed to the encoder, and whether the floor is due.
 #[derive(Debug)]
 pub struct FloorTimer {
@@ -792,10 +834,8 @@ pub fn tier_encodes(
         .collect()
 }
 
-#[cfg(windows)]
 pub use host::run;
 
-#[cfg(windows)]
 mod host {
     use std::io::{self, BufRead};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
@@ -805,28 +845,27 @@ mod host {
     use std::time::{Duration, Instant};
 
     use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
-    use windows::Win32::System::Performance::QueryPerformanceCounter;
 
     use super::{
         codec_wire_name, feature_room, limits_for, pick_codec, tier_encodes, tiers, CaptureGate,
-        Denials, Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining, Outbox,
+        moved, settles, Denials, Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining,
+        Outbox,
         SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
-    use crate::capture::{
-        self, DesktopWatcher, Duplication, OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS,
-    };
-    use crate::cursor::{self, CursorTracker, OutputGeometry, PointerReader};
+    use crate::capture::{OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS};
+    use crate::cursor::{CursorTracker, OutputGeometry};
     use crate::encode::{
         select, BackendCaps, Codec, CodecCaps, EncodedFrame, Encoder, EncoderConfig,
     };
-    use crate::gpu::scale::{self, Downscaler, Plan};
+    use crate::gpu::scale::{self, Plan};
     use crate::gpu::Frame;
-    use crate::input::{InputEvent, Injector, PointerSpace, SendInputInjector};
+    use crate::input::{InputEvent, Injector, PointerSpace};
     use crate::ipc::{
         self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, KillReason,
         LeftReason, MediaPath,
     };
+    use crate::platform::{self, CaptureSource, DesktopWatcher, Downscaler, InputInjector};
     use crate::bundle::Secret;
     use crate::signal::client::{Effect, SignalTransport};
     use crate::signal::messages::channel::{
@@ -844,13 +883,13 @@ mod host {
         admit_remote, ifwatch::InterfaceWatcher, Admission, DropReason, IceAction, IceEvent,
         IcePolicy, SystemResolver, DISCONNECTED_LIMIT,
     };
-    use crate::transport::rtc::{qpc_hz, PeerConfig, PeerEvent, PeerState, RtcPeer};
+    use crate::transport::rtc::{PeerConfig, PeerEvent, PeerState, RtcPeer};
     use crate::transport::VideoSink;
     use crate::viewers::lease::LeaseLedger;
     use crate::viewers::roster::Roster;
     use crate::viewers::SharedInput;
 
-    use super::quality::Ceiling;
+    use super::quality::{auto_bitrate_bps, Ceiling};
     use super::tiers::{TierKeyframes, TierPlan, TierViewer};
 
     /// §6: the streamer lingers about a minute after the last viewer leaves,
@@ -869,10 +908,10 @@ mod host {
 
     /// How often the `status` event goes to the service.
     const STATUS_INTERVAL: Duration = Duration::from_secs(2);
-
-    /// The starting CBR target, until the quality menu (Task 6.5) can move it.
-    /// 20 Mbps is what the bake-off measured arm B at end to end.
-    const DEFAULT_BITRATE_BPS: u32 = 20_000_000;
+    /// How often the rate story goes to the service log while somebody watches,
+    /// besides on every cut: gate M1 had nothing to read when a session fell
+    /// short of 60 fps.
+    const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
     /// Desktop Duplication is vsync-locked at the panel's rate; 60 is what the
     /// encoder's rate control is sized for.
@@ -893,14 +932,11 @@ mod host {
     // ------------------------------------------------------------- clock ---
 
     fn qpc_now() -> i64 {
-        let mut ticks = 0i64;
-        // SAFETY: writes one i64. QueryPerformanceCounter cannot fail on any
-        // Windows this binary runs on, and a zero is a timestamp, not a crash.
-        let _ = unsafe { QueryPerformanceCounter(&mut ticks) };
-        ticks
+        platform::clock::now_ticks()
     }
 
-    /// QPC ticks → §4's microseconds since `streamerEpoch`.
+    /// `platform::clock` ticks (QPC on Windows) → §4's microseconds since
+    /// `streamerEpoch`.
     ///
     /// The base is read once from the bundle's time anchor, so it carries the
     /// api's clock and never the kiosk's. A second of error in it is a constant
@@ -947,6 +983,9 @@ mod host {
         Opened { width: u32, height: u32 },
         /// Capture or encode could not start at all.
         Failed(Exit),
+        /// The source answered [`super::StoppedAtHost`]: the person at the
+        /// machine ended the capture, and the session ends as a `kill` does.
+        StoppedAtHost,
         Frame(Box<EncodedFrame>),
         Cursor(channel::Cursor),
         /// The source's texture size changed under a rebuild; the session
@@ -1046,7 +1085,7 @@ mod host {
 
     fn drive(bundle: Bundle, stdin: impl BufRead + Send + 'static) -> (Exit, ExitReason) {
         let started = Instant::now();
-        let hz = match qpc_hz() {
+        let hz = match platform::clock::hz() {
             Ok(hz) => hz,
             Err(e) => {
                 ::log::error!("swoop: no performance counter: {e}");
@@ -1063,7 +1102,7 @@ mod host {
 
         // Locally before the network: a box that cannot capture or encode
         // should say so with 12 or 13 rather than after a room round trip.
-        let outputs = match capture::enumerate_outputs() {
+        let outputs = match platform::enumerate_outputs() {
             Ok(outputs) if !outputs.is_empty() => outputs,
             Ok(_) => {
                 ::log::error!("swoop: no attached output to duplicate");
@@ -1371,6 +1410,7 @@ mod host {
             input: SharedInput::new(),
             plan: TierPlan::default(),
             keyframes: TierKeyframes::new(),
+            settle: None,
             uplink: UplinkBudget::new(HOST_UPLINK_ESTIMATE_BPS),
             encoder_budget: w.encoder_budget,
             tiers: Vec::new(),
@@ -1390,7 +1430,7 @@ mod host {
             ifwatch: match InterfaceWatcher::start() {
                 Ok(watcher) => Some(watcher),
                 Err(rc) => {
-                    ::log::warn!("swoop: no interface-change notifications (win32 {rc})");
+                    ::log::warn!("swoop: no interface-change notifications (os error {rc})");
                     None
                 }
             },
@@ -1402,6 +1442,8 @@ mod host {
             denials: Denials::default(),
             last_report: w.started,
             last_status: w.started,
+            status_logged: w.started,
+            cuts_logged: 0,
             encoder: None,
             display: 0,
             sas_pending: None,
@@ -1482,6 +1524,10 @@ mod host {
         /// One [`IdrPolicy`](super::IdrPolicy) per tier: a join and every PLI
         /// inside the cooldown cost that tier one IRAP between them.
         keyframes: TierKeyframes,
+        /// The settle keyframe's clock: the tier and the moment of the last
+        /// frame over its share of the rate ([`moved`]), answered by one
+        /// keyframe a second later ([`settles`]).
+        settle: Option<(Codec, Instant)>,
         /// One estimate of this machine's uplink, split across the viewers.
         uplink: UplinkBudget,
         /// `probe`'s measured concurrent encode sessions: the admission cap and
@@ -1511,8 +1557,9 @@ mod host {
         service_rx: Receiver<FromService>,
         resolver_tx: Sender<ToResolver>,
         resolved_rx: Receiver<FromResolver>,
-        /// `NotifyIpInterfaceChange`, as a flag this loop reads. A machine that
-        /// would not let us register carries on without the trigger rather than
+        /// The interface watcher (`NotifyIpInterfaceChange` on Windows, a
+        /// `getifaddrs` walk elsewhere), as a flag this loop reads. A machine
+        /// that would not start it carries on without the trigger rather than
         /// failing the session.
         ifwatch: Option<InterfaceWatcher>,
         bind_addr: SocketAddr,
@@ -1521,6 +1568,9 @@ mod host {
         denials: Denials,
         last_report: Instant,
         last_status: Instant,
+        /// When the rate story was last logged, and the cuts it reported.
+        status_logged: Instant,
+        cuts_logged: u64,
         /// The backend the capture thread's encoders are open on, as the
         /// selection chain named it. `None` until the first encoder opens —
         /// a session with no viewer has no encoder and nothing to report.
@@ -1583,7 +1633,8 @@ mod host {
     }
 
     impl Viewer {
-        fn new(id: String) -> Self {
+        /// `auto_bps` is what `auto` means for the source being captured.
+        fn new(id: String, auto_bps: u32) -> Self {
             Self {
                 id,
                 // The baseline every browser decodes, until its answer names
@@ -1592,7 +1643,7 @@ mod host {
                 announced: false,
                 hello_sent: false,
                 peer: None,
-                governor: Governor::new(GovernorConfig::new(DEFAULT_BITRATE_BPS)),
+                governor: Governor::new(GovernorConfig::new(auto_bps)),
                 ice: IcePolicy::new(),
                 sequencer: FrameSequencer::new(),
                 last_size: None,
@@ -1849,7 +1900,7 @@ mod host {
             // Watch-only: the room's `ctl` reaches no field here, and there is
             // no setter for one — only `Roster::verify` over a verified token.
             self.roster.join(&viewer);
-            self.viewers.push(Viewer::new(viewer.clone()));
+            self.viewers.push(Viewer::new(viewer.clone(), auto_bitrate_bps(self.source)));
             let ready = self.client.host_ready(Some(&viewer));
             self.send(&ready);
             self.publish_roster();
@@ -2117,6 +2168,11 @@ mod host {
                         ::log::error!("swoop: capture stopped: exit {}", exit.code());
                         return Some(self.teardown(exit, ExitReason::Error, LeftReason::Timeout));
                     }
+                    // The kill's own ending: a decision, not a failure, and the
+                    // page stops rather than starting the next session.
+                    Ok(FromWorker::StoppedAtHost) => {
+                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, LeftReason::Kill));
+                    }
                     Ok(FromWorker::Opened { .. }) => {}
                     Err(TryRecvError::Empty) => return None,
                     Err(TryRecvError::Disconnected) => {
@@ -2238,6 +2294,16 @@ mod host {
             };
             let frame_id = frame.frame_id as u32;
             let now = Instant::now();
+            if !frame.is_irap {
+                let rate = self
+                    .tiers
+                    .iter()
+                    .find(|t| t.codec == frame.codec)
+                    .map_or(0, |t| t.bitrate_bps);
+                if rate > 0 && moved(frame.data.len(), rate, TARGET_FPS) {
+                    self.settle = Some((frame.codec, now));
+                }
+            }
 
             let mut answered = false;
             let mut needs_irap = false;
@@ -2840,7 +2906,12 @@ mod host {
                     max_bitrate_kbps,
                     max_fps,
                 } => {
-                    let ceiling = Ceiling::from_quality(&preset, max_bitrate_kbps, max_fps);
+                    let ceiling = Ceiling::from_quality_with_auto(
+                        &preset,
+                        max_bitrate_kbps,
+                        max_fps,
+                        auto_bitrate_bps(self.source),
+                    );
                     let Some(v) = self.viewer_mut(viewer) else {
                         return;
                     };
@@ -3030,6 +3101,7 @@ mod host {
                 displays,
                 streamer_epoch: self.streamer_epoch,
                 protocol_version: crate::bundle::SWOOP_PROTOCOL_VERSION,
+                clipboard_reads: self.feature_status().clipboard.unwrap_or(true),
             };
             self.write_json_to(at, Channel::SwoopControl, &hello);
             // Who else is here, to the browser that has just opened its channel.
@@ -3082,6 +3154,15 @@ mod host {
             }
         }
 
+        /// Every feature's word, for the status line and for `hello-host`.
+        fn feature_status(&mut self) -> FeatureStatus {
+            let mut contributed = FeatureStatus::default();
+            for feature in self.features.iter_mut() {
+                feature.status(&mut contributed);
+            }
+            contributed
+        }
+
         fn tick(&mut self) {
             let now = Instant::now();
             if now.duration_since(self.last_report) >= REPORT_INTERVAL {
@@ -3090,6 +3171,12 @@ mod host {
             }
             if now.duration_since(self.last_status) >= STATUS_INTERVAL {
                 self.status(now);
+            }
+            if let Some((codec, at)) = self.settle {
+                if settles(Some(at), now) {
+                    self.settle = None;
+                    self.request_idr(codec);
+                }
             }
         }
 
@@ -3195,10 +3282,7 @@ mod host {
                     self.outbox.refused()
                 );
             }
-            let mut contributed = FeatureStatus::default();
-            for feature in self.features.iter_mut() {
-                feature.status(&mut contributed);
-            }
+            let contributed = self.feature_status();
             // The governor's own view, and only while somebody is watching:
             // with no peer there is no rate being governed, and §6 promises a
             // quiet session the nine-field line. N governors report as the
@@ -3210,6 +3294,24 @@ mod host {
                 .filter(|v| v.peer.is_some())
                 .min_by_key(|v| v.governor.target_bps());
             let governed = worst.map(|v| (v.governor.ceiling(), v.governor.stats(), v.governor.state(now)));
+            if let Some(v) = worst {
+                let stats = v.governor.stats();
+                if stats.cuts != self.cuts_logged
+                    || now.duration_since(self.status_logged) >= STATUS_LOG_INTERVAL
+                {
+                    self.cuts_logged = stats.cuts;
+                    self.status_logged = now;
+                    let rung = v.governor.rung();
+                    ::log::info!(
+                        "swoop: {fps} fps sent, {bitrate_kbps} kbps on the wire, target {target_kbps} kbps, rung {}fps/{}, {} cuts, {} gaps, governor {:?}",
+                        rung.fps,
+                        rung.resolution.wire_name(),
+                        stats.cuts,
+                        stats.frame_gaps,
+                        v.governor.state(now)
+                    );
+                }
+            }
             let denials = self.denials.count() + self.input.denials();
             let dropped = self.input.dropped();
             let idrs = self.keyframes.total_forced();
@@ -3536,7 +3638,7 @@ mod host {
     /// One open duplication, from the first acquire to a pause or an exit.
     fn capture_pass(ctx: &mut CaptureCtx) -> Pass {
         let signal = RebuildSignal::new();
-        let mut source = match Duplication::open(&ctx.output, signal) {
+        let mut source = match CaptureSource::open(&ctx.output, signal) {
             Ok(source) => source,
             Err(e) => {
                 ::log::error!("swoop: could not duplicate {}: {e}", ctx.output.device_name);
@@ -3563,7 +3665,6 @@ mod host {
         }
         ctx.reported = Some(size);
 
-        let mut reader = PointerReader::new();
         let mut tracker = CursorTracker::new();
         let mut geometry = OutputGeometry::for_output(source.output(), size);
         // One encoder per tier, opened from whatever the session last asked for
@@ -3619,32 +3720,27 @@ mod host {
             let acquired = {
                 let geometry = &geometry;
                 let tracker = &mut tracker;
-                let reader = &mut reader;
                 let pointer = &mut pointer;
                 let clock = ctx.clock;
-                source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |dup, info| {
+                source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
                     // Most cursor news arrives on frames that carry no picture
                     // at all, and the shape is only legal to read while the
                     // frame is held — which is why this is an observer.
                     //
-                    // `LastMouseUpdateTime` is qpc ticks; §5's `tsUs` is the
+                    // `ts_ticks` is `platform::clock` ticks; §5's `tsUs` is the
                     // same epoch as every other stamp the viewer is sent.
-                    let ts_us = clock.us(info.LastMouseUpdateTime) as i64;
-                    if let Some(at) = cursor::pointer_position(info) {
+                    let ts_us = clock.us(sample.ts_ticks) as i64;
+                    if let Some(at) = sample.position {
                         if let Some(message) = tracker.on_position(at, geometry, ts_us) {
                             pointer.push(message);
                         }
                     }
-                    match reader.shape(dup, info) {
-                        Ok(Some((shape, bytes))) => {
-                            match tracker.on_shape(&shape, bytes) {
-                                Ok(Some(message)) => pointer.push(message),
-                                Ok(None) => {}
-                                Err(e) => ::log::warn!("swoop: cursor shape: {e}"),
-                            }
+                    if let Some((shape, bytes)) = sample.shape {
+                        match tracker.on_shape(&shape, bytes) {
+                            Ok(Some(message)) => pointer.push(message),
+                            Ok(None) => {}
+                            Err(e) => ::log::warn!("swoop: cursor shape: {e}"),
                         }
-                        Ok(None) => {}
-                        Err(e) => ::log::warn!("swoop: cursor shape read: {e}"),
                     }
                 })
             };
@@ -3654,6 +3750,11 @@ mod host {
 
             let frame = match acquired {
                 Ok(frame) => frame,
+                // The source logged who stopped it; the session ends cleanly.
+                Err(e) if e.is::<super::StoppedAtHost>() => {
+                    let _ = ctx.tx.try_send(FromWorker::StoppedAtHost);
+                    return Pass::Done;
+                }
                 Err(e) => {
                     ::log::error!("swoop: capture failed: {e}");
                     let _ = ctx.tx.try_send(FromWorker::Failed(Exit::NoCaptureSource));
@@ -3768,7 +3869,14 @@ mod host {
                     // backend that probed fine and then refused the session
                     // costs one rung rather than the session.
                     match select::create(&ctx.caps, &cfg) {
-                        Ok((backend, created)) => {
+                        Ok((backend, mut created)) => {
+                            // A backend that finishes frames on its own thread
+                            // hands them straight to the session; the rest
+                            // answer them from `encode` below.
+                            let tx = ctx.tx.clone();
+                            created.set_sink(Box::new(move |frame| {
+                                tx.try_send(FromWorker::Frame(Box::new(frame))).is_ok()
+                            }));
                             tier.encoder = Some(created);
                             if ctx.backend != Some(backend) {
                                 ctx.backend = Some(backend);
@@ -3794,8 +3902,12 @@ mod host {
                         // desktop.
                         tier.floor.fed(now);
                         tier.last_encode = Some(now);
+                        // Cleared on the submit the encoder accepted, not on
+                        // an answer: a backend that delivers through its sink
+                        // answers nothing here, and the forced frame is in
+                        // its queue already.
+                        tier.force_irap = false;
                         if let Some(encoded) = encoded {
-                            tier.force_irap = false;
                             // A full queue means the session thread fell behind.
                             // The frame is dropped rather than stalling capture,
                             // and the next one is an IRAP so the gap cannot
@@ -3834,7 +3946,7 @@ mod host {
         // Same reason as the capture thread: the initial attach is not a
         // switch, and there is nothing held to release on it.
         watcher.follow();
-        let mut injector = SendInputInjector::new(space);
+        let mut injector = InputInjector::new(space);
 
         while !stop.load(Ordering::Relaxed) {
             // Trigger 4 of `release_all`. `follow` switches and reports in one
@@ -3869,9 +3981,10 @@ mod host {
     /// The viewer's candidates, admitted off the session thread.
     ///
     /// This thread exists for one call: `SystemResolver::resolve` goes to the
-    /// Windows DNS client for a `*.local` name and blocks until it answers or
-    /// gives up. On the session thread that would be a stall in the loop that
-    /// drives the peer; here it costs nothing but this thread.
+    /// system resolver (the DNS client on Windows, mDNSResponder on macOS) for
+    /// a `*.local` name and blocks until it answers or gives up. On the
+    /// session thread that would be a stall in the loop that drives the peer;
+    /// here it costs nothing but this thread.
     fn resolver_thread(rx: Receiver<ToResolver>, tx: Sender<FromResolver>) {
         let resolver = SystemResolver;
         while let Ok(work) = rx.recv() {
@@ -4056,7 +4169,7 @@ mod host {
                 codec,
                 width: encoded.0,
                 height: encoded.1,
-                bitrate_bps: DEFAULT_BITRATE_BPS,
+                bitrate_bps: crate::session::quality::DEFAULT_BITRATE_BPS,
                 fps: TARGET_FPS,
             }
         }
@@ -4185,7 +4298,7 @@ mod host {
         #[test]
         #[ignore = "captures this box's real desktop, opens its encoder and moves the pointer"]
         fn end_to_end_picture() {
-            let outputs = capture::enumerate_outputs().expect("dxgi enumerates");
+            let outputs = platform::enumerate_outputs().expect("the platform enumerates its outputs");
             assert!(!outputs.is_empty(), "no attached output to duplicate");
             let output = primary(&outputs).clone();
             let space = output.clone();
@@ -4200,7 +4313,7 @@ mod host {
             let limits = limits_for(&caps, codec).expect("the codec it just reported");
 
             let clock = HostClock::new(
-                qpc_hz().expect("a performance counter"),
+                platform::clock::hz().expect("a host clock"),
                 crate::bundle::TimeAnchor::new(0),
                 0,
             );
@@ -4238,7 +4351,7 @@ mod host {
             // the clock and not on frames: a busy desktop delivers 60 frames a
             // second and an idle one delivers none, and the pointer has to move
             // somewhere it was not already sitting either way.
-            let mut injector = SendInputInjector::new(PointerSpace::from_output(&space));
+            let mut injector = InputInjector::new(PointerSpace::from_output(&space));
             let spots = [(0.25f32, 0.25f32), (0.75, 0.65), (0.4, 0.8), (0.6, 0.2)];
             let mut spot = 0usize;
             let mut next_move = Instant::now();
@@ -4252,7 +4365,7 @@ mod host {
                     spot += 1;
                     injector
                         .inject(&InputEvent::MouseMove { x, y })
-                        .expect("sendinput reaches this desktop");
+                        .expect("the injector reaches this desktop");
                     next_move = Instant::now() + Duration::from_millis(200);
                 }
                 match rx.recv_timeout(Duration::from_millis(100)) {
@@ -4305,7 +4418,7 @@ mod host {
         #[test]
         #[ignore = "captures this box's real desktop and opens its encoder"]
         fn pause_closes_the_duplication_and_the_floor_holds_a_still_desktop() {
-            let outputs = capture::enumerate_outputs().expect("dxgi enumerates");
+            let outputs = platform::enumerate_outputs().expect("the platform enumerates its outputs");
             assert!(!outputs.is_empty(), "no attached output to duplicate");
             let output = primary(&outputs).clone();
 
@@ -4319,7 +4432,7 @@ mod host {
             let limits = limits_for(&caps, codec).expect("the codec it just reported");
 
             let clock = HostClock::new(
-                qpc_hz().expect("a performance counter"),
+                platform::clock::hz().expect("a host clock"),
                 crate::bundle::TimeAnchor::new(0),
                 0,
             );
@@ -4662,6 +4775,26 @@ mod tests {
     /// output measured 0.28 frames/s. The loop below is that case: every
     /// acquire times out, and the floor is the only thing that feeds the
     /// encoder.
+    #[test]
+    fn a_frame_over_its_share_of_the_rate_is_a_move() {
+        // 20 mbps at 60 fps is 41_666 bytes a frame
+        assert!(!moved(41_666, 20_000_000, 60));
+        assert!(moved(41_667, 20_000_000, 60));
+        assert!(!moved(900, 20_000_000, 60), "a caret or a menu-bar meter");
+    }
+
+    #[test]
+    fn a_mac_settles_a_second_after_the_last_big_move_and_windows_never() {
+        let at = Instant::now();
+        let settled = [
+            settles(None, at + Duration::from_secs(5)),
+            settles(Some(at), at + Duration::from_millis(999)),
+            settles(Some(at), at + SETTLE_AFTER),
+        ];
+        let expected = if cfg!(target_os = "macos") { [false, false, true] } else { [false; 3] };
+        assert_eq!(settled, expected);
+    }
+
     #[test]
     fn the_floor_feeds_the_encoder_on_a_timeout_only_capture_loop() {
         let start = Instant::now();

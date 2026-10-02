@@ -71,6 +71,18 @@
 //! layer that knows the session id and owns the sink — and it keeps the rule
 //! that a candidate's address never appears in a record beside a credential
 //! trivially true of this file.
+//!
+//! # The interface watcher's hardware test
+//!
+//! Off Windows the watcher walks `getifaddrs`, and one `#[ignore]`d test prints
+//! what a walk sees. From the working directory `agent/swoop`, on a Mac:
+//!
+//! ```text
+//! CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test --locked --no-default-features \
+//!     --features encode-videotoolbox,audio-opus --lib -- --ignored --nocapture ice_policy
+//! ```
+//!
+//! It reads the interface list and changes nothing on the machine.
 
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
@@ -223,17 +235,19 @@ pub trait MdnsResolver {
 
 /// The machine's own resolver.
 ///
-/// On Windows the DNS Client resolves `*.local` by mDNS, and `getaddrinfo`,
-/// `GetAddrInfoExW` and `DnsQueryEx` all reach it — the `Ex` forms buy
-/// cancellation and an explicit timeout, which cost a manifest entry this wave
-/// does not have and buy nothing a worker thread does not already give. It
-/// **blocks**, for as long as the resolver takes to give up, so it is called
-/// off the session loop or not at all.
+/// One call on every system: `getaddrinfo`, behind `to_socket_addrs`, reaches
+/// whatever answers `*.local` there. On Windows that is the DNS Client, which
+/// resolves it by mDNS; `GetAddrInfoExW` and `DnsQueryEx` reach it too, and
+/// their `Ex` forms buy cancellation and an explicit timeout, which cost a
+/// manifest entry and buy nothing a worker thread does not already give. On
+/// macOS it is mDNSResponder. On Linux it is nss-mdns where that is installed,
+/// and a name nothing answers is `None`, which costs same-LAN direct paths and
+/// nothing else. It **blocks**, for as long as the resolver takes to give up,
+/// so it is called off the session loop or not at all.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemResolver;
 
 impl MdnsResolver for SystemResolver {
-    #[cfg(windows)]
     fn resolve(&self, name: &str) -> Option<IpAddr> {
         use std::net::ToSocketAddrs;
 
@@ -244,13 +258,6 @@ impl MdnsResolver for SystemResolver {
             .ok()?
             .map(|addr| addr.ip())
             .next()
-    }
-
-    #[cfg(not(windows))]
-    fn resolve(&self, _name: &str) -> Option<IpAddr> {
-        // Wave 9's platform seam. A non-Windows host answers no `.local` name,
-        // which costs same-LAN direct paths and nothing else.
-        None
     }
 }
 
@@ -314,7 +321,7 @@ pub enum IceEvent {
     Disconnected,
     /// ICE gave up.
     Failed,
-    /// A Windows interface came up, went down or changed address.
+    /// A network interface came up, went down or changed address.
     InterfaceChanged,
 }
 
@@ -594,19 +601,172 @@ pub mod ifwatch {
     }
 }
 
-/// The non-Windows seam: compiles, reports nothing, and Wave 9 fills it.
-#[cfg(not(windows))]
+/// The interface set as one number: every (interface name, address) pair,
+/// collected into a sorted set first, so the order the system lists them in
+/// never reads as a change.
+#[cfg(any(unix, test))]
+fn interface_set_hash(entries: &[(String, IpAddr)]) -> u64 {
+    use std::collections::BTreeSet;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let set: BTreeSet<&(String, IpAddr)> = entries.iter().collect();
+    let mut hasher = DefaultHasher::new();
+    set.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Interface changes off Windows, as the same flag the session loop reads.
+///
+/// There is no portable change notification: macOS has `SCDynamicStore` and
+/// the routing socket, Linux has netlink, and each wants a run loop or a
+/// protocol of its own. A walk of `getifaddrs` is the same few lines on both
+/// and cheap, so a thread of its own walks it every two seconds and sets the
+/// flag when the hash of the interface set moves. The session loop never
+/// waits on a walk. A burst (a VPN bringing up a tunnel, a roam dropping one
+/// lease and taking another) lands in one or two walks, and
+/// [`RESTART_COOLDOWN`] folds those into one restart, as it does on Windows.
+#[cfg(unix)]
 pub mod ifwatch {
-    #[derive(Debug, Default)]
-    pub struct InterfaceWatcher;
+    use std::ffi::{c_int, CStr};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
+    use std::time::Duration;
+
+    use super::interface_set_hash;
+
+    /// A roam is seen about as soon as a quiet link would be
+    /// ([`super::DISCONNECTED_GRACE`]).
+    const WALK_INTERVAL: Duration = Duration::from_secs(2);
+
+    /// A live walking thread. Stopped and joined on drop.
+    #[derive(Debug)]
+    pub struct InterfaceWatcher {
+        changed: Arc<AtomicBool>,
+        stop: mpsc::Sender<()>,
+        thread: Option<JoinHandle<()>>,
+    }
 
     impl InterfaceWatcher {
+        /// Start the walking thread. `Err` is the errno of a thread that could
+        /// not be spawned, and the caller carries on without the restart
+        /// trigger, as it does on Windows.
         pub fn start() -> Result<Self, u32> {
-            Ok(Self)
+            let changed = Arc::new(AtomicBool::new(false));
+            let (stop, stopped) = mpsc::channel();
+            let flag = Arc::clone(&changed);
+            let thread = std::thread::Builder::new()
+                .name("swoop-ifwatch".to_owned())
+                .spawn(move || watch(&flag, &stopped))
+                .map_err(|e| {
+                    e.raw_os_error()
+                        .and_then(|code| u32::try_from(code).ok())
+                        .unwrap_or(0)
+                })?;
+            Ok(Self {
+                changed,
+                stop,
+                thread: Some(thread),
+            })
         }
 
+        /// Take the flag: true once per change of the interface set, then
+        /// false again.
         pub fn take_changed(&self) -> bool {
-            false
+            self.changed.swap(false, Ordering::Relaxed)
+        }
+    }
+
+    impl Drop for InterfaceWatcher {
+        fn drop(&mut self) {
+            // Ends the thread's wait at once, so the join costs at most a walk
+            // already in progress. A thread that is already gone makes the
+            // send fail, and there is nothing to wake.
+            let _ = self.stop.send(());
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// The thread: a baseline walk, then one walk per interval until the
+    /// watcher is dropped. The flag means "changed since we started", so the
+    /// baseline sets nothing. A failed walk is no news, and the next one is
+    /// compared with the last set actually seen.
+    fn watch(changed: &AtomicBool, stop: &mpsc::Receiver<()>) {
+        let mut last = walk().map(|set| interface_set_hash(&set));
+        loop {
+            match stop.recv_timeout(WALK_INTERVAL) {
+                Err(RecvTimeoutError::Timeout) => {}
+                Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
+            }
+            let Some(now) = walk().map(|set| interface_set_hash(&set)) else {
+                continue;
+            };
+            if last.is_some_and(|seen| seen != now) {
+                changed.store(true, Ordering::Relaxed);
+            }
+            last = Some(now);
+        }
+    }
+
+    /// Every (interface name, address) pair that carries an IPv4 or IPv6
+    /// address, or `None` when `getifaddrs` fails. Both families, as on
+    /// Windows: either one changing can move which candidates are reachable.
+    /// Link-layer entries (`AF_LINK` on macOS, `AF_PACKET` on Linux) carry no
+    /// address ICE could use and are skipped.
+    pub(super) fn walk() -> Option<Vec<(String, IpAddr)>> {
+        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+        // SAFETY: on success `head` is a list the system allocated; it is
+        // only read below and handed back to `freeifaddrs` exactly once.
+        if unsafe { libc::getifaddrs(&raw mut head) } != 0 {
+            return None;
+        }
+        let mut set = Vec::new();
+        let mut entry = head;
+        while !entry.is_null() {
+            // SAFETY: a node of the list above, alive until `freeifaddrs`.
+            let node = unsafe { &*entry };
+            if !node.ifa_name.is_null() {
+                // SAFETY: `ifa_addr` is null or a sockaddr sized by its family,
+                // and `ifa_name` a NUL-terminated name, both alive with the node.
+                if let Some(address) = unsafe { address_of(node.ifa_addr) } {
+                    let name = unsafe { CStr::from_ptr(node.ifa_name) };
+                    set.push((name.to_string_lossy().into_owned(), address));
+                }
+            }
+            entry = node.ifa_next;
+        }
+        // SAFETY: the list `getifaddrs` returned, freed once, not read after.
+        unsafe { libc::freeifaddrs(head) };
+        Some(set)
+    }
+
+    /// The IP address in one `sockaddr`, when it holds one.
+    ///
+    /// `addr` must be null or point at a `sockaddr` as long as its family says.
+    /// Only `sa_family` is read before the family is known: it follows `sa_len`
+    /// on macOS and comes first on Linux, and `libc` spells the struct for
+    /// each, so the one field access is right on both.
+    unsafe fn address_of(addr: *const libc::sockaddr) -> Option<IpAddr> {
+        if addr.is_null() {
+            return None;
+        }
+        // SAFETY: non-null, and the caller vouches for the rest.
+        match c_int::from(unsafe { (*addr).sa_family }) {
+            libc::AF_INET => {
+                // SAFETY: an AF_INET sockaddr is a sockaddr_in.
+                let v4 = unsafe { addr.cast::<libc::sockaddr_in>().read_unaligned() };
+                Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(v4.sin_addr.s_addr))))
+            }
+            libc::AF_INET6 => {
+                // SAFETY: an AF_INET6 sockaddr is a sockaddr_in6.
+                let v6 = unsafe { addr.cast::<libc::sockaddr_in6>().read_unaligned() };
+                Some(IpAddr::V6(Ipv6Addr::from(v6.sin6_addr.s6_addr)))
+            }
+            _ => None,
         }
     }
 }
@@ -994,5 +1154,83 @@ mod tests {
         let watcher = ifwatch::InterfaceWatcher::start().expect("NotifyIpInterfaceChange");
         assert!(!watcher.take_changed());
         drop(watcher);
+    }
+
+    // -------------------------------------------------- the interface set ---
+
+    fn interfaces(pairs: &[(&str, &str)]) -> Vec<(String, IpAddr)> {
+        pairs
+            .iter()
+            .map(|(name, addr)| ((*name).to_owned(), addr.parse().expect("an address")))
+            .collect()
+    }
+
+    #[test]
+    fn the_interface_set_moves_on_an_added_or_removed_address_and_not_on_order() {
+        let listed = interfaces(&[
+            ("lo0", "127.0.0.1"),
+            ("en0", "192.168.1.20"),
+            ("en0", "fe80::1c2b:3d4e:5f60:7182"),
+        ]);
+        let reordered = interfaces(&[
+            ("en0", "fe80::1c2b:3d4e:5f60:7182"),
+            ("lo0", "127.0.0.1"),
+            ("en0", "192.168.1.20"),
+        ]);
+        assert_eq!(
+            interface_set_hash(&listed),
+            interface_set_hash(&reordered),
+            "the same set in another order"
+        );
+
+        let mut added = listed.clone();
+        added.push(("utun4".to_owned(), "10.8.0.2".parse().expect("an address")));
+        assert_ne!(
+            interface_set_hash(&listed),
+            interface_set_hash(&added),
+            "a tunnel came up"
+        );
+
+        let removed = interfaces(&[("lo0", "127.0.0.1"), ("en0", "fe80::1c2b:3d4e:5f60:7182")]);
+        assert_ne!(
+            interface_set_hash(&listed),
+            interface_set_hash(&removed),
+            "the wi-fi lost its lease"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_interface_watcher_walks_and_stops() {
+        // The walk on this system, and a drop that ends the thread at once
+        // rather than after its interval.
+        assert!(ifwatch::walk().is_some(), "getifaddrs");
+        let watcher = ifwatch::InterfaceWatcher::start().expect("the walking thread");
+        assert!(!watcher.take_changed());
+        let dropped = Instant::now();
+        drop(watcher);
+        assert!(
+            dropped.elapsed() < Duration::from_secs(1),
+            "drop waited out the interval"
+        );
+    }
+
+    /// Prints the interface set as the unix watcher sees it; the invocation is
+    /// in the module doc.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "prints this machine's interface set; cargo test ... -- --ignored --nocapture ice_policy"]
+    fn prints_the_interface_set() {
+        let started = Instant::now();
+        let set = ifwatch::walk().expect("getifaddrs");
+        let took = started.elapsed();
+        for (name, address) in &set {
+            println!("{name:<10} {address}");
+        }
+        println!(
+            "{} entries, hash {:016x}, walked in {took:?}",
+            set.len(),
+            interface_set_hash(&set)
+        );
     }
 }

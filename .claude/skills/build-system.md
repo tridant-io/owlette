@@ -27,6 +27,15 @@ Step 6 of the full build compiles `desktop/` and step 8 copies the binary to `bu
 - The installer probes for the **WebView2 Evergreen runtime** and runs the bundled `vendor\MicrosoftEdgeWebview2Setup.exe` (`/silent /install`) when it is missing — LTSC/IoT kiosk images often lack it, and the app cannot create a window without it. Never fatal; the service works regardless.
 - The installer probes for the **PawnIO driver** (registry `Uninstall\PawnIO\DisplayVersion`) and runs the bundled `vendor\PawnIO_setup.exe` (`-install -silent`; exit 0/183/3010 all mean success) when absent or older than 2.2.0 — LibreHardwareMonitor reads CPU temps through it. Never fatal; without it CPU temps are None and GPU temps use vendor APIs.
 
+### The macOS pkg (`agent/build/macos/build.sh`)
+
+Runs on an Apple silicon Mac with the Command Line Tools, Node, cargo and **cmake**; nothing in it needs root. Output: `agent/build/macos/Owlette-Installer-v<version>.pkg`, the version read from `agent/VERSION`. Flags, signing and notarizing are in the script's header. Here the Tauri bundler does run, for the `.app` only (`--bundles app`); `pkgbuild` and `productbuild` make the installer.
+
+- **It compiles the swoop streamer first**: `cargo build --release --locked --no-default-features --features encode-videotoolbox,audio-opus` in `agent/swoop` (the default `nvenc` feature is Windows-only), then stages the binary as `desktop/src-tauri/binaries/owlette-swoop-aarch64-apple-darwin`. cmake builds the opus that `audio-opus` vendors, and cmake 4 refuses it without `CMAKE_POLICY_VERSION_MINIMUM=3.5`, which the script sets on its own cargo call.
+- **The streamer is a Tauri sidecar**: `bundle.externalBin`, declared only in `tauri.macos.conf.json`, so the bundler copies it to `owlette.app/Contents/MacOS/owlette-swoop` and signs it with the app's identity and hardened runtime. Windows and Linux builds never see it. `tauri-build` will not compile the desktop crate on macOS without the staged file, so a macOS `cargo check` or `cargo test` of `desktop/src-tauri` needs the streamer built and staged first, as the CI leg does.
+- **It checks the sidecar** before packaging and fails the build if it is missing from the bundle, prints a version other than `agent/VERSION` (the agent refuses a mismatched streamer at spawn), or, when signed, fails `codesign --verify --strict`, lacks the hardened runtime, or carries another team than the app's.
+- `--skip-app` reuses the last app bundle, sidecar included: neither the app nor the streamer is rebuilt.
+
 ### Version Bump Flow
 
 ```bash

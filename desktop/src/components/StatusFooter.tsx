@@ -20,7 +20,11 @@ interface StatusFooterProps {
   /** COMPUTERNAME, shown as-is — machine names keep their real casing. */
   hostname?: string | null
   starting: boolean
-  onStart: () => void
+  /**
+   * Start the service. Absent on macos, where launchd runs the agent and this
+   * app cannot start it, so a down service gets the sentence and no button.
+   */
+  onStart?: () => void
   /** Open the pairing dialog. */
   onJoin: () => void
 }
@@ -70,9 +74,11 @@ export function StatusFooter({
       </span>
 
       {state.serviceDown ? (
-        <Button size="sm" variant="secondary" className="h-6 px-2" disabled={starting} onClick={onStart}>
-          {starting ? 'starting…' : 'start service'}
-        </Button>
+        onStart && (
+          <Button size="sm" variant="secondary" className="h-6 px-2" disabled={starting} onClick={onStart}>
+            {starting ? 'starting…' : 'start service'}
+          </Button>
+        )
       ) : (
         // `disabled` and `removed from site` both mean a healthy machine that
         // belongs to nothing; without this button the only way back is a menu a

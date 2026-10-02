@@ -83,7 +83,8 @@
 //!    A decision that moves the host's encoder is made from the host's own
 //!    arithmetic over raw samples, not from a scalar a viewer asserts.
 //! 2. **Frame gaps**, from a rise in `stats.framesDropped` — frames the viewer
-//!    never presented.
+//!    never presented. Three or more in one report window; fewer are counted
+//!    and not cut ([`GAP_CUT_THRESHOLD`] says why).
 //! 3. **The host's own refusals**, from [`PacerStats::dropped_over_budget`]. A
 //!    frame the admission gate refused is congestion the host caused itself,
 //!    and it counts the same as the viewer reporting one missing.
@@ -227,6 +228,17 @@ pub const RISE_TRIGGER: Duration = Duration::from_millis(50);
 /// way this finds a ceiling is by walking into it again.
 const CUT_FACTOR: f64 = 0.80;
 const CLIMB_FACTOR: f64 = 1.05;
+
+/// Unexplained dropped frames in one report window below which the window is
+/// counted and not cut. `framesDropped` is the browser's own count, and it
+/// rises by one when the browser skips a late frame, a slow decode or a
+/// throttled paint as readily as for a loss on the path. Measured at gate M1
+/// on 2026-10-02, a Mac on Wi-Fi at 4K60 reported one dropped frame every two
+/// to four seconds; each was a 20 % cut, a two-second hold and a 2.5 MB
+/// recovery keyframe, 11 cuts in 40 s took a 50 Mbps target to 20, and the
+/// picture stuttered where the path was fine. Real loss is many frames a
+/// window, and real congestion is a delay rise, which rule 1 catches alone.
+const GAP_CUT_THRESHOLD: u64 = 3;
 
 /// A viewer's reported clock offset moving by more than this invalidates the
 /// reference: the subtraction only cancels a *constant* bias, so a step in the
@@ -680,8 +692,11 @@ impl Governor {
         let rise = std::mem::take(&mut self.pending_gap_rise);
         let explained = rise.min(self.unmatched_refusals);
         self.unmatched_refusals -= explained;
-        if rise > explained {
+        let unexplained = rise - explained;
+        if unexplained > 0 {
             self.stats.frame_gaps += 1;
+        }
+        if unexplained >= GAP_CUT_THRESHOLD {
             self.degraded = true;
         }
 
@@ -1111,6 +1126,33 @@ mod tests {
         f.governor.on_feedback(f.now, &stats(4));
         assert_eq!(f.report(GOOD), Some(16_000_000));
         assert_eq!(f.governor.stats().frame_gaps, 1);
+    }
+
+    #[test]
+    fn a_dropped_frame_or_two_in_a_window_is_noise_counted_and_not_cut() {
+        let mut f = Fixture::new();
+        f.report(GOOD);
+        let stats = |frames_dropped| Feedback::Stats {
+            decode_queue: 0,
+            frames_dropped,
+            jitter_ms: 0.0,
+            rtt_ms: 7.0,
+            width_css: 1920,
+            height_css: 1080,
+        };
+        f.governor.on_feedback(f.now, &stats(0));
+        f.report(GOOD);
+
+        f.governor.on_feedback(f.now, &stats(1));
+        assert_eq!(f.report(GOOD), None, "one skipped frame is the browser's business");
+        f.governor.on_feedback(f.now, &stats(3));
+        assert_eq!(f.report(GOOD), None, "two are still noise");
+        assert_eq!(f.governor.stats().frame_gaps, 2, "but both windows are counted");
+        assert_eq!(f.governor.stats().cuts, 0);
+
+        f.governor.on_feedback(f.now, &stats(6));
+        assert_eq!(f.report(GOOD), Some(16_000_000), "three in a window is loss");
+        assert_eq!(f.governor.stats().frame_gaps, 3);
     }
 
     #[test]

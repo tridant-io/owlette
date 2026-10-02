@@ -16,6 +16,9 @@
 //! way capture and input do: following it would take the clipboard listener to
 //! `Winlogon`, which is the one place §5 refuses to sync at all.
 //!
+//! On macOS the thread is `super::mac`'s, which polls the pasteboard instead
+//! of listening to it; the window, the desktop and WIC below are Windows'.
+//!
 //! Hardware tests are `#[ignore]`d — they read and write **this machine's real
 //! clipboard**, so whatever you had copied is gone afterwards. With the working
 //! directory `agent/swoop`:
@@ -33,6 +36,11 @@ use std::sync::{Arc, Mutex};
 use crossbeam_channel::{bounded, Sender};
 
 use super::formats::Payload;
+// the platform's listener thread; elsewhere there is none.
+#[cfg(target_os = "macos")]
+use super::mac::Thread;
+#[cfg(windows)]
+use win::Thread;
 
 /// The most payloads waiting to be applied to this machine's clipboard. Past
 /// this the viewer is pasting faster than the machine can take it, which is
@@ -46,7 +54,7 @@ const WRITE_QUEUE: usize = 4;
 /// before it: the session polls a feature only while a viewer's peer is
 /// connected, so a queue would hand a viewer that has just joined whatever was
 /// copied several clipboards ago instead of what is on the machine now.
-type Mailbox = Arc<Mutex<Option<Payload>>>;
+pub(super) type Mailbox = Arc<Mutex<Option<Payload>>>;
 
 /// Both halves of the echo guard, neither of which is sufficient alone.
 ///
@@ -65,7 +73,8 @@ impl Echo {
     /// Record what this process just put on the clipboard. `seq` is
     /// `GetClipboardSequenceNumber()` read **after** the clipboard was closed:
     /// `EmptyClipboard` and each `SetClipboardData` move the counter, and it is
-    /// the number in force when the update fires that has to match.
+    /// the number in force when the update fires that has to match. On macOS
+    /// it is the change count the write produced (`super::mac`).
     pub fn wrote(&mut self, seq: u32, payload: &Payload) {
         self.seq = Some(seq);
         self.digest = Some(payload.digest());
@@ -86,13 +95,21 @@ impl Echo {
 /// out, payloads to apply go in, and nothing blocks.
 pub struct Listener {
     latest: Mailbox,
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     writes: Sender<Payload>,
-    #[cfg(windows)]
-    inner: win::Thread,
+    /// Whether this machine's own clipboard is read at all.
+    reads: bool,
+    #[cfg(any(windows, target_os = "macos"))]
+    inner: Thread,
 }
 
 impl Listener {
+    /// Whether this machine's own clipboard is read, so what is copied here
+    /// reaches a viewer: the feature's status, and the viewer's notice.
+    pub fn reads(&self) -> bool {
+        self.reads
+    }
+
     /// The machine's clipboard if it has changed since the last call, already
     /// filtered: file lists, echoes of our own writes and anything over §5's
     /// caps never get this far.
@@ -106,7 +123,7 @@ impl Listener {
     /// Put a payload on this machine's clipboard. Best effort and never
     /// blocking: the write happens on the listener thread, and a full queue is
     /// a viewer pasting faster than the machine applies it.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub fn write(&self, payload: Payload) {
         if self.writes.try_send(payload).is_err() {
             ::log::debug!("swoop: a clipboard write was dropped, the queue is full");
@@ -115,38 +132,52 @@ impl Listener {
         self.inner.wake_for_write();
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub fn write(&self, _payload: Payload) {}
 
     /// Stop the thread and wait for it. Idempotent.
     pub fn stop(&mut self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         self.inner.stop();
     }
 }
 
-/// Start the listener. The win32 work happens on the thread, so this returns as
-/// soon as the thread is spawned and a failure to create the window is reported
-/// from there — a feature whose listener could not start runs inert rather than
-/// taking the session down with it.
-#[cfg(windows)]
+/// Start the listener. The platform's work happens on the thread, so this
+/// returns as soon as the thread is spawned and a failure there (no window on
+/// Windows) is reported from there — a feature whose listener could not start
+/// runs inert rather than taking the session down with it.
+#[cfg(any(windows, target_os = "macos"))]
 pub fn start() -> anyhow::Result<Listener> {
     let latest: Mailbox = Arc::new(Mutex::new(None));
     let (writes, write_rx) = bounded(WRITE_QUEUE);
-    let inner = win::Thread::spawn(Arc::clone(&latest), write_rx)?;
+    let inner = Thread::spawn(Arc::clone(&latest), write_rx)?;
     Ok(Listener {
         latest,
         writes,
+        reads: reads_own_clipboard(),
         inner,
     })
 }
 
-#[cfg(not(windows))]
+/// Always on Windows; on macOS only under the pasteboard access `mac` reads
+/// without raising the paste alert.
+#[cfg(windows)]
+fn reads_own_clipboard() -> bool {
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn reads_own_clipboard() -> bool {
+    super::mac::reads_general_pasteboard()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn start() -> anyhow::Result<Listener> {
     let (writes, _) = bounded(WRITE_QUEUE);
     Ok(Listener {
         latest: Arc::new(Mutex::new(None)),
         writes,
+        reads: false,
     })
 }
 

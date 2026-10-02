@@ -256,7 +256,8 @@ pub fn terminate_pid(
 
 /// Case- and separator-insensitive because config entries are operator-typed.
 /// A bare name matches the file name alone; anything with a separator must
-/// match the whole path.
+/// match the whole path. A macOS `.app` bundle is a directory, so it matches
+/// the image running from its `Contents/MacOS`.
 pub fn image_matches(actual: &str, expected: &str) -> bool {
   let actual_key = normalize(actual);
   let expected_key = normalize(expected);
@@ -264,10 +265,25 @@ pub fn image_matches(actual: &str, expected: &str) -> bool {
     return false;
   }
 
-  if expected_key.contains('\\') {
+  let whole = if expected_key.contains('\\') {
     actual_key == expected_key
   } else {
     file_name(&actual_key) == expected_key
+  };
+  whole || inside_bundle(&actual_key, &expected_key)
+}
+
+fn inside_bundle(actual_key: &str, expected_key: &str) -> bool {
+  let bundle = expected_key.trim_end_matches('\\');
+  if !bundle.ends_with(".app") {
+    return false;
+  }
+  let binaries = format!("{bundle}\\contents\\macos\\");
+  if bundle.contains('\\') {
+    actual_key.starts_with(&binaries)
+  } else {
+    // a bare name is a whole path component, never the tail of a longer one
+    actual_key.contains(&format!("\\{binaries}"))
   }
 }
 
@@ -413,6 +429,46 @@ mod tests {
     // Guards against a substring check sneaking in: "player.exe" must not be
     // satisfied by "mediaplayer.exe".
     assert!(!image_matches("C:\\apps\\mediaplayer.exe", "player.exe"));
+  }
+
+  #[test]
+  fn a_mac_app_bundle_matches_the_binary_it_runs() {
+    let actual = "/Applications/Kiosk.app/Contents/MacOS/Kiosk";
+    assert!(image_matches(actual, "/Applications/Kiosk.app"));
+    assert!(image_matches(actual, "/applications/kiosk.app/"));
+    assert!(image_matches(actual, "Kiosk.app"));
+  }
+
+  #[test]
+  fn a_lookalike_bundle_or_another_file_in_it_does_not_match() {
+    assert!(!image_matches(
+      "/Applications/Kiosk.app.evil/Contents/MacOS/Kiosk",
+      "/Applications/Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Kiosk.app.evil/Contents/MacOS/Kiosk",
+      "Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Other.app/Contents/MacOS/Kiosk",
+      "/Applications/Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Other.app/Contents/MacOS/Kiosk",
+      "Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/MyKiosk.app/Contents/MacOS/Kiosk",
+      "Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Kiosk.app/Contents/Resources/kiosk",
+      "/Applications/Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Kiosk.app/Contents/Resources/kiosk",
+      "Kiosk.app"
+    ));
   }
 
   #[test]

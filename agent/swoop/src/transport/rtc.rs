@@ -175,9 +175,10 @@ pub struct PeerConfig {
     /// The pacer's starting ceiling — the encoder's own CBR target until a
     /// governor moves it.
     pub bitrate_bps: u32,
-    /// `QueryPerformanceFrequency`. The caller owns the capture clock, so it
-    /// supplies the tick rate rather than this module guessing at one; see
-    /// [`qpc_hz`] on Windows.
+    /// Ticks per second of `platform::clock` (`QueryPerformanceFrequency` on
+    /// Windows). The caller owns the capture clock, so it supplies the tick
+    /// rate rather than this module guessing at one; see
+    /// [`crate::platform::clock::hz`].
     pub qpc_hz: i64,
     /// Leave false. Turning it on installs str0m's leaky-bucket pacer, which
     /// the bake-off measured at 1015.6 ms p50 of queue. It exists so the
@@ -1182,18 +1183,6 @@ fn channel_from_label(label: &str) -> Option<Channel> {
     ]
     .into_iter()
     .find(|c| channel_label(*c) == label)
-}
-
-/// `QueryPerformanceFrequency`, for [`PeerConfig::qpc_hz`]. Fixed for the life
-/// of the system, so a caller reads it once.
-#[cfg(windows)]
-pub fn qpc_hz() -> Result<i64> {
-    let mut hz = 0i64;
-    unsafe {
-        windows::Win32::System::Performance::QueryPerformanceFrequency(&mut hz)
-            .context("QueryPerformanceFrequency")?;
-    }
-    Ok(hz)
 }
 
 #[cfg(test)]

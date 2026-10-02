@@ -427,6 +427,7 @@ No surviving reference names a Wave 7 task.
 ## Wave 8 — swoop streamer backends on macOS/Linux
 
 - Decision 23 [verbatim: H §13]: +2,825 firm, up to 3,825 lines. Depends on the job runner (4.3), bundle signing (5.1) and packaging; `capabilities.swoop` is ANDed with `streamer_capable()`. Task list [unknown]. Status: **NOT STARTED**.
+- **Status 2026-09-30:** the macOS half is executed as `dev/active/swoop-macos/`, one plan with swoop Task 9.1. There, Waves 1–5 are done in code (17 of 24 tasks ticked; the Mac runs of 4.3, 4.4 and 4.9 are open), gate M0 was go on 2026-09-30 (the sidecar, launched by the installed app, read the display list through ScreenCaptureKit on the app's grant), and gate M1 (the first real session) and the release are ahead. The bundle travels over a unix socket, not a `stdin_path` file: see the C2 amendment in `plan.md`. Linux: **NOT STARTED**; it gets its own plan.
 
 ---
 
