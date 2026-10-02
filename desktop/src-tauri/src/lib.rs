@@ -14,6 +14,8 @@ mod watchers;
 #[cfg(unix)]
 mod jobrunner;
 #[cfg(target_os = "macos")]
+mod menu_bar_position;
+#[cfg(target_os = "macos")]
 mod tcc;
 mod window_state;
 

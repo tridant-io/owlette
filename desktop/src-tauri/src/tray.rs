@@ -365,6 +365,10 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     start_on_login: startup_link::is_enabled(),
   };
 
+  // before the item exists: appkit reads its saved position when it is created
+  #[cfg(target_os = "macos")]
+  crate::menu_bar_position::seed(&app.config().identifier);
+
   let menu = build_menu(app, &view)?;
   let tray = TrayIconBuilder::with_id(TRAY_ID)
     .icon(icon_for(view.code))
