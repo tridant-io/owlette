@@ -448,6 +448,10 @@ pub mod channel {
             displays: Vec<DisplayInfo>,
             streamer_epoch: i64,
             protocol_version: u32,
+            /// Whether the host reads its own clipboard, so what is copied
+            /// there reaches a viewer: false on a Mac whose pasteboard access
+            /// is not *allow*. A viewer takes an older host's silence as true.
+            clipboard_reads: bool,
         },
         /// viewer → host, per viewer, allowed for watchers.
         Quality { preset: String, max_bitrate_kbps: u32, max_fps: u32 },

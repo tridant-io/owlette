@@ -281,6 +281,9 @@ pub struct FeatureStatus {
     pub audio: Option<AudioState>,
     /// `displays`: whether this machine has a usable output at all.
     pub displays: Option<DisplayState>,
+    /// `clipboard`: whether this machine reads its own clipboard, so what is
+    /// copied here reaches a viewer. `None` until the feature has started.
+    pub clipboard: Option<bool>,
 }
 
 /// What a feature may ask the session to do on its behalf.
@@ -3089,6 +3092,7 @@ mod host {
                 displays,
                 streamer_epoch: self.streamer_epoch,
                 protocol_version: crate::bundle::SWOOP_PROTOCOL_VERSION,
+                clipboard_reads: self.feature_status().clipboard.unwrap_or(true),
             };
             self.write_json_to(at, Channel::SwoopControl, &hello);
             // Who else is here, to the browser that has just opened its channel.
@@ -3139,6 +3143,15 @@ mod host {
             if moved {
                 self.retier();
             }
+        }
+
+        /// Every feature's word, for the status line and for `hello-host`.
+        fn feature_status(&mut self) -> FeatureStatus {
+            let mut contributed = FeatureStatus::default();
+            for feature in self.features.iter_mut() {
+                feature.status(&mut contributed);
+            }
+            contributed
         }
 
         fn tick(&mut self) {
@@ -3260,10 +3273,7 @@ mod host {
                     self.outbox.refused()
                 );
             }
-            let mut contributed = FeatureStatus::default();
-            for feature in self.features.iter_mut() {
-                feature.status(&mut contributed);
-            }
+            let contributed = self.feature_status();
             // The governor's own view, and only while somebody is watching:
             // with no peer there is no rate being governed, and §6 promises a
             // quiet session the nine-field line. N governors report as the

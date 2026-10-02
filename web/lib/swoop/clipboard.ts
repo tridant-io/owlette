@@ -101,10 +101,36 @@ function isPasteKey(event: KeyboardEvent): boolean {
   return event.code === 'Insert' && event.shiftKey;
 }
 
+export interface SwoopClipboardStore {
+  subscribe(listener: () => void): () => void;
+  /** whether the machine reads its own clipboard: true until `hello-host` says otherwise. */
+  get(): boolean;
+}
+
+const stores = new WeakMap<SwoopSession, SwoopClipboardStore>();
+
+/** the live clipboard store, or null before attach. */
+export const swoopClipboard = (session: SwoopSession | null): SwoopClipboardStore | null =>
+  session ? (stores.get(session) ?? null) : null;
+
 export function attach(session: SwoopSession): SwoopDetach {
   const stage = session.stage;
   const view = stage.ownerDocument.defaultView;
   if (!view) return () => {};
+
+  // what the host said about its own clipboard, for the toolbar's notice: a
+  // mac that may not read its pasteboard never sends its copies here.
+  let hostReads = true;
+  const listeners = new Set<() => void>();
+  const store: SwoopClipboardStore = {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    get: () => hostReads,
+  };
 
   let detached = false;
   let seq = 0;
@@ -348,7 +374,15 @@ export function attach(session: SwoopSession): SwoopDetach {
     const decoded = decodeControlMessage(data);
     // a rejection here is ordinary: `swoop-control` carries the control traffic
     // too, and the caps are checked before a chunk is buffered.
-    if (!decoded.ok || decoded.value.t !== 'clip') return;
+    if (!decoded.ok) return;
+    if (decoded.value.t === 'hello-host') {
+      if (hostReads !== decoded.value.clipboardReads) {
+        hostReads = decoded.value.clipboardReads;
+        for (const listener of listeners) listener();
+      }
+      return;
+    }
+    if (decoded.value.t !== 'clip') return;
     const clip = decoded.value;
     if (clip.dir !== 'to-viewer') return;
 
@@ -406,10 +440,13 @@ export function attach(session: SwoopSession): SwoopDetach {
   stage.addEventListener('pointerdown', onActivation, true);
   stage.addEventListener('keydown', onActivation, true);
   const offControl = session.onChannelMessage('swoop-control', receiveChunk);
+  stores.set(session, store);
 
   return () => {
     if (detached) return;
     detached = true;
+    stores.delete(session);
+    listeners.clear();
     offControl();
     view.removeEventListener('keydown', onKeyCapture, true);
     view.removeEventListener('keyup', onKeyCapture, true);

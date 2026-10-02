@@ -316,9 +316,13 @@ viewer → host: `quality` (`preset`, `maxBitrateKbps`, `maxFps` — per viewer,
 `display` (`index` — shared state, requires `ctl`), `idr`, `sas` (ctrl+alt+del, requires `ctl`),
 `mute` (`on`), `lease` (`token`, section 10).
 
-host → viewer: `hello-host` (`codec`, `width`, `height`, `displays[]`, `streamerEpoch`, `protocolVersion`),
-`sas-result` (`ok`), `lease-ok` (`expiresAt`), `ended` (`reason`), `roster` (`viewers[]` of
-`{id, name, ctl}`, `tsUs`).
+host → viewer: `hello-host` (`codec`, `width`, `height`, `displays[]`, `streamerEpoch`, `protocolVersion`,
+`clipboardReads`), `sas-result` (`ok`), `lease-ok` (`expiresAt`), `ended` (`reason`), `roster` (`viewers[]`
+of `{id, name, ctl}`, `tsUs`).
+
+`clipboardReads` says whether the host reads its own clipboard, so what is copied there reaches a viewer:
+false on a Mac whose pasteboard access is not *allow* (decision 17), when only the viewer's clips cross. A
+viewer takes an older host's silence as true.
 
 `roster` is who is connected and who holds control, sent **whole on every change** rather than as a delta —
 this channel is ordered and reliable, but a viewer that joined late has no earlier state to apply a delta to.

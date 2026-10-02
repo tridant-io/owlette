@@ -124,7 +124,7 @@ fn run(latest: &Mailbox, writes: &Receiver<Payload>, stopped: &Receiver<()>) {
     let behaviour = access_behaviour(&pasteboard);
     let reads = may_read(behaviour);
     if reads {
-        ::log::debug!(
+        ::log::info!(
             "swoop: the pasteboard is read on a change, its access behaviour is {}",
             describe(behaviour)
         );
@@ -158,6 +158,12 @@ fn run(latest: &Mailbox, writes: &Receiver<Payload>, stopped: &Receiver<()>) {
             },
         }
     }
+}
+
+/// Whether the general pasteboard would be read: [`may_read`] of its access
+/// behaviour, for the feature's status and the viewer's notice.
+pub fn reads_general_pasteboard() -> bool {
+    may_read(access_behaviour(&NSPasteboard::generalPasteboard()))
 }
 
 /// The general pasteboard's access behaviour, or `None` on a system older than

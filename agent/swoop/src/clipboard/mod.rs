@@ -67,7 +67,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::ipc::HostEventKind;
-use crate::session::{Feature, FeatureRequest, Outbox, SessionHandle};
+use crate::session::{Feature, FeatureRequest, FeatureStatus, Outbox, SessionHandle};
 use crate::signal::messages::channel::{
     Channel, ClipDirection, ClipFormat, Clipboard, CLIPBOARD_CHUNK_MAX_BYTES,
 };
@@ -115,6 +115,10 @@ impl Feature for ClipboardFeature {
         if let Some(mut listener) = self.listener.take() {
             listener.stop();
         }
+    }
+
+    fn status(&mut self, out: &mut FeatureStatus) {
+        out.clipboard = self.listener.as_ref().map(Listener::reads);
     }
 
     fn on_message(&mut self, channel: Channel, ctl: bool, payload: &[u8]) -> anyhow::Result<()> {

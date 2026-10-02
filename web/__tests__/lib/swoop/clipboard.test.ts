@@ -4,7 +4,7 @@
 
 import { TextDecoder, TextEncoder } from 'node:util';
 
-import { attach } from '@/lib/swoop/clipboard';
+import { attach, swoopClipboard } from '@/lib/swoop/clipboard';
 import type { SwoopSession } from '@/lib/swoop/features';
 import {
   encodeControlMessage,
@@ -51,6 +51,7 @@ interface Harness {
   /** one inbound `swoop-control` frame, as the data channel delivers it. */
   deliver(frame: ControlChannelMessage): void;
   detach(): void;
+  session: SwoopSession;
 }
 
 function harness(options: { ctl?: boolean; buffering?: boolean } = {}): Harness {
@@ -102,6 +103,7 @@ function harness(options: { ctl?: boolean; buffering?: boolean } = {}): Harness 
     order,
     deliver: (frame) => handler?.(encodeControlMessage(frame)),
     detach,
+    session,
   };
 }
 
@@ -482,5 +484,29 @@ describe('applying the host clipboard', () => {
     h.deliver({ t: 'idr' });
     await flush();
     expect(writes).toHaveLength(0);
+  });
+});
+
+describe('the host clipboard status', () => {
+  it('reads true until hello-host says the machine cannot read its own clipboard', () => {
+    const h = attached();
+    const store = swoopClipboard(h.session);
+    expect(store?.get()).toBe(true);
+    const changed = jest.fn();
+    store?.subscribe(changed);
+
+    h.deliver({
+      t: 'hello-host',
+      codec: 'h264',
+      width: 1920,
+      height: 1080,
+      displays: [],
+      streamerEpoch: 0,
+      protocolVersion: 1,
+      clipboardReads: false,
+    });
+
+    expect(store?.get()).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(1);
   });
 });

@@ -97,11 +97,19 @@ pub struct Listener {
     latest: Mailbox,
     #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     writes: Sender<Payload>,
+    /// Whether this machine's own clipboard is read at all.
+    reads: bool,
     #[cfg(any(windows, target_os = "macos"))]
     inner: Thread,
 }
 
 impl Listener {
+    /// Whether this machine's own clipboard is read, so what is copied here
+    /// reaches a viewer: the feature's status, and the viewer's notice.
+    pub fn reads(&self) -> bool {
+        self.reads
+    }
+
     /// The machine's clipboard if it has changed since the last call, already
     /// filtered: file lists, echoes of our own writes and anything over §5's
     /// caps never get this far.
@@ -146,8 +154,21 @@ pub fn start() -> anyhow::Result<Listener> {
     Ok(Listener {
         latest,
         writes,
+        reads: reads_own_clipboard(),
         inner,
     })
+}
+
+/// Always on Windows; on macOS only under the pasteboard access `mac` reads
+/// without raising the paste alert.
+#[cfg(windows)]
+fn reads_own_clipboard() -> bool {
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn reads_own_clipboard() -> bool {
+    super::mac::reads_general_pasteboard()
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -156,6 +177,7 @@ pub fn start() -> anyhow::Result<Listener> {
     Ok(Listener {
         latest: Arc::new(Mutex::new(None)),
         writes,
+        reads: false,
     })
 }
 
