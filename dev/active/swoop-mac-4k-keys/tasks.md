@@ -317,3 +317,10 @@ arms the key down until the next typed key's release, and `releaseAll` lets go o
 - *Changelog lines:* "the swoop keyboard menu hands the keyboard back to the picture after it sends a key, so
   'hold for the next key' takes your next key." and "macOS: the owlette app shows the machine's name as the
   dashboard does, without `.local`."
+- **The quality menu is two levels** (the owner's idea: "submenus for bandwidth, resolution, etc."). Four
+  rows, one per axis, each showing what is set, with the options a level down; "on reconnect" moved into the
+  codec submenu. The eight bandwidth steps had made the flat menu twenty rows. Checks: three jsdom tests (new
+  file), the swoop Playwright specs 6 of 6 locally with the menu asserted in `session.spec.ts`, and the
+  rendered menu read from that run's trace.
+- *Changelog line:* "the swoop quality menu shows one row per setting with its current value, and the options
+  open beside it."

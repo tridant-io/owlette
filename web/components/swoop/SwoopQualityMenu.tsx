@@ -2,6 +2,8 @@
 
 /**
  * the quality ceiling — bandwidth, resolution, frame rate and codec preference.
+ * one row per axis, showing what is chosen, with its options in a submenu: all
+ * four lists at once ran to twenty rows and hid what was set.
  *
  * a preset is a ceiling, not a setting: the host's governor still adapts below
  * it, so the menu never promises a rate the session will actually hold. that is
@@ -17,23 +19,26 @@
  * codec preference is not a control message at all. the host picks the codec by
  * reading the browser's **offer** (`session::pick_codec`), so the preference is
  * applied to the transceiver and takes effect at the next negotiation, which is
- * why its row says "on reconnect" rather than pretending to switch mid-session.
+ * why its submenu says "on reconnect" rather than pretending to switch mid-session.
  * the options come from `probeClientCaps`, never from a webcodecs probe: spike
  * 2.12 measured edge exposing no `video/H265` to `RTCRtpReceiver` on the same
  * box where it decodes hevc happily through webcodecs, and offering hevc there
  * would negotiate a stream it cannot show.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuLabel,
+  DropdownMenuPortal,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
@@ -108,6 +113,23 @@ function applyCodecPreference(session: SwoopSession, preference: CodecPreference
   }
 }
 
+/** one axis: its name, what is chosen, and the options a level down. */
+function Axis({ label, value, children }: { label: string; value: string; children: ReactNode }) {
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <span className="flex flex-1 items-center justify-between gap-3">
+          {label}
+          <span className="text-xs text-muted-foreground">{value}</span>
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuPortal>
+        <DropdownMenuSubContent>{children}</DropdownMenuSubContent>
+      </DropdownMenuPortal>
+    </DropdownMenuSub>
+  );
+}
+
 export interface SwoopQualityMenuProps {
   session: SwoopSession | null;
 }
@@ -164,57 +186,63 @@ export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel>bandwidth</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={String(ceiling.bandwidth)}
-          onValueChange={(value) => update({ bandwidth: Number(value) })}
+        <Axis
+          label="bandwidth"
+          value={BANDWIDTH.find((option) => option.value === ceiling.bandwidth)?.label ?? 'auto'}
         >
-          {BANDWIDTH.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={String(option.value)}>
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
+          <DropdownMenuRadioGroup
+            value={String(ceiling.bandwidth)}
+            onValueChange={(value) => update({ bandwidth: Number(value) })}
+          >
+            {BANDWIDTH.map((option) => (
+              <DropdownMenuRadioItem key={option.value} value={String(option.value)}>
+                {option.label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </Axis>
 
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>resolution</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={ceiling.resolution}
-          onValueChange={(value) => update({ resolution: value })}
-        >
-          {RESOLUTION.map((option) => (
-            <DropdownMenuRadioItem key={option} value={option}>
-              {option}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
+        <Axis label="resolution" value={ceiling.resolution}>
+          <DropdownMenuRadioGroup
+            value={ceiling.resolution}
+            onValueChange={(value) => update({ resolution: value })}
+          >
+            {RESOLUTION.map((option) => (
+              <DropdownMenuRadioItem key={option} value={option}>
+                {option}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </Axis>
 
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>frame rate</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={String(ceiling.fps)}
-          onValueChange={(value) => update({ fps: Number(value) })}
-        >
-          {FRAME_RATE.map((option) => (
-            <DropdownMenuRadioItem key={option} value={String(option)}>
-              {option} fps
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
+        <Axis label="frame rate" value={`${ceiling.fps} fps`}>
+          <DropdownMenuRadioGroup
+            value={String(ceiling.fps)}
+            onValueChange={(value) => update({ fps: Number(value) })}
+          >
+            {FRAME_RATE.map((option) => (
+              <DropdownMenuRadioItem key={option} value={String(option)}>
+                {option} fps
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </Axis>
 
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>codec — on reconnect</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={ceiling.codec}
-          onValueChange={(value) => update({ codec: value as CodecPreference })}
-        >
-          <DropdownMenuRadioItem value="auto">auto</DropdownMenuRadioItem>
-          {offerable.map((option) => (
-            <DropdownMenuRadioItem key={option} value={option}>
-              {option}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
+        <Axis label="codec" value={ceiling.codec}>
+          <DropdownMenuRadioGroup
+            value={ceiling.codec}
+            onValueChange={(value) => update({ codec: value as CodecPreference })}
+          >
+            <DropdownMenuRadioItem value="auto">auto</DropdownMenuRadioItem>
+            {offerable.map((option) => (
+              <DropdownMenuRadioItem key={option} value={option}>
+                {option}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+          <DropdownMenuSeparator />
+          <p className="px-2 py-1.5 text-xs text-muted-foreground">takes effect on reconnect.</p>
+        </Axis>
 
         <DropdownMenuSeparator />
         <p className="px-2 py-1.5 text-xs text-muted-foreground">
