@@ -155,9 +155,12 @@ Settings' window, so the pane it lands on is the owner's to confirm).
   alert at the person who clicked) and then opens the pane; the copy says "allow the paste alert, then set
   owlette to allow under paste from other apps". From ssh the flag answers `{"pasteboardAccess":"allow"}`, since
   an ssh child is exempt; from the app it is the app's own setting. Checks green again on both platforms.
-- **Human half owed:** on the rig, the row should show; click its button, allow the alert, set owlette to
-  *allow* in the pane that opens, and the row clears within five seconds without a relaunch. Then a Mac copy
-  reaches the PC.
+- **Measured on the rig, 2026-10-02 (answers the human half):** with the 3a40f417 build the streamer, started
+  by the app for a real session, logged "the pasteboard is read on a change, its access behaviour is always
+  allow". So this Mac shares its clipboard already, the row rightly does not show (checked over accessibility:
+  the app's window lists no notice), and nothing is owed at the Mac. M1's "ctrl-c-v not working" was Task 3.1's
+  stale push alone. The row and its button stay for a Mac whose setting is *ask* or *deny*; they are untested
+  against a live alert, since no such Mac is on hand.
 - *Changelog line:* "macOS: the owlette app says when clipboard sharing is off and walks you to the setting."
 
 The Wave 3 build (`f0519394`) was installed on the rig at 22:53 on 2026-10-01, notarized: the profile was back.
