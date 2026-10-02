@@ -211,6 +211,12 @@ showed no delay-rise cut at all. So the menu gains 80 and 100 Mbps, and a 4K-cla
 `LARGE_SOURCE_AUTO_BPS`, 80 Mbps (the budget test's direct-path top moved with the menu). Windows 398, macOS
 423. The owner's next drag test says whether 80 is enough; 100 is one click away in the menu.
 
+**At 80 Mbps (build `6c3a16c8`, installed 09:25): the owner's word is "looks great."** The log: target 80000 kbps
+at the ceiling for most of the run, 19 to 54 fps sent (the screen's own rate of change, rung 60fps/native
+throughout), up to 12 Mbps on the wire over a ten-second window, a few cuts in the busiest spells (windows with
+three or more drops) that climbed back to 80000 within half a minute. That answers 5.1's picture items: full
+Retina, 60 fps where the screen moves, no smear the owner could see.
+
 Ctrl shortcuts: "ctrl acts as cmd" has been the default on dev.owlette.app all along, so Ctrl+C, Ctrl+V,
 Ctrl+Z and Ctrl+A on the Mac are testable there now; Win+C outside fullscreen opens Copilot because Windows
 owns the key until keyboard lock, which rides fullscreen.
