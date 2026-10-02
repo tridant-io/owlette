@@ -510,3 +510,43 @@ describe('the host clipboard status', () => {
     expect(changed).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('a copy the browser refuses', () => {
+  it('is reported as held until a gesture takes it', async () => {
+    let allowed = false;
+    withClipboard({
+      writeText: () => (allowed ? Promise.resolve() : Promise.reject(new DOMException('denied', 'NotAllowedError'))),
+    });
+    const h = attached();
+    const store = swoopClipboard(h.session);
+    const changed = jest.fn();
+    store?.subscribe(changed);
+    expect(store?.held()).toBe(false);
+
+    h.deliver(toHost('copied on the machine'));
+    await flush();
+    expect(store?.held()).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(1);
+
+    // a second refusal is the same state, and says nothing new.
+    h.stage.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await flush();
+    expect(store?.held()).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(1);
+
+    allowed = true;
+    h.stage.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await flush();
+    expect(store?.held()).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
+  it('is not reported by a browser that has no clipboard to write to', async () => {
+    withClipboard(undefined as unknown as Partial<Clipboard>);
+    const h = attached();
+
+    h.deliver(toHost('copied on the machine'));
+    await flush();
+    expect(swoopClipboard(h.session)?.held()).toBe(false);
+  });
+});

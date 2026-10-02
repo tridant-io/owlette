@@ -277,3 +277,25 @@ arms the key down until the next typed key's release, and `releaseAll` lets go o
   and tsc clean.
 - *Changelog line:* "the swoop keyboard menu names its two modifier settings, shows what each key does on the
   machine, and can hold the windows key or cmd for your next keystroke outside fullscreen."
+
+### 2026-10-02, the branch is on dev, and the browser's own clipboard question
+
+- **PR #256 is merged into dev** on the owner's word ("can't you merge it?"): merge `a34b35e6`, 24 of 24 checks
+  on the head `367d294e`, CodeQL 388/389/390 dismissed first. dev.owlette.app served `a34b35e6` at 18:40 UTC
+  (`/api/health`). The viewer half of this plan (shortcuts match, the keyboard menu, the tab title, the stale
+  clip guard) was on the branch only until then, which is why ctrl + c did nothing for the owner on dev.
+- **The owner met Chromium's clipboard question** ("see text and images copied to the clipboard") in Brave and
+  asked whether the docs say so and whether the viewer can speak up when it is not allowed. Neither was true.
+  The cause: the viewer writes a copy from the machine the moment it lands, and a write with no user
+  activation has Chromium ask for the site's clipboard permission. A block or a closed question left the copy
+  waiting for the next gesture with nothing said. Nothing in the web app reads the clipboard
+  (`navigator.clipboard.read` has no caller); the question comes from the write.
+- **Fix:** the clipboard store reports `held()`, true while the browser refused the newest copy and false once a
+  gesture takes it; a browser with no clipboard api is "unsupported", not a refusal. The session bar says "your
+  browser held back the machine's copy: click the picture to take it, or allow the clipboard for this site".
+  `web/content/docs/dashboard/swoop.mdx` has the paragraph, and its keyboard bullet now describes the two
+  settings and the hold key in place of the checkbox that Wave 4 removed.
+- Checks: jest 648 on the swoop suites and the toolbar (three new tests), eslint and tsc clean. No e2e: the
+  emulator has no streamer, so nothing there can send a copy from a machine.
+- *Changelog line:* "swoop says when your browser held back a copy from the machine, and the docs explain the
+  browser's clipboard question."

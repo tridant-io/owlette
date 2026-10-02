@@ -12,10 +12,18 @@ import React from 'react';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
+import { swoopClipboard } from '@/lib/swoop/clipboard';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
 
-afterEach(cleanup);
+// the bar reads the clipboard store off a live session, which these tests do
+// not have: null is what it gets before attach, and one test hands it a store.
+jest.mock('@/lib/swoop/clipboard', () => ({ swoopClipboard: jest.fn(() => null) }));
+
+afterEach(() => {
+  cleanup();
+  jest.mocked(swoopClipboard).mockReturnValue(null);
+});
 
 function renderBar(state: SwoopSessionState) {
   const onEnd = jest.fn();
@@ -96,6 +104,17 @@ describe('SwoopToolbar', () => {
     unmount();
     renderBar('error');
     expect(screen.getByTestId('session-badge')).toHaveTextContent('disconnected');
+  });
+
+  it('says so when the browser held back a copy from the machine, and only then', () => {
+    renderBar('connected');
+    expect(screen.queryByTestId('clipboard-held-notice')).toBeNull();
+    cleanup();
+
+    jest.mocked(swoopClipboard).mockReturnValue({ subscribe: () => () => {}, get: () => true, held: () => true });
+    renderBar('connected');
+    expect(screen.getByTestId('clipboard-held-notice')).toHaveTextContent(/allow the clipboard for this site/);
+    expect(screen.queryByTestId('clipboard-notice')).toBeNull();
   });
 
   it('badges a poor connection from the measured round trip, and only then', () => {
