@@ -5,7 +5,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all cursor-pointer disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all cursor-pointer disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring/30 focus-visible:ring-ring/20 focus-visible:ring-1 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
   {
     variants: {
       // `btn-sweep` sits on each variant rather than in the base string, because
@@ -21,7 +21,7 @@ const buttonVariants = cva(
         // it and muddy the sweep. Text/border hover stays ordinary utilities.
         default: "btn-sweep bg-primary text-primary-foreground",
         destructive:
-          "btn-sweep bg-destructive text-white dark:bg-destructive/60",
+          "btn-sweep bg-destructive text-white focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         // Do NOT reinstate `dark:border-input` here: --input (L≈0.25) against a
         // --card surface (L≈0.23) is a 0.02 delta, i.e. no visible edge, and
         // the control read as a stray background. Inheriting the real --border
