@@ -1,6 +1,6 @@
 # Tasks: swoop on macOS, 4K at 60 and the keyboard model
 
-Progress: 3/11. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
+Progress: 4/11. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
 apply (the four Windows commands, the macOS commands, nothing pushed to dev or main). Mac worktrees
 `~/src/owlette-swoop-mac-21` (streamer) and `-23` (desktop) on the rig; `~/src/mac-build-install.sh` builds,
 notarizes and installs.
@@ -28,7 +28,7 @@ notarizes and installs.
 
 ## Wave 3: the clipboard
 
-- [ ] **Task 3.1: Never re-push a clip the host already has** `[agent]`
+- [x] **Task 3.1: Never re-push a clip the host already has** `[agent]`
   - Files: `web/lib/swoop/clipboard.ts`, its test
   - Do: Remember the last payload pushed and the last payload received from the host (a hash); on a paste keystroke, skip the push when the PC clipboard matches either, and send the keystroke alone.
   - Done when: vitest covers copy-on-host then paste-on-host (no push), copy-on-PC then paste (push), and a host clip followed by paste (no push); `npm run lint` clean on the file.
@@ -113,3 +113,16 @@ passed; Windows clippy clean, 396 passed.
   20.
 - Checks: Windows clippy clean, 397 passed; macOS clippy clean, 422 passed.
 - *Changelog line:* "swoop starts a 4K-class machine at 50 Mbps; the quality menu still sets any rate."
+
+The Wave 2 build (`9b606b71`) was installed on the rig at 22:13 on 2026-10-01 signed but **not notarized**: the
+notary profile had vanished from the Mac's keychain again (`BUILD-EXIT=69`), as it did on 2026-09-28 and
+2026-09-30. The owner re-creates it with `xcrun notarytool store-credentials owlette-notary`.
+
+### 2026-10-01, Wave 3
+
+**Task 3.1: done** (`bf9f9547`). `clipboard.ts` remembers the last clip pushed and the last one the host sent;
+a paste whose clip matches either (same format, same bytes) sends the keystroke alone. Jest: 16 passed in
+`clipboard.test.ts`, three of them new (a host's clip is not pushed back; the same clip is not pushed twice;
+a different one is); eslint clean on both files.
+- *Changelog line:* "swoop no longer pushes your clipboard to the machine before a paste when the machine already
+  has it, so a copy made on a Mac is pasted as copied."
