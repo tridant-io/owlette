@@ -299,3 +299,21 @@ arms the key down until the next typed key's release, and `releaseAll` lets go o
   emulator has no streamer, so nothing there can send a copy from a machine.
 - *Changelog line:* "swoop says when your browser held back a copy from the machine, and the docs explain the
   browser's clipboard question."
+
+### 2026-10-02, the owner's first session on the merged viewer
+
+- **The owner's word on dev after the reload: "amazing - it works now!"** That is ctrl + c / ctrl + v on the Mac
+  and the clipboard both ways, from dev.owlette.app at `a34b35e6`. The Playwright run for the merge on dev
+  passed.
+- **"hold cmd for the next key" did not work.** The stage gets keys only while it holds focus, and a closing
+  menu hands focus to its own button, so the next key went to the button and cmd stayed down on the machine.
+  Fix: after a sent key the menu's `onCloseAutoFocus` puts focus on the stage; a menu closed with nothing sent
+  still returns to its button. With focus on the stage, the release of the enter that chose the item would
+  have ended the hold at once, so the hold now ends only on the release that follows a key pressed after it
+  (`armedKeyDown` in `input.ts`). Three tests failed first, then passed: jest 700 on the swoop suites.
+- **The Mac app's menu said `TEC-MBA.local`** while the dashboard says `TEC-MBA`: the agent has taken its
+  identity without the suffix since 4.0.6 and the app still showed the kernel's name. `tray.rs` `hostname()`
+  now applies the same rule (`identity_name`), with a test. It reaches the Mac with the next install.
+- *Changelog lines:* "the swoop keyboard menu hands the keyboard back to the picture after it sends a key, so
+  'hold for the next key' takes your next key." and "macOS: the owlette app shows the machine's name as the
+  dashboard does, without `.local`."

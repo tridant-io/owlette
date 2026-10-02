@@ -1148,17 +1148,19 @@ fn agent_version(install_root: &Path) -> String {
 
 /// The machine's name as the fleet records it: `COMPUTERNAME` on Windows;
 /// the kernel's hostname on the other two, the same call the agent's
-/// `socket.gethostname()` makes, so the tray and the machine card agree
-/// (`TEC-MBA.local`). A launchd or systemd child has no `HOSTNAME` in its
-/// environment and macOS has no `/etc/hostname`, so those are fallbacks only.
+/// `socket.gethostname()` makes, with the agent's own rule for a Mac applied
+/// to it, so the tray and the machine card agree (`TEC-MBA`). A launchd or
+/// systemd child has no `HOSTNAME` in its environment and macOS has no
+/// `/etc/hostname`, so those are fallbacks only.
 pub(crate) fn hostname() -> String {
   let from_env = if cfg!(windows) { "COMPUTERNAME" } else { "HOSTNAME" };
+  let mac = cfg!(target_os = "macos");
   #[cfg(unix)]
   if let Some(name) = unix_hostname() {
-    return name;
+    return identity_name(&name, mac).to_string();
   }
   if let Some(name) = std::env::var(from_env).ok().filter(|name| !name.trim().is_empty()) {
-    return name.trim().to_string();
+    return identity_name(name.trim(), mac).to_string();
   }
   if !cfg!(windows) {
     if let Some(name) = fs::read_to_string("/etc/hostname").ok().filter(|name| !name.trim().is_empty()) {
@@ -1166,6 +1168,18 @@ pub(crate) fn hostname() -> String {
     }
   }
   "unknown".to_string()
+}
+
+/// macOS names a machine `Name.local`, and the agent takes its identity
+/// without the suffix (`shared_utils._identity_hostname`): the api's machine id
+/// rule has no dot. The menu shows the name the dashboard shows.
+fn identity_name(name: &str, mac: bool) -> &str {
+  const SUFFIX: &str = ".local";
+  let cut = name.len().saturating_sub(SUFFIX.len());
+  match name.get(cut..) {
+    Some(tail) if mac && cut > 0 && tail.eq_ignore_ascii_case(SUFFIX) => &name[..cut],
+    _ => name,
+  }
 }
 
 #[cfg(unix)]
@@ -1353,7 +1367,18 @@ mod tests {
     std::env::remove_var("HOSTNAME");
     let name = hostname();
     assert_ne!(name, "unknown");
-    assert_eq!(Some(name.as_str()), unix_hostname().as_deref());
+    let kernel = unix_hostname().expect("the kernel has a hostname");
+    assert_eq!(name, identity_name(&kernel, cfg!(target_os = "macos")));
+  }
+
+  /// The agent's rule, so the menu and the machine card show one name.
+  #[test]
+  fn a_mac_is_named_without_its_local_suffix() {
+    assert_eq!(identity_name("TEC-MBA.local", true), "TEC-MBA");
+    assert_eq!(identity_name("TEC-MBA.LOCAL", true), "TEC-MBA");
+    assert_eq!(identity_name("TEC-MBA", true), "TEC-MBA");
+    assert_eq!(identity_name(".local", true), ".local");
+    assert_eq!(identity_name("kiosk.local", false), "kiosk.local");
   }
 
   fn fresh(value: Value) -> StatusDoc {
