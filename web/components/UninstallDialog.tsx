@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Trash2, Loader2, Package, Search, X } from 'lucide-react';
 import { toast } from '@/lib/toast';
-import { ITEM_FOCUS_RING } from '@/lib/utils';
 import { useMachines } from '@/hooks/useFirestore';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -379,7 +378,7 @@ export default function UninstallDialog({
                                 type="button"
                                 aria-pressed={isSelected}
                                 onClick={() => setSelectedSoftware(isSelected ? '' : softwareKey)}
-                                className={`block w-full text-left p-3 cursor-pointer transition-colors overflow-hidden relative ${ITEM_FOCUS_RING} ${
+                                className={`block w-full text-left p-3 cursor-pointer transition-colors overflow-hidden relative ${
                                   isSelected
                                     ? 'bg-primary/10 border-l-4 border-l-primary'
                                     : 'hover:bg-accent border-l-4 border-l-transparent'

@@ -25,7 +25,6 @@ import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { ITEM_FOCUS_RING } from '@/lib/utils';
 import { resolveMemoryTotalGb } from '@/lib/machineMemory';
 import { toast } from '@/lib/toast';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
@@ -121,7 +120,7 @@ function TileButton({ label }: { label: string }) {
     <button
       type="button"
       aria-label={label}
-      className={`absolute inset-0 z-[1] cursor-pointer ${ITEM_FOCUS_RING}`}
+      className="absolute inset-0 z-[1] cursor-pointer"
     />
   );
 }
@@ -549,7 +548,7 @@ const MachineCard = memo(function MachineCard({
           )}
           <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
         <CollapsibleTrigger asChild>
-          <button type="button" aria-label="collapse metrics" className={`block w-full border-t border-border/50 relative cursor-pointer group ${ITEM_FOCUS_RING}`}>
+          <button type="button" aria-label="collapse metrics" className="block w-full border-t border-border/50 relative cursor-pointer group">
             <span className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
             <span className="relative flex items-center px-4 py-1.5 select-none">
               <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
@@ -809,7 +808,7 @@ const MachineCard = memo(function MachineCard({
         )}
         <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
           <CollapsibleTrigger asChild>
-            <button type="button" aria-label="collapse displays" className={`block w-full border-t border-border/50 relative cursor-pointer group ${ITEM_FOCUS_RING}`}>
+            <button type="button" aria-label="collapse displays" className="block w-full border-t border-border/50 relative cursor-pointer group">
               <span className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
               <span className="relative flex items-center px-4 py-1.5 select-none">
                 <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
@@ -897,7 +896,7 @@ const MachineCard = memo(function MachineCard({
           )}
           <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
             <CollapsibleTrigger asChild>
-              <button type="button" aria-label="collapse processes" className={`block w-full border-t border-border/50 relative cursor-pointer group ${ITEM_FOCUS_RING}`}>
+              <button type="button" aria-label="collapse processes" className="block w-full border-t border-border/50 relative cursor-pointer group">
                 <span className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                 <span className="relative flex items-center px-4 py-2 select-none">
                   <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />

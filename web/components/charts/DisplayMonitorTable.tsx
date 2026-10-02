@@ -17,7 +17,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { cn, ITEM_FOCUS_RING } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 
 type MonitorUpdate = Partial<MonitorInfo>;
 
@@ -291,7 +291,6 @@ function DisplayMonitorTableImpl({
                 className={cn(
                   'border-b border-border last:border-b-0 transition-colors',
                   onSelect && !canEdit && 'cursor-pointer',
-                  onSelect && ITEM_FOCUS_RING,
                   isSelected
                     ? 'bg-accent/30'
                     : isHovered && 'bg-accent/20',

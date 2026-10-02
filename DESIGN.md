@@ -268,7 +268,7 @@ corners are small and engineered. the base radius is 6px (`--radius: 0.375rem`).
 quiet and precise. the fill is flat at rest and wakes up with a directional sweep.
 - **Shape:** gently squared (4px). default height 36px, small 32px, large 40px. icon buttons are square at the same heights.
 - **Primary:** signal cyan fill, cyan-ink text, control type.
-- **Hover / Focus:** `.btn-sweep` draws a translucent tint across the button from left to right over 200ms (`cubic-bezier(0.4, 0, 0.2, 1)`), and on exit the tint keeps travelling right. the tint is a scrim, not a colour: blue (`oklch(0.62 0.16 250)` at 26%) in dark mode, so it brightens any base without fighting it. keyboard focus draws the global 2px signal-cyan outline (see Keyboard Focus). disabled sits at 50% opacity.
+- **Hover / Focus:** `.btn-sweep` draws a translucent tint across the button from left to right over 200ms (`cubic-bezier(0.4, 0, 0.2, 1)`), and on exit the tint keeps travelling right. the tint is a scrim, not a colour: blue (`oklch(0.62 0.16 250)` at 26%) in dark mode, so it brightens any base without fighting it. keyboard focus adds a faint ring on top of the sweep (see Keyboard Focus). disabled sits at 50% opacity.
 - **Outline:** input-navy fill with a hairline-blue border. never revert it to the old `--input` border, which is invisible on a card.
 - **Secondary / Ghost:** control-navy fill, or no fill. ghost picks up only the sweep tint.
 - **Destructive:** alarm coral at 60% with white text. `ghost-destructive` is a red glyph with no fill, for icon-only deletes.
@@ -276,9 +276,9 @@ quiet and precise. the fill is flat at rest and wakes up with a directional swee
 - **Icon-only:** always `IconButton` (`web/components/ui/icon-button.tsx`). its `label` is required and becomes both the accessible name and the tooltip, and it defaults to `type="button"` so it never submits a form by accident.
 
 ### Keyboard Focus
-- **Default:** every focusable element draws a 2px `--ring` outline at a 2px offset (8:1 or better on every dark surface). full-width rows and tiles inside a card draw the same ring inset (`ITEM_FOCUS_RING` in `web/lib/utils.ts`), where an outer outline would be clipped. menu and listbox rows show focus with their accent highlight fill alone, with no ring. inputs keep their 3px ring.
+- **Default:** keyboard focus is deliberately quiet: a 1px outline at 30% alpha (`oklch(0.5 0.15 250 / 0.3)`) at a 2px offset, buttons add a faint 1px `--ring` at 20% plus the sweep fill, inputs keep their 3px ring at 50%, and menu and listbox rows use their highlight fill. there is no strong focus ring anywhere.
 
-**The Visible Focus Rule.** never ship `outline-none` without a replacement indicator that clears 3:1 against its surface. the old 1px outline at 30% measured 1.3:1 and was invisible in practice. menu and listbox rows are the exception: their highlight fill is the indicator (owner call, 2026-10-02, after an inset ring there read as a box drawn over the menu).
+**The Quiet Focus Rule.** focus stays subtle: no full-strength or inset cyan ring on any surface. owner call on 2026-10-02, after a 2px ring added for wcag 1.4.11 read as a box drawn over the ui. the quiet outline measures about 1.3:1, under that criterion's 3:1, and the trade is deliberate. reopen it only with the owner.
 
 ### Links
 - **Highlighter sweep** (`.hl-link`): links never underline. on hover a selection-style cyan fill sweeps in from left to right, and each glyph flips to navy as the edge crosses it. `.hl-link-muted` (footer) and `.hl-link-plain` (body-text rest colour) change only the palette.
@@ -329,5 +329,5 @@ the signature loaders: charts plot a miniature line graph on a loop (2.4s), and 
 - **Don't** place two near-identical flat fills against a shared hard edge.
 - **Don't** add a second interactive accent or another icon library. lucide-react is the only icon set.
 - **Don't** write title-case or sentence-case UI copy.
-- **Don't** remove a focus outline without drawing a visible replacement.
+- **Don't** add a strong or inset focus ring. the owner rejected it on sight (2026-10-02).
 - **Don't** add new uses of the light theme's stock neutral palette (near-black primary, grey surfaces) as if it were the brand. it is shadcn scaffolding until the light theme is designed.
