@@ -6,13 +6,10 @@
 //!
 //! **Position.** The location of a `CGEventCreate(NULL)` event is where the
 //! pointer is, in global points. On the captured display it becomes a pixel of
-//! the picture, which is the display's size in points
-//! (`platform::macos::picture_size`), counted from its top-left pixel as the
-//! session's normalisation over the picture expects, and it is visible
+//! that display (decision 13: `desktop_rect` is pixels), counted from its
+//! top-left pixel as the session's normalisation expects, and it is visible
 //! whenever it is there. On any other display the last pixel it had here is
 //! reported invisible, so the overlay hides without sliding along an edge.
-//! The display's two rects are read again with every shape read, since a mode
-//! change moves its pixels under the same id.
 //!
 //! **Not `CGCursorIsVisible()`.** macOS hides the pointer while someone types
 //! until the mouse moves, and only a physical mouse clears that: measured on
@@ -21,13 +18,12 @@
 //! `CGWarpMouseCursorPosition` and `CGPostMouseEvent` all left it hidden. A
 //! viewer that typed would lose the pointer for the rest of the session while
 //! its moves and clicks still landed, so the viewer draws it as other remote
-//! tools do. The person at the Mac sees it again once they touch their mouse.
+//! tools do. The person at the Mac sees it again once they touch their mouse. The display's two rects are read again with every shape read,
+//! since a mode change moves its pixels under the same id.
 //!
 //! **Shape.** At most every 33 ms, `NSCursor.currentSystemCursor`'s image is
-//! drawn at one pixel per point into a 32-bit BGRA bitmap, with the hot spot
-//! in the same pixels: the viewer sizes a shape against the picture, and a Mac
-//! streams at its size in points by default (`session::native_height`). Drawn
-//! at a 2x panel's scale it showed twice the size at gate M1. CoreGraphics draws only into premultiplied bitmaps, so
+//! drawn at the display's scale into a 32-bit BGRA bitmap, with the hot spot
+//! in the same pixels. CoreGraphics draws only into premultiplied bitmaps, so
 //! the alpha is made straight before the bytes leave: that is the `Color`
 //! shape [`super::CursorTracker::on_shape`] and [`super::decode`] already take
 //! from Desktop Duplication. The call answers a new object every time, so the
@@ -44,8 +40,8 @@
 //!
 //! Measured on the rig (macOS 26.6, a 2x panel), from a test thread of a
 //! process started over ssh, with the screen locked: the call answers the
-//! arrow, 28x40 points with representations at 1x, 2x, 5x and 10x, drawn then
-//! at the panel's 2x as 56x80 pixels with the hot spot at (10, 10). In a release build a shape
+//! arrow, 28x40 points with representations at 1x, 2x, 5x and 10x, drawn here
+//! at 56x80 pixels with the hot spot at (10, 10). In a release build a shape
 //! read costs 0.14 ms at p50 (0.3 ms at p95), 0.12 ms of it the call itself; a
 //! sample without one costs 15 µs at p50 even in a debug build.
 //!
@@ -78,9 +74,9 @@ pub use appkit::CursorSampler;
 /// changed.
 const SHAPE_PERIOD_TICKS: i64 = 33_000_000;
 
-/// A global point as a cell of the grid `pixels` laid over the display whose
-/// point rect (`CGDisplayBounds`: x, y, width, height) is `points`, counted
-/// from the display's top-left cell. `None` off that display.
+/// A global point as a pixel of the display whose pixel rect is `pixels` and
+/// whose point rect (`CGDisplayBounds`: x, y, width, height) is `points`,
+/// counted from the display's top-left pixel. `None` off that display.
 ///
 /// The inverse of the injector's pixel-to-point step in `input::mac`, floored
 /// rather than rounded: a pixel is the cell a point falls in, so the point
@@ -175,16 +171,14 @@ mod appkit {
         PointerPosition, PointerSample, PointerSampler, ShapeInfo, ShapeKind, MAX_SHAPE_DIM,
     };
     use crate::platform::clock;
-    use crate::platform::macos::{display_for_pixel_rect, display_point_rect, picture_size};
+    use crate::platform::macos::{display_for_pixel_rect, display_pixel_rect, display_point_rect};
 
     /// The pointer over one captured display.
     pub struct CursorSampler {
         /// `None` when no attached display had the output's pixel rect; every
         /// position is then off the display, so invisible.
         display: Option<u32>,
-        /// The picture's grid: the display's size in points, as capture
-        /// opens it.
-        picture: Rect,
+        pixels: Rect,
         /// `CGDisplayBounds`: x, y, width, height in global points.
         points: (f64, f64, f64, f64),
         shapes: bool,
@@ -208,7 +202,7 @@ mod appkit {
             }
             let points = display.map_or((0.0, 0.0, 0.0, 0.0), display_point_rect);
             let mut bitmap = Vec::new();
-            let shapes = read_shape(SHAPE_SCALE, &mut bitmap).is_some();
+            let shapes = read_shape(scale(&output.desktop_rect, points), &mut bitmap).is_some();
             if shapes {
                 ::log::info!("swoop: the pointer is drawn by the viewer from the system cursor");
             } else {
@@ -218,7 +212,7 @@ mod appkit {
             }
             Self {
                 display,
-                picture: picture_grid(points),
+                pixels: output.desktop_rect,
                 points,
                 shapes,
                 gate: ShapeGate::new(),
@@ -238,7 +232,7 @@ mod appkit {
         fn position(&mut self) -> Option<PointerPosition> {
             let event = CGEvent::new(None)?;
             let at = CGEvent::location(Some(&*event));
-            Some(match local_pixel((at.x, at.y), &self.picture, self.points) {
+            Some(match local_pixel((at.x, at.y), &self.pixels, self.points) {
                 Some((x, y)) => {
                     self.last = (x, y);
                     PointerPosition {
@@ -256,22 +250,11 @@ mod appkit {
         }
 
         fn shape(&mut self) -> Option<(ShapeInfo, &[u8])> {
-            let info = read_shape(SHAPE_SCALE, &mut self.bitmap)?;
+            let info = read_shape(scale(&self.pixels, self.points), &mut self.bitmap)?;
             let bytes = &self.bitmap[..];
             self.gate
                 .changed(shape_hash(&info, bytes))
                 .then_some((info, bytes))
-        }
-    }
-
-    /// The picture's size as a rect at the origin, for `local_pixel`.
-    fn picture_grid(points: (f64, f64, f64, f64)) -> Rect {
-        let (width, height) = picture_size(points);
-        Rect {
-            left: 0,
-            top: 0,
-            right: width as i32,
-            bottom: height as i32,
         }
     }
 
@@ -281,8 +264,8 @@ mod appkit {
             let due = self.gate.due(now);
             if due {
                 if let Some(id) = self.display {
+                    self.pixels = display_pixel_rect(id);
                     self.points = display_point_rect(id);
-                    self.picture = picture_grid(self.points);
                 }
             }
             let position = self.position();
@@ -299,8 +282,15 @@ mod appkit {
         }
     }
 
-    /// Pixels per point a shape is drawn at (the module doc's **Shape**).
-    const SHAPE_SCALE: f64 = 1.0;
+    /// Pixels per point, from the display's two rects; 1 for a display that
+    /// has gone.
+    fn scale(pixels: &Rect, points: (f64, f64, f64, f64)) -> f64 {
+        if points.2 > 0.0 && pixels.width() > 0 {
+            f64::from(pixels.width()) / points.2
+        } else {
+            1.0
+        }
+    }
 
     /// Draw the system cursor at `scale` into `out` as straight BGRA, and
     /// describe it. `None` when the system answers no cursor, or an image
@@ -412,16 +402,6 @@ mod tests {
         };
         assert_eq!(local_pixel((0.0, 0.0), &gone, (0.0, 0.0, 0.0, 0.0)), None);
         assert_eq!(local_pixel((-720.0, 250.0), &gone, POINTS), None);
-
-        // On the picture's grid, the display's size in points, a point is the
-        // cell it falls in: the middle of a 1440x900 display is (720, 450).
-        let picture = Rect {
-            left: 0,
-            top: 0,
-            right: 1440,
-            bottom: 900,
-        };
-        assert_eq!(local_pixel((-720.0, 250.0), &picture, POINTS), Some((720, 450)));
     }
 
     #[test]

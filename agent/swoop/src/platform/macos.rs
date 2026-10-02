@@ -285,15 +285,6 @@ pub fn display_point_rect(id: u32) -> (f64, f64, f64, f64) {
     (bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height)
 }
 
-/// The picture a display is captured at: its size in points, each side made
-/// even for 4:2:0 (`capture::sck` says why it is not the pixel rect). The
-/// cursor sampler reports positions on this grid, since a `cpos` is normalised
-/// over the picture.
-pub fn picture_size(points: (f64, f64, f64, f64)) -> (u32, u32) {
-    let even = |side: f64| (side.max(0.0) as u32) & !1;
-    (even(points.2), even(points.3))
-}
-
 /// The display's point origin times its scale, and its pixel size.
 pub fn display_pixel_rect(id: u32) -> Rect {
     let (x, y, width, height) = display_point_rect(id);

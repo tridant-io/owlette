@@ -86,7 +86,6 @@ use objc2_screen_capture_kit::{
 use super::{FrameRects, OutputInfo, RebuildSignal, Rect, Source};
 use crate::cursor::{PointerSample, PointerSampler};
 use crate::displays::mac as displays;
-use crate::platform::macos::{display_point_rect, picture_size};
 use crate::gpu::Frame;
 use crate::platform::clock;
 use crate::session::StoppedAtHost;
@@ -269,7 +268,7 @@ impl ScreenCapture {
             bail!("screen recording is not granted to this process");
         }
         let output = displays::output(self.display);
-        let size = picture_size(display_point_rect(self.display));
+        let size = pixel_size(&output.desktop_rect);
         if size.0 == 0 || size.1 == 0 {
             bail!("{} is not attached", output.device_name);
         }
@@ -603,14 +602,7 @@ impl<T> Newest<T> {
     }
 }
 
-/// The capture configuration: the display's size in points
-/// (`platform::macos::picture_size`), NV12 video range, BT.709. At gate M1 a
-/// full Retina picture (3420x2214) encoded in 24 ms at p50 and 37 ms at p95, so
-/// a session that waits on each frame ran at 25-40 fps and smeared on every
-/// window move; shrunk to its size in points after capture it stopped smearing
-/// but still dropped frames. Captured at that size, ScreenCaptureKit scales in
-/// the compositor and nothing here pays for it. Input still maps through the
-/// pixel rect; only the picture is smaller.
+/// The capture configuration: native pixels, NV12 video range, BT.709.
 fn configuration(size: (u32, u32), cursor_in_frame: bool) -> Retained<SCStreamConfiguration> {
     // SAFETY: plain setters on a fresh configuration; the two colour names
     // are the frameworks' own constants.
@@ -729,6 +721,10 @@ fn ticks_from(time: CMTime, hz: i64) -> Option<i64> {
     i64::try_from(ticks).ok()
 }
 
+/// The size a stream is opened at: the display's pixel rect (decision 13).
+fn pixel_size(rect: &Rect) -> (u32, u32) {
+    (rect.width() as u32, rect.height() as u32)
+}
 
 fn whole_frame(size: (u32, u32)) -> FrameRects {
     FrameRects {
@@ -793,13 +789,18 @@ mod tests {
         );
     }
 
-    /// A panel at a negative origin is opened at its size in points, each
-    /// side even, and its one dirty rect is the whole of that picture.
+    /// A 2x panel at a negative origin is opened at its pixel grid, and its
+    /// one dirty rect is the whole of that grid.
     #[test]
-    fn a_stream_is_opened_at_the_size_in_points_and_reports_the_whole_frame() {
-        let size = picture_size((-1512.0, -120.0, 1512.0, 982.0));
-        assert_eq!(size, (1512, 982));
-        assert_eq!(picture_size((0.0, 0.0, 1710.0, 1107.0)), (1710, 1106));
+    fn a_stream_is_opened_at_the_pixel_rect_and_reports_the_whole_frame() {
+        let rect = Rect {
+            left: -3024,
+            top: -240,
+            right: 0,
+            bottom: 1724,
+        };
+        let size = pixel_size(&rect);
+        assert_eq!(size, (3024, 1964));
         let rects = whole_frame(size);
         assert!(rects.moves.is_empty());
         assert_eq!(
@@ -807,8 +808,8 @@ mod tests {
             vec![Rect {
                 left: 0,
                 top: 0,
-                right: 1512,
-                bottom: 982
+                right: 3024,
+                bottom: 1964
             }]
         );
     }
@@ -987,12 +988,10 @@ mod tests {
             let (frame, calls) = next_picture(&mut source, Duration::from_secs(5));
             let mut gaps = vec![gap(&frame)];
             assert_eq!((frame.width, frame.height), source.size());
-            let id = crate::platform::macos::display_for_pixel_rect(&info.desktop_rect)
-                .expect("an attached display");
             assert_eq!(
                 (frame.width, frame.height),
-                picture_size(display_point_rect(id)),
-                "the picture is not the display's size in points"
+                pixel_size(&info.desktop_rect),
+                "the picture is not the display's pixel rect"
             );
             println!(
                 "{} {}x{} opened in {open_ms:.0} ms, first picture after {calls} calls, stamped {:.1} ms before now",
