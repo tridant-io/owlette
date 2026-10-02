@@ -1,6 +1,6 @@
 # Tasks: swoop on macOS, 4K at 60 and the keyboard model
 
-Progress: 5/11. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
+Progress: 9/11. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
 apply (the four Windows commands, the macOS commands, nothing pushed to dev or main). Mac worktrees
 `~/src/owlette-swoop-mac-21` (streamer) and `-23` (desktop) on the rig; `~/src/mac-build-install.sh` builds,
 notarizes and installs.
@@ -38,7 +38,7 @@ notarizes and installs.
   - Do: Log the pasteboard access behaviour at info at session start. The clipboard feature's status carries `reads: false` with a reason; the viewer shows "the mac's clipboard is not shared: allow owlette under paste from other apps" once, lowercase.
   - Done when: a Mac session's service log names the access behaviour; vitest covers the status line.
 
-- [ ] **Task 3.3: The Mac app asks for clipboard sharing the way it asks for Accessibility** `[agent+human]`
+- [x] **Task 3.3: The Mac app asks for clipboard sharing the way it asks for Accessibility** `[agent+human]`
   - Files: `agent/swoop/src/selfcheck.rs` (or where `selfcheck --grants` lives), `desktop/src-tauri/src/` (the grants reader), `desktop/src/components/` (the permissions notice)
   - Do: `selfcheck --grants` reports the pasteboard access behaviour (the sidecar is the app bundle's child, so it reads the app's own setting; `null` below macOS 15.4). The app's permissions notice gains a row when it is not *allow*: "clipboard sharing is off for owlette on this mac: allow owlette under paste from other apps", lowercase, with the same "open system settings" button the Accessibility row has, aimed at that pane (find the deep link on the rig; fall back to the Privacy & Security pane). The row clears on its own when the setting changes, as the Accessibility row does. Nothing reads the pasteboard to find out: the behaviour is a property, not a read.
   - Human: one click on the rig to set *allow*, so the row's clearing is measured.
@@ -46,17 +46,17 @@ notarizes and installs.
 
 ## Wave 4: the keyboard
 
-- [ ] **Task 4.1: One model, tested in every direction** `[agent]`
+- [x] **Task 4.1: One model, tested in every direction** `[agent]`
   - Files: `web/lib/swoop/keymap.ts`, `web/__tests__/lib/swoop/keymap.test.ts` (or the existing test)
   - Do: Keep the switch's behaviour as plan.md's two tables; make sure `MetaLeft`/`MetaRight` are never remapped by the switch in either direction (today a Mac viewer's Command becomes Ctrl under the switch, which the table keeps; keys-match sends it as the Windows key). One table-driven test over host {windows, macos, linux} × viewer {mac, pc} × switch {on, off} for Control, Meta and Alt.
   - Done when: the test enumerates all twelve cells and passes; lint clean.
 
-- [ ] **Task 4.2: The legend** `[agent]`
+- [x] **Task 4.2: The legend** `[agent]`
   - Files: `web/components/swoop/SwoopSpecialKeys.tsx`, `web/lib/swoop/specialKeys.ts`
   - Do: Under the switch, three rows "you press → the machine gets" for the current host, viewer and switch, from the same function the input capture uses; a note "the windows key reaches the machine in fullscreen" while keyboard lock is not held.
   - Done when: vitest renders the legend for a PC viewer on a Mac host in both switch states; lowercase copy; lint clean.
 
-- [ ] **Task 4.3: A sticky super key for a session outside fullscreen** `[agent]`
+- [x] **Task 4.3: A sticky super key for a session outside fullscreen** `[agent]`
   - Files: `web/lib/swoop/specialKeys.ts`, `web/components/swoop/SwoopSpecialKeys.tsx`, `web/lib/swoop/input.ts`, `web/lib/swoop/keyboardLock.ts`
   - Do: A keyboard-menu item, "hold cmd for the next key" on a Mac host and "hold the windows key for the next key" on a Windows or Linux host, that arms `MetaLeft` down until the next key's release goes through the input capture, then releases it; shown only while keyboard lock is not held, since under lock the real key arrives. Correct `keyboardLock.ts`'s header: Brave exposes the API (measured 2026-10-01 on the owner's PC); the feature is absent only in non-Chromium browsers and outside fullscreen.
   - Done when: vitest covers arm, next key, release, and the item hidden under lock; lint clean.
@@ -137,3 +137,49 @@ shared: on a mac, allow owlette under paste from other apps in system settings" 
   the whole web suite; eslint and tsc clean. Not covered: a toolbar render test (the store needs a live
   attach); the store itself is. The service-log line is read off the rig once this build is installed.
 - *Changelog line:* "swoop tells you when the machine does not share its clipboard."
+
+**Task 3.3: done, agent half** (`f0519394`). `selfcheck --grants` reports `pasteboardAccess` (`allow`, `ask`,
+`deny`, `default`, `unknown`, or `null` before macOS 15.4) beside the three grants. The app's `tcc.rs` reads it
+(`clipboard_sharing`: true under *allow* and with no setting, false otherwise, unknown when the sidecar predates
+the key), two new commands expose it and open the pane, and `PermissionBanner` gains the row "clipboard sharing
+is off for owlette on this mac: a swoop viewer gets nothing you copy here. allow owlette under paste from other
+apps in system settings", re-read every five seconds while it shows. The pane's anchor is `Privacy_Pasteboard`,
+read from `SecurityPrivacyExtension.appex` on the rig (the deep-link check over ssh could not see System
+Settings' window, so the pane it lands on is the owner's to confirm).
+- Checks: desktop vitest 9 (two new); desktop clippy and tests, Windows 124 and macOS 149; streamer 397 and 422;
+  `tsc -b` clean; oxlint's two warnings in `App.tsx` predate this change.
+- **Amended 2026-10-02** (`a9ef626c`): opened over ssh, the Paste from Other Apps pane on the rig listed no app
+  at all ("applications that have requested access … will appear here"): macOS lists an app there only once it
+  has read the pasteboard, and owlette never does under *ask*. So the row's button now runs
+  `owlette-swoop selfcheck --paste-once` (one read in the app bundle's identity, which raises the system's paste
+  alert at the person who clicked) and then opens the pane; the copy says "allow the paste alert, then set
+  owlette to allow under paste from other apps". From ssh the flag answers `{"pasteboardAccess":"allow"}`, since
+  an ssh child is exempt; from the app it is the app's own setting. Checks green again on both platforms.
+- **Human half owed:** on the rig, the row should show; click its button, allow the alert, set owlette to
+  *allow* in the pane that opens, and the row clears within five seconds without a relaunch. Then a Mac copy
+  reaches the PC.
+- *Changelog line:* "macOS: the owlette app says when clipboard sharing is off and walks you to the setting."
+
+The Wave 3 build (`f0519394`) was installed on the rig at 22:53 on 2026-10-01, notarized: the profile was back.
+Everything on the Mac's side of the plan is live there. The viewer's side (Tasks 3.1, 3.2 and Wave 4) is web
+code on this branch, which dev.owlette.app does not serve: for the 5.1 run the viewer is this box's own
+`cd web && npm run dev` at `http://localhost:3000/swoop/default_site/TEC-MBA`.
+
+### 2026-10-01, Wave 4
+
+**Tasks 4.1, 4.2 and 4.3: done** (`30a9a95d`). The conversion itself was already the plan's model
+(`applyModifierMapping` never touches `MetaLeft`, so the Windows key is Command under both settings); the
+matrix test in `keymap.test.ts` gained Alt. The menu's switch is now a radio pair under "modifier keys":
+"shortcuts match: ctrl acts as cmd" (the default) and "keys match: ctrl is control" for a PC viewer on a Mac,
+"shortcuts match: cmd acts as ctrl" and "keys match: cmd is the windows key" for a Mac viewer on Windows or
+Linux. Under it the legend, three rows from `modifierLegend()` (`web/lib/swoop/modifierLegend.ts`), which runs
+the capture's own conversion. Outside fullscreen the menu says "the windows key reaches the machine in
+fullscreen" (or that the browser keeps it, where there is no keyboard lock api) and offers "hold the windows
+key for the next key" (Windows and Linux hosts) or "hold cmd for the next key" (Mac): `InputCapture::holdNextKey`
+arms the key down until the next typed key's release, and `releaseAll` lets go of it with everything else.
+`keyboardLock.ts`'s header no longer says Brave switches the api off.
+- Checks: jest 225 on the five suites (two new files: `modifierLegend.test.ts` and a jsdom render of the menu
+  that opens it, reads the legend in both settings and finds the hold item); the whole web suite 6247; eslint
+  and tsc clean.
+- *Changelog line:* "the swoop keyboard menu names its two modifier settings, shows what each key does on the
+  machine, and can hold the windows key or cmd for your next keystroke outside fullscreen."
