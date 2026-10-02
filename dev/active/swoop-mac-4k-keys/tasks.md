@@ -217,6 +217,16 @@ throughout), up to 12 Mbps on the wire over a ten-second window, a few cuts in t
 three or more drops) that climbed back to 80000 within half a minute. That answers 5.1's picture items: full
 Retina, 60 fps where the screen moves, no smear the owner could see.
 
+**The menu bar icon was under the notch** (the owner: "I don't see the menubar icon"). Measured over
+accessibility, no screenshot: the item at x=927..963 on a 1710-point screen whose notch spans x=763..948
+(`NSScreen.auxiliaryTopRightArea`); the bar is full and macOS creates a new item at the far left. On the rig, a
+saved position of 1 (`NSStatusItem Preferred Position Item-0`, points from the right edge, in the app's own
+defaults) and one app restart put it at x=1591, just left of the system's items. In the product (`6eb1b891`,
+`menu_bar_position.rs`): on macOS, before the tray is built, the app saves that position when none is saved, and
+never overwrites one. Desktop tests 150 on the Mac (the new one runs `defaults` against a scratch domain and
+leaves nothing), 124 on Windows; not yet in an installed build, since an install would drop the owner's live
+session for no visible change on the rig.
+
 Ctrl shortcuts: "ctrl acts as cmd" has been the default on dev.owlette.app all along, so Ctrl+C, Ctrl+V,
 Ctrl+Z and Ctrl+A on the Mac are testable there now; Win+C outside fullscreen opens Copilot because Windows
 owns the key until keyboard lock, which rides fullscreen.
