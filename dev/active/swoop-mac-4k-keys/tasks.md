@@ -183,6 +183,18 @@ every cut (fps sent, kbps on the wire, target, rung, cuts, gaps, governor state)
 dev.owlette.app, with a minute of fast window drags, is what decides between more rate on a LAN, a governor that
 ignores its own keyframes, and dropping the settle keyframe at 4K.
 
+**The rate story, read 2026-10-02 after one minute of fast drags (build `82f75bbe`):** 52 to 58 fps sent the
+whole time, rung 60fps/native throughout, so the host's frame rate was there. But 11 cuts in 40 s, each matched
+by one frame gap, took the target from 50 Mbps to 20 (and later lower), with the governor holding the whole time.
+The gap is the browser's `framesDropped`, which rises by one for a skipped late frame, a slow decode or a
+throttled paint as readily as for loss on the path; one every two to four seconds at 60 fps is noise, and every
+one cost a 20 % cut, a two-second hold and a 2.5 MB recovery keyframe. That is the stutter the owner saw as "not
+60 fps" and the starved target behind the earlier smear. Fixed in `transport/governor.rs`: fewer than three
+unexplained dropped frames in a report window are counted and not cut (`GAP_CUT_THRESHOLD`); a delay rise still
+cuts on its own. Tests: the window-noise case added, the existing gap tests unchanged; 398 on Windows, 423 on
+macOS. The owner reported no smear in this run. The next session from dev.owlette.app, read the same way, shows
+whether the target now stays near 50 Mbps.
+
 The viewer-side changes (Tasks 3.1, 3.2, Wave 4) cannot be run by the owner yet: a passkey is bound to
 dev.owlette.app and cannot sign in on localhost, and dev.owlette.app serves `dev`, not this branch. They are
 covered by unit tests and wait for the branch on `dev` (the owner's merge of PR #256).
