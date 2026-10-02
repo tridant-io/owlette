@@ -1407,6 +1407,7 @@ mod host {
             input: SharedInput::new(),
             plan: TierPlan::default(),
             keyframes: TierKeyframes::new(),
+            settle: None,
             uplink: UplinkBudget::new(HOST_UPLINK_ESTIMATE_BPS),
             encoder_budget: w.encoder_budget,
             tiers: Vec::new(),
@@ -1518,6 +1519,10 @@ mod host {
         /// One [`IdrPolicy`](super::IdrPolicy) per tier: a join and every PLI
         /// inside the cooldown cost that tier one IRAP between them.
         keyframes: TierKeyframes,
+        /// The settle keyframe's clock: the tier and the moment of the last
+        /// frame over its share of the rate ([`moved`]), answered by one
+        /// keyframe a second later ([`settles`]).
+        settle: Option<(Codec, Instant)>,
         /// One estimate of this machine's uplink, split across the viewers.
         uplink: UplinkBudget,
         /// `probe`'s measured concurrent encode sessions: the admission cap and
@@ -2280,6 +2285,16 @@ mod host {
             };
             let frame_id = frame.frame_id as u32;
             let now = Instant::now();
+            if !frame.is_irap {
+                let rate = self
+                    .tiers
+                    .iter()
+                    .find(|t| t.codec == frame.codec)
+                    .map_or(0, |t| t.bitrate_bps);
+                if rate > 0 && moved(frame.data.len(), rate, TARGET_FPS) {
+                    self.settle = Some((frame.codec, now));
+                }
+            }
 
             let mut answered = false;
             let mut needs_irap = false;
@@ -3133,6 +3148,12 @@ mod host {
             if now.duration_since(self.last_status) >= STATUS_INTERVAL {
                 self.status(now);
             }
+            if let Some((codec, at)) = self.settle {
+                if settles(Some(at), now) {
+                    self.settle = None;
+                    self.request_idr(codec);
+                }
+            }
         }
 
         /// One governor evaluation per viewer, then the one split of the host
@@ -3476,9 +3497,6 @@ mod host {
         /// frame-rate gate, and for the floor.
         floor: FloorTimer,
         last_encode: Option<Instant>,
-        /// When this tier last sent a frame over its share of the rate, for
-        /// [`settles`]; cleared by the keyframe that settles it.
-        moved_at: Option<Instant>,
     }
 
     impl TierPass {
@@ -3492,7 +3510,6 @@ mod host {
                 force_irap: true,
                 floor: FloorTimer::new(now),
                 last_encode: None,
-                moved_at: None,
             }
         }
 
@@ -3770,10 +3787,6 @@ mod host {
                 } else if !tier.floor.due(now) {
                     continue;
                 }
-                if settles(tier.moved_at, now) {
-                    tier.force_irap = true;
-                    tier.moved_at = None;
-                }
 
                 let (width, height) = (tier.want.width, tier.want.height);
                 if tier.scaler.is_none() && (width, height) != (captured.width, captured.height) {
@@ -3817,7 +3830,14 @@ mod host {
                     // backend that probed fine and then refused the session
                     // costs one rung rather than the session.
                     match select::create(&ctx.caps, &cfg) {
-                        Ok((backend, created)) => {
+                        Ok((backend, mut created)) => {
+                            // A backend that finishes frames on its own thread
+                            // hands them straight to the session; the rest
+                            // answer them from `encode` below.
+                            let tx = ctx.tx.clone();
+                            created.set_sink(Box::new(move |frame| {
+                                tx.try_send(FromWorker::Frame(Box::new(frame))).is_ok()
+                            }));
                             tier.encoder = Some(created);
                             if ctx.backend != Some(backend) {
                                 ctx.backend = Some(backend);
@@ -3843,13 +3863,12 @@ mod host {
                         // desktop.
                         tier.floor.fed(now);
                         tier.last_encode = Some(now);
+                        // Cleared on the submit the encoder accepted, not on
+                        // an answer: a backend that delivers through its sink
+                        // answers nothing here, and the forced frame is in
+                        // its queue already.
+                        tier.force_irap = false;
                         if let Some(encoded) = encoded {
-                            if !encoded.is_irap
-                                && moved(encoded.data.len(), tier.want.bitrate_bps, TARGET_FPS)
-                            {
-                                tier.moved_at = Some(now);
-                            }
-                            tier.force_irap = false;
                             // A full queue means the session thread fell behind.
                             // The frame is dropped rather than stalling capture,
                             // and the next one is an IRAP so the gap cannot

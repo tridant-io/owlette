@@ -11,8 +11,8 @@
 //!
 //! The capture hands NV12 (`420v`) IOSurface buffers, which the session takes
 //! as they are, so no convert pass sits in front of it. A session tries
-//! `EnableLowLatencyRateControl` in its encoder specification first and goes
-//! without it when that session cannot encode. On the session: `RealTime`, no
+//! no `EnableLowLatencyRateControl` in its encoder specification first, and
+//! with it only when the plain session cannot encode. On the session: `RealTime`, no
 //! frame reordering, `MaxKeyFrameInterval` at the largest value the session
 //! advertises (keyframes come only when the session forces one),
 //! `AverageBitRate` with `DataRateLimits` over one frame interval,
@@ -59,11 +59,23 @@
 //!
 //! # Latency
 //!
-//! VideoToolbox is asynchronous, with its own queue. `encode` submits the frame
-//! and then forces it out with `VTCompressionSessionCompleteFrames`, so every
-//! frame's bits come back from the call that submitted it and nothing is ever
-//! pending between calls. The capture ticks travel as the frame's reference
-//! value and the `encoded` ticks are read in the output callback.
+//! VideoToolbox is asynchronous, with its own queue. With a sink set
+//! ([`Encoder::set_sink`], which the session does) `encode` only submits, and
+//! the output callback assembles each frame and hands it to the sink on
+//! VideoToolbox's thread: the next capture overlaps this encode, and reordering
+//! off keeps callback order equal to input order. Without a sink `encode`
+//! forces the frame out with `VTCompressionSessionCompleteFrames` and answers
+//! it from the same call, which is what most tests use. The capture ticks
+//! travel as the frame's reference value and the `encoded` ticks are read in
+//! the output callback.
+//!
+//! Measured on the rig on 2026-10-01 at 3420x2214, HEVC hardware, 240 frames
+//! submitted without completing each: with low-latency rate control the
+//! encoder tops out at 48.6 fps, each submit blocks 20 ms and a frame takes
+//! 100 ms from submit to callback; without it, 104 fps unpaced, and paced at
+//! 60 Hz exactly 60.0 fps with none dropped and 11 ms p50 / 17 ms p95 from
+//! submit to callback, at 20 and at 50 Mbps. That is why the plain session is
+//! tried first.
 //!
 //! # The bitstream
 //!
@@ -89,11 +101,14 @@
 //! restriction. It asserts the first frame is an IRAP carrying its parameter
 //! sets, that the only other IRAP is the one forced at frame 90, and that the
 //! H.264 SPS on the wire carries the restriction. One thread, so the codecs'
-//! timings do not share the encoder.
+//! timings do not share the encoder. `videotoolbox_holds_60_at_the_panels_size_through_its_sink`
+//! opens HEVC at the main display's pixel size, paces 240 frames at 60 Hz
+//! through a sink, and asserts the rate and the latency above.
 
 use std::ffi::c_void;
 use std::fmt;
 use std::ptr::{self, NonNull};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use objc2_core_foundation::{
@@ -125,7 +140,7 @@ use objc2_video_toolbox::{
 use thiserror::Error;
 
 use crate::encode::h264_sps;
-use crate::encode::{BackendCaps, Codec, CodecCaps, EncodedFrame, Encoder, EncoderConfig};
+use crate::encode::{BackendCaps, Codec, CodecCaps, EncodedFrame, Encoder, EncoderConfig, Sink};
 use crate::gpu::vt_transfer::{nv12_attributes, pixel_buffer};
 use crate::gpu::Frame;
 use crate::ipc::Exit;
@@ -566,11 +581,28 @@ fn warm_up(session: &VTCompressionSession, shared: &Shared) -> Result<i64, VtErr
 
 // ----------------------------------------------------------------- output ---
 
-/// What the output callback hands back to `encode`, which runs on the thread
-/// that submitted the frame.
+/// What the output callback hands to the sink, on its own thread, or back to
+/// `encode` on the thread that submitted the frame.
 struct Shared {
     codec: Codec,
+    width: u32,
+    height: u32,
     outputs: Mutex<Vec<Output>>,
+    /// The Annex-B state, reached from the callback and from `encode`.
+    assembly: Mutex<Assembly>,
+    sink: Mutex<Option<Sink>>,
+    /// The next submit is forced to a keyframe: after the warm-up, and after
+    /// the callback dropped a frame or the sink refused one, so the hole
+    /// cannot dangle.
+    key_due: AtomicBool,
+    /// A failure the callback saw with a sink set; the next `encode` answers
+    /// it, since nothing else on that thread can.
+    failed: Mutex<Option<VtError>>,
+}
+
+struct Assembly {
+    frame_id: u64,
+    sps_fix: SpsFix,
 }
 
 impl Shared {
@@ -580,6 +612,71 @@ impl Shared {
             .lock()
             .map(|mut outputs| std::mem::take(&mut *outputs))
             .map_err(|_| VtError::Malformed("the output queue is poisoned"))
+    }
+
+    fn has_sink(&self) -> bool {
+        self.sink.lock().is_ok_and(|sink| sink.is_some())
+    }
+
+    /// Annex-B for one frame, parameter sets first, every H.264 SPS through
+    /// the restriction check, numbered in the order frames come back.
+    fn assemble(&self, raw: &Raw) -> Result<EncodedFrame, VtError> {
+        let mut assembly = self
+            .assembly
+            .lock()
+            .map_err(|_| VtError::Malformed("the assembly is poisoned"))?;
+        let units = length_prefixed(&raw.payload, raw.length_size)?;
+        let mut out = Vec::with_capacity(raw.payload.len() + 256);
+        for nal in raw.parameter_sets.iter().map(Vec::as_slice).chain(units) {
+            out.extend_from_slice(&START_CODE);
+            let is_sps = self.codec == Codec::H264
+                && nal
+                    .first()
+                    .is_some_and(|header| header & 0x1f == h264_sps::NAL_SPS);
+            match is_sps.then(|| assembly.sps_fix.apply(nal)).flatten() {
+                Some(fixed) => out.extend_from_slice(&fixed),
+                None => out.extend_from_slice(nal),
+            }
+        }
+        let frame_id = assembly.frame_id;
+        assembly.frame_id += 1;
+        Ok(EncodedFrame {
+            data: out,
+            is_irap: raw.irap,
+            codec: self.codec,
+            width: self.width,
+            height: self.height,
+            frame_id,
+            captured_qpc: raw.captured,
+            encoded_qpc: raw.encoded,
+        })
+    }
+
+    /// One output through the sink, from the callback's thread. A dropped
+    /// frame and a refused one both leave a hole, so the next submit is forced
+    /// to a keyframe; a failure waits for the next `encode` to answer it.
+    fn deliver(&self, sink: &Sink, output: Output) {
+        match output {
+            Output::Frame(raw) => match self.assemble(&raw) {
+                Ok(frame) => {
+                    if !sink(frame) {
+                        self.key_due.store(true, Ordering::SeqCst);
+                    }
+                }
+                Err(e) => self.fail(e),
+            },
+            Output::Dropped => {
+                ::log::debug!("swoop: videotoolbox dropped a frame");
+                self.key_due.store(true, Ordering::SeqCst);
+            }
+            Output::Failed(e) => self.fail(e),
+        }
+    }
+
+    fn fail(&self, e: VtError) {
+        if let Ok(mut failed) = self.failed.lock() {
+            failed.get_or_insert(e);
+        }
     }
 }
 
@@ -628,8 +725,20 @@ unsafe extern "C-unwind" fn on_output(
             None => Output::Dropped,
         }
     };
-    if let Ok(mut outputs) = shared.outputs.lock() {
-        outputs.push(output);
+    let queued = match shared.sink.lock() {
+        Ok(sink) => match sink.as_ref() {
+            Some(sink) => {
+                shared.deliver(sink, output);
+                None
+            }
+            None => Some(output),
+        },
+        Err(_) => Some(output),
+    };
+    if let Some(output) = queued {
+        if let Ok(mut outputs) = shared.outputs.lock() {
+            outputs.push(output);
+        }
     }
 }
 
@@ -881,11 +990,7 @@ struct VtEncoder {
     /// Whether the session took `DataRateLimits`; `set_bitrate` moves it only
     /// then.
     rate_window: bool,
-    /// The next frame is forced to a keyframe: the one after the warm-up.
-    key_due: bool,
-    frame_id: u64,
     last_pts: Option<i64>,
-    sps_fix: SpsFix,
 }
 
 // SAFETY: the session is a thread-safe CoreFoundation object and the shared
@@ -900,16 +1005,26 @@ impl VtEncoder {
         Self::open_on(cfg, hardware)
     }
 
-    /// The first session on this encoder, low-latency rate control first,
-    /// that opens and encodes a frame at `cfg`'s size.
+    /// The first session on this encoder, without low-latency rate control
+    /// first (the module doc's measurement), that opens and encodes a frame
+    /// at `cfg`'s size.
     fn open_on(cfg: &EncoderConfig, hardware: bool) -> Result<(Self, SessionInfo), VtError> {
         let shared = Box::new(Shared {
             codec: cfg.codec,
+            width: cfg.width,
+            height: cfg.height,
             outputs: Mutex::new(Vec::new()),
+            assembly: Mutex::new(Assembly {
+                frame_id: 0,
+                sps_fix: SpsFix::Undecided,
+            }),
+            sink: Mutex::new(None),
+            key_due: AtomicBool::new(true),
+            failed: Mutex::new(None),
         });
         let refcon = ptr::from_ref::<Shared>(&shared).cast_mut().cast::<c_void>();
         let mut failure = VtError::NoEncoder { codec: cfg.codec };
-        for low_latency in [true, false] {
+        for low_latency in [false, true] {
             let opened = create_session(cfg, hardware, low_latency, refcon).and_then(|session| {
                 let refused = configure(&session.0, cfg)?;
                 // SAFETY: the session is alive.
@@ -935,10 +1050,7 @@ impl VtEncoder {
                 shared,
                 force_key: CFDictionary::from_slices(&[force], &[CFBoolean::new(true) as &CFType]),
                 rate_window: !refused.iter().any(|(name, _)| *name == "DataRateLimits"),
-                key_due: true,
-                frame_id: 0,
                 last_pts: Some(pts),
-                sps_fix: SpsFix::Undecided,
             };
             let info = SessionInfo {
                 hardware,
@@ -948,25 +1060,6 @@ impl VtEncoder {
             return Ok((encoder, info));
         }
         Err(failure)
-    }
-
-    /// Annex-B for one frame, parameter sets first, every H.264 SPS through
-    /// the restriction check.
-    fn annexb(&mut self, raw: &Raw) -> Result<Vec<u8>, VtError> {
-        let units = length_prefixed(&raw.payload, raw.length_size)?;
-        let mut out = Vec::with_capacity(raw.payload.len() + 256);
-        for nal in raw.parameter_sets.iter().map(Vec::as_slice).chain(units) {
-            out.extend_from_slice(&START_CODE);
-            let is_sps = self.cfg.codec == Codec::H264
-                && nal
-                    .first()
-                    .is_some_and(|header| header & 0x1f == h264_sps::NAL_SPS);
-            match is_sps.then(|| self.sps_fix.apply(nal)).flatten() {
-                Some(fixed) => out.extend_from_slice(&fixed),
-                None => out.extend_from_slice(nal),
-            }
-        }
-        Ok(out)
     }
 }
 
@@ -981,26 +1074,41 @@ impl Encoder for VtEncoder {
             }
             .into());
         }
+        if let Some(e) = self.shared.failed.lock().ok().and_then(|mut failed| failed.take()) {
+            return Err(e.into());
+        }
         let buffer = pixel_buffer(frame).ok_or(VtError::NoPixelBuffer)?;
         let pts = next_pts(self.last_pts, frame.captured_qpc);
         self.last_pts = Some(pts);
         // SAFETY: plain value constructors; kCMTimeInvalid is an immutable static.
         let (time, duration) = unsafe { (CMTime::new(pts, NANOS), kCMTimeInvalid) };
-        let properties = (force_irap || self.key_due).then(|| self.force_key.as_opaque());
+        let forced = force_irap || self.shared.key_due.swap(false, Ordering::SeqCst);
+        let properties = forced.then(|| self.force_key.as_opaque());
         // the capture ticks ride as the frame's reference value, and come back
         // to the callback beside its bits
         let reference = ptr::without_provenance_mut::<c_void>(frame.captured_qpc as usize);
         let mut flags = VTEncodeInfoFlags(0);
         // SAFETY: the buffer is alive for the call (VideoToolbox retains what it
         // keeps), the properties dictionary is alive, and the flags are a local.
-        check(
+        let submitted = check(
             unsafe {
                 self.session
                     .0
                     .encode_frame(buffer, time, duration, properties, reference, &mut flags)
             },
             "VTCompressionSessionEncodeFrame",
-        )?;
+        );
+        if let Err(e) = submitted {
+            if forced {
+                // the keyframe owed is still owed
+                self.shared.key_due.store(true, Ordering::SeqCst);
+            }
+            return Err(e.into());
+        }
+        if self.shared.has_sink() {
+            // The callback assembles the frame and hands it to the sink.
+            return Ok(None);
+        }
         // SAFETY: the session is alive. It returns once every frame up to this
         // one has been through the output callback.
         check(
@@ -1019,20 +1127,13 @@ impl Encoder for VtEncoder {
         let Some(raw) = raw else {
             return Ok(None);
         };
-        self.key_due = false;
-        let data = self.annexb(&raw)?;
-        let frame_id = self.frame_id;
-        self.frame_id += 1;
-        Ok(Some(EncodedFrame {
-            data,
-            is_irap: raw.irap,
-            codec: self.cfg.codec,
-            width: self.cfg.width,
-            height: self.cfg.height,
-            frame_id,
-            captured_qpc: raw.captured,
-            encoded_qpc: raw.encoded,
-        }))
+        Ok(Some(self.shared.assemble(&raw)?))
+    }
+
+    fn set_sink(&mut self, sink: Sink) {
+        if let Ok(mut slot) = self.shared.sink.lock() {
+            *slot = Some(sink);
+        }
     }
 
     fn set_bitrate(&mut self, bitrate_bps: u32) -> anyhow::Result<()> {
@@ -1302,6 +1403,82 @@ mod tests {
         assert!(started.elapsed().as_millis() < 50);
     }
 
+    /// Needs VideoToolbox, no grant. The sink is the session's path; the
+    /// numbers asserted are the module doc's.
+    #[test]
+    #[ignore = "needs videotoolbox"]
+    fn videotoolbox_holds_60_at_the_panels_size_through_its_sink() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use objc2_core_graphics::CGMainDisplayID;
+
+        use crate::platform::macos::display_pixel_rect;
+
+        let panel = display_pixel_rect(CGMainDisplayID());
+        let cfg = EncoderConfig {
+            width: panel.width() as u32 & !1,
+            height: panel.height() as u32 & !1,
+            bitrate_bps: 50_000_000,
+            ..base(Codec::H265)
+        };
+        let buffers: Vec<_> = (0..8)
+            .map(|phase| pattern(cfg.width, cfg.height, phase))
+            .collect();
+        let (mut encoder, info) = VtEncoder::open_on(&cfg, true).expect("the encoder opens");
+        // (captured, encoded, irap, frame id), in callback order
+        type Arrived = Arc<Mutex<Vec<(i64, i64, bool, u64)>>>;
+        let arrived: Arrived = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&arrived);
+        encoder.set_sink(Box::new(move |frame| {
+            seen.lock().unwrap().push((
+                frame.captured_qpc,
+                frame.encoded_qpc,
+                frame.is_irap,
+                frame.frame_id,
+            ));
+            true
+        }));
+
+        let n = 240u32;
+        let started = Instant::now();
+        for i in 0..n {
+            let slot = started + Duration::from_micros(u64::from(i) * 16_667);
+            if let Some(wait) = slot.checked_duration_since(Instant::now()) {
+                std::thread::sleep(wait);
+            }
+            let captured = frame(&buffers[(i % 8) as usize], clock::now_ticks());
+            let answered = encoder.encode(&captured, i == 90).expect("the frame submits");
+            assert!(answered.is_none(), "with a sink nothing is answered from encode");
+        }
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while arrived.lock().unwrap().len() < n as usize && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let elapsed = started.elapsed().as_secs_f64();
+        let frames = arrived.lock().unwrap().clone();
+        let fps = frames.len() as f64 / elapsed;
+        let mut latency: Vec<f64> = frames.iter().map(|(c, e, ..)| (e - c) as f64 / 1e6).collect();
+        latency.sort_by(f64::total_cmp);
+        let iraps: Vec<u64> = frames.iter().filter(|f| f.2).map(|f| f.3).collect();
+        println!(
+            "{}x{} through the sink: {} of {n} frames in {elapsed:.2} s = {fps:.1} fps, submit-to-callback p50 {:.1} ms p95 {:.1} ms, iraps at {iraps:?}; {info}",
+            cfg.width,
+            cfg.height,
+            frames.len(),
+            percentile(&latency, 50),
+            percentile(&latency, 95),
+        );
+        assert_eq!(frames.len(), n as usize, "every frame came back");
+        assert!(
+            frames.windows(2).all(|w| w[0].3 + 1 == w[1].3 && w[0].0 <= w[1].0),
+            "callback order is input order"
+        );
+        assert!(fps >= 59.0, "{fps:.1} fps");
+        assert!(percentile(&latency, 95) < 20.0, "p95 {:.1} ms", percentile(&latency, 95));
+        assert_eq!(iraps, [0, 90]);
+    }
+
     /// Needs VideoToolbox, no grant: the invocation is in the module doc.
     #[test]
     #[ignore = "needs videotoolbox"]
@@ -1389,7 +1566,7 @@ mod tests {
                 let sps = sps.expect("the first access unit carries an sps");
                 println!(
                     "  videotoolbox's own sps declared the restriction: {}; on the wire: flag={} max_num_reorder_frames={:?} max_dec_frame_buffering={:?} max_num_ref_frames={}",
-                    encoder.sps_fix == SpsFix::Keep,
+                    encoder.shared.assembly.lock().unwrap().sps_fix == SpsFix::Keep,
                     sps.bitstream_restriction_flag,
                     sps.max_num_reorder_frames,
                     sps.max_dec_frame_buffering,
