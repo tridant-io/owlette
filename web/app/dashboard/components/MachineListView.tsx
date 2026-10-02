@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatScheduleSummary } from '@/components/ScheduleEditor';
+import { cn } from '@/lib/utils';
 import { BLOCK_COLORS } from '@/lib/scheduleDefaults';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { resolveMemoryTotalGb } from '@/lib/machineMemory';
@@ -356,7 +357,7 @@ export const MachineRow = memo(function MachineRow({
   const heartbeat = formatHeartbeatTime(machine.lastHeartbeat, displayTz, siteTimeFormat);
   const isStale = !machine.online || !!machine.rebooting;
   // Dimmed, not faded: below ~75% the muted device labels fall under 4.5:1 contrast.
-  const staleClass = isStale ? ' opacity-80' : '';
+  const staleClass = isStale ? 'opacity-80' : '';
 
   // Machine-local clock under the hostname. The shared minute tick re-renders every row in
   // lockstep off a single app-wide interval.
@@ -511,7 +512,7 @@ export const MachineRow = memo(function MachineRow({
           <button
             type="button"
             aria-label={`open cpu history for ${machine.machineId}`}
-            className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible${staleClass}`}
+            className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
           >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.cpu} color="cpu" height={52} loading={sparklineData.loading} />
@@ -544,7 +545,7 @@ export const MachineRow = memo(function MachineRow({
           <button
             type="button"
             aria-label={`open ram history for ${machine.machineId}`}
-            className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible${staleClass}`}
+            className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
           >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.memory} color="memory" height={52} loading={sparklineData.loading} />
@@ -572,7 +573,7 @@ export const MachineRow = memo(function MachineRow({
           <button
             type="button"
             aria-label={`open disk history for ${machine.machineId}`}
-            className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible${staleClass}`}
+            className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
           >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.disk} color="disk" height={52} loading={sparklineData.loading} />
@@ -618,7 +619,7 @@ export const MachineRow = memo(function MachineRow({
           <button
             type="button"
             aria-label={`open gpu history for ${machine.machineId}`}
-            className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible${staleClass}`}
+            className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
           >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.gpu} color="gpu" height={52} loading={sparklineData.loading} />
@@ -677,7 +678,7 @@ export const MachineRow = memo(function MachineRow({
               <button
                 type="button"
                 aria-label={`open network history for ${machine.machineId}`}
-                className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible xl:visible${staleClass}`}
+                className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible xl:visible', staleClass)}
               >
                 <div className={`absolute left-0 top-1/2 -translate-y-1/2 h-[52px] w-0.5 ${getUsageColorClass(maxUtil)}`} />
                 <div className="p-2 pl-2.5">
