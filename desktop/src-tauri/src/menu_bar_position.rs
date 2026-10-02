@@ -57,7 +57,9 @@ mod tests {
 
   #[test]
   fn a_first_run_saves_the_right_end_and_a_saved_position_is_left_alone() {
-    let domain = format!("app.owlette.desktop.test-{}", std::process::id());
+    // one fixed scratch domain, so a run that dies leaves one file and not one a run
+    let domain = "app.owlette.desktop.selftest".to_owned();
+    let _ = Command::new(DEFAULTS).args(["delete", &domain]).output();
     assert!(!saved(&domain).expect("defaults runs"), "a scratch domain starts empty");
 
     seed(&domain);
@@ -69,8 +71,15 @@ mod tests {
     seed(&domain);
     assert_eq!(read(&domain), "250");
 
-    // the scratch domain alone
+    // the scratch domain alone; `defaults delete` empties it and leaves its
+    // file, so the test takes that one file too
     let removed = Command::new(DEFAULTS).args(["delete", &domain]).status().expect("defaults runs");
     assert!(removed.success());
+    if let Some(home) = std::env::var_os("HOME") {
+      let file = std::path::Path::new(&home)
+        .join("Library/Preferences")
+        .join(format!("{domain}.plist"));
+      let _ = std::fs::remove_file(file);
+    }
   }
 }
