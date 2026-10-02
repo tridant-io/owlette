@@ -204,6 +204,17 @@ remaining cut is a window with three or more drops, which is what the rule still
 browser drops a frame or two even while the stream is quiet, so `framesDropped` is noisier than a path signal
 should be; a delay-rise-only rule stays an option if that ever matters.
 
+**Still "smearing a bit" on fast window moves at a steady 50 Mbps** (the owner, after the gap tolerance). With
+57 fps sent and the governor at its ceiling for five minutes, the remaining smear is bits: 50 Mbps over
+3420x2214 is 6.6 bits per pixel-second against the 9.7 a 1080p Windows host gets at 20 Mbps, and the path
+showed no delay-rise cut at all. So the menu gains 80 and 100 Mbps, and a 4K-class source starts at
+`LARGE_SOURCE_AUTO_BPS`, 80 Mbps (the budget test's direct-path top moved with the menu). Windows 398, macOS
+423. The owner's next drag test says whether 80 is enough; 100 is one click away in the menu.
+
+Ctrl shortcuts: "ctrl acts as cmd" has been the default on dev.owlette.app all along, so Ctrl+C, Ctrl+V,
+Ctrl+Z and Ctrl+A on the Mac are testable there now; Win+C outside fullscreen opens Copilot because Windows
+owns the key until keyboard lock, which rides fullscreen.
+
 The viewer-side changes (Tasks 3.1, 3.2, Wave 4) cannot be run by the owner yet: a passkey is bound to
 dev.owlette.app and cannot sign in on localhost, and dev.owlette.app serves `dev`, not this branch. They are
 covered by unit tests and wait for the branch on `dev` (the owner's merge of PR #256).
