@@ -9,9 +9,19 @@ import type { Metadata } from 'next';
  * `components/Footer.tsx` early-returns on `/swoop` instead.
  */
 
-export const metadata: Metadata = {
-  title: 'swoop',
-};
+/**
+ * the tab is named after the machine, with no brand in front of it: a session
+ * per machine is told apart by its tab, so `absolute` keeps the root template
+ * from putting "owlette - " on every one.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ machineId: string }>;
+}): Promise<Metadata> {
+  const { machineId } = await params;
+  return { title: { absolute: `swoop - ${machineId}` } };
+}
 
 export default function SwoopLayout({ children }: { children: React.ReactNode }) {
   return <div className="fixed inset-0 overflow-hidden bg-background">{children}</div>;
