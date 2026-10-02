@@ -5,7 +5,7 @@
 
 'use client';
 
-import React, { memo, useEffect, useRef, useState } from 'react';
+import React, { memo, useEffect, useId, useRef, useState } from 'react';
 import { useMinuteTick } from '@/hooks/useMinuteTick';
 import { TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +28,7 @@ import {
   DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/AuthContext';
+import { ITEM_FOCUS_RING } from '@/lib/utils';
 import { formatScheduleSummary } from '@/components/ScheduleEditor';
 import { BLOCK_COLORS } from '@/lib/scheduleDefaults';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
@@ -264,7 +265,9 @@ interface MachineRowProps {
   listPref?: DeviceSelection;
 }
 
-export function MachineRow({
+// Memoized: the dashboard hands every row stable props, so a heartbeat
+// re-renders only the row whose machine changed.
+export const MachineRow = memo(function MachineRow({
   machine,
   isExpanded,
   currentSiteId,
@@ -379,6 +382,7 @@ export function MachineRow({
     if (selection && selection.toString().length > 0) return;
     onToggleExpanded();
   };
+  const processesId = useId();
 
   return (
     <>
@@ -387,12 +391,24 @@ export function MachineRow({
         className="border-border/50 bg-card-sunken hover:bg-secondary/30 cursor-pointer"
         onClick={handleRowClick}
       >
-        <TableCell className="w-8 p-2">
-          <div className="flex items-center justify-center">
+        {/* The row click is the mouse target; this is the disclosure keyboard
+            and screen-reader users get. */}
+        <TableCell className="w-8 p-1">
+          <button
+            type="button"
+            aria-expanded={isExpanded}
+            aria-controls={heldExpanded ? processesId : undefined}
+            aria-label={`processes for ${machine.machineId}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpanded();
+            }}
+            className="flex h-8 w-6 items-center justify-center rounded-md cursor-pointer"
+          >
             <ChevronDown
               className={`h-4 w-4 text-foreground/70 transition-transform duration-150 ease-out motion-reduce:transition-none ${isExpanded ? '-rotate-180' : 'rotate-0'}`}
             />
-          </div>
+          </button>
         </TableCell>
         <TableCell className="w-[130px] font-medium text-white select-text overflow-hidden">
           <div className="flex flex-col gap-0.5 min-w-0">
@@ -484,12 +500,20 @@ export function MachineRow({
             onCancel={onCancelRestart}
           />
         </TableCell>
+        {/* Metric cells: the cell's onClick opens the detail panel, and the
+            button inside is its keyboard entry — its click bubbles to that
+            handler. Invisible while the column is collapsed to 0px, so a
+            clipped button never takes focus. */}
         {/* CPU with Sparkline */}
         <TableCell
           className="text-white p-0 w-0 sm:w-[150px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('cpu'); }}
         >
-          <div className={`relative cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden${staleClass}`}>
+          <button
+            type="button"
+            aria-label={`open cpu history for ${machine.machineId}`}
+            className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible ${ITEM_FOCUS_RING}${staleClass}`}
+          >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.cpu} color="cpu" height={52} loading={sparklineData.loading} />
             </div>
@@ -511,14 +535,18 @@ export function MachineRow({
                 </div>
               ) : '-'}
             </div>
-          </div>
+          </button>
         </TableCell>
         {/* Memory with Sparkline */}
         <TableCell
           className="text-white p-0 w-0 sm:w-[110px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('memory'); }}
         >
-          <div className={`relative cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden${staleClass}`}>
+          <button
+            type="button"
+            aria-label={`open ram history for ${machine.machineId}`}
+            className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible ${ITEM_FOCUS_RING}${staleClass}`}
+          >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.memory} color="memory" height={52} loading={sparklineData.loading} />
             </div>
@@ -535,14 +563,18 @@ export function MachineRow({
                 </div>
               ) : '-'}
             </div>
-          </div>
+          </button>
         </TableCell>
         {/* Disk with Sparkline */}
         <TableCell
           className="text-white p-0 w-0 lg:w-[150px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('disk'); }}
         >
-          <div className={`relative cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden${staleClass}`}>
+          <button
+            type="button"
+            aria-label={`open disk history for ${machine.machineId}`}
+            className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible ${ITEM_FOCUS_RING}${staleClass}`}
+          >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.disk} color="disk" height={52} loading={sparklineData.loading} />
             </div>
@@ -577,16 +609,20 @@ export function MachineRow({
                 </>
               ) : '-'}
             </div>
-          </div>
+          </button>
         </TableCell>
         {/* GPU with Sparkline */}
         <TableCell
           className="text-white p-0 w-0 lg:w-[190px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('gpu'); }}
         >
-          <div className={`relative cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden${staleClass}`}>
+          <button
+            type="button"
+            aria-label={`open gpu history for ${machine.machineId}`}
+            className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible ${ITEM_FOCUS_RING}${staleClass}`}
+          >
             <div className="opacity-80">
-              <SparklineChart data={sparklineData.gpu.length > 0 ? sparklineData.gpu : []} color="gpu" height={52} loading={sparklineData.loading} />
+              <SparklineChart data={sparklineData.gpu} color="gpu" height={52} loading={sparklineData.loading} />
             </div>
             <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(gpuDevice?.usagePercent ?? 0)}`} />
             <div className="absolute inset-0 flex items-center p-2 pl-2.5 overflow-hidden">
@@ -613,7 +649,7 @@ export function MachineRow({
                 <span className="text-muted-foreground">N/A</span>
               )}
             </div>
-          </div>
+          </button>
         </TableCell>
         {/* Network */}
         <TableCell
@@ -639,7 +675,11 @@ export function MachineRow({
               ? `${nicDevice.id} (${linkSpeed} Mbps)`
               : nicDevice.id;
             return (
-              <div className={`relative cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden${staleClass}`}>
+              <button
+                type="button"
+                aria-label={`open network history for ${machine.machineId}`}
+                className={`relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible xl:visible ${ITEM_FOCUS_RING}${staleClass}`}
+              >
                 <div className={`absolute left-0 top-1/2 -translate-y-1/2 h-[52px] w-0.5 ${getUsageColorClass(maxUtil)}`} />
                 <div className="p-2 pl-2.5">
                   <div className="text-xs text-muted-foreground truncate" title={titleText}>
@@ -652,7 +692,7 @@ export function MachineRow({
                     <span className="text-green-400">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
                   </div>
                 </div>
-              </div>
+              </button>
             );
           })()}
         </TableCell>
@@ -713,7 +753,7 @@ export function MachineRow({
                 same surface scheme the card view uses for its sections, so the
                 processes panel clearly reads as offset from the bg-card machine
                 row above. */}
-            <div className="px-4 py-3 bg-card-sunken">
+            <div id={processesId} className="px-4 py-3 bg-card-sunken">
               {machine.processes && machine.processes.length > 0 ? (
                 <>
                   {/* Section enclosure: one raised bg-card surface holding the
@@ -779,7 +819,11 @@ export function MachineRow({
                                       </span>
                                     </div>
                                   ) : (
-                                  <div className="flex items-stretch rounded-md overflow-hidden border border-border h-8">
+                                  <div
+                                    role="group"
+                                    aria-label={`launch mode for ${process.name}`}
+                                    className="flex items-stretch rounded-md overflow-hidden border border-border h-8"
+                                  >
                                     {(['off', 'always', 'scheduled'] as const).map((mode) => {
                                       const isActive = currentMode === mode;
                                       const labels = { off: 'off', always: 'always on', scheduled: 'scheduled' };
@@ -793,6 +837,8 @@ export function MachineRow({
                                         return (
                                           <span key={mode} className={`flex items-stretch ${isActive ? 'bg-blue-600 text-white' : 'bg-card text-muted-foreground'}`}>
                                             <button
+                                              type="button"
+                                              aria-pressed={isActive}
                                               onClick={() => !isActive && onSetLaunchMode(process.id, process.name, mode, process.exe_path)}
                                               className={`px-3 text-sm font-medium ${isActive ? 'cursor-default' : 'hover:bg-accent/50 cursor-pointer'} transition-colors`}
                                             >
@@ -802,7 +848,9 @@ export function MachineRow({
                                             <Tooltip>
                                               <TooltipTrigger asChild>
                                                 <button
+                                                  type="button"
                                                   onClick={() => onConfigureSchedule?.(process)}
+                                                  aria-label={`configure schedule for ${process.name}`}
                                                   className={`px-1.5 transition-colors cursor-pointer flex items-center ${isActive ? 'hover:bg-blue-500' : 'hover:bg-accent/50'}`}
                                                 >
                                                   <Settings2 className="h-3.5 w-3.5" />
@@ -819,6 +867,8 @@ export function MachineRow({
                                       return (
                                         <button
                                           key={mode}
+                                          type="button"
+                                          aria-pressed={isActive}
                                           onClick={() => onSetLaunchMode(process.id, process.name, mode, process.exe_path)}
                                           className={`px-3 text-sm font-medium transition-all duration-500 cursor-pointer ${isActive ? activeColors[mode] : 'bg-card text-muted-foreground hover:bg-accent/50'}`}
                                         >
@@ -889,6 +939,7 @@ export function MachineRow({
                                           <Button
                                             variant="ghost"
                                             size="sm"
+                                            aria-label={`more options for ${process.name}`}
                                             className="bg-card border border-border text-muted-foreground hover:text-white h-8 w-8 p-0"
                                           >
                                             <MoreVertical className="h-4 w-4" />
@@ -1029,4 +1080,4 @@ export function MachineRow({
       )}
     </>
   );
-}
+});

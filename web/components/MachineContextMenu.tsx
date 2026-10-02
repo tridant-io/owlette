@@ -201,6 +201,7 @@ export function MachineContextMenu({
                 variant="ghost"
                 size="sm"
                 data-testid="machine-context-menu-trigger"
+                aria-label={`machine options for ${machineName}`}
                 className="h-8 w-8 pointer-coarse:h-10 pointer-coarse:w-10 p-0 bg-card border border-border text-muted-foreground hover:text-white"
                 onClick={(e) => {
                   // Prevent row click event from firing
@@ -260,21 +261,20 @@ export function MachineContextMenu({
                     </DropdownMenuItem>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        {/* Icon-only. Its "schedule restarts" label lives in the
-                            tooltip portal, so `getByRole('button', { name:
-                            'schedule restarts' })` cannot resolve it — that name
-                            belongs to the standalone offline-machine item below
-                            (`machine-context-menu-schedule-restarts`). */}
-                        <button
+                        {/* A menu item, not a plain button: menu focus moves by
+                            arrow key between items only, so a plain button here
+                            was unreachable from the keyboard. */}
+                        <DropdownMenuItem
                           onClick={(e) => {
                             e.stopPropagation();
                             setShowRestartScheduleDialog(true);
                           }}
+                          aria-label="schedule restarts"
                           data-testid="machine-context-menu-schedule-restarts-gear"
-                          className="ml-2 p-0.5 rounded hover:bg-amber-950/50 transition-colors cursor-pointer"
+                          className="ml-2 p-0.5 rounded hover:bg-amber-950/50 focus:bg-amber-950/50 transition-colors cursor-pointer"
                         >
                           <Settings2 className="h-3.5 w-3.5 text-muted-foreground hover:text-amber-300 transition-colors" />
-                        </button>
+                        </DropdownMenuItem>
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>schedule restarts</p>
