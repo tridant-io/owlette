@@ -48,6 +48,8 @@ const BANDWIDTH: { value: number; label: string }[] = [
   { value: 20_000, label: '20 mbps' },
   { value: 30_000, label: '30 mbps' },
   { value: 50_000, label: '50 mbps' },
+  { value: 80_000, label: '80 mbps' },
+  { value: 100_000, label: '100 mbps' },
 ];
 
 /** the `preset` tokens `ResolutionCap::parse` knows. `native` caps nothing. */
