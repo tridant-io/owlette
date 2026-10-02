@@ -242,6 +242,19 @@ the branch (`6ef0fde1`): four conflicts, all where dev's escape-twice (`58a562b9
 editor keeps the Windows-only wrapper with dev's responsive grid. On the merged tree: tsc and eslint clean, jest
 6333, streamer 398, agent 2126. The PR is `MERGEABLE` again and its checks are running.
 
+**The first full check run on the merged branch:** everything green but one Playwright test and the two
+alert-gated checks. The test was `e2e/specs/swoop/mac-host.spec.ts`, still reading the old keyboard menu (five
+entries and a checkbox); it now reads the new one (six entries outside fullscreen, the two named settings, the
+legend, the super-key note) (`c2a6df55`), and the suite passed 438 of 438 on the next run. `CodeQL` and `no live
+vulnerability on this branch` were red only for alerts 388, 389 and 390 (`py/overly-permissive-file`).
+
+**CodeQL 388, 389 and 390 dismissed on GitHub, 2026-10-02, on the owner's word ("Okay, yes, dismiss")** after
+each was explained in plain terms, with the security review's reasons: 388 as *won't fix*, by design (0660
+`root:_owlette` on the launch socket is what lets the console user's app connect; the gate is the daemon's
+peer-uid and pinned-process check); 389 and 390 as *used in tests* (`fake_runner.py`, not shipped; 0640 matches
+the production runner's mode). The security check was re-run and the PR shows 24 of 24 checks passing. This
+closes the dismissal item the swoop-macos plan's Task 7.1 was carrying.
+
 The viewer-side changes (Tasks 3.1, 3.2, Wave 4) cannot be run by the owner yet: a passkey is bound to
 dev.owlette.app and cannot sign in on localhost, and dev.owlette.app serves `dev`, not this branch. They are
 covered by unit tests and wait for the branch on `dev` (the owner's merge of PR #256).
