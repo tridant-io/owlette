@@ -18,8 +18,9 @@
 //! `CGWarpMouseCursorPosition` and `CGPostMouseEvent` all left it hidden. A
 //! viewer that typed would lose the pointer for the rest of the session while
 //! its moves and clicks still landed, so the viewer draws it as other remote
-//! tools do. The person at the Mac sees it again once they touch their mouse. The display's two rects are read again with every shape read,
-//! since a mode change moves its pixels under the same id.
+//! tools do. The person at the Mac sees it again once they touch their mouse.
+//! The display's two rects are read again with every shape read, since a mode
+//! change moves its pixels under the same id.
 //!
 //! **Shape.** At most every 33 ms, `NSCursor.currentSystemCursor`'s image is
 //! drawn at the display's scale into a 32-bit BGRA bitmap, with the hot spot

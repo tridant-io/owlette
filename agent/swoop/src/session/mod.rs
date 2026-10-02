@@ -886,7 +886,7 @@ mod host {
     use crate::viewers::roster::Roster;
     use crate::viewers::SharedInput;
 
-    use super::quality::Ceiling;
+    use super::quality::{auto_bitrate_bps, Ceiling};
     use super::tiers::{TierKeyframes, TierPlan, TierViewer};
 
     /// §6: the streamer lingers about a minute after the last viewer leaves,
@@ -905,10 +905,6 @@ mod host {
 
     /// How often the `status` event goes to the service.
     const STATUS_INTERVAL: Duration = Duration::from_secs(2);
-
-    /// The starting CBR target, until the quality menu (Task 6.5) can move it.
-    /// 20 Mbps is what the bake-off measured arm B at end to end.
-    const DEFAULT_BITRATE_BPS: u32 = 20_000_000;
 
     /// Desktop Duplication is vsync-locked at the panel's rate; 60 is what the
     /// encoder's rate control is sized for.
@@ -1625,7 +1621,8 @@ mod host {
     }
 
     impl Viewer {
-        fn new(id: String) -> Self {
+        /// `auto_bps` is what `auto` means for the source being captured.
+        fn new(id: String, auto_bps: u32) -> Self {
             Self {
                 id,
                 // The baseline every browser decodes, until its answer names
@@ -1634,7 +1631,7 @@ mod host {
                 announced: false,
                 hello_sent: false,
                 peer: None,
-                governor: Governor::new(GovernorConfig::new(DEFAULT_BITRATE_BPS)),
+                governor: Governor::new(GovernorConfig::new(auto_bps)),
                 ice: IcePolicy::new(),
                 sequencer: FrameSequencer::new(),
                 last_size: None,
@@ -1891,7 +1888,7 @@ mod host {
             // Watch-only: the room's `ctl` reaches no field here, and there is
             // no setter for one — only `Roster::verify` over a verified token.
             self.roster.join(&viewer);
-            self.viewers.push(Viewer::new(viewer.clone()));
+            self.viewers.push(Viewer::new(viewer.clone(), auto_bitrate_bps(self.source)));
             let ready = self.client.host_ready(Some(&viewer));
             self.send(&ready);
             self.publish_roster();
@@ -2897,7 +2894,12 @@ mod host {
                     max_bitrate_kbps,
                     max_fps,
                 } => {
-                    let ceiling = Ceiling::from_quality(&preset, max_bitrate_kbps, max_fps);
+                    let ceiling = Ceiling::from_quality_with_auto(
+                        &preset,
+                        max_bitrate_kbps,
+                        max_fps,
+                        auto_bitrate_bps(self.source),
+                    );
                     let Some(v) = self.viewer_mut(viewer) else {
                         return;
                     };
@@ -4130,7 +4132,7 @@ mod host {
                 codec,
                 width: encoded.0,
                 height: encoded.1,
-                bitrate_bps: DEFAULT_BITRATE_BPS,
+                bitrate_bps: crate::session::quality::DEFAULT_BITRATE_BPS,
                 fps: TARGET_FPS,
             }
         }

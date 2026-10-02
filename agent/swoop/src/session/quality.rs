@@ -51,6 +51,22 @@ pub const BITRATE_CAPS_BPS: [u32; 5] = [
 /// `auto`: 20 Mbps is what the bake-off measured arm B at end to end.
 pub const DEFAULT_BITRATE_BPS: u32 = 20_000_000;
 
+/// A source above this many pixels takes the menu's top rate for `auto`: a 4K
+/// panel, or a Retina Mac's, is four times the picture 20 Mbps was measured
+/// for, and at gate M1 (2026-10-01) that rate smeared on every window move. A
+/// relayed path pays nothing new: the governor descends on loss from any
+/// ceiling.
+pub const LARGE_SOURCE_PIXELS: u32 = 2_500_000;
+
+/// The rate `auto` means for a source of `size`.
+pub fn auto_bitrate_bps(size: (u32, u32)) -> u32 {
+    if size.0.saturating_mul(size.1) > LARGE_SOURCE_PIXELS {
+        BITRATE_CAPS_BPS[BITRATE_CAPS_BPS.len() - 1]
+    } else {
+        DEFAULT_BITRATE_BPS
+    }
+}
+
 /// The frame-rate rungs the menu offers, and `auto` is the first of them.
 pub const FPS_CAPS: [u32; 2] = [60, 30];
 
@@ -161,8 +177,19 @@ impl Ceiling {
     /// and takes the default rather than a ceiling of nothing — a viewer can
     /// ask for less, but it cannot ask for a session that will not run.
     pub fn from_quality(preset: &str, max_bitrate_kbps: u32, max_fps: u32) -> Self {
+        Self::from_quality_with_auto(preset, max_bitrate_kbps, max_fps, DEFAULT_BITRATE_BPS)
+    }
+
+    /// As [`Self::from_quality`], with `auto_bps` for an unstated rate: what
+    /// [`auto_bitrate_bps`] says for the source the session captures.
+    pub fn from_quality_with_auto(
+        preset: &str,
+        max_bitrate_kbps: u32,
+        max_fps: u32,
+        auto_bps: u32,
+    ) -> Self {
         let bitrate_bps = match max_bitrate_kbps {
-            0 => DEFAULT_BITRATE_BPS,
+            0 => auto_bps,
             kbps => kbps
                 .saturating_mul(1_000)
                 .clamp(BITRATE_CAPS_BPS[0], BITRATE_CAPS_BPS[BITRATE_CAPS_BPS.len() - 1]),
@@ -387,5 +414,18 @@ mod tests {
             resolution: ResolutionCap::P720,
         };
         assert_eq!(ceiling.rungs().len(), 1, "nothing left to trade");
+    }
+
+    #[test]
+    fn auto_is_the_top_rate_for_a_large_source_and_the_default_below() {
+        assert_eq!(auto_bitrate_bps((1920, 1080)), DEFAULT_BITRATE_BPS);
+        assert_eq!(auto_bitrate_bps((2560, 1440)), 50_000_000);
+        assert_eq!(auto_bitrate_bps((3420, 2214)), 50_000_000);
+        assert_eq!(auto_bitrate_bps((3840, 2160)), 50_000_000);
+        let auto = Ceiling::from_quality_with_auto("native", 0, 0, 50_000_000);
+        assert_eq!(auto.bitrate_bps, 50_000_000);
+        // a stated rate is the viewer's, whatever the source
+        let asked = Ceiling::from_quality_with_auto("native", 10_000, 0, 50_000_000);
+        assert_eq!(asked.bitrate_bps, 10_000_000);
     }
 }
