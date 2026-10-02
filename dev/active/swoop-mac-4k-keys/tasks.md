@@ -1,6 +1,6 @@
 # Tasks: swoop on macOS, 4K at 60 and the keyboard model
 
-Progress: 4/11. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
+Progress: 5/11. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
 apply (the four Windows commands, the macOS commands, nothing pushed to dev or main). Mac worktrees
 `~/src/owlette-swoop-mac-21` (streamer) and `-23` (desktop) on the rig; `~/src/mac-build-install.sh` builds,
 notarizes and installs.
@@ -33,7 +33,7 @@ notarizes and installs.
   - Do: Remember the last payload pushed and the last payload received from the host (a hash); on a paste keystroke, skip the push when the PC clipboard matches either, and send the keystroke alone.
   - Done when: vitest covers copy-on-host then paste-on-host (no push), copy-on-PC then paste (push), and a host clip followed by paste (no push); `npm run lint` clean on the file.
 
-- [ ] **Task 3.2: The host says when it cannot read its clipboard** `[agent]`
+- [x] **Task 3.2: The host says when it cannot read its clipboard** `[agent]`
   - Files: `agent/swoop/src/clipboard/mac.rs`, `agent/swoop/src/clipboard/mod.rs`, `web/components/swoop/SwoopToolbar.tsx` (or where feature status is shown)
   - Do: Log the pasteboard access behaviour at info at session start. The clipboard feature's status carries `reads: false` with a reason; the viewer shows "the mac's clipboard is not shared: allow owlette under paste from other apps" once, lowercase.
   - Done when: a Mac session's service log names the access behaviour; vitest covers the status line.
@@ -126,3 +126,14 @@ a paste whose clip matches either (same format, same bytes) sends the keystroke 
 a different one is); eslint clean on both files.
 - *Changelog line:* "swoop no longer pushes your clipboard to the machine before a paste when the machine already
   has it, so a copy made on a Mac is pasted as copied."
+
+**Task 3.2: done** (`3a40f417`). `hello-host` carries `clipboardReads` (PROTOCOL.md; the golden vector gained
+it), from the clipboard feature's new status (`FeatureStatus::clipboard`, `Listener::reads`: Windows always,
+macOS `reads_general_pasteboard()`, the stub never); the session gathers feature status for the status line and
+for hello alike. The Mac listener logs the access behaviour at info. The viewer's `swoopClipboard(session)`
+store reads it off hello (an older host's silence is true) and the toolbar shows "the machine's clipboard is not
+shared: on a mac, allow owlette under paste from other apps in system settings" while it is false.
+- Checks: Windows clippy clean, 397; macOS clippy clean, 422; jest 94 on the three touched suites and 6239 on
+  the whole web suite; eslint and tsc clean. Not covered: a toolbar render test (the store needs a live
+  attach); the store itself is. The service-log line is read off the rig once this build is installed.
+- *Changelog line:* "swoop tells you when the machine does not share its clipboard."
