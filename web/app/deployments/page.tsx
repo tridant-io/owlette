@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Plus, CheckCircle2, XCircle, Clock, Loader2, Trash2, X, MoreVertical, RefreshCw, Package, PlayCircle, Archive } from 'lucide-react';
+import { Plus, CheckCircle2, XCircle, Clock, Loader2, Trash2, X, MoreVertical, RefreshCw, Package, PlayCircle, Archive, ChevronDown } from 'lucide-react';
 import DeploymentDialog from '@/components/DeploymentDialog';
 import UninstallDialog from '@/components/UninstallDialog';
 import { ManageSitesDialog } from '@/components/ManageSitesDialog';
@@ -122,24 +122,26 @@ const DeploymentRow = React.memo(function DeploymentRow({
       open={isSelected}
       onOpenChange={() => onToggle(deployment.id)}
     >
-      <CollapsibleTrigger asChild>
-        <div
-          className="flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer"
-          onClick={(e) => {
-            // Don't toggle if the user's mid-drag-selecting text in the summary
-            // (names are `select-text`). preventDefault here short-circuits
-            // Radix's trigger (composeEventHandlers respects defaultPrevented).
-            const selection = window.getSelection();
-            if (selection && selection.toString().length > 0) {
-              e.preventDefault();
-            }
-          }}
-        >
+      {/* the whole row toggles for pointer users; the chevron button is the
+          real trigger, because a row that holds the actions menu can't itself
+          be a button */}
+      <div
+        className="flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer"
+        onClick={() => {
+          // Don't toggle if the user's mid-drag-selecting text in the summary
+          // (names are `select-text`).
+          const selection = window.getSelection();
+          if (selection && selection.toString().length > 0) return;
+          onToggle(deployment.id);
+        }}
+      >
         <div className="flex items-center gap-3 min-w-0 flex-1">
           {getStatusIcon(deployment.status)}
           <div className="min-w-0">
             <span className="block truncate text-foreground font-medium select-text">{deployment.name}</span>
             <p className="text-xs text-muted-foreground select-text truncate">{deployment.installer_name}</p>
+            {/* below `sm` the badge is hidden and the icon alone carries the status */}
+            <span className="sr-only sm:hidden">{deployment.status.replace('_', ' ')}</span>
           </div>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
@@ -152,6 +154,17 @@ const DeploymentRow = React.memo(function DeploymentRow({
           <span className="text-xs text-muted-foreground hidden sm:block w-[150px] text-right">
             {formatSiteScopedTimestamp(deployment.createdAt, timeDisplayMode, userTz, siteTz, timeFormat)}
           </span>
+          <CollapsibleTrigger asChild>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={`details for ${deployment.name}`}
+              onClick={(e) => e.stopPropagation()}
+              className="h-7 w-7 pointer-coarse:h-10 pointer-coarse:w-10 p-0 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+            >
+              <ChevronDown className={`h-4 w-4 transition-transform ${isSelected ? 'rotate-180' : ''}`} />
+            </Button>
+          </CollapsibleTrigger>
           <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -210,8 +223,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        </div>
-      </CollapsibleTrigger>
+      </div>
 
       <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
         <div className="border-t border-border">
@@ -236,50 +248,56 @@ const DeploymentRow = React.memo(function DeploymentRow({
             </div>
 
             <div>
-              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">targets ({deployment.targets.length})</h4>
+              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">targets ({deployment.targets.length})</h2>
               <div className="space-y-1.5">
                 {deployment.targets.map((target: DeploymentTarget) => (
-                  <div key={target.machineId} className="flex items-center justify-between py-1.5 px-3 rounded border border-border/40 bg-background/50">
-                    <span className="text-foreground text-sm select-text">{target.machineId}</span>
-                    <div className="flex items-center gap-2">
-                      {target.progress !== undefined && (target.status === 'downloading' || target.status === 'installing') && (
-                        <span className="text-xs text-muted-foreground">{target.progress}%</span>
-                      )}
-                      {getStatusBadge(target.status, target.error)}
-                      {target.status === 'failed' && (() => {
-                        const rowRetrying = bulkRetrying || retrying.has(`${deployment.id}:${target.machineId}`);
-                        return (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                disabled={rowRetrying}
-                                onClick={() => onRetryTarget(deployment, target.machineId)}
-                                aria-label={`retry deployment to ${target.machineId}`}
-                                className="h-7 px-2 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
-                              >
-                                <RefreshCw className={`h-4 w-4 ${rowRetrying ? 'animate-spin' : ''}`} />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>retry this machine</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        );
-                      })()}
-                      {(target.status === 'pending' || target.status === 'closing_processes' || target.status === 'downloading' || target.status === 'installing') && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => onCancel(deployment.id, target.machineId, deployment.installer_name)}
-                          aria-label={`cancel deployment to ${target.machineId}`}
-                          className="h-7 px-2 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      )}
+                  <div key={target.machineId} className="rounded border border-border/40 bg-background/50">
+                    <div className="flex items-center justify-between py-1.5 px-3">
+                      <span className="text-foreground text-sm select-text">{target.machineId}</span>
+                      <div className="flex items-center gap-2">
+                        {target.progress !== undefined && (target.status === 'downloading' || target.status === 'installing') && (
+                          <span className="text-xs text-muted-foreground">{target.progress}%</span>
+                        )}
+                        {getStatusBadge(target.status)}
+                        {target.status === 'failed' && (() => {
+                          const rowRetrying = bulkRetrying || retrying.has(`${deployment.id}:${target.machineId}`);
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  disabled={rowRetrying}
+                                  onClick={() => onRetryTarget(deployment, target.machineId)}
+                                  aria-label={`retry deployment to ${target.machineId}`}
+                                  className="h-7 px-2 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+                                >
+                                  <RefreshCw className={`h-4 w-4 ${rowRetrying ? 'animate-spin' : ''}`} />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>retry this machine</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          );
+                        })()}
+                        {(target.status === 'pending' || target.status === 'closing_processes' || target.status === 'downloading' || target.status === 'installing') && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => onCancel(deployment.id, target.machineId, deployment.installer_name)}
+                            aria-label={`cancel deployment to ${target.machineId}`}
+                            className="h-7 px-2 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
+                    {/* inline, not tooltip-only: the reason is what the operator needs to act on */}
+                    {target.error && (
+                      <p className="px-3 pb-2 text-xs text-destructive whitespace-pre-wrap break-words select-text">{target.error}</p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -534,7 +552,7 @@ export default function DeploymentsPage() {
               never push the document past the viewport (same shape as the
               dashboard's quick-stats row). */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6 md:gap-8">
-            <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">deployments</h2>
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">deployments</h1>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6 md:gap-8">
               <div className="flex items-center gap-2.5">

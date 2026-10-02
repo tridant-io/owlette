@@ -6,6 +6,7 @@ import { useSites } from '@/hooks/useFirestore';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -381,7 +382,7 @@ export default function AlertsPage() {
             <div className="flex items-center gap-3">
               {sites.length > 1 && (
                 <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-                  <SelectTrigger className="w-[180px] border-border bg-card text-foreground">
+                  <SelectTrigger aria-label="site" className="w-[180px] border-border bg-card text-foreground">
                     <SelectValue placeholder="select site" />
                   </SelectTrigger>
                   <SelectContent className="border-border bg-card text-foreground">
@@ -430,7 +431,7 @@ export default function AlertsPage() {
         {rules.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <Bell className="h-12 w-12 text-muted-foreground/30 mb-4" />
-            <h3 className="text-lg font-medium text-foreground mb-2">no alert rules configured</h3>
+            <h2 className="text-lg font-medium text-foreground mb-2">no alert rules configured</h2>
             <p className="text-muted-foreground text-sm mb-6 max-w-md">
               create alert rules to get notified when machine metrics like CPU, memory, disk, or
               GPU exceed your defined thresholds.
@@ -478,6 +479,7 @@ export default function AlertsPage() {
                   checked={rule.enabled}
                   onCheckedChange={() => handleToggleEnabled(rule.id)}
                   disabled={saving}
+                  aria-label={`enable ${rule.name}`}
                 />
                 <div
                   className="flex-1 min-w-0 cursor-pointer"
@@ -500,18 +502,18 @@ export default function AlertsPage() {
                     cooldown {rule.cooldownMinutes}m
                   </p>
                 </div>
-                <Button
+                <IconButton
+                  label={`edit ${rule.name}`}
                   variant="ghost"
-                  size="icon"
                   onClick={() => openEditDialog(rule)}
                   disabled={saving}
                   className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
                 >
                   <Pencil className="h-3.5 w-3.5" />
-                </Button>
-                <Button
+                </IconButton>
+                <IconButton
+                  label={`delete ${rule.name}`}
                   variant="ghost"
-                  size="icon"
                   onClick={(e) => {
                     e.stopPropagation();
                     setRuleToDelete(rule);
@@ -521,7 +523,7 @@ export default function AlertsPage() {
                   className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                </IconButton>
               </div>
             ))}
           </div>
@@ -555,9 +557,9 @@ export default function AlertsPage() {
 
             {/* Metric */}
             <div className="space-y-2">
-              <Label>metric</Label>
+              <Label htmlFor="rule-metric">metric</Label>
               <Select value={formMetric} onValueChange={setFormMetric}>
-                <SelectTrigger className="bg-background border-border">
+                <SelectTrigger id="rule-metric" className="bg-background border-border">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border text-foreground">
@@ -573,9 +575,9 @@ export default function AlertsPage() {
             {/* Operator + Value */}
             <div className="flex gap-3">
               <div className="space-y-2 w-24">
-                <Label>operator</Label>
+                <Label htmlFor="rule-operator">operator</Label>
                 <Select value={formOperator} onValueChange={setFormOperator}>
-                  <SelectTrigger className="bg-background border-border">
+                  <SelectTrigger id="rule-operator" className="bg-background border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-border text-foreground">
@@ -602,9 +604,9 @@ export default function AlertsPage() {
 
             {/* Severity */}
             <div className="space-y-2">
-              <Label>severity</Label>
+              <Label htmlFor="rule-severity">severity</Label>
               <Select value={formSeverity} onValueChange={setFormSeverity}>
-                <SelectTrigger className="bg-background border-border">
+                <SelectTrigger id="rule-severity" className="bg-background border-border">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border text-foreground">
@@ -619,8 +621,8 @@ export default function AlertsPage() {
 
             {/* Channels */}
             <div className="space-y-2">
-              <Label>notification channels</Label>
-              <div className="flex gap-4">
+              <p id="rule-channels-label" className="text-sm leading-none font-medium">notification channels</p>
+              <div role="group" aria-labelledby="rule-channels-label" className="flex gap-4">
                 <div className="flex items-center gap-2">
                   <Checkbox
                     id="channel-email"

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Power, RotateCw, Loader2 } from 'lucide-react';
+import { Power, RotateCw, Loader2, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -157,9 +157,12 @@ export function MachineStatusPill({
         title="click to cancel"
         aria-label={`${actionLabel}, ${formatMMSS(remaining)} remaining — click to cancel`}
         data-testid="machine-status-cancel-pill"
-        className="group relative px-1 py-0.5"
+        className="group relative px-1 py-0.5 pointer-coarse:min-h-6"
       >
-        <ActionIcon className="h-3 w-3 group-hover:invisible" aria-hidden="true" />
+        {/* A touch screen has no hover to reveal "cancel", so there the × takes
+            the action icon's place and says the pill is a cancel button. */}
+        <ActionIcon className="h-3 w-3 group-hover:invisible pointer-coarse:hidden" aria-hidden="true" />
+        <X className="hidden h-3 w-3 group-hover:invisible pointer-coarse:block" aria-hidden="true" />
         <span className="group-hover:invisible">{formatMMSS(remaining)}</span>
         <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100">
           cancel

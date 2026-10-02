@@ -11,10 +11,9 @@
  * interactive.
  */
 
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { Ban, CircleCheck, CircleDashed, CircleX, User, Wrench } from 'lucide-react';
 import { HootIcon } from '@/components/icons/HootIcon';
+import { HootMarkdown } from '@/components/hoot/HootMarkdown';
 import type { SharedMessage, SharedToolOutcome } from '@/lib/hoot/shareTypes';
 
 const OUTCOME: Record<SharedToolOutcome, { label: string; icon: typeof CircleCheck; className: string }> = {
@@ -91,14 +90,7 @@ export function SharedConversation({ messages, variant = 'page' }: SharedConvers
               <div className={isUser ? 'opacity-80 text-right' : ''}>
                 {message.parts.map((part, i) => {
                   if (part.type === 'text') {
-                    return (
-                      <div
-                        key={i}
-                        className="hoot-markdown text-sm text-foreground prose prose-invert prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none"
-                      >
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.text}</ReactMarkdown>
-                      </div>
-                    );
+                    return <HootMarkdown key={i} text={part.text} />;
                   }
 
                   const outcome = OUTCOME[part.outcome];

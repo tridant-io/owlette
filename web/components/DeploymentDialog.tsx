@@ -17,7 +17,7 @@ import { useSystemPresets } from '@/hooks/useSystemPresets';
 import { useInstallerChecksum, SHA256_HEX_RE } from '@/hooks/useInstallerChecksum';
 import InstallerChecksumStatus from '@/components/InstallerChecksumStatus';
 import { SelectGroup, SelectLabel } from '@/components/ui/select';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
 
 interface DeploymentDialogProps {
   open: boolean;
@@ -411,10 +411,11 @@ export default function DeploymentDialog({
         <div className="space-y-4 py-4 pr-2">
           {/* Template — single row: dropdown/edit + pencil + save + trash */}
           <div className="space-y-2">
-            <Label className="text-white">template</Label>
+            <Label htmlFor="deployment-template" className="text-white">template</Label>
             <div className="flex gap-2">
               {editingName ? (
                 <Input
+                  id="deployment-template"
                   placeholder="e.g., TouchDesigner 2025.32280"
                   value={deploymentName}
                   onChange={(e) => setDeploymentName(e.target.value)}
@@ -429,7 +430,7 @@ export default function DeploymentDialog({
                   handleItemSelect(value);
                   setEditingName(false);
                 }}>
-                  <SelectTrigger className="border-border bg-background text-white flex-1 overflow-hidden">
+                  <SelectTrigger id="deployment-template" className="border-border bg-background text-white flex-1 overflow-hidden">
                     {selectedItem ? (
                       <span className="truncate">{deploymentName || getSelectedLabel()}</span>
                     ) : (
@@ -482,30 +483,24 @@ export default function DeploymentDialog({
                 </Select>
               )}
               {/* New template: clear form and start fresh — always available */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onClick={handleNewTemplate}
-                    className="border-border bg-background text-white hover:bg-muted hover:text-white cursor-pointer shrink-0"
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>new template</p>
-                </TooltipContent>
-              </Tooltip>
+              <IconButton
+                label="new template"
+                type="button"
+                variant="outline"
+                onClick={handleNewTemplate}
+                className="border-border bg-background text-white hover:bg-muted hover:text-white cursor-pointer shrink-0"
+              >
+                <Plus className="h-4 w-4" />
+              </IconButton>
               {/* Action buttons — hidden for system presets */}
               {!isPresetSelected && (
                 <>
                   {/* Pencil: toggle edit name mode */}
-                  <Button
+                  <IconButton
+                    label="rename template"
+                    aria-pressed={editingName}
                     type="button"
                     variant="outline"
-                    size="icon"
                     onClick={() => {
                       if (!editingName && !deploymentName) {
                         setDeploymentName(getSelectedLabel());
@@ -515,35 +510,28 @@ export default function DeploymentDialog({
                     className={`border-border bg-background cursor-pointer shrink-0 ${editingName ? 'text-accent-cyan hover:bg-accent-cyan/20 hover:text-accent-cyan' : 'text-white hover:bg-muted hover:text-white'}`}
                   >
                     <Pencil className="h-4 w-4" />
-                  </Button>
+                  </IconButton>
                   {/* Save template */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        onClick={handleSaveTemplate}
-                        className="border-border bg-background text-white hover:bg-muted hover:text-white cursor-pointer shrink-0"
-                      >
-                        <Save className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>{isTemplateSelected ? 'save changes to template' : 'save as new template'}</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label={isTemplateSelected ? 'save changes to template' : 'save as new template'}
+                    type="button"
+                    variant="outline"
+                    onClick={handleSaveTemplate}
+                    className="border-border bg-background text-white hover:bg-muted hover:text-white cursor-pointer shrink-0"
+                  >
+                    <Save className="h-4 w-4" />
+                  </IconButton>
                   {/* Delete template */}
                   {isTemplateSelected && (
-                    <Button
+                    <IconButton
+                      label="delete template"
                       type="button"
                       variant="outline"
-                      size="icon"
                       onClick={handleDeleteTemplate}
                       className="border-border bg-background text-red-400 hover:bg-red-900 hover:text-red-300 cursor-pointer shrink-0"
                     >
                       <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </IconButton>
                   )}
                 </>
               )}
@@ -566,7 +554,7 @@ export default function DeploymentDialog({
                   if (filename && filename.includes('.')) setInstallerName(filename);
                 } catch { /* ignore invalid URLs while typing */ }
               }}
-              className="border-border bg-background text-white font-mono text-sm"
+              className="border-border bg-background text-white font-mono text-base md:text-sm"
             />
             {installerName && (
               <p className="text-xs text-muted-foreground">filename: {installerName}</p>
@@ -585,7 +573,7 @@ export default function DeploymentDialog({
               // One command line: wrap visually, but collapse real newlines or the
               // agent's installer invocation gets a broken multi-line string.
               onChange={(e) => setSilentFlags(e.target.value.replace(/\s*[\r\n]+\s*/g, ' '))}
-              className="border-border bg-background text-white font-mono text-sm"
+              className="border-border bg-background text-white font-mono text-base md:text-sm"
             />
             <p className="text-xs text-muted-foreground">command-line flags for silent installation</p>
           </div>
@@ -613,6 +601,7 @@ export default function DeploymentDialog({
             <button
               type="button"
               className="flex items-center gap-2 text-sm text-muted-foreground hover:text-white transition-colors"
+              aria-expanded={showCloseProcesses}
               onClick={() => setShowCloseProcesses(!showCloseProcesses)}
             >
               {showCloseProcesses ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -664,22 +653,11 @@ export default function DeploymentDialog({
                   }
 
                   return (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">managed processes</Label>
+                    <div role="group" aria-labelledby="managed-processes-label" className="space-y-1.5">
+                      <p id="managed-processes-label" className="text-xs font-medium text-muted-foreground">managed processes</p>
                       {managedProcesses.map(proc => (
-                        <div
-                          key={proc.id}
-                          className="flex items-center gap-2 cursor-pointer"
-                          onClick={() => {
-                            const newSet = new Set(selectedProjectIds);
-                            if (newSet.has(proc.id)) {
-                              newSet.delete(proc.id);
-                            } else {
-                              newSet.add(proc.id);
-                            }
-                            setSelectedProjectIds(newSet);
-                          }}
-                        >
+                        // a label row: the whole row toggles the checkbox and names it
+                        <label key={proc.id} className="flex items-center gap-2 cursor-pointer">
                           <Checkbox
                             checked={selectedProjectIds.has(proc.id)}
                             onCheckedChange={() => {
@@ -695,7 +673,7 @@ export default function DeploymentDialog({
                           />
                           <span className="text-white text-sm">{proc.name}</span>
                           <span className="text-muted-foreground text-xs">({proc.exeName})</span>
-                        </div>
+                        </label>
                       ))}
                     </div>
                   );
@@ -709,7 +687,7 @@ export default function DeploymentDialog({
                     placeholder="e.g., msiexec.exe, CodeMeter.exe"
                     value={additionalProcesses}
                     onChange={(e) => setAdditionalProcesses(e.target.value)}
-                    className="border-border bg-background text-white text-sm"
+                    className="border-border bg-background text-white"
                   />
                   <p className="text-xs text-muted-foreground">comma-separated exe names for non-managed processes</p>
                 </div>
@@ -737,7 +715,7 @@ export default function DeploymentDialog({
                         <span className="font-medium">The following processes will be closed on target machines before installation: </span>
                         <span>{allProcessNames.join(', ')}</span>
                         {selectedProjectIds.size > 0 && (
-                          <span className="block text-xs text-amber-300/70 mt-1">Managed processes will restart automatically after installation.</span>
+                          <span className="block text-xs text-amber-300 mt-1">Managed processes will restart automatically after installation.</span>
                         )}
                       </div>
                     </div>
@@ -750,7 +728,7 @@ export default function DeploymentDialog({
           {/* Target Machines */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label className="text-white">target machines ({selectedMachines.size} selected)</Label>
+              <p id="target-machines-label" className="text-sm font-medium text-white">target machines ({selectedMachines.size} selected)</p>
               <div className="flex gap-2">
                 <Button
                   type="button"
@@ -773,27 +751,26 @@ export default function DeploymentDialog({
               </div>
             </div>
 
-            <div className="border border-border rounded-lg p-3 bg-background/50 max-h-48 overflow-y-auto space-y-2">
+            <div role="group" aria-labelledby="target-machines-label" className="border border-border rounded-lg p-3 bg-background/50 max-h-48 overflow-y-auto space-y-2">
               {machines.length === 0 ? (
                 <p className="text-muted-foreground text-sm text-center py-2">no machines available</p>
               ) : (
                 machines.map((machine) => (
-                  <div
-                    key={machine.machineId}
-                    className="flex items-center justify-between p-2 rounded hover:bg-secondary cursor-pointer"
-                    onClick={() => toggleMachine(machine.machineId)}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Checkbox
-                        checked={selectedMachines.has(machine.machineId)}
-                        onCheckedChange={() => toggleMachine(machine.machineId)}
-                        className="cursor-pointer"
-                      />
-                      <span className="text-white">{machine.machineId}</span>
-                    </div>
-                    <Badge className={`text-xs ${machine.online ? 'bg-green-600' : 'bg-red-600'}`}>
-                      {machine.online ? 'online' : 'offline'}
-                    </Badge>
+                  <div key={machine.machineId} className="rounded hover:bg-secondary">
+                    {/* a label fills the row: the whole row toggles the checkbox and names it */}
+                    <label className="flex items-center justify-between p-2 cursor-pointer">
+                      <span className="flex items-center gap-3">
+                        <Checkbox
+                          checked={selectedMachines.has(machine.machineId)}
+                          onCheckedChange={() => toggleMachine(machine.machineId)}
+                          className="cursor-pointer"
+                        />
+                        <span className="text-white">{machine.machineId}</span>
+                      </span>
+                      <Badge className={`text-xs ${machine.online ? 'bg-green-600' : 'bg-red-600'}`}>
+                        {machine.online ? 'online' : 'offline'}
+                      </Badge>
+                    </label>
                   </div>
                 ))
               )}

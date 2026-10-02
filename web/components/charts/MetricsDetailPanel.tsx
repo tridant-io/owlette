@@ -18,11 +18,7 @@ import {
 } from 'recharts';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import {
-  Tooltip as UITooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import { X, ToggleLeft, ToggleRight, Monitor, HardDrive, ArrowDownUp, ArrowUp, ArrowDown, Thermometer, ChevronDown, Check, Pin } from 'lucide-react';
@@ -101,11 +97,11 @@ function MachineSwitcher({
         <button
           type="button"
           aria-label="switch machine"
-          className="flex items-center gap-2 text-xl font-semibold text-foreground shrink-0 -ml-1.5 px-1.5 py-0.5 rounded-md cursor-pointer hover:bg-accent/40 transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex min-w-0 items-center gap-2 text-xl font-semibold text-foreground -ml-1.5 px-1.5 py-0.5 rounded-md cursor-pointer hover:bg-accent/40 transition-colors"
         >
-          <Monitor className="h-5 w-5 text-muted-foreground" />
-          {label}
-          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          <Monitor className="h-5 w-5 shrink-0 text-muted-foreground" />
+          <span className="truncate">{label}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="p-0 w-64">
@@ -116,7 +112,8 @@ function MachineSwitcher({
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder="filter machines…"
-              className="h-8 text-sm"
+              aria-label="filter machines"
+              className="h-8"
             />
           </div>
         )}
@@ -130,12 +127,13 @@ function MachineSwitcher({
                 <button
                   key={m.machineId}
                   type="button"
+                  aria-current={isCurrent || undefined}
                   onClick={() => {
                     setOpen(false);
                     if (!isCurrent) onSelect(m.machineId);
                   }}
                   className={cn(
-                    'flex w-full items-center gap-2 px-3 py-1.5 text-sm text-left cursor-pointer transition-colors',
+                    'flex w-full items-center gap-2 px-3 py-1.5 text-sm text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground',
                     isCurrent
                       ? 'bg-accent text-foreground'
                       : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground',
@@ -680,6 +678,19 @@ export function MetricsDetailPanel({
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
 
+  // Escape closes the panel. Skipped while typing in a field, and when a radix layer
+  // (switcher popover, tooltip, a dialog over the page) already took the key: radix
+  // marks the events it dismisses on with preventDefault.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   const timeDomain = useMemo((): [number, number] => {
     const now = nowTs;
     switch (timeRange) {
@@ -1087,24 +1098,23 @@ export function MetricsDetailPanel({
               onSelect={onSwitchMachine}
             />
           ) : (
-            <span className="flex items-center gap-2 text-xl font-semibold text-foreground shrink-0">
-              <Monitor className="h-5 w-5 text-muted-foreground" />
-              {machineName || machineId}
+            <span className="flex min-w-0 items-center gap-2 text-xl font-semibold text-foreground">
+              <Monitor className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <span className="truncate">{machineName || machineId}</span>
             </span>
           )}
           <div className="flex-1" />
-          {/* Icon-only, and the panel has no key handler — Escape does NOT close
-              it. The testid is the only stable way for a spec or a capture scene
-              to dismiss the panel. */}
-          <Button
+          {/* Capture scenes dismiss the panel by this testid. */}
+          <IconButton
+            label="close"
             variant="ghost"
-            size="sm"
+            size="icon-sm"
             onClick={onClose}
             data-testid="metrics-detail-close-button"
-            className="bg-card border border-border text-muted-foreground hover:text-white h-8 w-8 p-0 shrink-0"
+            className="bg-card border border-border text-muted-foreground hover:text-foreground shrink-0"
           >
             <X className="h-4 w-4" />
-          </Button>
+          </IconButton>
         </div>
 
         {/* Loading branch — historical-metrics fetch in flight. The 320px
@@ -1122,29 +1132,24 @@ export function MetricsDetailPanel({
           </div>
         ) : (
         <div className="animate-in fade-in duration-100">
-        {/* Controls row */}
-        <div className="flex items-center gap-3 mb-3">
+        {/* Controls row — wraps on a phone so the time range keeps a reachable row
+            instead of being clipped by the dashboard's overflow-hidden slide wrapper. */}
+        <div className="flex flex-wrap items-center gap-3 mb-3">
           {/* Metric toggle buttons - left aligned */}
           <div className="flex flex-wrap items-center gap-1.5">
-            <UITooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={toggleAll}
-                  className="bg-card border border-border text-muted-foreground hover:text-white h-8 w-8 p-0 shrink-0"
-                >
-                  {allSelected ? (
-                    <ToggleRight className="h-4 w-4" />
-                  ) : (
-                    <ToggleLeft className="h-4 w-4" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{allSelected ? 'clear all' : 'show all metrics'}</p>
-              </TooltipContent>
-            </UITooltip>
+            <IconButton
+              label={allSelected ? 'clear all' : 'show all metrics'}
+              variant="ghost"
+              size="icon-sm"
+              onClick={toggleAll}
+              className="bg-card border border-border text-muted-foreground hover:text-foreground shrink-0"
+            >
+              {allSelected ? (
+                <ToggleRight className="h-4 w-4" />
+              ) : (
+                <ToggleLeft className="h-4 w-4" />
+              )}
+            </IconButton>
             {availableMetrics
               .filter((m) => m !== 'cpuTemp' && m !== 'gpuTemp')
               .map((metric) => {
@@ -1160,6 +1165,7 @@ export function MetricsDetailPanel({
                     variant="ghost"
                     size="sm"
                     onClick={() => togglePairedMetric(metric, hasTemp ? temp : null)}
+                    aria-pressed={isSelected}
                     className={toggleButtonClass(isSelected)}
                     title={hasTemp ? `${config.label} — usage & temperature` : undefined}
                   >
@@ -1194,6 +1200,7 @@ export function MetricsDetailPanel({
                       variant="ghost"
                       size="sm"
                       onClick={() => toggleDisk(drive)}
+                      aria-pressed={storageSelected}
                       className={toggleButtonClass(storageSelected)}
                       title={`${drive} — disk usage`}
                     >
@@ -1206,6 +1213,7 @@ export function MetricsDetailPanel({
                       variant="ghost"
                       size="sm"
                       onClick={() => toggleDiskIO(drive)}
+                      aria-pressed={activitySelected}
                       className={toggleButtonClass(activitySelected)}
                       title={`${drive} — read/write activity (% of max bandwidth)`}
                     >
@@ -1228,6 +1236,7 @@ export function MetricsDetailPanel({
                   variant="ghost"
                   size="sm"
                   onClick={() => toggleGpu(gpuName)}
+                  aria-pressed={isSelected}
                   className={toggleButtonClass(isSelected)}
                 >
                   <span className="inline-flex items-center gap-0.5 shrink-0">
@@ -1250,6 +1259,7 @@ export function MetricsDetailPanel({
                   variant="ghost"
                   size="sm"
                   onClick={() => toggleNic(nicName)}
+                  aria-pressed={isSelected}
                   className={toggleButtonClass(isSelected)}
                 >
                   <span className="flex gap-0.5 shrink-0">
@@ -1262,11 +1272,7 @@ export function MetricsDetailPanel({
             })}
           </div>
 
-          {/* Spacer */}
-          <div className="flex-1" />
-
-          {/* Time selector */}
-          <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
+          <TimeRangeSelector value={timeRange} onChange={setTimeRange} className="ml-auto" />
         </div>
 
         {/* Chart Area — leaving it drops the cursor's label focus. */}
@@ -1283,7 +1289,7 @@ export function MetricsDetailPanel({
               <div className="text-muted-foreground">
                 no data available for this time range.
                 <br />
-                <span className="text-sm text-muted-foreground/70">data appears as the agent collects metrics.</span>
+                <span className="text-sm text-muted-foreground/80">data appears as the agent collects metrics.</span>
               </div>
             </div>
           ) : !activeLines.some((line) => !line.hidden) ? (
@@ -1291,7 +1297,7 @@ export function MetricsDetailPanel({
               <div className="text-muted-foreground">
                 no metrics selected.
                 <br />
-                <span className="text-sm text-muted-foreground/70">toggle a metric above to view its chart.</span>
+                <span className="text-sm text-muted-foreground/80">toggle a metric above to view its chart.</span>
               </div>
             </div>
           ) : (
@@ -1451,9 +1457,10 @@ export function MetricsDetailPanel({
                   aria-pressed={isPinned}
                   title={isPinned ? 'click to unpin' : 'click to pin'}
                   className={cn(
-                    'relative flex items-center gap-4 px-3 py-2 rounded-lg bg-secondary border border-border/60 transition cursor-pointer outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40',
+                    // wraps the stats under the label when a phone-width row can't hold both
+                    'relative flex max-w-full flex-wrap items-center gap-x-4 gap-y-1.5 px-3 py-2 rounded-lg bg-secondary border border-border/60 transition cursor-pointer',
                     isPinned ? 'bg-accent ring-1 ring-primary/40' : 'hover:bg-accent/40',
-                    activePinnedKey !== null && !isPinned && 'opacity-50 hover:opacity-100',
+                    activePinnedKey !== null && !isPinned && 'opacity-50 hover:opacity-100 focus-visible:opacity-100',
                   )}
                   style={{ borderLeftColor: color, borderLeftWidth: '3px' }}
                   onMouseEnter={() => setHoveredKey(key)}

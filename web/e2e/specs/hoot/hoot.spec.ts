@@ -95,6 +95,15 @@ test.describe('hoot conversations and controls', () => {
     await expect(page.getByText('Deployment RCA')).toHaveCount(0);
   });
 
+  test('names the page and keeps a reply log for screen readers', async ({ page }) => {
+    await page.goto('/hoot');
+    await expect(page.getByLabel('chat message')).toBeVisible();
+
+    await expect(page.getByRole('heading', { level: 1, name: 'hoot' })).toBeAttached();
+    // replies are read out from here once a turn ends, never token by token.
+    await expect(page.getByRole('log', { name: 'hoot replies' })).toBeAttached();
+  });
+
   test('narrows the target to one machine and surfaces offline warnings', async ({ page }) => {
     await page.goto('/hoot');
     const target = page.getByLabel(/hoot target/i);

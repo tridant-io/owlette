@@ -13,6 +13,7 @@ import { useDeployments } from '@/hooks/useDeployments';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
 import { useAgentAlertToasts, type ExeMissingToastAlert } from '@/hooks/useAgentAlertToasts';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -20,14 +21,9 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/lib/toast';
 import { Plus, LayoutGrid, List, ChevronsUpDown, ChevronsDownUp, Square, Trash2, Monitor, Cog, Settings2, RotateCw, Loader2, CheckCircle2, Clock } from 'lucide-react';
-import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import { Table, TableBody } from '@/components/ui/table';
-import { ManageSitesDialog } from '@/components/ManageSitesDialog';
-import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import DownloadButton from '@/components/DownloadButton';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
-import { ScreenshotDialog } from '@/components/ScreenshotDialog';
-import { LiveViewModal } from '@/components/LiveViewModal';
 import { PageHeader } from '@/components/PageHeader';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 // Imported from the lightweight module, not @/components/charts' barrel, which would
@@ -61,8 +57,43 @@ const DisplayLayoutPanel = dynamic(
   () => import('@/components/charts/DisplayLayoutPanel').then((m) => ({ default: m.DisplayLayoutPanel })),
   { ssr: false, loading: () => null },
 );
+// Closed until asked for, so they stay out of the dashboard's first bundle.
+const AccountSettingsDialog = dynamic(
+  () => import('@/components/AccountSettingsDialog').then((m) => ({ default: m.AccountSettingsDialog })),
+  { ssr: false, loading: () => null },
+);
+const ManageSitesDialog = dynamic(
+  () => import('@/components/ManageSitesDialog').then((m) => ({ default: m.ManageSitesDialog })),
+  { ssr: false, loading: () => null },
+);
+const CreateSiteDialog = dynamic(
+  () => import('@/components/CreateSiteDialog').then((m) => ({ default: m.CreateSiteDialog })),
+  { ssr: false, loading: () => null },
+);
+const ScreenshotDialog = dynamic(
+  () => import('@/components/ScreenshotDialog').then((m) => ({ default: m.ScreenshotDialog })),
+  { ssr: false, loading: () => null },
+);
+const LiveViewModal = dynamic(
+  () => import('@/components/LiveViewModal').then((m) => ({ default: m.LiveViewModal })),
+  { ssr: false, loading: () => null },
+);
 
 type ViewType = 'card' | 'list';
+
+/**
+ * A callback whose identity never changes but which always runs the latest
+ * render's function, so the memoized machine cards and rows can take it
+ * without re-rendering on every heartbeat. Event handlers only: it sees the
+ * function as of the last commit.
+ */
+function useStableCallback<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  useLayoutEffect(() => {
+    ref.current = fn;
+  });
+  return useCallback((...args: A) => ref.current(...args), []);
+}
 
 interface DetailPanelState {
   machineId: string;
@@ -741,9 +772,20 @@ export default function DashboardPage() {
     );
   };
 
+  // The panel opens above the machine list, so on a phone a tap on any card but
+  // the first would open it off-screen.
+  const revealDetailPanel = () => {
+    const panel = slideContentRef.current;
+    if (!panel || !window.matchMedia('(max-width: 767px)').matches) return;
+    if (panel.getBoundingClientRect().top >= 0) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    panel.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  };
+
   // A click SWAPS the panel selection (overwrites this machine's graphTabs) rather than
   // merging, so clicking cells behaves like switching tabs, not accumulating them.
   const handleMetricClick = (machineId: string, metric: MetricType) => {
+    revealDetailPanel();
     // 'display' is a panel route, not a chart tab — writing it would persist entries
     // deserializeTabs drops on read.
     if (metric === 'display') {
@@ -794,6 +836,73 @@ export default function DashboardPage() {
       { silent: true },
     ).catch(() => { /* fire-and-forget */ });
   };
+
+  const openScreenshot = (machineId: string) => {
+    const m = machines.find((machine) => machine.machineId === machineId);
+    setScreenshotTarget({ machineId, machineName: machineId, isOnline: m?.online ?? false });
+    setScreenshotDialogOpen(true);
+  };
+
+  const openLiveView = (machineId: string) => {
+    setLiveViewTarget({ machineId, machineName: machineId });
+    setLiveViewOpen(true);
+  };
+
+  // Stable for the memoized cards and rows: see useStableCallback.
+  const onEditProcess = useStableCallback(openEditProcessDialog);
+  const onDuplicateProcess = useStableCallback(handleDuplicateProcess);
+  const onCreateProcess = useStableCallback(openCreateProcessDialog);
+  const onKillProcess = useStableCallback(handleKillProcess);
+  const onRestartProcess = useStableCallback(handleRestartProcess);
+  const onSetLaunchMode = useStableCallback(handleSetLaunchMode);
+  const onConfigureSchedule = useStableCallback(handleConfigureSchedule);
+  const onRemoveMachine = useStableCallback(openRemoveMachineDialog);
+  const onMetricClick = useStableCallback(handleMetricClick);
+  const onRestartMachine = useStableCallback(restartMachine);
+  const onShutdownMachine = useStableCallback(shutdownMachine);
+  const onCancelRestart = useStableCallback(cancelRestart);
+  const onDismissRestartPending = useStableCallback(dismissRestartPending);
+  const onScreenshot = useStableCallback(openScreenshot);
+  const onLiveView = useStableCallback(openLiveView);
+  const onSwoop = useStableCallback(openSwoop);
+  // The online flag is read when the dialog opens, not when the row was bound.
+  const onRemoveMachineById = useStableCallback((machineId: string) => {
+    const machine = machines.find((m) => m.machineId === machineId);
+    openRemoveMachineDialog(machineId, machineId, machine?.online ?? false);
+  });
+
+  const temperaturePrefs = useMemo(
+    () => ({ temperatureUnit: userPreferences.temperatureUnit }),
+    [userPreferences.temperatureUnit],
+  );
+
+  // MachineRow takes callbacks already bound to its machine. One set per
+  // machine, rebuilt only when the set of machines changes, so a heartbeat
+  // re-renders only the row it changed.
+  const machineIdsKey = machines.map((m) => m.machineId).join('\n');
+  const rowHandlers = useMemo(() => new Map(machineIdsKey.split('\n').map((id) => [id, {
+    onToggleExpanded: () => toggleMachineExpanded(id),
+    onEditProcess: (process: Process) => onEditProcess(id, process),
+    onDuplicateProcess: (process: Process) => onDuplicateProcess(id, process),
+    onCreateProcess: () => onCreateProcess(id),
+    onKillProcess: (processId: string, processName: string) => onKillProcess(id, processId, processName),
+    onRestartProcess: (processId: string, processName: string) => onRestartProcess(id, processId, processName),
+    onSetLaunchMode: (processId: string, processName: string, mode: LaunchMode, exePath: string, schedules?: ScheduleBlock[] | null) =>
+      onSetLaunchMode(id, processId, processName, mode, exePath, schedules),
+    onConfigureSchedule: (process: Process) => onConfigureSchedule(id, process),
+    onRemoveMachine: () => onRemoveMachineById(id),
+    onMetricClick: (metric: MetricType) => onMetricClick(id, metric),
+    onRestart: () => onRestartMachine(id),
+    onShutdown: () => onShutdownMachine(id),
+    onCancelRestart: () => onCancelRestart(id),
+    onScreenshot: () => onScreenshot(id),
+    onLiveView: () => onLiveView(id),
+    onSwoop: () => onSwoop(id),
+  }])), [
+    machineIdsKey, toggleMachineExpanded, onEditProcess, onDuplicateProcess, onCreateProcess,
+    onKillProcess, onRestartProcess, onSetLaunchMode, onConfigureSchedule, onRemoveMachineById,
+    onMetricClick, onRestartMachine, onShutdownMachine, onCancelRestart, onScreenshot, onLiveView, onSwoop,
+  ]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -883,7 +992,7 @@ export default function DashboardPage() {
       <main className="relative z-10 mx-auto max-w-screen-2xl p-3 md:p-4">
         <div className="mt-3 md:mt-2 mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground mb-1 truncate">
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground mb-1 truncate">
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -897,7 +1006,7 @@ export default function DashboardPage() {
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-            </h2>
+            </h1>
             <p className="text-sm md:text-base text-muted-foreground">
               {randomJoke.toLowerCase()}
             </p>
@@ -1014,7 +1123,7 @@ export default function DashboardPage() {
                 the segmented view toggle drop under the heading at narrow
                 widths instead of squeezing the row past the viewport. */}
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-lg md:text-xl font-bold text-foreground">machines</h3>
+              <h2 className="text-lg md:text-xl font-bold text-foreground">machines</h2>
 
               <div className="flex items-center gap-2">
                 {/* Add Machine Button */}
@@ -1025,53 +1134,37 @@ export default function DashboardPage() {
 
                 {/* Expand/Collapse All + View Toggle */}
                 <div className="flex items-center gap-1 rounded-lg bg-card-sunken p-1 select-none">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={toggleAllExpanded}
-                        className="cursor-pointer text-muted-foreground"
-                      >
-                        {allExpanded ? <ChevronsDownUp className="h-4 w-4" /> : <ChevronsUpDown className="h-4 w-4" />}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>{allExpanded ? 'collapse all' : 'expand all'}</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label={allExpanded ? 'collapse all' : 'expand all'}
+                    variant="ghost"
+                    size="sm"
+                    onClick={toggleAllExpanded}
+                    className="cursor-pointer text-muted-foreground"
+                  >
+                    {allExpanded ? <ChevronsDownUp className="h-4 w-4" /> : <ChevronsUpDown className="h-4 w-4" />}
+                  </IconButton>
                   <div className="h-4 w-px bg-border" />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleViewChange('card')}
-                        className={`cursor-pointer ${viewType === 'card' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
-                      >
-                        <LayoutGrid className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>card view</p>
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleViewChange('list')}
-                        data-testid="view-toggle-list"
-                        className={`cursor-pointer ${viewType === 'list' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
-                      >
-                        <List className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>list view</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label="card view"
+                    aria-pressed={viewType === 'card'}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleViewChange('card')}
+                    className={`cursor-pointer ${viewType === 'card' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                  </IconButton>
+                  <IconButton
+                    label="list view"
+                    aria-pressed={viewType === 'list'}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleViewChange('list')}
+                    data-testid="view-toggle-list"
+                    className={`cursor-pointer ${viewType === 'list' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
+                  >
+                    <List className="h-4 w-4" />
+                  </IconButton>
                 </div>
               </div>
             </div>
@@ -1091,29 +1184,22 @@ export default function DashboardPage() {
                   currentSiteId={currentSiteId}
                   siteTimezone={currentSite?.timezone}
                   siteTimeFormat={userPreferences.timeFormat || '12h'}
-                  onEditProcess={openEditProcessDialog}
-                  onDuplicateProcess={handleDuplicateProcess}
-                  onCreateProcess={openCreateProcessDialog}
-                  onKillProcess={handleKillProcess}
-                  onRestartProcess={handleRestartProcess}
-                  onSetLaunchMode={handleSetLaunchMode}
-                  onConfigureSchedule={handleConfigureSchedule}
-                  onRemoveMachine={openRemoveMachineDialog}
-                  onMetricClick={handleMetricClick}
-                  onRestart={restartMachine}
-                  onShutdown={shutdownMachine}
-                  onCancelRestart={cancelRestart}
-                  onDismissRestartPending={dismissRestartPending}
-                  onScreenshot={(machineId) => {
-                    const m = machines.find(m => m.machineId === machineId);
-                    setScreenshotTarget({ machineId, machineName: machineId, isOnline: m?.online ?? false });
-                    setScreenshotDialogOpen(true);
-                  }}
-                  onLiveView={(machineId) => {
-                    setLiveViewTarget({ machineId, machineName: machineId });
-                    setLiveViewOpen(true);
-                  }}
-                  onSwoop={openSwoop}
+                  onEditProcess={onEditProcess}
+                  onDuplicateProcess={onDuplicateProcess}
+                  onCreateProcess={onCreateProcess}
+                  onKillProcess={onKillProcess}
+                  onRestartProcess={onRestartProcess}
+                  onSetLaunchMode={onSetLaunchMode}
+                  onConfigureSchedule={onConfigureSchedule}
+                  onRemoveMachine={onRemoveMachine}
+                  onMetricClick={onMetricClick}
+                  onRestart={onRestartMachine}
+                  onShutdown={onShutdownMachine}
+                  onCancelRestart={onCancelRestart}
+                  onDismissRestartPending={onDismissRestartPending}
+                  onScreenshot={onScreenshot}
+                  onLiveView={onLiveView}
+                  onSwoop={onSwoop}
                 />
               </div>
             )}
@@ -1135,6 +1221,7 @@ export default function DashboardPage() {
                     {machines.map((machine) => (
                       <MachineRow
                         key={machine.machineId}
+                        {...rowHandlers.get(machine.machineId)!}
                         machine={machine}
                         schedulesFollowSiteTime={currentSite?.schedulesFollowSiteTime}
                         listPref={listPref}
@@ -1142,32 +1229,8 @@ export default function DashboardPage() {
                         currentSiteId={currentSiteId}
                         siteTimezone={currentSite?.timezone || 'UTC'}
                         siteTimeFormat={userPreferences.timeFormat || '12h'}
-                        userPreferences={userPreferences}
+                        userPreferences={temperaturePrefs}
                         isSiteAdmin={isSiteAdmin(currentSiteId)}
-                        onToggleExpanded={() => toggleMachineExpanded(machine.machineId)}
-                        onEditProcess={(process) => openEditProcessDialog(machine.machineId, process)}
-                        onDuplicateProcess={(process) => handleDuplicateProcess(machine.machineId, process)}
-                        onCreateProcess={() => openCreateProcessDialog(machine.machineId)}
-                        onKillProcess={(processId, processName) => handleKillProcess(machine.machineId, processId, processName)}
-                        onRestartProcess={(processId, processName) => handleRestartProcess(machine.machineId, processId, processName)}
-                        onSetLaunchMode={(processId, processName, mode, exePath, schedules) =>
-                          handleSetLaunchMode(machine.machineId, processId, processName, mode, exePath, schedules)
-                        }
-                        onConfigureSchedule={(process) => handleConfigureSchedule(machine.machineId, process)}
-                        onRemoveMachine={() => openRemoveMachineDialog(machine.machineId, machine.machineId, machine.online)}
-                        onMetricClick={(metricType) => handleMetricClick(machine.machineId, metricType)}
-                        onRestart={() => restartMachine(machine.machineId)}
-                        onShutdown={() => shutdownMachine(machine.machineId)}
-                        onCancelRestart={() => cancelRestart(machine.machineId)}
-                        onScreenshot={() => {
-                          setScreenshotTarget({ machineId: machine.machineId, machineName: machine.machineId, isOnline: machine.online });
-                          setScreenshotDialogOpen(true);
-                        }}
-                        onLiveView={() => {
-                          setLiveViewTarget({ machineId: machine.machineId, machineName: machine.machineId });
-                          setLiveViewOpen(true);
-                        }}
-                        onSwoop={() => openSwoop(machine.machineId)}
                       />
                     ))}
                   </TableBody>
@@ -1331,7 +1394,7 @@ export default function DashboardPage() {
             {/* Launch Mode — positioned prominently after name */}
             <div className="space-y-2">
               <Label className="text-foreground text-sm">launch mode</Label>
-              <div className="flex items-stretch rounded-lg overflow-hidden border border-border">
+              <div role="group" aria-label="launch mode" className="flex items-stretch rounded-lg overflow-hidden border border-border">
                 {(['off', 'always', 'scheduled'] as const).map((mode) => {
                   const labels = { off: 'off', always: 'always on', scheduled: 'scheduled' };
                   const isActive = editProcessForm.launch_mode === mode;
@@ -1345,6 +1408,7 @@ export default function DashboardPage() {
                     <button
                       key={mode}
                       type="button"
+                      aria-pressed={isActive}
                       onClick={() => setEditProcessForm({ ...editProcessForm, launch_mode: mode, autolaunch: mode !== 'off' })}
                       className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${colors[mode]} ${!isActive ? 'bg-card text-muted-foreground hover:bg-muted/50' : ''}`}
                     >
@@ -1417,7 +1481,7 @@ export default function DashboardPage() {
 
             {/* priority and visibility apply on windows only; a mac or linux agent ignores both */}
             {editLaunchCopy.launchOptions && (
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Priority */}
               <div className="space-y-2">
                 <Label htmlFor="edit-priority" className="text-foreground">task priority</Label>
@@ -1454,13 +1518,10 @@ export default function DashboardPage() {
                   </SelectContent>
                 </Select>
               </div>
-
-              {/* Empty space for alignment */}
-              <div></div>
             </div>
             )}
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Time Delay */}
               <div className="space-y-2">
                 <Label htmlFor="edit-time-delay" className="text-foreground">launch delay (sec)</Label>
@@ -1536,13 +1597,13 @@ export default function DashboardPage() {
           </div>
           <DialogFooter className="flex items-center">
             {processDialogMode === 'edit' && (
-              <Button
-                variant="ghost"
+              <IconButton
+                label="delete process"
+                variant="ghost-destructive"
                 onClick={() => setDeleteConfirmOpen(true)}
-                className="text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
               >
                 <Trash2 className="h-4 w-4" />
-              </Button>
+              </IconButton>
             )}
             <div className="flex gap-2 ml-auto">
               <Button

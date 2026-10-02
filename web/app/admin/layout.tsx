@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import RequireAdminAccess from '@/components/RequireAdminAccess';
@@ -27,6 +27,26 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const router = useRouter();
   const { role, administersAnySite } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const closeMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const menuWasOpen = useRef(false);
+
+  // the drawer takes focus when it opens, escape closes it, and focus goes back
+  // to the menu button on close (it remounts, so this runs after the commit)
+  useEffect(() => {
+    if (mobileMenuOpen) {
+      closeMenuButtonRef.current?.focus();
+    } else if (menuWasOpen.current) {
+      menuButtonRef.current?.focus();
+    }
+    menuWasOpen.current = mobileMenuOpen;
+    if (!mobileMenuOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileMenuOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [mobileMenuOpen]);
 
   // Explicit user control, not the old viewport-driven auto-collapse, so width is
   // predictable at any window size. lg+ only; <lg always uses the drawer.
@@ -115,9 +135,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {!mobileMenuOpen && (
           <div className="lg:hidden fixed top-4 left-4 z-50">
             <Button
+              ref={menuButtonRef}
               variant="outline"
               size="sm"
               onClick={() => setMobileMenuOpen(true)}
+              aria-label="open admin menu"
+              aria-expanded={false}
+              aria-controls="admin-sidebar"
               className="border-border bg-muted/95 backdrop-blur-sm text-foreground hover:bg-muted! cursor-pointer shadow-lg"
             >
               <Menu className="h-5 w-5 stroke-[2.5]" />
@@ -135,14 +159,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
         {/* Sidebar Navigation */}
         <aside
+          id="admin-sidebar"
           // Width var is lg+ expanded only (mobile w-64, collapsed rail lg:w-20).
           // Transitions off mid-drag so width tracks the pointer 1:1.
           style={{ '--admin-sidebar-w': `${sidebarWidth}px` } as React.CSSProperties}
           className={`
           w-64 ${collapsed ? 'lg:w-20' : 'lg:w-[var(--admin-sidebar-w)]'} bg-card border-r border-border flex flex-col
           fixed lg:relative inset-y-0 left-0 z-40
-          transform ${resizing ? 'transition-none' : 'transition-all duration-200 ease-in-out'}
-          ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+          transform ${resizing ? 'transition-none' : 'duration-200 ease-in-out'}
+          ${mobileMenuOpen
+            // visibility transitions on close only: on open the drawer must be
+            // focusable at once, or the focus() in the effect above lands nowhere
+            ? `translate-x-0 ${resizing ? '' : 'transition-[translate,width]'}`
+            : `-translate-x-full invisible lg:visible lg:translate-x-0 ${resizing ? '' : 'transition-[translate,width,visibility]'}`}
         `}>
           {/* Resize handle, lg+ expanded only. Arrows nudge 16px, double-click resets.
               Keep the aria-value* attrs: a focusable separator is a window-splitter
@@ -174,11 +203,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             {/* Mobile Header */}
             <div className="lg:hidden mb-4">
               <div className="flex items-center justify-between mb-2">
-                <h1 className="text-xl font-bold text-foreground">admin panel</h1>
+                <p className="text-xl font-bold text-foreground">admin panel</p>
                 <button
+                  ref={closeMenuButtonRef}
+                  type="button"
                   onClick={() => setMobileMenuOpen(false)}
                   className="p-2 hover:bg-muted! rounded-lg transition-colors cursor-pointer"
-                  aria-label="Close menu"
+                  aria-label="close admin menu"
                 >
                   <X className="h-5 w-5 text-muted-foreground hover:text-foreground" />
                 </button>
@@ -218,7 +249,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     <Image src="/owlette-icon.png" alt="Owlette" width={36} height={36} />
                   </div>
                   <div className="block pr-8">
-                    <h1 className="text-xl font-bold text-foreground">admin panel</h1>
+                    <p className="text-xl font-bold text-foreground">admin panel</p>
                   </div>
                   {/* Floated right, centered on the logo; the title's pr-8 keeps text clear. */}
                   <div className="absolute right-0 top-1/2 -translate-y-1/2">
@@ -235,6 +266,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   variant="outline"
                   size="sm"
                   onClick={handleBack}
+                  aria-label={collapsed ? backLabel : undefined}
                   className={`w-full border-border bg-background text-foreground hover:bg-accent! hover:text-foreground! cursor-pointer ${collapsed ? 'lg:px-2' : 'lg:px-3'}`}
                 >
                   <ArrowLeft className={`h-4 w-4 ${collapsed ? 'lg:mr-0' : 'lg:mr-2'}`} />
@@ -256,7 +288,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               return (
                 <Tooltip key={item.href}>
                   <TooltipTrigger asChild>
-                    <Link href={item.href} onClick={() => setMobileMenuOpen(false)}>
+                    <Link
+                      href={item.href}
+                      onClick={() => setMobileMenuOpen(false)}
+                      // the collapsed rail hides the text, and the icon is aria-hidden
+                      aria-label={collapsed ? item.name : undefined}
+                      aria-current={isActive ? 'page' : undefined}
+                    >
                       <div
                         className={`
                           flex items-start gap-3 p-3 ${collapsed ? 'lg:p-2 lg:justify-center' : 'lg:p-3 lg:justify-start'} rounded-lg cursor-pointer transition-colors mb-2

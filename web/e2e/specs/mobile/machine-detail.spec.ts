@@ -128,9 +128,7 @@ test.describe('mobile machine detail — admin on site-A', () => {
     await expect(card.getByText('Test Monitor 2', { exact: true })).toBeVisible();
     await assertNoHorizontalOverflow(page);
 
-    // Icon-only with no accessible name, so addressed by its lucide glyph
-    // (`ChevronsDownUp` = the "collapse all" state).
-    await page.locator('button:has(svg.lucide-chevrons-down-up)').click();
+    await page.getByRole('button', { name: 'collapse all', exact: true }).click();
 
     // Collapsed: each section falls back to its one-line summary trigger.
     await expect(card.getByText('Test Monitor 1', { exact: true })).toBeHidden();

@@ -1,0 +1,672 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-02T16:15:01.627Z",
+  "title": "Design System: owlette",
+  "extensions": {
+    "colorMeta": {
+      "signal-cyan": {
+        "role": "primary",
+        "displayName": "Signal Cyan",
+        "canonical": "oklch(0.75 0.18 195)",
+        "tonalRamp": [
+          "oklch(0.15 0.18 195)",
+          "oklch(0.26 0.18 195)",
+          "oklch(0.38 0.18 195)",
+          "oklch(0.49 0.18 195)",
+          "oklch(0.61 0.18 195)",
+          "oklch(0.72 0.18 195)",
+          "oklch(0.84 0.18 195)",
+          "oklch(0.95 0.18 195)"
+        ]
+      },
+      "signal-cyan-bright": {
+        "role": "primary",
+        "displayName": "Signal Cyan Bright",
+        "canonical": "oklch(0.80 0.20 195)",
+        "tonalRamp": [
+          "oklch(0.15 0.2 195)",
+          "oklch(0.26 0.2 195)",
+          "oklch(0.38 0.2 195)",
+          "oklch(0.49 0.2 195)",
+          "oklch(0.61 0.2 195)",
+          "oklch(0.72 0.2 195)",
+          "oklch(0.84 0.2 195)",
+          "oklch(0.95 0.2 195)"
+        ]
+      },
+      "signal-cyan-dim": {
+        "role": "primary",
+        "displayName": "Signal Cyan Dim",
+        "canonical": "oklch(0.45 0.10 195)",
+        "tonalRamp": [
+          "oklch(0.15 0.1 195)",
+          "oklch(0.26 0.1 195)",
+          "oklch(0.38 0.1 195)",
+          "oklch(0.49 0.1 195)",
+          "oklch(0.61 0.1 195)",
+          "oklch(0.72 0.1 195)",
+          "oklch(0.84 0.1 195)",
+          "oklch(0.95 0.1 195)"
+        ]
+      },
+      "signal-cyan-ink": {
+        "role": "primary",
+        "displayName": "Signal Cyan Ink",
+        "canonical": "oklch(0.15 0.02 195)",
+        "tonalRamp": [
+          "oklch(0.15 0.02 195)",
+          "oklch(0.26 0.02 195)",
+          "oklch(0.38 0.02 195)",
+          "oklch(0.49 0.02 195)",
+          "oklch(0.61 0.02 195)",
+          "oklch(0.72 0.02 195)",
+          "oklch(0.84 0.02 195)",
+          "oklch(0.95 0.02 195)"
+        ]
+      },
+      "sodium-amber": {
+        "role": "secondary",
+        "displayName": "Sodium Amber",
+        "canonical": "oklch(0.72 0.16 55)",
+        "tonalRamp": [
+          "oklch(0.15 0.16 55)",
+          "oklch(0.26 0.16 55)",
+          "oklch(0.38 0.16 55)",
+          "oklch(0.49 0.16 55)",
+          "oklch(0.61 0.16 55)",
+          "oklch(0.72 0.16 55)",
+          "oklch(0.84 0.16 55)",
+          "oklch(0.95 0.16 55)"
+        ]
+      },
+      "sodium-amber-bright": {
+        "role": "secondary",
+        "displayName": "Sodium Amber Bright",
+        "canonical": "oklch(0.78 0.18 55)",
+        "tonalRamp": [
+          "oklch(0.15 0.18 55)",
+          "oklch(0.26 0.18 55)",
+          "oklch(0.38 0.18 55)",
+          "oklch(0.49 0.18 55)",
+          "oklch(0.61 0.18 55)",
+          "oklch(0.72 0.18 55)",
+          "oklch(0.84 0.18 55)",
+          "oklch(0.95 0.18 55)"
+        ]
+      },
+      "sodium-amber-dim": {
+        "role": "secondary",
+        "displayName": "Sodium Amber Dim",
+        "canonical": "oklch(0.45 0.10 45)",
+        "tonalRamp": [
+          "oklch(0.15 0.1 45)",
+          "oklch(0.26 0.1 45)",
+          "oklch(0.38 0.1 45)",
+          "oklch(0.49 0.1 45)",
+          "oklch(0.61 0.1 45)",
+          "oklch(0.72 0.1 45)",
+          "oklch(0.84 0.1 45)",
+          "oklch(0.95 0.1 45)"
+        ]
+      },
+      "console-navy": {
+        "role": "neutral",
+        "displayName": "Console Navy",
+        "canonical": "oklch(0.145 0.03 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.03 250)",
+          "oklch(0.26 0.03 250)",
+          "oklch(0.38 0.03 250)",
+          "oklch(0.49 0.03 250)",
+          "oklch(0.61 0.03 250)",
+          "oklch(0.72 0.03 250)",
+          "oklch(0.84 0.03 250)",
+          "oklch(0.95 0.03 250)"
+        ]
+      },
+      "sunken-navy": {
+        "role": "neutral",
+        "displayName": "Sunken Navy",
+        "canonical": "oklch(0.19 0.04 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.04 250)",
+          "oklch(0.26 0.04 250)",
+          "oklch(0.38 0.04 250)",
+          "oklch(0.49 0.04 250)",
+          "oklch(0.61 0.04 250)",
+          "oklch(0.72 0.04 250)",
+          "oklch(0.84 0.04 250)",
+          "oklch(0.95 0.04 250)"
+        ]
+      },
+      "popover-navy": {
+        "role": "neutral",
+        "displayName": "Popover Navy",
+        "canonical": "oklch(0.205 0.04 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.04 250)",
+          "oklch(0.26 0.04 250)",
+          "oklch(0.38 0.04 250)",
+          "oklch(0.49 0.04 250)",
+          "oklch(0.61 0.04 250)",
+          "oklch(0.72 0.04 250)",
+          "oklch(0.84 0.04 250)",
+          "oklch(0.95 0.04 250)"
+        ]
+      },
+      "panel-navy": {
+        "role": "neutral",
+        "displayName": "Panel Navy",
+        "canonical": "oklch(0.23 0.04 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.04 250)",
+          "oklch(0.26 0.04 250)",
+          "oklch(0.38 0.04 250)",
+          "oklch(0.49 0.04 250)",
+          "oklch(0.61 0.04 250)",
+          "oklch(0.72 0.04 250)",
+          "oklch(0.84 0.04 250)",
+          "oklch(0.95 0.04 250)"
+        ]
+      },
+      "input-navy": {
+        "role": "neutral",
+        "displayName": "Input Navy",
+        "canonical": "oklch(0.25 0.06 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.06 250)",
+          "oklch(0.26 0.06 250)",
+          "oklch(0.38 0.06 250)",
+          "oklch(0.49 0.06 250)",
+          "oklch(0.61 0.06 250)",
+          "oklch(0.72 0.06 250)",
+          "oklch(0.84 0.06 250)",
+          "oklch(0.95 0.06 250)"
+        ]
+      },
+      "control-navy": {
+        "role": "neutral",
+        "displayName": "Control Navy",
+        "canonical": "oklch(0.269 0.05 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.05 250)",
+          "oklch(0.26 0.05 250)",
+          "oklch(0.38 0.05 250)",
+          "oklch(0.49 0.05 250)",
+          "oklch(0.61 0.05 250)",
+          "oklch(0.72 0.05 250)",
+          "oklch(0.84 0.05 250)",
+          "oklch(0.95 0.05 250)"
+        ]
+      },
+      "hairline-blue": {
+        "role": "neutral",
+        "displayName": "Hairline Blue",
+        "canonical": "oklch(0.35 0.08 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.08 250)",
+          "oklch(0.26 0.08 250)",
+          "oklch(0.38 0.08 250)",
+          "oklch(0.49 0.08 250)",
+          "oklch(0.61 0.08 250)",
+          "oklch(0.72 0.08 250)",
+          "oklch(0.84 0.08 250)",
+          "oklch(0.95 0.08 250)"
+        ]
+      },
+      "readout-white": {
+        "role": "neutral",
+        "displayName": "Readout White",
+        "canonical": "oklch(0.985 0.01 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.01 250)",
+          "oklch(0.26 0.01 250)",
+          "oklch(0.38 0.01 250)",
+          "oklch(0.49 0.01 250)",
+          "oklch(0.61 0.01 250)",
+          "oklch(0.72 0.01 250)",
+          "oklch(0.84 0.01 250)",
+          "oklch(0.95 0.01 250)"
+        ]
+      },
+      "muted-steel": {
+        "role": "neutral",
+        "displayName": "Muted Steel",
+        "canonical": "oklch(0.708 0.05 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.05 250)",
+          "oklch(0.26 0.05 250)",
+          "oklch(0.38 0.05 250)",
+          "oklch(0.49 0.05 250)",
+          "oklch(0.61 0.05 250)",
+          "oklch(0.72 0.05 250)",
+          "oklch(0.84 0.05 250)",
+          "oklch(0.95 0.05 250)"
+        ]
+      },
+      "alarm-coral": {
+        "role": "status",
+        "displayName": "Alarm Coral",
+        "canonical": "oklch(0.704 0.191 22.216)",
+        "tonalRamp": [
+          "oklch(0.15 0.191 22.216)",
+          "oklch(0.26 0.191 22.216)",
+          "oklch(0.38 0.191 22.216)",
+          "oklch(0.49 0.191 22.216)",
+          "oklch(0.61 0.191 22.216)",
+          "oklch(0.72 0.191 22.216)",
+          "oklch(0.84 0.191 22.216)",
+          "oklch(0.95 0.191 22.216)"
+        ]
+      },
+      "online-green": {
+        "role": "status",
+        "displayName": "Online Green",
+        "canonical": "oklch(0.723 0.219 149.579)",
+        "tonalRamp": [
+          "oklch(0.15 0.219 149.579)",
+          "oklch(0.26 0.219 149.579)",
+          "oklch(0.38 0.219 149.579)",
+          "oklch(0.49 0.219 149.579)",
+          "oklch(0.61 0.219 149.579)",
+          "oklch(0.72 0.219 149.579)",
+          "oklch(0.84 0.219 149.579)",
+          "oklch(0.95 0.219 149.579)"
+        ]
+      },
+      "offline-red": {
+        "role": "status",
+        "displayName": "Offline Red",
+        "canonical": "oklch(0.577 0.245 27.325)",
+        "tonalRamp": [
+          "oklch(0.15 0.245 27.325)",
+          "oklch(0.26 0.245 27.325)",
+          "oklch(0.38 0.245 27.325)",
+          "oklch(0.49 0.245 27.325)",
+          "oklch(0.61 0.245 27.325)",
+          "oklch(0.72 0.245 27.325)",
+          "oklch(0.84 0.245 27.325)",
+          "oklch(0.95 0.245 27.325)"
+        ]
+      },
+      "warning-yellow": {
+        "role": "status",
+        "displayName": "Warning Yellow",
+        "canonical": "oklch(0.795 0.184 86.047)",
+        "tonalRamp": [
+          "oklch(0.15 0.184 86.047)",
+          "oklch(0.26 0.184 86.047)",
+          "oklch(0.38 0.184 86.047)",
+          "oklch(0.49 0.184 86.047)",
+          "oklch(0.61 0.184 86.047)",
+          "oklch(0.72 0.184 86.047)",
+          "oklch(0.84 0.184 86.047)",
+          "oklch(0.95 0.184 86.047)"
+        ]
+      },
+      "critical-red": {
+        "role": "status",
+        "displayName": "Critical Red",
+        "canonical": "oklch(0.637 0.237 25.331)",
+        "tonalRamp": [
+          "oklch(0.15 0.237 25.331)",
+          "oklch(0.26 0.237 25.331)",
+          "oklch(0.38 0.237 25.331)",
+          "oklch(0.49 0.237 25.331)",
+          "oklch(0.61 0.237 25.331)",
+          "oklch(0.72 0.237 25.331)",
+          "oklch(0.84 0.237 25.331)",
+          "oklch(0.95 0.237 25.331)"
+        ]
+      },
+      "band-calm-emerald": {
+        "role": "status",
+        "displayName": "Band Calm Emerald",
+        "canonical": "oklch(0.696 0.149 162.48)",
+        "tonalRamp": [
+          "oklch(0.15 0.149 162.48)",
+          "oklch(0.26 0.149 162.48)",
+          "oklch(0.38 0.149 162.48)",
+          "oklch(0.49 0.149 162.48)",
+          "oklch(0.61 0.149 162.48)",
+          "oklch(0.72 0.149 162.48)",
+          "oklch(0.84 0.149 162.48)",
+          "oklch(0.95 0.149 162.48)"
+        ]
+      },
+      "band-steady-violet": {
+        "role": "status",
+        "displayName": "Band Steady Violet",
+        "canonical": "oklch(0.606 0.219 292.717)",
+        "tonalRamp": [
+          "oklch(0.15 0.219 292.717)",
+          "oklch(0.26 0.219 292.717)",
+          "oklch(0.38 0.219 292.717)",
+          "oklch(0.49 0.219 292.717)",
+          "oklch(0.61 0.219 292.717)",
+          "oklch(0.72 0.219 292.717)",
+          "oklch(0.84 0.219 292.717)",
+          "oklch(0.95 0.219 292.717)"
+        ]
+      },
+      "band-working-sky": {
+        "role": "status",
+        "displayName": "Band Working Sky",
+        "canonical": "oklch(0.685 0.148 237.323)",
+        "tonalRamp": [
+          "oklch(0.15 0.148 237.323)",
+          "oklch(0.26 0.148 237.323)",
+          "oklch(0.38 0.148 237.323)",
+          "oklch(0.49 0.148 237.323)",
+          "oklch(0.61 0.148 237.323)",
+          "oklch(0.72 0.148 237.323)",
+          "oklch(0.84 0.148 237.323)",
+          "oklch(0.95 0.148 237.323)"
+        ]
+      },
+      "band-strained-amber": {
+        "role": "status",
+        "displayName": "Band Strained Amber",
+        "canonical": "oklch(0.769 0.165 70.08)",
+        "tonalRamp": [
+          "oklch(0.15 0.165 70.08)",
+          "oklch(0.26 0.165 70.08)",
+          "oklch(0.38 0.165 70.08)",
+          "oklch(0.49 0.165 70.08)",
+          "oklch(0.61 0.165 70.08)",
+          "oklch(0.72 0.165 70.08)",
+          "oklch(0.84 0.165 70.08)",
+          "oklch(0.95 0.165 70.08)"
+        ]
+      },
+      "band-critical-red": {
+        "role": "status",
+        "displayName": "Band Critical Red",
+        "canonical": "oklch(0.637 0.208 25.331)",
+        "tonalRamp": [
+          "oklch(0.15 0.208 25.331)",
+          "oklch(0.26 0.208 25.331)",
+          "oklch(0.38 0.208 25.331)",
+          "oklch(0.49 0.208 25.331)",
+          "oklch(0.61 0.208 25.331)",
+          "oklch(0.72 0.208 25.331)",
+          "oklch(0.84 0.208 25.331)",
+          "oklch(0.95 0.208 25.331)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "landing hero headline only."
+      },
+      "section": {
+        "displayName": "Section",
+        "purpose": "landing section headlines, paired with a light muted subheadline."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "app page titles; 24px below md, 30px from md."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "section and dialog titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "default UI text."
+      },
+      "control": {
+        "displayName": "Control",
+        "purpose": "button and tab labels."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "metadata, badges, units, table detail lines; the most-used size."
+      },
+      "readout": {
+        "displayName": "Readout",
+        "purpose": "command output, IDs, API examples, versions."
+      },
+      "micro": {
+        "displayName": "Micro",
+        "purpose": "uppercase mock-up captions on the landing page; never body text."
+      }
+    },
+    "shadows": [
+      {
+        "name": "floating-panel",
+        "value": "0 25px 50px -12px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.1)",
+        "purpose": "menus, popovers, site switcher (MENU_SURFACE), over 85% control navy with an 8px backdrop blur."
+      },
+      {
+        "name": "dialog",
+        "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
+        "purpose": "modal content, over a 50% black overlay with a 4px backdrop blur."
+      },
+      {
+        "name": "resting-hint",
+        "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        "purpose": "outline buttons, inputs, cards; residue, not structure."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-standard",
+        "value": "cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "button sweep, link highlight, form reveal."
+      },
+      {
+        "name": "sweep-button",
+        "value": "200ms",
+        "purpose": "button hover sweep, left to right in and out."
+      },
+      {
+        "name": "sweep-link",
+        "value": "180ms",
+        "purpose": "highlighter link fill and glyph flip."
+      },
+      {
+        "name": "collapsible",
+        "value": "200ms ease-out open / 180ms ease-in close",
+        "purpose": "radix collapsible height."
+      },
+      {
+        "name": "form-reveal",
+        "value": "260ms",
+        "purpose": "progressive form disclosure, grid-rows 0fr to 1fr."
+      },
+      {
+        "name": "hero-enter",
+        "value": "600ms ease-out, staggered 300/450/600/800ms",
+        "purpose": "landing hero fade-up after the eye ignites (1.5s)."
+      },
+      {
+        "name": "chart-plot",
+        "value": "2.4s ease-in-out infinite",
+        "purpose": "chart loading line graph."
+      },
+      {
+        "name": "feather-fall",
+        "value": "7.2s linear, 3.6s sway",
+        "purpose": "boot / long-load falling feather."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      },
+      {
+        "name": "xl",
+        "value": "1280px"
+      },
+      {
+        "name": "2xl",
+        "value": "1536px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "the one cyan action on a surface; hover sweeps a blue scrim left to right.",
+      "html": "<button class=\"ds-btn-primary\">deploy</button>",
+      "css": ".ds-btn-primary { font-family: Geist, ui-sans-serif, system-ui, sans-serif; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 4px; font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer; background-image: linear-gradient(var(--btn-hover, color-mix(in oklch, oklch(0.62 0.16 250) 26%, transparent)), var(--btn-hover, color-mix(in oklch, oklch(0.62 0.16 250) 26%, transparent))); background-repeat: no-repeat; background-size: 0% 100%; background-position: 100% 0; transition: background-size 200ms cubic-bezier(0.4, 0, 0.2, 1), color 200ms cubic-bezier(0.4, 0, 0.2, 1); background-color: var(--primary, oklch(0.75 0.18 195)); color: var(--primary-foreground, oklch(0.15 0.02 195)); } .ds-btn-primary:hover, .ds-btn-primary:focus-visible { background-position: 0 0; background-size: 100% 100%; } .ds-btn-primary:focus-visible { outline: 2px solid var(--ring, oklch(0.75 0.18 195)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "secondary actions on cards; full input-navy fill plus a real hairline border.",
+      "html": "<button class=\"ds-btn-outline\">view logs</button>",
+      "css": ".ds-btn-outline { font-family: Geist, ui-sans-serif, system-ui, sans-serif; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 4px; font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer; background-image: linear-gradient(var(--btn-hover, color-mix(in oklch, oklch(0.62 0.16 250) 26%, transparent)), var(--btn-hover, color-mix(in oklch, oklch(0.62 0.16 250) 26%, transparent))); background-repeat: no-repeat; background-size: 0% 100%; background-position: 100% 0; transition: background-size 200ms cubic-bezier(0.4, 0, 0.2, 1), color 200ms cubic-bezier(0.4, 0, 0.2, 1); background-color: var(--input, oklch(0.25 0.06 250)); color: var(--foreground, oklch(0.985 0.01 250)); border-color: var(--border, oklch(0.35 0.08 250)); } .ds-btn-outline:hover, .ds-btn-outline:focus-visible { background-position: 0 0; background-size: 100% 100%; } .ds-btn-outline:focus-visible { outline: 2px solid var(--ring, oklch(0.75 0.18 195)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "toolbar and icon actions; no fill until the sweep passes.",
+      "html": "<button class=\"ds-btn-ghost\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12h14\"/><path d=\"M12 5v14\"/></svg>add process</button>",
+      "css": ".ds-btn-ghost { font-family: Geist, ui-sans-serif, system-ui, sans-serif; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 4px; font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer; background-image: linear-gradient(var(--btn-hover, color-mix(in oklch, oklch(0.62 0.16 250) 26%, transparent)), var(--btn-hover, color-mix(in oklch, oklch(0.62 0.16 250) 26%, transparent))); background-repeat: no-repeat; background-size: 0% 100%; background-position: 100% 0; transition: background-size 200ms cubic-bezier(0.4, 0, 0.2, 1), color 200ms cubic-bezier(0.4, 0, 0.2, 1); background-color: transparent; color: var(--foreground, oklch(0.985 0.01 250)); } .ds-btn-ghost:hover, .ds-btn-ghost:focus-visible { background-position: 0 0; background-size: 100% 100%; } .ds-btn-ghost:focus-visible { outline: 2px solid var(--ring, oklch(0.75 0.18 195)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "compact 36px field; cyan border and 3px ring on focus.",
+      "html": "<input class=\"ds-input\" placeholder=\"search machines\" />",
+      "css": ".ds-input { font-family: Geist, ui-sans-serif, system-ui, sans-serif; height: 36px; width: 280px; padding: 4px 12px; border-radius: 4px; border: 1px solid var(--input, oklch(0.25 0.06 250)); background: color-mix(in oklch, var(--input, oklch(0.25 0.06 250)) 30%, transparent); color: var(--foreground, oklch(0.985 0.01 250)); font-size: 14px; outline: none; transition: border-color 150ms, box-shadow 150ms; } .ds-input::placeholder { color: var(--muted-foreground, oklch(0.708 0.05 250)); } .ds-input:focus-visible { border-color: var(--ring, oklch(0.75 0.18 195)); box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring, oklch(0.75 0.18 195)) 50%, transparent); }"
+    },
+    {
+      "name": "Breadcrumb Header",
+      "kind": "nav",
+      "description": "56px header: eye mark, wordmark, slash-separated site and page crumbs.",
+      "html": "<nav class=\"ds-nav\"><span class=\"ds-nav-eye\"></span><strong>owlette</strong><span class=\"ds-nav-sep\">/</span><button class=\"ds-nav-crumb\">horizon museum ▾</button><span class=\"ds-nav-sep\">/</span><span class=\"ds-nav-page\">dashboard</span></nav>",
+      "css": ".ds-nav { font-family: Geist, ui-sans-serif, system-ui, sans-serif; display: flex; align-items: center; gap: 6px; height: 56px; padding: 0 12px; background: var(--background, oklch(0.145 0.03 250)); border-bottom: 1px solid var(--border, oklch(0.35 0.08 250)); color: var(--foreground, oklch(0.985 0.01 250)); font-size: 14px; } .ds-nav strong { font-size: 16px; font-weight: 600; margin-right: 4px; } .ds-nav-eye { width: 18px; height: 18px; border-radius: 9999px; background: radial-gradient(circle at 40% 40%, oklch(0.85 0.12 60), oklch(0.62 0.17 40)); } .ds-nav-sep { color: color-mix(in oklch, var(--muted-foreground, oklch(0.708 0.05 250)) 60%, transparent); font-size: 18px; } .ds-nav-crumb { font-family: Geist, ui-sans-serif, system-ui, sans-serif; background: none; border: 0; color: var(--muted-foreground, oklch(0.708 0.05 250)); font-size: 14px; padding: 4px 6px; border-radius: 4px; cursor: pointer; } .ds-nav-crumb:hover { color: var(--foreground, oklch(0.985 0.01 250)); background: var(--secondary, oklch(0.269 0.05 250)); } .ds-nav-page { font-weight: 500; padding: 4px 6px; }"
+    },
+    {
+      "name": "Status Pills",
+      "kind": "chip",
+      "description": "online is a green dot; offline and restarting are solid red pills.",
+      "html": "<div class=\"ds-status\"><span class=\"ds-dot\" title=\"online\"></span><span class=\"ds-pill\">offline</span><span class=\"ds-pill ds-pulse\">↻ 00:42</span></div>",
+      "css": ".ds-status { font-family: Geist, ui-sans-serif, system-ui, sans-serif; display: flex; align-items: center; gap: 12px; } .ds-dot { width: 10px; height: 10px; border-radius: 9999px; background: oklch(0.723 0.219 149.579); } .ds-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 9999px; background: oklch(0.577 0.245 27.325); color: #fff; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; } .ds-pulse { animation: ds-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; } @keyframes ds-pulse { 50% { opacity: 0.5; } } @media (prefers-reduced-motion: reduce) { .ds-pulse { animation: none; } }"
+    },
+    {
+      "name": "Telemetry Row",
+      "kind": "custom",
+      "description": "signature metric strip: usage-band edge bar, muted label, bold value, colour only past a threshold.",
+      "html": "<div class=\"ds-tele\"><div class=\"ds-tele-row\"><i style=\"background: rgb(139, 92, 246)\"></i><span class=\"ds-tele-k\">cpu</span><span class=\"ds-tele-d\">Intel Xeon W-2295</span><b>38%</b><span class=\"ds-tele-t\">58.0°C</span></div><div class=\"ds-tele-row\"><i style=\"background: rgb(245, 158, 11)\"></i><span class=\"ds-tele-k\">gpu</span><span class=\"ds-tele-d\">NVIDIA RTX A5000</span><b>79%</b><span class=\"ds-tele-t ds-hot\">81.0°C</span></div></div>",
+      "css": ".ds-tele { font-family: Geist, ui-sans-serif, system-ui, sans-serif; width: 420px; border: 1px solid var(--border, oklch(0.35 0.08 250)); border-radius: 10px; overflow: hidden; background: var(--card, oklch(0.23 0.04 250)); } .ds-tele-row { position: relative; display: flex; align-items: baseline; gap: 10px; padding: 12px 14px 12px 18px; background: var(--card-sunken, oklch(0.19 0.04 250)); color: var(--foreground, oklch(0.985 0.01 250)); } .ds-tele-row + .ds-tele-row { border-top: 1px solid var(--border, oklch(0.35 0.08 250)); } .ds-tele-row i { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; } .ds-tele-k { color: var(--muted-foreground, oklch(0.708 0.05 250)); font-size: 14px; } .ds-tele-d { color: var(--muted-foreground, oklch(0.708 0.05 250)); font-size: 12px; flex: 1; } .ds-tele-row b { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; } .ds-tele-t { font-size: 14px; font-variant-numeric: tabular-nums; } .ds-hot { color: oklch(0.795 0.184 86.047); }"
+    },
+    {
+      "name": "Floating Menu",
+      "kind": "custom",
+      "description": "MENU_SURFACE: frosted control navy, deep shadow, 1px white ring. the only lifted surface.",
+      "html": "<div class=\"ds-menu\"><div class=\"ds-menu-item\">horizon museum <span>✓</span></div><div class=\"ds-menu-item\">riverside gallery</div><div class=\"ds-menu-item ds-menu-muted\">manage sites</div></div>",
+      "css": ".ds-menu { font-family: Geist, ui-sans-serif, system-ui, sans-serif; width: 240px; padding: 4px; border-radius: 6px; border: 1px solid var(--border, oklch(0.35 0.08 250)); background: color-mix(in oklch, var(--secondary, oklch(0.269 0.05 250)) 85%, transparent); backdrop-filter: blur(8px); box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.1); color: var(--foreground, oklch(0.985 0.01 250)); font-size: 14px; } .ds-menu-item { display: flex; justify-content: space-between; padding: 6px 8px; border-radius: 4px; cursor: pointer; } .ds-menu-item span { color: var(--primary, oklch(0.75 0.18 195)); } .ds-menu-item:hover { background: var(--accent, oklch(0.35 0.08 250)); } .ds-menu-muted { color: var(--muted-foreground, oklch(0.708 0.05 250)); }"
+    },
+    {
+      "name": "Highlighter Link",
+      "kind": "custom",
+      "description": "links never underline; a cyan selection fill sweeps in left to right and exits to the right.",
+      "html": "<p class=\"ds-p\">read the <a class=\"ds-link\" href=\"#\">roost guide</a> before your first deploy.</p>",
+      "css": ".ds-p { font-family: Geist, ui-sans-serif, system-ui, sans-serif; color: var(--foreground, oklch(0.985 0.01 250)); font-size: 14px; } .ds-link { color: var(--primary, oklch(0.75 0.18 195)); text-decoration: none; border-radius: 2px; padding: 0.05em 0.15em; margin: 0 -0.15em; background-image: linear-gradient(var(--primary, oklch(0.75 0.18 195)), var(--primary, oklch(0.75 0.18 195))); background-repeat: no-repeat; background-size: 0% 100%; background-position: 100% 0; transition: background-size 180ms cubic-bezier(0.4, 0, 0.2, 1), color 180ms cubic-bezier(0.4, 0, 0.2, 1); } .ds-link:hover, .ds-link:focus-visible { color: var(--background, oklch(0.145 0.03 250)); background-position: 0 0; background-size: 100% 100%; outline: none; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Mission Control",
+    "overview": "owlette is a console for watching machines nobody is sitting in front of. the screen is a deep navy room, telemetry is the decoration, and one cyan signal marks what is live, interactive or needs you. everything else steps back. density is high on purpose: an operator scans tens of machines at once, so the type is small, the controls are compact, and every row carries five readouts before it carries any ornament.\n\nthe personality sits in a few precise mechanics, not in decoration: a hover fill that sweeps left to right like a highlighter, the owlette eye that powers on at first paint, a feather that falls while data loads, a line graph that plots itself. the blueprint and dot grids are the room's walls. they sit at low opacity behind everything and never compete with data.\n\ndark is canonical today, and the app is pinned dark (`<html class=\"dark\">`). a light theme is planned, so new work must keep the light token layer valid even though nothing renders it yet (see Do's and Don'ts).",
+    "keyCharacteristics": [
+      "deep navy surfaces in one hue family (250), separated by lightness steps, not by colour",
+      "signal cyan is the only interactive accent; sodium amber is the rare warm counterpoint",
+      "dense telemetry: 12–14px type, 36px controls, usage-coloured bars and sparklines inside rows",
+      "Geist for everything, Geist Mono for readouts, commands and identifiers",
+      "all copy lowercase",
+      "motion is functional and directional: sweeps run left to right, entrances fade up, and everything stops under reduced motion"
+    ],
+    "rules": [
+      {
+        "name": "The One Signal Rule",
+        "body": "cyan means interactive or live. don't use it for decoration, headings or illustration fills, or it stops meaning anything.",
+        "section": "colors"
+      },
+      {
+        "name": "The Colour Is an Alarm Rule",
+        "body": "colour on a readout is reserved for crossed thresholds. normal values stay readout white, so a wall of numbers can't hide the one that matters.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Hue Rule",
+        "body": "every navy surface sits at hue 250. drifting hue between near-identical darks reads as a white-balance error, not depth.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Orphans Rule",
+        "body": "headings use `text-wrap: balance`, and paragraphs and list items use `text-wrap: pretty`. this has been a platform rule since 2026-08-13.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "tables and readouts use tabular figures so columns of numbers align as they update.",
+        "section": "typography"
+      },
+      {
+        "name": "The Lowercase Rule",
+        "body": "every user-facing string is lowercase, except acronyms (CPU, GPU, API), proper nouns and user-entered strings. type hierarchy never leans on capitalisation.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flush Row Rule",
+        "body": "telemetry rows stack edge to edge inside their card, separated by hairlines, not gaps. whitespace belongs between objects, not inside a readout.",
+        "section": "layout"
+      },
+      {
+        "name": "The Shadows Float Rule",
+        "body": "a surface at rest gets no structural shadow. shadow plus hairline ring is the signature of \"this is above the page\".",
+        "section": "elevation"
+      },
+      {
+        "name": "The No Twin Fills Rule",
+        "body": "never place two large flat fills a hair apart in lightness against a shared hard edge. it reads as a mistake, not depth. to get a darker region, use a vignette that fades to `--card-recessed` with no boundary line (as on the auth brand panel).",
+        "section": "elevation"
+      },
+      {
+        "name": "The Visible Focus Rule",
+        "body": "never ship `outline-none` without a replacement indicator that clears 3:1 against its surface. the old 1px outline at 30% measured 1.3:1 and was invisible in practice. menu and listbox rows are the exception: their highlight fill is the indicator (owner call, 2026-10-02, after an inset ring there read as a box drawn over the menu).",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "**Do** route every interactive or live state through signal cyan, and keep it off everything else.",
+      "**Do** separate surfaces by lightness steps within hue 250 and hairline-blue borders.",
+      "**Do** colour a readout only when it crosses a threshold, using the usage bands or the warning/critical temperature colours.",
+      "**Do** standardize button styling in `web/components/ui/button.tsx` variants. hover feedback comes from `.btn-sweep`, not per-instance `hover:bg-*`.",
+      "**Do** use `MENU_SURFACE` for any floating menu, on web and desktop alike.",
+      "**Do** define every new colour token in both the `:root` (light) and `.dark` blocks of `globals.css`. dark is canonical, but a light theme is planned, so light values must stay valid.",
+      "**Do** use `IconButton` for every icon-only control, with a lowercase label that names the action.",
+      "**Do** honour `prefers-reduced-motion`: every new animation needs a reduced-motion path that ends in its final state.",
+      "**Do** keep `desktop/src/globals.css` in step with web. its dark `--btn-hover` still uses the grey foreground mix that web replaced with the blue tint, which is a known drift."
+    ],
+    "donts": [
+      "**Don't** hardcode colours in components. use the theme tokens. existing raw Tailwind status classes (`red-600`, `green-500`, `amber-*`) are incumbent debt, not precedent.",
+      "**Don't** underline links or give them `hover:text-*`. the highlighter sweep owns link hover.",
+      "**Don't** put structural shadows on resting cards or panels.",
+      "**Don't** place two near-identical flat fills against a shared hard edge.",
+      "**Don't** add a second interactive accent or another icon library. lucide-react is the only icon set.",
+      "**Don't** write title-case or sentence-case UI copy.",
+      "**Don't** remove a focus outline without drawing a visible replacement.",
+      "**Don't** add new uses of the light theme's stock neutral palette (near-black primary, grey surfaces) as if it were the brand. it is shadcn scaffolding until the light theme is designed."
+    ]
+  }
+}

@@ -220,14 +220,14 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
         </div>
 
         <div className="hidden min-w-0 sm:block">
-          <div className="text-[11px] leading-tight text-muted-foreground/60">created</div>
+          <div className="text-[11px] leading-tight text-muted-foreground/80">created</div>
           <div className="text-xs leading-tight text-muted-foreground tabular-nums">
             {formatDate(apiKey.createdAt)}
           </div>
         </div>
 
         <div className="hidden min-w-0 sm:block">
-          <div className="text-[11px] leading-tight text-muted-foreground/60">last used</div>
+          <div className="text-[11px] leading-tight text-muted-foreground/80">last used</div>
           <div className="text-xs leading-tight text-muted-foreground tabular-nums">
             {formatRelativeAt(apiKey.lastUsedAt, now)}
           </div>
@@ -236,7 +236,7 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
         <div className="hidden min-w-0 sm:block">
           <div
             className={`text-[11px] leading-tight ${
-              apiKey.expired ? 'text-red-400/70' : 'text-muted-foreground/60'
+              apiKey.expired ? 'text-red-400' : 'text-muted-foreground/80'
             }`}
           >
             {apiKey.expired ? 'expired' : apiKey.retired ? 'retired' : 'expires'}

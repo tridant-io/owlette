@@ -3,6 +3,7 @@
 import React, { useState, useCallback } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -155,7 +156,7 @@ export default function UploadInstallerDialog({
         <div className="space-y-4 py-4">
           {/* File Upload Area */}
           <div className="space-y-2">
-            <Label className="text-white">installer file</Label>
+            <p className="text-sm leading-none font-medium text-white">installer file</p>
             <div
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
@@ -202,7 +203,8 @@ export default function UploadInstallerDialog({
                       <p className="text-sm text-muted-foreground">{formatFileSize(file.size)}</p>
                     </div>
                   </div>
-                  <Button
+                  <IconButton
+                    label="remove file"
                     type="button"
                     variant="ghost"
                     size="sm"
@@ -211,7 +213,7 @@ export default function UploadInstallerDialog({
                     className="cursor-pointer"
                   >
                     <X className="h-4 w-4 text-muted-foreground" />
-                  </Button>
+                  </IconButton>
                 </div>
               )}
             </div>

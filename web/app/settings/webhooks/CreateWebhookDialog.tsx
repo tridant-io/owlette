@@ -167,7 +167,7 @@ export function CreateWebhookDialog({
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label className="text-white">events</Label>
+              <p id="webhook-events-label" className="text-sm leading-none font-medium text-white">events</p>
               <button
                 type="button"
                 onClick={toggleAll}
@@ -178,7 +178,7 @@ export function CreateWebhookDialog({
                   : 'select all'}
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto border border-border rounded p-3">
+            <div role="group" aria-labelledby="webhook-events-label" className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto border border-border rounded p-3">
               {ROOST_WEBHOOK_EVENTS.map((evt) => (
                 <label
                   key={evt}

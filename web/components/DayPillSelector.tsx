@@ -107,9 +107,10 @@ export default function DayPillSelector({
     setDay(day, dragModeRef.current);
   };
 
-  // Coarse pointers still need plain click toggling.
-  const handleClick = (day: DayKey) => {
-    if (supportsDrag) return; // mouseDown already handled it
+  // Coarse pointers and the keyboard toggle on click. A mouse click (detail > 0) on a
+  // drag-capable device was already handled by mouseDown; Enter/Space click with detail 0.
+  const handleClick = (day: DayKey, e: React.MouseEvent) => {
+    if (supportsDrag && e.detail > 0) return;
     toggleDay(day);
   };
 
@@ -142,7 +143,9 @@ export default function DayPillSelector({
             type="button"
             onMouseDown={(e) => handleMouseDown(day, e)}
             onMouseEnter={() => handleMouseEnter(day)}
-            onClick={() => handleClick(day)}
+            onClick={(e) => handleClick(day, e)}
+            aria-label={FULL_NAMES[day]}
+            aria-pressed={isActive}
             className={`${baseClasses} ${isActive ? activeCls : inactiveCls}`}
             title={FULL_NAMES[day]}
           >

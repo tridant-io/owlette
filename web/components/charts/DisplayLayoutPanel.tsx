@@ -20,6 +20,7 @@ import {
 import { toast } from '@/lib/toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Switch } from '@/components/ui/switch';
 import { AlertTriangle, Loader2, Monitor, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -1337,19 +1338,15 @@ export function DisplayLayoutPanel({
             </div>
           )}
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleCloseClick}
-                className="bg-card border border-border text-muted-foreground hover:text-white h-8 w-8 p-0 shrink-0"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>close panel</TooltipContent>
-          </Tooltip>
+          <IconButton
+            label="close panel"
+            variant="ghost"
+            size="icon-sm"
+            onClick={handleCloseClick}
+            className="bg-card border border-border text-muted-foreground hover:text-foreground shrink-0"
+          >
+            <X className="h-4 w-4" />
+          </IconButton>
         </div>
 
         {ackSecondsLeft !== null && (

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { AlertTriangle, Fingerprint, Pencil, Trash2, Plus, Check, X, Smartphone, Monitor } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -174,7 +174,8 @@ export function PasskeyManager({
                           <Input
                             value={editName}
                             onChange={(e) => setEditName(e.target.value)}
-                            className="h-7 w-40 text-sm bg-input border-border text-foreground"
+                            aria-label="passkey name"
+                            className="h-7 w-40 text-base md:text-sm bg-input border-border text-foreground"
                             maxLength={50}
                             autoFocus
                             onKeyDown={(e) => {
@@ -182,29 +183,22 @@ export function PasskeyManager({
                               if (e.key === 'Escape') setEditingId(null);
                             }}
                           />
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7 cursor-pointer"
-                                onClick={() => handleRename(pk.credentialId)}
-                              >
-                                <Check className="h-3.5 w-3.5 text-green-400" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>save</p>
-                            </TooltipContent>
-                          </Tooltip>
-                          <Button
+                          <IconButton
+                            label="save name"
                             variant="ghost"
-                            size="icon"
+                            className="h-7 w-7 cursor-pointer"
+                            onClick={() => handleRename(pk.credentialId)}
+                          >
+                            <Check className="h-3.5 w-3.5 text-green-400" />
+                          </IconButton>
+                          <IconButton
+                            label="cancel rename"
+                            variant="ghost"
                             className="h-7 w-7 cursor-pointer"
                             onClick={() => setEditingId(null)}
                           >
                             <X className="h-3.5 w-3.5 text-muted-foreground" />
-                          </Button>
+                          </IconButton>
                         </div>
                       ) : (
                         <>
@@ -222,9 +216,9 @@ export function PasskeyManager({
 
                   {editingId !== pk.credentialId && (
                     <div className="flex items-center gap-1 shrink-0">
-                      <Button
+                      <IconButton
+                        label={`rename ${pk.friendlyName}`}
                         variant="ghost"
-                        size="icon"
                         className="h-7 w-7 cursor-pointer"
                         onClick={() => {
                           setEditingId(pk.credentialId);
@@ -232,15 +226,15 @@ export function PasskeyManager({
                         }}
                       >
                         <Pencil className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
-                      </Button>
-                      <Button
+                      </IconButton>
+                      <IconButton
+                        label={`remove ${pk.friendlyName}`}
                         variant="ghost"
-                        size="icon"
                         className="h-7 w-7 cursor-pointer"
                         onClick={() => setDeleteTarget({ id: pk.credentialId, name: pk.friendlyName })}
                       >
                         <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-red-400" />
-                      </Button>
+                      </IconButton>
                     </div>
                   )}
                 </div>
@@ -252,7 +246,8 @@ export function PasskeyManager({
                     value={newPasskeyName}
                     onChange={(e) => setNewPasskeyName(e.target.value)}
                     placeholder="passkey name (e.g. MacBook, iPhone)"
-                    className="h-9 text-sm bg-input border-border text-foreground placeholder:text-muted-foreground"
+                    aria-label="new passkey name"
+                    className="h-9 text-base md:text-sm bg-input border-border text-foreground placeholder:text-muted-foreground"
                     maxLength={50}
                     autoFocus
                     disabled={registering}
@@ -261,15 +256,15 @@ export function PasskeyManager({
                       if (e.key === 'Escape') setShowNameInput(false);
                     }}
                   />
-                  <Button
+                  <IconButton
+                    label="cancel new passkey"
                     variant="ghost"
-                    size="icon"
                     className="h-9 w-9 cursor-pointer"
                     onClick={() => setShowNameInput(false)}
                     disabled={registering}
                   >
                     <X className="h-4 w-4 text-muted-foreground" />
-                  </Button>
+                  </IconButton>
                 </div>
               )}
 

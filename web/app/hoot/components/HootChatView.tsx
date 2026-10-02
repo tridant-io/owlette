@@ -15,6 +15,7 @@ import {
 import { PageHeader } from '@/components/PageHeader';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Plus, MessageSquare, Trash2, KeyRound, Check, X, Zap, Search, Loader2, Pencil, ChevronRight, ChevronsDownUp, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, RotateCw, Clock, Share2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Input } from '@/components/ui/input';
@@ -880,6 +881,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                   <Input
                     autoFocus
                     placeholder="search..."
+                    aria-label="search conversations"
                     value={chat.searchQuery}
                     onChange={(e) => chat.setSearchQuery(e.target.value)}
                     onKeyDown={(e) => {
@@ -888,14 +890,17 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                         setSearchOpen(false);
                       }
                     }}
-                    className="h-8 pl-7 pr-7 text-xs bg-secondary border-border"
+                    className="h-8 pl-7 pr-7 text-base md:text-xs bg-secondary border-border"
                   />
-                  <button
+                  <IconButton
+                    label="close search"
+                    tooltip={false}
+                    variant="ghost"
                     onClick={() => { chat.setSearchQuery(''); setSearchOpen(false); }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer"
+                    className="absolute right-0.5 top-1/2 -translate-y-1/2 size-7 text-muted-foreground hover:text-foreground"
                   >
-                    <X className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
-                  </button>
+                    <X className="size-3" />
+                  </IconButton>
                 </div>
               </>
             ) : (
@@ -1027,7 +1032,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                               <span className="sr-only">contains the current conversation</span>
                             </>
                           )}
-                          <span className="text-xs text-muted-foreground/40 ml-auto">
+                          <span className="text-xs text-muted-foreground/80 ml-auto">
                             {group.conversations.length}
                           </span>
                         </button>
@@ -1084,6 +1089,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
 
         {/* Main Chat Area */}
         <main className="flex-1 flex flex-col min-h-0 rounded-lg border border-border bg-card overflow-hidden">
+          <h1 className="sr-only">hoot</h1>
           {/* Machine selector bar — matches sidebar header height above `md`
               (`md:h-12` + `md:py-0` keep that row pixel-identical). Below it the
               row wraps instead: the target selector, the offline warning and the
@@ -1188,7 +1194,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
 
           {/* Error display */}
           {chat.error && !errorDismissed && (
-            <div className="px-4 py-2 bg-red-950/30 border-t border-red-800/50">
+            <div role="alert" className="px-4 py-2 bg-red-950/30 border-t border-red-800/50">
               <div className="flex items-center gap-2 max-w-3xl mx-auto">
                 <p className="text-xs text-red-400 flex-1">
                   {(() => {
@@ -1478,7 +1484,8 @@ function ConversationItem({
               setEditing(false);
             }
           }}
-          className="flex-1 text-sm bg-secondary rounded px-2 py-1 outline-none border border-border focus:border-accent-cyan min-w-0"
+          aria-label="conversation title"
+          className="flex-1 text-base md:text-sm bg-secondary rounded px-2 py-1 outline-none border border-border focus:border-accent-cyan min-w-0"
         />
         <Tooltip>
           <TooltipTrigger asChild>

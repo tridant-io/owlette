@@ -8,6 +8,7 @@ import { formatScheduleSummary } from '@/components/ScheduleEditor';
 import WeekSummaryBar from '@/components/WeekSummaryBar';
 import SchedulePresetDialog from '@/components/SchedulePresetDialog';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -108,7 +109,7 @@ export default function SchedulePresetsPage() {
             <div className="flex items-center gap-3">
               {sites.length > 1 && (
                 <Select value={selectedSiteId || ''} onValueChange={setSelectedSiteId}>
-                  <SelectTrigger className="w-[180px] border-border bg-card text-foreground">
+                  <SelectTrigger aria-label="site" className="w-[180px] border-border bg-card text-foreground">
                     <SelectValue placeholder="select site" />
                   </SelectTrigger>
                   <SelectContent className="border-border bg-card text-foreground">
@@ -150,23 +151,23 @@ export default function SchedulePresetsPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <Button
+                  <IconButton
+                    label={`edit ${preset.name}`}
                     variant="ghost"
-                    size="icon"
                     onClick={() => handleEdit(preset)}
                     className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
                   >
                     <Pencil className="h-3.5 w-3.5" />
-                  </Button>
+                  </IconButton>
                   {!preset.isBuiltIn && (
-                    <Button
+                    <IconButton
+                      label={`delete ${preset.name}`}
                       variant="ghost"
-                      size="icon"
                       onClick={() => handleDelete(preset)}
                       className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    </IconButton>
                   )}
                 </div>
               </div>

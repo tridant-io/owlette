@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
 import { useRestartPresets, type RestartPreset } from '@/hooks/useRestartPresets';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -17,7 +18,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Plus, X, Save, Pencil, Trash2, Users } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import DayPillSelector from '@/components/DayPillSelector';
 import { TimePicker } from '@/components/ScheduleEditor';
@@ -447,26 +447,26 @@ export default function RestartScheduleDialog({
                           <Input
                             value={editPresetName}
                             onChange={(e) => setEditPresetName(e.target.value)}
-                            className="h-7 w-32 text-[11px] px-2 bg-background border-border"
+                            aria-label="preset name"
+                            className="h-7 w-32 text-base md:text-[11px] px-2 bg-background border-border"
                             autoFocus
                           />
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button type="submit" className="p-1 text-muted-foreground hover:text-foreground cursor-pointer">
-                                <Save className="h-3.5 w-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>save</p>
-                            </TooltipContent>
-                          </Tooltip>
-                          <button
-                            type="button"
+                          <IconButton
+                            type="submit"
+                            label="save name"
+                            variant="ghost"
+                            className="size-7 text-muted-foreground hover:text-foreground"
+                          >
+                            <Save className="h-3.5 w-3.5" />
+                          </IconButton>
+                          <IconButton
+                            label="cancel rename"
+                            variant="ghost"
                             onClick={() => setEditingPresetId(null)}
-                            className="p-1 text-muted-foreground hover:text-foreground cursor-pointer"
+                            className="size-7 text-muted-foreground hover:text-foreground"
                           >
                             <X className="h-3.5 w-3.5" />
-                          </button>
+                          </IconButton>
                         </form>
                       )}
 
@@ -564,26 +564,26 @@ export default function RestartScheduleDialog({
                     value={newPresetName}
                     onChange={(e) => setNewPresetName(e.target.value)}
                     placeholder="preset name"
-                    className="h-7 w-32 text-[11px] px-2 bg-background border-border"
+                    aria-label="preset name"
+                    className="h-7 w-32 text-base md:text-[11px] px-2 bg-background border-border"
                     autoFocus
                   />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button type="submit" className="p-1 text-muted-foreground hover:text-foreground cursor-pointer">
-                        <Save className="h-3.5 w-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>save preset</p>
-                    </TooltipContent>
-                  </Tooltip>
-                  <button
-                    type="button"
+                  <IconButton
+                    type="submit"
+                    label="save preset"
+                    variant="ghost"
+                    className="size-7 text-muted-foreground hover:text-foreground"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                  </IconButton>
+                  <IconButton
+                    label="cancel"
+                    variant="ghost"
                     onClick={() => { setSavingNewPreset(false); setNewPresetName(''); }}
-                    className="p-1 text-muted-foreground hover:text-foreground cursor-pointer"
+                    className="size-7 text-muted-foreground hover:text-foreground"
                   >
                     <X className="h-3.5 w-3.5" />
-                  </button>
+                  </IconButton>
                 </form>
               )}
 
@@ -642,6 +642,7 @@ export default function RestartScheduleDialog({
                   {/* Time + delete grouped together so they wrap as a unit, never split. */}
                   <div className="flex items-center gap-2 ml-auto">
                     <TimePicker
+                      label="restart time"
                       value={entry.time}
                       onChange={(time) => updateEntry(entry.id, { time })}
                     />
@@ -650,13 +651,14 @@ export default function RestartScheduleDialog({
                         {tzShort}
                       </span>
                     )}
-                    <button
-                      type="button"
+                    <IconButton
+                      label="remove restart"
+                      variant="ghost"
                       onClick={() => removeEntry(entry.id)}
-                      className="h-6 w-6 rounded-md text-muted-foreground hover:text-red-400 hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                      className="size-6 text-muted-foreground hover:text-destructive flex-shrink-0"
                     >
                       <X className="h-3.5 w-3.5" />
-                    </button>
+                    </IconButton>
                   </div>
                 </div>
               ))}
@@ -707,7 +709,6 @@ export default function RestartScheduleDialog({
                 type="button"
                 onClick={handleSave}
                 disabled={saving}
-                className="bg-cyan-600 hover:bg-cyan-700"
               >
                 {saving ? 'saving...' : 'save'}
               </Button>

@@ -307,6 +307,99 @@ describe('keyboard', () => {
   });
 });
 
+describe('escape twice, the keyboard way off the stage', () => {
+  const tapEscape = (h: Harness, init: KeyboardEventInit = {}): KeyboardEvent => {
+    const down = keyEvent('keydown', 'Escape', init);
+    h.target.dispatchEvent(down);
+    h.target.dispatchEvent(keyEvent('keyup', 'Escape'));
+    return down;
+  };
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+  });
+
+  it('sends the first tap to the host and keeps the second, telling the listener', () => {
+    const h = harness();
+    const leave = jest.fn();
+    h.capture.onEscapeTwice(leave);
+
+    tapEscape(h);
+    expect(leave).not.toHaveBeenCalled();
+    const second = keyEvent('keydown', 'Escape');
+    h.target.dispatchEvent(second);
+
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(second.defaultPrevented).toBe(false);
+    expect(h.sent()).toEqual([
+      { t: 'k', code: 'Escape', down: true, seq: 1, tsUs: TS_US },
+      { t: 'k', code: 'Escape', down: false, seq: 2, tsUs: TS_US },
+    ]);
+  });
+
+  it('releases what is held before focus goes, so nothing sticks down on the host', () => {
+    const h = harness();
+    h.capture.onEscapeTwice(jest.fn());
+    h.target.dispatchEvent(keyEvent('keydown', 'ShiftLeft'));
+
+    tapEscape(h);
+    h.clear();
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+
+    expect(h.sent()).toEqual([{ t: 'k', code: 'ShiftLeft', down: false, seq: 4, tsUs: TS_US }]);
+  });
+
+  it('sends both taps when they are further apart than half a second', () => {
+    const h = harness();
+    const leave = jest.fn();
+    h.capture.onEscapeTwice(leave);
+    const now = jest.spyOn(performance, 'now').mockReturnValue(1_000);
+
+    tapEscape(h);
+    now.mockReturnValue(1_501);
+    tapEscape(h);
+
+    expect(leave).not.toHaveBeenCalled();
+    expect(h.sent().filter((m) => m.t === 'k' && m.down)).toHaveLength(2);
+  });
+
+  it('does not count a held escape repeating', () => {
+    const h = harness();
+    const leave = jest.fn();
+    h.capture.onEscapeTwice(leave);
+
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape', { repeat: true }));
+
+    expect(leave).not.toHaveBeenCalled();
+  });
+
+  it('leaves fullscreen to the browser escape hold', () => {
+    const h = harness();
+    const leave = jest.fn();
+    h.capture.onEscapeTwice(leave);
+    Object.defineProperty(document, 'fullscreenElement', { value: h.target, configurable: true });
+
+    tapEscape(h);
+    tapEscape(h);
+
+    expect(leave).not.toHaveBeenCalled();
+    expect(h.sent().filter((m) => m.t === 'k' && m.down)).toHaveLength(2);
+  });
+
+  it('sends every escape to the host while nothing listens', () => {
+    const h = harness();
+    const off = h.capture.onEscapeTwice(jest.fn());
+    off();
+
+    tapEscape(h);
+    tapEscape(h);
+
+    expect(h.sent().filter((m) => m.t === 'k' && m.down)).toHaveLength(2);
+  });
+});
+
 describe('a held modifier', () => {
   it('holds an armed modifier through the next key and releases it after', () => {
     const h = harness({ hostOs: 'macos' });

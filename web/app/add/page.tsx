@@ -191,10 +191,9 @@ export default function AddMachinePage() {
   if (isAuthorized) {
     return (
       /* Same shell as the form state — this used to be a third, narrower card
-         geometry. brandTitleAs="h2" because two specs query it by heading role. */
+         geometry. */
       <AuthShell
         brandTitle="machine authorized"
-        brandTitleAs="h2"
         brandDescription="pairing complete"
       >
         <div className="space-y-6 text-center">

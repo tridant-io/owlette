@@ -49,7 +49,7 @@ export default function WebhooksPage() {
             <div className="flex items-center gap-3">
               {sites.length > 1 && (
                 <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-                  <SelectTrigger className="w-[180px] bg-card border-border text-foreground">
+                  <SelectTrigger aria-label="site" className="w-[180px] bg-card border-border text-foreground">
                     <SelectValue placeholder="select site" />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-border">

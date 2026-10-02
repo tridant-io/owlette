@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Trash2, Loader2, Package, Search, X } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { ITEM_FOCUS_RING } from '@/lib/utils';
 import { useMachines } from '@/hooks/useFirestore';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -336,6 +337,7 @@ export default function UninstallDialog({
                     {filterText && (
                       <button
                         onClick={() => setFilterText('')}
+                        aria-label="clear filter"
                         className="absolute right-6 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                         type="button"
                       >
@@ -370,39 +372,32 @@ export default function UninstallDialog({
                             const isSelected = selectedSoftware === softwareKey;
 
                             return (
-                              <div
+                              // single choice, but a second press clears it, so a
+                              // toggle button rather than a radio
+                              <button
                                 key={softwareKey}
+                                type="button"
+                                aria-pressed={isSelected}
                                 onClick={() => setSelectedSoftware(isSelected ? '' : softwareKey)}
-                                className={`p-3 cursor-pointer transition-colors overflow-hidden relative ${
+                                className={`block w-full text-left p-3 cursor-pointer transition-colors overflow-hidden relative ${ITEM_FOCUS_RING} ${
                                   isSelected
                                     ? 'bg-primary/10 border-l-4 border-l-primary'
                                     : 'hover:bg-accent border-l-4 border-l-transparent'
                                 }`}
-                                style={{ width: '100%', maxWidth: '100%' }}
                               >
-                                <div className="flex items-center gap-3">
+                                <span className="flex items-center gap-3">
                                   <Package className={`h-4 w-4 shrink-0 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
-                                  <div className="flex-1 min-w-0" style={{ maxWidth: 'calc(100% - 2rem)' }}>
-                                    <p className={`text-sm font-medium truncate ${isSelected ? 'text-primary' : ''}`} title={software.name}>
+                                  <span className="flex-1 min-w-0">
+                                    <span className={`block text-sm font-medium truncate ${isSelected ? 'text-primary' : ''}`} title={software.name}>
                                       {software.name}
-                                    </p>
+                                    </span>
                                     {software.publisher && (
-                                      <p className="text-xs text-muted-foreground truncate" title={software.publisher}>{software.publisher}</p>
+                                      <span className="block text-xs text-muted-foreground truncate" title={software.publisher}>{software.publisher}</span>
                                     )}
-                                  </div>
-                                  {isSelected && (
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setSelectedSoftware('');
-                                      }}
-                                      className="shrink-0 ml-2 p-1 rounded-sm hover:bg-primary/20 transition-colors cursor-pointer"
-                                    >
-                                      <X className="h-4 w-4 text-primary" />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
+                                  </span>
+                                  {isSelected && <X className="h-4 w-4 shrink-0 ml-2 text-primary" aria-hidden="true" />}
+                                </span>
+                              </button>
                             );
                           })}
                         </div>
