@@ -62,8 +62,11 @@ and from a Mac to a PC. That is the owner's rule, and the wire already carries i
 
 What stops it working is the viewer's own machine, not the mapping. Outside keyboard lock, Windows takes the
 Windows key for itself (Start, Win+L, Win+D), and a Mac browser takes Cmd+W, Cmd+T, Cmd+Q. Keyboard lock is
-Chromium's, needs fullscreen, and **Brave switches the API off** (`web/lib/swoop/keyboardLock.ts`). So the
-owner's Brave sessions can never deliver the Windows key; Chrome or Edge in fullscreen can.
+Chromium's and needs fullscreen; swoop takes it with the toolbar's fullscreen click. `web/lib/swoop/keyboardLock.ts`
+says Brave switches the API off. **Measured 2026-10-01 on the owner's PC, fresh profiles, headless:** Brave and
+Chrome both expose `navigator.keyboard.lock` as a function, so the comment is wrong and a Brave session in
+fullscreen delivers the Windows key as Chrome does (Edge did not answer the check and is unverified). Outside
+fullscreen no browser can, which is what the sticky super key of Task 4.3 is for.
 
 Hence the one switch the keyboard menu has, "ctrl acts as cmd" (PC viewer, Mac host) or "cmd acts as ctrl"
 (Mac viewer, Windows host): it exists so copy, paste, undo and save work from muscle memory in every browser,
@@ -108,12 +111,21 @@ model is checked in both directions rather than remembered.
 
 ## Owner decisions
 
-1. **The shortcut switch stays the default** (copy and paste work in every browser; keys-match is one click
-   away). Proposed; the owner may prefer keys-match as the default for Chrome users.
-2. **`native` on a Mac is Retina again, at 50 Mbps auto for 4K-class sources.** Proposed per "4K is tenable".
-3. **The Windows-key path is tested in Chrome**, since Brave cannot deliver it. The owner's call which browser
-   the fleet is expected on.
-4. The pasteboard setting on the rig Mac: *allow*, or the Mac's copies stay on the Mac by design.
+1. **Decided 2026-10-01:** the shortcut switch stays the default, and "keys match" is offered as the other
+   setting of the keyboard menu's switch, named as such.
+2. **Decided 2026-10-01:** `native` on a Mac is Retina again, at 50 Mbps auto for 4K-class sources.
+3. **Decided 2026-10-01:** Chrome is the expected browser, and the owner notes Brave is Chromium. Measured the
+   same day: Brave exposes keyboard lock, so Brave in fullscreen delivers the Windows key too; the code's claim
+   that it does not is corrected in Task 4.3. A session outside fullscreen, in any browser, gets a sticky
+   Command / Windows key in the keyboard menu instead, so the model holds everywhere.
+4. **Asked 2026-10-01: "can owlette prompt for this? is this a system settings thing?"** It is: since macOS
+   15.4 a programmatic pasteboard read is a privacy control, per app, under System Settings › Privacy & Security ›
+   Paste from Other Apps, with *ask* (the default: macOS alerts whoever is at the Mac on each read), *allow* and
+   *deny*. An app cannot grant it to itself; it can only cause the system's own alert, and only on a click.
+   So owlette prompts the way it does for Accessibility: the Mac app's permissions notice gains a clipboard row
+   when the setting is not *allow*, with a button that opens System Settings at that pane, and the streamer
+   never reads under *ask* (an unattended alert on a kiosk is the thing to avoid). Task 3.3. Older systems have
+   neither the setting nor the alert and share the clipboard as Windows does.
 
 ## Risks
 

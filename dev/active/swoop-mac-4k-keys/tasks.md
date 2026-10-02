@@ -1,6 +1,6 @@
 # Tasks: swoop on macOS, 4K at 60 and the keyboard model
 
-Progress: 0/9. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
+Progress: 0/11. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
 apply (the four Windows commands, the macOS commands, nothing pushed to dev or main). Mac worktrees
 `~/src/owlette-swoop-mac-21` (streamer) and `-23` (desktop) on the rig; `~/src/mac-build-install.sh` builds,
 notarizes and installs.
@@ -38,6 +38,12 @@ notarizes and installs.
   - Do: Log the pasteboard access behaviour at info at session start. The clipboard feature's status carries `reads: false` with a reason; the viewer shows "the mac's clipboard is not shared: allow owlette under paste from other apps" once, lowercase.
   - Done when: a Mac session's service log names the access behaviour; vitest covers the status line.
 
+- [ ] **Task 3.3: The Mac app asks for clipboard sharing the way it asks for Accessibility** `[agent+human]`
+  - Files: `agent/swoop/src/selfcheck.rs` (or where `selfcheck --grants` lives), `desktop/src-tauri/src/` (the grants reader), `desktop/src/components/` (the permissions notice)
+  - Do: `selfcheck --grants` reports the pasteboard access behaviour (the sidecar is the app bundle's child, so it reads the app's own setting; `null` below macOS 15.4). The app's permissions notice gains a row when it is not *allow*: "clipboard sharing is off for owlette on this mac: allow owlette under paste from other apps", lowercase, with the same "open system settings" button the Accessibility row has, aimed at that pane (find the deep link on the rig; fall back to the Privacy & Security pane). The row clears on its own when the setting changes, as the Accessibility row does. Nothing reads the pasteboard to find out: the behaviour is a property, not a read.
+  - Human: one click on the rig to set *allow*, so the row's clearing is measured.
+  - Done when: the row shows and clears on the rig without a relaunch; desktop clippy and tests green on both platforms; vitest covers the row.
+
 ## Wave 4: the keyboard
 
 - [ ] **Task 4.1: One model, tested in every direction** `[agent]`
@@ -47,8 +53,13 @@ notarizes and installs.
 
 - [ ] **Task 4.2: The legend** `[agent]`
   - Files: `web/components/swoop/SwoopSpecialKeys.tsx`, `web/lib/swoop/specialKeys.ts`
-  - Do: Under the switch, three rows "you press → the machine gets" for the current host, viewer and switch, from the same function the input capture uses; a note "the windows key reaches the machine in fullscreen in chrome or edge" where keyboard lock is unavailable.
+  - Do: Under the switch, three rows "you press → the machine gets" for the current host, viewer and switch, from the same function the input capture uses; a note "the windows key reaches the machine in fullscreen" while keyboard lock is not held.
   - Done when: vitest renders the legend for a PC viewer on a Mac host in both switch states; lowercase copy; lint clean.
+
+- [ ] **Task 4.3: A sticky super key for a session outside fullscreen** `[agent]`
+  - Files: `web/lib/swoop/specialKeys.ts`, `web/components/swoop/SwoopSpecialKeys.tsx`, `web/lib/swoop/input.ts`, `web/lib/swoop/keyboardLock.ts`
+  - Do: A keyboard-menu item, "hold cmd for the next key" on a Mac host and "hold the windows key for the next key" on a Windows or Linux host, that arms `MetaLeft` down until the next key's release goes through the input capture, then releases it; shown only while keyboard lock is not held, since under lock the real key arrives. Correct `keyboardLock.ts`'s header: Brave exposes the API (measured 2026-10-01 on the owner's PC); the feature is absent only in non-Chromium browsers and outside fullscreen.
+  - Done when: vitest covers arm, next key, release, and the item hidden under lock; lint clean.
 
 ## Wave 5: verification
 
@@ -57,7 +68,7 @@ notarizes and installs.
   - Do: Build, install, one session from Chrome in fullscreen and one from Brave: stats overlay (fps, resolution, breakdown), window drags, text sharpness, smear; copy and paste in both directions after Task 3; the Windows key and the switch in both states; the pasteboard setting as found.
   - Human: the clicks at the Mac (pasteboard *allow* if chosen), the viewer side.
   - Done when: the memo has the observed numbers and the owner's word.
-  - Depends on: 2.1, 2.2, 3.1, 3.2, 4.1, 4.2
+  - Depends on: 2.1, 2.2, 3.1, 3.2, 3.3, 4.1, 4.2, 4.3
 
 - [ ] **Task 5.2: Windows unchanged** `[agent+human]`
   - Do: The four Windows commands; one Windows-host session from this box (picture, cursor, copy and paste).
