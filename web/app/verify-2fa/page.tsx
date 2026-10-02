@@ -296,7 +296,11 @@ function Verify2FAContent() {
 
       <form onSubmit={handleVerify} className="space-y-6">
         <div className="space-y-2">
+          <Label htmlFor="otp-code" className="sr-only">
+            {useBackupCode ? 'backup code' : '6-digit code'}
+          </Label>
           <Input
+            id="otp-code"
             type="text"
             name="otp"
             autoComplete="one-time-code"

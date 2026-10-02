@@ -28,12 +28,11 @@
  *    A new entrance animation here would not be neutralised by name and can
  *    make the mobile overflow gate flap.
  *
- * 4. THE BRAND TITLE CARRIES THE PAGE TITLE, and defaults to a <div> (via
- *    CardTitle). Pass `brandTitleAs` to promote it to a real h1/h2 — required
- *    on /unsubscribe, /add's success state and /cli/authorize, whose specs use
- *    anchored getByRole('heading', …) queries. Leave it a div everywhere else:
- *    putting every page title into the heading tree would destabilise the
- *    `.first()` and anchored text queries the other specs rely on.
+ * 4. THE BRAND TITLE IS THE PAGE'S h1. An auth page has no other heading, so
+ *    a <div> title left screen-reader users with no heading to land on (the
+ *    a11y audit). `brandTitleAs` overrides the level (/add's success state
+ *    passes h2). Text queries are unaffected by the tag; heading queries that
+ *    expect a single match must stay anchored to the title text.
  *
  * 5. min-w-0 ON BOTH COLUMNS. Grid items default to min-width:auto, so one long
  *    unbreakable string (an email, a machine id, a base32 secret) sets the
@@ -101,11 +100,7 @@ export const authFooterLinkClass =
 export interface AuthShellProps {
   /** Brand panel headline — the page's own title. */
   brandTitle?: ReactNode;
-  /**
-   * Promote the brand title to a real heading. Only for pages whose specs query
-   * it by heading role; everywhere else the default <div> keeps the heading tree
-   * clear. See contract 4.
-   */
+  /** The brand title's element: the page's h1 by default. See contract 4. */
   brandTitleAs?: 'div' | 'h1' | 'h2';
   /** Brand panel supporting line, under the title. */
   brandDescription?: ReactNode;
@@ -129,7 +124,7 @@ export interface AuthShellProps {
 
 export function AuthShell({
   brandTitle = 'owlette',
-  brandTitleAs = 'div',
+  brandTitleAs = 'h1',
   brandDescription = 'keep your installation running',
   brandMeta,
   width = 'default',

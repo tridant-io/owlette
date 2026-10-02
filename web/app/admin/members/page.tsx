@@ -359,7 +359,7 @@ export default function SiteMembersPage() {
             <StatChip icon={Shield} iconBg="bg-green-600" count={adminCount} label="admins" />
             {sites.length > 1 && (
               <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-                <SelectTrigger className="w-[180px] bg-card border-border text-foreground">
+                <SelectTrigger aria-label="site" className="w-[180px] bg-card border-border text-foreground">
                   <SelectValue placeholder="select site" />
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border">
@@ -409,7 +409,7 @@ export default function SiteMembersPage() {
         )}
 
         {!sitesLoading && !loading && !error && selectedSiteId && (
-          <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <div className="bg-card border border-border rounded-lg overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-border bg-background/50">
@@ -499,6 +499,7 @@ export default function SiteMembersPage() {
                                     <DropdownMenuTrigger asChild>
                                       <Button
                                         variant="ghost"
+                                        aria-label={`options for ${member.email || member.displayName || member.uid}`}
                                         className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground! hover:bg-accent! cursor-pointer"
                                       >
                                         <MoreVertical className="h-4 w-4" />
@@ -758,7 +759,7 @@ export default function SiteMembersPage() {
                   )
                 }
               >
-                <SelectTrigger className="w-full bg-secondary border-border text-foreground">
+                <SelectTrigger aria-label="new role" className="w-full bg-secondary border-border text-foreground">
                   <SelectValue placeholder="select a role" />
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border">

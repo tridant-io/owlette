@@ -386,7 +386,7 @@ export function ManageSitesDialog({
                 {/* Column header — sticky so it stays put while the list scrolls;
                     same grid template as the rows so the columns line up. */}
                 <div
-                  className="sticky top-0 z-10 grid items-center gap-3 border-b border-border/60 bg-secondary px-3 pb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70"
+                  className="sticky top-0 z-10 grid items-center gap-3 border-b border-border/60 bg-secondary px-3 pb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80"
                   style={{ gridTemplateColumns: gridTemplate }}
                 >
                   <span className="min-w-0 truncate">site</span>
@@ -434,6 +434,7 @@ export function ManageSitesDialog({
                                   toast.error('Failed to copy Site ID');
                                 }
                               }}
+                              aria-label={`copy site ID ${site.id}`}
                               className="min-w-0 cursor-pointer truncate text-left font-mono text-[11px] text-muted-foreground hover:text-accent-cyan"
                             >
                               {highlightMatch(site.id, filter)}
@@ -470,8 +471,9 @@ export function ManageSitesDialog({
                           ) : site.owner && currentUserId && site.owner === currentUserId ? (
                             <span className="text-[11px] text-muted-foreground">you</span>
                           ) : (
-                            <span className="text-[11px] text-muted-foreground/40" title="no owner recorded">
-                              —
+                            <span className="text-[11px] text-muted-foreground/80" title="no owner recorded">
+                              <span aria-hidden="true">—</span>
+                              <span className="sr-only">no owner recorded</span>
                             </span>
                           )
                         )}

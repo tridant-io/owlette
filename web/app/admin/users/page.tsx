@@ -465,6 +465,8 @@ export default function UserManagementPage() {
               aria-label="show deleted accounts"
             />
           </div>
+          {/* scrolls sideways on phones so the actions column stays reachable */}
+          <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="border-b border-border bg-background/50">
@@ -489,7 +491,7 @@ export default function UserManagementPage() {
                   return (
                   <tr
                     key={user.uid}
-                    className={`border-b border-border hover:bg-muted/50 transition-colors${isDeleted ? ' opacity-60' : ''}`}
+                    className={`border-b border-border hover:bg-muted/50 transition-colors${isDeleted ? ' opacity-80' : ''}`}
                   >
                     {/* User Info */}
                     <td className="p-4">
@@ -607,6 +609,7 @@ export default function UserManagementPage() {
                               <DropdownMenuTrigger asChild>
                                 <Button
                                   variant="ghost"
+                                  aria-label={`options for ${user.email}`}
                                   className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground! hover:bg-accent! cursor-pointer"
                                 >
                                   <MoreVertical className="h-4 w-4" />
@@ -688,6 +691,7 @@ export default function UserManagementPage() {
               )}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -833,7 +837,7 @@ export default function UserManagementPage() {
               value={userToChangeRole?.newRole}
               onValueChange={(v) => handleSelectNewRole(v as UserRole)}
             >
-              <SelectTrigger className="w-full bg-secondary border-border text-foreground">
+              <SelectTrigger aria-label="new role" className="w-full bg-secondary border-border text-foreground">
                 <SelectValue placeholder="select a role" />
               </SelectTrigger>
               <SelectContent className="bg-card border-border">

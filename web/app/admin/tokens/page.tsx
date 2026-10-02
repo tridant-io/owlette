@@ -6,6 +6,7 @@ import { useSites } from '@/hooks/useFirestore';
 import { formatSiteScopedTimestamp } from '@/lib/timeUtils';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -310,7 +311,7 @@ export default function TokensPage() {
           </div>
           <div className="flex items-center gap-3">
             <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-              <SelectTrigger className="w-[180px] bg-card border-border text-foreground">
+              <SelectTrigger aria-label="site" className="w-[180px] bg-card border-border text-foreground">
                 <SelectValue placeholder="select site" />
               </SelectTrigger>
               <SelectContent className="bg-card border-border">
@@ -321,22 +322,15 @@ export default function TokensPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={fetchTokens}
-                  disabled={!selectedSiteId || loading}
-                  className="border-border text-foreground hover:bg-accent! hover:text-foreground!"
-                >
-                  <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>refresh tokens</p>
-              </TooltipContent>
-            </Tooltip>
+            <IconButton
+              label="refresh tokens"
+              variant="outline"
+              onClick={fetchTokens}
+              disabled={!selectedSiteId || loading}
+              className="border-border text-foreground hover:bg-accent! hover:text-foreground!"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </IconButton>
             {tokens.length > 0 && (
               <Button
                 variant="destructive"
@@ -361,12 +355,13 @@ export default function TokensPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="search machine id or agent uid"
+              aria-label="search tokens"
               className="pl-9 bg-card border-border text-foreground"
             />
           </div>
 
           <Select value={versionFilter} onValueChange={setVersionFilter}>
-            <SelectTrigger className="w-[160px] bg-card border-border text-foreground">
+            <SelectTrigger aria-label="agent version" className="w-[160px] bg-card border-border text-foreground">
               <SelectValue placeholder="all versions" />
             </SelectTrigger>
             <SelectContent className="bg-card border-border">

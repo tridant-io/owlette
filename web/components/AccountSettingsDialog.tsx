@@ -17,6 +17,9 @@ import { MfaFactorsSection } from '@/components/MfaFactorsSection';
 import { getBrowserTimezone } from '@/lib/timeUtils';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
+import { FormError } from '@/components/ui/form-error';
+import { useFieldError } from '@/hooks/useFieldError';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { ApiKeysManager } from '@/components/ApiKeysManager';
 import { useScrollFade } from '@/hooks/useScrollFade';
@@ -65,7 +68,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
   const [apiKeyAlerts, setApiKeyAlerts] = useState(true);
   const [alertCcEmails, setAlertCcEmails] = useState<string[]>([]);
   const [newCcEmail, setNewCcEmail] = useState('');
-  const [ccEmailError, setCcEmailError] = useState('');
+  const { error: ccEmailError, fail: failCcEmail, clear: clearCcEmail, fieldProps: ccEmailFieldProps } = useFieldError('settings-cc-email-error');
   const [loading, setLoading] = useState(false);
 
   const [showPasswordSection, setShowPasswordSection] = useState(false);
@@ -75,7 +78,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [passwordError, setPasswordError] = useState('');
+  const { error: passwordError, fail: failPassword, clear: clearPassword, fieldProps: passwordFieldProps } = useFieldError('settings-password-error');
 
   const [llmProvider, setLlmProvider] = useState<'anthropic' | 'openai'>('anthropic');
   const [llmApiKey, setLlmApiKey] = useState('');
@@ -137,7 +140,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
       setApiKeyAlerts(userPreferences.apiKeyAlerts);
       setAlertCcEmails(userPreferences.alertCcEmails || []);
       setNewCcEmail('');
-      setCcEmailError('');
+      clearCcEmail();
 
       fetch('/api/settings/llm-key')
         .then((res) => res.json())
@@ -161,11 +164,11 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
       setProcessAlerts(true);
       setAlertCcEmails([]);
       setNewCcEmail('');
-      setCcEmailError('');
+      clearCcEmail();
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      setPasswordError('');
+      clearPassword();
       setShowPasswordSection(false);
       setShowDeleteConfirm(false);
       setDeletePassword('');
@@ -184,42 +187,39 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
     const email = newCcEmail.trim().toLowerCase();
     if (!email) return;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setCcEmailError('please enter a valid email address');
-      return;
+      return failCcEmail('settings-cc-email', 'please enter a valid email address');
     }
     if (email === user?.email?.toLowerCase()) {
-      setCcEmailError('this is already your primary alert email');
-      return;
+      return failCcEmail('settings-cc-email', 'this is already your primary alert email');
     }
     if (alertCcEmails.includes(email)) {
-      setCcEmailError('this email is already added');
-      return;
+      return failCcEmail('settings-cc-email', 'this email is already added');
     }
     if (alertCcEmails.length >= 5) {
-      setCcEmailError('maximum of 5 CC addresses');
-      return;
+      return failCcEmail('settings-cc-email', 'maximum of 5 CC addresses');
     }
     setAlertCcEmails(prev => [...prev, email]);
     setNewCcEmail('');
-    setCcEmailError('');
+    clearCcEmail();
   };
 
   const validatePassword = (): boolean => {
-    setPasswordError('');
+    clearPassword();
     if (!currentPassword || !newPassword || !confirmPassword) {
-      setPasswordError('All password fields are required');
+      const empty = !currentPassword ? 'currentPassword' : !newPassword ? 'newPassword' : 'confirmPassword';
+      failPassword(empty, 'fill in all three password fields');
       return false;
     }
     if (newPassword.length < 6) {
-      setPasswordError('New password must be at least 6 characters');
+      failPassword('newPassword', 'new password must be at least 6 characters');
       return false;
     }
     if (newPassword !== confirmPassword) {
-      setPasswordError('New passwords do not match');
+      failPassword('confirmPassword', 'new passwords do not match');
       return false;
     }
     if (newPassword === currentPassword) {
-      setPasswordError('New password must be different from current password');
+      failPassword('newPassword', 'new password must be different from your current password');
       return false;
     }
     return true;
@@ -269,7 +269,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
   const handleSave = async () => {
     setLoading(true);
-    setPasswordError('');
+    clearPassword();
     try {
       if (firstName || lastName) {
         await updateUserProfile(firstName, lastName);
@@ -328,10 +328,12 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
         </VisuallyHidden>
         <div className="flex flex-col sm:flex-row sm:min-h-[480px] min-h-0 max-h-[85dvh]">
           {/* Mobile: horizontal scrollable tabs */}
-          <nav className="sm:hidden flex overflow-x-auto border-b border-border bg-card/50 p-1.5 gap-1 flex-shrink-0">
+          <nav aria-label="settings sections" className="sm:hidden flex overflow-x-auto border-b border-border bg-card/50 p-1.5 gap-1 flex-shrink-0">
             {SECTIONS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
+                type="button"
+                aria-current={activeSection === id ? 'true' : undefined}
                 onClick={() => setActiveSection(id)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs whitespace-nowrap transition-colors cursor-pointer flex-shrink-0 ${
                   activeSection === id
@@ -348,13 +350,15 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
           </nav>
 
           {/* Desktop: vertical sidebar */}
-          <nav className="hidden sm:flex w-48 border-r border-border bg-card/50 p-2 flex-col gap-0.5 flex-shrink-0">
+          <nav aria-label="settings sections" className="hidden sm:flex w-48 border-r border-border bg-card/50 p-2 flex-col gap-0.5 flex-shrink-0">
             <div className="px-3 py-2.5 mb-1">
               <h2 className="text-sm font-semibold text-white">settings</h2>
             </div>
             {SECTIONS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
+                type="button"
+                aria-current={activeSection === id ? 'true' : undefined}
                 onClick={() => setActiveSection(id)}
                 className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors cursor-pointer ${
                   activeSection === id
@@ -453,8 +457,9 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-white">email</Label>
+                    <Label htmlFor="settings-email" className="text-white">email</Label>
                     <Input
+                      id="settings-email"
                       type="email"
                       value={user?.email || ''}
                       className="border-border bg-background text-muted-foreground"
@@ -475,11 +480,16 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-white">display times in</Label>
-                    <p className="text-xs text-muted-foreground">
+                    <p id="settings-time-display-label" className="text-sm leading-none font-medium text-white">display times in</p>
+                    <p id="settings-time-display-help" className="text-xs text-muted-foreground">
                       controls how heartbeats, activity logs, and other absolute timestamps render across the dashboard. schedule editors are unaffected — they follow the site&apos;s schedule clock setting (each machine&apos;s own clock unless the site opted into site time), not this preference.
                     </p>
-                    <div className="space-y-2 mt-1">
+                    <div
+                      role="radiogroup"
+                      aria-labelledby="settings-time-display-label"
+                      aria-describedby="settings-time-display-help"
+                      className="space-y-2 mt-1"
+                    >
                       {([
                         { value: 'machine', label: "each machine's local timezone", help: 'every machine renders its own heartbeats and timestamps in its own local clock. best when monitoring kiosks across multiple timezones.' },
                         { value: 'user', label: 'my timezone', help: 'all machines render in your selected timezone (below). best when you want a single shared reference frame.' },
@@ -660,14 +670,14 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="rounded-md border border-border bg-card/50 p-4 space-y-3">
                     <div className="space-y-0.5">
-                      <Label className="text-white">alert email</Label>
+                      <p className="text-sm leading-none font-medium text-white">alert email</p>
                       <p className="text-xs text-muted-foreground">
                         alerts are sent to <span className="text-white font-medium">{user?.email}</span>
                       </p>
                     </div>
 
                     <div className="space-y-2">
-                      <Label className="text-white text-xs">additional CC recipients</Label>
+                      <Label htmlFor="settings-cc-email" className="text-white text-xs">additional CC recipients</Label>
                       {alertCcEmails.length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
                           {alertCcEmails.map((email) => (
@@ -677,6 +687,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                                 type="button"
                                 onClick={() => setAlertCcEmails(prev => prev.filter(e => e !== email))}
                                 disabled={loading}
+                                aria-label={`remove ${email}`}
                                 className="cursor-pointer text-muted-foreground hover:text-white"
                               >
                                 <X className="h-3 w-3" />
@@ -687,33 +698,29 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                       )}
                       <div className="flex gap-2">
                         <Input
+                          id="settings-cc-email"
                           type="email"
                           placeholder="colleague@example.com"
                           value={newCcEmail}
-                          onChange={(e) => { setNewCcEmail(e.target.value); setCcEmailError(''); }}
+                          onChange={(e) => { setNewCcEmail(e.target.value); clearCcEmail(); }}
                           className="border-border bg-background text-white flex-1"
                           disabled={loading}
                           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCcEmail(); } }}
+                          {...ccEmailFieldProps('settings-cc-email')}
                         />
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={handleAddCcEmail}
-                              disabled={loading || !newCcEmail.trim()}
-                              className="border-border text-white hover:bg-secondary"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>add email</p>
-                          </TooltipContent>
-                        </Tooltip>
+                        <IconButton
+                          label="add email"
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={handleAddCcEmail}
+                          disabled={loading || !newCcEmail.trim()}
+                          className="border-border text-white hover:bg-secondary"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </IconButton>
                       </div>
-                      {ccEmailError && <p className="text-xs text-red-400">{ccEmailError}</p>}
+                      <FormError message={ccEmailError?.message} id="settings-cc-email-error" />
                       <p className="text-[11px] text-muted-foreground">these addresses will be CC&apos;d on all alert emails. max 5.</p>
                     </div>
                   </div>
@@ -721,10 +728,10 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   {userPreferences.mutedMachines.length > 0 && (
                     <div className="rounded-md border border-border bg-card/50 p-4 space-y-3">
                       <div className="space-y-0.5">
-                        <Label className="text-white flex items-center gap-1.5">
+                        <p className="text-sm leading-none font-medium text-white flex items-center gap-1.5">
                           <BellOff className="h-3.5 w-3.5" />
                           muted machines
-                        </Label>
+                        </p>
                         <p className="text-xs text-muted-foreground">
                           alerts are silenced for these machines. unmute from the machine&apos;s context menu on the dashboard.
                         </p>
@@ -740,6 +747,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                                 updateUserPreferences({ mutedMachines }, { silent: true });
                               }}
                               disabled={loading}
+                              aria-label={`unmute ${machineId}`}
                               className="cursor-pointer text-muted-foreground hover:text-white"
                             >
                               <X className="h-3 w-3" />
@@ -845,6 +853,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                             <button
                               type="button"
                               onClick={() => setShowLlmKey(!showLlmKey)}
+                              aria-label={showLlmKey ? 'hide key' : 'show key'}
                               className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-white"
                             >
                               {showLlmKey ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
@@ -945,14 +954,14 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <Label className="text-white">change password</Label>
+                      <p className="text-sm leading-none font-medium text-white">change password</p>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         onClick={() => {
                           setShowPasswordSection(!showPasswordSection);
-                          setPasswordError('');
+                          clearPassword();
                           if (showPasswordSection) {
                             setCurrentPassword('');
                             setNewPassword('');
@@ -977,6 +986,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                               placeholder="enter current password"
                               value={currentPassword}
                               onChange={(e) => setCurrentPassword(e.target.value)}
+                              {...passwordFieldProps('currentPassword')}
                               className="border-border bg-background pr-10 text-white"
                               disabled={loading}
                             />
@@ -985,6 +995,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                                 <button
                                   type="button"
                                   onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                                  aria-label={showCurrentPassword ? 'hide password' : 'show password'}
                                   className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-white"
                                   disabled={loading}
                                 >
@@ -1007,6 +1018,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                               placeholder="enter new password"
                               value={newPassword}
                               onChange={(e) => setNewPassword(e.target.value)}
+                              {...passwordFieldProps('newPassword')}
                               className="border-border bg-background pr-10 text-white"
                               disabled={loading}
                             />
@@ -1015,6 +1027,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                                 <button
                                   type="button"
                                   onClick={() => setShowNewPassword(!showNewPassword)}
+                                  aria-label={showNewPassword ? 'hide password' : 'show password'}
                                   className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-white"
                                   disabled={loading}
                                 >
@@ -1038,6 +1051,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                               placeholder="confirm new password"
                               value={confirmPassword}
                               onChange={(e) => setConfirmPassword(e.target.value)}
+                              {...passwordFieldProps('confirmPassword')}
                               className="border-border bg-background pr-10 text-white"
                               disabled={loading}
                             />
@@ -1046,6 +1060,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                                 <button
                                   type="button"
                                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                  aria-label={showConfirmPassword ? 'hide password' : 'show password'}
                                   className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-white"
                                   disabled={loading}
                                 >
@@ -1059,11 +1074,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                           </div>
                         </div>
 
-                        {passwordError && (
-                          <div className="rounded-md bg-red-900/20 border border-red-800 p-3">
-                            <p className="text-sm text-red-400">{passwordError}</p>
-                          </div>
-                        )}
+                        <FormError message={passwordError?.message} id="settings-password-error" />
                       </div>
                     )}
                   </div>
@@ -1112,7 +1123,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                     <div className="flex items-start gap-3">
                       <AlertTriangle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
                       <div className="flex-1 space-y-2">
-                        <Label className="text-red-400 font-semibold">delete account</Label>
+                        <p className="text-sm leading-none font-semibold text-red-400">delete account</p>
                         <p className="text-sm text-muted-foreground">
                           permanently delete your account and all associated data. this action cannot be undone.
                         </p>

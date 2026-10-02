@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
@@ -298,11 +299,12 @@ export function WebhookList({ siteId }: { siteId: string }) {
       {webhooks.map((webhook) => (
         <div
           key={webhook.id}
-          className={`flex items-center gap-4 p-4 rounded-lg border border-border bg-card ${!webhook.enabled ? 'opacity-50' : ''}`}
+          className={`flex items-center gap-4 p-4 rounded-lg border border-border bg-card ${!webhook.enabled ? 'opacity-80' : ''}`}
         >
           <Switch
             checked={webhook.enabled}
             onCheckedChange={() => handleToggle(webhook)}
+            aria-label={`enable ${webhook.name}`}
           />
 
           {/* Left: name inline, url + pills stacked below */}
@@ -357,14 +359,14 @@ export function WebhookList({ siteId }: { siteId: string }) {
                 <Send className="h-3.5 w-3.5 ml-1" />
               )}
             </Button>
-            <Button
+            <IconButton
+              label={`edit ${webhook.name}`}
               variant="ghost"
-              size="icon"
               onClick={() => openEdit(webhook)}
               className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
             >
               <Pencil className="h-3.5 w-3.5" />
-            </Button>
+            </IconButton>
             {deleteConfirmId === webhook.id ? (
               <div className="flex items-center gap-1">
                 <Button
@@ -386,14 +388,14 @@ export function WebhookList({ siteId }: { siteId: string }) {
                 </Button>
               </div>
             ) : (
-              <Button
+              <IconButton
+                label={`delete ${webhook.name}`}
                 variant="ghost"
-                size="icon"
                 onClick={() => setDeleteConfirmId(webhook.id)}
                 className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+              </IconButton>
             )}
           </div>
         </div>
@@ -434,8 +436,8 @@ export function WebhookList({ siteId }: { siteId: string }) {
             </div>
 
             <div className="space-y-2">
-              <Label>events</Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <p id="webhook-edit-events-label" className="text-sm leading-none font-medium">events</p>
+              <div role="group" aria-labelledby="webhook-edit-events-label" className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {SUPPORTED_EVENTS.map((evt) => (
                   <label
                     key={evt.id}
@@ -598,8 +600,8 @@ export default function AddWebhookDialog({ siteId, open, onOpenChange }: AddWebh
             </div>
 
             <div className="space-y-2">
-              <Label>events</Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <p id="webhook-add-events-label" className="text-sm leading-none font-medium">events</p>
+              <div role="group" aria-labelledby="webhook-add-events-label" className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {SUPPORTED_EVENTS.map((evt) => (
                   <label
                     key={evt.id}

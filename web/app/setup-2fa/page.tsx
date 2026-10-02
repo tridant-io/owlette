@@ -12,6 +12,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useInAppBrowser } from '@/hooks/useInAppBrowser';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { AuthShell, authFooterLinkClass } from '@/components/auth/AuthShell';
 import { BackupCodesPanel } from '@/components/BackupCodesPanel';
 import { toast } from '@/lib/toast';
@@ -483,7 +484,7 @@ export default function Setup2FAPage() {
           )}
 
           <div className="space-y-2">
-            <p className="text-sm font-semibold text-muted-foreground">manual entry code:</p>
+            <Label htmlFor="totp-secret" className="font-semibold text-muted-foreground">manual entry code:</Label>
             {/* Stacked until the column is wide enough: side by side, the
                 copy button left the field showing about a third of a 32-char
                 secret on a phone — and manual transcription is this control's
@@ -491,6 +492,7 @@ export default function Setup2FAPage() {
                 reads the secret with locator('input[readonly]'). */}
             <div className="flex flex-col gap-2 @sm/auth-form:flex-row">
               <Input
+                id="totp-secret"
                 value={secret}
                 readOnly
                 className="font-mono text-sm"
@@ -537,7 +539,9 @@ export default function Setup2FAPage() {
           </div>
 
           <div className="space-y-2">
+            <Label htmlFor="totp-code" className="sr-only">6-digit code</Label>
             <Input
+              id="totp-code"
               type="text"
               placeholder="000000"
               value={verificationCode}

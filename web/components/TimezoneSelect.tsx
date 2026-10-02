@@ -3,7 +3,7 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ChevronDown, Search, Check } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, ITEM_FOCUS_RING } from '@/lib/utils';
 import { getAllTimezones, getTimezoneOffset, COMMON_TIMEZONES, type TimezoneOption } from '@/lib/timeUtils';
 
 interface TimezoneSelectProps {
@@ -97,7 +97,7 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
           aria-expanded={open}
           disabled={disabled}
           className={cn(
-            'flex h-9 w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-50',
+            'flex h-9 w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap shadow-xs disabled:cursor-not-allowed disabled:opacity-50',
             'border-input dark:bg-input/30 dark:hover:bg-input/50 bg-transparent',
             className
           )}
@@ -119,7 +119,8 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="search timezones..."
-            className="flex-1 bg-transparent text-sm text-white placeholder:text-muted-foreground outline-none"
+            aria-label="search timezones"
+            className="flex-1 bg-transparent text-base md:text-sm text-white placeholder:text-muted-foreground"
           />
         </div>
         <div
@@ -138,7 +139,7 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
           ) : (
             // Grouped view with pinned common timezones
             <>
-              <div className="px-2 py-1.5 text-xs text-muted-foreground font-medium">Common</div>
+              <div className="px-2 py-1.5 text-xs text-muted-foreground font-medium">common</div>
               {commonOptions.map((tz) => (
                 <TimezoneItem key={tz.value} tz={tz} selected={value === tz.value} onSelect={handleSelect} />
               ))}
@@ -167,8 +168,11 @@ function TimezoneItem({ tz, selected, onSelect }: { tz: TimezoneOption; selected
     <button
       type="button"
       onClick={() => onSelect(tz.value)}
+      // the check icon is aria-hidden, so the chosen zone needs its own state
+      aria-current={selected ? 'true' : undefined}
       className={cn(
-        'flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm cursor-pointer outline-none',
+        'flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm cursor-pointer',
+        ITEM_FOCUS_RING,
         'text-white hover:bg-muted',
         selected && 'bg-muted'
       )}

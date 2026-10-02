@@ -186,7 +186,7 @@ export default function EmailPage() {
                 id="template-select"
                 value={selectedTemplate}
                 onChange={(e) => setSelectedTemplate(e.target.value)}
-                className="w-full appearance-none rounded-md border border-border bg-background px-3 py-2 pr-10 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent-cyan/50 focus:border-accent-cyan cursor-pointer"
+                className="w-full appearance-none rounded-md border border-border bg-background px-3 py-2 pr-10 text-base md:text-sm text-foreground focus:border-accent-cyan cursor-pointer"
               >
                 {EMAIL_TEMPLATES.map((t) => (
                   <option key={t.id} value={t.id}>
