@@ -253,12 +253,12 @@ test('episode 16 — logs & troubleshooting', async ({ browser }) => {
         await page.waitForTimeout(250);
         await crashRow.click({ force: true });
         await page.waitForTimeout(400);
-        const crashThumb = crashRow.locator('img[alt="Crash screenshot"]');
+        const crashThumb = crashRow.locator('img[alt="crash screenshot"]');
         await expect(crashThumb).toBeVisible();
         await highlight(page, crashThumb, 2200);
         await narrate(page, 'b04 crash thumbnail', 10);
         await clickWithCursor(page, crashThumb);
-        const fullModal = page.locator('img[alt="Crash screenshot"]').last();
+        const fullModal = page.locator('img[alt="crash screenshot"]').last();
         await expect(fullModal).toBeVisible();
         await narrate(page, 'b04 full size', 10);
         await page.keyboard.press('Escape');

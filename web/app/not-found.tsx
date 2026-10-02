@@ -4,8 +4,10 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { OwletteEye } from '@/components/landing/OwletteEye';
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 
-function RainCanvas() {
+/** `still` paints one frame of the rain and stops there. */
+function RainCanvas({ still }: { still: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const initDrops = useCallback((width: number, height: number) => {
@@ -36,10 +38,9 @@ function RainCanvas() {
       canvas!.width = window.innerWidth;
       canvas!.height = window.innerHeight;
       drops = initDrops(canvas!.width, canvas!.height);
+      // resizing clears the canvas, so a still frame is painted again.
+      if (still) draw();
     }
-
-    resize();
-    window.addEventListener('resize', resize);
 
     function draw() {
       ctx!.clearRect(0, 0, canvas!.width, canvas!.height);
@@ -55,15 +56,17 @@ function RainCanvas() {
           drop.opacity = 0.05 + Math.random() * 0.15;
         }
       }
-      animId = requestAnimationFrame(draw);
+      if (!still) animId = requestAnimationFrame(draw);
     }
 
-    draw();
+    resize();
+    window.addEventListener('resize', resize);
+    if (!still) draw();
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', resize);
     };
-  }, [initDrops]);
+  }, [initDrops, still]);
 
   return (
     <canvas
@@ -76,14 +79,17 @@ function RainCanvas() {
 
 export default function NotFound() {
   const [glitch, setGlitch] = useState(false);
+  // no rain and no glitch until hydration says motion is welcome.
+  const reducedMotion = usePrefersReducedMotion(true);
 
   useEffect(() => {
+    if (reducedMotion) return;
     const interval = setInterval(() => {
       setGlitch(true);
       setTimeout(() => setGlitch(false), 200);
     }, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [reducedMotion]);
 
   return (
     <div className="relative min-h-[100dvh] flex flex-col items-center justify-center overflow-hidden pb-24">
@@ -91,7 +97,7 @@ export default function NotFound() {
       <div className="absolute inset-0 dot-grid opacity-40" />
 
       {/* Raining dots */}
-      <RainCanvas />
+      <RainCanvas still={reducedMotion} />
 
       {/* Radial glow behind the eye */}
       <div
@@ -108,8 +114,11 @@ export default function NotFound() {
           <OwletteEye size={110} className="drop-shadow-2xl" animated />
         </div>
 
-        {/* 404 */}
-        <h1
+        <h1 className="sr-only">404: page not found</h1>
+        {/* the ghost numeral is decoration (wcag 1.4.3 exempts it); the sr-only h1
+            carries the meaning */}
+        <div
+          aria-hidden="true"
           className={`font-mono text-[5.5rem] sm:text-[8.5rem] font-bold leading-none tracking-tighter mb-6 transition-all duration-100 ${
             glitch
               ? 'text-accent-coral skew-x-2 scale-x-[1.02]'
@@ -122,7 +131,7 @@ export default function NotFound() {
           }}
         >
           404
-        </h1>
+        </div>
 
         {/* One-liner */}
         <p className="text-lg sm:text-xl text-muted-foreground font-light tracking-wide mb-8 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">

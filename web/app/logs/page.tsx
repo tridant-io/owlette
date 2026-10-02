@@ -387,7 +387,7 @@ const LogRow = React.memo(function LogRow({
               {!isExpanded && (log.details ? (
                 <TruncatedText text={log.details} className="text-muted-foreground min-w-0" data-testid="log-details" />
               ) : (
-                <span className="text-muted-foreground/40">—</span>
+                <span className="text-muted-foreground/80">—</span>
               ))}
             </div>
           </div>
@@ -424,10 +424,10 @@ const LogRow = React.memo(function LogRow({
           {log.screenshotUrl && (
             <div className="flex-shrink-0 border-t md:border-t-0 md:border-l border-border/50 pt-3 md:pt-0 md:pl-6">
               <span className="text-muted-foreground text-xs">crash screenshot</span>
-              <button onClick={() => onOpenScreenshot(log.screenshotUrl!)} className="block mt-1">
+              <button type="button" onClick={() => onOpenScreenshot(log.screenshotUrl!)} className="block mt-1">
                 <img
                   src={log.screenshotUrl}
-                  alt="Crash screenshot"
+                  alt="crash screenshot"
                   className="rounded border border-border/50 max-w-[200px] max-h-[120px] object-cover hover:opacity-80 transition-opacity cursor-pointer"
                 />
               </button>
@@ -495,7 +495,24 @@ export default function LogsPage() {
 
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [screenshotModalUrl, setScreenshotModalUrl] = useState<string | null>(null);
+  const screenshotCloseRef = useRef<HTMLButtonElement>(null);
   const [isClearing, setIsClearing] = useState(false);
+
+  // the overlay never holds focus, so escape is heard at the document. focus
+  // moves to the close button and returns to the thumbnail that opened it.
+  useEffect(() => {
+    if (!screenshotModalUrl) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    screenshotCloseRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setScreenshotModalUrl(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      opener?.focus();
+    };
+  }, [screenshotModalUrl]);
 
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -894,7 +911,7 @@ export default function LogsPage() {
         {/* Section header with inline stats */}
         <div className="mt-3 md:mt-2 mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3 md:gap-8">
-            <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">logs</h2>
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">logs</h1>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 md:gap-8">
               <div className="flex items-center gap-2.5">
@@ -987,6 +1004,7 @@ export default function LogsPage() {
                   ref={searchInputRef}
                   type="text"
                   placeholder="search logs..."
+                  aria-label="search logs"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => {
@@ -1049,7 +1067,9 @@ export default function LogsPage() {
                 date fields reads as a layout accident. */}
             <div className="flex flex-wrap items-end gap-4">
               <div className="w-full sm:w-48">
-                <Label className="text-foreground text-sm mb-2 block">action type</Label>
+                <Label id="logs-filter-action-label" className="text-foreground text-sm mb-2 block">action type</Label>
+                {/* MultiSelect takes no id, so the group carries the label to its trigger */}
+                <div role="group" aria-labelledby="logs-filter-action-label">
                 <MultiSelect
                   groups={ACTION_TYPE_GROUPS}
                   selected={filterActions}
@@ -1059,12 +1079,13 @@ export default function LogsPage() {
                   searchPlaceholder="search actions…"
                   data-testid="logs-filter-action"
                 />
+                </div>
               </div>
 
               <div className="w-full sm:w-40">
-                <Label className="text-foreground text-sm mb-2 block">machine</Label>
+                <Label htmlFor="logs-filter-machine" className="text-foreground text-sm mb-2 block">machine</Label>
                 <Select value={filterMachine} onValueChange={setFilterMachine}>
-                  <SelectTrigger data-testid="logs-filter-machine" className="bg-muted border-border">
+                  <SelectTrigger id="logs-filter-machine" data-testid="logs-filter-machine" className="bg-muted border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1079,9 +1100,9 @@ export default function LogsPage() {
               </div>
 
               <div className="w-full sm:w-32">
-                <Label className="text-foreground text-sm mb-2 block">level</Label>
+                <Label htmlFor="logs-filter-level" className="text-foreground text-sm mb-2 block">level</Label>
                 <Select value={filterLevel} onValueChange={setFilterLevel}>
-                  <SelectTrigger data-testid="logs-filter-level" className="bg-muted border-border">
+                  <SelectTrigger id="logs-filter-level" data-testid="logs-filter-level" className="bg-muted border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1094,9 +1115,9 @@ export default function LogsPage() {
               </div>
 
               <div className="w-full sm:w-40">
-                <Label className="text-foreground text-sm mb-2 block">date range</Label>
+                <Label htmlFor="logs-filter-date" className="text-foreground text-sm mb-2 block">date range</Label>
                 <Select value={filterDatePreset} onValueChange={(v) => setFilterDatePreset(v as DatePreset)}>
-                  <SelectTrigger data-testid="logs-filter-date" className="bg-muted border-border">
+                  <SelectTrigger id="logs-filter-date" data-testid="logs-filter-date" className="bg-muted border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1112,16 +1133,18 @@ export default function LogsPage() {
               {filterDatePreset === 'custom' && (
                 <>
                   <div className="w-full sm:w-36">
-                    <Label className="text-foreground text-sm mb-2 block">from</Label>
+                    <Label htmlFor="logs-filter-from" className="text-foreground text-sm mb-2 block">from</Label>
                     <DatePicker
+                      id="logs-filter-from"
                       value={fromYMD(filterDateFrom)}
                       onChange={(d) => setFilterDateFrom(d ? toYMD(d) : '')}
                       placeholder="start date"
                     />
                   </div>
                   <div className="w-full sm:w-36">
-                    <Label className="text-foreground text-sm mb-2 block">to</Label>
+                    <Label htmlFor="logs-filter-to" className="text-foreground text-sm mb-2 block">to</Label>
                     <DatePicker
+                      id="logs-filter-to"
                       value={fromYMD(filterDateTo)}
                       onChange={(d) => setFilterDateTo(d ? toYMD(d) : '')}
                       placeholder="end date"
@@ -1212,17 +1235,20 @@ export default function LogsPage() {
       {/* Screenshot Modal */}
       {screenshotModalUrl && (
         <div
+          role="dialog"
+          aria-label="crash screenshot"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 cursor-pointer"
           onClick={() => setScreenshotModalUrl(null)}
-          onKeyDown={(e) => e.key === 'Escape' && setScreenshotModalUrl(null)}
         >
           <img
             src={screenshotModalUrl}
-            alt="Crash screenshot"
+            alt="crash screenshot"
             className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
             onClick={(e) => e.stopPropagation()}
           />
           <button
+            ref={screenshotCloseRef}
+            type="button"
             onClick={() => setScreenshotModalUrl(null)}
             aria-label="close screenshot"
             className="absolute top-4 right-4 text-white/70 hover:text-white transition-colors"
@@ -1269,8 +1295,9 @@ export default function LogsPage() {
       >
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label className="text-foreground text-sm mb-1.5 block">from (optional)</Label>
+            <Label htmlFor="logs-clear-from" className="text-foreground text-sm mb-1.5 block">from (optional)</Label>
             <DatePicker
+              id="logs-clear-from"
               value={clearFrom}
               onChange={setClearFrom}
               placeholder="any start"
@@ -1278,8 +1305,9 @@ export default function LogsPage() {
             />
           </div>
           <div>
-            <Label className="text-foreground text-sm mb-1.5 block">to (optional)</Label>
+            <Label htmlFor="logs-clear-to" className="text-foreground text-sm mb-1.5 block">to (optional)</Label>
             <DatePicker
+              id="logs-clear-to"
               value={clearTo}
               onChange={setClearTo}
               placeholder="any end"

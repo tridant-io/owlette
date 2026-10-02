@@ -1,6 +1,8 @@
 'use client';
 
+import { useId } from 'react';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -121,6 +123,9 @@ export function ApiKeyScopeFields({
   onCustomScopesChange,
   disabled = false,
 }: Props) {
+  // create and edit can both be mounted, so the scope select's id must be unique
+  const scopeId = useId();
+
   function updateCustomScope(index: number, patch: Partial<ApiKeyScope>) {
     onCustomScopesChange(customScopes.map((s, i) => (i === index ? { ...s, ...patch } : s)));
   }
@@ -151,7 +156,7 @@ export function ApiKeyScopeFields({
   return (
     <>
       <div className="space-y-2">
-        <Label className="text-white">scope</Label>
+        <Label htmlFor={scopeId} className="text-white">scope</Label>
         <Select
           value={preset}
           onValueChange={(v) => {
@@ -162,7 +167,7 @@ export function ApiKeyScopeFields({
           }}
           disabled={disabled}
         >
-          <SelectTrigger className="bg-background border-border text-white">
+          <SelectTrigger id={scopeId} className="bg-background border-border text-white">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -182,7 +187,7 @@ export function ApiKeyScopeFields({
       {preset === 'custom' && (
         <div className="space-y-2 rounded-md border border-border bg-card/40 p-3">
           <div className="flex items-center justify-between">
-            <Label className="text-white text-sm">custom scopes</Label>
+            <p className="text-sm leading-none font-medium text-white">custom scopes</p>
             <Button
               type="button"
               size="sm"
@@ -205,7 +210,10 @@ export function ApiKeyScopeFields({
                 onValueChange={(v) => updateCustomScope(i, { resource: v as ApiKeyResource })}
                 disabled={disabled}
               >
-                <SelectTrigger className="h-8 text-xs bg-background border-border text-white">
+                <SelectTrigger
+                  aria-label={`scope ${i + 1} resource`}
+                  className="h-8 text-xs bg-background border-border text-white"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -222,10 +230,11 @@ export function ApiKeyScopeFields({
                   value={s.id}
                   onChange={(e) => updateCustomScope(i, { id: e.target.value })}
                   placeholder="id (or * for all)"
-                  className="h-8 text-xs bg-background border-border text-white"
+                  aria-label={`scope ${i + 1} id`}
+                  className="h-8 text-base md:text-xs bg-background border-border text-white"
                   disabled={disabled}
                 />
-                <div className="flex flex-wrap gap-2">
+                <div role="group" aria-label={`scope ${i + 1} permissions`} className="flex flex-wrap gap-2">
                   {PERMISSIONS.map((p) => (
                     <label
                       key={p}
@@ -242,7 +251,8 @@ export function ApiKeyScopeFields({
                   ))}
                 </div>
               </div>
-              <Button
+              <IconButton
+                label={`remove scope ${i + 1}`}
                 type="button"
                 size="sm"
                 variant="ghost"
@@ -251,7 +261,7 @@ export function ApiKeyScopeFields({
                 className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400 cursor-pointer"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+              </IconButton>
             </div>
           ))}
         </div>

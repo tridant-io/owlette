@@ -16,7 +16,6 @@ import {
   EmailAuthProvider,
 } from 'firebase/auth';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '@/lib/firebase';
 import { handleError, logError } from '@/lib/errorHandler';
 import { inAppDiagnostics, isPopupUnavailableError } from '@/lib/inAppBrowser';
@@ -919,6 +918,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Storage is not initialized.');
       }
 
+      // loaded on first use: nothing else in the auth context needs storage.
+      const { ref: storageRef, uploadBytes, getDownloadURL, deleteObject } = await import('firebase/storage');
       const uid = auth.currentUser.uid;
       const avatarRef = storageRef(storage, `users/${uid}/avatar.jpg`);
 

@@ -149,7 +149,7 @@ export default function WebhooksSettingsPage() {
             <div className="flex items-center gap-2">
               {siteIds.length > 1 && (
                 <Select value={selectedSite} onValueChange={setUserPickedSite}>
-                  <SelectTrigger className="w-48 bg-card border-border text-white">
+                  <SelectTrigger aria-label="site" className="w-48 bg-card border-border text-white">
                     <SelectValue placeholder="pick a site" />
                   </SelectTrigger>
                   <SelectContent>

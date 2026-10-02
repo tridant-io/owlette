@@ -107,6 +107,8 @@ export function PageHeader({
   const [openMenuCount, setOpenMenuCount] = useState(0);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const feedbackIndex = useRef(0);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const drawerTriggerRef = useRef<HTMLButtonElement>(null);
 
   const handleMenuOpenChange = (open: boolean) => {
     setOpenMenuCount((n) => Math.max(0, open ? n + 1 : n - 1));
@@ -121,18 +123,43 @@ export function PageHeader({
   // a resized-wide window would silently reappear on the way back down.
   useEffect(() => {
     if (!navDrawerOpen) return;
+    const drawer = drawerRef.current;
+    const trigger = drawerTriggerRef.current;
+    const focusables = () =>
+      Array.from(drawer?.querySelectorAll<HTMLElement>('a[href], button:not(:disabled)') ?? []);
+    // a modal drawer: focus starts inside it and tab wraps there.
+    focusables()[0]?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setNavDrawerOpen(false);
+      if (e.key === 'Escape') {
+        // claimed, so a panel underneath that closes on escape stays open.
+        e.preventDefault();
+        setNavDrawerOpen(false);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!drawer?.contains(active) || active === (e.shiftKey ? first : last)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first)?.focus();
+      }
     };
     const mq = window.matchMedia('(min-width: 768px)');
     const onBreakpointChange = (e: MediaQueryListEvent) => {
       if (e.matches) setNavDrawerOpen(false);
     };
-    window.addEventListener('keydown', onKeyDown);
+    // capture: window bubble listeners registered before the drawer opened
+    // would otherwise see the escape before it is claimed.
+    window.addEventListener('keydown', onKeyDown, true);
     mq.addEventListener('change', onBreakpointChange);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       mq.removeEventListener('change', onBreakpointChange);
+      // back where the drawer was opened from. a dialog opened from inside the
+      // drawer takes focus after this, in its own mount effect.
+      trigger?.focus();
     };
   }, [navDrawerOpen]);
 
@@ -153,11 +180,18 @@ export function PageHeader({
     return () => clearInterval(interval);
   }, [feedbackRotating]);
 
-  const currentSiteName = sites.find(s => s.id === currentSiteId)?.name ?? 'Select site';
+  const currentSiteName = sites.find(s => s.id === currentSiteId)?.name ?? 'select site';
   // Non-null only when there is actually a site to switch to. Holds the narrowed
   // callback so bar and drawer can call it without re-testing the same conditions.
   const selectSite = sites.length > 0 && currentSiteId && onSiteChange ? onSiteChange : null;
   const PageIcon = PAGE_ICONS[currentPage.toLowerCase()];
+
+  // the scrim mounts with the first open menu and goes once its fade-out ends:
+  // a full-viewport backdrop blur costs a compositing pass while it exists,
+  // even at opacity 0.
+  const menuOpen = openMenuCount > 0;
+  const [scrimMounted, setScrimMounted] = useState(false);
+  if (menuOpen && !scrimMounted) setScrimMounted(true);
 
   return (
     <>
@@ -173,6 +207,7 @@ export function PageHeader({
               action buttons, so they collapse into the drawer this opens. */}
           {!disableNav && (
             <button
+              ref={drawerTriggerRef}
               type="button"
               aria-label="menu"
               aria-expanded={navDrawerOpen}
@@ -181,6 +216,14 @@ export function PageHeader({
             >
               <Menu className="h-5 w-5 text-muted-foreground" />
             </button>
+          )}
+
+          {/* the site stays in view below `md`, where its switcher lives in the
+              drawer: which fleet the page shows should never be a guess. */}
+          {!disableNav && selectSite && (
+            <span data-testid="mobile-current-site" className="md:hidden min-w-0 truncate text-sm text-muted-foreground">
+              {currentSiteName}
+            </span>
           )}
 
           {/* Breadcrumb: Site > Page — desktop only (mobile uses the drawer) */}
@@ -394,7 +437,7 @@ export function PageHeader({
         only while open, and force-closed on the way up past `md` (see the
         effect above), so at >=768px this subtree does not exist. */}
     {navDrawerOpen && (
-      <div className="fixed inset-0 z-50 md:hidden">
+      <div ref={drawerRef} role="dialog" aria-modal="true" aria-label="menu" className="fixed inset-0 z-50 md:hidden">
         <div
           aria-hidden
           className="absolute inset-0 bg-black/50"
@@ -510,10 +553,15 @@ export function PageHeader({
     {/* Subtle top glow for readability over dot grid */}
     <div className="pointer-events-none absolute inset-x-0 top-14 h-48 z-0" style={{ background: 'linear-gradient(to bottom, oklch(0.20 0.03 250 / 0.7), transparent)' }} />
     {/* Scrim: subtle blur + dim of page content when a nav dropdown is open */}
-    <div
-      aria-hidden
-      className={`pointer-events-none fixed inset-x-0 top-14 bottom-0 z-40 backdrop-blur-[2px] bg-black/10 transition-opacity duration-150 ${openMenuCount > 0 ? 'opacity-100' : 'opacity-0'}`}
-    />
+    {scrimMounted && (
+      <div
+        aria-hidden
+        onTransitionEnd={() => {
+          if (!menuOpen) setScrimMounted(false);
+        }}
+        className={`pointer-events-none fixed inset-x-0 top-14 bottom-0 z-40 backdrop-blur-[2px] bg-black/10 transition-opacity duration-150 ${menuOpen ? 'opacity-100 animate-in fade-in-0' : 'opacity-0'}`}
+      />
+    )}
     <ReportBugDialog open={reportBugOpen} onOpenChange={setReportBugOpen} />
     </>
   );

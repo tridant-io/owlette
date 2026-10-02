@@ -90,7 +90,7 @@ test('creating a preset writes a Firestore doc with valid blocks', async ({ page
   const dialog = page.getByRole('dialog', { name: /create schedule preset/i });
   await expect(dialog).toBeVisible();
 
-  await dialog.getByLabel('Name').fill(presetName);
+  await dialog.getByLabel('Name', { exact: true }).fill(presetName);
   // DEFAULT_SCHEDULE is pre-populated, so submitting straight away is valid.
   await dialog.getByRole('button', { name: /^create preset$/i }).click();
 

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
 import { roleState } from '../../helpers/roles';
-import { TEST_USERS } from '../../helpers/seed';
+import { TEST_SITES, TEST_USERS, seedMachine } from '../../helpers/seed';
 import {
   clearHootFixture,
   seedHootFixture,
@@ -72,7 +72,7 @@ async function expectNoSeriousA11yViolations(page: Page, within?: string) {
 test.describe('public a11y smoke', () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  for (const route of ['/', '/privacy', '/terms', '/legal/dmca', '/unsubscribe?success=true', '/demo']) {
+  for (const route of ['/', '/privacy', '/terms', '/legal/dmca', '/unsubscribe?success=true', '/demo', '/login', '/register']) {
     test(`${route} has no serious/critical axe violations`, async ({ page }) => {
       await page.goto(route);
       await expect(page.locator('body')).toBeVisible();
@@ -90,6 +90,30 @@ test.describe('authenticated a11y smoke', () => {
     await expect(page.getByRole('heading', { name: /^logs$/i })).toBeVisible();
     await expectNoSeriousA11yViolations(page);
   });
+
+  // /demo carries labels the real dashboard lacked, so the real one is scanned too:
+  // card view (the default) and list view
+  test('dashboard has no serious/critical axe violations', async ({ page }) => {
+    await seedMachine(TEST_SITES[0].id, 'e2e-a11y-dashboard-machine');
+    await page.goto('/dashboard');
+    await expect(page.getByTestId('machine-card').first()).toBeVisible({ timeout: 15_000 });
+    await expectNoSeriousA11yViolations(page);
+    await page.getByTestId('view-toggle-list').click();
+    await expect(page.getByTestId('machine-row').first()).toBeVisible();
+    await expectNoSeriousA11yViolations(page);
+  });
+
+  for (const [route, heading] of [
+    ['/deployments', 'deployments'],
+    ['/roosts', 'roosts'],
+    ['/settings/api-keys', 'api keys'],
+  ] as const) {
+    test(`${route} has no serious/critical axe violations`, async ({ page }) => {
+      await page.goto(route);
+      await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible({ timeout: 10_000 });
+      await expectNoSeriousA11yViolations(page);
+    });
+  }
 
   test('hoot keyed state has no serious/critical axe violations', async ({ page }) => {
     await seedHootFixture({ userId: TEST_USERS.admin.uid });

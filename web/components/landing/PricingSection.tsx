@@ -170,10 +170,10 @@ export function PricingSection() {
               get in touch
             </a>
           </p>
-          <p className="mt-10 text-sm text-muted-foreground/60">
+          <p className="mt-10 text-sm text-muted-foreground/80">
             founders pricing is the rate you keep, not an introductory period.
           </p>
-          <p className="mt-2 text-sm text-muted-foreground/60">
+          <p className="mt-2 text-sm text-muted-foreground/80">
             * hoot requires your own API key (OpenAI, Anthropic, or compatible)
           </p>
         </div>

@@ -17,7 +17,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { cn } from '@/lib/utils';
+import { cn, ITEM_FOCUS_RING } from '@/lib/utils';
 
 type MonitorUpdate = Partial<MonitorInfo>;
 
@@ -132,10 +132,11 @@ function effectiveResolution(monitor: MonitorInfo): { w: number; h: number } {
 }
 
 // Native controls on purpose: keyboard + a11y for free, at a styling ceiling
-// that's acceptable at this row density.
+// that's acceptable at this row density. 16px below md: iOS zooms the page into
+// any focused field set smaller. Focus is the global outline.
 const EDITABLE_CELL_BASE =
-  'bg-card border border-border rounded px-1.5 py-0.5 text-xs text-foreground ' +
-  'hover:border-accent focus:outline-none focus:ring-1 focus:ring-accent';
+  'bg-card border border-border rounded px-1.5 py-0.5 text-base md:text-xs text-foreground ' +
+  'hover:border-accent';
 
 /**
  * Controlled numeric input surviving the two classic traps: a bare "-"
@@ -230,7 +231,9 @@ function DisplayMonitorTableImpl({
   const canEdit = editable && !!onUpdateMonitor;
 
   return (
-    <div className="rounded-r-lg border border-border bg-secondary overflow-hidden h-[280px] overflow-y-auto">
+    // overflow-auto, not overflow-hidden: at phone width the seven columns are wider
+    // than the panel and scroll sideways instead of being clipped
+    <div className="rounded-r-lg border border-border bg-secondary h-[280px] overflow-auto">
       <table className="w-full text-xs">
         <thead className="text-[10px] text-muted-foreground bg-card sticky top-0 z-10">
           <tr className="border-b border-border">
@@ -288,7 +291,7 @@ function DisplayMonitorTableImpl({
                 className={cn(
                   'border-b border-border last:border-b-0 transition-colors',
                   onSelect && !canEdit && 'cursor-pointer',
-                  onSelect && 'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+                  onSelect && ITEM_FOCUS_RING,
                   isSelected
                     ? 'bg-accent/30'
                     : isHovered && 'bg-accent/20',
@@ -333,11 +336,12 @@ function DisplayMonitorTableImpl({
                             ? 'primary monitor'
                             : 'mark as primary'
                         }
+                        aria-label={monitor.primary ? 'primary monitor' : 'mark as primary'}
                         className={cn(
                           'shrink-0 transition-colors',
                           monitor.primary
                             ? 'text-accent-warm cursor-default'
-                            : 'text-muted-foreground/50 hover:text-accent-warm',
+                            : 'text-muted-foreground hover:text-accent-warm',
                         )}
                       >
                         <Star
@@ -345,7 +349,7 @@ function DisplayMonitorTableImpl({
                             'h-3 w-3',
                             monitor.primary && 'fill-accent-warm',
                           )}
-                          aria-label={monitor.primary ? 'primary' : 'set primary'}
+                          aria-hidden
                         />
                       </button>
                     ) : (
@@ -511,6 +515,7 @@ function DisplayMonitorTableImpl({
                       }
                       onClick={(e) => e.stopPropagation()}
                       className={cn(EDITABLE_CELL_BASE, 'tabular-nums')}
+                      aria-label="scale"
                     >
                       {SCALE_OPTIONS.map((s) => (
                         <option key={s} value={s}>
@@ -538,6 +543,7 @@ function DisplayMonitorTableImpl({
                       }
                       onClick={(e) => e.stopPropagation()}
                       className={EDITABLE_CELL_BASE}
+                      aria-label="orientation"
                     >
                       {ROTATION_OPTIONS.map((opt) => (
                         <option key={opt.value} value={opt.value}>

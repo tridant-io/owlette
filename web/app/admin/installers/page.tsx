@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useInstallerManagement } from '@/hooks/useInstallerManagement';
 import type { FirestoreTs } from '@/hooks/useFirestore';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -41,7 +42,8 @@ function TruncatedReleaseNotes({ text }: { text: string }) {
   }, [checkTruncation]);
 
   const content = (
-    <p ref={ref} className="text-sm text-muted-foreground line-clamp-2 cursor-default">
+    // focusable once clamped, so a keyboard user can open the tooltip with the rest
+    <p ref={ref} tabIndex={isTruncated ? 0 : undefined} className="text-sm text-muted-foreground line-clamp-2 cursor-default">
       {text}
     </p>
   );
@@ -253,36 +255,22 @@ export default function InstallerVersionsPage() {
               </p>
             </div>
             <div className="flex gap-2">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    onClick={() => window.open(latestVersion.download_url, '_blank')}
-                    variant="outline"
-                    size="icon"
-                    className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground! cursor-pointer"
-                  >
-                    <Download className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>download installer</p>
-                </TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    onClick={() => copyDownloadLink(latestVersion.download_url, latestVersion.version)}
-                    variant="outline"
-                    size="icon"
-                    className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground! cursor-pointer"
-                  >
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>copy download link</p>
-                </TooltipContent>
-              </Tooltip>
+              <IconButton
+                label="download installer"
+                onClick={() => window.open(latestVersion.download_url, '_blank')}
+                variant="outline"
+                className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground! cursor-pointer"
+              >
+                <Download className="h-4 w-4" />
+              </IconButton>
+              <IconButton
+                label="copy download link"
+                onClick={() => copyDownloadLink(latestVersion.download_url, latestVersion.version)}
+                variant="outline"
+                className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground! cursor-pointer"
+              >
+                <Copy className="h-4 w-4" />
+              </IconButton>
             </div>
           </div>
         </div>
@@ -305,7 +293,7 @@ export default function InstallerVersionsPage() {
 
       {/* Versions Table */}
       {!loading && !error && (
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="bg-card border border-border rounded-lg overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="border-b border-border bg-background/50">
@@ -368,7 +356,7 @@ export default function InstallerVersionsPage() {
                         {version.release_notes ? (
                           <TruncatedReleaseNotes text={version.release_notes} />
                         ) : (
-                          <span className="text-xs text-muted-foreground/60">no notes</span>
+                          <span className="text-xs text-muted-foreground/80">no notes</span>
                         )}
                       </td>
 
@@ -402,40 +390,26 @@ export default function InstallerVersionsPage() {
 
                           {/* Right side: Icon buttons (always aligned) */}
                           <div className="flex items-center gap-2">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => window.open(version.download_url, '_blank')}
-                                  className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
-                                >
-                                  <Download className="h-3.5 w-3.5" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>download installer</p>
-                              </TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => copyDownloadLink(version.download_url, version.version)}
-                                  className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
-                                >
-                                  <Copy className="h-3.5 w-3.5" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>copy download link</p>
-                              </TooltipContent>
-                            </Tooltip>
+                            <IconButton
+                              label={`download installer ${version.version}`}
+                              variant="ghost"
+                              onClick={() => window.open(version.download_url, '_blank')}
+                              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                            </IconButton>
+                            <IconButton
+                              label={`copy download link for ${version.version}`}
+                              variant="ghost"
+                              onClick={() => copyDownloadLink(version.download_url, version.version)}
+                              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </IconButton>
                             {!isLatest ? (
-                              <Button
+                              <IconButton
+                                label={`delete ${version.version}`}
                                 variant="ghost"
-                                size="icon"
                                 onClick={() => handleDelete(version.version)}
                                 disabled={isDeleting || isSetting}
                                 className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
@@ -445,7 +419,7 @@ export default function InstallerVersionsPage() {
                                 ) : (
                                   <Trash2 className="h-3.5 w-3.5" />
                                 )}
-                              </Button>
+                              </IconButton>
                             ) : (
                               <div className="w-[36px]" />
                             )}

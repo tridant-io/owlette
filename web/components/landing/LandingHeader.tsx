@@ -174,9 +174,11 @@ export function LandingHeader() {
         </div>
       </div>
 
-      {/* Mobile menu panel — slides open/closed via a grid-rows transition */}
+      {/* Mobile menu panel — slides open/closed via a grid-rows transition.
+          inert, not just aria-hidden, while closed: its links stay in the dom
+          for the transition and would otherwise still take tab. */}
       <div
-        aria-hidden={!menuOpen}
+        inert={!menuOpen}
         className={`lg:hidden grid overflow-hidden bg-background/95 backdrop-blur-md transition-[grid-template-rows] duration-200 ease-out ${
           menuOpen ? 'grid-rows-[1fr] border-t border-border/50' : 'grid-rows-[0fr]'
         }`}

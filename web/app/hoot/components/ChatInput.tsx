@@ -3,6 +3,7 @@
 import React, { useRef, useCallback, useState, useEffect, useId, useMemo } from 'react';
 import { Send, Square, X, Loader2, AtSign } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import {
   applyMention,
   filterMentionOptions,
@@ -11,6 +12,7 @@ import {
 } from '@/lib/hoot/mentions';
 import { formatTargetLabel } from '@/lib/hoot/target';
 import { MentionPopover, type MentionMachine } from './MentionPopover';
+import { ImageLightbox } from '@/components/ImageLightbox';
 
 export interface PendingImage {
   url: string;
@@ -106,16 +108,6 @@ export function ChatInput({
     (machineId: string) => `${fieldId}-mention-${machineId}`,
     [fieldId],
   );
-
-  // Close lightbox on Escape
-  useEffect(() => {
-    if (!expandedImage) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setExpandedImage(null);
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [expandedImage]);
 
   // Auto-resize textarea to fit its content. Driven by `input` so it tracks
   // every value change — including programmatic ones like clearing on submit,
@@ -268,59 +260,43 @@ export function ChatInput({
 
   return (
     <div className="border-t border-border px-4 py-3">
-      {/* Lightbox overlay */}
-      {expandedImage && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 cursor-pointer"
-          onClick={() => setExpandedImage(null)}
-        >
-          <button
-            type="button"
-            onClick={() => setExpandedImage(null)}
-            className="absolute top-4 right-4 h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
-          >
-            <X className="h-5 w-5 text-white" />
-          </button>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={expandedImage}
-            alt="Expanded preview"
-            className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
+      <ImageLightbox src={expandedImage} alt="pasted image" onClose={() => setExpandedImage(null)} />
 
       <form onSubmit={onSubmit} className="max-w-3xl mx-auto">
         {/* Image preview strip */}
         {pendingImages.length > 0 && (
-          <div className="flex gap-2 mb-2 flex-wrap">
+          <div className="flex gap-3 mb-2 flex-wrap">
             {pendingImages.map((img, i) => (
               <div
                 key={i}
                 className="relative group h-12 w-12 rounded-md border border-border bg-secondary flex-shrink-0"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={img.previewUrl || img.url}
-                  alt="Pending upload"
-                  className="h-full w-full object-cover cursor-pointer rounded-md"
+                <button
+                  type="button"
                   onClick={() => setExpandedImage(img.previewUrl || img.url)}
-                />
+                  aria-label={`view pasted image ${i + 1}`}
+                  className="h-full w-full overflow-hidden rounded-md cursor-pointer"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={img.previewUrl || img.url} alt="" className="h-full w-full object-cover" />
+                </button>
                 {img.uploading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/50">
                     <Loader2 className="h-4 w-4 text-white animate-spin" />
                   </div>
                 )}
                 {!img.uploading && (
-                  <button
+                  // touch has no hover to reveal it, so it only hides behind
+                  // hover where there is a mouse to hover with.
+                  <IconButton
                     type="button"
+                    label={`remove pasted image ${i + 1}`}
+                    variant="secondary"
                     onClick={() => onRemoveImage(i)}
-                    aria-label="remove image"
-                    className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-red-600 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                    className="absolute -top-2 -right-2 size-6 rounded-full border border-border pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100"
                   >
-                    <X className="h-2.5 w-2.5 text-white" />
-                  </button>
+                    <X className="size-3.5" />
+                  </IconButton>
                 )}
               </div>
             ))}
@@ -372,7 +348,8 @@ export function ChatInput({
               aria-activedescendant={
                 mentionOpen && activeOption ? optionDomId(activeOption.id) : undefined
               }
-              className="flex-1 resize-none rounded-lg border border-border bg-secondary px-4 py-2 text-sm leading-normal text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent-cyan/50 focus:border-accent-cyan"
+              // 16px below md: iOS zooms the page into any field smaller than that.
+              className="flex-1 resize-none rounded-lg border border-border bg-secondary px-4 py-2 text-base md:text-sm leading-normal text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent-cyan/50 focus:border-accent-cyan"
               disabled={isLoading}
             />
 

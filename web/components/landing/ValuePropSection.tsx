@@ -34,6 +34,12 @@ export function ValuePropSection() {
         x: ((e.clientX - rect.left) / rect.width) * 100,
         y: ((e.clientY - rect.top) / rect.height) * 100,
       };
+      start();
+    };
+
+    // the loop parks once it settles; a move or a return to view restarts it.
+    const start = () => {
+      if (isVisible.current && !raf.current) raf.current = requestAnimationFrame(animate);
     };
 
     const animate = () => {
@@ -45,13 +51,21 @@ export function ValuePropSection() {
       const factor = 0.06;
       const cur = current.current;
       const tgt = target.current;
-      cur.x += (tgt.x - cur.x) * factor;
-      cur.y += (tgt.y - cur.y) * factor;
-
       const sc = sheenCurrent.current;
       const st = sheenTarget.current;
-      sc.x += (st.x - sc.x) * factor;
-      sc.y += (st.y - sc.y) * factor;
+      // close enough to the pointer to stop: the sheen is a full-size gradient
+      // and every write repaints it, so it must not run on with nothing moving.
+      const settled = [tgt.x - cur.x, tgt.y - cur.y, st.x - sc.x, st.y - sc.y].every((d) => Math.abs(d) < 0.01);
+
+      if (settled) {
+        Object.assign(cur, tgt);
+        Object.assign(sc, st);
+      } else {
+        cur.x += (tgt.x - cur.x) * factor;
+        cur.y += (tgt.y - cur.y) * factor;
+        sc.x += (st.x - sc.x) * factor;
+        sc.y += (st.y - sc.y) * factor;
+      }
 
       // Write directly to DOM — no React re-render
       if (tiltRef.current) {
@@ -61,23 +75,20 @@ export function ValuePropSection() {
         sheenRef.current.style.background = `radial-gradient(ellipse 600px 400px at ${sc.x}% ${sc.y}%, rgba(255, 255, 255, 0.06) 0%, transparent 70%)`;
       }
 
-      raf.current = requestAnimationFrame(animate);
+      raf.current = settled ? null : requestAnimationFrame(animate);
     };
 
     // Only run RAF when section is in viewport
     const observer = new IntersectionObserver(
       ([entry]) => {
         isVisible.current = entry.isIntersecting;
-        if (entry.isIntersecting && !raf.current) {
-          raf.current = requestAnimationFrame(animate);
-        }
+        start();
       },
       { threshold: 0 }
     );
     observer.observe(container);
 
     window.addEventListener('mousemove', handleMouseMove, { passive: true });
-    raf.current = requestAnimationFrame(animate);
 
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
@@ -89,7 +100,13 @@ export function ValuePropSection() {
   return (
     <section className="pt-0 sm:pt-0 pb-0 px-4 sm:px-6 mt-8 sm:-mt-24">
       {/* Product screenshot with mouse-reactive 3D tilt */}
-      <div ref={containerRef} className="max-w-6xl mx-auto mb-6 sm:mb-8 hero-enter-delay-3" style={{ perspective: '1800px' }}>
+      {/* the lcp image: it rises in but is never held transparent, which
+          would hold back largest contentful paint until the fade began. */}
+      <div
+        ref={containerRef}
+        className="max-w-6xl mx-auto mb-6 sm:mb-8 motion-safe:animate-in slide-in-from-bottom-4 duration-800 ease-out"
+        style={{ perspective: '1800px' }}
+      >
         <Link
           ref={tiltRef}
           href="/demo"
@@ -107,9 +124,12 @@ export function ValuePropSection() {
             alt="owlette dashboard showing 10 machines with real-time metrics"
             width={1920}
             height={1080}
+            // max-w-6xl inside px-6 (px-4 below sm) caps it at 1152px from a 1200px viewport.
+            sizes="(max-width: 1200px) 100vw, 1152px"
+            quality={90}
             className="w-full h-auto"
             priority
-            unoptimized
+            fetchPriority="high"
           />
           {/* Sheen overlay */}
           <div

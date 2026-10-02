@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Eye, Loader2, Square, Play, Download, Maximize2, X as XIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
+import { ImageLightbox } from '@/components/ImageLightbox';
 import {
   Dialog,
   DialogContent,
@@ -16,7 +18,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -235,48 +236,24 @@ export function LiveViewModal({
     }
   }, [screenshot, machineName]);
 
-  useEffect(() => {
-    if (!fullscreen) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setFullscreen(false);
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [fullscreen]);
-
   return (
     <>
-
-      {fullscreen && screenshot && (
-        <div
-          className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center cursor-pointer"
-          onClick={() => setFullscreen(false)}
-        >
-          <Button
-            variant="ghost"
-            size="icon"
-            className="absolute top-4 right-4 text-white hover:bg-white/20 z-10"
-            onClick={(e) => { e.stopPropagation(); setFullscreen(false); }}
-          >
-            <XIcon className="h-6 w-6" />
-          </Button>
-          <img
-            src={screenshot.url}
-            alt={`Live view of ${machineName}`}
-            className="max-w-[95vw] max-h-[95vh] object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
+      {screenshot && (
+        <ImageLightbox
+          src={fullscreen ? screenshot.url : null}
+          alt={`live view of ${machineName}`}
+          onClose={() => setFullscreen(false)}
+        />
       )}
 
-      <Dialog open={open} onOpenChange={(v) => { if (fullscreen) { setFullscreen(false); return; } onOpenChange(v); }}>
-        <DialogContent showCloseButton={false} className="bg-card border-border w-[calc(100vw-2rem)] sm:max-w-4xl max-w-none p-0 gap-0 h-[calc(100vh-4rem)] max-h-[700px]">
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent showCloseButton={false} className="bg-card border-border w-[calc(100vw-2rem)] sm:max-w-4xl max-w-none p-0 gap-0 h-[calc(100dvh-4rem)] max-h-[700px]">
           <div className="flex flex-col h-full">
 
             <DialogHeader className="px-4 py-2 border-b border-border flex-shrink-0">
               <DialogTitle className="flex items-center gap-2">
-                <Eye className="h-5 w-5" />
-                live view — {machineName}
+                <Eye className="h-5 w-5 shrink-0" />
+                <span className="truncate">live view — {machineName}</span>
                 {liveViewActive && timeRemaining && (
                   <span className="text-xs font-normal text-muted-foreground ml-2">
                     {timeRemaining} remaining
@@ -291,14 +268,17 @@ export function LiveViewModal({
                     <span className="text-xs font-normal text-green-400">live</span>
                   </span>
                 )}
-                <Button
+                {/* no tooltip: as the first tabbable control it takes focus on open,
+                    and an open tooltip would take the first escape press */}
+                <IconButton
+                  label="close"
+                  tooltip={false}
                   variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-muted-foreground ml-auto"
+                  className="size-7 text-muted-foreground ml-auto"
                   onClick={() => onOpenChange(false)}
                 >
                   <XIcon className="h-4 w-4" />
-                </Button>
+                </IconButton>
               </DialogTitle>
             </DialogHeader>
 
@@ -307,7 +287,7 @@ export function LiveViewModal({
                 <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground text-center px-6">
                   <Eye className="h-8 w-8" />
                   <p>press <span className="text-foreground font-medium">start</span> to begin a live preview of this machine</p>
-                  <p className="text-xs text-muted-foreground/70">
+                  <p className="text-xs text-muted-foreground/80">
                     captures a screenshot every {interval}s · auto-stops after 10 minutes
                   </p>
                 </div>
@@ -321,17 +301,18 @@ export function LiveViewModal({
               )}
 
               {screenshot && (
+                // eslint-disable-next-line @next/next/no-img-element -- signed storage url, not a static asset
                 <img
                   src={screenshot.url}
-                  alt={`Live view of ${machineName}`}
+                  alt={`live view of ${machineName}`}
                   className="absolute inset-0 w-full h-full object-contain cursor-pointer"
                   onClick={() => setFullscreen(true)}
                 />
               )}
             </div>
 
-            <div className="flex items-center justify-between px-4 py-2 border-t border-border flex-shrink-0">
-              <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-t border-border flex-shrink-0">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
 
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">interval:</span>
@@ -363,36 +344,22 @@ export function LiveViewModal({
               <div className="flex items-center gap-2">
                 {screenshot && (
                   <>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={handleDownload}
-                        >
-                          <Download className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>download screenshot</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => setFullscreen(true)}
-                        >
-                          <Maximize2 className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>fullscreen</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    <IconButton
+                      label="download screenshot"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={handleDownload}
+                    >
+                      <Download className="h-4 w-4" />
+                    </IconButton>
+                    <IconButton
+                      label="fullscreen"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setFullscreen(true)}
+                    >
+                      <Maximize2 className="h-4 w-4" />
+                    </IconButton>
                   </>
                 )}
 

@@ -2,14 +2,14 @@
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type UIMessage } from 'ai';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { ArrowUp, X, Pencil } from 'lucide-react';
+import { ArrowUp, Pencil } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
+import { HootMarkdown } from '@/components/hoot/HootMarkdown';
 import { ToolCallCard } from './ToolCallCard';
 import { CopyButton } from './CopyButton';
+import { ImageLightbox } from '@/components/ImageLightbox';
 import { SynapticIndicator } from './SynapticIndicator';
 import { getRandomSuggestions } from '../data/suggestedQuestions';
 import { YOU_TRANSLATIONS } from '@/lib/dashboardConstants';
@@ -23,6 +23,43 @@ type MessagePart = UIMessage['parts'][number];
 
 function isToolPart(part: MessagePart): boolean {
   return part.type.startsWith('tool-') || part.type === 'dynamic-tool';
+}
+
+/** v6: static tool parts are typed 'tool-{name}', dynamic ones carry `toolName`. */
+function toolNameOf(part: MessagePart): string {
+  return part.type === 'dynamic-tool'
+    ? ((part as { toolName?: string }).toolName || 'unknown')
+    : part.type.slice(5);
+}
+
+/** the tool the newest reply is held on for approval, if it is. */
+function awaitedApprovalTool(message: UIMessage | undefined, turnRunning: boolean): string | null {
+  if (!message || message.role !== 'assistant' || turnRunning) return null;
+  const part = message.parts.find(
+    (p) => isToolPart(p) && (p as { state?: string }).state === 'approval-requested',
+  );
+  return part ? toolNameOf(part) : null;
+}
+
+/**
+ * what the reply log reads out once a turn ends: the reply's last text part —
+ * after an approval resume, the earlier text was already read — or nothing.
+ * the markers that only style the text (fences, backticks, bold, heading
+ * hashes) are dropped so a screen reader does not spell them out; pipes stay,
+ * since in a command they carry meaning.
+ */
+function finishedReplyAnnouncement(messages: UIMessage[]): string {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== 'assistant') return '';
+  const texts = last.parts.filter(
+    (p): p is { type: 'text'; text: string } => p.type === 'text' && p.text.trim().length > 0,
+  );
+  const text = texts[texts.length - 1]?.text
+    .replace(/```[^\n]*\n?/g, '')
+    .replace(/`|\*\*/g, '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .trim();
+  return text ? `hoot replied: ${text}` : '';
 }
 
 /**
@@ -117,6 +154,34 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const suggestions = useMemo(() => getRandomSuggestions(4), []);
 
+  const lastMessage = messages[messages.length - 1];
+  // A reply is in flight while this tab streams it — or, after a reload, while the
+  // stream doc says its turn is live and not stale.
+  const inFlight = isLoading || (Boolean(turnRunning) && !turnStale);
+  const thinking = inFlight && Boolean(lastMessage) && (lastMessage.role === 'user' || !hasVisibleContent(lastMessage));
+  const approvalTool = awaitedApprovalTool(lastMessage, Boolean(turnRunning));
+
+  // screen readers hear a reply once, when its turn ends: a live region over the
+  // streaming transcript would read out every token. set while rendering, on the
+  // in-flight edge, so a chat that opens already answered stays quiet.
+  const [wasInFlight, setWasInFlight] = useState(inFlight);
+  const [replyAnnouncement, setReplyAnnouncement] = useState('');
+  if (inFlight !== wasInFlight) {
+    setWasInFlight(inFlight);
+    setReplyAnnouncement(inFlight || turnErrored ? '' : finishedReplyAnnouncement(messages));
+  }
+
+  // kept mounted through the empty state, so the first "thinking" is heard too:
+  // a live region announces changes, not its own arrival.
+  const announcer = (
+    <div className="sr-only">
+      <div role="status">
+        {thinking ? 'hoot is thinking' : approvalTool ? `hoot needs your approval to run ${approvalTool}` : ''}
+      </div>
+      <div role="log" aria-label="hoot replies">{replyAnnouncement}</div>
+    </div>
+  );
+
   // Each assistant turn carries the machines it actually ran on. Read once per
   // render — `readHootTurnMetadata` validates an untrusted blob, and both the
   // approval cards and the retarget captions need the result — and flag the turns
@@ -172,15 +237,6 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
     }
   }, [messages, isLoading]);
 
-  useEffect(() => {
-    if (!expandedImage) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setExpandedImage(null);
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [expandedImage]);
-
   // Grow the edit box with its text, as the composer does: collapse to the
   // 3-row floor, then take the content height. A layout effect, so the box
   // never paints at the floor first. Under border-box `height` counts the
@@ -213,6 +269,8 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
 
   if (messages.length === 0) {
     return (
+      <>
+      {announcer}
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center max-w-md px-4">
           <HootIcon className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
@@ -246,15 +304,13 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
             </div>
         </div>
       </div>
+      </>
     );
   }
 
-  const lastMessage = messages[messages.length - 1];
-  // A reply is in flight while this tab streams it — or, after a reload, while the
-  // stream doc says its turn is live and not stale.
-  const inFlight = isLoading || (Boolean(turnRunning) && !turnStale);
-
   return (
+    <>
+    {announcer}
     <div className="relative flex-1 min-h-0 flex flex-col">
       {/* Scroll to top button */}
       <button
@@ -274,28 +330,7 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
       <div ref={scrollerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
       <div ref={topRef} />
 
-      {/* Lightbox overlay */}
-      {expandedImage && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 cursor-pointer"
-          onClick={() => setExpandedImage(null)}
-        >
-          <button
-            type="button"
-            onClick={() => setExpandedImage(null)}
-            className="absolute top-4 right-4 h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
-          >
-            <X className="h-5 w-5 text-white" />
-          </button>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={expandedImage}
-            alt="Expanded image"
-            className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
+      <ImageLightbox src={expandedImage} alt="pasted image" onClose={() => setExpandedImage(null)} />
 
       {messages.map((message, index) => {
         const isUser = message.role === 'user';
@@ -350,7 +385,7 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
                   const copyBtn = fullText.length > 0 ? (
                     <CopyButton
                       value={fullText}
-                      className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-cyan focus-visible:outline-offset-2 rounded-sm transition-opacity"
+                      className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-cyan focus-visible:outline-offset-2 rounded-sm transition-opacity"
                     />
                   ) : null;
                   // Edit pencil — user messages only, hidden while streaming or editing.
@@ -361,7 +396,7 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
                           type="button"
                           onClick={() => { setEditText(fullText); setEditingId(message.id); }}
                           aria-label="edit message"
-                          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-cyan focus-visible:outline-offset-2 rounded-sm transition-opacity text-muted-foreground hover:text-foreground cursor-pointer"
+                          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-cyan focus-visible:outline-offset-2 rounded-sm transition-opacity text-muted-foreground hover:text-foreground cursor-pointer"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
@@ -405,7 +440,7 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
                       }
                     }}
                     rows={3}
-                    className="w-full max-h-[40vh] resize-none rounded-lg border border-border bg-secondary px-4 py-3 text-sm leading-relaxed text-foreground text-left focus:outline-none focus:ring-2 focus:ring-accent-cyan/50 focus:border-accent-cyan"
+                    className="w-full max-h-[40vh] resize-none rounded-lg border border-border bg-secondary px-4 py-3 text-base md:text-sm leading-relaxed text-foreground text-left focus:outline-none focus:ring-2 focus:ring-accent-cyan/50 focus:border-accent-cyan"
                   />
                   <div className="flex items-center justify-end gap-2">
                     <Button type="button" variant="ghost" size="sm" onClick={cancelEdit}>
@@ -433,46 +468,36 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
               {/* Render parts (text + images + tool calls) */}
               {message.parts.map((part, i) => {
               if (part.type === 'text') {
-                return (
-                  <div
-                    key={i}
-                    className="hoot-markdown text-sm text-foreground prose prose-invert prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none"
-                  >
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {part.text}
-                    </ReactMarkdown>
-                  </div>
-                );
+                return <HootMarkdown key={i} text={part.text} />;
               }
 
               if (part.type === 'file') {
                 const filePart = part as { type: 'file'; mediaType?: string; url?: string };
-                if (filePart.mediaType?.startsWith('image/') && filePart.url) {
+                const imageUrl = filePart.mediaType?.startsWith('image/') ? filePart.url : undefined;
+                if (imageUrl) {
                   return (
-                    /* eslint-disable-next-line @next/next/no-img-element */
-                    <img
+                    <button
                       key={i}
-                      src={filePart.url}
-                      alt="Pasted image"
-                      className={`max-w-sm rounded-lg border border-border my-1 cursor-pointer hover:opacity-90 transition-opacity${isUser ? ' ml-auto' : ''}`}
-                      loading="lazy"
-                      onClick={() => setExpandedImage(filePart.url!)}
-                    />
+                      type="button"
+                      onClick={() => setExpandedImage(imageUrl)}
+                      aria-label="view pasted image"
+                      className={`block max-w-sm my-1 rounded-lg cursor-pointer hover:opacity-90 transition-opacity${isUser ? ' ml-auto' : ''}`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={imageUrl} alt="" loading="lazy" className="max-w-full rounded-lg border border-border" />
+                    </button>
                   );
                 }
                 return null;
               }
 
-              if (part.type.startsWith('tool-') || part.type === 'dynamic-tool') {
-                // v6: static tool parts have type 'tool-{name}', dynamic ones have type 'dynamic-tool' with toolName
+              if (isToolPart(part)) {
                 const toolPart = part as {
                   type: string; toolName?: string; toolCallId?: string;
                   args?: unknown; input?: unknown; output?: unknown; errorText?: string; state?: string;
                   approval?: { id: string; approved?: boolean };
                 };
-                const toolName = toolPart.type === 'dynamic-tool'
-                  ? (toolPart.toolName || 'unknown')
-                  : toolPart.type.slice(5); // strip 'tool-' prefix
+                const toolName = toolNameOf(part);
                 const args = (toolPart.args || toolPart.input || {}) as Record<string, unknown>;
                 const state = toolPart.state;
                 // 'output-error' carries the message in `errorText` (not `output`);
@@ -575,7 +600,7 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
       )}
 
       {/* Loading indicator — up until the reply has something to show */}
-      {inFlight && lastMessage && (lastMessage.role === 'user' || !hasVisibleContent(lastMessage)) && (
+      {thinking && (
         <div className="max-w-3xl mx-auto">
           <div className="flex items-center gap-3 border-l-2 pl-3 border-accent-cyan/40">
             <div className="flex-shrink-0">
@@ -594,5 +619,6 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
       <div ref={bottomRef} />
       </div>
     </div>
+    </>
   );
 }

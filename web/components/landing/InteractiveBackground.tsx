@@ -1,28 +1,18 @@
 'use client';
 
 import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 
 interface MousePosition {
   x: number;
   y: number;
 }
 
-const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
-
 /** Touch support can't change mid-session — nothing to subscribe to. */
 const subscribeNever = () => () => undefined;
 
-function subscribeReducedMotion(onChange: () => void) {
-  const mql = window.matchMedia(REDUCED_MOTION_QUERY);
-  mql.addEventListener('change', onChange);
-  return () => mql.removeEventListener('change', onChange);
-}
-
 const getTouchSnapshot = () =>
   'ontouchstart' in window || navigator.maxTouchPoints > 0;
-
-const getReducedMotionSnapshot = () =>
-  window.matchMedia(REDUCED_MOTION_QUERY).matches;
 
 /**
  * Reports false during SSR *and* the hydration render, so the client's first
@@ -45,57 +35,79 @@ export function InteractiveBackground() {
     getTouchSnapshot,
     getServerSnapshot,
   );
-  const prefersReducedMotion = useSyncExternalStore(
-    subscribeReducedMotion,
-    getReducedMotionSnapshot,
-    getServerSnapshot,
-  );
+  const prefersReducedMotion = usePrefersReducedMotion(false);
   const animationRef = useRef<number | null>(null);
   const targetPos = useRef<MousePosition>({ x: 0.5, y: 0.5 });
   const currentPos = useRef<MousePosition>({ x: 0.5, y: 0.5 });
 
   useEffect(() => {
     if (isTouchDevice || prefersReducedMotion) return;
+    const container = containerRef.current;
+    if (!container) return;
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const x = e.clientX / window.innerWidth;
-      const y = e.clientY / window.innerHeight;
-      targetPos.current = { x, y };
-    };
+    // the glows sit centred and move by transform alone: animating left/top
+    // relaid and repainted both blur-3xl layers on every frame.
+    let width = container.clientWidth;
+    let height = container.clientHeight;
+    let visible = false;
 
     // Exponential decay; writes the DOM directly to avoid React re-renders.
     const animate = () => {
       const dx = targetPos.current.x - currentPos.current.x;
       const dy = targetPos.current.y - currentPos.current.y;
       const factor = 0.025;
+      // under a tenth of a pixel from the pointer: park until it moves again.
+      const settled = Math.abs(dx * width) < 0.1 && Math.abs(dy * height) < 0.1;
 
-      currentPos.current = {
-        x: currentPos.current.x + dx * factor,
-        y: currentPos.current.y + dy * factor,
-      };
+      currentPos.current = settled
+        ? { ...targetPos.current }
+        : { x: currentPos.current.x + dx * factor, y: currentPos.current.y + dy * factor };
 
-      const mx = currentPos.current.x;
-      const my = currentPos.current.y;
+      const ox = (currentPos.current.x - 0.5) * width;
+      const oy = (currentPos.current.y - 0.5) * height;
+      if (primaryRef.current) primaryRef.current.style.transform = `translate3d(${ox}px, ${oy}px, 0)`;
+      if (secondaryRef.current) secondaryRef.current.style.transform = `translate3d(${-ox}px, ${-oy}px, 0)`;
 
-      if (primaryRef.current) {
-        primaryRef.current.style.left = `calc(${mx * 100}% - min(450px, 75vw))`;
-        primaryRef.current.style.top = `calc(${my * 100}% - min(450px, 75vw))`;
-      }
-      if (secondaryRef.current) {
-        secondaryRef.current.style.left = `calc(${(1 - mx) * 100}% - min(300px, 50vw))`;
-        secondaryRef.current.style.top = `calc(${(1 - my) * 100}% - min(300px, 50vw))`;
-      }
-
-      animationRef.current = requestAnimationFrame(animate);
+      animationRef.current = settled ? null : requestAnimationFrame(animate);
     };
 
+    const start = () => {
+      if (visible && animationRef.current === null) animationRef.current = requestAnimationFrame(animate);
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      targetPos.current = { x: e.clientX / window.innerWidth, y: e.clientY / window.innerHeight };
+      start();
+    };
+
+    const handleResize = () => {
+      width = container.clientWidth;
+      height = container.clientHeight;
+      start();
+    };
+
+    // off screen, nothing is seen to move: stop, and pick up from there on return.
+    const observer = new IntersectionObserver(([entry]) => {
+      visible = entry.isIntersecting;
+      if (visible) {
+        start();
+      } else if (animationRef.current !== null) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+      }
+    });
+    observer.observe(container);
+
     window.addEventListener('mousemove', handleMouseMove, { passive: true });
-    animationRef.current = requestAnimationFrame(animate);
+    window.addEventListener('resize', handleResize, { passive: true });
 
     return () => {
+      observer.disconnect();
       window.removeEventListener('mousemove', handleMouseMove);
-      if (animationRef.current) {
+      window.removeEventListener('resize', handleResize);
+      if (animationRef.current !== null) {
         cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
       }
     };
   }, [isTouchDevice, prefersReducedMotion]);
@@ -121,7 +133,7 @@ export function InteractiveBackground() {
       {/* Primary glow - follows mouse, responsive size */}
       <div
         ref={primaryRef}
-        className="absolute w-[min(900px,150vw)] h-[min(900px,150vw)] rounded-full blur-3xl"
+        className="absolute w-[min(900px,150vw)] h-[min(900px,150vw)] rounded-full blur-3xl will-change-transform"
         style={{
           background: 'radial-gradient(circle, oklch(0.75 0.18 195 / 0.10) 0%, transparent 60%)',
           left: 'calc(50% - min(450px, 75vw))',
@@ -132,7 +144,7 @@ export function InteractiveBackground() {
       {/* Secondary warm glow - offset from mouse for depth */}
       <div
         ref={secondaryRef}
-        className="absolute w-[min(600px,100vw)] h-[min(600px,100vw)] rounded-full blur-3xl"
+        className="absolute w-[min(600px,100vw)] h-[min(600px,100vw)] rounded-full blur-3xl will-change-transform"
         style={{
           background: 'radial-gradient(circle, oklch(0.72 0.16 55 / 0.06) 0%, oklch(0.70 0.14 30 / 0.03) 40%, transparent 70%)',
           left: 'calc(50% - min(300px, 50vw))',

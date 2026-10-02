@@ -1,6 +1,7 @@
 'use client';
 
 import { useId } from 'react';
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 
 interface OwletteEyeProps {
   size?: number;
@@ -10,6 +11,10 @@ interface OwletteEyeProps {
 
 export function OwletteEye({ size = 400, className = '', animated = false }: OwletteEyeProps) {
   const uid = useId();
+  // smil ignores the css motion clamp, so the breath is left out instead; still
+  // until hydration says otherwise.
+  const reducedMotion = usePrefersReducedMotion(true);
+  const breathe = animated && !reducedMotion;
 
   return (
     <svg
@@ -18,6 +23,7 @@ export function OwletteEye({ size = 400, className = '', animated = false }: Owl
       viewBox="0 0 200 200"
       className={`${className} ${animated ? 'animate-eye-ignite' : ''}`}
       xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
     >
       <defs>
         <radialGradient id={`${uid}-eye`} cx="50%" cy="50%" r="50%">
@@ -52,7 +58,7 @@ export function OwletteEye({ size = 400, className = '', animated = false }: Owl
       <circle cx="88" cy="86" r="18" fill={`url(#${uid}-sheen)`} />
 
       {/* Animated breath */}
-      {animated && (
+      {breathe && (
         <circle cx="100" cy="100" r="88" fill={`url(#${uid}-eye)`} opacity="0.2">
           <animate attributeName="r" values="88;92;88" dur="5s" repeatCount="indefinite" />
           <animate attributeName="opacity" values="0.2;0;0.2" dur="5s" repeatCount="indefinite" />
@@ -72,6 +78,7 @@ export function OwletteEyeIcon({ size = 32, className = '' }: { size?: number; c
       viewBox="0 0 200 200"
       className={className}
       xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
     >
       <defs>
         <radialGradient id={`${uid}-eye`} cx="50%" cy="50%" r="50%">

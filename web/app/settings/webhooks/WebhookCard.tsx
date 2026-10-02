@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -223,6 +223,7 @@ export function WebhookCard({
           onClick={handleToggleExpand}
           className="mt-1 text-muted-foreground hover:text-white cursor-pointer"
           aria-label={expanded ? 'collapse' : 'expand'}
+          aria-expanded={expanded}
         >
           {expanded ? (
             <ChevronDown className="h-4 w-4" />
@@ -268,67 +269,55 @@ export function WebhookCard({
 
         {canManage && (
           <div className="flex items-center gap-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleTogglePaused}
-                  disabled={busyAction !== null}
-                  className="h-8 w-8 p-0 border-border cursor-pointer"
-                >
-                  {busyAction === 'paused' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : webhook.paused ? (
-                    <Play className="h-3.5 w-3.5" />
-                  ) : (
-                    <Pause className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{webhook.paused ? 'resume' : 'pause'}</TooltipContent>
-            </Tooltip>
+            <IconButton
+              label={webhook.paused ? 'resume webhook' : 'pause webhook'}
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleTogglePaused}
+              disabled={busyAction !== null}
+              className="h-8 w-8 p-0 border-border cursor-pointer"
+            >
+              {busyAction === 'paused' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : webhook.paused ? (
+                <Play className="h-3.5 w-3.5" />
+              ) : (
+                <Pause className="h-3.5 w-3.5" />
+              )}
+            </IconButton>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleRotateSecret}
-                  disabled={busyAction !== null}
-                  className="h-8 w-8 p-0 border-border cursor-pointer"
-                >
-                  {busyAction === 'rotate' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>rotate secret</TooltipContent>
-            </Tooltip>
+            <IconButton
+              label="rotate signing secret"
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleRotateSecret}
+              disabled={busyAction !== null}
+              className="h-8 w-8 p-0 border-border cursor-pointer"
+            >
+              {busyAction === 'rotate' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+            </IconButton>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleDelete}
-                  disabled={busyAction !== null}
-                  className="h-8 w-8 p-0 border-border text-red-400 hover:bg-red-950 cursor-pointer"
-                >
-                  {busyAction === 'delete' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>delete</TooltipContent>
-            </Tooltip>
+            <IconButton
+              label="delete webhook"
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleDelete}
+              disabled={busyAction !== null}
+              className="h-8 w-8 p-0 border-border text-red-400 hover:bg-red-950 cursor-pointer"
+            >
+              {busyAction === 'delete' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+            </IconButton>
           </div>
         )}
       </div>
@@ -336,9 +325,9 @@ export function WebhookCard({
       {expanded && (
         <div className="mt-4 pt-4 border-t border-border">
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-xs font-semibold text-white uppercase tracking-wide">
+            <h2 className="text-xs font-semibold text-white uppercase tracking-wide">
               recent deliveries
-            </h4>
+            </h2>
             <Button
               type="button"
               size="sm"
@@ -380,25 +369,21 @@ export function WebhookCard({
                   <span className="text-muted-foreground w-24 text-right">
                     {formatRelative(d.createdAt)}
                   </span>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleRetryDelivery(d.id)}
-                        disabled={retryingId !== null}
-                        className="h-6 w-6 p-0 cursor-pointer"
-                      >
-                        {retryingId === d.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <RotateCcw className="h-3 w-3" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>retry this delivery</TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label="retry this delivery"
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleRetryDelivery(d.id)}
+                    disabled={retryingId !== null}
+                    className="h-6 w-6 p-0 cursor-pointer"
+                  >
+                    {retryingId === d.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3 w-3" />
+                    )}
+                  </IconButton>
                 </div>
               ))}
             </div>

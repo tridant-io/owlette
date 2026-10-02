@@ -126,6 +126,7 @@ export default function SystemPresetsPage() {
               variant={selectedCategory === 'All' ? 'default' : 'outline'}
               size="sm"
               onClick={() => setSelectedCategory('All')}
+              aria-pressed={selectedCategory === 'All'}
               className={
                 selectedCategory === 'All'
                   ? 'bg-accent-cyan text-gray-900 cursor-pointer'
@@ -142,6 +143,7 @@ export default function SystemPresetsPage() {
                   variant={selectedCategory === category ? 'default' : 'outline'}
                   size="sm"
                   onClick={() => setSelectedCategory(category)}
+                  aria-pressed={selectedCategory === category}
                   className={
                     selectedCategory === category
                       ? 'bg-accent-cyan text-gray-900 cursor-pointer'
@@ -159,7 +161,7 @@ export default function SystemPresetsPage() {
         {filteredPresets.length === 0 ? (
           <div className="bg-card border border-border rounded-lg p-12 text-center">
             <Package className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-xl font-medium text-foreground mb-2">no presets found</h3>
+            <h2 className="text-xl font-medium text-foreground mb-2">no presets found</h2>
             <p className="text-muted-foreground mb-6">
               {selectedCategory === 'All'
                 ? 'Create your first system preset to get started.'
@@ -280,7 +282,7 @@ export default function SystemPresetsPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2 mb-1">
                         <div>
-                          <h3 className="text-foreground font-medium text-base">{preset.software_name}</h3>
+                          <h2 className="text-foreground font-medium text-base">{preset.software_name}</h2>
                           <p className="text-muted-foreground text-sm">{preset.name}</p>
                         </div>
                         <Badge variant="outline" className="border-border text-foreground text-xs whitespace-nowrap">

@@ -12,6 +12,7 @@ import { getBrowserTimezone } from '@/lib/timeUtils';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
 import { CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { FormError } from '@/components/ui/form-error';
 import { db } from '@/lib/firebase';
 import { doc, getDoc } from 'firebase/firestore';
 
@@ -78,7 +79,7 @@ export function CreateSiteDialog({
     const validation = validateSiteId(siteId);
     if (!validation.isValid) {
       setAvailabilityStatus('invalid');
-      setValidationError(validation.error || 'Invalid site ID');
+      setValidationError(validation.error || 'invalid site ID');
       return;
     }
 
@@ -88,7 +89,7 @@ export function CreateSiteDialog({
     try {
       if (!db) {
         setAvailabilityStatus('invalid');
-        setValidationError('Firebase not configured');
+        setValidationError('firebase is not configured');
         return;
       }
 
@@ -97,7 +98,7 @@ export function CreateSiteDialog({
 
       if (siteSnap.exists()) {
         setAvailabilityStatus('taken');
-        setValidationError('This Site ID is already taken');
+        setValidationError('this site ID is already taken');
       } else {
         setAvailabilityStatus('available');
         setValidationError('');
@@ -119,7 +120,7 @@ export function CreateSiteDialog({
       }
       console.error('Error checking site availability:', error);
       setAvailabilityStatus('invalid');
-      setValidationError('Failed to check availability');
+      setValidationError('could not check availability. edit the site ID to retry');
     }
   }, []);
 
@@ -200,6 +201,13 @@ export function CreateSiteDialog({
     }
   };
 
+  // taken/invalid are announced by the error alert, so the status only speaks for the rest
+  const availabilityText =
+    availabilityStatus === 'checking' ? 'checking site ID availability'
+      : availabilityStatus === 'available' ? 'site ID available'
+        : '';
+  const hasIdError = availabilityStatus === 'taken' || availabilityStatus === 'invalid';
+
   const getAvailabilityIcon = () => {
     switch (availabilityStatus) {
       case 'checking':
@@ -244,11 +252,13 @@ export function CreateSiteDialog({
               <span>site ID:</span>
               <span className="font-mono text-accent-cyan">{newSiteId}</span>
               {getAvailabilityIcon()}
+              <span role="status" className="sr-only">{availabilityText}</span>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
                     onClick={handleRegenerate}
+                    aria-label="generate new site ID"
                     className="text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
                   >
                     <RefreshCw className="h-3 w-3" />
@@ -260,13 +270,12 @@ export function CreateSiteDialog({
               </Tooltip>
             </div>
 
-            {validationError && (
-              <p className="text-xs text-red-400">{validationError}</p>
-            )}
+            <FormError message={validationError} id="site-id-error" />
 
             {/* Expandable custom ID section */}
             <button
               type="button"
+              aria-expanded={customIdOpen}
               onClick={() => setCustomIdOpen(!customIdOpen)}
               className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
             >
@@ -276,17 +285,16 @@ export function CreateSiteDialog({
 
             {customIdOpen && (
               <div className="relative">
+                <Label htmlFor="site-id" className="sr-only">site ID</Label>
                 <Input
                   id="site-id"
                   placeholder="e.g., nyc-office"
                   value={newSiteId}
                   onChange={(e) => handleSiteIdChange(e.target.value)}
+                  aria-invalid={hasIdError || undefined}
+                  aria-describedby={validationError ? 'site-id-error' : undefined}
                   className={`border-border bg-background text-white pr-10 ${
-                    availabilityStatus === 'taken' || availabilityStatus === 'invalid'
-                      ? 'border-red-500/50 focus-visible:ring-red-500'
-                      : availabilityStatus === 'available'
-                      ? 'border-green-500/50 focus-visible:ring-green-500'
-                      : ''
+                    availabilityStatus === 'available' ? 'border-green-500/50 focus-visible:ring-green-500' : ''
                   }`}
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -320,6 +328,7 @@ export function CreateSiteDialog({
 
             <button
               type="button"
+              aria-expanded={timezoneOpen}
               onClick={() => setTimezoneOpen(!timezoneOpen)}
               className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
             >
