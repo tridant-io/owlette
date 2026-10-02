@@ -5,7 +5,8 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-// keyboard focus for menu and listbox rows: an inset ring, because the highlight
-// fill alone (accent on the menu surface) measures 1.4:1, under wcag 1.4.11
+// keyboard focus for full-width rows and tiles inside a card, where the global
+// outline would be clipped by the card edge. menu and listbox rows show focus with
+// their highlight fill instead: the ring read as a box drawn over the menu
 export const ITEM_FOCUS_RING =
   "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"

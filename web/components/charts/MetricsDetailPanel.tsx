@@ -35,7 +35,7 @@ import { useDemoContext } from '@/contexts/DemoContext';
 import { getNicColors, getDiskColors, getGpuColors, formatThroughput } from '@/lib/networkUtils';
 import { DISK_IO_COLORS, formatDiskIO, isDiskIOKey, parseDiskIOKey, computeNiceByteTicks } from '@/lib/diskIOUtils';
 import { useAuth } from '@/contexts/AuthContext';
-import { cn, ITEM_FOCUS_RING } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { ChartLoadingIndicator } from './ChartLoadingIndicator';
 
 interface MetricsDetailPanelProps {
@@ -133,8 +133,7 @@ function MachineSwitcher({
                     if (!isCurrent) onSelect(m.machineId);
                   }}
                   className={cn(
-                    ITEM_FOCUS_RING,
-                    'flex w-full items-center gap-2 px-3 py-1.5 text-sm text-left cursor-pointer transition-colors',
+                    'flex w-full items-center gap-2 px-3 py-1.5 text-sm text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground',
                     isCurrent
                       ? 'bg-accent text-foreground'
                       : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground',
