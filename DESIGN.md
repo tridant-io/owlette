@@ -276,9 +276,9 @@ quiet and precise. the fill is flat at rest and wakes up with a directional swee
 - **Icon-only:** always `IconButton` (`web/components/ui/icon-button.tsx`). its `label` is required and becomes both the accessible name and the tooltip, and it defaults to `type="button"` so it never submits a form by accident.
 
 ### Keyboard Focus
-- **Default:** every focusable element draws a 2px `--ring` outline at a 2px offset (8:1 or better on every dark surface). menu and listbox rows draw the same ring inset (`ITEM_FOCUS_RING` in `web/lib/utils.ts`), and inputs keep their 3px ring.
+- **Default:** every focusable element draws a 2px `--ring` outline at a 2px offset (8:1 or better on every dark surface). full-width rows and tiles inside a card draw the same ring inset (`ITEM_FOCUS_RING` in `web/lib/utils.ts`), where an outer outline would be clipped. menu and listbox rows show focus with their accent highlight fill alone, with no ring. inputs keep their 3px ring.
 
-**The Visible Focus Rule.** never ship `outline-none` without a replacement indicator that clears 3:1 against its surface. the old 1px outline at 30% measured 1.3:1 and was invisible in practice.
+**The Visible Focus Rule.** never ship `outline-none` without a replacement indicator that clears 3:1 against its surface. the old 1px outline at 30% measured 1.3:1 and was invisible in practice. menu and listbox rows are the exception: their highlight fill is the indicator (owner call, 2026-10-02, after an inset ring there read as a box drawn over the menu).
 
 ### Links
 - **Highlighter sweep** (`.hl-link`): links never underline. on hover a selection-style cyan fill sweeps in from left to right, and each glyph flips to navy as the edge crosses it. `.hl-link-muted` (footer) and `.hl-link-plain` (body-text rest colour) change only the palette.

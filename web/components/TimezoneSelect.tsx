@@ -3,7 +3,7 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ChevronDown, Search, Check } from 'lucide-react';
-import { cn, ITEM_FOCUS_RING } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { getAllTimezones, getTimezoneOffset, COMMON_TIMEZONES, type TimezoneOption } from '@/lib/timeUtils';
 
 interface TimezoneSelectProps {
@@ -172,8 +172,7 @@ function TimezoneItem({ tz, selected, onSelect }: { tz: TimezoneOption; selected
       aria-current={selected ? 'true' : undefined}
       className={cn(
         'flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm cursor-pointer',
-        ITEM_FOCUS_RING,
-        'text-white hover:bg-muted',
+        'text-white hover:bg-muted focus-visible:outline-none focus-visible:bg-muted',
         selected && 'bg-muted'
       )}
     >

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-02T14:52:05.601Z",
+  "generatedAt": "2026-10-02T16:15:01.627Z",
   "title": "Design System: owlette",
   "extensions": {
     "colorMeta": {
@@ -643,7 +643,7 @@
       },
       {
         "name": "The Visible Focus Rule",
-        "body": "never ship `outline-none` without a replacement indicator that clears 3:1 against its surface. the old 1px outline at 30% measured 1.3:1 and was invisible in practice.",
+        "body": "never ship `outline-none` without a replacement indicator that clears 3:1 against its surface. the old 1px outline at 30% measured 1.3:1 and was invisible in practice. menu and listbox rows are the exception: their highlight fill is the indicator (owner call, 2026-10-02, after an inset ring there read as a box drawn over the menu).",
         "section": "components"
       }
     ],
