@@ -111,6 +111,9 @@ export function attach(session: SwoopSession): SwoopDetach {
   let inbound: Inbound | null = null;
   /** the newest host clipboard the browser has not accepted yet. */
   let pendingWrite: ClipPayload | null = null;
+  /** the last clip the host was sent, and the last it sent: what it holds already. */
+  let lastPushed: ClipPayload | null = null;
+  let lastReceived: ClipPayload | null = null;
   let waiting = false;
   /** a paste keystroke is held for the `paste` its default fires; this ends the wait. */
   let pasteWait: number | null = null;
@@ -176,6 +179,7 @@ export function attach(session: SwoopSession): SwoopDetach {
         }),
       );
     }
+    lastPushed = payload;
     // the keystroke that pastes this rides another channel, so the clip leaves
     // this side entirely before the keystroke is let go.
     await drainedTo(channel, 0);
@@ -189,6 +193,18 @@ export function attach(session: SwoopSession): SwoopDetach {
     sending = sending.then(() => transfer(payload)).catch(() => undefined);
     return sending;
   };
+
+  const same = (a: ClipPayload | null, b: ClipPayload): boolean =>
+    a !== null &&
+    a.fmt === b.fmt &&
+    a.bytes.length === b.bytes.length &&
+    a.bytes.every((byte, at) => byte === b.bytes[at]);
+
+  // a clip the host holds already is not pushed again. a mac whose pasteboard
+  // owlette may not read never sends its copies here, so pushing this side's
+  // stale clipboard before every paste would paste over the copy just made
+  // there; the keystroke alone pastes what the host has.
+  const hostHas = (clip: ClipPayload): boolean => same(lastPushed, clip) || same(lastReceived, clip);
 
   // the clipboard as the browser hands it to a paste, read inside the event,
   // which is the only place it can be read without asking. an image is
@@ -259,7 +275,7 @@ export function attach(session: SwoopSession): SwoopDetach {
     view.clearTimeout(pasteWait);
     pasteWait = null;
     void (payload ?? Promise.resolve(null))
-      .then((clip) => (clip ? sendPayload(clip) : undefined))
+      .then((clip) => (clip && !hostHas(clip) ? sendPayload(clip) : undefined))
       .then(() => {
         waiting = false;
         forwardHeld();
@@ -283,7 +299,7 @@ export function attach(session: SwoopSession): SwoopDetach {
     }
     // a paste with no keystroke held for it, such as the browser's own edit menu.
     void payload.then((clip) => {
-      if (clip && !detached) void sendPayload(clip);
+      if (clip && !detached && !hostHas(clip)) void sendPayload(clip);
     });
   };
 
@@ -377,7 +393,9 @@ export function attach(session: SwoopSession): SwoopDetach {
       whole.set(part, at);
       at += part.length;
     }
-    applyOrHold({ fmt: transfer.fmt, bytes: whole });
+    const received: ClipPayload = { fmt: transfer.fmt, bytes: whole };
+    lastReceived = received;
+    applyOrHold(received);
   };
 
   view.addEventListener('keydown', onKeyCapture, true);

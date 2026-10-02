@@ -183,6 +183,35 @@ describe('paste interception', () => {
     expect(h.forwarded.map((event) => event.code)).toEqual(['KeyV']);
   });
 
+  it('does not push a clip the host just sent, so a copy made on the host is not pasted over', async () => {
+    const h = attached();
+    h.deliver(toHost('copied on the host'));
+    await flush();
+
+    pasteWith(h, { text: 'copied on the host' });
+    await flush();
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.order).toEqual(['key']);
+  });
+
+  it('does not push the same clip twice, and does push a different one', async () => {
+    const h = attached();
+    pasteWith(h, { text: 'once' });
+    await flush();
+    expect(h.sent).toHaveLength(1);
+
+    pasteWith(h, { text: 'once' });
+    await flush();
+    expect(h.sent).toHaveLength(1);
+    expect(h.order).toEqual(['clip', 'key', 'key']);
+
+    pasteWith(h, { text: 'twice' });
+    await flush();
+    expect(h.sent).toHaveLength(2);
+    expect(atob((JSON.parse(h.sent[1]) as ClipboardMessage).data)).toBe('twice');
+  });
+
   it('never reads the clipboard itself, so no permission prompt stands in the way', async () => {
     const read = jest.fn(() => Promise.reject(new DOMException('denied', 'NotAllowedError')));
     const readText = jest.fn(() => Promise.reject(new DOMException('denied', 'NotAllowedError')));
