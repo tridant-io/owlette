@@ -41,6 +41,7 @@ const FILE_MODE: u32 = 0o644;
 /// The swoop sidecar, beside this app's own executable.
 const SIDECAR: &str = "owlette-swoop";
 const GRANTS_ARGS: [&str; 2] = ["selfcheck", "--grants"];
+const PASTE_ONCE_ARGS: [&str; 2] = ["selfcheck", "--paste-once"];
 /// Past this the sidecar's answer is unknown. It answers in milliseconds.
 const GRANTS_TIMEOUT: Duration = Duration::from_secs(2);
 const GRANTS_POLL: Duration = Duration::from_millis(20);
@@ -173,6 +174,27 @@ fn ask_sidecar(program: &Path, timeout: Duration) -> Result<serde_json::Value, S
 pub fn request_accessibility() -> bool {
   // SAFETY: as above; the call may show a system prompt, which the click asked for.
   unsafe { CGRequestPostEventAccess() }
+}
+
+/// One deliberate pasteboard read by the sidecar, from the notice's button:
+/// macOS lists an app under Paste from Other Apps only once it has read, so
+/// under *ask* this raises the paste alert at the person who clicked. Spawned
+/// and reaped on its own thread: the read returns only once the alert is
+/// answered, and that can take as long as it takes.
+pub fn request_clipboard_sharing() -> Result<(), String> {
+  let program = sidecar_path().ok_or("this app's own path is unknown")?;
+  let mut child = Command::new(&program)
+    .args(PASTE_ONCE_ARGS)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .current_dir("/")
+    .spawn()
+    .map_err(|error| format!("could not start {}: {error}", program.display()))?;
+  thread::spawn(move || {
+    let _ = child.wait();
+  });
+  Ok(())
 }
 
 /// The report body, as the daemon parses it. An unknown Accessibility answer

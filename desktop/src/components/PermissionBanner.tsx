@@ -25,8 +25,10 @@ const RECHECK_MS = 5_000
  *
  * Without clipboard sharing (macOS 15.4's Paste from Other Apps, per app) the
  * swoop streamer never reads this Mac's pasteboard, so a viewer gets nothing
- * copied here. An app cannot grant that to itself: the button opens the pane,
- * and the notice re-reads the setting every five seconds while it shows.
+ * copied here. An app cannot grant that to itself, and macOS lists an app in
+ * that pane only once it has read: the button makes one read, which raises
+ * the system's paste alert, and opens the pane; the notice re-reads the
+ * setting every five seconds while it shows.
  *
  * Each answer is null off macOS and before the first answer, and
  * Accessibility's is null when the app could not find out (`tcc.rs`):
@@ -39,7 +41,7 @@ export function PermissionBanner({
   onOpenScreenRecordingSettings,
   onRequestAccessibility,
   onRecheckAccessibility,
-  onOpenClipboardSettings,
+  onRequestClipboardSharing,
   onRecheckClipboardSharing,
 }: {
   screenRecording: boolean | null
@@ -48,7 +50,7 @@ export function PermissionBanner({
   onOpenScreenRecordingSettings: () => void
   onRequestAccessibility: () => void
   onRecheckAccessibility: () => void
-  onOpenClipboardSettings: () => void
+  onRequestClipboardSharing: () => void
   onRecheckClipboardSharing: () => void
 }) {
   const accessibilityMissing = accessibility === false
@@ -80,9 +82,9 @@ export function PermissionBanner({
         </Notice>
       )}
       {clipboardOff && (
-        <Notice testId="clipboard-banner" onOpenSettings={onOpenClipboardSettings}>
+        <Notice testId="clipboard-banner" onOpenSettings={onRequestClipboardSharing}>
           clipboard sharing is off for owlette on this mac: a swoop viewer gets nothing you copy here.
-          allow owlette under paste from other apps in system settings.
+          allow the paste alert, then set owlette to allow under paste from other apps.
         </Notice>
       )}
     </div>

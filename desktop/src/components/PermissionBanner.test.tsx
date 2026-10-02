@@ -20,7 +20,7 @@ function banner(
       onRequestAccessibility={requestAccessibility}
       onRecheckAccessibility={recheckAccessibility}
       clipboardSharing={clip}
-      onOpenClipboardSettings={openClipboard}
+      onRequestClipboardSharing={openClipboard}
       onRecheckClipboardSharing={recheckClipboard}
     />
   )

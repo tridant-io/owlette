@@ -90,7 +90,7 @@ pub fn run() {
       commands::accessibility_granted,
       commands::request_accessibility,
       commands::clipboard_sharing,
-      commands::open_clipboard_settings,
+      commands::request_clipboard_sharing,
       commands::startup_link_enabled,
       commands::set_startup_link,
       commands::read_owlette_json,

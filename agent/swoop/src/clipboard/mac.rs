@@ -179,6 +179,17 @@ pub fn pasteboard_access() -> Option<&'static str> {
     })
 }
 
+/// One deliberate read of the general pasteboard, for the desktop app's
+/// button: macOS lists an app under Paste from Other Apps only once it has
+/// read, so under *ask* this raises the paste alert at the person who
+/// clicked, and the setting can be made *allow* from then on. What was read
+/// is discarded. Answers the access behaviour afterwards.
+pub fn read_once() -> Option<&'static str> {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let _ = pasteboard.stringForType(string_type());
+    pasteboard_access()
+}
+
 /// The general pasteboard's access behaviour, or `None` on a system older than
 /// macOS 15.4, which has neither the property nor the alert it describes.
 fn access_behaviour(pasteboard: &NSPasteboard) -> Option<NSPasteboardAccessBehavior> {

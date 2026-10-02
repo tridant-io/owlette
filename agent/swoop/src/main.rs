@@ -61,12 +61,15 @@ fn main() -> ExitCode {
 /// raise the Screen Recording dialog; without it nothing here can. `--grants`
 /// prints the three grant answers alone and touches neither ScreenCaptureKit
 /// nor the network: the desktop app asks it on a timer, because its own
-/// process keeps the Accessibility answer it had at launch.
+/// process keeps the Accessibility answer it had at launch. `--paste-once`
+/// reads the pasteboard one time, which under *ask* raises macOS's paste
+/// alert: only the desktop app's own button runs it, on a click.
 #[cfg(target_os = "macos")]
 fn selfcheck() -> ExitCode {
     use owlette_swoop::platform::macos;
     let line = match std::env::args().nth(2).as_deref() {
         Some("--grants") => serde_json::to_string(&macos::grants()),
+        Some("--paste-once") => serde_json::to_string(&macos::paste_once()),
         flag => serde_json::to_string(&macos::selfcheck(flag == Some("--force"))),
     };
     match line {

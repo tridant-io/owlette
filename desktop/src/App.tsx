@@ -46,9 +46,9 @@ import {
   hostname,
   serverFromArgs,
   setStartupLink,
-  openClipboardSettings,
   openScreenRecordingSettings,
   requestAccessibility,
+  requestClipboardSharing,
   screenRecordingGranted,
   serviceRestart,
   startupLinkEnabled,
@@ -531,8 +531,8 @@ function App() {
           }}
           onRecheckAccessibility={readAccessibility}
           clipboardSharing={clipboardShared}
-          onOpenClipboardSettings={() => {
-            void openClipboardSettings().catch((cause: unknown) =>
+          onRequestClipboardSharing={() => {
+            void requestClipboardSharing().catch((cause: unknown) =>
               toast.error('could not open system settings', { description: message(cause) }),
             )
           }}

@@ -390,6 +390,20 @@ pub fn grants() -> Grants {
     }
 }
 
+/// `selfcheck --paste-once`: one pasteboard read for the desktop app's button
+/// (`clipboard::mac::read_once`), and the access behaviour after it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasteOnce {
+    pub pasteboard_access: Option<&'static str>,
+}
+
+pub fn paste_once() -> PasteOnce {
+    PasteOnce {
+        pasteboard_access: crate::clipboard::mac::read_once(),
+    }
+}
+
 fn ax_trusted() -> bool {
     // SAFETY: no arguments; it reads the caller's own trust.
     let trusted = unsafe { AXIsProcessTrusted() };

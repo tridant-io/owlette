@@ -102,7 +102,13 @@ pub fn clipboard_sharing() -> Option<bool> {
 }
 
 #[tauri::command(async)]
-pub fn open_clipboard_settings() -> Result<(), String> {
+pub fn request_clipboard_sharing() -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    if let Err(error) = crate::tcc::request_clipboard_sharing() {
+      log::warn!("clipboard sharing: the read from the banner did not start: {error}");
+    }
+  }
   shell_open::open_clipboard_settings()
 }
 

@@ -207,9 +207,12 @@ export function clipboardSharing(): Promise<boolean | null> {
   return invoke<boolean | null>('clipboard_sharing')
 }
 
-/** Open the Paste from Other Apps pane of System Settings (macOS). */
-export function openClipboardSettings(): Promise<void> {
-  return invoke<void>('open_clipboard_settings')
+/**
+ * Make one pasteboard read, which raises macOS's paste alert and lists this
+ * app under Paste from Other Apps, and open that pane. Only ever from a click.
+ */
+export function requestClipboardSharing(): Promise<void> {
+  return invoke<void>('request_clipboard_sharing')
 }
 
 /** Create or remove the run-on-login shortcut; resolves to the resulting state. */
