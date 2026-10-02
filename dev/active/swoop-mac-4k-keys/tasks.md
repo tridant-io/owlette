@@ -168,6 +168,25 @@ Everything on the Mac's side of the plan is live there. The viewer's side (Tasks
 code on this branch, which dev.owlette.app does not serve: for the 5.1 run the viewer is this box's own
 `cd web && npm run dev` at `http://localhost:3000/swoop/default_site/TEC-MBA`.
 
+### 2026-10-02, the 5.1 run so far (the owner, from dev.owlette.app overnight)
+
+The session held all night without a drop. The owner reports "still smearing a bit on fast window moves" and
+"definitely not getting 60fps". Measured on the rig to place the loss: ScreenCaptureKit delivers 57 pictures a
+second at 3420x2214 against a 60 Hz animation (a scrolling terminal gave 32, which was the terminal), and the
+encoder holds 60 (Task 1.1), so the frames are lost after capture. The prime suspect is the governor
+(`transport/governor.rs`): a one-way-delay rise over 50 ms cuts the rate 20 %, and once the rate is pinned at
+its floor the ladder drops the frame rate before the resolution; the overnight streamer log shows a 34 s spell
+at 2224x1440, which only happens after the frame-rate rung has already gone. A 4K keyframe at 50 Mbps is 2.5 MB,
+400 ms of link time, which is itself a delay rise; the settle keyframe makes one per big move. The host logged
+nothing about any of this, so the session's rate story now goes to the service log every ten seconds and on
+every cut (fps sent, kbps on the wire, target, rung, cuts, gaps, governor state). The next session from
+dev.owlette.app, with a minute of fast window drags, is what decides between more rate on a LAN, a governor that
+ignores its own keyframes, and dropping the settle keyframe at 4K.
+
+The viewer-side changes (Tasks 3.1, 3.2, Wave 4) cannot be run by the owner yet: a passkey is bound to
+dev.owlette.app and cannot sign in on localhost, and dev.owlette.app serves `dev`, not this branch. They are
+covered by unit tests and wait for the branch on `dev` (the owner's merge of PR #256).
+
 ### 2026-10-01, Wave 4
 
 **Tasks 4.1, 4.2 and 4.3: done** (`30a9a95d`). The conversion itself was already the plan's model
