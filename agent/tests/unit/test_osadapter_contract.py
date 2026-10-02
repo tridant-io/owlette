@@ -74,15 +74,28 @@ PENDING_REBOOT_KEYS = {
 }
 
 
+def _without_exit_records(win):
+    """The Windows arm keeps exit records in module state for the whole run, and
+    a record another test left for a pid Windows has since handed out again would
+    answer for the process that holds it now."""
+    with win._watch_lock:
+        for handle in win._watched.values():
+            handle.Close()
+        win._watched.clear()
+        win._exits.clear()
+    return win
+
+
 @pytest.fixture(params=ADAPTERS)
 def adapter(request):
     """Each adapter module that can run on this OS."""
-    return importlib.import_module(f'osadapter.{request.param}')
+    module = importlib.import_module(f'osadapter.{request.param}')
+    return _without_exit_records(module) if request.param == 'win' else module
 
 
 @pytest.fixture
 def win():
-    return importlib.import_module('osadapter.win')
+    return _without_exit_records(importlib.import_module('osadapter.win'))
 
 
 @pytest.fixture
@@ -244,6 +257,13 @@ class TestBehaviour:
 @pytest.mark.windows
 class TestWindows:
     """What the Windows arm delegates to, and what it refuses."""
+
+    def test_starts_without_exit_records_left_by_earlier_tests(self, win):
+        """The lifecycle suite kills processes it watched without reading their
+        codes, and Windows hands those pids out again: a record left behind
+        answered 15 for an unrelated child (agent tests on dev, 2026-10-02)."""
+        assert win._exits == {}
+        assert win._watched == {}
 
     def test_streamer_capable_is_unconditionally_true(self, win):
         assert win.streamer_capable() is True
