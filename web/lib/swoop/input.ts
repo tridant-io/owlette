@@ -203,6 +203,8 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   const heldButtons = new Set<number>();
   /** the modifier `holdNextKey` has down, until the next key's release. */
   let armed: string | null = null;
+  /** whether that next key has gone down: the release of an earlier key is not its release. */
+  let armedKeyDown = false;
 
   // off the picture — over its letterbox bars or off the stage — with nothing
   // held. nothing reaches the host from there: a move pinned to the edge drags
@@ -290,6 +292,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   const holdNextKey = (code: string): void => {
     if (armed === code) return;
     armed = code;
+    armedKeyDown = false;
     heldKeys.add(code);
     key(code, true, nowUs());
   };
@@ -337,6 +340,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     // on the host side repeats a held key for us.
     heldKeys.add(code);
     key(code, true, nowUs());
+    if (armed !== null && code !== armed) armedKeyDown = true;
   };
 
   const onKeyUp = (event: KeyboardEvent): void => {
@@ -349,7 +353,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     // and a spurious release is cheaper than a stuck key.
     heldKeys.delete(code);
     key(code, false, nowUs());
-    if (code !== armed) releaseArmed();
+    if (armedKeyDown && code !== armed) releaseArmed();
   };
 
   const onPointerMove = (event: PointerEvent): void => {

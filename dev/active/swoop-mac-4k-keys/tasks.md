@@ -277,3 +277,50 @@ arms the key down until the next typed key's release, and `releaseAll` lets go o
   and tsc clean.
 - *Changelog line:* "the swoop keyboard menu names its two modifier settings, shows what each key does on the
   machine, and can hold the windows key or cmd for your next keystroke outside fullscreen."
+
+### 2026-10-02, the branch is on dev, and the browser's own clipboard question
+
+- **PR #256 is merged into dev** on the owner's word ("can't you merge it?"): merge `a34b35e6`, 24 of 24 checks
+  on the head `367d294e`, CodeQL 388/389/390 dismissed first. dev.owlette.app served `a34b35e6` at 18:40 UTC
+  (`/api/health`). The viewer half of this plan (shortcuts match, the keyboard menu, the tab title, the stale
+  clip guard) was on the branch only until then, which is why ctrl + c did nothing for the owner on dev.
+- **The owner met Chromium's clipboard question** ("see text and images copied to the clipboard") in Brave and
+  asked whether the docs say so and whether the viewer can speak up when it is not allowed. Neither was true.
+  The cause: the viewer writes a copy from the machine the moment it lands, and a write with no user
+  activation has Chromium ask for the site's clipboard permission. A block or a closed question left the copy
+  waiting for the next gesture with nothing said. Nothing in the web app reads the clipboard
+  (`navigator.clipboard.read` has no caller); the question comes from the write.
+- **Fix:** the clipboard store reports `held()`, true while the browser refused the newest copy and false once a
+  gesture takes it; a browser with no clipboard api is "unsupported", not a refusal. The session bar says "your
+  browser held back the machine's copy: click the picture to take it, or allow the clipboard for this site".
+  `web/content/docs/dashboard/swoop.mdx` has the paragraph, and its keyboard bullet now describes the two
+  settings and the hold key in place of the checkbox that Wave 4 removed.
+- Checks: jest 648 on the swoop suites and the toolbar (three new tests), eslint and tsc clean. No e2e: the
+  emulator has no streamer, so nothing there can send a copy from a machine.
+- *Changelog line:* "swoop says when your browser held back a copy from the machine, and the docs explain the
+  browser's clipboard question."
+
+### 2026-10-02, the owner's first session on the merged viewer
+
+- **The owner's word on dev after the reload: "amazing - it works now!"** That is ctrl + c / ctrl + v on the Mac
+  and the clipboard both ways, from dev.owlette.app at `a34b35e6`. The Playwright run for the merge on dev
+  passed.
+- **"hold cmd for the next key" did not work.** The stage gets keys only while it holds focus, and a closing
+  menu hands focus to its own button, so the next key went to the button and cmd stayed down on the machine.
+  Fix: after a sent key the menu's `onCloseAutoFocus` puts focus on the stage; a menu closed with nothing sent
+  still returns to its button. With focus on the stage, the release of the enter that chose the item would
+  have ended the hold at once, so the hold now ends only on the release that follows a key pressed after it
+  (`armedKeyDown` in `input.ts`). Three tests failed first, then passed: jest 700 on the swoop suites.
+- **The Mac app's menu said `TEC-MBA.local`** while the dashboard says `TEC-MBA`: the agent has taken its
+  identity without the suffix since 4.0.6 and the app still showed the kernel's name. `tray.rs` `hostname()`
+  now applies the same rule (`identity_name`), with a test. It reaches the Mac with the next install.
+- *Changelog lines:* "the swoop keyboard menu hands the keyboard back to the picture after it sends a key, so
+  'hold for the next key' takes your next key." and "macOS: the owlette app shows the machine's name as the
+  dashboard does, without `.local`."
+- **The quality menu is two levels** (the owner's idea: "submenus for bandwidth, resolution, etc."). Four
+  rows, one per axis, each showing what is set, with the options a level down; "on reconnect" moved into the
+  codec submenu. The eight bandwidth steps had made the flat menu twenty rows. Checks: three jsdom tests (new
+  file), the swoop Playwright specs 6 of 6 locally with the menu asserted in `session.spec.ts`, and the
+  rendered menu read from that run's trace.
+- *Changelog line:* "the swoop quality menu shows one row per setting with its current value, and the options
+  open beside it."

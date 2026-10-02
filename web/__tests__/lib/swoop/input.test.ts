@@ -416,6 +416,24 @@ describe('a held modifier', () => {
     ]);
   });
 
+  it('does not take the release of a key pressed before the hold as the next key', () => {
+    const h = harness({ hostOs: 'macos' });
+    h.capture.holdNextKey('MetaLeft');
+    // the enter that chose the menu item, released once focus is back on the stage.
+    h.target.dispatchEvent(keyEvent('keyup', 'Enter'));
+    h.target.dispatchEvent(keyEvent('keydown', 'KeyC'));
+    h.target.dispatchEvent(keyEvent('keyup', 'KeyC'));
+
+    const keys = h.sent().filter((m) => m.t === 'k');
+    expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual([
+      'MetaLeft:down',
+      'Enter:up',
+      'KeyC:down',
+      'KeyC:up',
+      'MetaLeft:up',
+    ]);
+  });
+
   it('releases an armed modifier with everything else, and never arms it twice', () => {
     const h = harness();
     h.capture.holdNextKey('MetaLeft');

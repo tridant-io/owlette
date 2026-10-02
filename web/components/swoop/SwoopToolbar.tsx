@@ -63,6 +63,7 @@ function badgeFor(
 
 /** before attach, and on the server: nothing to say. */
 const hostReadsUnknown = (): boolean => true;
+const nothingHeld = (): boolean => false;
 
 export interface SwoopToolbarProps {
   session: SwoopSession | null;
@@ -109,6 +110,11 @@ export function SwoopToolbar({
     clipboard ? clipboard.subscribe : subscribeNever,
     clipboard ? clipboard.get : hostReadsUnknown,
     hostReadsUnknown,
+  );
+  const clipboardHeld = useSyncExternalStore(
+    clipboard ? clipboard.subscribe : subscribeNever,
+    clipboard ? clipboard.held : nothingHeld,
+    nothingHeld,
   );
   // a capability probe, not state: the server has no `navigator`, so it renders
   // the supported case and hydration corrects it once, without a second render
@@ -190,6 +196,12 @@ export function SwoopToolbar({
         <span className="text-xs text-muted-foreground" data-testid="clipboard-notice">
           the machine&apos;s clipboard is not shared: on a mac, allow owlette under paste from other apps in
           system settings
+        </span>
+      )}
+      {clipboardHeld && (
+        <span className="text-xs text-muted-foreground" data-testid="clipboard-held-notice">
+          your browser held back the machine&apos;s copy: click the picture to take it, or allow the clipboard for
+          this site
         </span>
       )}
 

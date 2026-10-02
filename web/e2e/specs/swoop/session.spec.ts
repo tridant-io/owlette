@@ -210,6 +210,22 @@ test.describe('the viewer page', () => {
     const queued = Object.values(pending.data() ?? {}) as Array<{ type?: string; sid?: string }>;
     expect(queued.some((cmd) => cmd.type === 'swoop_session_requested' && cmd.sid === grant.sid)).toBe(true);
 
+    // the quality menu is one row per axis with what is chosen; the options
+    // sit a level down.
+    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    const quality = page.getByRole('menu');
+    await expect(quality.getByRole('menuitem')).toHaveText([
+      /^bandwidth\s*auto$/,
+      /^resolution\s*native$/,
+      /^frame rate\s*60 fps$/,
+      /^codec\s*auto$/,
+    ]);
+    await quality.getByRole('menuitem', { name: /^bandwidth/ }).click();
+    await page.getByRole('menuitemradio', { name: '20 mbps' }).click();
+    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await expect(page.getByRole('menuitem', { name: /^bandwidth/ })).toHaveText(/^bandwidth\s*20 mbps$/);
+    await page.keyboard.press('Escape');
+
     // ending it is one click, one DELETE, and the record says so.
     const ended = page.waitForResponse(
       (r) => r.url().includes(`/swoop/sessions/${grant.sid}`) && r.request().method() === 'DELETE',

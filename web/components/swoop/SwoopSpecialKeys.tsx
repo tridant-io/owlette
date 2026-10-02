@@ -11,7 +11,7 @@
  * sees the menu disabled rather than absent, so the affordance is learnable.
  */
 
-import { Fragment, useEffect, useState, useSyncExternalStore } from 'react';
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Keyboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -68,6 +68,10 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
   const swap = modifierSwap(osFamily, viewerIsMac);
   const legend = modifierLegend(osFamily, viewerIsMac, mapping);
   const superKey = viewerIsMac ? 'cmd' : 'the windows key';
+  // a sent key is the machine's, so the keyboard goes back to the picture with
+  // it. a closing menu hands focus to its own button, where the "next key" of
+  // a hold would land and never reach the machine.
+  const sent = useRef(false);
 
   useEffect(() => {
     if (!session) return;
@@ -91,7 +95,16 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
           <Keyboard aria-hidden />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
+      <DropdownMenuContent
+        align="end"
+        className="w-72"
+        onCloseAutoFocus={(event) => {
+          if (!sent.current) return;
+          sent.current = false;
+          event.preventDefault();
+          session?.stage.focus();
+        }}
+      >
         {swap && (
           <>
             <DropdownMenuLabel>modifier keys</DropdownMenuLabel>
@@ -132,9 +145,8 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
             onSelect={() => {
               if (!session) return;
               setNote(null);
-              if (!sendSpecialKey({ send: session.send, capture: swoopInputCapture(session) }, key)) {
-                setNote('that key could not be sent right now.');
-              }
+              sent.current = sendSpecialKey({ send: session.send, capture: swoopInputCapture(session) }, key);
+              if (!sent.current) setNote('that key could not be sent right now.');
             }}
           >
             <span>{key.label}</span>

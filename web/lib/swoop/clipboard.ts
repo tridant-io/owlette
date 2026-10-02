@@ -105,6 +105,8 @@ export interface SwoopClipboardStore {
   subscribe(listener: () => void): () => void;
   /** whether the machine reads its own clipboard: true until `hello-host` says otherwise. */
   get(): boolean;
+  /** whether the browser refused the machine's newest copy, which now waits for a gesture. */
+  held(): boolean;
 }
 
 const stores = new WeakMap<SwoopSession, SwoopClipboardStore>();
@@ -121,6 +123,8 @@ export function attach(session: SwoopSession): SwoopDetach {
   // what the host said about its own clipboard, for the toolbar's notice: a
   // mac that may not read its pasteboard never sends its copies here.
   let hostReads = true;
+  // and what the browser did with the machine's newest copy, for the other one.
+  let refused = false;
   const listeners = new Set<() => void>();
   const store: SwoopClipboardStore = {
     subscribe(listener) {
@@ -130,6 +134,7 @@ export function attach(session: SwoopSession): SwoopDetach {
       };
     },
     get: () => hostReads,
+    held: () => refused,
   };
 
   let detached = false;
@@ -331,22 +336,22 @@ export function attach(session: SwoopSession): SwoopDetach {
 
   // ----------------------------------------------------------- host → viewer
 
-  const applyToClipboard = async (payload: ClipPayload): Promise<boolean> => {
+  const applyToClipboard = async (payload: ClipPayload): Promise<'written' | 'refused' | 'unsupported'> => {
     const clipboard = view.navigator?.clipboard;
-    if (!clipboard) return false;
+    if (!clipboard) return 'unsupported';
     try {
       if (payload.fmt === 'text') {
         await clipboard.writeText(new TextDecoder().decode(payload.bytes));
-        return true;
+        return 'written';
       }
       if (typeof clipboard.write !== 'function' || typeof ClipboardItem === 'undefined') {
-        return false;
+        return 'unsupported';
       }
       const blob = new Blob([payload.bytes as BlobPart], { type: 'image/png' });
       await clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      return true;
+      return 'written';
     } catch {
-      return false;
+      return 'refused';
     }
   };
 
@@ -354,12 +359,20 @@ export function attach(session: SwoopSession): SwoopDetach {
    * a write is attempted the moment the clip lands and kept for the next user
    * gesture if the browser refuses it: a document that is not focused, and an
    * image write outside a live user activation, are both refusals rather than
-   * errors. the newest clipboard supersedes an older one still waiting.
+   * errors. the newest clipboard supersedes an older one still waiting. a
+   * refusal is also what the toolbar says: a write with no activation has
+   * chromium ask whether the site may use the clipboard, and a "block" or a
+   * closed prompt would otherwise leave the copy waiting with nothing said.
    */
   const applyOrHold = (payload: ClipPayload): void => {
     pendingWrite = payload;
-    void applyToClipboard(payload).then((ok) => {
-      if (ok && pendingWrite === payload) pendingWrite = null;
+    void applyToClipboard(payload).then((result) => {
+      // a newer clip took its place, and that one's own attempt decides.
+      if (pendingWrite !== payload) return;
+      if (result === 'written') pendingWrite = null;
+      if (refused === (result === 'refused')) return;
+      refused = result === 'refused';
+      for (const listener of listeners) listener();
     });
   };
 

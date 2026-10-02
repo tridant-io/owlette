@@ -2,10 +2,15 @@
  * @jest-environment jsdom
  */
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SwoopSpecialKeys } from '@/components/swoop/SwoopSpecialKeys';
-import type { SwoopSession } from '@/lib/swoop/features';
+import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
+import type { InputCapture } from '@/lib/swoop/input';
+
+// the menu finds the input capture on a live session, which these tests do not
+// have: null is a session with nothing attached, and two tests hand it one.
+jest.mock('@/lib/swoop/features', () => ({ swoopInputCapture: jest.fn(() => null) }));
 
 // jsdom ships no ResizeObserver; Radix's menu positioning constructs one.
 global.ResizeObserver = class {
@@ -19,7 +24,11 @@ Element.prototype.setPointerCapture ??= () => {};
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  jest.mocked(swoopInputCapture).mockReturnValue(null);
+  document.body.innerHTML = '';
+});
 
 // a session with control and nothing attached: the menu reads the setting and
 // the legend from the systems alone.
@@ -56,5 +65,47 @@ describe('SwoopSpecialKeys', () => {
     expect(screen.getByTestId('super-key-note').textContent).toMatch(/the windows key/);
     expect(screen.queryByRole('menuitemradio')).toBeNull();
     expect(legend()).toBe('ctrlctrlwindows keywindows keyaltalt');
+  });
+
+  describe('where the keyboard goes when the menu closes', () => {
+    const attached = () => {
+      const stage = document.createElement('div');
+      stage.tabIndex = -1;
+      document.body.appendChild(stage);
+      const capture = { holdNextKey: jest.fn(), pressChord: jest.fn(), setModifierMapping: jest.fn() };
+      jest.mocked(swoopInputCapture).mockReturnValue(capture as unknown as InputCapture);
+      const user = userEvent.setup();
+      render(<SwoopSpecialKeys session={{ ...session, stage } as SwoopSession} osFamily="macos" />);
+      const trigger = screen.getByRole('button', { name: 'send a key combination' });
+      return { stage, capture, user, trigger };
+    };
+
+    it('goes to the picture after a hold, so the next key reaches the machine', async () => {
+      const { stage, capture, user, trigger } = attached();
+      await user.click(trigger);
+      await user.click(await screen.findByRole('menuitem', { name: 'hold cmd for the next key' }));
+
+      expect(capture.holdNextKey).toHaveBeenCalledWith('MetaLeft');
+      await waitFor(() => expect(stage).toHaveFocus());
+    });
+
+    it('goes to the picture after a sent chord', async () => {
+      const { stage, capture, user, trigger } = attached();
+      await user.click(trigger);
+      await user.click(await screen.findByRole('menuitem', { name: /cmd \+ tab/ }));
+
+      expect(capture.pressChord).toHaveBeenCalledWith(['MetaLeft', 'Tab']);
+      await waitFor(() => expect(stage).toHaveFocus());
+    });
+
+    it('stays on the menu button when nothing was sent', async () => {
+      const { stage, user, trigger } = attached();
+      await user.click(trigger);
+      await screen.findByRole('menu');
+      await user.keyboard('{Escape}');
+
+      await waitFor(() => expect(trigger).toHaveFocus());
+      expect(stage).not.toHaveFocus();
+    });
   });
 });
