@@ -268,11 +268,17 @@ corners are small and engineered. the base radius is 6px (`--radius: 0.375rem`).
 quiet and precise. the fill is flat at rest and wakes up with a directional sweep.
 - **Shape:** gently squared (4px). default height 36px, small 32px, large 40px. icon buttons are square at the same heights.
 - **Primary:** signal cyan fill, cyan-ink text, control type.
-- **Hover / Focus:** `.btn-sweep` draws a translucent tint across the button from left to right over 200ms (`cubic-bezier(0.4, 0, 0.2, 1)`), and on exit the tint keeps travelling right. the tint is a scrim, not a colour: blue (`oklch(0.62 0.16 250)` at 26%) in dark mode, so it brightens any base without fighting it. focus adds a faint 1px ring. disabled sits at 50% opacity.
+- **Hover / Focus:** `.btn-sweep` draws a translucent tint across the button from left to right over 200ms (`cubic-bezier(0.4, 0, 0.2, 1)`), and on exit the tint keeps travelling right. the tint is a scrim, not a colour: blue (`oklch(0.62 0.16 250)` at 26%) in dark mode, so it brightens any base without fighting it. keyboard focus draws the global 2px signal-cyan outline (see Keyboard Focus). disabled sits at 50% opacity.
 - **Outline:** input-navy fill with a hairline-blue border. never revert it to the old `--input` border, which is invisible on a card.
 - **Secondary / Ghost:** control-navy fill, or no fill. ghost picks up only the sweep tint.
 - **Destructive:** alarm coral at 60% with white text. `ghost-destructive` is a red glyph with no fill, for icon-only deletes.
 - **Link:** opts out of the sweep and uses the highlighter link below.
+- **Icon-only:** always `IconButton` (`web/components/ui/icon-button.tsx`). its `label` is required and becomes both the accessible name and the tooltip, and it defaults to `type="button"` so it never submits a form by accident.
+
+### Keyboard Focus
+- **Default:** every focusable element draws a 2px `--ring` outline at a 2px offset (8:1 or better on every dark surface). menu and listbox rows draw the same ring inset (`ITEM_FOCUS_RING` in `web/lib/utils.ts`), and inputs keep their 3px ring.
+
+**The Visible Focus Rule.** never ship `outline-none` without a replacement indicator that clears 3:1 against its surface. the old 1px outline at 30% measured 1.3:1 and was invisible in practice.
 
 ### Links
 - **Highlighter sweep** (`.hl-link`): links never underline. on hover a selection-style cyan fill sweeps in from left to right, and each glyph flips to navy as the edge crosses it. `.hl-link-muted` (footer) and `.hl-link-plain` (body-text rest colour) change only the palette.
@@ -312,6 +318,7 @@ the signature loaders: charts plot a miniature line graph on a loop (2.4s), and 
 - **Do** standardize button styling in `web/components/ui/button.tsx` variants. hover feedback comes from `.btn-sweep`, not per-instance `hover:bg-*`.
 - **Do** use `MENU_SURFACE` for any floating menu, on web and desktop alike.
 - **Do** define every new colour token in both the `:root` (light) and `.dark` blocks of `globals.css`. dark is canonical, but a light theme is planned, so light values must stay valid.
+- **Do** use `IconButton` for every icon-only control, with a lowercase label that names the action.
 - **Do** honour `prefers-reduced-motion`: every new animation needs a reduced-motion path that ends in its final state.
 - **Do** keep `desktop/src/globals.css` in step with web. its dark `--btn-hover` still uses the grey foreground mix that web replaced with the blue tint, which is a known drift.
 
@@ -322,4 +329,5 @@ the signature loaders: charts plot a miniature line graph on a loop (2.4s), and 
 - **Don't** place two near-identical flat fills against a shared hard edge.
 - **Don't** add a second interactive accent or another icon library. lucide-react is the only icon set.
 - **Don't** write title-case or sentence-case UI copy.
+- **Don't** remove a focus outline without drawing a visible replacement.
 - **Don't** add new uses of the light theme's stock neutral palette (near-black primary, grey surfaces) as if it were the brand. it is shadcn scaffolding until the light theme is designed.
