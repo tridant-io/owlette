@@ -38,6 +38,21 @@ describe('IconButton', () => {
     expect(await screen.findByRole('tooltip')).toHaveTextContent('delete process');
   });
 
+  it('never submits the form it sits in unless asked to', async () => {
+    const onSubmit = jest.fn((e: React.FormEvent) => e.preventDefault());
+    render(
+      <TooltipProvider delayDuration={0}>
+        <form onSubmit={onSubmit}>
+          <IconButton label="cancel rename">
+            <Trash2 />
+          </IconButton>
+        </form>
+      </TooltipProvider>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'cancel rename' }));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('keeps the name when the tooltip is turned off', async () => {
     const { onClick } = renderButton({ tooltip: false });
     await userEvent.click(screen.getByRole('button', { name: 'delete process' }));

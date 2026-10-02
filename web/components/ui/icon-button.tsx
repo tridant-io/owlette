@@ -9,8 +9,10 @@ type IconButtonProps = Omit<React.ComponentProps<typeof Button>, "aria-label"> &
   tooltip?: boolean
 }
 
-function IconButton({ label, tooltip = true, size = "icon", ...props }: IconButtonProps) {
-  const button = <Button aria-label={label} size={size} {...props} />
+// type defaults to "button": an icon control inside a form (cancel, remove,
+// close) must not submit it; a save icon opts in with type="submit"
+function IconButton({ label, tooltip = true, size = "icon", type = "button", ...props }: IconButtonProps) {
+  const button = <Button aria-label={label} size={size} type={type} {...props} />
   if (!tooltip) return button
   return (
     <Tooltip>
