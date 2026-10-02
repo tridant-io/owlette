@@ -80,10 +80,13 @@ export interface SwoopToolbarProps {
   /** whether the latency overlay is showing; the page owns the flag. */
   statsOpen: boolean;
   onToggleStats: () => void;
+  /** the bar itself, where the page sends keyboard focus off the stage. */
+  ref?: React.Ref<HTMLDivElement>;
   children?: React.ReactNode;
 }
 
 export function SwoopToolbar({
+  ref,
   session,
   machineId,
   state,
@@ -154,7 +157,7 @@ export function SwoopToolbar({
   const badge = badgeFor(state, stats, retryIn);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
+    <div ref={ref} className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
       <span className="truncate text-sm font-medium text-foreground" title={machineId}>
         {machineId}
       </span>

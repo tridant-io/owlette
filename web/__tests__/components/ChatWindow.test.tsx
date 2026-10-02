@@ -17,6 +17,9 @@
  * And per-turn targets: each assistant turn is labelled from its own stamped
  * `metadata.hoot`, not from the header selector, and a turn that moved to other
  * machines says so.
+ *
+ * And what a screen reader hears — "thinking" and an awaited approval in a status
+ * region, a reply once its turn ends — and the pasted-image lightbox's focus.
  */
 import React from 'react';
 import { render, screen } from '@testing-library/react';
@@ -549,5 +552,129 @@ describe('ChatWindow — a Claude 5 reply', () => {
 
     expect(screen.getByText('consulting Claude Opus 5...')).toBeInTheDocument();
     expect(screen.queryByText('thinking...')).toBeNull();
+  });
+});
+
+describe('ChatWindow — what a screen reader hears', () => {
+  const ASK = msg('u1', 'user', [{ type: 'text', text: 'why is the render node slow?' }]);
+  const PARTIAL = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu' }]);
+  const DONE = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu is pinned at 100%.' }]);
+
+  function rerenderChat(view: ReturnType<typeof renderChat>, props: Partial<React.ComponentProps<typeof ChatWindow>>) {
+    view.rerender(
+      <TooltipProvider>
+        <ChatWindow messages={MESSAGES} isLoading={false} {...props} />
+      </TooltipProvider>,
+    );
+  }
+
+  it('says hoot is thinking in a status region while the reply has nothing to show', () => {
+    renderChat({ isLoading: true, messages: [ASK] });
+
+    expect(screen.getByRole('status')).toHaveTextContent('hoot is thinking');
+  });
+
+  it('keeps the regions mounted through the empty state, so the first turn is heard', () => {
+    const view = renderChat({ messages: [] });
+    const status = screen.getByRole('status');
+    const log = screen.getByRole('log', { name: 'hoot replies' });
+
+    rerenderChat(view, { isLoading: true, messages: [ASK] });
+
+    // the same nodes: a live region that arrives with its text is not announced.
+    expect(screen.getByRole('status')).toBe(status);
+    expect(screen.getByRole('log', { name: 'hoot replies' })).toBe(log);
+    expect(status).toHaveTextContent('hoot is thinking');
+  });
+
+  it('reads the reply out once its turn ends, not token by token', () => {
+    const view = renderChat({ isLoading: true, messages: [ASK, PARTIAL] });
+    const log = screen.getByRole('log', { name: 'hoot replies' });
+    expect(log).toBeEmptyDOMElement();
+
+    rerenderChat(view, { isLoading: false, messages: [ASK, DONE] });
+
+    expect(log).toHaveTextContent('hoot replied: the gpu is pinned at 100%.');
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  });
+
+  it('drops the markdown that only styles the reply, and keeps a command pipe', () => {
+    const styled = msg('a1', 'assistant', [
+      { type: 'text', text: '## cause\n**the gpu** is pinned:\n```powershell\nGet-Process | Sort-Object CPU\n```' },
+    ]);
+    const view = renderChat({ isLoading: true, messages: [ASK, PARTIAL] });
+
+    rerenderChat(view, { isLoading: false, messages: [ASK, styled] });
+
+    expect(screen.getByRole('log', { name: 'hoot replies' })).toHaveTextContent(
+      'hoot replied: cause the gpu is pinned: Get-Process | Sort-Object CPU',
+    );
+  });
+
+  it('stays quiet about replies that were already there when the chat opened', () => {
+    renderChat({ messages: [ASK, DONE] });
+
+    expect(screen.getByRole('log', { name: 'hoot replies' })).toBeEmptyDOMElement();
+  });
+
+  it('does not read out a reply whose turn failed — the error banner speaks for it', () => {
+    const view = renderChat({ isLoading: true, messages: [ASK, PARTIAL] });
+
+    rerenderChat(view, { isLoading: false, turnErrored: true, messages: [ASK, PARTIAL] });
+
+    expect(screen.getByRole('log', { name: 'hoot replies' })).toBeEmptyDOMElement();
+  });
+
+  it('says when hoot is waiting on an approval', () => {
+    const pending = {
+      type: 'tool-run_powershell',
+      toolCallId: 'tc1',
+      state: 'approval-requested',
+      input: { command: 'hostname' },
+      approval: { id: 'ap1' },
+    };
+    renderChat({ onToolApproval: jest.fn(), messages: [ASK, msg('a1', 'assistant', [pending])] });
+
+    expect(screen.getByRole('status')).toHaveTextContent('hoot needs your approval to run run_powershell');
+  });
+});
+
+describe('ChatWindow — a pasted image', () => {
+  const PNG = 'data:image/png;base64,iVBORw0KGgo=';
+  const WITH_IMAGE = [
+    msg('u1', 'user', [
+      { type: 'text', text: 'what is on this screen?' },
+      { type: 'file', mediaType: 'image/png', url: PNG },
+    ]),
+  ];
+
+  it('opens from a named button into a modal dialog that takes focus', async () => {
+    const { user } = renderChat({ messages: WITH_IMAGE });
+
+    await user.click(screen.getByRole('button', { name: 'view pasted image' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'pasted image' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole('button', { name: 'close image' })).toHaveFocus();
+  });
+
+  it('closes on Escape and hands focus back to the thumbnail', async () => {
+    const { user } = renderChat({ messages: WITH_IMAGE });
+    const thumbnail = screen.getByRole('button', { name: 'view pasted image' });
+
+    await user.click(thumbnail);
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(thumbnail).toHaveFocus();
+  });
+
+  it('closes from its close button', async () => {
+    const { user } = renderChat({ messages: WITH_IMAGE });
+
+    await user.click(screen.getByRole('button', { name: 'view pasted image' }));
+    await user.click(screen.getByRole('button', { name: 'close image' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

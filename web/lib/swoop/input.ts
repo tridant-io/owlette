@@ -66,6 +66,9 @@ const BROWSER_RESERVED: ReadonlySet<string> = new Set(['F11', 'F12']);
 /** an escape seen this recently was the one that dropped pointer lock. */
 const ESCAPE_SYNTH_WINDOW_MS = 250;
 
+/** a second escape tap this soon after the first is the keyboard leaving the stage. */
+const ESCAPE_TWICE_WINDOW_MS = 500;
+
 const TICK_FALLBACK_MS = 16;
 
 export interface InputCaptureOptions {
@@ -98,6 +101,15 @@ export interface InputCapture {
   readonly pointerOutside: boolean;
   /** called whenever `pointerOutside` changes; returns the unsubscribe. */
   onPointerOutsideChange(listener: () => void): () => void;
+  /**
+   * the keyboard's way off the stage, which otherwise sends every key — tab
+   * included — to the host. a second tap of escape within half a second, with
+   * nothing fullscreen, is not sent: what is held is released and the listener
+   * moves focus. the first tap still reaches the host, so escape there keeps
+   * working. fullscreen keeps its own exit, the browser's escape hold. with no
+   * listener, every escape goes to the host as before. returns the unsubscribe.
+   */
+  onEscapeTwice(listener: () => void): () => void;
   setCmdMapping(mapping: CmdMapping): void;
   /**
    * relative mode. `unadjustedMovement` asks for raw deltas with no pointer
@@ -162,7 +174,9 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   let locked = false;
   let exitRequested = false;
   let lastEscapeMs = -Infinity;
+  let lastEscapeTapMs = -Infinity;
   let detached = false;
+  const escapeTwiceListeners = new Set<() => void>();
 
   const queue: InputMessage[] = [];
   const heldKeys = new Set<string>();
@@ -260,8 +274,25 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   const onKeyDown = (event: KeyboardEvent): void => {
     if (composing || event.isComposing) return;
     if (BROWSER_RESERVED.has(event.code)) return;
-    if (event.code === 'Escape') lastEscapeMs = nowMs();
-    else event.preventDefault();
+    if (event.code === 'Escape') {
+      lastEscapeMs = nowMs();
+      // a held escape repeats; only separate taps count towards leaving.
+      if (!event.repeat) {
+        const leaving =
+          escapeTwiceListeners.size > 0 &&
+          !doc.fullscreenElement &&
+          lastEscapeMs - lastEscapeTapMs <= ESCAPE_TWICE_WINDOW_MS;
+        lastEscapeTapMs = leaving ? -Infinity : lastEscapeMs;
+        if (leaving) {
+          // focus is about to go, and the keyups with it.
+          releaseAll();
+          for (const listener of escapeTwiceListeners) listener();
+          return;
+        }
+      }
+    } else {
+      event.preventDefault();
+    }
 
     const code = applyCmdMapping(event.code, cmdMapping);
     if (!isInjectable(code)) return;
@@ -436,6 +467,13 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       outsideListeners.add(listener);
       return () => {
         outsideListeners.delete(listener);
+      };
+    },
+
+    onEscapeTwice(listener: () => void): () => void {
+      escapeTwiceListeners.add(listener);
+      return () => {
+        escapeTwiceListeners.delete(listener);
       };
     },
 

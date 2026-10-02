@@ -14,7 +14,7 @@
  * session-create request; the page never inspects, stores or logs a proof.
  */
 
-import { use, useState } from 'react';
+import { use, useCallback, useRef, useState } from 'react';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
@@ -40,10 +40,16 @@ export default function SwoopPage({
   // the overlay covers the picture, so it is off until asked for — and the
   // toolbar is out of reach once fullscreen holds, so the choice is made here.
   const [statsOpen, setStatsOpen] = useState(false);
+  // escape twice on the stage lands the keyboard on the bar's first control.
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const leaveStage = useCallback(() => {
+    toolbarRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
+  }, []);
 
   return (
     <main className="flex h-full w-full flex-col">
       <SwoopToolbar
+        ref={toolbarRef}
         machineId={machineId}
         session={session}
         state={state}
@@ -62,7 +68,7 @@ export default function SwoopPage({
       </SwoopToolbar>
 
       <div className="min-h-0 flex-1">
-        <SwoopStage session={session} state={state} stageRef={stageRef} videoRef={videoRef}>
+        <SwoopStage session={session} state={state} stageRef={stageRef} videoRef={videoRef} onLeave={leaveStage}>
           <SwoopCursor session={session} />
           <SwoopPresence session={session} />
           <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
