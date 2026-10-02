@@ -908,6 +908,10 @@ mod host {
 
     /// How often the `status` event goes to the service.
     const STATUS_INTERVAL: Duration = Duration::from_secs(2);
+    /// How often the rate story goes to the service log while somebody watches,
+    /// besides on every cut: gate M1 had nothing to read when a session fell
+    /// short of 60 fps.
+    const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
     /// Desktop Duplication is vsync-locked at the panel's rate; 60 is what the
     /// encoder's rate control is sized for.
@@ -1438,6 +1442,8 @@ mod host {
             denials: Denials::default(),
             last_report: w.started,
             last_status: w.started,
+            status_logged: w.started,
+            cuts_logged: 0,
             encoder: None,
             display: 0,
             sas_pending: None,
@@ -1562,6 +1568,9 @@ mod host {
         denials: Denials,
         last_report: Instant,
         last_status: Instant,
+        /// When the rate story was last logged, and the cuts it reported.
+        status_logged: Instant,
+        cuts_logged: u64,
         /// The backend the capture thread's encoders are open on, as the
         /// selection chain named it. `None` until the first encoder opens —
         /// a session with no viewer has no encoder and nothing to report.
@@ -3285,6 +3294,24 @@ mod host {
                 .filter(|v| v.peer.is_some())
                 .min_by_key(|v| v.governor.target_bps());
             let governed = worst.map(|v| (v.governor.ceiling(), v.governor.stats(), v.governor.state(now)));
+            if let Some(v) = worst {
+                let stats = v.governor.stats();
+                if stats.cuts != self.cuts_logged
+                    || now.duration_since(self.status_logged) >= STATUS_LOG_INTERVAL
+                {
+                    self.cuts_logged = stats.cuts;
+                    self.status_logged = now;
+                    let rung = v.governor.rung();
+                    ::log::info!(
+                        "swoop: {fps} fps sent, {bitrate_kbps} kbps on the wire, target {target_kbps} kbps, rung {}fps/{}, {} cuts, {} gaps, governor {:?}",
+                        rung.fps,
+                        rung.resolution.wire_name(),
+                        stats.cuts,
+                        stats.frame_gaps,
+                        v.governor.state(now)
+                    );
+                }
+            }
             let denials = self.denials.count() + self.input.denials();
             let dropped = self.input.dropped();
             let idrs = self.keyframes.total_forced();
