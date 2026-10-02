@@ -1,26 +1,26 @@
 # Tasks: swoop on macOS, 4K at 60 and the keyboard model
 
-Progress: 0/11. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
+Progress: 3/11. Branch `swoop/macos`, worktree `Owlette-swoop-mac-wt`. Standing rules of `../swoop-macos/plan.md`
 apply (the four Windows commands, the macOS commands, nothing pushed to dev or main). Mac worktrees
 `~/src/owlette-swoop-mac-21` (streamer) and `-23` (desktop) on the rig; `~/src/mac-build-install.sh` builds,
 notarizes and installs.
 
 ## Wave 1: the encoder
 
-- [ ] **Task 1.1: VideoToolbox without low-latency rate control, delivering from its callback** `[agent]`
+- [x] **Task 1.1: VideoToolbox without low-latency rate control, delivering from its callback** `[agent]`
   - Files: `agent/swoop/src/encode/videotoolbox/mod.rs`, `agent/swoop/src/encode/mod.rs`, `agent/swoop/src/session/mod.rs` (the capture pass only)
   - Do: On macOS open the session without `EnableLowLatencyRateControl` (the fallback order stays for a session that cannot encode). Add `Encoder::set_sink` with a no-op default; the VideoToolbox backend hands each finished frame to the sink from `on_output`, in callback order, Annex-B'd there, and `encode()` only submits (no `CompleteFrames`). The session gives each tier's encoder a sink that sends `FromWorker::Frame`; `force_irap` clears on an accepted submit for a sink backend. The hardware test gains the paced-60 run at the panel's size and prints throughput, submit time and submit-to-callback latency.
   - Done when: the macOS commands are green; the hardware test shows 60.0 fps paced at the panel's size with none dropped and latency under 20 ms p95; the four Windows commands are green and `git diff` touches no Windows backend's behaviour.
 
 ## Wave 2: the picture
 
-- [ ] **Task 2.1: Capture at the pixel rect again** `[agent]`
+- [x] **Task 2.1: Capture at the pixel rect again** `[agent]`
   - Files: `agent/swoop/src/capture/sck.rs`, `agent/swoop/src/cursor/mac.rs`, `agent/swoop/src/platform/macos.rs`
   - Do: Revert the point-size capture and picture grid (`adf65040`, `2cfbef4a`) so the stream is the display's pixels, the cursor is drawn at the panel's scale and reported in pixels. Keep `picture_size` only if something still uses it.
   - Done when: the capture hardware test opens at 3420x2214; the cursor hardware test's shapes are 2x again; the macOS commands are green.
   - Depends on: 1.1
 
-- [ ] **Task 2.2: 50 Mbps auto for a 4K-class source** `[agent]`
+- [x] **Task 2.2: 50 Mbps auto for a 4K-class source** `[agent]`
   - Files: `agent/swoop/src/session/quality.rs`, `agent/swoop/src/session/mod.rs`
   - Do: `Ceiling::default()` for a source above 2.5 megapixels starts at the menu's top rate; the governor's floor and descent are untouched. Unit test both sides of the threshold.
   - Done when: the four Windows commands and the macOS commands are green; a 1080p source still defaults to 20 Mbps.
@@ -76,3 +76,40 @@ notarizes and installs.
   - Depends on: 5.1
 
 ## Log
+
+### 2026-10-01, Wave 1
+
+**Task 1.1: done** (`34c1d9bc`). `Encoder::set_sink`, a no-op by default that only VideoToolbox takes. The
+VideoToolbox session opens without `EnableLowLatencyRateControl` first; with a sink `encode` only submits, and
+`on_output` assembles the frame and hands it over on VideoToolbox's thread (the Annex-B state moved into
+`Shared`); a dropped or refused frame forces the next submit to a keyframe, and a callback failure is answered
+by the next `encode`. The session sets the sink on every encoder it opens and clears `force_irap` on the accepted
+submit. The settle keyframe moved to the session thread (`on_frame` marks a big move, `tick` requests the IDR a
+second later), so it works whichever way frames arrive.
+- Hardware test `videotoolbox_holds_60_at_the_panels_size_through_its_sink`, 3420x2214 HEVC at 50 Mbps, 240
+  frames paced at 60 Hz: 240 of 240 in 4.00 s = 60.0 fps, submit-to-callback p50 10.7 ms, p95 16.5 ms, callback
+  order equal to input order, IRAPs at [0, 90]. The 120-frame test at 1080p without low-latency: hardware HEVC
+  3.9 ms p50, hardware H.264 5.3 ms, software H.264 10.9 ms.
+- Checks: macOS clippy clean and 421 tests passed; Windows clippy clean and 396 passed; no Windows backend
+  touched.
+- *Changelog line:* "macOS: swoop encodes at the display's rate, 60 fps at a Retina panel's size, with one frame in
+  flight."
+
+### 2026-10-01, Wave 2
+
+**Task 2.1: done** (`d849dbcc`). The point-size capture (`adf65040`) and the picture grid (`2cfbef4a`) reverted
+in `capture/sck.rs`, `cursor/mac.rs` and `platform/macos.rs`; the session's side of `adf65040` (the removal of
+the earlier points cap) kept. Capture hardware test: display-1 opened at 3420x2214 in 328 ms, rebuilt in 213 ms.
+Cursor hardware test: the arrow at 56x80 with the hot spot at (10, 10), 2x again; 553 samples, all visible. Both
+needed the display awake (`caffeinate -u -t 5`; an asleep display is not listed). macOS clippy clean, 421
+passed; Windows clippy clean, 396 passed.
+
+**Task 2.2: done** (`9b606b71`). `quality::auto_bitrate_bps(size)`: above 2.5 megapixels, the menu's top rate
+(50 Mbps); otherwise 20. `Ceiling::from_quality_with_auto` takes it for an unstated rate and
+`Viewer::new` for a new viewer's governor, both from the session's captured source size. The session's own
+`DEFAULT_BITRATE_BPS` went (unused outside a test). Unit test over 1080p, 1440p, Retina and 4K.
+- *Note for the owner:* 2560x1440 is 3.7 megapixels, so a 1440p **Windows** host now starts at 50 Mbps auto
+  too. The plan's threshold is the one approved; raise `LARGE_SOURCE_PIXELS` to 4 million if 1440p should stay at
+  20.
+- Checks: Windows clippy clean, 397 passed; macOS clippy clean, 422 passed.
+- *Changelog line:* "swoop starts a 4K-class machine at 50 Mbps; the quality menu still sets any rate."
