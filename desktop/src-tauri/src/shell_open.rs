@@ -106,6 +106,11 @@ const SCREEN_RECORDING_SETTINGS: &str =
 const ACCESSIBILITY_SETTINGS: &str =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
+// the anchor the SecurityPrivacyExtension names for "paste from other apps"
+#[cfg(target_os = "macos")]
+const CLIPBOARD_SETTINGS: &str =
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_Pasteboard";
+
 /// Open the Screen Recording pane (macOS); a typed refusal elsewhere.
 pub fn open_screen_recording_settings() -> Result<(), String> {
   #[cfg(target_os = "macos")]
@@ -127,6 +132,17 @@ pub fn open_accessibility_settings() -> Result<(), String> {
   #[cfg(not(target_os = "macos"))]
   {
     Err("accessibility is a macos setting".to_string())
+  }
+}
+
+pub fn open_clipboard_settings() -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    open_link(CLIPBOARD_SETTINGS)
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    Err("clipboard sharing is a macos setting".to_string())
   }
 }
 

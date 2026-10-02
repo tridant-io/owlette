@@ -166,6 +166,19 @@ pub fn reads_general_pasteboard() -> bool {
     may_read(access_behaviour(&NSPasteboard::generalPasteboard()))
 }
 
+/// The general pasteboard's access behaviour as the desktop app's notice
+/// names it (`selfcheck --grants`), or `None` on a system older than macOS
+/// 15.4, where there is nothing to allow.
+pub fn pasteboard_access() -> Option<&'static str> {
+    access_behaviour(&NSPasteboard::generalPasteboard()).map(|behaviour| match behaviour {
+        NSPasteboardAccessBehavior::AlwaysAllow => "allow",
+        NSPasteboardAccessBehavior::Ask => "ask",
+        NSPasteboardAccessBehavior::AlwaysDeny => "deny",
+        NSPasteboardAccessBehavior::Default => "default",
+        _ => "unknown",
+    })
+}
+
 /// The general pasteboard's access behaviour, or `None` on a system older than
 /// macOS 15.4, which has neither the property nor the alert it describes.
 fn access_behaviour(pasteboard: &NSPasteboard) -> Option<NSPasteboardAccessBehavior> {

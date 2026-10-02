@@ -198,6 +198,20 @@ export function requestAccessibility(): Promise<void> {
   return invoke<void>('request_accessibility')
 }
 
+/**
+ * macOS's answer on sharing this app's clipboard (Paste from Other Apps, since
+ * macOS 15.4); null off macOS, on an unknown answer, and true where there is
+ * no such setting.
+ */
+export function clipboardSharing(): Promise<boolean | null> {
+  return invoke<boolean | null>('clipboard_sharing')
+}
+
+/** Open the Paste from Other Apps pane of System Settings (macOS). */
+export function openClipboardSettings(): Promise<void> {
+  return invoke<void>('open_clipboard_settings')
+}
+
 /** Create or remove the run-on-login shortcut; resolves to the resulting state. */
 export function setStartupLink(enabled: boolean): Promise<boolean> {
   return invoke<boolean>('set_startup_link', { enabled })

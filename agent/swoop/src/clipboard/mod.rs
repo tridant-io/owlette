@@ -59,7 +59,7 @@
 pub mod formats;
 pub mod listener;
 #[cfg(target_os = "macos")]
-mod mac;
+pub(crate) mod mac;
 #[cfg(windows)]
 pub mod wic;
 

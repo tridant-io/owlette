@@ -90,6 +90,23 @@ pub fn request_accessibility() -> Result<(), String> {
 
 /// Whether the run-on-login startup shortcut exists.
 #[tauri::command(async)]
+pub fn clipboard_sharing() -> Option<bool> {
+  #[cfg(target_os = "macos")]
+  {
+    crate::tcc::clipboard_sharing()
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    None
+  }
+}
+
+#[tauri::command(async)]
+pub fn open_clipboard_settings() -> Result<(), String> {
+  shell_open::open_clipboard_settings()
+}
+
+#[tauri::command(async)]
 pub fn startup_link_enabled() -> bool {
   crate::startup_link::is_enabled()
 }

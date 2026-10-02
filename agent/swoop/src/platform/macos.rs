@@ -364,16 +364,20 @@ pub fn selfcheck(force: bool) -> SelfCheck {
     }
 }
 
-/// `selfcheck --grants`: the three grant answers and nothing else.
+/// `selfcheck --grants`: the three grant answers, the pasteboard access, and
+/// nothing else.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Grants {
     pub screen_capture_preflight: bool,
     pub post_event_preflight: bool,
     pub ax_trusted: bool,
+    /// `allow`, `ask`, `deny`, `default` or `unknown`; `null` before macOS
+    /// 15.4, where there is no setting.
+    pub pasteboard_access: Option<&'static str>,
 }
 
-/// The grants alone, for a caller that asks often: three reads that never
+/// The grants alone, for a caller that asks often: four reads that never
 /// ask, and neither ScreenCaptureKit nor a packet (swoop-macos task 4.9). A
 /// fresh process reads its grants as they are now, which the desktop app's
 /// own long-lived process does not.
@@ -382,6 +386,7 @@ pub fn grants() -> Grants {
         screen_capture_preflight: CGPreflightScreenCaptureAccess(),
         post_event_preflight: CGPreflightPostEventAccess(),
         ax_trusted: ax_trusted(),
+        pasteboard_access: crate::clipboard::mac::pasteboard_access(),
     }
 }
 
@@ -432,15 +437,21 @@ mod tests {
 
     /// The desktop app reads this line every few seconds: exactly these keys.
     #[test]
-    fn the_grants_line_is_the_three_answers_alone() {
+    fn the_grants_line_is_the_four_answers_alone() {
         let grants = Grants {
             screen_capture_preflight: true,
             post_event_preflight: false,
             ax_trusted: true,
+            pasteboard_access: Some("ask"),
         };
         assert_eq!(
             serde_json::to_string(&grants).unwrap(),
-            r#"{"screenCapturePreflight":true,"postEventPreflight":false,"axTrusted":true}"#
+            r#"{"screenCapturePreflight":true,"postEventPreflight":false,"axTrusted":true,"pasteboardAccess":"ask"}"#
         );
+        let older = Grants {
+            pasteboard_access: None,
+            ..grants
+        };
+        assert!(serde_json::to_string(&older).unwrap().ends_with(r#""pasteboardAccess":null}"#));
     }
 }

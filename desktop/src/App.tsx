@@ -42,9 +42,11 @@ import { classifyOptions, tauriFsProbe } from '@/lib/fsProbe'
 import {
   ARG_PAIR,
   accessibilityGranted,
+  clipboardSharing,
   hostname,
   serverFromArgs,
   setStartupLink,
+  openClipboardSettings,
   openScreenRecordingSettings,
   requestAccessibility,
   screenRecordingGranted,
@@ -144,15 +146,20 @@ function App() {
   const readAccessibility = useCallback(() => {
     accessibilityGranted().then(setAccessibility, () => setAccessibility(null))
   }, [])
+  const [clipboardShared, setClipboardShared] = useState<boolean | null>(null)
+  const readClipboardSharing = useCallback(() => {
+    clipboardSharing().then(setClipboardShared, () => setClipboardShared(null))
+  }, [])
   useEffect(() => {
     const read = () => {
       screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
       readAccessibility()
+      readClipboardSharing()
     }
     read()
     window.addEventListener('focus', read)
     return () => window.removeEventListener('focus', read)
-  }, [readAccessibility])
+  }, [readAccessibility, readClipboardSharing])
 
   // The webview's native menu (Back/Refresh/Print/Inspect) is browser chrome, not
   // this app. Suppressed in built apps except on editable fields; `tauri dev` keeps
@@ -523,6 +530,13 @@ function App() {
             )
           }}
           onRecheckAccessibility={readAccessibility}
+          clipboardSharing={clipboardShared}
+          onOpenClipboardSettings={() => {
+            void openClipboardSettings().catch((cause: unknown) =>
+              toast.error('could not open system settings', { description: message(cause) }),
+            )
+          }}
+          onRecheckClipboardSharing={readClipboardSharing}
         />
 
         {config.error && (

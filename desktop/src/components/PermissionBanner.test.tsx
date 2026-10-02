@@ -2,23 +2,40 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PermissionBanner } from '@/components/PermissionBanner'
 
-function banner(screenRecording: boolean | null, accessibility: boolean | null) {
+function banner(
+  screenRecording: boolean | null,
+  accessibility: boolean | null,
+  clipboardSharing: boolean | null = true,
+) {
   const openScreenRecording = vi.fn()
   const requestAccessibility = vi.fn()
   const recheckAccessibility = vi.fn()
-  const element = (recording: boolean | null, access: boolean | null) => (
+  const openClipboard = vi.fn()
+  const recheckClipboard = vi.fn()
+  const element = (recording: boolean | null, access: boolean | null, clip: boolean | null = clipboardSharing) => (
     <PermissionBanner
       screenRecording={recording}
       accessibility={access}
       onOpenScreenRecordingSettings={openScreenRecording}
       onRequestAccessibility={requestAccessibility}
       onRecheckAccessibility={recheckAccessibility}
+      clipboardSharing={clip}
+      onOpenClipboardSettings={openClipboard}
+      onRecheckClipboardSharing={recheckClipboard}
     />
   )
   const rendered = render(element(screenRecording, accessibility))
-  const answer = (recording: boolean | null, access: boolean | null) =>
-    rendered.rerender(element(recording, access))
-  return { ...rendered, answer, openScreenRecording, requestAccessibility, recheckAccessibility }
+  const answer = (recording: boolean | null, access: boolean | null, clip?: boolean | null) =>
+    rendered.rerender(element(recording, access, clip))
+  return {
+    ...rendered,
+    answer,
+    openScreenRecording,
+    requestAccessibility,
+    recheckAccessibility,
+    openClipboard,
+    recheckClipboard,
+  }
 }
 
 afterEach(() => {
@@ -81,6 +98,28 @@ describe('PermissionBanner', () => {
     expect(screen.queryByTestId('accessibility-banner')).toBeNull()
     vi.advanceTimersByTime(60_000)
     expect(recheckAccessibility).toHaveBeenCalledTimes(2)
+  })
+
+  it('names the consequence and opens the setting when clipboard sharing is off', () => {
+    const { openClipboard, openScreenRecording, requestAccessibility } = banner(true, true, false)
+    expect(screen.getByTestId('clipboard-banner').textContent).toMatch(/clipboard sharing is off/i)
+    expect(screen.getByTestId('clipboard-banner').textContent).toMatch(/paste from other apps/i)
+    expect(screen.queryByTestId('accessibility-banner')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /open system settings/i }))
+    expect(openClipboard).toHaveBeenCalledTimes(1)
+    expect(openScreenRecording).not.toHaveBeenCalled()
+    expect(requestAccessibility).not.toHaveBeenCalled()
+  })
+
+  it('asks again every five seconds while the clipboard notice shows, and stops once allowed', () => {
+    vi.useFakeTimers()
+    const { answer, recheckClipboard } = banner(true, true, false)
+    vi.advanceTimersByTime(5_000)
+    expect(recheckClipboard).toHaveBeenCalledTimes(1)
+    answer(true, true, true)
+    expect(screen.queryByTestId('clipboard-banner')).toBeNull()
+    vi.advanceTimersByTime(60_000)
+    expect(recheckClipboard).toHaveBeenCalledTimes(1)
   })
 
   it('never asks again on a timer when there is no accessibility notice', () => {

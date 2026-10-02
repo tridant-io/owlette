@@ -2,8 +2,8 @@ import { useEffect, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { InlineNotice } from '@/components/ui/inline-notice'
 
-/** How often a showing accessibility notice asks again whether it still applies. */
-const ACCESSIBILITY_RECHECK_MS = 5_000
+/** How often a showing accessibility or clipboard notice asks again whether it still applies. */
+const RECHECK_MS = 5_000
 
 /**
  * Says so, one notice per missing grant, when macOS has not granted this app
@@ -23,6 +23,11 @@ const ACCESSIBILITY_RECHECK_MS = 5_000
  * the window losing and regaining focus. The callback must keep its identity
  * across renders, or the interval restarts before it ever fires.
  *
+ * Without clipboard sharing (macOS 15.4's Paste from Other Apps, per app) the
+ * swoop streamer never reads this Mac's pasteboard, so a viewer gets nothing
+ * copied here. An app cannot grant that to itself: the button opens the pane,
+ * and the notice re-reads the setting every five seconds while it shows.
+ *
  * Each answer is null off macOS and before the first answer, and
  * Accessibility's is null when the app could not find out (`tcc.rs`):
  * nothing to say.
@@ -30,24 +35,36 @@ const ACCESSIBILITY_RECHECK_MS = 5_000
 export function PermissionBanner({
   screenRecording,
   accessibility,
+  clipboardSharing,
   onOpenScreenRecordingSettings,
   onRequestAccessibility,
   onRecheckAccessibility,
+  onOpenClipboardSettings,
+  onRecheckClipboardSharing,
 }: {
   screenRecording: boolean | null
   accessibility: boolean | null
+  clipboardSharing: boolean | null
   onOpenScreenRecordingSettings: () => void
   onRequestAccessibility: () => void
   onRecheckAccessibility: () => void
+  onOpenClipboardSettings: () => void
+  onRecheckClipboardSharing: () => void
 }) {
   const accessibilityMissing = accessibility === false
+  const clipboardOff = clipboardSharing === false
   useEffect(() => {
     if (!accessibilityMissing) return
-    const timer = window.setInterval(onRecheckAccessibility, ACCESSIBILITY_RECHECK_MS)
+    const timer = window.setInterval(onRecheckAccessibility, RECHECK_MS)
     return () => window.clearInterval(timer)
   }, [accessibilityMissing, onRecheckAccessibility])
+  useEffect(() => {
+    if (!clipboardOff) return
+    const timer = window.setInterval(onRecheckClipboardSharing, RECHECK_MS)
+    return () => window.clearInterval(timer)
+  }, [clipboardOff, onRecheckClipboardSharing])
 
-  if (screenRecording !== false && !accessibilityMissing) return null
+  if (screenRecording !== false && !accessibilityMissing && !clipboardOff) return null
   return (
     <div className="m-3 space-y-3">
       {screenRecording === false && (
@@ -60,6 +77,12 @@ export function PermissionBanner({
         <Notice testId="accessibility-banner" onOpenSettings={onRequestAccessibility}>
           accessibility is off for owlette on this mac: swoop can show this screen but cannot
           control it. switch it on in system settings.
+        </Notice>
+      )}
+      {clipboardOff && (
+        <Notice testId="clipboard-banner" onOpenSettings={onOpenClipboardSettings}>
+          clipboard sharing is off for owlette on this mac: a swoop viewer gets nothing you copy here.
+          allow owlette under paste from other apps in system settings.
         </Notice>
       )}
     </div>

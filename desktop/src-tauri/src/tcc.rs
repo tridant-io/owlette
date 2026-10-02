@@ -69,20 +69,39 @@ pub fn request() -> bool {
 /// the sidecar reads it now; None when it could not say. Blocks for up to
 /// [`GRANTS_TIMEOUT`], so never on the main thread.
 pub fn accessibility_granted() -> Option<bool> {
-  let exe = match std::env::current_exe() {
-    Ok(exe) => exe,
-    Err(error) => {
-      log::warn!("accessibility: this app's own path is unknown: {error}");
-      return None;
-    }
-  };
-  let program = exe.parent().unwrap_or(Path::new("")).join(SIDECAR);
-  accessibility_from(&program, GRANTS_TIMEOUT)
+  accessibility_from(&sidecar_path()?, GRANTS_TIMEOUT)
 }
 
-/// [`ask_sidecar`], with a failure logged and answered as unknown.
+/// macOS's pasteboard access for this app, as `selfcheck --grants` reports it:
+/// `Some(true)` under *allow* and on a system with no such setting (`null`),
+/// `Some(false)` under anything else, `None` when the sidecar gave no answer
+/// or predates the key.
+pub fn clipboard_sharing() -> Option<bool> {
+  clipboard_sharing_from(&sidecar_path()?, GRANTS_TIMEOUT)
+}
+
+/// The grants sidecar beside this app's own binary; `None` when that path is
+/// unknown.
+fn sidecar_path() -> Option<PathBuf> {
+  match std::env::current_exe() {
+    Ok(exe) => Some(exe.parent().unwrap_or(Path::new("")).join(SIDECAR)),
+    Err(error) => {
+      log::warn!("grants: this app's own path is unknown: {error}");
+      None
+    }
+  }
+}
+
+/// [`ask_sidecar`]'s `postEventPreflight`, with a failure logged and answered
+/// as unknown.
 fn accessibility_from(program: &Path, timeout: Duration) -> Option<bool> {
-  match ask_sidecar(program, timeout) {
+  let answer = ask_sidecar(program, timeout).and_then(|grants| {
+    grants
+      .get("postEventPreflight")
+      .and_then(serde_json::Value::as_bool)
+      .ok_or_else(|| "its answer carries no postEventPreflight".to_owned())
+  });
+  match answer {
     Ok(granted) => Some(granted),
     Err(error) => {
       log::warn!("accessibility: {} gave no answer: {error}", program.display());
@@ -91,9 +110,26 @@ fn accessibility_from(program: &Path, timeout: Duration) -> Option<bool> {
   }
 }
 
-/// Run `program selfcheck --grants` and read `postEventPreflight`, the
-/// answer the streamer's injector goes by, from its one line.
-fn ask_sidecar(program: &Path, timeout: Duration) -> Result<bool, String> {
+/// [`ask_sidecar`]'s `pasteboardAccess`, with a failure logged and answered
+/// as unknown.
+fn clipboard_sharing_from(program: &Path, timeout: Duration) -> Option<bool> {
+  let grants = match ask_sidecar(program, timeout) {
+    Ok(grants) => grants,
+    Err(error) => {
+      log::warn!("clipboard sharing: {} gave no answer: {error}", program.display());
+      None?
+    }
+  };
+  match grants.get("pasteboardAccess") {
+    Some(serde_json::Value::Null) => Some(true),
+    Some(serde_json::Value::String(access)) => Some(access == "allow"),
+    _ => None,
+  }
+}
+
+/// Run `program selfcheck --grants` and read its one line of json: the
+/// answers the streamer's own reads give now.
+fn ask_sidecar(program: &Path, timeout: Duration) -> Result<serde_json::Value, String> {
   let mut child = Command::new(program)
     .args(GRANTS_ARGS)
     .stdin(Stdio::null())
@@ -128,9 +164,7 @@ fn ask_sidecar(program: &Path, timeout: Duration) -> Result<bool, String> {
     .read_to_string(&mut line)
     .map_err(|error| format!("could not read its answer: {error}"))?;
   serde_json::from_str::<serde_json::Value>(line.trim())
-    .ok()
-    .and_then(|grants| grants.get("postEventPreflight")?.as_bool())
-    .ok_or_else(|| "its answer carries no postEventPreflight".to_owned())
+    .map_err(|error| format!("its answer is not json: {error}"))
 }
 
 /// Ask for Accessibility: lists the app in System Settings and may raise the
@@ -261,6 +295,19 @@ mod tests {
       None,
       "not a bool"
     );
+  }
+
+  #[test]
+  fn the_sidecars_pasteboard_answer_is_the_clipboard_sharing_answer() {
+    let allow = sidecar(r#"echo '{"postEventPreflight":true,"pasteboardAccess":"allow"}'"#);
+    assert_eq!(clipboard_sharing_from(&allow, GRANTS_TIMEOUT), Some(true));
+    let ask = sidecar(r#"echo '{"postEventPreflight":true,"pasteboardAccess":"ask"}'"#);
+    assert_eq!(clipboard_sharing_from(&ask, GRANTS_TIMEOUT), Some(false));
+    let older_system = sidecar(r#"echo '{"postEventPreflight":true,"pasteboardAccess":null}'"#);
+    assert_eq!(clipboard_sharing_from(&older_system, GRANTS_TIMEOUT), Some(true), "nothing to allow");
+    let older_sidecar = sidecar(r#"echo '{"postEventPreflight":true}'"#);
+    assert_eq!(clipboard_sharing_from(&older_sidecar, GRANTS_TIMEOUT), None, "no pasteboardAccess");
+    assert_eq!(clipboard_sharing_from(&sidecar("exit 3"), GRANTS_TIMEOUT), None, "a failed run");
   }
 
   #[test]
