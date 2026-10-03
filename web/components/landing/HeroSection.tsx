@@ -62,7 +62,7 @@ export function HeroSection({ headline }: HeroSectionProps) {
 
         {/* Platform pill row */}
         <p className="mt-6 sm:mt-8 text-xs sm:text-sm text-muted-foreground text-center hero-enter-delay-3">
-          windows only <span className="mx-1 sm:mx-2">&middot;</span> free during beta <span className="mx-1 sm:mx-2">&middot;</span>
+          windows, macos and linux <span className="mx-1 sm:mx-2">&middot;</span> free during beta <span className="mx-1 sm:mx-2">&middot;</span>
           <a
             href={LICENSE_URL}
             target="_blank"

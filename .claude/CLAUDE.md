@@ -1,6 +1,6 @@
 # Owlette - Cloud-Connected Process Management System
 
-Owlette is a cloud-connected Windows process management and remote deployment system for managing TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python Windows service (agent) + Next.js web dashboard (web) + Firebase/Firestore backend.
+Owlette is a cloud-connected process management and remote deployment system for Windows, macOS and Linux machines: TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python agent service (agent; a Windows service, a launchd daemon on macOS, a systemd unit on Linux) + Next.js web dashboard (web) + Firebase/Firestore backend.
 
 **Version**: 4.0.6 | **License**: FSL-1.1-Apache-2.0
 
@@ -51,7 +51,7 @@ A multi-quarter rewrite of project distribution into a content-addressed sync pl
 ## Tech Stack
 
 - **Web** (`web/`): Next.js 16 (App Router, React 19), TypeScript, Tailwind CSS 4, shadcn/ui, Firebase Auth + Firestore
-- **Agent** (`agent/`): Python 3.11 (bundled 3.11.8 ships; a fresh dependency install needs ≥3.10 — Pillow 12.x) hosted as a Windows service by `owlette-host` (`agent/host`, Rust — replaced NSSM in 3.0.0), Firestore REST API (not Admin SDK), psutil, pywin32, Inno Setup installer
+- **Agent** (`agent/`): Python 3.11 (bundled 3.11.8 ships; a fresh dependency install needs ≥3.10 — Pillow 12.x) hosted as a Windows service by `owlette-host` (`agent/host`, Rust — replaced NSSM in 3.0.0), as a launchd daemon on macOS and a systemd unit on Linux, Firestore REST API (not Admin SDK), psutil, pywin32, Inno Setup installer
 - **Database**: Cloud Firestore (real-time NoSQL), Firebase Auth (Email/Password, Google OAuth, Passkey/WebAuthn)
 - **Package Managers**: Web: npm (not pnpm/yarn) | Agent: pip
 

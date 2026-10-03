@@ -161,7 +161,7 @@ export default function ForAiPage() {
               </dt>
               <dd className="mt-2 text-muted-foreground leading-relaxed">
                 {OPERATING_SYSTEM}. a lightweight Python agent runs on each
-                machine as a Windows service.
+                machine as a system service.
               </dd>
             </div>
             <div className="bg-background p-6">
