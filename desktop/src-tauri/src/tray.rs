@@ -503,6 +503,10 @@ pub fn show_main_window(app: &AppHandle) {
   // starts the app as an accessory).
   #[cfg(target_os = "macos")]
   let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+  // macOS 26 shapes the window only once it carries a toolbar; the window
+  // exists by now, which it does not in setup (mac_window.rs).
+  #[cfg(target_os = "macos")]
+  crate::mac_window::adopt_system_shape(&window);
   let _ = window.unminimize();
   let _ = window.show();
   let _ = window.set_focus();

@@ -480,10 +480,13 @@ function App() {
           // during a modal, so the window stays draggable with a dialog up.
           // DialogContent exempts [data-titlebar] from outside-dismiss to match.
           className={cn(
-            'pointer-events-auto relative z-[60] flex h-10 shrink-0 select-none items-center gap-2.5 border-b',
+            'pointer-events-auto relative z-[60] flex shrink-0 select-none items-center gap-2.5 border-b',
+            // macos: the row is the height of the window's unified toolbar
+            // (52 pt; the toolbar is what gives the macos 26 corners, see
+            // mac_window.rs), so the whole title area stays the drag surface.
             // macos 26 spaces the traffic lights 23 pt apart (20 before), so the
             // green one ends at 72 pt; the wordmark starts a light's gap after it.
-            IS_MAC ? 'pl-24' : 'pl-4',
+            IS_MAC ? 'h-13 pl-24' : 'h-10 pl-4',
           )}
         >
           <OwletteEye size={18} className="pointer-events-none" />
