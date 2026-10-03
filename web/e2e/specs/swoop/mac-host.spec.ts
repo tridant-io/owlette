@@ -101,7 +101,7 @@ test('a mac host gets the mac chords and ctrl acting as cmd, on by default', asy
   // the two settings by name, shortcuts match on by default, and the legend it gives
   await expect(menu.getByRole('menuitemradio', { name: 'shortcuts match: ctrl acts as cmd' })).toBeChecked();
   await expect(menu.getByRole('menuitemradio', { name: 'keys match: ctrl is control' })).not.toBeChecked();
-  await expect(menu.getByTestId('modifier-legend')).toHaveText(/ctrl\s*cmd\s*windows key\s*cmd\s*alt\s*option/);
+  await expect(menu.getByTestId('modifier-legend')).toHaveText(/ctrl\s*→\s*cmd\s*windows key\s*→\s*cmd\s*alt\s*→\s*option/);
   await expect(menu.getByTestId('super-key-note')).toContainText('the windows key');
 
   await page.keyboard.press('Escape');
