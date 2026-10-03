@@ -126,6 +126,16 @@ without accessibility you can still watch: the picture, the cursor, the audio an
 
 ---
 
+## admin → swoop
+
+**admin** → **swoop** lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site admins and owners see the sessions on their own sites, and a superadmin sees every site. a plain member does not get the page.
+
+**kill** ends one session after a confirm. the viewer is disconnected at once, and, like every kill above, it also closes every open second-factor window on that machine, so anyone it cut off confirms again before taking control.
+
+you do not need the page to spot a busy machine: the dashboard's machine menu shows the live viewer count on its button and on its swoop row.
+
+---
+
 ## notes
 
 - **refusal codes** you may see, in the viewer or from the API: `api_key_not_permitted`, `swoop_disabled`, `machine_excluded`, `capability_missing`, `members_may_not_watch`, `step_up_required`, `machine_offline` (the viewer keeps retrying this one until the machine is back)
