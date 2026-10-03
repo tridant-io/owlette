@@ -31,9 +31,9 @@ test.describe('landing — hero', () => {
 
     // Substring matches, so punctuation tweaks around the middots don't
     // false-positive.
-    const pillRow = hero.locator('p', { hasText: 'windows only' });
+    const pillRow = hero.locator('p', { hasText: 'windows, macos and linux' });
     await expect(pillRow).toBeVisible();
-    await expect(pillRow).toContainText('windows only');
+    await expect(pillRow).toContainText('windows, macos and linux');
     await expect(pillRow).toContainText('free during beta');
     await expect(pillRow).toContainText('FSL-1.1');
 

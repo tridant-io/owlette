@@ -26,7 +26,7 @@ const siteUrl = process.env.RAILWAY_PUBLIC_DOMAIN
 
 export const metadata: Metadata = {
   title: {
-    default: "owlette — keep every windows machine running",
+    default: "owlette — keep every machine running",
     // Every app route sets a short lowercase name (the nav label) and gets
     // "owlette - <name>" in the tab.
     //
@@ -36,15 +36,15 @@ export const metadata: Metadata = {
     // is what gives them "owlette - Getting Started" instead of a brandless tab.
     template: "owlette - %s",
   },
-  description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows machines.",
+  description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows, macOS and Linux machines.",
   icons: {
     icon: '/icon.svg',
     shortcut: '/icon.svg',
     apple: '/owlette-icon.png',
   },
   openGraph: {
-    title: "owlette — keep every windows machine running",
-    description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows machines.",
+    title: "owlette — keep every machine running",
+    description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows, macOS and Linux machines.",
     url: siteUrl,
     siteName: "owlette",
     images: [
@@ -60,8 +60,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: "owlette — keep every windows machine running",
-    description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows machines.",
+    title: "owlette — keep every machine running",
+    description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows, macOS and Linux machines.",
     images: ['/og-image.png'],
   },
   metadataBase: new URL(siteUrl),

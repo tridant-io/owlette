@@ -152,8 +152,39 @@ pub mod clock {
 }
 
 pub mod process {
-    /// Nothing to set up before `main` goes on.
+    use std::sync::OnceLock;
+
+    /// The pid that started this process, taken at `prepare`.
+    static PARENT: OnceLock<libc::pid_t> = OnceLock::new();
+
+    fn parent() -> libc::pid_t {
+        // SAFETY: getppid takes nothing and cannot fail.
+        unsafe { libc::getppid() }
+    }
+
+    /// Remember who started us; nothing else to set up before `main` goes on.
     pub fn prepare() -> anyhow::Result<()> {
+        PARENT.get_or_init(parent);
         Ok(())
+    }
+
+    /// Whether the process that started this one has gone. On macOS and Linux
+    /// the streamer is the desktop app's child and holds the app's grants
+    /// (Screen Recording, Accessibility) through it: once the app quits, the
+    /// kernel hands the child to another parent and the keyboard stops at the
+    /// machine while the picture goes on. The session ends on this instead.
+    pub fn parent_gone() -> bool {
+        *PARENT.get_or_init(parent) != parent()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::parent_gone;
+
+        #[test]
+        fn a_living_parent_is_not_gone() {
+            assert!(!parent_gone());
+            assert!(!parent_gone());
+        }
     }
 }

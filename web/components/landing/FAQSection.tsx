@@ -28,7 +28,7 @@ const faqs: { q: string; a: React.ReactNode }[] = [
   },
   {
     q: "does it work on mac or linux?",
-    a: "no. owlette is windows-only. your mac is fine — it doesn't need monitoring. it'll let you know when something's wrong. loudly. in the middle of a show.",
+    a: "yes. the agent runs on windows, on macs with apple silicon (macos 15 or later) and on linux (ubuntu 24.04). one dashboard, every machine, including swoop on a mac.",
   },
   {
     q: "what happens if my machine loses internet?",

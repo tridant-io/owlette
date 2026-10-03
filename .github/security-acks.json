@@ -20,7 +20,7 @@
   ],
   "acks": {
     "alert:dependabot:230": {
-      "reason": "glib 0.18.5 arrives only via Tauri 2.11's GTK backend, which is cfg(target_os = \"linux\")-gated. The desktop app is built on windows-latest only, always via `tauri build --no-bundle`, and `cargo tree --locked --target x86_64-pc-windows-msvc -i glib` prints 'nothing to print' \u2014 the crate is never compiled into anything shipped. No fix exists upstream: Tauri 2.x pins the whole gtk-rs 0.18 stack.",
+      "reason": "glib 0.18.5 arrives only via Tauri 2.11's GTK backend, which is cfg(target_os = \"linux\")-gated: it is compiled into the Linux desktop app alone, which the .deb ships since 4.0.x; the Windows exe and the macOS app never link it (`cargo tree --locked --target x86_64-pc-windows-msvc -i glib` prints 'nothing to print'). The finding, GHSA-wrw7-89jp-8q8g, is an unsound Iterator impl on glib::VariantStrIter, an API owlette's own code never calls. No fix exists upstream: Tauri 2.x pins the whole gtk-rs 0.18 stack. Reason reworded 2026-10-02 at the owner's instruction, after the Linux package shipped the app; the acceptance below stands.",
       "accepted_by": "rosco@theexperiential.com",
       "accepted_on": "2026-09-12",
       "expires": "2026-12-12",
