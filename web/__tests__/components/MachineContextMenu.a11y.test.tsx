@@ -47,7 +47,7 @@ jest.mock('@/lib/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
 }));
 
-function renderMenu() {
+function renderMenu(props: { swoopCapable?: boolean; swoopViewers?: number } = {}) {
   render(
     <TooltipProvider>
       <MachineContextMenu
@@ -59,6 +59,7 @@ function renderMenu() {
         onRemoveMachine={jest.fn()}
         onRestart={jest.fn()}
         onShutdown={jest.fn()}
+        {...props}
       />
     </TooltipProvider>,
   );
@@ -87,5 +88,20 @@ describe('MachineContextMenu — accessible names and keyboard reach', () => {
 
     await user.keyboard('{Enter}');
     expect(await screen.findByText('restart schedule dialog')).toBeInTheDocument();
+  });
+
+  // the trigger pill is decoration: the count is spoken once, on the swoop row.
+  it('speaks the swoop count on the row and leaves the trigger name alone', async () => {
+    const user = userEvent.setup();
+    renderMenu({ swoopCapable: true, swoopViewers: 2 });
+
+    const trigger = screen.getByRole('button', { name: 'machine options for kiosk-1' });
+    expect(screen.getByTestId('machine-context-menu-swoop-pill')).toHaveAttribute('aria-hidden', 'true');
+
+    await user.click(trigger);
+    await screen.findByRole('menu');
+
+    // the count is what shows; "watching" is read, not seen.
+    expect(screen.getByTestId('machine-context-menu-swoop-count')).toHaveTextContent('2 watching');
   });
 });
