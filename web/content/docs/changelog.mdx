@@ -5,7 +5,7 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ---
 
-## [Unreleased]
+## [4.1.0] - 2026-10-02
 
 ### added — a Mac can host a swoop session
 
@@ -62,9 +62,9 @@ network.
 
 ### changed — the swoop keyboard follows the machine you control
 
-From a PC, ctrl now acts as cmd on a Mac, so ctrl + c copies there. A checkbox
-in the keyboard menu turns that off. A Mac viewing a Windows machine keeps cmd
-acting as ctrl. The keyboard menu lists the machine's own shortcuts: cmd chords
+From a PC, ctrl now acts as cmd on a Mac, so ctrl + c copies there. The
+keyboard menu's "keys match" setting turns that off. A Mac viewing a Windows
+machine keeps cmd acting as ctrl. The keyboard menu lists the machine's own shortcuts: cmd chords
 on a Mac, and no ctrl + alt + del on a Mac or on Linux. The Print Screen and
 Pause keys, which a Mac has no key for, are dropped there.
 
@@ -86,6 +86,70 @@ notarized with it, and the build fails if it is missing, the wrong version or
 signed by another team. A new `selfcheck` verb reports a Mac's Screen Recording,
 Accessibility and local network state without raising a prompt, and the
 streamer's log follows `OWLETTE_DATA_ROOT`.
+
+### changed — a Mac streams at its full size, at 60 fps
+
+The streamer no longer waits on each encode: VideoToolbox hands frames to the
+session from its own callback, with low-latency rate control off, which holds
+60 fps at 3420x2214 where the earlier build managed 48. A Mac is captured at
+its native pixel size again, and a settle keyframe a second after the last big
+move keeps a fast window drag from smearing. `auto` now starts any source above
+2.5 megapixels, a 4K-class display or a 1440p screen, at 80 Mbps, and the
+bandwidth menu goes to 100 Mbps. The governor no longer cuts the rate for one
+or two dropped frames in a report window, and the host logs its rate every ten
+seconds and on every cut.
+
+### changed — the swoop keyboard menu
+
+The menu names its two modifier settings, "shortcuts match" (ctrl acts as cmd
+on a Mac; the default) and "keys match" (ctrl is control), shows what each of
+your modifier keys does on the machine under the setting you chose, and outside
+fullscreen offers to hold the Windows key or cmd for your next keystroke. After
+it sends a key the keyboard goes back to the picture, so that held key takes
+your next key.
+
+### changed — the swoop quality menu is two levels
+
+One row per setting (bandwidth, resolution, frame rate, codec), each showing
+what is set, with the options beside it. "on reconnect" sits in the codec
+submenu.
+
+### fixed — the swoop clipboard
+
+A paste no longer pushes your clipboard to the machine when the machine already
+holds it, so a copy made on a Mac is pasted as copied. The session bar says
+when the machine does not share its clipboard, and when your browser held back
+a copy from the machine; the docs explain the browser's clipboard question. On
+a Mac, the owlette app says when clipboard sharing is off and takes you to the
+setting.
+
+### changed — the swoop tab and the machine menu
+
+The tab is titled `swoop - <machine>`. In the dashboard's machine menu, swoop
+wears the brand colour.
+
+### fixed — a streamer whose app has quit ends its session (macOS and Linux)
+
+The streamer is the desktop app's child and types under the app's Accessibility
+grant. When the app quit, the picture went on with a dead keyboard. The session
+now ends, and the page starts its next one under the app that comes back.
+
+### changed — the macOS app
+
+Its menu bar item starts at the right end of the menu bar, clear of the notch,
+on first run. Its menu shows the machine's name as the dashboard does, without
+`.local`. The app is built against the macOS 26 SDK, so on macOS 26 its window
+has the system's corner radius.
+
+### changed — the product no longer calls itself Windows only
+
+The landing page, the FAQ, the page titles and the facts the AI surfaces read
+now say Windows, macOS and Linux.
+
+### security
+
+`@fastify/busboy` 3.2.2 (GHSA-xjh9-v7x6-24jw, a denial of service through an
+oversized multipart boundary), a dependency of firebase-admin in the web app.
 
 ## [4.0.6] - 2026-09-28
 
