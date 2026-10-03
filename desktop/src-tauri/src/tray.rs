@@ -43,7 +43,7 @@ use tauri_plugin_notification::NotificationExt;
 
 #[cfg(windows)]
 use crate::paths::RESTART_FLAG_REL;
-use crate::paths::{self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL};
+use crate::paths::{self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL, UPDATE_MARKER_REL};
 use crate::pid_file;
 use crate::service_ctl;
 use crate::startup_link;
@@ -85,6 +85,9 @@ const FLASH_PERIOD: Duration = Duration::from_millis(800);
 const NOTIFY_DELAY: Duration = Duration::from_secs(5);
 /// Silence window after launch, so a service still starting is not an incident.
 const NOTIFY_GRACE: Duration = Duration::from_secs(10);
+/// An update marker older than this is what a crashed update left behind, not
+/// a reason to stay quiet about a stopped service.
+const UPDATE_MARKER_MAX_AGE: Duration = Duration::from_secs(15 * 60);
 /// How long a cached status document stays usable after a failed read.
 const STATUS_CACHE_TTL: Duration = Duration::from_secs(60);
 /// How often the icon and tooltip are re-asserted even when nothing changed.
@@ -603,14 +606,21 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
           degraded_since = None;
         }
         StatusCode::Error => {
-          let since = *degraded_since.get_or_insert(now);
-          if !degraded_notified
-            && now.duration_since(since) >= NOTIFY_DELAY
-            && now.duration_since(started) > NOTIFY_GRACE
-          {
-            degraded_notified = true;
-            let (title, body) = degraded_notification(&view);
-            notify(&app, title, body);
+          // A self-update stops the service for as long as the installer
+          // takes — a minute for the linux package — and that stop raised a
+          // "service stopped" toast on every update. The icon still shows it.
+          if update_in_progress(&root) {
+            degraded_since = None;
+          } else {
+            let since = *degraded_since.get_or_insert(now);
+            if !degraded_notified
+              && now.duration_since(since) >= NOTIFY_DELAY
+              && now.duration_since(started) > NOTIFY_GRACE
+            {
+              degraded_notified = true;
+              let (title, body) = degraded_notification(&view);
+              notify(&app, title, body);
+            }
           }
         }
       }
@@ -1038,6 +1048,21 @@ fn degraded_notification(view: &TrayView) -> (&'static str, String) {
       .to_string(),
     ),
   }
+}
+
+/// Whether the service is updating itself: its marker is present and fresh.
+/// Freshness matters because the marker outlives an update that crashed
+/// before the new service could clear it.
+fn update_in_progress(root: &Path) -> bool {
+  update_marker_is_fresh(&root.join(UPDATE_MARKER_REL), SystemTime::now())
+}
+
+fn update_marker_is_fresh(marker: &Path, now: SystemTime) -> bool {
+  fs::metadata(marker)
+    .and_then(|meta| meta.modified())
+    .ok()
+    .and_then(|modified| now.duration_since(modified).ok())
+    .is_some_and(|age| age < UPDATE_MARKER_MAX_AGE)
 }
 
 fn notify(app: &AppHandle, title: &str, body: String) {
@@ -2039,6 +2064,24 @@ mod tests {
 
     let (title, _) = degraded_notification(&view("status: disconnected", StatusCode::Warning));
     assert_eq!(title, "owlette — reconnecting");
+  }
+
+  /// The update marker holds the toast only while it is fresh: a marker a
+  /// crashed update left behind must not silence a real outage for good.
+  #[test]
+  fn a_fresh_update_marker_holds_the_toast_and_a_stale_one_does_not() {
+    let dir = std::env::temp_dir().join(format!("owlette-tray-update-{}", std::process::id()));
+    fs::create_dir_all(&dir).expect("scratch");
+    let marker = dir.join("update_in_progress.json");
+    fs::write(&marker, "{}").expect("marker");
+    let written = fs::metadata(&marker).and_then(|m| m.modified()).expect("mtime");
+
+    assert!(update_marker_is_fresh(&marker, written + Duration::from_secs(60)));
+    assert!(!update_marker_is_fresh(&marker, written + UPDATE_MARKER_MAX_AGE + Duration::from_secs(1)));
+    assert!(!update_marker_is_fresh(&dir.join("absent.json"), written));
+
+    let _ = fs::remove_file(&marker);
+    let _ = fs::remove_dir(&dir);
   }
 
   #[test]

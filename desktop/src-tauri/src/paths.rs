@@ -43,6 +43,11 @@ pub const RESTART_FLAG_REL: &str = "tmp/restart.flag";
 /// `%PROGRAMDATA%\Owlette`); on the other two they are not.
 pub const AGENT_VERSION_REL: &str = "agent/VERSION";
 
+/// Written by the service before it runs an installer over itself and removed
+/// once the new service has reported the outcome (`owlette_service.py`,
+/// `_write_update_marker`). While it is there, a stopped service is the update.
+pub const UPDATE_MARKER_REL: &str = "logs/update_in_progress.json";
+
 /// Absolute path of the owlette data root.
 pub fn data_root() -> PathBuf {
   data_root_from(std::env::var_os(DATA_ROOT_ENV).as_deref(), std::env::var_os("PROGRAMDATA").as_deref())
