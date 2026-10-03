@@ -729,6 +729,7 @@ export const MachineRow = memo(function MachineRow({
               onScreenshot={onScreenshot}
               onLiveView={onLiveView}
               swoopCapable={machine.capabilities?.swoop === 1}
+              swoopViewers={machine.swoopViewers}
               onSwoop={onSwoop}
               onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}
               rebootSchedule={machine.rebootSchedule}
