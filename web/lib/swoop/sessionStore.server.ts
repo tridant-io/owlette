@@ -14,7 +14,10 @@
  * bundle reaches the agent over its own authenticated channel.
  *
  * This module never writes a command document. That is
- * `lib/actions/requestSwoopSession.server.ts`, and only that.
+ * `lib/actions/requestSwoopSession.server.ts`, and only that. Its one write
+ * outside the collection is the machine record's `swoopViewers`, a count
+ * recomputed from these documents (`syncMachineSwoopViewers`) so the dashboard
+ * can show it without a rule that reaches them.
  *
  * Documents are removed by the retention sweep (`/api/cron/swoop-retention`)
  * and nowhere else. It takes its pages as REFERENCES from here rather than
@@ -24,6 +27,7 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import logger from '@/lib/logger';
 import { SWOOP_LEASE_GRACE_SECONDS, SWOOP_LEASE_SECONDS } from '@/lib/swoop/policy.server';
 
 export type SwoopSessionState = 'pending' | 'live' | 'ended';
@@ -123,20 +127,19 @@ export function assertNoKeyMaterial(data: unknown, path = ''): void {
   }
 }
 
+function machineRef(siteId: string, machineId: string) {
+  return getAdminDb().collection('sites').doc(siteId).collection('machines').doc(machineId);
+}
+
 function sessionsRef(siteId: string, machineId: string) {
-  return getAdminDb()
-    .collection('sites')
-    .doc(siteId)
-    .collection('machines')
-    .doc(machineId)
-    .collection('swoop_sessions');
+  return machineRef(siteId, machineId).collection('swoop_sessions');
 }
 
 function sessionRef(siteId: string, machineId: string, sid: string) {
   return sessionsRef(siteId, machineId).doc(sid);
 }
 
-/** Every write in this module goes through here — that is the whole guard. */
+/** Every session write in this module goes through here — that is the whole guard. */
 async function writeSession(
   siteId: string,
   machineId: string,
@@ -228,34 +231,57 @@ export async function getSwoopSession(
 const UNENDED_STATES: SwoopSessionState[] = ['pending', 'live'];
 
 /**
- * Every unended session in this site that `uid` is in — as a viewer, or as the
- * user who started it. Revocation is the only caller (PROTOCOL.md §10).
- *
- * Collection-group scoped because a site's sessions are scattered one machine
- * at a time and a revocation cannot know which machine; the alternative is a
- * query per machine in the site. `viewers` is an array of objects, so the uid
- * cannot be a filter — it is matched here, over the site's unended sessions
- * only, which is a handful of documents.
+ * every unended session in this site, on whichever machine. collection-group
+ * scoped because a site's sessions are scattered one machine at a time; the
+ * alternative is a query per machine in the site. a document that names no
+ * machine cannot be acted on, so it is left out.
  */
-export async function listUnendedSwoopSessionsForUser(args: {
-  siteId: string;
-  uid: string;
-}): Promise<SwoopSession[]> {
+async function listUnendedSwoopSessionsInSite(siteId: string): Promise<SwoopSession[]> {
   const snap = await getAdminDb()
     .collectionGroup('swoop_sessions')
-    .where('siteId', '==', args.siteId)
+    .where('siteId', '==', siteId)
     .where('state', 'in', UNENDED_STATES)
     .get();
   return snap.docs
     .map((doc) => {
       const data = (doc.data() ?? {}) as Record<string, unknown>;
-      return parseSession(data, args.siteId, String(data.machineId ?? ''), doc.id);
+      return parseSession(data, siteId, String(data.machineId ?? ''), doc.id);
     })
-    .filter(
-      (session) =>
-        session.machineId !== '' &&
-        (session.createdBy === args.uid || session.viewers.some((v) => v.uid === args.uid)),
-    );
+    .filter((session) => session.machineId !== '');
+}
+
+/**
+ * Every unended session in this site that `uid` is in — as a viewer, or as the
+ * user who started it. Revocation is the only caller (PROTOCOL.md §10).
+ *
+ * Site-wide because a revocation cannot know which machine. `viewers` is an
+ * array of objects, so the uid cannot be a filter — it is matched here, over the
+ * site's unended sessions only, which is a handful of documents.
+ */
+export async function listUnendedSwoopSessionsForUser(args: {
+  siteId: string;
+  uid: string;
+}): Promise<SwoopSession[]> {
+  const sessions = await listUnendedSwoopSessionsInSite(args.siteId);
+  return sessions.filter(
+    (session) =>
+      session.createdBy === args.uid || session.viewers.some((v) => v.uid === args.uid),
+  );
+}
+
+/**
+ * the site's sessions someone can still be in, pending and live — the admin
+ * swoop page's list (`/api/sites/{siteId}/swoop/sessions`). a session whose
+ * lease has lapsed is left out: nobody closed the record, but the host has
+ * already dropped every viewer of it, so there is nothing to show or to kill.
+ */
+export async function listLiveSwoopSessionsForSite(args: {
+  siteId: string;
+  nowMs?: number;
+}): Promise<SwoopSession[]> {
+  const nowMs = args.nowMs ?? Date.now();
+  const sessions = await listUnendedSwoopSessionsInSite(args.siteId);
+  return sessions.filter((session) => !leaseLapsed(session, nowMs));
 }
 
 /**
@@ -361,9 +387,41 @@ export async function listSwoopSessionRefsStartedBefore(args: {
 }
 
 /**
+ * mirror the machine's viewer count onto its record as `swoopViewers`: the
+ * viewers of its live sessions whose lease has not lapsed. the dashboard reads
+ * the machine, never a session, so this is how the count reaches it. every
+ * mutator that changes who is watching calls it after its own write.
+ *
+ * a full recount every time, never an increment, so a write lost to a race is
+ * healed by the next one. `update`, not `set`: a machine that is gone must not
+ * come back as a ghost document. and it never throws — the session write it
+ * follows has landed, and a badge is not worth failing that request over.
+ */
+export async function syncMachineSwoopViewers(
+  siteId: string,
+  machineId: string,
+  nowMs = Date.now(),
+): Promise<void> {
+  try {
+    const sessions = await listUnendedSwoopSessionsForMachine({ siteId, machineId });
+    const swoopViewers = sessions
+      .filter((session) => session.state === 'live' && !leaseLapsed(session, nowMs))
+      .reduce((sum, session) => sum + session.viewers.length, 0);
+    await machineRef(siteId, machineId).update({ swoopViewers });
+  } catch (err) {
+    logger.warn('[swoop/store] machine viewer count could not be mirrored', {
+      context: 'swoop/store',
+      data: { siteId, machineId, err: err instanceof Error ? err.message : String(err) },
+    });
+  }
+}
+
+/**
  * `pending` -> `live`, which only the streamer can witness: it is reported as a
  * `session_started` host event (`/api/agent/swoop/events`). Ending a session is
- * `endSwoopSession`, so `ended` is not a state this can set.
+ * `endSwoopSession`, so `ended` is not a state this can set. a session's
+ * viewers count on the machine from here: the mint adds its viewer while the
+ * session is still pending.
  */
 export async function setSwoopSessionState(
   siteId: string,
@@ -372,6 +430,7 @@ export async function setSwoopSessionState(
   state: Exclude<SwoopSessionState, 'ended'>,
 ): Promise<void> {
   await writeSession(siteId, machineId, sid, { state });
+  await syncMachineSwoopViewers(siteId, machineId);
 }
 
 /** Idempotent per viewer: a rejoin replaces the row rather than duplicating it. */
@@ -386,6 +445,7 @@ export async function upsertSwoopViewer(args: {
   await writeSession(args.siteId, args.machineId, args.sid, {
     viewers: [...others, args.viewer],
   });
+  await syncMachineSwoopViewers(args.siteId, args.machineId);
 }
 
 /**
@@ -402,6 +462,7 @@ export async function removeSwoopViewer(args: {
   await writeSession(args.siteId, args.machineId, args.sid, {
     viewers: (current?.viewers ?? []).filter((v) => v.viewerId !== args.viewerId),
   });
+  await syncMachineSwoopViewers(args.siteId, args.machineId);
 }
 
 /** Push one viewer's lease out. */
@@ -439,4 +500,5 @@ export async function endSwoopSession(args: {
     endedAt: args.endedAt ?? Date.now(),
     viewers: [],
   });
+  await syncMachineSwoopViewers(args.siteId, args.machineId);
 }

@@ -52,7 +52,13 @@ jest.mock('@/lib/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
 }));
 
-async function openMenu(props: { swoopCapable?: boolean; onSwoop?: () => void; onLiveView?: () => void }) {
+async function openMenu(props: {
+  isOnline?: boolean;
+  swoopCapable?: boolean;
+  swoopViewers?: number;
+  onSwoop?: () => void;
+  onLiveView?: () => void;
+}) {
   const user = userEvent.setup();
   render(
     <TooltipProvider>
@@ -101,5 +107,45 @@ describe('MachineContextMenu — swoop entry', () => {
     await user.click(screen.getByTestId('machine-context-menu-swoop'));
 
     expect(onSwoop).toHaveBeenCalledTimes(1);
+  });
+});
+
+// the count is the server's mirror of live viewers; it shows only where swoop
+// itself shows, so a stale count never lands on live view or an offline machine.
+describe('MachineContextMenu — swoop viewer count', () => {
+  it('counts viewers on the swoop row and on the trigger', async () => {
+    await openMenu({ swoopCapable: true, swoopViewers: 2 });
+
+    const badge = screen.getByTestId('machine-context-menu-swoop-count');
+    expect(screen.getByTestId('machine-context-menu-swoop')).toContainElement(badge);
+    expect(badge).toHaveTextContent('2');
+
+    const pill = screen.getByTestId('machine-context-menu-swoop-pill');
+    expect(screen.getByTestId('machine-context-menu-trigger')).toContainElement(pill);
+    expect(pill).toHaveTextContent('2');
+  });
+
+  it.each([0, undefined])('shows no count at %p viewers', async (swoopViewers) => {
+    await openMenu({ swoopCapable: true, swoopViewers });
+
+    expect(screen.getByTestId('machine-context-menu-swoop')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-pill')).not.toBeInTheDocument();
+  });
+
+  it('shows no count on the live-view branch', async () => {
+    await openMenu({ swoopViewers: 2 });
+
+    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-pill')).not.toBeInTheDocument();
+  });
+
+  it('shows no count when the machine is offline', async () => {
+    await openMenu({ isOnline: false, swoopCapable: true, swoopViewers: 2 });
+
+    expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-pill')).not.toBeInTheDocument();
   });
 });

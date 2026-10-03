@@ -15,6 +15,7 @@ import {
   Webhook,
   Clock,
   Bell,
+  MonitorPlay,
   type LucideIcon,
 } from 'lucide-react';
 import type { UserRole } from '@/contexts/AuthContext';
@@ -64,6 +65,13 @@ const NAV_ITEMS: AdminNavItem[] = [
     href: '/admin/tokens',
     icon: KeyRound,
     description: 'view and revoke agent tokens',
+    minRole: 'admin',
+  },
+  {
+    name: 'swoop',
+    href: '/admin/swoop',
+    icon: MonitorPlay,
+    description: 'view and end live swoop sessions',
     minRole: 'admin',
   },
   {

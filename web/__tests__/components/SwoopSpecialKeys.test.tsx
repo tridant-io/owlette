@@ -49,22 +49,25 @@ describe('SwoopSpecialKeys', () => {
   it('names the two settings and shows what the keys do, for a pc viewer on a mac', async () => {
     const { user, trigger } = await open('macos');
     expect(screen.getByRole('menuitemradio', { name: 'shortcuts match: ctrl acts as cmd' })).toBeChecked();
-    expect(legend()).toBe('ctrlcmdwindows keycmdaltoption');
+    expect(legend()).toBe('ctrl→cmdwindows key→cmdalt→option');
 
     await user.click(screen.getByRole('menuitemradio', { name: 'keys match: ctrl is control' }));
     await user.click(trigger);
     await screen.findByRole('menu');
 
     expect(screen.getByRole('menuitemradio', { name: 'keys match: ctrl is control' })).toBeChecked();
-    expect(legend()).toBe('ctrlcontrolwindows keycmdaltoption');
+    expect(legend()).toBe('ctrl→controlwindows key→cmdalt→option');
   });
 
-  it('offers to hold the super key outside fullscreen, and says where the key reaches the machine', async () => {
+  it('offers to hold the super key outside fullscreen, says what to do, and shows no legend where nothing is converted', async () => {
     await open('windows');
     expect(screen.getByRole('menuitem', { name: /hold the windows key for the next key/ })).toBeInTheDocument();
-    expect(screen.getByTestId('super-key-note').textContent).toMatch(/the windows key/);
+    // jsdom has no keyboard lock api, which is what firefox and safari show.
+    expect(screen.getByTestId('super-key-note').textContent).toBe(
+      'this browser never hands the windows key to a page. use "hold the windows key for the next key" below.',
+    );
     expect(screen.queryByRole('menuitemradio')).toBeNull();
-    expect(legend()).toBe('ctrlctrlwindows keywindows keyaltalt');
+    expect(screen.queryByTestId('modifier-legend')).toBeNull();
   });
 
   describe('where the keyboard goes when the menu closes', () => {
