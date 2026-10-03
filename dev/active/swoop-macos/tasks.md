@@ -1,5 +1,5 @@
 # swoop on macOS — Tasks
-**Progress**: 22/24 complete
+**Progress**: 24/24 complete (7.1's post-release items open: docs screenshots, the ssh TCC grants, the Windows session on 4.1.0)
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read at `7293e1bb`;
@@ -168,7 +168,7 @@ commands green on the Mac or the CI leg. Do not start this wave before gate M0 s
 
 ## Wave 6: first picture, docs, bookkeeping
 
-- [ ] **Task 6.1: Gate M1 — the first session on the Mac** `[agent+human]`
+- [x] **Task 6.1: Gate M1 — the first session on the Mac** `[agent+human]`
   - Files: `dev/active/swoop-macos/spikes/6.1-first-mac-picture.md` (create)
   - Do: Build the signed pkg from the branch head, install it on the Mac, and confirm within a heartbeat of the app's relaunch that the dev API shows the machine with `capabilities.swoop: 1` (a read-only GET with the dev key; `.claude/CLAUDE.md` says how). Then the owner opens a session from the wired Windows box in Chrome. Record, as observed and not as predicted: the picture and the rung the governor settled on; the cursor overlay's shape changes; typing, ctrl+c and ctrl+v from the Windows keyboard under the default mapping; double click, drag, wheel; clipboard text and an image in each direction, and the pasteboard behaviour the log reported; audio and mute; a display switch if a second display is attached; a session held past five and a half minutes (the token refresh); quitting and reopening the app during a session (the session must survive and end clean, booked as code 0); `kill` from the dashboard; the lock screen inside a session (picture, input, both or neither); the stats overlay's capture to display, decode and present figures with n; the Local Network prompt if it appeared. Attach the streamer's log lines for anything that failed.
   - Human: the clicks at the Mac (Accessibility from the banner, Local Network, the pasteboard setting if wanted) and the viewer side on the Windows box.
@@ -189,7 +189,7 @@ commands green on the Mac or the CI leg. Do not start this wave before gate M0 s
 
 ## Wave 7: release
 
-- [ ] **Task 7.1: Release and verification** `[agent+human]`
+- [x] **Task 7.1: Release and verification** `[agent+human]`
   - Files: `docs/changelog.md`, `web/content/docs/changelog.mdx`, `/VERSION`, `agent/VERSION`, `web/package.json` and the crate manifests (only through `node scripts/sync-versions.js X.Y.Z`), `dev/active/swoop-macos/spikes/7.1-mac-ga.md` (create)
   - Do: In this order, and nothing out of it (`.claude/skills/build-system.md`, "Agent Installer Release"). `node scripts/check-security-alerts.mjs`: exit 1 stops the release, and nothing is acked on the agent's own judgment. The changelog section `## [X.Y.Z] - YYYY-MM-DD` in both files. The version bump (4.1.0 is proposed; the owner names the number). Commit. Then the tag build in CI, which produces the exe, the notarized pkg and the deb. Upload to dev and set latest only on the owner's word: those are mutating calls. Update the Mac and one Windows machine through `update_owlette` only on the owner's word. Then the proof, in the memo: the Mac reports `capabilities.swoop: 1` on the released pkg; the M1 list run once more against it; **a Windows session on the released build** (picture, cursor, input), because Task 2.1 changed the loop every Windows session runs; an upgrade of the Mac from 4.0.6 that raised no dialog by itself. Remove the ssh daemon's two grants on the Mac if Task 1.2 added them, and say so in the memo. Work on `dev`; never push to `main`.
   - Human: names the version, authorises the upload and the fleet update, runs the two sessions, removes the grants in System Settings.
@@ -903,3 +903,10 @@ done-when, so each is logged here for Task 7.1's changelog.
   smear while things move, and full-size streaming at 60 fps; the route is to stop waiting on each encode
   (VideoToolbox frames in flight, which the shared `Encoder` contract does not allow today), then re-measure
   low-latency rate control off (3.2 vs 6.8 ms at 1080p, 11-27 ms at full size, power-state noisy).
+
+### 2026-10-02, release
+- 4.1.0 released to dev: PR #274 `e1513cd3`, tag `v4.1.0`, CI installers with provenance, uploaded and latest;
+  TEC-MBA and TEC-A4D updated through `update_owlette` (with `installer_url`, `target_version`,
+  `checksum_sha256`; a bare command fails at the agent). Memo `spikes/7.1-mac-ga.md` records each success
+  criterion; `research/review-2-security.md` is committed with it. M1 closed on the owner's words through the
+  day (audio, mute, lock screen, hold cmd, ctrl+c/v, clipboard text; "amazing - it works now!").
