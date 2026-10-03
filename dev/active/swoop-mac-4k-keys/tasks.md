@@ -335,3 +335,11 @@ arms the key down until the next typed key's release, and `releaseAll` lets go o
   of `app.owlette.agent`. Owed: a streamer that loses its app must exit.
 - The swoop row of the machine menu wears `text-primary` in medium weight, alone in that menu, at the owner's
   ask ("the most visually apparent/attractive color").
+- **The rest, at the owner's "please do the rest you're describing"** (2026-10-02 evening): the streamer ends
+  its session (`restart`) when its parent is gone, checked once a second on the input thread
+  (`platform::process::parent_gone`, false on Windows); the Mac's Command Line Tools are 26.6 and the
+  installed app (`03bbac3b`, 21:09) is linked against SDK 26.5 for the macOS 26 corners, with the release's
+  Mac job moved to `macos-26`; every "windows only" claim about the product corrected (landing, FAQ, titles,
+  AI facts, project notes, the glib ack's reason); `@fastify/busboy` 3.2.2 for GHSA-xjh9-v7x6-24jw, which
+  appeared today and blocked the security check. Decisions taken by the owner: version 4.1.0; 80 Mbps auto
+  stays for large screens.
