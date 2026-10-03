@@ -19,7 +19,8 @@ use objc2_app_kit::{NSTitlebarSeparatorStyle, NSToolbar, NSWindow, NSWindowToolb
 use objc2_foundation::NSString;
 
 /// Attach the empty toolbar to the main window. Called when the window is
-/// shown, on the main thread; a second call finds the toolbar and returns.
+/// shown, hopped onto the main thread by the caller; a second call finds the
+/// toolbar and returns.
 /// (Setup is too early: the window from the config is not built yet there,
 /// which is how 4.1.0's first attempt attached nothing.)
 pub fn adopt_system_shape(window: &tauri::WebviewWindow) {

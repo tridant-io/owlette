@@ -504,9 +504,16 @@ pub fn show_main_window(app: &AppHandle) {
   #[cfg(target_os = "macos")]
   let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
   // macOS 26 shapes the window only once it carries a toolbar; the window
-  // exists by now, which it does not in setup (mac_window.rs).
+  // exists by now, which it does not in setup (mac_window.rs). The tray and
+  // the single-instance handler call this off the main thread, and AppKit
+  // takes a toolbar only on it.
   #[cfg(target_os = "macos")]
-  crate::mac_window::adopt_system_shape(&window);
+  {
+    let shaped = window.clone();
+    if let Err(error) = window.run_on_main_thread(move || crate::mac_window::adopt_system_shape(&shaped)) {
+      log::warn!("could not reach the main thread for the window shape: {error}");
+    }
+  }
   let _ = window.unminimize();
   let _ = window.show();
   let _ = window.set_focus();
