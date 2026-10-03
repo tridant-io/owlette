@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -54,6 +55,12 @@ interface MachineContextMenuProps {
    * server-side (site enablement, membersMayWatch, step-up), not here.
    */
   swoopCapable?: boolean;
+  /**
+   * live swoop viewers, mirrored onto the machine doc by the server from the
+   * session records. counted on the swoop row and on the trigger only while the
+   * machine is online and swoop-capable, so a stale mirror never badges live view.
+   */
+  swoopViewers?: number;
   onSwoop?: () => void;
   onViewDisplays?: () => void;
   rebootSchedule?: RestartSchedule;
@@ -75,6 +82,7 @@ export function MachineContextMenu({
   onScreenshot,
   onLiveView,
   swoopCapable,
+  swoopViewers,
   onSwoop,
   onViewDisplays,
   rebootSchedule,
@@ -88,6 +96,7 @@ export function MachineContextMenu({
   const [showRestartScheduleDialog, setShowRestartScheduleDialog] = useState(false);
   const { userPreferences, updateUserPreferences } = useAuth();
   const isMuted = userPreferences.mutedMachines.includes(machineId);
+  const watching = isOnline && swoopCapable ? (swoopViewers ?? 0) : 0;
 
   const handleToggleMute = async () => {
     const mutedMachines = isMuted
@@ -202,13 +211,24 @@ export function MachineContextMenu({
                 size="sm"
                 data-testid="machine-context-menu-trigger"
                 aria-label={`machine options for ${machineName}`}
-                className="h-8 w-8 pointer-coarse:h-10 pointer-coarse:w-10 p-0 bg-card border border-border text-muted-foreground hover:text-foreground"
+                className="relative h-8 w-8 pointer-coarse:h-10 pointer-coarse:w-10 p-0 bg-card border border-border text-muted-foreground hover:text-foreground"
                 onClick={(e) => {
                   // Prevent row click event from firing
                   e.stopPropagation();
                 }}
               >
                 <MoreVertical className="h-4 w-4" />
+                {/* aria-hidden: the trigger keeps its name; the swoop row
+                    inside the menu carries the spoken count. */}
+                {watching > 0 && (
+                  <span
+                    className="absolute -top-1 -right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold tabular-nums text-primary-foreground pointer-events-none"
+                    aria-hidden
+                    data-testid="machine-context-menu-swoop-pill"
+                  >
+                    {watching}
+                  </span>
+                )}
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
@@ -338,6 +358,12 @@ export function MachineContextMenu({
                 >
                   <MonitorPlay className="mr-2 h-4 w-4" />
                   swoop
+                  {watching > 0 && (
+                    <Badge className="ml-auto tabular-nums" data-testid="machine-context-menu-swoop-count">
+                      {watching}
+                      <span className="sr-only"> watching</span>
+                    </Badge>
+                  )}
                 </DropdownMenuItem>
               ) : (
                 <DropdownMenuItem

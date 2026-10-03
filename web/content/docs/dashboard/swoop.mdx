@@ -11,6 +11,8 @@ two things are true of every session and worth knowing before you turn it on:
 - **control asks for a second factor, every time the window lapses.** watching does not.
 - **an API key can never start a session.** swoop is a human-in-the-loop surface; the session routes refuse a key outright with `api_key_not_permitted`.
 
+a machine with someone in a session shows the count on its menu button and on the menu's swoop row.
+
 ---
 
 ## turning it on
@@ -121,6 +123,16 @@ without accessibility you can still watch: the picture, the cursor, the audio an
 - **macOS asks again after about thirty days** without a capture whether owlette may keep recording the screen. someone at the Mac has to answer it; owlette can neither answer it nor turn it off
 - **the keyboard follows the Mac.** from a PC, ctrl acts as cmd, so ctrl+c copies on the Mac. the keyboard menu has two settings: **shortcuts match** (the default), where ctrl and the Windows key both send cmd, and **keys match**, where ctrl is the Mac's own control key and the Windows key is cmd. the menu shows what each of your modifier keys does under the setting you chose. outside fullscreen your own Windows keeps the Windows key for itself, so the menu's **hold cmd for the next key** sends cmd with your next key press. a Mac viewing a Windows machine does the reverse: cmd acts as ctrl. the keyboard menu lists the Mac's own shortcuts (cmd+tab, cmd+space, cmd+q, and cmd+ctrl+q to lock) in place of ctrl+alt+del, print screen and pause are dropped because a Mac has no key for them, and the Mac's keyboard layout decides what a key types
 - **the clipboard** carries text and images both ways, within the limits above. an image the Mac copied as a TIFF reaches you as a PNG, and copied files are never carried. what you paste into the Mac arrives whatever macOS is set to. what the Mac copies reaches you only while owlette is set to always allow under **paste from other apps**, because any other answer has macOS raise a paste alert at the Mac, and swoop never raises one; each session reads the setting once, when it starts. macOS lists an app there only after the app has raised that alert once, which owlette never does, so on a Mac that does not list owlette the clipboard from the Mac stays off. macOS before 15.4 has no such setting, and there the clipboard travels both ways
+
+---
+
+## admin → swoop
+
+**admin** → **swoop** lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site admins and owners see the sessions on their own sites, and a superadmin sees every site. a plain member does not get the page.
+
+**kill** ends one session after a confirm. the viewer is disconnected at once, and, like every kill above, it also closes every open second-factor window on that machine, so anyone it cut off confirms again before taking control.
+
+you do not need the page to spot a busy machine: the dashboard's machine menu shows the live viewer count on its button and on its swoop row.
 
 ---
 

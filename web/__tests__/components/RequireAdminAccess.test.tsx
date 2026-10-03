@@ -145,6 +145,7 @@ describe('visibleNavItems', () => {
     expect(visibleNavItems('member', true).map((item) => item.name)).toEqual([
       'members',
       'agent tokens',
+      'swoop',
       'schedules',
       'alerts',
       'webhooks',
@@ -158,6 +159,7 @@ describe('visibleNavItems', () => {
       'members',
       'users',
       'agent tokens',
+      'swoop',
       'schedules',
       'alerts',
       'webhooks',
@@ -181,6 +183,7 @@ describe('requiredRoleForPath', () => {
   it('reads the requirement off the matching nav entry', () => {
     expect(requiredRoleForPath('/admin/members')).toBe('admin');
     expect(requiredRoleForPath('/admin/webhooks')).toBe('admin');
+    expect(requiredRoleForPath('/admin/swoop')).toBe('admin');
     expect(requiredRoleForPath('/admin/users')).toBe('superadmin');
   });
 

@@ -388,6 +388,7 @@ const MachineCard = memo(function MachineCard({
                 onScreenshot={onScreenshot ? () => onScreenshot(machineId) : undefined}
                 onLiveView={onLiveView ? () => onLiveView(machineId) : undefined}
                 swoopCapable={machine.capabilities?.swoop === 1}
+                swoopViewers={machine.swoopViewers}
                 onSwoop={onSwoop ? () => onSwoop(machineId) : undefined}
                 onViewDisplays={openMetric ? () => openMetric('display') : undefined}
                 rebootSchedule={machine.rebootSchedule}

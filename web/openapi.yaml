@@ -6363,6 +6363,70 @@ paths:
         '422': { $ref: '#/components/responses/Problem422' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
+  /api/sites/{siteId}/swoop/sessions:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+    get:
+      operationId: listSiteSwoopSessions
+      tags: [Machines]
+      summary: list a site's live swoop sessions
+      description: |
+        Every swoop session in the site that someone can still be in,
+        `pending` and `live`, oldest first, with the people in it. A session
+        whose lease has lapsed is left out: the host has already dropped every
+        viewer of it. This is the admin swoop page's list; it ends a session
+        through `swoop/kill` with the session's `sid`.
+
+        A viewer whose account is gone keeps their row, with `email` and
+        `displayName` null. Requires the machine remote-control capability
+        (site admin or owner).
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: The site's live sessions, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      sessions:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            sid: { type: string }
+                            machineId: { type: string }
+                            state: { type: string, enum: [pending, live] }
+                            startedAt: { type: integer, description: Epoch milliseconds. }
+                            viewers:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  uid: { type: string }
+                                  email: { type: string, nullable: true }
+                                  displayName: { type: string, nullable: true }
+                                  ctl: { type: boolean, description: Whether the viewer holds control. }
+                                  joinedAt: { type: integer, description: Epoch milliseconds. }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code: api_key_not_permitted` when the caller used an api key, or
+            the machine remote-control capability is missing.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
   /api/sites/{siteId}/swoop-settings:
     parameters:
       - $ref: '#/components/parameters/SiteIdPath'
@@ -10265,6 +10329,12 @@ components:
               type: object
               nullable: true
               additionalProperties: true
+            swoopViewers:
+              description: |
+                live swoop viewers, mirrored by the server from the session
+                records. Null until the machine's first session.
+              type: integer
+              nullable: true
     MachineDeployment:
       description: Current state for one roost that targets a machine.
       type: object

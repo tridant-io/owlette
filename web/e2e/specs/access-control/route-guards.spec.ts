@@ -16,6 +16,7 @@ const SITE_SCOPED_ROUTES = [
   '/admin/alerts',
   '/admin/tokens',
   '/admin/schedules',
+  '/admin/swoop',
 ];
 
 /** Platform destinations: superadmin only. */

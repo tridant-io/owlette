@@ -68,6 +68,8 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
   const swap = modifierSwap(osFamily, viewerIsMac);
   const legend = modifierLegend(osFamily, viewerIsMac, mapping);
   const superKey = viewerIsMac ? 'cmd' : 'the windows key';
+  const ownSystem = viewerIsMac ? 'mac' : 'windows';
+  const holdItem = `"hold ${superKey} for the next key"`;
   // a sent key is the machine's, so the keyboard goes back to the picture with
   // it. a closing menu hands focus to its own button, where the "next key" of
   // a hold would land and never reach the machine.
@@ -117,23 +119,29 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
             </DropdownMenuRadioGroup>
           </>
         )}
-        <dl
-          className="grid grid-cols-[auto_1fr] gap-x-4 px-2 py-1.5 text-xs text-muted-foreground"
-          aria-label="what your keys do on the machine"
-          data-testid="modifier-legend"
-        >
-          {legend.map((row) => (
-            <Fragment key={row.press}>
-              <dt>{row.press}</dt>
-              <dd>{row.gets}</dd>
-            </Fragment>
-          ))}
-        </dl>
+        {/* the legend only where a key is converted: on a machine with the
+            viewer's own system every key arrives as itself, and three rows
+            saying so read as a puzzle. */}
+        {swap && (
+          <dl
+            className="grid grid-cols-[auto_auto_1fr] gap-x-2 px-2 py-1.5 text-xs text-muted-foreground"
+            aria-label="what your keys do on the machine"
+            data-testid="modifier-legend"
+          >
+            {legend.map((row) => (
+              <Fragment key={row.press}>
+                <dt>{row.press}</dt>
+                <dd aria-hidden>→</dd>
+                <dd>{row.gets}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        )}
         {!fullscreen && (
-          <p className="px-2 pb-1.5 text-xs text-muted-foreground" data-testid="super-key-note">
+          <p className="px-2 py-1.5 text-xs text-muted-foreground" data-testid="super-key-note">
             {keyboardLock
-              ? `${superKey} reaches the machine in fullscreen`
-              : `this browser keeps ${superKey} for itself`}
+              ? `outside fullscreen your own ${ownSystem} keeps ${superKey}. go fullscreen, or use ${holdItem} below.`
+              : `this browser never hands ${superKey} to a page. use ${holdItem} below.`}
           </p>
         )}
         <DropdownMenuSeparator />

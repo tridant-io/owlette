@@ -377,7 +377,9 @@ describe('GET /api/cron/swoop-retention', () => {
 
     const filtered = queryLog.filter((q) => q.where.length > 0);
     expect(filtered.every((q) => q.where.length === 1)).toBe(true);
-    expect(filtered.map((q) => q.where[0][0]).sort()).toEqual(['startedAt', 'state']);
+    // the second `state` query is the machine's own recount after the close
+    // (`syncMachineSwoopViewers`), single-field too.
+    expect(filtered.map((q) => q.where[0][0]).sort()).toEqual(['startedAt', 'state', 'state']);
   });
 
   it('sweeps every machine in every site', async () => {
