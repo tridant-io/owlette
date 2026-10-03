@@ -67,13 +67,35 @@ Ubuntu 24.04. Install with `apt-get`, not `dpkg -i`: the package declares depend
 sudo apt-get install ./Owlette-Installer-v<version>.deb
 ```
 
-The service runs as `owlette-agent.service`, and the app starts for every login through a user unit. Pair from the owlette app after installing.
+The service runs as `owlette-agent.service`, and the app starts for every login through a user unit. Pair from the owlette app after installing, or preseed the phrase (below) for a machine nobody is standing in front of.
+
+**Ubuntu Server, or any box without a desktop:** the service runs the same; the app's user unit is tied to the graphical session, so with no desktop it never starts and never fails. Without a display you lose screenshots and launching windowed apps; process supervision, metrics, commands, roost and hoot work. Pair with the preseed, or afterwards from a shell:
+
+```bash
+cd /opt/owlette/agent/src && sudo /opt/owlette/python/bin/python3.11 configure_site.py --add <phrase>
+```
+
+### the pairing preseed (macos and linux)
+
+The equivalent of the Windows installer's `/ADD=`: write the phrase where the package will look before you install it, and the package pairs in the background right after installing. The file is renamed `pairing.json.used` once consumed, and it never re-pairs a machine that already belongs to a site.
+
+```bash
+# linux
+sudo mkdir -p /var/lib/owlette/config
+echo '{"phrase": "silver-compass-drift"}' | sudo tee /var/lib/owlette/config/pairing.json
+sudo apt-get install ./Owlette-Installer-v<version>.deb
+
+# macos
+sudo mkdir -p "/Library/Application Support/Owlette/config"
+echo '{"phrase": "silver-compass-drift"}' | sudo tee "/Library/Application Support/Owlette/config/pairing.json"
+sudo installer -pkg Owlette-Installer-v<version>.pkg -target /
+```
 
 ---
 
 ## method 2: silent install with `/ADD=`
 
-Use this path for bulk deployment when an admin has already generated and authorized a pairing phrase. The silent install is Windows only; on macOS and Linux, pair from the app after installing.
+Use this path for bulk deployment when an admin has already generated and authorized a pairing phrase. The silent install is Windows only; on macOS and Linux, use the pairing preseed above.
 
 ![add machine modal](/docs-screens/add-machine-modal.png)
 
