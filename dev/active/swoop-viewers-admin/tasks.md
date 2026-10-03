@@ -1,5 +1,5 @@
 # swoop viewer count and admin sessions page — Tasks
-**Progress**: 3/10 complete
+**Progress**: 9/10 complete
 
 Standing rules: work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-swoop-mac-wt` on branch
 `swoop/macos`; never touch the main checkout; `firestore.rules` and `.claude/hooks` untouched; all user-facing
@@ -69,7 +69,7 @@ the same manual step twice, and measure before claiming.
 
 ## Wave 2: wiring and the route
 
-- [ ] **Task 2.1: The views pass the count** `[agent]`
+- [x] **Task 2.1: The views pass the count** `[agent]`
   - Files: `web/app/dashboard/components/MachineCardView.tsx`, `web/app/dashboard/components/MachineListView.tsx`,
     `web/content/docs/dashboard/swoop.mdx`
   - Do: Pass `swoopViewers={machine.swoopViewers}` beside `swoopCapable` (`MachineCardView.tsx:391`,
@@ -79,7 +79,7 @@ the same manual step twice, and measure before claiming.
     __tests__/components` passes.
   - Depends on: 1.2, 1.3.
 
-- [ ] **Task 2.2: The site sessions route** `[agent]`
+- [x] **Task 2.2: The site sessions route** `[agent]`
   - Files: `web/app/api/sites/[siteId]/swoop/sessions/route.ts` (create), `web/openapi.yaml`,
     `web/__tests__/api/swoop/site-sessions.test.ts` (create)
   - Do: `GET /api/sites/{siteId}/swoop/sessions`. Wrap with `authorizedSiteHandler` exactly as the kill route
@@ -102,7 +102,7 @@ the same manual step twice, and measure before claiming.
   - Done when: the test passes, the OpenAPI validator passes, eslint and tsc clean.
   - Depends on: 1.1.
 
-- [ ] **Task 2.3: Admin nav and guards** `[agent]`
+- [x] **Task 2.3: Admin nav and guards** `[agent]`
   - Files: `web/app/admin/navItems.ts`, `web/__tests__/components/RequireAdminAccess.test.tsx`,
     `web/e2e/specs/access-control/route-guards.spec.ts`
   - Do: Add `{ name: 'swoop', href: '/admin/swoop', icon: MonitorPlay, description: 'view and end live swoop
@@ -116,7 +116,7 @@ the same manual step twice, and measure before claiming.
 
 ## Wave 3: the page and the badge proof
 
-- [ ] **Task 3.1: The admin page** `[agent]`
+- [x] **Task 3.1: The admin page** `[agent]`
   - Files: `web/app/admin/swoop/page.tsx` (create), `web/app/admin/swoop/layout.tsx` (create),
     `web/__tests__/app/admin-swoop-page.test.tsx` (create), `web/content/docs/dashboard/swoop.mdx`
   - Do: Copy the shape of `web/app/admin/tokens/page.tsx`. Sites from `useSites(user?.uid, userSites,
@@ -143,7 +143,7 @@ the same manual step twice, and measure before claiming.
     4.1, not by a browser here).
   - Depends on: 2.2, 2.3.
 
-- [ ] **Task 3.2: The badge e2e** `[agent]`
+- [x] **Task 3.2: The badge e2e** `[agent]`
   - Files: `web/e2e/specs/swoop/viewer-badge.spec.ts` (create)
   - Do: Copy `access-control/machine-card.spec.ts`'s shape (`seedMachine`, `cardFor`, `openContextMenu`,
     `roleState('admin')`). Seed one site-A machine with a unique id, then
@@ -157,7 +157,7 @@ the same manual step twice, and measure before claiming.
 
 ## Wave 4: proof and the PR
 
-- [ ] **Task 4.1: The admin page e2e** `[agent]`
+- [x] **Task 4.1: The admin page e2e** `[agent]`
   - Files: `web/e2e/specs/admin/swoop.spec.ts` (create), `web/e2e/COVERAGE.md`
   - Do: Copy `admin/tokens.spec.ts`. In `beforeAll` seed a dedicated site and machine (`seedSite`,
     `seedMachine`) and write a live session record through the Admin SDK at
@@ -196,3 +196,9 @@ the same manual step twice, and measure before claiming.
   windows-key note says what to do (owner: "this just confuses me"). The pre-commit gate checks the main
   checkout, which fails on the owner's own branch work; commits go through PowerShell after the worktree's
   own lint/tsc/jest.
+- Waves 2–4.1 done the same way: 2.3 `d2e0d439`, 2.1 `fbe2169b`, 2.2 `53096bc3` (the route also documents
+  `swoopViewers` on `MachineDetail`), 3.2 `30048de9` (badge e2e, 1 of 1), 3.1 `39ccd4c6` (kill uses button.tsx's
+  `ghost-destructive` / `destructive` variants rather than the tokens page's amber literals; `control` /
+  `watch` badges; `useSites` lives in `@/hooks/useFirestore`), 4.1 `8b9c51a3` (admin e2e 2 of 2 plus the route
+  guards, 34 of 34 in that run). Verification so far: lint 0 errors (5 old warnings in untouched files),
+  typecheck clean, jest 6371 passed, security CLEAR, OpenAPI valid; the full local e2e is running.
