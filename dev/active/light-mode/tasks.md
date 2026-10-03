@@ -1,5 +1,5 @@
 # Light mode — Tasks
-**Progress**: 3/21 complete · branch `feat/light-mode`
+**Progress**: 8/21 complete · branch `feat/light-mode`
 
 Read `plan.md` first (Approach → token architecture and migration rules). Read `DESIGN.md` at the repo root for the visual system.
 
@@ -97,7 +97,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
 
 ## Wave 2: Plumbing and primitives
 
-- [ ] **Task 2.1: Theme preference sync and the profile control**
+- [x] **Task 2.1: Theme preference sync and the profile control**
   - Files: `web/contexts/AuthContext.tsx`, `web/components/ThemePreferenceSync.tsx` (new), `web/components/AppearanceControl.tsx` (new), `web/components/AccountSettingsDialog.tsx`, `web/components/PageHeader.tsx`, the file that renders children inside the auth provider (find where `LazyAuthProvider` wraps the app), `web/__tests__/components/ThemePreferenceSync.test.tsx` (new), `web/__tests__/components/AppearanceControl.test.tsx` (new)
   - Do:
     - **Add `theme?: ThemeChoice` to `UserPreferences`** (`AuthContext.tsx`, the `UserPreferences` interface). Include it in the `newPrefs` construction AND in the equality check; the comment there explains why both are required.
@@ -124,7 +124,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - Unit tests pass, and `npx eslint` is clean.
   - Depends on: Task 1.1, Task 1.2
 
-- [ ] **Task 2.2: Web ui primitives**
+- [x] **Task 2.2: Web ui primitives**
   - Files: `web/components/ui/sonner.tsx`, `web/components/ui/tooltip.tsx`, `web/components/ui/checkbox.tsx`, `web/components/ui/switch.tsx`, `web/components/ui/input.tsx`, `web/components/ui/alert.tsx`, `web/components/admin/AdminButton.tsx`
   - Do:
     - Replace the dark-tuned literals with tokens:
@@ -140,7 +140,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - `npm test` and `npx eslint` are clean.
   - Depends on: Task 1.1
 
-- [ ] **Task 2.3: Data-viz on tokens**
+- [x] **Task 2.3: Data-viz on tokens**
   - Files: `web/lib/usageColorUtils.ts`, `web/lib/temperatureUtils.ts`, `web/lib/networkUtils.ts`, `web/lib/diskIOUtils.ts`, `web/components/charts/ChartTooltip.tsx`, `web/components/charts/MetricsDetailPanel.tsx`, `web/components/charts/SparklineChart.tsx`, `web/__tests__/lib/diskIOUtils.test.ts`, `web/__tests__/lib/usageColorUtils.test.ts` (new)
   - Do:
     - **`usageColorUtils`:** `getUsageColorClass` returns `bg-band-calm` … `bg-band-critical`. `getUsageColor` returns `var(--band-…)`. Keep the bands (<30, <50, <70, <85).
@@ -156,7 +156,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - Unit tests pass.
   - Depends on: Task 1.1
 
-- [ ] **Task 2.4: Third parties and odds**
+- [x] **Task 2.4: Third parties and odds**
   - Files: `web/components/TurnstileWidget.tsx`, `web/components/DownloadButton.tsx`, `web/app/hoot/components/ChatWindow.tsx`, `web/components/hoot/HootMarkdown.tsx`, `web/components/hoot/SharedConversation.tsx`, `web/components/mdx/mermaid.tsx`, `web/app/not-found.tsx`, `web/components/FallingFeather.tsx`, `web/app/docs/api/route.ts`
   - Do:
     - **Turnstile** (`:132-134`): pass `theme: resolvedTheme === 'light' ? 'light' : 'dark'` from `useTheme()`, and re-render the widget when it changes. Remove the comment about `'auto'`.
@@ -178,7 +178,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - `npx eslint` is clean.
   - Depends on: Task 1.1, Task 1.2
 
-- [ ] **Task 2.5: Desktop tokens**
+- [x] **Task 2.5: Desktop tokens**
   - Files: `desktop/src/globals.css`, `desktop/src/lib/surfaces.ts`, `desktop/src/test/design-system.test.tsx`
   - Do:
     - **Port Task 1.1's token work** from `web/app/globals.css` into `desktop/src/globals.css`: the light `:root` values, the new families, and the tokenised base CSS (scrollbars, focus outline, dot-grid, select scrollbar, flash keyframe).
@@ -414,6 +414,15 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Log
 ### 2026-10-03
+- Wave 2 done.
+  - **Appearance control:** in profile → preferences. A three-way radiogroup with a morphing disc glyph; the slide lands first, then the theme applies.
+  - **Preference sync:** tolerates writes in flight and changes from other tabs.
+  - **Primitives:** moved onto control tokens (`--tooltip`, `--checkbox`, `--switch-off`, `--selection`); dark values equal the old slate and blue.
+  - **Charts:** `var()` in recharts SVG attributes resolves (checked in Chrome).
+  - **Scalar:** follows the choice through its `colorMode`.
+  - **Desktop:** tokens ported, and the hover-tint drift is fixed.
+  - **Tiny dark shifts, accepted:** over-threshold temperature colours, the online dot (green-400), one superadmin badge border.
+  - **For the review:** sonner's colour classes never applied, so dark toasts stay stock black.
 - Wave 1 done. Light palette "the same room by day" is in the `:root` block, with the status, band, series, chart, elevation and chrome families defined in both themes; every original `.dark` line is unchanged. Dark `success-solid` moved to green-700, because white on green-600 was 3.3:1. `theme-contrast.test.ts` holds both themes to AA. The provider follows the OS, with dark as the server-rendered fallback. Playwright (and the live smoke) are pinned dark.
 - Owner brief: build light mode fully, on every page. It follows the OS with dark as the fallback, and the switch is concealed in the profile. The plan was amended above (Tasks 1.2, 2.1, 2.4, 5.1 and 6.2). It moved to `dev/active/` (force-added, so it stays tracked) and runs on `feat/light-mode`.
 

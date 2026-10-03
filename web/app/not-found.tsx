@@ -6,6 +6,12 @@ import { Button } from '@/components/ui/button';
 import { OwletteEye } from '@/components/landing/OwletteEye';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 
+// --muted-foreground is brighter than the slate the rain used to be drawn in;
+// this scale keeps dark's drops as faint as they were
+const RAIN_STRENGTH = 0.7;
+
+const rainColor = () => getComputedStyle(document.documentElement).getPropertyValue('--muted-foreground').trim();
+
 /** `still` paints one frame of the rain and stops there. */
 function RainCanvas({ still }: { still: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -33,6 +39,14 @@ function RainCanvas({ still }: { still: boolean }) {
 
     let animId: number;
     let drops: ReturnType<typeof initDrops>;
+    let color = rainColor();
+
+    // a canvas can't follow css, so a theme switch (the class on <html>) re-reads the token
+    const themeObserver = new MutationObserver(() => {
+      color = rainColor();
+      if (still) draw();
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
     function resize() {
       canvas!.width = window.innerWidth;
@@ -44,10 +58,11 @@ function RainCanvas({ still }: { still: boolean }) {
 
     function draw() {
       ctx!.clearRect(0, 0, canvas!.width, canvas!.height);
+      ctx!.fillStyle = color;
       for (const drop of drops) {
         ctx!.beginPath();
         ctx!.arc(drop.x, drop.y, 1.35, 0, Math.PI * 2);
-        ctx!.fillStyle = `rgba(97, 112, 155, ${drop.opacity + 0.05})`;
+        ctx!.globalAlpha = (drop.opacity + 0.05) * RAIN_STRENGTH;
         ctx!.fill();
 
         drop.y += drop.speed;
@@ -65,6 +80,7 @@ function RainCanvas({ still }: { still: boolean }) {
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', resize);
+      themeObserver.disconnect();
     };
   }, [initDrops, still]);
 
@@ -103,7 +119,8 @@ export default function NotFound() {
       <div
         className="absolute w-[500px] h-[500px] rounded-full blur-3xl opacity-30"
         style={{
-          background: 'radial-gradient(circle, oklch(0.70 0.14 30 / 0.4) 0%, oklch(0.72 0.16 55 / 0.15) 40%, transparent 70%)',
+          background:
+            'radial-gradient(circle, color-mix(in oklch, var(--accent-coral) 40%, transparent) 0%, color-mix(in oklch, var(--accent-warm) 15%, transparent) 40%, transparent 70%)',
         }}
       />
 
@@ -125,9 +142,7 @@ export default function NotFound() {
               : 'text-foreground/10'
           }`}
           style={{
-            textShadow: glitch
-              ? '3px 0 oklch(0.75 0.18 195), -3px 0 oklch(0.70 0.14 30)'
-              : 'none',
+            textShadow: glitch ? '3px 0 var(--accent-cyan), -3px 0 var(--accent-coral)' : 'none',
           }}
         >
           404

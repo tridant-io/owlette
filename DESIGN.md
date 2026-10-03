@@ -345,7 +345,7 @@ the signature loaders: charts plot a miniature line graph on a loop (2.4s), and 
 - **Do** define every new colour token in both the `:root` (light) and `.dark` blocks of `globals.css`. the contrast test fails if a dark token has no light value.
 - **Do** use `IconButton` for every icon-only control, with a lowercase label that names the action.
 - **Do** honour `prefers-reduced-motion`: every new animation needs a reduced-motion path that ends in its final state.
-- **Do** keep `desktop/src/globals.css` in step with web. its dark `--btn-hover` still uses the grey foreground mix that web replaced with the blue tint, which is a known drift.
+- **Do** keep `desktop/src/globals.css` in step with web. the two share every token and value, and the desktop design-system test fails if a dark token has no light value.
 
 ### Don't:
 - **Don't** hardcode colours in components. use the theme tokens. existing raw Tailwind status classes (`red-600`, `green-500`, `amber-*`) are incumbent debt, not precedent.

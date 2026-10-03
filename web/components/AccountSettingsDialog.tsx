@@ -16,6 +16,7 @@ import { toast } from '@/lib/toast';
 import { MfaFactorsSection } from '@/components/MfaFactorsSection';
 import { getBrowserTimezone } from '@/lib/timeUtils';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
+import { AppearanceControl } from '@/components/AppearanceControl';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { IconButton } from '@/components/ui/icon-button';
 import { FormError } from '@/components/ui/form-error';
@@ -478,6 +479,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                     <h3 className="text-base font-medium text-white">preferences</h3>
                     <p className="text-xs text-muted-foreground mt-1">dashboard display settings</p>
                   </div>
+
+                  <AppearanceControl />
 
                   <div className="space-y-2">
                     <p id="settings-time-display-label" className="text-sm leading-none font-medium text-white">display times in</p>

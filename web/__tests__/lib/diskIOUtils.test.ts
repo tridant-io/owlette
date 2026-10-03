@@ -19,12 +19,12 @@ describe('DISK_IO_COLORS', () => {
     expect(Object.keys(DISK_IO_COLORS).sort()).toEqual(['read', 'write']);
   });
 
-  it('uses the same green for read as NIC RX (convention parity)', () => {
-    expect(DISK_IO_COLORS.read).toBe('rgb(74, 222, 128)');
+  it('reads the read colour from its theme token', () => {
+    expect(DISK_IO_COLORS.read).toBe('var(--series-disk-io-read)');
   });
 
-  it('uses the same orange for write as NIC TX (convention parity)', () => {
-    expect(DISK_IO_COLORS.write).toBe('rgb(251, 146, 60)');
+  it('reads the write colour from its theme token', () => {
+    expect(DISK_IO_COLORS.write).toBe('var(--series-disk-io-write)');
   });
 });
 
