@@ -85,6 +85,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         // dashboard reads this from firestore directly; api callers had no
         // way to see it at all, so every capability gate read undefined.
         capabilities: data.capabilities ?? null,
+        // live swoop viewers, mirrored by the server from the session records
+        swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : null,
         processes: Array.isArray(data.processes)
           ? data.processes
           : Array.isArray(data.status?.processes)

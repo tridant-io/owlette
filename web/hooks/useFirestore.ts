@@ -278,6 +278,8 @@ export interface Machine {
     swoop?: number;
     displayRemoteApply?: number;
   };
+  /** live swoop viewers, mirrored from the session records by the server; absent until the first session */
+  swoopViewers?: number;
   // `reboot*` are agent-written wire contracts; the legacy spelling is deliberate (UI says "restart").
   rebooting?: boolean;
   shuttingDown?: boolean;
@@ -1392,6 +1394,7 @@ export function useMachines(siteId: string) {
               // the server's `isHootEnabled` (hoot-utils.server.ts)
               cortexEnabled: data.cortexEnabled !== false,
               capabilities: data.capabilities,
+              swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : undefined,
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
               rebootScheduledAt: restartScheduledAt,

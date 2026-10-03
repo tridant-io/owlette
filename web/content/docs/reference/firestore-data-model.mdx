@@ -119,6 +119,7 @@ web go through API routes.
 | `lastScreenshot` | map/null | Latest screenshot pointer surfaced by live view. |
 | `liveView` | map | `{ active, interval, startedAt, expiresAt }` when live view is running. |
 | `capabilities` | map | Feature gates such as `displayRemoteApply`. |
+| `swoopViewers` | number | Live swoop viewers, mirrored by the server from the session records. Missing until the first session. |
 | `metrics` | map | Current metrics payload described below. |
 
 Current metrics use schema version 2 and are nested on the machine document:
