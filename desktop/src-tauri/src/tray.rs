@@ -39,6 +39,7 @@ use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
+#[cfg(not(target_os = "linux"))]
 use tauri_plugin_notification::NotificationExt;
 
 #[cfg(windows)]
@@ -1065,8 +1066,30 @@ fn update_marker_is_fresh(marker: &Path, now: SystemTime) -> bool {
     .is_some_and(|age| age < UPDATE_MARKER_MAX_AGE)
 }
 
+#[cfg(not(target_os = "linux"))]
 fn notify(app: &AppHandle, title: &str, body: String) {
   if let Err(error) = app.notification().builder().title(title).body(body).show() {
+    log::warn!("could not show the tray notification: {error}");
+  }
+}
+
+/// The desktop entry the package installs, which is how gnome maps a
+/// notification to the app's name and icon. Without the hint it titles the
+/// notification after the process, "owlette-desktop", and after an update
+/// "owlette-desktop (deleted)".
+#[cfg(target_os = "linux")]
+const DESKTOP_ENTRY: &str = "owlette-desktop";
+
+#[cfg(target_os = "linux")]
+fn notify(_app: &AppHandle, title: &str, body: String) {
+  let result = notify_rust::Notification::new()
+    .appname("owlette")
+    .summary(title)
+    .body(&body)
+    .icon(DESKTOP_ENTRY)
+    .hint(notify_rust::Hint::DesktopEntry(DESKTOP_ENTRY.to_string()))
+    .show();
+  if let Err(error) = result {
     log::warn!("could not show the tray notification: {error}");
   }
 }

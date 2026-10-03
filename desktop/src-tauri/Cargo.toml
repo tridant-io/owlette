@@ -47,6 +47,21 @@ notify = "8"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# the notification plugin's own linux backend, already in the lock file
+# through it; a direct dependency because the plugin sends a notification
+# with no app name and no desktop-entry hint, so gnome titles it after the
+# process ("owlette-desktop") and cannot find the app's icon.
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4"
+
+# appkit, for the one thing tauri does not expose: the toolbar that gives a
+# window the macos 26 corner radius (mac_window.rs). both crates are already in
+# the lock file through tauri; the features name the classes this crate uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSToolbar", "NSWindow", "NSResponder"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSString"] }
+
 # the scm, the named mutex and WM_CLOSE are windows; the other two desktops do
 # not build these at all (tri-platform task 4.1).
 [target.'cfg(windows)'.dependencies]

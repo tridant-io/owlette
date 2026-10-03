@@ -14,6 +14,8 @@ mod watchers;
 #[cfg(unix)]
 mod jobrunner;
 #[cfg(target_os = "macos")]
+mod mac_window;
+#[cfg(target_os = "macos")]
 mod menu_bar_position;
 #[cfg(target_os = "macos")]
 mod tcc;
@@ -145,6 +147,12 @@ pub fn run() {
       // with the window, so the icon comes and goes with it.
       #[cfg(target_os = "macos")]
       app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+      // The window from the config exists by now; macOS 26 shapes it only
+      // once it carries a toolbar (mac_window.rs).
+      #[cfg(target_os = "macos")]
+      if let Some(window) = app.get_webview_window("main") {
+        mac_window::adopt_system_shape(&window);
+      }
 
       let root = paths::data_root();
 
