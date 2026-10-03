@@ -481,7 +481,9 @@ function App() {
           // DialogContent exempts [data-titlebar] from outside-dismiss to match.
           className={cn(
             'pointer-events-auto relative z-[60] flex h-10 shrink-0 select-none items-center gap-2.5 border-b',
-            IS_MAC ? 'pl-20' : 'pl-4',
+            // macos 26 spaces the traffic lights 23 pt apart (20 before), so the
+            // green one ends at 72 pt; the wordmark starts a light's gap after it.
+            IS_MAC ? 'pl-24' : 'pl-4',
           )}
         >
           <OwletteEye size={18} className="pointer-events-none" />
