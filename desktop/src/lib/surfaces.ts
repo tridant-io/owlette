@@ -10,4 +10,4 @@
  * Usage: `<DropdownMenuContent className={`${MENU_SURFACE} w-56`}>`
  */
 export const MENU_SURFACE =
-  'border-border bg-secondary/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring'
+  'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring'

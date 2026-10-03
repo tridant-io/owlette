@@ -136,7 +136,7 @@ export default function EmailPage() {
                   {config.provider}
                   <Badge
                     variant={config.apiKeyConfigured ? 'default' : 'destructive'}
-                    className={config.apiKeyConfigured ? 'bg-emerald-600 hover:bg-emerald-600' : ''}
+                    className={config.apiKeyConfigured ? 'bg-success-solid text-success-solid-foreground' : ''}
                   >
                     {config.apiKeyConfigured ? 'connected' : 'not configured'}
                   </Badge>
@@ -204,7 +204,7 @@ export default function EmailPage() {
           <Button
             onClick={sendTestEmail}
             disabled={isSending}
-            className="text-gray-900 cursor-pointer"
+            className="cursor-pointer"
           >
             {isSending ? (
               <>
@@ -222,17 +222,17 @@ export default function EmailPage() {
           {lastResult && (
             <div className={`p-4 rounded-lg border ${
               lastResult.success
-                ? 'bg-emerald-950/50 border-emerald-800'
-                : 'bg-red-950/50 border-red-800'
+                ? 'bg-success-surface border-success-border'
+                : 'bg-danger-surface border-danger-border'
             }`}>
               <div className="flex items-center gap-2 mb-2">
                 {lastResult.success ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                  <CheckCircle2 className="h-4 w-4 text-success" />
                 ) : (
-                  <XCircle className="h-4 w-4 text-red-400" />
+                  <XCircle className="h-4 w-4 text-danger" />
                 )}
                 <span className={`font-semibold text-sm ${
-                  lastResult.success ? 'text-emerald-300' : 'text-red-300'
+                  lastResult.success ? 'text-success' : 'text-danger'
                 }`}>
                   {lastResult.success ? 'Email sent successfully' : 'Failed to send email'}
                 </span>
@@ -248,7 +248,7 @@ export default function EmailPage() {
                   <>
                     <p>{lastResult.error}</p>
                     {lastResult.details && (
-                      <pre className="mt-1 p-2 bg-red-950 rounded text-xs overflow-x-auto">
+                      <pre className="mt-1 p-2 bg-danger-surface border border-danger-border rounded text-xs overflow-x-auto">
                         {typeof lastResult.details === 'string'
                           ? lastResult.details
                           : JSON.stringify(lastResult.details, null, 2)}

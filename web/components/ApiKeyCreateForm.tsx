@@ -74,12 +74,12 @@ export function ApiKeyCreateForm({ onSubmit, onCancel }: Props) {
     <div className="space-y-4 rounded-md border border-border bg-background/40 p-3">
       {/* Heading kept from the modal this replaced — the e2e specs anchor on
           it, and it still labels the region now that it is inline. */}
-      <h3 className="text-sm font-medium text-white">create api key</h3>
+      <h3 className="text-sm font-medium text-foreground">create api key</h3>
       <p className="text-xs text-muted-foreground">
         the raw key is shown once, right after creation. store it somewhere safe.
       </p>
       <div className="space-y-2">
-        <Label htmlFor="keyName" className="text-white">
+        <Label htmlFor="keyName" className="text-foreground">
           name
         </Label>
         <Input
@@ -88,13 +88,13 @@ export function ApiKeyCreateForm({ onSubmit, onCancel }: Props) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g. ci/cd — publisher"
-          className="bg-background border-border text-white"
+          className="bg-background border-border text-foreground"
           disabled={creating}
         />
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="ttlDays" className="text-white">
+        <Label htmlFor="ttlDays" className="text-foreground">
           ttl (days)
         </Label>
         <Input
@@ -104,7 +104,7 @@ export function ApiKeyCreateForm({ onSubmit, onCancel }: Props) {
           max={MAX_TTL_DAYS}
           value={ttlDays}
           onChange={(e) => setTtlDays(Number(e.target.value) || DEFAULT_TTL_DAYS)}
-          className="bg-background border-border text-white"
+          className="bg-background border-border text-foreground"
           disabled={creating}
         />
       </div>
@@ -131,7 +131,7 @@ export function ApiKeyCreateForm({ onSubmit, onCancel }: Props) {
           type="button"
           onClick={handleCreate}
           disabled={creating || !name.trim()}
-          className="text-gray-900 cursor-pointer"
+          className="cursor-pointer"
         >
           {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : 'create key'}
         </Button>

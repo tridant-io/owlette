@@ -92,7 +92,7 @@ export default function SystemPresetsPage() {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <p className="text-red-400 font-medium mb-2">error loading presets</p>
+          <p className="text-danger font-medium mb-2">error loading presets</p>
           <p className="text-muted-foreground text-sm">{error}</p>
         </div>
       </div>
@@ -113,7 +113,7 @@ export default function SystemPresetsPage() {
             </div>
             <Button
               onClick={handleCreateNew}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               <Plus className="h-5 w-5 mr-2" />
               add template
@@ -129,7 +129,7 @@ export default function SystemPresetsPage() {
               aria-pressed={selectedCategory === 'All'}
               className={
                 selectedCategory === 'All'
-                  ? 'bg-accent-cyan text-gray-900 cursor-pointer'
+                  ? 'cursor-pointer'
                   : 'border-border bg-card text-foreground hover:bg-accent! hover:text-foreground! cursor-pointer'
               }
             >
@@ -146,7 +146,7 @@ export default function SystemPresetsPage() {
                   aria-pressed={selectedCategory === category}
                   className={
                     selectedCategory === category
-                      ? 'bg-accent-cyan text-gray-900 cursor-pointer'
+                      ? 'cursor-pointer'
                       : 'border-border bg-card text-foreground hover:bg-accent! hover:text-foreground! cursor-pointer'
                   }
                 >
@@ -170,7 +170,7 @@ export default function SystemPresetsPage() {
             {selectedCategory === 'All' && (
               <Button
                 onClick={handleCreateNew}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 <Plus className="h-5 w-5 mr-2" />
                 add first preset
@@ -253,11 +253,11 @@ export default function SystemPresetsPage() {
                               <Pencil className="h-3.5 w-3.5" />
                             </Button>
                             <Button
-                              variant="ghost"
+                              variant="ghost-destructive"
                               size="icon"
                               onClick={() => handleDelete(preset)}
                               aria-label={`delete ${preset.name}`}
-                              className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                              className="h-8 w-8 cursor-pointer"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
@@ -327,11 +327,11 @@ export default function SystemPresetsPage() {
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
                     <Button
-                      variant="ghost"
+                      variant="ghost-destructive"
                       size="icon"
                       onClick={() => handleDelete(preset)}
                       aria-label={`delete ${preset.name}`}
-                      className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                      className="h-8 w-8 cursor-pointer"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -351,7 +351,7 @@ export default function SystemPresetsPage() {
 
         {/* Delete Confirmation Dialog */}
         <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-          <DialogContent className="border-border bg-card text-foreground">
+          <DialogContent className="border-border text-foreground">
             <DialogHeader>
               <DialogTitle>delete preset</DialogTitle>
               <DialogDescription className="text-muted-foreground">
@@ -371,9 +371,10 @@ export default function SystemPresetsPage() {
                 cancel
               </Button>
               <Button
+                variant="destructive"
                 onClick={confirmDelete}
                 disabled={deleting}
-                className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+                className="cursor-pointer"
               >
                 {deleting ? (
                   <>

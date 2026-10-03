@@ -33,14 +33,14 @@ const CUSTOM_CSS = `
   --scalar-background-2: oklch(0.94 0.012 250);
   --scalar-background-3: oklch(0.92 0.02 250);
   --scalar-color-1: oklch(0.21 0.03 258);
-  --scalar-color-2: oklch(0.47 0.032 256);
-  --scalar-color-accent: oklch(0.52 0.105 218);
+  --scalar-color-2: oklch(0.42 0.032 256);
+  --scalar-color-accent: oklch(0.5 0.105 218);
   --scalar-border-color: oklch(0.88 0.016 250);
 }
 .dark-mode,
 .light-mode {
-  --scalar-color-3: color-mix(in oklch, var(--scalar-color-2) 70%, transparent);
-  --scalar-background-accent: color-mix(in oklch, var(--scalar-color-accent) 12%, transparent);
+  --scalar-color-3: color-mix(in oklab, var(--scalar-color-2) 70%, transparent);
+  --scalar-background-accent: color-mix(in oklab, var(--scalar-color-accent) 12%, transparent);
 }
 
 /* paints the page in its mode while the scalar bundle is still loading */

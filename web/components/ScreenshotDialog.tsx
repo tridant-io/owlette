@@ -276,7 +276,7 @@ export function ScreenshotDialog({
           e.preventDefault();
           closeButtonRef.current?.focus();
         }}
-        className="bg-card border-border w-[calc(100vw-2rem)] sm:max-w-none max-w-none p-0 gap-0 h-[calc(100dvh-4rem)]"
+        className="border-border w-[calc(100vw-2rem)] sm:max-w-none max-w-none p-0 gap-0 h-[calc(100dvh-4rem)]"
       >
         {/* below md the history stacks under the screenshot, so the image keeps the
             dialog's full width; from md it is a sidebar on the left */}
@@ -318,8 +318,10 @@ export function ScreenshotDialog({
               </DialogTitle>
             </DialogHeader>
 
-            {/* Screenshot display */}
-            <div className="flex-1 relative bg-black/30 flex items-center justify-center overflow-hidden min-h-0">
+            {/* Screenshot display. the black/30 letterbox only reads as black at night;
+                over a day panel it is a mid grey that sinks the empty-state text, so
+                day uses the sunken well */}
+            <div className="flex-1 relative bg-card-sunken dark:bg-black/30 flex items-center justify-center overflow-hidden min-h-0">
               {isCapturing && (
                 <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
                   <Loader2 className="h-8 w-8 animate-spin" />
@@ -329,7 +331,7 @@ export function ScreenshotDialog({
 
               {!isCapturing && error && (
                 <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground">
-                  <AlertTriangle className="h-8 w-8 text-amber-400" />
+                  <AlertTriangle className="h-8 w-8 text-warning" />
                   <p className="text-sm text-center max-w-md">{error}</p>
                 </div>
               )}
@@ -381,7 +383,7 @@ export function ScreenshotDialog({
                       size="icon-sm"
                       onClick={handleCopy}
                     >
-                      {copied ? <Check className="h-4 w-4 text-green-500" /> : <ClipboardCopy className="h-4 w-4" />}
+                      {copied ? <Check className="h-4 w-4 text-success" /> : <ClipboardCopy className="h-4 w-4" />}
                     </IconButton>
                     <IconButton
                       label="fullscreen"
@@ -518,7 +520,7 @@ export function ScreenshotDialog({
 
     {/* Clear all confirmation dialog */}
     <Dialog open={confirmClearAll} onOpenChange={setConfirmClearAll}>
-      <DialogContent className="bg-card border-border sm:max-w-sm">
+      <DialogContent className="border-border sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>clear screenshot history?</DialogTitle>
           <DialogDescription className="text-muted-foreground">

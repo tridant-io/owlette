@@ -64,7 +64,7 @@ function presentation(status: TargetStatus | 'stale' | 'unreported'): StatusPres
     case 'committed':
       return {
         label: 'synced',
-        className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+        className: 'bg-success-surface text-success border-success-border',
         icon: CheckCircle2,
       };
     case 'downloading':
@@ -89,7 +89,7 @@ function presentation(status: TargetStatus | 'stale' | 'unreported'): StatusPres
     case 'failed':
       return {
         label: 'failed',
-        className: 'bg-red-500/10 text-red-400 border-red-500/30',
+        className: 'bg-danger/10 text-danger border-danger/30',
         icon: XCircle,
       };
     case 'cancelled':
@@ -192,7 +192,7 @@ function rollupPresentation(status: RollupStatus): StatusPresentation {
     case 'synced':
       return {
         label: 'synced',
-        className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+        className: 'bg-success-surface text-success border-success-border',
         icon: CheckCircle2,
       };
     case 'syncing':
@@ -204,7 +204,7 @@ function rollupPresentation(status: RollupStatus): StatusPresentation {
     case 'partial':
       return {
         label: 'partial',
-        className: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
+        className: 'bg-warning-surface text-warning border-warning-solid/30',
         icon: AlertTriangle,
       };
     case 'pending':
@@ -217,7 +217,7 @@ function rollupPresentation(status: RollupStatus): StatusPresentation {
     case 'failed':
       return {
         label: 'failed',
-        className: 'bg-red-500/10 text-red-400 border-red-500/30',
+        className: 'bg-danger/10 text-danger border-danger/30',
         icon: XCircle,
       };
     case 'unreported':
@@ -480,13 +480,13 @@ function TargetCheckboxRow({
         )}
         <span
           className={`inline-flex items-center gap-1 text-[11px] ${
-            machine.online ? 'text-emerald-400' : 'text-muted-foreground'
+            machine.online ? 'text-success' : 'text-muted-foreground'
           }`}
           title={machine.online ? 'online' : 'offline'}
         >
           <span
             className={`inline-block h-1.5 w-1.5 rounded-full ${
-              machine.online ? 'bg-emerald-500' : 'bg-muted-foreground/60'
+              machine.online ? 'bg-success' : 'bg-muted-foreground/60'
             }`}
             aria-hidden="true"
           />

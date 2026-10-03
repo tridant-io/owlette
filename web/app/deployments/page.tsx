@@ -31,33 +31,37 @@ import { toast } from '@/lib/toast';
 function getStatusIcon(status: string) {
   switch (status) {
     case 'completed':
-      return <CheckCircle2 className="h-5 w-5 text-green-500" />;
+      return <CheckCircle2 className="h-5 w-5 text-success" />;
     case 'uninstalled':
-      return <Trash2 className="h-5 w-5 text-purple-500" />;
+      return <Trash2 className="h-5 w-5 text-chart-4" />;
     case 'failed':
-      return <XCircle className="h-5 w-5 text-red-500" />;
+      return <XCircle className="h-5 w-5 text-danger" />;
     case 'cancelled':
-      return <XCircle className="h-5 w-5 text-orange-500" />;
+      return <XCircle className="h-5 w-5 text-accent-coral" />;
     case 'in_progress':
       return <Loader2 className="h-5 w-5 text-accent-cyan animate-spin" />;
     case 'partial':
-      return <Clock className="h-5 w-5 text-yellow-500" />;
+      return <Clock className="h-5 w-5 text-warning" />;
     default:
       return <Clock className="h-5 w-5 text-muted-foreground" />;
   }
 }
 
+// outcomes take the status families. the rest are categorical: in-flight steps
+// take the signal and the warm accents, and purple has no status family, so the
+// install steps borrow --chart-4. a fill with no text class keeps the badge's
+// primary-foreground ink, which reads on each of them in both themes
 const statusColors: Record<string, string> = {
-  completed: 'bg-green-600 hover:bg-green-700',
-  uninstalled: 'bg-purple-600 hover:bg-purple-700',
-  failed: 'bg-red-600 hover:bg-red-700',
-  cancelled: 'bg-orange-600 hover:bg-orange-700',
-  in_progress: 'bg-cyan-600 hover:bg-cyan-700',
-  partial: 'bg-yellow-600 hover:bg-yellow-700',
-  pending: 'bg-muted hover:bg-muted',
-  closing_processes: 'bg-amber-600 hover:bg-amber-700',
-  downloading: 'bg-cyan-600 hover:bg-cyan-700',
-  installing: 'bg-purple-600 hover:bg-purple-700',
+  completed: 'bg-success-solid text-success-solid-foreground',
+  uninstalled: 'bg-chart-4',
+  failed: 'bg-danger-solid text-danger-solid-foreground',
+  cancelled: 'bg-accent-coral',
+  in_progress: 'bg-primary',
+  partial: 'bg-warning-solid text-warning-solid-foreground',
+  pending: 'bg-muted text-muted-foreground',
+  closing_processes: 'bg-accent-warm',
+  downloading: 'bg-primary',
+  installing: 'bg-chart-4',
 };
 
 function getStatusBadge(status: string, error?: string) {
@@ -184,7 +188,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                 <p>more options</p>
               </TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="end" className="border-border bg-secondary">
+            <DropdownMenuContent align="end" className="border-border bg-raised">
               {deployment.targets.some((t: DeploymentTarget) => t.status === 'failed') && (
                 <DropdownMenuItem
                   disabled={bulkRetrying}
@@ -215,7 +219,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                   e.stopPropagation();
                   onDelete(deployment.id);
                 }}
-                className="text-red-400 focus:bg-red-950/30 focus:text-red-400 cursor-pointer"
+                className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
               >
                 <X className="h-4 w-4 mr-2" />
                 delete record
@@ -284,10 +288,10 @@ const DeploymentRow = React.memo(function DeploymentRow({
                         {(target.status === 'pending' || target.status === 'closing_processes' || target.status === 'downloading' || target.status === 'installing') && (
                           <Button
                             size="sm"
-                            variant="ghost"
+                            variant="ghost-destructive"
                             onClick={() => onCancel(deployment.id, target.machineId, deployment.installer_name)}
                             aria-label={`cancel deployment to ${target.machineId}`}
-                            className="h-7 px-2 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                            className="h-7 px-2 cursor-pointer"
                           >
                             <X className="h-4 w-4" />
                           </Button>
@@ -603,7 +607,7 @@ export default function DeploymentsPage() {
             <UpdateOwletteButton siteId={currentSiteId} machines={machines} />
             <Button
               onClick={() => setDeployDialogOpen(true)}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               <Plus className="h-4 w-4 mr-2" />
               new deployment
@@ -633,7 +637,7 @@ export default function DeploymentsPage() {
               <p className="text-sm text-muted-foreground mb-4">create your first deployment to install software across your machines</p>
               <Button
                 onClick={() => setDeployDialogOpen(true)}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
                 size="sm"
               >
                 <Plus className="h-4 w-4 mr-1" />

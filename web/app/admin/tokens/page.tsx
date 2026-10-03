@@ -37,6 +37,14 @@ interface TokenInfo {
 
 const ALL = 'all';
 
+// tinted chips: light takes the family surface, dark keeps the 20% tints they always had
+const CHIP = {
+  success: 'border-success-border bg-success-surface text-success dark:bg-success/20',
+  warning: 'border-warning-border bg-warning-surface text-warning dark:border-warning-solid/30 dark:bg-warning-solid/20',
+  danger: 'border-danger-border bg-danger-surface text-danger dark:border-danger-solid/30 dark:bg-danger-solid/20',
+  signal: 'border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan dark:bg-accent-cyan/20',
+};
+
 export default function TokensPage() {
   const { user, isSuperadmin, userSites, lastSiteId, updateLastSite, userPreferences } = useAuth();
   const { sites } = useSites(user?.uid, userSites, isSuperadmin);
@@ -245,18 +253,18 @@ export default function TokensPage() {
 
   const getExpiryStatus = (expiresAt: string | null) => {
     if (!expiresAt) {
-      return { label: 'Never expires', color: 'bg-green-500/20 text-green-400 border-green-500/30' };
+      return { label: 'Never expires', color: CHIP.success };
     }
     const expiry = new Date(expiresAt);
     const now = new Date();
     if (expiry < now) {
-      return { label: 'Expired', color: 'bg-red-500/20 text-red-400 border-red-500/30' };
+      return { label: 'Expired', color: CHIP.danger };
     }
     const daysUntil = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     if (daysUntil <= 7) {
-      return { label: `Expires in ${daysUntil}d`, color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' };
+      return { label: `Expires in ${daysUntil}d`, color: CHIP.warning };
     }
-    return { label: `Expires ${expiry.toLocaleDateString()}`, color: 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/30' };
+    return { label: `Expires ${expiry.toLocaleDateString()}`, color: CHIP.signal };
   };
 
   // Distinct versions present, newest-first, for the version filter.
@@ -336,7 +344,7 @@ export default function TokensPage() {
                 variant="destructive"
                 size="sm"
                 onClick={() => setRevokeAllDialogOpen(true)}
-                className="bg-red-600 hover:bg-red-700 cursor-pointer"
+                className="cursor-pointer"
               >
                 <Trash2 className="h-4 w-4 mr-2" />
                 revoke all
@@ -380,7 +388,7 @@ export default function TokensPage() {
                 onClick={() => setDuplicatesOnly((v) => !v)}
                 aria-pressed={duplicatesOnly}
                 className={`border-border cursor-pointer ${duplicatesOnly
-                  ? 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/40 hover:bg-accent-cyan/30!'
+                  ? 'bg-accent-cyan/10 text-accent-cyan border-accent-cyan/40 dark:hover:bg-accent-cyan/30!'
                   : 'text-foreground hover:bg-accent! hover:text-foreground!'}`}
               >
                 <Layers className="h-4 w-4 mr-2" />
@@ -400,7 +408,7 @@ export default function TokensPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => setPruneDialogOpen(true)}
-                    className="border-amber-500/40 text-amber-400 hover:bg-amber-950/30! hover:text-amber-300! cursor-pointer"
+                    className="border-warning-border text-warning hover:bg-warning-surface! hover:text-warning! cursor-pointer"
                   >
                     <Eraser className="h-4 w-4 mr-2" />
                     prune dead ({prunableCount})
@@ -466,7 +474,7 @@ export default function TokensPage() {
                                     <Badge
                                       tabIndex={0}
                                       aria-label={`one of ${dupCount} tokens sharing machine id ${token.machineId}; revoking disconnects whichever agent holds this one`}
-                                      className="cursor-help bg-amber-500/20 text-amber-400 border-amber-500/30"
+                                      className={`cursor-help ${CHIP.warning}`}
                                     >
                                       duplicate
                                     </Badge>
@@ -503,7 +511,7 @@ export default function TokensPage() {
                                 setTokenToRevoke(token);
                                 setRevokeDialogOpen(true);
                               }}
-                              className="text-amber-400 hover:text-amber-300! hover:bg-amber-950/30!"
+                              className="text-warning hover:text-warning! hover:bg-warning-surface!"
                             >
                               <KeyRound className="h-4 w-4 mr-1" />
                               revoke
@@ -522,7 +530,7 @@ export default function TokensPage() {
 
       {/* Revoke Single Token Dialog */}
       <Dialog open={revokeDialogOpen} onOpenChange={setRevokeDialogOpen}>
-        <DialogContent className="bg-background border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
             <DialogTitle>revoke token for {tokenToRevoke?.machineId}?</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -540,7 +548,7 @@ export default function TokensPage() {
             <Button
               onClick={handleRevokeToken}
               disabled={isRevoking}
-              className="bg-amber-600 hover:bg-amber-700"
+              className="bg-warning-solid text-warning-solid-foreground"
             >
               {isRevoking ? 'revoking...' : 'revoke token'}
             </Button>
@@ -550,9 +558,9 @@ export default function TokensPage() {
 
       {/* Revoke All Tokens Dialog */}
       <Dialog open={revokeAllDialogOpen} onOpenChange={setRevokeAllDialogOpen}>
-        <DialogContent className="bg-background border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-red-400">
+            <DialogTitle className="flex items-center gap-2 text-danger">
               <AlertTriangle className="h-5 w-5" />
               revoke all tokens?
             </DialogTitle>
@@ -560,7 +568,7 @@ export default function TokensPage() {
               This will immediately invalidate ALL agent tokens for this site ({tokens.length} tokens).
               All agents will disconnect and require re-registration to reconnect.
               <br /><br />
-              <strong className="text-amber-400">this action cannot be undone.</strong>
+              <strong className="text-warning">this action cannot be undone.</strong>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -571,9 +579,9 @@ export default function TokensPage() {
               Cancel
             </AdminButton>
             <Button
+              variant="destructive"
               onClick={handleRevokeAll}
               disabled={isRevoking}
-              className="bg-red-600 hover:bg-red-700"
             >
               {isRevoking ? 'revoking...' : `revoke all ${tokens.length} tokens`}
             </Button>
@@ -583,9 +591,9 @@ export default function TokensPage() {
 
       {/* Prune Dead Tokens Dialog */}
       <Dialog open={pruneDialogOpen} onOpenChange={setPruneDialogOpen}>
-        <DialogContent className="bg-background border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-amber-400">
+            <DialogTitle className="flex items-center gap-2 text-warning">
               <Eraser className="h-5 w-5" />
               prune dead tokens?
             </DialogTitle>
@@ -605,7 +613,7 @@ export default function TokensPage() {
             <Button
               onClick={handlePrune}
               disabled={isPruning}
-              className="bg-amber-600 hover:bg-amber-700"
+              className="bg-warning-solid text-warning-solid-foreground"
             >
               {isPruning ? 'pruning...' : `prune ${prunableCount} dead tokens`}
             </Button>

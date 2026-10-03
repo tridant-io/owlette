@@ -88,11 +88,28 @@ const TEXT_PAIRS: Array<[string, string]> = [
   ['accent-cyan', 'card'],
   ['destructive', 'card'],
   ['chart-axis', 'card'],
+  // translucent pairs the ui relies on: cyan text on its own tint, faded muted text
+  ['accent-cyan', 'accent-cyan@0.1'],
+  ['muted-foreground@0.8', 'card'],
+  ['muted-foreground@0.8', 'background'],
+  // ink on sodium amber (the update flow)
+  ['background', 'accent-warm'],
+  // the first net and disk-io series double as readout text
+  ...(['series-nic-tx-1', 'series-nic-rx-1', 'series-disk-io-read', 'series-disk-io-write'] as const).flatMap(
+    (series): Array<[string, string]> => [[series, 'card'], [series, 'background']],
+  ),
+  // menus sit on --secondary
   ...(['danger', 'warning', 'success', 'info'] as const).flatMap((status): Array<[string, string]> => [
     [status, 'background'],
     [status, 'card'],
+    [status, 'secondary'],
     [status, `${status}-surface`],
     [`${status}-solid-foreground`, `${status}-solid`],
+  ]),
+  ...[1, 2, 3, 4, 5, 6, 7, 8].flatMap((n): Array<[string, string]> => [
+    [`block-${n}-foreground`, `block-${n}`],
+    [`block-${n}-ink`, 'card'],
+    [`block-${n}-ink`, 'raised'],
   ]),
 ];
 
@@ -102,14 +119,18 @@ describe.each([
 ])('%s theme contrast', (_name, selector) => {
   const tokens = { ...block(':root'), ...block(selector) };
   const card = parse(tokens.card).rgb;
-  const paint = (name: string): Rgb => {
+  /** `name` or `name@alpha`, composited over `base` the way the browser paints it */
+  const paint = (spec: string, base: Rgb = card): Rgb => {
+    const [name, alpha] = spec.split('@');
     const value = tokens[name];
     if (!value) throw new Error(`--${name} is not defined for ${selector}`);
-    return over(parse(value), card);
+    const colour = parse(value);
+    return over({ rgb: colour.rgb, alpha: colour.alpha * (alpha ? Number(alpha) : 1) }, base);
   };
 
   it.each(TEXT_PAIRS)('--%s on --%s clears 4.5:1', (text, surface) => {
-    expect(contrast(paint(text), paint(surface))).toBeGreaterThanOrEqual(TEXT);
+    const behind = paint(surface);
+    expect(contrast(paint(text, behind), behind)).toBeGreaterThanOrEqual(TEXT);
   });
 });
 

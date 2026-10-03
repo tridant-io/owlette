@@ -101,7 +101,7 @@ export default function DmcaFormPage() {
       <main className="mx-auto max-w-2xl px-4 py-12">
         <Card>
           <CardContent className="space-y-4 pt-6">
-            <div className="flex items-center gap-2 text-green-500">
+            <div className="flex items-center gap-2 text-success">
               <CheckCircle2 className="h-5 w-5" />
               <span className="text-sm font-medium">notice received</span>
             </div>

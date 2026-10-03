@@ -87,13 +87,13 @@ function DeviceColumnHeader({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1 text-foreground hover:text-white cursor-pointer"
+          className="inline-flex items-center gap-1 text-foreground cursor-pointer"
         >
           <span>{displayLabel}</span>
           <ChevronDown className="h-3 w-3 opacity-70" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="border-border bg-secondary">
+      <DropdownMenuContent align="start" className="border-border bg-raised">
         <DropdownMenuRadioGroup
           value={selectedId ?? ''}
           onValueChange={(value) => onSelect(kind, value === '' ? null : value)}
@@ -141,7 +141,7 @@ function DeviceColumnHeader({
  * don't wire `deviceUnion` through. */
 export const MemoizedTableHeader = memo(function MemoizedTableHeader() {
   return (
-    <TableHeader className="sticky top-0 z-10 bg-card-header">
+    <TableHeader className="sticky top-0 z-10 bg-card-header header-lit">
       <TableRow className="border-border/60 hover:bg-transparent">
         <TableHead className="text-foreground w-8"></TableHead>
         <TableHead className="text-foreground w-[130px]">hostname</TableHead>
@@ -174,7 +174,7 @@ export const MachineTableHeader = memo(function MachineTableHeader({
   setListPref,
 }: MachineTableHeaderProps) {
   return (
-    <TableHeader className="sticky top-0 z-10 bg-card-header">
+    <TableHeader className="sticky top-0 z-10 bg-card-header header-lit">
       <TableRow className="border-border/60 hover:bg-transparent">
         <TableHead className="text-foreground w-8"></TableHead>
         <TableHead className="text-foreground w-[130px]">hostname</TableHead>
@@ -388,7 +388,7 @@ export const MachineRow = memo(function MachineRow({
     <>
       <TableRow
         data-testid="machine-row"
-        className="border-border/50 bg-card-sunken hover:bg-secondary/30 cursor-pointer"
+        className="border-border/50 bg-card-sunken hover:bg-[var(--surface-hover)] dark:hover:bg-secondary/30 cursor-pointer"
         onClick={handleRowClick}
       >
         {/* The row click is the mouse target; this is the disclosure keyboard
@@ -410,7 +410,7 @@ export const MachineRow = memo(function MachineRow({
             />
           </button>
         </TableCell>
-        <TableCell className="w-[130px] font-medium text-white select-text overflow-hidden">
+        <TableCell className="w-[130px] font-medium text-foreground select-text overflow-hidden">
           <div className="flex flex-col gap-0.5 min-w-0">
             <div className="flex items-center gap-2">
               <div className="relative flex-shrink-0">
@@ -424,7 +424,7 @@ export const MachineRow = memo(function MachineRow({
                         onMetricClick?.('display');
                       }}
                       data-testid="open-display-panel"
-                      className="bg-card border border-border text-muted-foreground hover:text-white h-8 w-8 p-0"
+                      className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 w-8 p-0"
                       aria-label="view displays"
                     >
                       <Monitor className="h-4 w-4" />
@@ -436,7 +436,7 @@ export const MachineRow = memo(function MachineRow({
                 </Tooltip>
                 {displayDriftCount > 0 && (
                   <span
-                    className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-amber-500 pointer-events-none"
+                    className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-warning-solid pointer-events-none"
                     role="img"
                     aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
                     title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
@@ -482,7 +482,7 @@ export const MachineRow = memo(function MachineRow({
                     <p className="max-w-xs mt-1">{clockTooltip.scheduleLine}</p>
                   )}
                   {clockTooltip.advisory && (
-                    <p className="max-w-xs mt-1 text-amber-400">{clockTooltip.advisory}</p>
+                    <p className="max-w-xs mt-1 text-warning-solid dark:text-warning">{clockTooltip.advisory}</p>
                   )}
                 </TooltipContent>
               </Tooltip>
@@ -506,13 +506,13 @@ export const MachineRow = memo(function MachineRow({
             clipped button never takes focus. */}
         {/* CPU with Sparkline */}
         <TableCell
-          className="text-white p-0 w-0 sm:w-[150px] overflow-hidden"
+          className="text-foreground p-0 w-0 sm:w-[150px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('cpu'); }}
         >
           <button
             type="button"
             aria-label={`open cpu history for ${machine.machineId}`}
-            className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
+            className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
           >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.cpu} color="cpu" height={52} loading={sparklineData.loading} />
@@ -539,13 +539,13 @@ export const MachineRow = memo(function MachineRow({
         </TableCell>
         {/* Memory with Sparkline */}
         <TableCell
-          className="text-white p-0 w-0 sm:w-[110px] overflow-hidden"
+          className="text-foreground p-0 w-0 sm:w-[110px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('memory'); }}
         >
           <button
             type="button"
             aria-label={`open ram history for ${machine.machineId}`}
-            className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
+            className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
           >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.memory} color="memory" height={52} loading={sparklineData.loading} />
@@ -567,13 +567,13 @@ export const MachineRow = memo(function MachineRow({
         </TableCell>
         {/* Disk with Sparkline */}
         <TableCell
-          className="text-white p-0 w-0 lg:w-[150px] overflow-hidden"
+          className="text-foreground p-0 w-0 lg:w-[150px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('disk'); }}
         >
           <button
             type="button"
             aria-label={`open disk history for ${machine.machineId}`}
-            className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
+            className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
           >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.disk} color="disk" height={52} loading={sparklineData.loading} />
@@ -613,13 +613,13 @@ export const MachineRow = memo(function MachineRow({
         </TableCell>
         {/* GPU with Sparkline */}
         <TableCell
-          className="text-white p-0 w-0 lg:w-[190px] overflow-hidden"
+          className="text-foreground p-0 w-0 lg:w-[190px] overflow-hidden"
           onClick={(e) => { e.stopPropagation(); onMetricClick?.('gpu'); }}
         >
           <button
             type="button"
             aria-label={`open gpu history for ${machine.machineId}`}
-            className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
+            className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
           >
             <div className="opacity-80">
               <SparklineChart data={sparklineData.gpu} color="gpu" height={52} loading={sparklineData.loading} />
@@ -653,7 +653,7 @@ export const MachineRow = memo(function MachineRow({
         </TableCell>
         {/* Network */}
         <TableCell
-          className="text-white p-0 w-0 xl:w-[130px] overflow-hidden"
+          className="text-foreground p-0 w-0 xl:w-[130px] overflow-hidden"
           onClick={(e) => {
             e.stopPropagation();
             if (nicDevice) onMetricClick?.(`${nicDevice.id}_tx_util` as MetricType);
@@ -678,7 +678,7 @@ export const MachineRow = memo(function MachineRow({
               <button
                 type="button"
                 aria-label={`open network history for ${machine.machineId}`}
-                className={cn('relative block w-full text-left cursor-pointer hover:bg-muted/50 transition-colors overflow-hidden invisible xl:visible', staleClass)}
+                className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible xl:visible', staleClass)}
               >
                 <div className={`absolute left-0 top-1/2 -translate-y-1/2 h-[52px] w-0.5 ${getUsageColorClass(maxUtil)}`} />
                 <div className="p-2 pl-2.5">
@@ -686,10 +686,10 @@ export const MachineRow = memo(function MachineRow({
                     {nicDevice.id}
                   </div>
                   <div className="text-xs font-medium">
-                    <span className="text-orange-400">{'\u2191 '}{formatThroughput(nicDevice.txBps)}</span>
+                    <span className="text-[var(--series-nic-tx-1)]">{'\u2191 '}{formatThroughput(nicDevice.txBps)}</span>
                   </div>
                   <div className="text-xs font-medium">
-                    <span className="text-green-400">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
+                    <span className="text-[var(--series-nic-rx-1)]">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
                   </div>
                 </div>
               </button>
@@ -700,7 +700,7 @@ export const MachineRow = memo(function MachineRow({
           <Tooltip>
             <TooltipTrigger asChild>
               <span
-                className={`text-xs flex items-center gap-1 cursor-help ${heartbeat.isStale ? 'text-red-400' : 'text-muted-foreground'}`}
+                className={`text-xs flex items-center gap-1 cursor-help ${heartbeat.isStale ? 'text-danger' : 'text-muted-foreground'}`}
               >
                 <Clock className="h-3 w-3" />
                 {heartbeat.display}
@@ -771,8 +771,8 @@ export const MachineRow = memo(function MachineRow({
                           <div className="flex-1 min-w-40">
                             <div className="flex items-center gap-2 mb-1">
                               <Cog className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                              <span className="text-white font-medium truncate select-text">{process.name}</span>
-                              <Badge className={`text-xs flex-shrink-0 select-none ${!machine.online ? 'bg-muted text-muted-foreground' : process.status === 'RUNNING' ? 'bg-green-600' : process.status === 'INACTIVE' ? 'bg-slate-600 text-slate-200' : process.status === 'LAUNCH_FAILED' || process.status === 'STOPPED' || process.status === 'KILLED' ? 'bg-red-600 text-white' : 'bg-yellow-600'}`}>
+                              <span className="text-foreground font-medium truncate select-text">{process.name}</span>
+                              <Badge className={`text-xs flex-shrink-0 select-none ${!machine.online ? 'bg-muted text-muted-foreground' : process.status === 'RUNNING' ? 'bg-success-solid text-success-solid-foreground' : process.status === 'INACTIVE' ? 'bg-muted-foreground/40 text-foreground' : process.status === 'LAUNCH_FAILED' || process.status === 'STOPPED' || process.status === 'KILLED' ? 'bg-danger-solid text-danger-solid-foreground' : 'bg-warning-solid text-warning-solid-foreground'}`}>
                                 {(!machine.online ? 'unknown' : process.status === 'LAUNCH_FAILED' ? 'failed' : process.status).toLowerCase()}
                               </Badge>
                               {process.pid && <span className="text-xs text-muted-foreground flex-shrink-0 select-text">PID: {process.pid}</span>}
@@ -781,7 +781,7 @@ export const MachineRow = memo(function MachineRow({
                               <span className="truncate" title={process.exe_path}>{process.exe_path}</span>
                               {process.file_path && (
                                 <>
-                                  <span className="flex-shrink-0 text-muted-foreground/70">›</span>
+                                  <span className="flex-shrink-0 text-muted-foreground dark:text-muted-foreground/70">›</span>
                                   <span className="truncate" title={process.file_path}>{process.file_path}</span>
                                 </>
                               )}
@@ -814,7 +814,7 @@ export const MachineRow = memo(function MachineRow({
                                   {!isSiteAdmin ? (
                                     // Non-admins are read-only: static mode pill, no toggle (which would 403).
                                     <div className="flex items-center h-8">
-                                      <span className={`flex items-center px-3 text-sm font-medium rounded-md border bg-card ${currentMode === 'always' ? 'text-emerald-400 border-emerald-600/40' : currentMode === 'scheduled' ? 'text-blue-400 border-blue-600/40' : 'text-muted-foreground border-border'}`}>
+                                      <span className={`flex items-center px-3 text-sm font-medium rounded-md border bg-card ${currentMode === 'always' ? 'text-success border-success-border' : currentMode === 'scheduled' ? 'text-info border-info-border' : 'text-muted-foreground border-border'}`}>
                                         {currentMode === 'always' ? 'always on' : currentMode === 'scheduled' ? 'scheduled' : 'off'}
                                       </span>
                                     </div>
@@ -829,13 +829,13 @@ export const MachineRow = memo(function MachineRow({
                                       const labels = { off: 'off', always: 'always on', scheduled: 'scheduled' };
                                       const activeColors = {
                                         off: 'bg-muted text-foreground',
-                                        always: 'bg-emerald-600 text-white',
-                                        scheduled: 'bg-blue-600 text-white',
+                                        always: 'bg-success-solid text-success-solid-foreground',
+                                        scheduled: 'bg-info-solid text-info-solid-foreground',
                                       };
 
                                       if (mode === 'scheduled') {
                                         return (
-                                          <span key={mode} className={`flex items-stretch ${isActive ? 'bg-blue-600 text-white' : 'bg-card text-muted-foreground'}`}>
+                                          <span key={mode} className={`flex items-stretch ${isActive ? 'bg-info-solid text-info-solid-foreground' : 'bg-card text-muted-foreground'}`}>
                                             <button
                                               type="button"
                                               aria-pressed={isActive}
@@ -844,14 +844,14 @@ export const MachineRow = memo(function MachineRow({
                                             >
                                               {labels[mode]}
                                             </button>
-                                            <span className={`w-px ${isActive ? 'bg-blue-400/50' : 'bg-border'}`} />
+                                            <span className={`w-px ${isActive ? 'bg-info-solid-foreground/30' : 'bg-border'}`} />
                                             <Tooltip>
                                               <TooltipTrigger asChild>
                                                 <button
                                                   type="button"
                                                   onClick={() => onConfigureSchedule?.(process)}
                                                   aria-label={`configure schedule for ${process.name}`}
-                                                  className={`px-1.5 transition-colors cursor-pointer flex items-center ${isActive ? 'hover:bg-blue-500' : 'hover:bg-accent/50'}`}
+                                                  className={`px-1.5 transition-colors cursor-pointer flex items-center ${isActive ? 'hover:bg-info-solid-foreground/15' : 'hover:bg-accent/50'}`}
                                                 >
                                                   <Settings2 className="h-3.5 w-3.5" />
                                                 </button>
@@ -914,7 +914,7 @@ export const MachineRow = memo(function MachineRow({
                                     variant="ghost"
                                     size="sm"
                                     onClick={() => onKillProcess(process.id, process.name)}
-                                    className="bg-card border border-border text-red-400 hover:bg-red-950/50 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                    className="bg-card border border-border text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
                                     disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
                                   >
                                     <Square className="h-3 w-3 mr-1" />
@@ -927,7 +927,7 @@ export const MachineRow = memo(function MachineRow({
                                 <div className="flex lg:hidden items-center gap-2 sm:ml-2 flex-shrink-0">
                                   {!isSiteAdmin ? (
                                     // Non-admins are read-only: static mode pill, no write menu.
-                                    <span className={`flex items-center px-2.5 h-8 text-xs font-medium rounded-md border bg-card ${currentMode === 'always' ? 'text-emerald-400 border-emerald-600/40' : currentMode === 'scheduled' ? 'text-blue-400 border-blue-600/40' : 'text-muted-foreground border-border'}`}>
+                                    <span className={`flex items-center px-2.5 h-8 text-xs font-medium rounded-md border bg-card ${currentMode === 'always' ? 'text-success border-success-border' : currentMode === 'scheduled' ? 'text-info border-info-border' : 'text-muted-foreground border-border'}`}>
                                       {currentMode === 'always' ? 'always on' : currentMode === 'scheduled' ? 'scheduled' : 'off'}
                                     </span>
                                   ) : (
@@ -940,7 +940,7 @@ export const MachineRow = memo(function MachineRow({
                                             variant="ghost"
                                             size="sm"
                                             aria-label={`more options for ${process.name}`}
-                                            className="bg-card border border-border text-muted-foreground hover:text-white h-8 w-8 p-0"
+                                            className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 w-8 p-0"
                                           >
                                             <MoreVertical className="h-4 w-4" />
                                           </Button>
@@ -950,7 +950,7 @@ export const MachineRow = memo(function MachineRow({
                                         <p>more options</p>
                                       </TooltipContent>
                                     </Tooltip>
-                                    <DropdownMenuContent align="end" className="border-border bg-secondary w-52">
+                                    <DropdownMenuContent align="end" className="border-border bg-raised w-52">
                                       <DropdownMenuLabel className="text-muted-foreground text-xs">
                                         launch mode
                                       </DropdownMenuLabel>
@@ -965,16 +965,16 @@ export const MachineRow = memo(function MachineRow({
                                         <DropdownMenuRadioItem value="off" className="cursor-pointer">
                                           off
                                         </DropdownMenuRadioItem>
-                                        <DropdownMenuRadioItem value="always" className="text-emerald-400 cursor-pointer">
+                                        <DropdownMenuRadioItem value="always" className="text-success cursor-pointer">
                                           always on
                                         </DropdownMenuRadioItem>
-                                        <DropdownMenuRadioItem value="scheduled" className="text-blue-400 cursor-pointer">
+                                        <DropdownMenuRadioItem value="scheduled" className="text-info cursor-pointer">
                                           scheduled
                                         </DropdownMenuRadioItem>
                                       </DropdownMenuRadioGroup>
                                       <DropdownMenuItem
                                         onClick={() => onConfigureSchedule?.(process)}
-                                        className="text-blue-400 focus:bg-blue-950/30 focus:text-blue-300 cursor-pointer pl-8"
+                                        className="text-info focus:bg-info-surface focus:text-info cursor-pointer pl-8"
                                       >
                                         <Settings2 className="mr-2 h-3.5 w-3.5" />
                                         configure schedule
@@ -1022,7 +1022,7 @@ export const MachineRow = memo(function MachineRow({
                                         size="sm"
                                         onClick={() => onKillProcess(process.id, process.name)}
                                         aria-label={`kill ${process.name}`}
-                                        className="bg-card border border-border text-red-400 hover:bg-red-950/50 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50 h-8 w-8 p-0"
+                                        className="bg-card border border-border text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50 h-8 w-8 p-0"
                                         disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
                                       >
                                         <Square className="h-3 w-3" />

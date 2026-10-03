@@ -120,13 +120,13 @@ function formatDuration(run: TalonRunListItem): string {
 export function talonStatusIcon(status: string | null | undefined) {
   switch (status) {
     case 'succeeded':
-      return <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />;
+      return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
     case 'failed':
-      return <XCircle className="h-3.5 w-3.5 text-red-500" />;
+      return <XCircle className="h-3.5 w-3.5 text-danger" />;
     case 'skipped':
-      return <MinusCircle className="h-3.5 w-3.5 text-orange-500" />;
+      return <MinusCircle className="h-3.5 w-3.5 text-accent-coral" />;
     case 'missed':
-      return <AlertTriangle className="h-3.5 w-3.5 text-yellow-500" />;
+      return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
     case 'running':
       return <Loader2 className="h-3.5 w-3.5 animate-spin text-accent-cyan" />;
     // Deferral crumbs: `pending` is still counting down (live clock, not the muted "never
@@ -208,7 +208,7 @@ export function TalonRunRow({ run }: TalonRunRowProps) {
             <TooltipTrigger asChild>
               <span
                 data-testid="talon-run-disabled-reason"
-                className="block truncate text-amber-600 dark:text-amber-400"
+                className="block truncate text-warning"
               >
                 talon switched off — {disabledReason}
               </span>
@@ -222,7 +222,7 @@ export function TalonRunRow({ run }: TalonRunRowProps) {
             <TooltipTrigger asChild>
               <span
                 className={`block truncate ${
-                  condition.verdict === 'fail' ? 'text-red-400' : 'text-muted-foreground'
+                  condition.verdict === 'fail' ? 'text-danger' : 'text-muted-foreground'
                 }`}
               >
                 verdict: {condition.verdict}
@@ -258,7 +258,7 @@ export function TalonRunRow({ run }: TalonRunRowProps) {
           <TooltipTrigger asChild>
             <span
               className={`w-20 flex-shrink-0 text-right tabular-nums ${
-                outputSummary.failed ? 'text-red-400' : 'text-muted-foreground'
+                outputSummary.failed ? 'text-danger' : 'text-muted-foreground'
               }`}
             >
               {outputSummary.label}

@@ -43,7 +43,7 @@ command, and the quick build re-copies the exe from `target/release/`.
 
 ```
 desktop/
-├─ index.html            # <html class="dark">, body font-sans antialiased
+├─ index.html            # <html class="dark"> fallback + pre-paint theme class, body font-sans antialiased
 ├─ components.json       # shadcn config (new-york, neutral, cssVariables)
 ├─ vite.config.ts        # @ alias, tailwind 4 plugin, tauri dev server, vitest
 ├─ public/               # icon.svg, owlette-eye.svg
@@ -62,6 +62,7 @@ desktop/
 │  ├─ lib/fsProbe.ts     # the real disk behind it + per-machine search paths
 │  ├─ lib/dropQueue.ts   # the confirm-card queue between a drop and a write
 │  ├─ lib/sidebarWidth.ts    # the sidebar clamp + drag/keyboard geometry
+│  ├─ lib/theme.ts       # the appearance choices (system / dark / light)
 │  └─ test/              # vitest setup + design-system smoke test
 └─ src-tauri/
    ├─ src/paths.rs       # %PROGRAMDATA%\Owlette layout + path scoping
@@ -74,7 +75,7 @@ desktop/
    ├─ src/tray.rs        # notification-area icon, menu, status monitor
    ├─ src/startup_link.rs # "start on login": {userstartup}\Owlette.lnk; on macos / linux this user's
    │                      #   override of the installer's login item (launchctl disable / systemctl --user mask)
-   ├─ src/window_state.rs # per-user layout memory (window size, sidebar width)
+   ├─ src/window_state.rs # per-user layout memory (window size, sidebar width, appearance)
    ├─ src/commands.rs    # #[tauri::command] adapters (no logic)
    └─ src/lib.rs         # builder, plugins, watcher wiring, exit cleanup
 ```
@@ -336,8 +337,33 @@ CSS imports to an empty string by default, which would silently empty the
 
 ## Window
 
-`src-tauri/tauri.conf.json` sets the window to 1280×800 with a 900×600 minimum,
-centred, `theme: "Dark"`, and `backgroundColor: "#020B16"` — the sRGB value of
-the dark `--background` token (`oklch(0.145 0.03 250)`), so the native window
-paints the app's background instead of white before the webview's first frame.
-`dragDropEnabled` is on.
+`src-tauri/tauri.conf.json` sets the window to 1060×640 with a 780×540 minimum,
+centred, and `backgroundColor: "#020B16"` — the sRGB value of the dark
+`--background` token (`oklch(0.145 0.03 250)`), so the native window paints the
+app's background instead of white before setup runs. `dragDropEnabled` is on.
+Neither config pins a `theme`.
+
+### Appearance
+
+The operator picks system, dark or light from `appearance` in the app menu. It is
+stored in `layout.json` as `{"appearance": {"theme": "system"}}` (`system` when
+absent) and it is the **window** theme, set from Rust; the webview never picks a
+theme itself.
+
+- Before the window first shows, `window_state::restore` pins the window theme
+  for dark or light (`system` leaves it unpinned) and paints the window and
+  webview background to match: `#020B16` dark, `#F4F7FB` light (the light
+  `--background`, `oklch(0.975 0.006 250)`). Under `system` the colour follows
+  the theme the OS reports, and dark when it reports nothing.
+- The window theme drives the webview's `prefers-color-scheme`. `main.tsx` runs
+  next-themes in `system` and never calls `setTheme`, so the `.dark` / `.light`
+  class follows the window. A head script in `index.html` resolves that class
+  before first paint, the way next-themes does after mount, so a light window
+  never paints a dark first frame; `class="dark"` stays as the fallback.
+- `set_appearance_theme` re-themes the open window at once, then stores the
+  choice. `WindowEvent::ThemeChanged` repaints the background when the OS
+  re-themes an unpinned window.
+- Linux is the least certain: tao drives WebKitGTK through GTK's
+  `prefer-dark-theme` setting, a portal reporting no preference reads as light,
+  and switching back to `system` while running clears the OS dark preference
+  until the next launch.

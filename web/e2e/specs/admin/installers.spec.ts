@@ -114,6 +114,10 @@ test('lists seeded versions with sizes, uploader and the latest badge on the rig
     .locator('div.bg-card.border')
     .filter({ hasText: 'current latest version' });
   await expect(statsCard.getByText(LATEST_VERSION.version, { exact: true })).toBeVisible();
+  // the latest offers every platform it has, and says which it lacks
+  await expect(statsCard.getByRole('link', { name: 'download windows' })).toHaveAttribute('href', /\.exe$/);
+  await expect(statsCard.getByRole('link', { name: /^download macOS/ })).toHaveAttribute('href', /\.pkg$/);
+  await expect(statsCard.locator('[data-platform="linux_x64"]')).toContainText('not uploaded');
 
   const table = page.locator('table');
   const olderRow = table.locator('tr').filter({ hasText: OLDER_VERSION.version });
@@ -128,22 +132,24 @@ test('lists seeded versions with sizes, uploader and the latest badge on the rig
   await expect(olderRow.getByText('Latest', { exact: true })).toHaveCount(0);
 
   // Match only /MB/ — don't pin formatFileSize()'s exact rounding.
-  await expect(latestRow).toContainText(/MB/);
+  await expect(table.locator('tbody').filter({ hasText: LATEST_VERSION.version })).toContainText(/MB/);
 });
 
-test('renders one file row per platform under each version, — where the version has no file', async ({ page }) => {
+test('lists each version\'s platforms side by side, "not uploaded" where it has no file', async ({ page }) => {
   await page.goto('/admin/installers');
   // RequireAdminAccess spinner — see the first test.
   await expect(
     page.getByRole('heading', { name: 'installers', exact: true }),
   ).toBeVisible({ timeout: 10_000 });
 
-  // Each version is its own <tbody>: the version row, then a row per platform.
+  // Each version is its own <tbody>: the version row, then one row holding every platform.
   const olderGroup = page.locator('tbody').filter({ hasText: OLDER_VERSION.version });
   const latestGroup = page.locator('tbody').filter({ hasText: LATEST_VERSION.version });
+  await expect(olderGroup.locator('tr').filter({ has: page.locator('[data-platform]') })).toHaveCount(1);
+  await expect(olderGroup.locator('tr [data-platform]')).toHaveCount(3);
 
   // The legacy flat doc synthesises the windows entry; the other two are empty.
-  const olderWindows = olderGroup.locator('tr[data-platform="windows_x64"]');
+  const olderWindows = olderGroup.locator('[data-platform="windows_x64"]');
   await expect(olderWindows).toContainText('windows');
   await expect(olderWindows).toContainText(/MB/);
   await expect(olderWindows).toContainText('sha256 deadbeefdead');
@@ -152,20 +158,20 @@ test('renders one file row per platform under each version, — where the versio
     /Owlette\.exe$/,
   );
   for (const platform of ['macos_arm64', 'linux_x64']) {
-    const row = olderGroup.locator(`tr[data-platform="${platform}"]`);
-    await expect(row).toContainText('—');
+    const row = olderGroup.locator(`[data-platform="${platform}"]`);
+    await expect(row).toContainText('not uploaded');
     await expect(row.getByRole('link')).toHaveCount(0);
   }
 
-  // A doc with `files` lists what it has and — for what it lacks.
-  const latestMac = latestGroup.locator('tr[data-platform="macos_arm64"]');
+  // A doc with `files` lists what it has, and "not uploaded" for what it lacks.
+  const latestMac = latestGroup.locator('[data-platform="macos_arm64"]');
   await expect(latestMac).toContainText('macOS (apple silicon)');
   await expect(latestMac).toContainText(/MB/);
   await expect(latestMac.getByRole('link', { name: /download/i })).toHaveAttribute(
     'href',
     /\.pkg$/,
   );
-  await expect(latestGroup.locator('tr[data-platform="linux_x64"]')).toContainText('—');
+  await expect(latestGroup.locator('[data-platform="linux_x64"]')).toContainText('not uploaded');
 });
 
 test('the latest row hides the set-as-latest and delete buttons', async ({ page }) => {
@@ -180,14 +186,37 @@ test('the latest row hides the set-as-latest and delete buttons', async ({ page 
 
   await expect(latestRow.getByRole('button', { name: /set as latest/i })).toHaveCount(0);
 
-  // Trash is omitted too (a spacer div renders instead). red-400 is the
-  // trash-only color, so its absence is the simplest negative.
-  await expect(latestRow.locator('button.text-red-400')).toHaveCount(0);
+  // Trash is omitted too. Its accessible name is `delete <version>`, so its
+  // absence is the simplest negative.
+  await expect(latestRow.getByRole('button', { name: /^delete /i })).toHaveCount(0);
 
   // The older row keeps both affordances.
   const olderRow = page.locator('table tr').filter({ hasText: OLDER_VERSION.version });
   await expect(olderRow.getByRole('button', { name: /set as latest/i })).toBeVisible();
-  await expect(olderRow.locator('button.text-red-400')).toHaveCount(1);
+  await expect(olderRow.getByRole('button', { name: /^delete /i })).toHaveCount(1);
+});
+
+test('dates stay on one line and set as latest is never clipped', async ({ page }) => {
+  await page.goto('/admin/installers');
+  // RequireAdminAccess spinner — see the first test.
+  await expect(
+    page.getByRole('heading', { name: 'installers', exact: true }),
+  ).toBeVisible({ timeout: 10_000 });
+
+  const olderRow = page.locator('table tr').filter({ hasText: OLDER_VERSION.version });
+  // one line box: a crushed column wraps its date onto several
+  const lines = await olderRow.getByText(/\d{4}, \d{2}:\d{2}/).evaluate((date) => {
+    const range = document.createRange();
+    range.selectNodeContents(date);
+    return new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top))).size;
+  });
+  expect(lines).toBe(1);
+
+  // whole as the page opens, without scrolling the table to find it
+  const button = olderRow.getByRole('button', { name: /set as latest/i });
+  const scroller = page.locator('table').locator('xpath=..');
+  const [b, box] = await Promise.all([button.boundingBox(), scroller.boundingBox()]);
+  expect(b!.x + b!.width).toBeLessThanOrEqual(box!.x + box!.width + 0.5);
 });
 
 test('set-as-latest confirms via dialog and updates Firestore latest doc', async ({ page }) => {
@@ -298,13 +327,13 @@ test('uploading a .pkg under an existing version lists the macos file beside the
   await expect(dialog).toBeHidden();
 
   const group = page.locator('tbody').filter({ hasText: OLDER_VERSION.version });
-  await expect(group.locator('tr[data-platform="windows_x64"]')).toContainText(/MB/);
-  const macRow = group.locator('tr[data-platform="macos_arm64"]');
+  await expect(group.locator('[data-platform="windows_x64"]')).toContainText(/MB/);
+  const macRow = group.locator('[data-platform="macos_arm64"]');
   await expect(macRow).toContainText('macOS (apple silicon)');
   await expect(macRow).toContainText(`${PKG_BYTES.length} Bytes`);
   await expect(macRow).toContainText(`sha256 ${PKG_SHA256.slice(0, 12)}`);
   await expect(macRow.getByRole('link', { name: /download/i })).toHaveCount(1);
-  await expect(group.locator('tr[data-platform="linux_x64"]')).toContainText('—');
+  await expect(group.locator('[data-platform="linux_x64"]')).toContainText('not uploaded');
 
   // Admin SDK read-through: the file merged into `files`, the pointer untouched.
   const db = getAdminDb();

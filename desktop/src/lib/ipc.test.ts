@@ -9,6 +9,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: (...args: unknown[]) => listen
 const {
   OWLETTE_FILES,
   SERVICE_STATUS_STALE_SECONDS,
+  appearanceTheme,
   isServiceDown,
   onOwletteFileChanged,
   onOwletteFileChangedFor,
@@ -20,6 +21,7 @@ const {
   serviceStart,
   serviceStatus,
   serviceStop,
+  setAppearanceTheme,
   setSidebarWidth,
   sidebarWidth,
   terminatePid,
@@ -182,6 +184,16 @@ describe('layout memory', () => {
 
     await expect(setSidebarWidth(9000)).resolves.toBe(400)
     expect(invoke).toHaveBeenCalledWith('set_sidebar_width', { width: 9000 })
+  })
+
+  it('reads and writes the appearance through the host', async () => {
+    invoke.mockResolvedValue('light')
+    await expect(appearanceTheme()).resolves.toBe('light')
+    expect(invoke).toHaveBeenCalledWith('appearance_theme')
+
+    invoke.mockResolvedValue('dark')
+    await expect(setAppearanceTheme('dark')).resolves.toBe('dark')
+    expect(invoke).toHaveBeenCalledWith('set_appearance_theme', { theme: 'dark' })
   })
 })
 

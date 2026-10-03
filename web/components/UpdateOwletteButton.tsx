@@ -148,7 +148,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
       <Button
         onClick={handleOpenDialog}
         variant="outline"
-        className="border-orange-600 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950 cursor-pointer"
+        className="border-accent-warm text-accent-warm hover:bg-accent-warm/10 hover:text-accent-warm-hover cursor-pointer"
       >
         <RefreshCw className={`h-4 w-4 mr-2 ${inProgressCount > 0 ? 'animate-spin' : ''}`} />
         {inProgressCount > 0 ? 'updating owlette' : 'update owlette'}
@@ -156,12 +156,12 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
           <span className="ml-2 text-xs">to v{latestVersion}</span>
         )}
         {selectableMachineIds.length > 0 && (
-          <Badge className="ml-2 bg-orange-600 text-white">
+          <Badge className="ml-2 bg-accent-warm text-background">
             {selectableMachineIds.length}
           </Badge>
         )}
         {inProgressCount > 0 && (
-          <Badge className="ml-2 bg-accent-cyan text-gray-900">
+          <Badge className="ml-2">
             in progress: {inProgressCount}
           </Badge>
         )}
@@ -233,7 +233,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                       key={machine.machineId}
                       className={`flex items-center gap-4 p-4 ${
                         isSelectable
-                          ? 'hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer'
+                          ? 'hover:bg-muted cursor-pointer'
                           : 'cursor-not-allowed opacity-75'
                       }`}
                     >
@@ -248,7 +248,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                             {machine.machineId}
                           </span>
                         </div>
-                        <div className="text-sm text-gray-500 dark:text-gray-400">
+                        <div className="text-sm text-muted-foreground">
                           current: {machine.agent_version ? `v${machine.agent_version}` : '< v2.0.8'} → latest: v{latestVersion}
                         </div>
                         {!machine.online && (
@@ -268,7 +268,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                               type="button"
                               variant="ghost"
                               size="sm"
-                              className="h-8 px-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700"
+                              className="h-8 px-2 text-xs hover:bg-accent"
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -294,7 +294,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                               type="button"
                               variant="ghost"
                               size="sm"
-                              className="h-8 px-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700"
+                              className="h-8 px-2 text-xs hover:bg-accent"
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -311,7 +311,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                           </>
                         )}
                         {machine.online ? (
-                          <Badge className="bg-green-100 text-green-800 border-green-200 px-3 py-1">
+                          <Badge className="bg-success-surface text-success border-success-border px-3 py-1">
                             online
                           </Badge>
                         ) : (
@@ -341,7 +341,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
               type="button"
               onClick={handleUpdate}
               disabled={isUpdating || selectedMachines.size === 0}
-              className="bg-orange-600 hover:bg-orange-700 text-white"
+              className="bg-accent-warm text-background"
             >
               {isUpdating ? (
                 <>

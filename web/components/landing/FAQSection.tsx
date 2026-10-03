@@ -89,9 +89,11 @@ export function FAQSection() {
             const isOpen = openIndex === i;
             return (
               <React.Fragment key={i}>
+              {/* a white wash vanishes on paper, so day hovers with the shared
+                  surface tint and night keeps its faint white */}
               <div
                 className={`group px-6 transition-all duration-300 ${
-                  isOpen ? 'bg-card/60 rounded-2xl border border-border' : 'hover:bg-white/[0.04]'
+                  isOpen ? 'bg-card/60 rounded-2xl border border-border' : 'hover:bg-[var(--surface-hover)] dark:hover:bg-elevation-ring/40'
                 }`}
               >
                 <button

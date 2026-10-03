@@ -12,7 +12,7 @@ import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
 
-const MENU_SURFACE = 'border-border bg-secondary/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
+const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
 
 const FEEDBACK_LABELS = [
   'report a bug',
@@ -550,10 +550,8 @@ export function PageHeader({
       </div>
     )}
 
-    {/* Subtle top glow for readability over dot grid. the background lifted a
-        step toward white, not the bare background: in dark that step is the
-        glow (it lands within 1/255 of the old oklch(0.20 0.03 250)) */}
-    <div className="pointer-events-none absolute inset-x-0 top-14 h-48 z-0" style={{ background: 'linear-gradient(to bottom, color-mix(in oklch, color-mix(in oklch, var(--background), white 6.4%) 70%, transparent), transparent)' }} />
+    {/* the light under the header: a cool lift at night, a desk lamp's warm pool by day */}
+    <div className="pointer-events-none absolute inset-x-0 top-14 h-48 z-0" style={{ background: 'var(--header-glow)' }} />
     {/* Scrim: subtle blur + dim of page content when a nav dropdown is open */}
     {scrimMounted && (
       <div

@@ -39,8 +39,9 @@ function highlightMatch(text: string, query: string): React.ReactNode {
       break;
     }
     if (idx > i) parts.push(text.slice(i, idx));
+    // by day cyan glyphs on a cyan tint miss aa, so they go to ink, as the highlighter link does
     parts.push(
-      <mark key={key++} className="rounded-[2px] bg-accent-cyan/25 font-semibold text-accent-cyan">
+      <mark key={key++} className="rounded-[2px] bg-accent-cyan/25 font-semibold text-foreground dark:text-accent-cyan">
         {text.slice(idx, idx + q.length)}
       </mark>,
     );
@@ -83,7 +84,7 @@ function SwoopSiteToggle({ siteId }: { siteId: string }) {
   return (
     <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
       <div className="space-y-0.5">
-        <Label htmlFor={`swoop-${siteId}`} className="text-white">
+        <Label htmlFor={`swoop-${siteId}`} className="text-foreground">
           swoop
         </Label>
         <p className="text-xs text-muted-foreground">
@@ -286,7 +287,7 @@ export function ManageSitesDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           showCloseButton={false}
-          className="border-border bg-secondary text-white sm:max-w-5xl"
+          className="border-border text-foreground sm:max-w-5xl"
           onOpenAutoFocus={(e) => {
             // Search-first: focus the filter, not the first button.
             if (filterInputRef.current) {
@@ -310,7 +311,7 @@ export function ManageSitesDialog({
                 inflating the dialog's min-content — which used to push every
                 row's actions column off-screen on phones. */}
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <DialogTitle className="text-white">manage sites</DialogTitle>
+              <DialogTitle className="text-foreground">manage sites</DialogTitle>
               {/* Search, "new site", and close share one centered flex row with
                   the title so all four header controls sit on one axis. gap-6
                   keeps the close ✕ equidistant from its neighbor and the
@@ -326,7 +327,7 @@ export function ManageSitesDialog({
                       placeholder="filter sites…"
                       aria-label="filter sites"
                       autoComplete="off"
-                      className="border-border bg-accent pl-9 pr-8 text-white"
+                      className="border-border bg-background pl-9 pr-8 text-foreground"
                     />
                     {filter && (
                       <button
@@ -336,7 +337,7 @@ export function ManageSitesDialog({
                           filterInputRef.current?.focus();
                         }}
                         aria-label="clear filter"
-                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-white cursor-pointer"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground cursor-pointer"
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -349,7 +350,7 @@ export function ManageSitesDialog({
                     onOpenChange(false);
                     onCreateSite();
                   }}
-                  className="shrink-0 cursor-pointer text-gray-900"
+                  className="shrink-0 cursor-pointer"
                 >
                   <Plus className="h-4 w-4 mr-1" />
                   new site
@@ -358,7 +359,7 @@ export function ManageSitesDialog({
                   type="button"
                   onClick={() => onOpenChange(false)}
                   aria-label="close"
-                  className="shrink-0 cursor-pointer rounded-sm p-1 text-muted-foreground opacity-70 transition-opacity hover:text-white hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-secondary"
+                  className="shrink-0 cursor-pointer rounded-sm p-1 text-muted-foreground opacity-70 transition-opacity hover:text-foreground hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-secondary"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -386,7 +387,7 @@ export function ManageSitesDialog({
                 {/* Column header — sticky so it stays put while the list scrolls;
                     same grid template as the rows so the columns line up. */}
                 <div
-                  className="sticky top-0 z-10 grid items-center gap-3 border-b border-border/60 bg-secondary px-3 pb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80"
+                  className="sticky top-0 z-10 grid items-center gap-3 border-b border-border/60 bg-raised px-3 pb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80"
                   style={{ gridTemplateColumns: gridTemplate }}
                 >
                   <span className="min-w-0 truncate">site</span>
@@ -400,10 +401,14 @@ export function ManageSitesDialog({
                 {filteredSites.map((site) => (
                   <div
                     key={site.id}
+                    // emphasis is brightness in both themes: by day rows rest a step
+                    // down, brighten on hover, and the open one is lifted to white
                     className={`site-row-cv overflow-hidden rounded-lg border transition-colors ${
                       site.id === currentSiteId
                         ? 'border-accent-cyan/60 bg-accent-cyan/10'
-                        : 'border-border bg-card hover:bg-muted'
+                        : expandedSiteId === site.id
+                          ? 'border-border bg-card shadow-sm dark:shadow-none dark:hover:bg-muted'
+                          : 'border-border bg-card-sunken hover:bg-card dark:bg-card dark:hover:bg-muted'
                     }`}
                   >
                     {/* View row — aligned column grid. Stays visible while
@@ -412,9 +417,10 @@ export function ManageSitesDialog({
                       <div className="grid items-center gap-3 px-3 py-2" style={{ gridTemplateColumns: gridTemplate }}>
                         {/* name */}
                         <div className="flex min-w-0 items-center gap-2">
-                          <span className="truncate text-sm font-medium text-white">{highlightMatch(site.name, filter)}</span>
+                          <span className="truncate text-sm font-medium text-foreground">{highlightMatch(site.name, filter)}</span>
+                          {/* ink by day for the same reason as the match highlight */}
                           {site.id === currentSiteId && (
-                            <span className="shrink-0 rounded bg-accent-cyan/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-cyan">
+                            <span className="shrink-0 rounded bg-accent-cyan/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground dark:text-accent-cyan">
                               current
                             </span>
                           )}
@@ -458,11 +464,11 @@ export function ManageSitesDialog({
                           </span>
                         )}
 
-                        {/* owner — superadmin only */}
+                        {/* owner — superadmin only. full-strength amber by day: at 80% it misses aa on a light row */}
                         {isSuperadmin && (
                           site.owner && currentUserId && site.owner !== currentUserId ? (
                             <span
-                              className="flex min-w-0 items-center gap-1 text-[11px] text-amber-400/80"
+                              className="flex min-w-0 items-center gap-1 text-[11px] text-warning dark:text-warning/80"
                               title={ownerEmailByUid.get(site.owner) || site.owner}
                             >
                               <User className="h-3 w-3 shrink-0" />
@@ -545,7 +551,7 @@ export function ManageSitesDialog({
                                   size="sm"
                                   onClick={() => confirmDeleteSite(site.id)}
                                   aria-label={`delete ${site.name}`}
-                                  className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-red-400 cursor-pointer"
+                                  className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-destructive cursor-pointer"
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
@@ -576,7 +582,7 @@ export function ManageSitesDialog({
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') handleSaveSite(site.id);
                               }}
-                              className="border-border bg-accent text-white"
+                              className="border-border bg-background text-foreground"
                               autoFocus
                             />
                           </div>
@@ -588,7 +594,7 @@ export function ManageSitesDialog({
                               id={`timezone-${site.id}`}
                               value={editingTimezone}
                               onValueChange={setEditingTimezone}
-                              className="border-border bg-accent text-white"
+                              className="border-border bg-background text-foreground"
                             />
                           </div>
                           <div className="flex shrink-0 items-center gap-2">
@@ -606,7 +612,7 @@ export function ManageSitesDialog({
                               size="sm"
                               onClick={() => handleSaveSite(site.id)}
                               disabled={isSaving}
-                              className="text-gray-900 cursor-pointer"
+                              className="cursor-pointer"
                             >
                               <Check className="h-4 w-4 mr-1" />
                               {isSaving ? 'saving...' : 'save'}
@@ -635,16 +641,16 @@ export function ManageSitesDialog({
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deletingDialogOpen} onOpenChange={setDeletingDialogOpen}>
-        <DialogContent className="border-border bg-secondary text-white">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
-            <DialogTitle className="text-white">delete site</DialogTitle>
+            <DialogTitle className="text-foreground">delete site</DialogTitle>
             <DialogDescription className="text-muted-foreground">
               are you sure you want to delete this site? this action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           {siteToDelete && (
             <div className="py-4">
-              <p className="text-white">
+              <p className="text-foreground">
                 site: <span className="font-semibold">{sites.find(s => s.id === siteToDelete)?.name}</span>
               </p>
               <p className="text-sm text-muted-foreground mt-2">
@@ -664,8 +670,9 @@ export function ManageSitesDialog({
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={handleDeleteSite}
-              className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+              className="cursor-pointer"
             >
               delete site
             </Button>

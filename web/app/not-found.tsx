@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { OwletteEye } from '@/components/landing/OwletteEye';
+import { EYE_HALO_DAY, EYE_HALO_GRADIENT, OwletteEye } from '@/components/landing/OwletteEye';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 
 // --muted-foreground is brighter than the slate the rain used to be drawn in;
@@ -117,11 +117,8 @@ export default function NotFound() {
 
       {/* Radial glow behind the eye */}
       <div
-        className="absolute w-[500px] h-[500px] rounded-full blur-3xl opacity-30"
-        style={{
-          background:
-            'radial-gradient(circle, color-mix(in oklch, var(--accent-coral) 40%, transparent) 0%, color-mix(in oklch, var(--accent-warm) 15%, transparent) 40%, transparent 70%)',
-        }}
+        className={`absolute w-[500px] h-[500px] rounded-full blur-3xl opacity-80 dark:opacity-30 ${EYE_HALO_DAY} dark:[--halo-core:color-mix(in_oklch,var(--accent-coral)_40%,transparent)] dark:[--halo-edge:color-mix(in_oklch,var(--accent-warm)_15%,transparent)]`}
+        style={{ background: EYE_HALO_GRADIENT }}
       />
 
       {/* Content */}

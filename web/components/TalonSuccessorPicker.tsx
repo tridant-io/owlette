@@ -65,9 +65,9 @@ export function TalonSuccessorPicker({
   const selectId = `${idPrefix}-select`;
 
   return (
-    <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 space-y-3">
+    <div className="rounded-lg border border-warning-border bg-warning-surface p-4 space-y-3">
       <div className="flex items-start gap-2">
-        <Zap className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+        <Zap className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <div className="space-y-1">
           <p className="text-sm font-semibold text-foreground">
             this person wrote {count} talon{count === 1 ? '' : 's'}
@@ -117,7 +117,7 @@ export function TalonSuccessorPicker({
           </SelectContent>
         </Select>
         {candidates.length === 0 && (
-          <p className="text-xs text-amber-500">
+          <p className="text-xs text-warning">
             no other admin has access to take these over — promote someone first, or accept
             that they stop.
           </p>

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { InteractiveBackground } from './InteractiveBackground';
-import { OwletteEye } from './OwletteEye';
+import { EYE_HALO_DAY, EYE_HALO_GRADIENT, OwletteEye } from './OwletteEye';
 import type { HeroHeadline } from '@/lib/heroHeadlines';
 import { LICENSE_URL } from '@/lib/repoLinks';
 
@@ -23,10 +23,8 @@ export function HeroSection({ headline }: HeroSectionProps) {
         {/* The Eye */}
         <div className="relative flex items-center justify-center mb-6 sm:mb-8">
           <div
-            className="absolute w-[300px] h-[300px] sm:w-[500px] sm:h-[500px] rounded-full blur-3xl"
-            style={{
-              background: 'radial-gradient(circle, oklch(0.70 0.14 30 / 0.15) 0%, oklch(0.72 0.16 55 / 0.08) 40%, transparent 70%)',
-            }}
+            className={`absolute w-[300px] h-[300px] sm:w-[500px] sm:h-[500px] rounded-full blur-3xl ${EYE_HALO_DAY} dark:[--halo-core:color-mix(in_oklch,var(--accent-coral)_15%,transparent)] dark:[--halo-edge:color-mix(in_oklch,var(--accent-warm)_8%,transparent)]`}
+            style={{ background: EYE_HALO_GRADIENT }}
           />
           <OwletteEye
             size={220}

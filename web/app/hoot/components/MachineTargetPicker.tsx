@@ -48,11 +48,12 @@ function statusText(machine: MachineTargetOption): string | null {
 
 /**
  * The small print beside a row's name. `--muted-foreground` over the focused
- * row's `--accent` fill is 4.37:1 in the app's forced-dark theme — under the
- * 4.5:1 that axe's `color-contrast` rule enforces on /hoot — so the focused row
- * alone gets a lighter tone and every other row keeps the muted hierarchy.
- * Radix focuses a row on pointer move, so this covers hover too; the rows carry
- * `group` for it.
+ * row's `--accent` fill is 4.37:1 in dark — under the 4.5:1 that axe's
+ * `color-contrast` rule enforces on /hoot — so the focused row alone gets a
+ * stronger tone and every other row keeps the muted hierarchy. by day the muted
+ * token already clears it (5.39:1), and the same class reads one step darker at
+ * 8.09:1. Radix focuses a row on pointer move, so this covers hover too; the
+ * rows carry `group` for it.
  */
 const STATUS_TEXT_CLASS = 'text-xs text-muted-foreground group-focus:text-accent-foreground/80';
 

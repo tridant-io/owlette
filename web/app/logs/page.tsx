@@ -242,11 +242,11 @@ const getLevelBadge = (level: string) => {
   const base = "inline-flex items-center rounded-full px-1.5 text-[11px] font-medium leading-5 whitespace-nowrap";
   switch (level.toLowerCase()) {
     case 'error':
-      return <span className={`${base} bg-red-700 text-white`}>error</span>;
+      return <span className={`${base} bg-danger-solid text-danger-solid-foreground`}>error</span>;
     case 'warning':
-      return <span className={`${base} bg-yellow-400 text-gray-950`}>warning</span>;
+      return <span className={`${base} bg-warning-solid text-warning-solid-foreground`}>warning</span>;
     case 'info':
-      return <span className={`${base} bg-accent-cyan text-gray-900`}>info</span>;
+      return <span className={`${base} bg-accent-cyan text-primary-foreground`}>info</span>;
     default:
       return <span className={`${base} border border-border text-foreground`}>{level}</span>;
   }
@@ -929,12 +929,12 @@ export default function LogsPage() {
               <div className="hidden md:block h-8 w-px bg-border" />
 
               <div className="flex items-center gap-2.5">
-                <div className={`rounded-md p-1.5 ${warningCount > 0 ? 'bg-yellow-500/10 text-yellow-400' : 'bg-muted text-muted-foreground'}`}>
+                <div className={`rounded-md p-1.5 ${warningCount > 0 ? 'bg-warning-surface text-warning' : 'bg-muted text-muted-foreground'}`}>
                   <AlertTriangle className="h-4 w-4" />
                 </div>
                 <div>
                   <div className="flex items-baseline gap-0.5">
-                    <span className={`text-xl font-bold ${warningCount > 0 ? 'text-yellow-400' : 'text-foreground'}`}>{warningCount}</span>
+                    <span className={`text-xl font-bold ${warningCount > 0 ? 'text-warning' : 'text-foreground'}`}>{warningCount}</span>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-tight">warnings</p>
                 </div>
@@ -943,12 +943,12 @@ export default function LogsPage() {
               <div className="hidden md:block h-8 w-px bg-border" />
 
               <div className="flex items-center gap-2.5">
-                <div className={`rounded-md p-1.5 ${errorCount > 0 ? 'bg-red-500/10 text-red-400' : 'bg-muted text-muted-foreground'}`}>
+                <div className={`rounded-md p-1.5 ${errorCount > 0 ? 'bg-danger-surface text-danger' : 'bg-muted text-muted-foreground'}`}>
                   <AlertCircle className="h-4 w-4" />
                 </div>
                 <div>
                   <div className="flex items-baseline gap-0.5">
-                    <span className={`text-xl font-bold ${errorCount > 0 ? 'text-red-400' : 'text-foreground'}`}>{errorCount}</span>
+                    <span className={`text-xl font-bold ${errorCount > 0 ? 'text-danger' : 'text-foreground'}`}>{errorCount}</span>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-tight">errors</p>
                 </div>
@@ -1047,7 +1047,7 @@ export default function LogsPage() {
                 disabled={isClearing || logs.length === 0}
                 variant="outline"
                 data-testid="logs-clear"
-                className="gap-2 border-red-400/60 text-red-400 hover:bg-red-950/50 hover:text-red-300 dark:hover:bg-red-950/50 dark:hover:text-red-300 transition-colors cursor-pointer"
+                className="gap-2 border-danger/60 text-danger hover:bg-danger-surface hover:text-danger transition-colors cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
                 {isClearing ? 'clearing...' : 'clear logs'}
@@ -1178,7 +1178,7 @@ export default function LogsPage() {
         {/* Logs List */}
         <Card className="bg-card-sunken border-border/60 overflow-hidden py-0 gap-0">
           {!logsLoading && filteredLogs.length > 0 && (
-            <div className={`hidden md:grid ${LOG_COLS} items-center px-4 py-3 border-b border-border bg-card-header rounded-t-xl text-[11px] font-medium tracking-wide text-muted-foreground`}>
+            <div className={`hidden md:grid ${LOG_COLS} items-center px-4 py-3 border-b border-border bg-card-header header-lit rounded-t-xl text-[11px] font-medium tracking-wide text-muted-foreground`}>
               <span aria-hidden />
               <span>level</span>
               <span>time</span>

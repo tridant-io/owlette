@@ -34,8 +34,8 @@ colors:
   day-control: "oklch(0.94 0.012 250)"
   day-hairline: "oklch(0.88 0.016 250)"
   day-ink: "oklch(0.21 0.03 258)"
-  day-slate: "oklch(0.47 0.032 256)"
-  day-signal-cyan: "oklch(0.52 0.105 218)"
+  day-slate: "oklch(0.42 0.032 256)"
+  day-signal-cyan: "oklch(0.5 0.105 218)"
   day-amber: "oklch(0.56 0.15 52)"
 typography:
   display:
@@ -213,8 +213,8 @@ the same room by day: cool paper with a faint hue-250 cast, white panels, and na
 - **Control Paper** (`day-control`): secondary buttons and muted fills.
 - **Hairline** (`day-hairline`): borders and dividers.
 - **Navy Ink** (`day-ink`): primary text.
-- **Slate Ink** (`day-slate`): secondary text. it clears 4.5:1 on every light surface.
-- **Deep Signal Cyan** (`day-signal-cyan`): the light theme's signal. signal cyan itself can't carry text on white (about 2:1), so day uses a deeper cyan that clears 4.8:1 as a link and holds white text as a fill. it keeps the one-signal meaning.
+- **Slate Ink** (`day-slate`): secondary text. it clears 4.5:1 on every light surface, and still clears it at 80% opacity on a card.
+- **Deep Signal Cyan** (`day-signal-cyan`): the light theme's signal. signal cyan itself can't carry text on white (about 2:1), so day uses a deeper cyan that clears AA as a link, on its own 10% tint and as a fill under white text. it keeps the one-signal meaning.
 - **Burnt Amber** (`day-amber`): sodium amber deepened to read on paper.
 
 status colours come from token families rather than raw palette classes: `danger`, `warning`, `success` and `info`, each with `-surface`, `-border`, `-solid` and `-solid-foreground`. charts and load bars use `--band-*` and `--series-*`. every family is defined for both themes in `web/app/globals.css`, and `web/__tests__/styles/theme-contrast.test.ts` holds both themes to WCAG AA.

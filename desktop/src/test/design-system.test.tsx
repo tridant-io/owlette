@@ -116,7 +116,7 @@ describe('theme tokens', () => {
 describe('MENU_SURFACE', () => {
   it('uses the elevation token recipe', () => {
     expect(MENU_SURFACE).toBe(
-      'border-border bg-secondary/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring',
+      'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring',
     )
     // the utilities only exist while @theme inline maps the tokens
     expect(globalsCss).toContain('--color-elevation-shadow: var(--elevation-shadow)')

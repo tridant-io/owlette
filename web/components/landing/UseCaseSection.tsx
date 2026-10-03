@@ -2,52 +2,54 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, ChevronDown, ChevronLeft, ChevronRight, Monitor, Power, Rocket, X, Zap } from 'lucide-react';
-import Image from 'next/image';
+import { useTheme } from 'next-themes';
 import { HootIcon } from '@/components/icons/HootIcon';
+import { ThemedImage } from '@/components/ThemedImage';
 
 // React.ElementType rather than lucide's LucideIcon: the hoot card uses the
 // custom HootIcon (a plain SVG component, not a lucide forwardRef export).
-const capabilities: { label: string; detail: string; expanded: string; preview: string; icon: React.ElementType }[] = [
+// each preview's light path is the dark capture until a light one is taken.
+const capabilities: { label: string; detail: string; expanded: string; preview: { dark: string; light: string }; icon: React.ElementType }[] = [
   {
     label: 'monitor',
     detail: 'real-time metrics and email/webhook notifications',
     expanded: 'live cpu, memory, gpu, and disk usage for every machine. inline sparkline charts track trends over time. know instantly when something drifts.',
-    preview: '/landing-screens/monitor.png',
+    preview: { dark: '/landing-screens/monitor.png', light: '/landing-screens/monitor.png' },
     icon: Activity,
   },
   {
     label: 'control',
     detail: 'start, stop, or restart any process — with a full API',
     expanded: 'full remote process control across your entire fleet. configure startup sequences, manage dependencies, and auto-restart crashed processes before anyone notices.',
-    preview: '/landing-screens/control.png',
+    preview: { dark: '/landing-screens/control.png', light: '/landing-screens/control.png' },
     icon: Power,
   },
   {
     label: 'deploy',
     detail: 'push software updates to all machines at once',
     expanded: 'deploy software, configurations, and content to any machine, anywhere. fleet-wide rollouts or targeted single-machine updates — your call.',
-    preview: '/landing-screens/preview-deploy.png',
+    preview: { dark: '/landing-screens/preview-deploy.png', light: '/landing-screens/preview-deploy.png' },
     icon: Rocket,
   },
   {
     label: 'diagnose',
     detail: 'ask hoot why a process crashed, what driver is installed, or which machine just dropped offline.',
     expanded: 'hoot turns plain-english questions into real diagnostic actions across your fleet. bring your own openai or anthropic key.',
-    preview: '/landing-screens/preview-diagnose.png',
+    preview: { dark: '/landing-screens/preview-diagnose.png', light: '/landing-screens/preview-diagnose.png' },
     icon: HootIcon,
   },
   {
     label: 'display',
     detail: 'displays that stay put — drift-detected and auto-restored after restarts, driver updates, or accidental changes.',
     expanded: 'owlette captures the windows display topology you want and watches for drift. when a restart, a driver update, or an accidental change moves a monitor, owlette restores the known-good layout automatically. mosaic-aware.',
-    preview: '/landing-screens/preview-displays.png',
+    preview: { dark: '/landing-screens/preview-displays.png', light: '/landing-screens/preview-displays.png' },
     icon: Monitor,
   },
   {
     label: 'automate',
     detail: 'talons fire on a schedule, a threshold, or an event — and can look at the screen before acting.',
     expanded: 'every talon is a trigger, an optional condition, and outputs. fire on a schedule, a metric threshold, or an event like a crash. gate it on an ai visual check of a fresh screenshot. then email, post a webhook, restart the process, or hand hoot a directive.',
-    preview: '/landing-screens/preview-automate.png',
+    preview: { dark: '/landing-screens/preview-automate.png', light: '/landing-screens/preview-automate.png' },
     icon: Zap,
   },
 ];
@@ -73,7 +75,10 @@ export function UseCaseSection() {
   });
   const isZoomed = scale > 1;
   const lightboxOpen = lightboxIndex !== null;
-  const lightboxSrc = lightboxOpen ? capabilities[lightboxIndex].preview : null;
+  // the lightbox opens on a click, after hydration, so the resolved theme is known
+  const { resolvedTheme } = useTheme();
+  const lightboxShot = lightboxOpen ? capabilities[lightboxIndex].preview : null;
+  const lightboxSrc = lightboxShot && (resolvedTheme === 'light' ? lightboxShot.light : lightboxShot.dark);
 
   // Matches the expanded-panel collapse transition (duration-500) + a small buffer.
   const COLLAPSE_MS = 520;
@@ -267,15 +272,15 @@ export function UseCaseSection() {
                     aria-label={`open ${cap.label} preview`}
                     data-preview-trigger={cap.label}
                     tabIndex={openIndex === i ? 0 : -1}
-                    className="block w-full relative rounded-xl overflow-hidden shadow-2xl shadow-black/30 ring-1 ring-white/5 cursor-zoom-in border-0 bg-transparent p-0"
+                    className="block w-full relative rounded-xl overflow-hidden shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50 cursor-zoom-in border-0 bg-transparent p-0"
                     style={{
                       maskImage: 'linear-gradient(to bottom, black 80%, transparent)',
                       WebkitMaskImage: 'linear-gradient(to bottom, black 80%, transparent)',
                     }}
                     onClick={() => setLightboxIndex(i)}
                   >
-                    <Image
-                      src={cap.preview}
+                    <ThemedImage
+                      {...cap.preview}
                       alt={`${cap.label} preview`}
                       width={1280}
                       height={720}
@@ -354,7 +359,7 @@ export function UseCaseSection() {
                     aria-label={openIndex !== null ? `open ${capabilities[openIndex].label} preview` : 'open capability preview'}
                     data-preview-trigger={rowHasActive && openIndex !== null ? capabilities[openIndex].label : undefined}
                     tabIndex={rowHasActive ? 0 : -1}
-                    className="block w-full relative rounded-xl overflow-hidden shadow-2xl shadow-black/30 ring-1 ring-white/5 cursor-zoom-in border-0 bg-transparent p-0"
+                    className="block w-full relative rounded-xl overflow-hidden shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50 cursor-zoom-in border-0 bg-transparent p-0"
                     style={{
                       maskImage: 'linear-gradient(to bottom, black 80%, transparent), linear-gradient(to right, transparent, black 25px, black calc(100% - 25px), transparent)',
                       maskComposite: 'intersect',
@@ -366,7 +371,7 @@ export function UseCaseSection() {
                     <div className="relative">
                       {rowCaps.map((cap) => (
                         <div
-                          key={cap.preview}
+                          key={cap.label}
                           className="transition-all duration-500 ease-out"
                           style={{
                             opacity: rowHasActive && activePreview === cap.preview ? 1 : 0,
@@ -377,8 +382,8 @@ export function UseCaseSection() {
                             transform: rowHasActive && activePreview === cap.preview ? 'translateY(0)' : 'translateY(12px)',
                           }}
                         >
-                          <Image
-                            src={cap.preview}
+                          <ThemedImage
+                            {...cap.preview}
                             alt={`${cap.label} preview`}
                             width={1280}
                             height={720}

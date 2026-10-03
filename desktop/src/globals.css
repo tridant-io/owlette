@@ -108,6 +108,39 @@
   --color-band-critical: var(--band-critical);
   --color-elevation-shadow: var(--elevation-shadow);
   --color-elevation-ring: var(--elevation-ring);
+  --color-raised: var(--raised);
+  --color-block-1: var(--block-1);
+  --color-block-1-foreground: var(--block-1-foreground);
+  --color-block-1-bar: var(--block-1-bar);
+  --color-block-1-ink: var(--block-1-ink);
+  --color-block-2: var(--block-2);
+  --color-block-2-foreground: var(--block-2-foreground);
+  --color-block-2-bar: var(--block-2-bar);
+  --color-block-2-ink: var(--block-2-ink);
+  --color-block-3: var(--block-3);
+  --color-block-3-foreground: var(--block-3-foreground);
+  --color-block-3-bar: var(--block-3-bar);
+  --color-block-3-ink: var(--block-3-ink);
+  --color-block-4: var(--block-4);
+  --color-block-4-foreground: var(--block-4-foreground);
+  --color-block-4-bar: var(--block-4-bar);
+  --color-block-4-ink: var(--block-4-ink);
+  --color-block-5: var(--block-5);
+  --color-block-5-foreground: var(--block-5-foreground);
+  --color-block-5-bar: var(--block-5-bar);
+  --color-block-5-ink: var(--block-5-ink);
+  --color-block-6: var(--block-6);
+  --color-block-6-foreground: var(--block-6-foreground);
+  --color-block-6-bar: var(--block-6-bar);
+  --color-block-6-ink: var(--block-6-ink);
+  --color-block-7: var(--block-7);
+  --color-block-7-foreground: var(--block-7-foreground);
+  --color-block-7-bar: var(--block-7-bar);
+  --color-block-7-ink: var(--block-7-ink);
+  --color-block-8: var(--block-8);
+  --color-block-8-foreground: var(--block-8-foreground);
+  --color-block-8-bar: var(--block-8-bar);
+  --color-block-8-ink: var(--block-8-ink);
   --color-tooltip: var(--tooltip);
   --color-tooltip-foreground: var(--tooltip-foreground);
   --color-tooltip-border: var(--tooltip-border);
@@ -143,30 +176,27 @@
   --card-sunken: oklch(0.962 0.008 250);
   /* the vignette edge tone, not a panel fill (see the .dark note) */
   --card-recessed: oklch(0.955 0.01 250);
-  /* Header surface: a slight step darker than --card-sunken (midway toward
-     --background) so machine headers read as distinct from their content.
-     Derived from themed tokens via color-mix and defined only here — it
-     re-resolves per theme at use time, so no .dark override is needed (and
-     therefore can't fall back to a light value the way a duplicated token can). */
-  --card-header: color-mix(in oklch, var(--card-sunken) 30%, var(--background));
+  /* header surface, so machine headers read as distinct from their content. by day
+     it is lit: midway from the sunken body up to the card */
+  --card-header: color-mix(in oklab, var(--card-sunken) 50%, var(--card));
   --card-foreground: oklch(0.21 0.03 258);
   --popover: oklch(0.995 0.002 250);
   --popover-foreground: oklch(0.21 0.03 258);
-  --primary: oklch(0.52 0.105 218);
+  --primary: oklch(0.5 0.105 218);
   --primary-foreground: oklch(0.99 0.005 218);
   --secondary: oklch(0.94 0.012 250);
   --secondary-foreground: oklch(0.21 0.03 258);
   --muted: oklch(0.95 0.01 250);
-  --muted-foreground: oklch(0.47 0.032 256);
+  --muted-foreground: oklch(0.42 0.032 256);
   --accent: oklch(0.92 0.02 250);
   --accent-foreground: oklch(0.21 0.03 258);
   --destructive: oklch(0.52 0.2 27);
   --border: oklch(0.88 0.016 250);
   --input: oklch(0.85 0.02 250);
-  --ring: oklch(0.52 0.105 218);
+  --ring: oklch(0.5 0.105 218);
 
-  --accent-cyan: oklch(0.52 0.105 218);
-  --accent-cyan-hover: oklch(0.46 0.1 220);
+  --accent-cyan: oklch(0.5 0.105 218);
+  --accent-cyan-hover: oklch(0.44 0.1 220);
   --accent-cyan-muted: oklch(0.8 0.06 212);
   --accent-warm: oklch(0.56 0.15 52);
   --accent-warm-hover: oklch(0.5 0.14 50);
@@ -190,20 +220,20 @@
   --sidebar-ring: oklch(0.5 0.2 255);
 
   /* hover tints, see .btn-sweep: the same hue-250 wash as dark, lighter */
-  --btn-hover: color-mix(in oklch, oklch(0.55 0.12 250) 14%, transparent);
-  --surface-hover: color-mix(in oklch, oklch(0.55 0.12 250) 8%, transparent);
+  --btn-hover: color-mix(in oklab, oklch(0.55 0.12 250) 14%, transparent);
+  --surface-hover: color-mix(in oklab, oklch(0.55 0.12 250) 8%, transparent);
 
   --danger: oklch(0.505 0.213 27.518);
   --danger-surface: oklch(0.971 0.013 17.38);
   --danger-border: oklch(0.885 0.062 18.334);
   --danger-solid: oklch(0.577 0.245 27.325);
   --danger-solid-foreground: oklch(1 0 0);
-  --warning: oklch(0.555 0.163 48.998);
+  --warning: oklch(0.52 0.16 49);
   --warning-surface: oklch(0.987 0.022 95.277);
   --warning-border: oklch(0.879 0.169 91.605);
   --warning-solid: oklch(0.769 0.188 70.08);
   --warning-solid-foreground: oklch(0.21 0.034 264.665);
-  --success: oklch(0.527 0.154 150.069);
+  --success: oklch(0.49 0.145 150);
   --success-surface: oklch(0.982 0.018 155.826);
   --success-border: oklch(0.925 0.084 155.995);
   --success-solid: oklch(0.527 0.154 150.069);
@@ -222,6 +252,61 @@
 
   --elevation-shadow: oklch(0.3 0.04 255 / 0.16);
   --elevation-ring: oklch(0.3 0.04 255 / 0.08);
+  /* the owlette eye by day: a deep copper bead, lit from the centre to a copper edge
+     with no dark band, so it reads crisp on the paper at any size. the stops sit at
+     the night offsets (see OwletteEye.tsx), sampled from 0 #FFE8DC, 40 #EFB090,
+     62 #D57F57, 82 #BD6840, 100 #A85A35 */
+  --eye-glow: #E9A583;
+  --eye-iris: #D17C54;
+  --eye-band-1: #C26D45;
+  --eye-band-2: #BC673F;
+  --eye-band-3: #B7643D;
+  --eye-edge: #A85A35;
+  --eye-rim: transparent;
+  --eye-wash-core: 0;
+  --eye-wash-disc: 0.82;
+  --eye-sheen: 0.85;
+  --eye-icon-sheen: 0.85;
+
+  /* raised: what floats above the page, dialogs and the app's menus. night lifts it to
+     the --secondary step; day makes it the brightest panel, so it comes forward and
+     never reads darker than the page */
+  --raised: oklch(0.995 0.002 250);
+
+  /* schedule blocks: eight hues kept apart. a pill is a solid fill, so its fill and
+     text are the same in both themes; the week bar and the label ink follow the theme */
+  --block-1: oklch(0.546 0.245 262.881);
+  --block-1-foreground: oklch(1 0 0);
+  --block-1-bar: var(--block-1);
+  --block-1-ink: oklch(0.488 0.243 264.376);
+  --block-2: oklch(0.666 0.179 58.318);
+  --block-2-foreground: oklch(0.21 0.034 264.665);
+  --block-2-bar: var(--block-2);
+  --block-2-ink: oklch(0.555 0.163 48.998);
+  --block-3: oklch(0.508 0.118 165.612);
+  --block-3-foreground: oklch(1 0 0);
+  --block-3-bar: var(--block-3);
+  --block-3-ink: oklch(0.508 0.118 165.612);
+  --block-4: oklch(0.586 0.253 17.585);
+  --block-4-foreground: oklch(1 0 0);
+  --block-4-bar: var(--block-4);
+  --block-4-ink: oklch(0.514 0.222 16.935);
+  --block-5: oklch(0.541 0.281 293.009);
+  --block-5-foreground: oklch(1 0 0);
+  --block-5-bar: var(--block-5);
+  --block-5-ink: oklch(0.491 0.27 292.581);
+  --block-6: oklch(0.52 0.105 223.128);
+  --block-6-foreground: oklch(1 0 0);
+  --block-6-bar: var(--block-6);
+  --block-6-ink: oklch(0.52 0.105 223.128);
+  --block-7: oklch(0.553 0.195 38.402);
+  --block-7-foreground: oklch(1 0 0);
+  --block-7-bar: var(--block-7);
+  --block-7-ink: oklch(0.47 0.157 37.304);
+  --block-8: oklch(0.592 0.249 0.584);
+  --block-8-foreground: oklch(1 0 0);
+  --block-8-bar: var(--block-8);
+  --block-8-ink: oklch(0.525 0.223 3.958);
 
   /* controls: an inverse ink tooltip by day, a visible unchecked box, a soft track */
   --tooltip: oklch(0.24 0.03 258);
@@ -231,7 +316,7 @@
   --checkbox-border: oklch(0.62 0.03 255);
   --switch-off: oklch(0.8 0.022 250);
   --switch-off-border: transparent;
-  --selection: oklch(0.52 0.105 218);
+  --selection: oklch(0.5 0.105 218);
   --selection-foreground: oklch(0.99 0.005 218);
 
   --scrollbar-track: oklch(0.975 0.006 250);
@@ -255,6 +340,8 @@
   --foreground: oklch(0.985 0.01 250);
   --card: oklch(0.23 0.04 250);
   --card-sunken: oklch(0.19 0.04 250);
+  /* at night a slight step darker than the sunken body, toward --background */
+  --card-header: color-mix(in oklab, var(--card-sunken) 30%, var(--background));
   /* NOT a flat panel fill. Two large flat fills a hair apart, sharing a hard
      edge, read as a mistake rather than depth — tried twice on the auth pages,
      failed twice. This is the EDGE tone of the auth brand panel's radial
@@ -310,8 +397,8 @@
   /* Hover tints — see .btn-sweep. Blue, not the near-white --foreground: at
      14% over a 0.23L card the old mix desaturated to grey. Hue 250 matches the
      surface ramp, so hover reads as the surface brightening, not a film. */
-  --btn-hover: color-mix(in oklch, oklch(0.62 0.16 250) 26%, transparent);
-  --surface-hover: color-mix(in oklch, oklch(0.62 0.16 250) 14%, transparent);
+  --btn-hover: color-mix(in oklab, oklch(0.62 0.16 250) 26%, transparent);
+  --surface-hover: color-mix(in oklab, oklch(0.62 0.16 250) 14%, transparent);
 
   /* the families below equal the tailwind palette classes and literals they
      replace (red-400, red-950/30, amber-500/40, ...), so dark renders as before */
@@ -346,6 +433,39 @@
 
   --elevation-shadow: oklch(0 0 0 / 0.5);
   --elevation-ring: oklch(1 0 0 / 0.1);
+  /* the owlette eye at night: the original mark, a light falling off into the dark */
+  --eye-glow: #F0B89A;
+  --eye-iris: #D08060;
+  --eye-band-1: #8B4525;
+  --eye-band-2: #3A1810;
+  --eye-band-3: #1A0A06;
+  --eye-edge: #0E0604;
+  --eye-rim: #0A0604;
+  --eye-wash-core: 1;
+  --eye-wash-disc: 0;
+  --eye-sheen: 0.7;
+  --eye-icon-sheen: 0.65;
+
+  /* raised: the --secondary step dialogs and menus were lifted to before tokens */
+  --raised: oklch(0.269 0.05 250);
+
+  /* schedule blocks: night keeps the brighter bars and labels */
+  --block-1-bar: oklch(0.623 0.214 259.815);
+  --block-1-ink: oklch(0.707 0.165 254.624);
+  --block-2-bar: oklch(0.769 0.188 70.08);
+  --block-2-ink: oklch(0.828 0.189 84.429);
+  --block-3-bar: oklch(0.696 0.17 162.48);
+  --block-3-ink: oklch(0.765 0.177 163.223);
+  --block-4-bar: oklch(0.645 0.246 16.439);
+  --block-4-ink: oklch(0.712 0.194 13.428);
+  --block-5-bar: oklch(0.606 0.25 292.717);
+  --block-5-ink: oklch(0.702 0.183 293.541);
+  --block-6-bar: oklch(0.715 0.143 215.221);
+  --block-6-ink: oklch(0.789 0.154 211.53);
+  --block-7-bar: oklch(0.705 0.213 47.604);
+  --block-7-ink: oklch(0.75 0.183 55.934);
+  --block-8-bar: oklch(0.656 0.241 354.308);
+  --block-8-ink: oklch(0.718 0.202 349.761);
 
   /* controls: slate-950/50/800 tooltip, slate-900/700 box, slate-700/600 track and
      blue-500 selection, exactly as the primitives drew them before tokens */

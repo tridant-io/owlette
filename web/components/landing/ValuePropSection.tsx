@@ -2,8 +2,24 @@
 
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { ArrowRight } from 'lucide-react';
+import { ThemedImage } from '@/components/ThemedImage';
+
+// the deepest layer was black at 0.6 and elevation-shadow stops at 0.5: a fifth of
+// the page tone lifts the alpha to 0.6 and still reads black. by day it is the
+// token's soft navy
+const FRAME_SHADOW =
+  '0 80px 160px -30px color-mix(in oklab, var(--elevation-shadow) 80%, var(--background)), ' +
+  '0 40px 80px -20px color-mix(in oklab, var(--elevation-shadow) 80%, transparent), ' +
+  '0 0 0 1px color-mix(in oklab, var(--elevation-ring) 50%, transparent)';
+
+// the glint that follows the pointer: white light on the glass at night, a soft
+// daylight glare by day, where a white wash at night's strength would vanish
+const SHEEN =
+  '[--sheen:color-mix(in_oklab,var(--card)_40%,transparent)] dark:[--sheen:color-mix(in_oklab,var(--elevation-ring)_60%,transparent)]';
+
+const sheenAt = (x: number, y: number) =>
+  `radial-gradient(ellipse 600px 400px at ${x}% ${y}%, var(--sheen) 0%, transparent 70%)`;
 
 export function ValuePropSection() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -72,7 +88,7 @@ export function ValuePropSection() {
         tiltRef.current.style.transform = `rotateX(${cur.x}deg) rotateY(${cur.y}deg)`;
       }
       if (sheenRef.current) {
-        sheenRef.current.style.background = `radial-gradient(ellipse 600px 400px at ${sc.x}% ${sc.y}%, rgba(255, 255, 255, 0.06) 0%, transparent 70%)`;
+        sheenRef.current.style.background = sheenAt(sc.x, sc.y);
       }
 
       raf.current = settled ? null : requestAnimationFrame(animate);
@@ -115,12 +131,13 @@ export function ValuePropSection() {
           style={{
             transform: `rotateX(8deg) rotateY(0deg)`,
             transformOrigin: 'center center',
-            boxShadow: '0 80px 160px -30px rgba(0, 0, 0, 0.6), 0 40px 80px -20px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05)',
+            boxShadow: FRAME_SHADOW,
             willChange: 'transform',
           }}
         >
-          <Image
-            src="/landing-screens/dashboard.png"
+          <ThemedImage
+            dark="/landing-screens/dashboard.png"
+            light="/landing-screens/dashboard.png"
             alt="owlette dashboard showing 10 machines with real-time metrics"
             width={1920}
             height={1080}
@@ -128,16 +145,14 @@ export function ValuePropSection() {
             sizes="(max-width: 1200px) 100vw, 1152px"
             quality={90}
             className="w-full h-auto"
-            priority
+            preload
             fetchPriority="high"
           />
           {/* Sheen overlay */}
           <div
             ref={sheenRef}
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              background: `radial-gradient(ellipse 600px 400px at 50% 50%, rgba(255, 255, 255, 0.06) 0%, transparent 70%)`,
-            }}
+            className={`absolute inset-0 pointer-events-none ${SHEEN}`}
+            style={{ background: sheenAt(50, 50) }}
           />
         </Link>
       </div>

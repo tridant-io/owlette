@@ -300,7 +300,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                           flex items-start gap-3 p-3 ${collapsed ? 'lg:p-2 lg:justify-center' : 'lg:p-3 lg:justify-start'} rounded-lg cursor-pointer transition-colors mb-2
                           ${
                             isActive
-                              ? 'bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30'
+                              ? 'bg-accent-cyan/10 dark:bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30'
                               : 'text-foreground hover:bg-accent! hover:text-foreground!'
                           }
                         `}
@@ -321,7 +321,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   </TooltipTrigger>
                   <TooltipContent side="right" className={collapsed ? 'hidden lg:block' : 'hidden'}>
                     <p className="font-medium">{item.name}</p>
-                    <p className="text-xs text-muted-foreground">{item.description}</p>
+                    {/* the light tooltip is inverse ink, so its muted line comes from the tooltip's own ink */}
+                    <p className="text-xs text-tooltip-foreground/70 dark:text-muted-foreground">{item.description}</p>
                   </TooltipContent>
                 </Tooltip>
               );

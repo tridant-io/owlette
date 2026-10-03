@@ -361,7 +361,7 @@ export function ChatInput({
                 aria-label="stop response"
                 className="!h-auto w-10 rounded-lg flex-shrink-0"
               >
-                <Square className="h-4 w-4 text-gray-900 fill-gray-900" />
+                <Square className="h-4 w-4 fill-current" />
               </Button>
             ) : (
               <Button
@@ -371,7 +371,7 @@ export function ChatInput({
                 aria-label="send message"
                 className="!h-auto w-10 rounded-lg disabled:opacity-50 flex-shrink-0"
               >
-                <Send className="h-4 w-4 text-gray-900" />
+                <Send className="h-4 w-4" />
               </Button>
             )}
           </div>

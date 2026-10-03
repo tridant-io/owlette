@@ -1,5 +1,5 @@
 # Light mode — Tasks
-**Progress**: 8/21 complete · branch `feat/light-mode`
+**Progress**: 14/21 complete · branch `feat/light-mode`
 
 Read `plan.md` first (Approach → token architecture and migration rules). Read `DESIGN.md` at the repo root for the visual system.
 
@@ -196,7 +196,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
 
 Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you find a file not listed in your task, leave it and note it in the Log; don't edit it. Each sweep finishes with `grep` showing zero raw palette or `text-white` / `text-gray-900` utilities in its files, except theme-invariant items listed in `plan.md` (scrims, brand marks, swoop letterbox).
 
-- [ ] **Task 3.1: Dashboard and machines**
+- [x] **Task 3.1: Dashboard and machines**
   - Files:
     - everything under `web/app/dashboard/**`
     - `web/components/MachineContextMenu.tsx`, `MachineStatusPill.tsx`, `UpdateOwletteButton.tsx`, `RestartScheduleDialog.tsx`, `ScheduleEditor.tsx`, `LiveViewModal.tsx`, `ScreenshotDialog.tsx`, `RemoveMachineDialog.tsx`, `UninstallDialog.tsx`, `SiteMachinesList.tsx`, `WeekSummaryBar.tsx`, `DayPillSelector.tsx`, `TimezoneChip.tsx`, `OsLabel.tsx`
@@ -216,7 +216,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npm test` passes and `npx eslint` is clean.
   - Depends on: Task 2.1, Task 2.2, Task 2.3
 
-- [ ] **Task 3.2: Shared dialogs and account surfaces**
+- [x] **Task 3.2: Shared dialogs and account surfaces**
   - Files: `web/components/AccountSettingsDialog.tsx`, `DeploymentDialog.tsx`, `SystemPresetDialog.tsx`, `SchedulePresetDialog.tsx`, `ApplyScheduleToMachinesDialog.tsx`, `ManageSitesDialog.tsx`, `ManageUserSitesDialog.tsx`, `CreateSiteDialog.tsx`, `WebhookSettingsDialog.tsx`, `ApiKeysManager.tsx`, `ApiKeyCreateForm.tsx`, `ApiKeyScopeEditor.tsx`, `ApiKeyScopeFields.tsx`, `MfaFactorsSection.tsx`, `PasskeyManager.tsx`, `BackupCodesPanel.tsx`, `ConfirmDialog.tsx`, `ReportBugDialog.tsx`, `InstallerChecksumStatus.tsx`, `SecurityVersionBanner.tsx`, `NoSitesEmptyState.tsx`, `InAppBrowserNotice.tsx`, `TimezoneSelect.tsx`, `CopyButton.tsx`, `UserAvatar.tsx`, `TalonSuccessorPicker.tsx`, `ErrorBoundary.tsx`, `RequireAdminAccess.tsx`, `LoadingWord.tsx`
   - Do:
     - Migrate per the rules.
@@ -229,7 +229,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npx eslint` is clean.
   - Depends on: Task 2.1, Task 2.2
 
-- [ ] **Task 3.3: Admin, settings, deployments, logs, talons, misc routes**
+- [x] **Task 3.3: Admin, settings, deployments, logs, talons, misc routes**
   - Files: `web/app/admin/**`, `web/components/admin/**` (except `AdminButton.tsx`, done in 2.2), `web/app/settings/**`, `web/app/deployments/**`, `web/app/logs/**`, `web/app/talons/**`, `web/app/cli/**`, `web/app/add/**`, `web/app/demo/**`, `web/app/legal/**`, `web/app/setup/**`, `web/app/share/**` (page UI only; leave `opengraph-image.tsx`), `web/app/unsubscribe/**`
   - Do:
     - Migrate per the rules.
@@ -241,7 +241,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npm test` and `npx eslint` are clean.
   - Depends on: Task 2.2
 
-- [ ] **Task 3.4: Hoot, roost, swoop and auth**
+- [x] **Task 3.4: Hoot, roost, swoop and auth**
   - Files: `web/app/hoot/**` (ChatWindow was done in 2.4; don't revert it), `web/components/hoot/**`, `web/app/roosts/**`, `web/components/roost/**`, `web/components/Roost*.tsx`, `web/components/ProjectDistributionDialog.tsx`, `web/components/FolderDropzone.tsx`, `web/components/PreUploadSummary.tsx`, `web/components/MinimizedUploadCard.tsx`, `web/components/EmptyStateUpload.tsx`, `web/app/swoop/**`, `web/components/swoop/**`, `web/app/login/**`, `web/app/register/**`, `web/app/forgot-password/**`, `web/app/reset-password/**`, `web/app/setup-2fa/**`, `web/app/verify-2fa/**`, `web/components/auth/**`
   - Do:
     - Migrate per the rules.
@@ -254,7 +254,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npm test` and `npx eslint` are clean.
   - Depends on: Task 2.2, Task 2.4
 
-- [ ] **Task 3.5: Landing light design**
+- [x] **Task 3.5: Landing light design**
   - Files: `web/components/landing/**`, `web/components/Footer.tsx`, `web/components/ThemedImage.tsx` (new), `web/app/page.tsx` (only if section wrappers need it), `web/app/download/**`, `web/app/for-ai/**` (page UI), `web/app/privacy/page.tsx`, `web/app/terms/page.tsx`
   - Do:
     - **Run `/impeccable` on the landing page** for a light variant of the Mission Control world, with `DESIGN.md` as authority. Persuade mode.
@@ -273,7 +273,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npx eslint` is clean.
   - Depends on: Task 2.2
 
-- [ ] **Task 3.6: Desktop theme runtime**
+- [x] **Task 3.6: Desktop theme runtime**
   - Files: `desktop/src-tauri/src/window_state.rs`, `desktop/src-tauri/src/lib.rs`, `desktop/src-tauri/src/tray.rs` (only if the window is built or shown there), `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/tauri.macos.conf.json`, `desktop/src-tauri/capabilities/default.json` (only if a JS-side permission is truly needed), `desktop/src/lib/ipc.ts`, `desktop/index.html`, `desktop/src/main.tsx`, `desktop/src/components/AppMenu.tsx`, `desktop/src/lib/theme.ts` (new), `desktop/src/components/AppMenu.test.tsx` (new or extended)
   - Do:
     - **Rust side:**
@@ -414,6 +414,32 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Log
 ### 2026-10-03
+- Owner preview on localhost, changes made from it:
+  - **The warm tint was a bug.** Chrome reads a near-neutral colour's hue as `none` (0°, rose) in an `oklch` mix. Every `color-mix` is now `in oklab`, which gives the same result for our same-hue and transparent mixes, so dark is unchanged.
+  - **The lamp:** `--header-glow` is a warm pool under the header by day (the accidental rose, made deliberate). Header surfaces catch it through the `header-lit` utility, a falloff plus a bright top edge. By day the card header is lit (between the body and the card).
+  - **Raised surfaces:** `--dialog` became `--raised`. Every dialog takes it from the primitive, and so do the app's menus: white by day, and the `--secondary` step at night (which moves the night card and background dialogs up to it).
+  - **The eye by day:** a deep copper bead (`--eye-*` tokens; no dark band, no rim, the red wash over the whole disc). Night is the original mark, unchanged. Web and desktop.
+  - **Installers:** the latest card offers every platform. Each version lists its platforms side by side, and the columns fit at 1280. e2e guards dates on one line and an unclipped "set as latest".
+  - **Wrapping:** the global orphans rule used the `text-wrap` shorthand, which reset the wrap mode and un-nowrapped paragraphs inside `whitespace-nowrap` cells. It now sets `text-wrap-style` only.
+  - **Smaller fixes:**
+    - The account settings dialog eases between section heights.
+    - In manage sites, open rows are the brightest.
+    - The machine menu's restart row is two clearly separate buttons.
+- Wave 3 done.
+  - **Dialogs:** a `--dialog` surface token (night equals `--secondary`, day a white panel); 16 dialogs moved onto it.
+  - **Schedule blocks:** `--block-1..8` with `-foreground`, `-bar` and `-ink`. A pill is a solid fill, so its fill and text are shared by both themes; bars and label ink follow the theme.
+  - **Day ink deepened:** `--warning` and `--success` (they were 4.2:1 on the menu surface), and the first net and disk-io series, which double as readout text. `theme-contrast.test.ts` now covers menus, series text, ink on amber and every block.
+  - **Visible dark changes, for the owner's review:**
+    - Four block pills go deeper (amber, emerald, cyan, orange) and amber takes dark text, because white on them was 2.2–3.7:1.
+    - Destructive confirmations use the destructive variant.
+    - The active day pill is signal cyan with ink (never white on cyan).
+    - Revoke machine goes fuchsia to danger.
+    - The update flow goes orange to sodium amber with ink, and the approve button amber with ink.
+    - The online badge in the update dialog was a day style leaking into night; it is now the night success chip.
+  - **Landing:** pastel day halos, a night-only warm glow, elevation tokens, and `ThemedImage` (only the visible theme's image is fetched).
+  - **Desktop runtime:** the window theme comes from `layout.json` before show; the app menu has a theme submenu.
+  - **Left in web on purpose:** white glyphs on black scrims (lightbox controls, spinners over images). Task 5.2 allowlists them.
+  - **Found, not ours:** privacy and terms use `prose`, but the typography plugin isn't registered, so those classes do nothing. Check in 6.2.
 - Wave 2 done.
   - **Appearance control:** in profile → preferences. A three-way radiogroup with a morphing disc glyph; the slide lands first, then the theme applies.
   - **Preference sync:** tolerates writes in flight and changes from other tabs.

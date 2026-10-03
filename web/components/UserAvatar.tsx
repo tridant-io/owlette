@@ -31,7 +31,7 @@ export function UserAvatar({ user, size = 'sm', className, previewUrl }: UserAva
   return (
     <Avatar className={cn(SIZE_CLASSES[size], className)}>
       {src && <AvatarImage src={src} alt={user?.displayName || user?.email || 'User avatar'} />}
-      <AvatarFallback className="bg-accent-cyan text-gray-900 font-medium">
+      <AvatarFallback className="bg-accent-cyan text-primary-foreground font-medium">
         {initials}
       </AvatarFallback>
     </Avatar>

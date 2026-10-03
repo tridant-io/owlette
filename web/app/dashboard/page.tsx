@@ -1018,12 +1018,12 @@ export default function DashboardPage() {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6 md:gap-8">
             {/* Machines / Online ratio */}
             <div className="flex items-center gap-2.5">
-              <div className={`rounded-md p-1.5 ${onlineMachines > 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+              <div className={`rounded-md p-1.5 ${onlineMachines > 0 ? 'bg-success-surface text-success' : 'bg-muted text-muted-foreground'}`}>
                 <Monitor className="h-4 w-4" />
               </div>
               <div>
                 <div className="flex items-baseline gap-0.5 tabular-nums">
-                  <span className={`text-xl font-bold ${onlineMachines > 0 ? 'text-emerald-400' : 'text-foreground'}`}>{onlineMachines}</span>
+                  <span className={`text-xl font-bold ${onlineMachines > 0 ? 'text-success' : 'text-foreground'}`}>{onlineMachines}</span>
                   <span className="text-xs text-muted-foreground">/ {machines.length}</span>
                 </div>
                 <p className="text-[11px] text-muted-foreground leading-tight">online</p>
@@ -1272,7 +1272,7 @@ export default function DashboardPage() {
                   </p>
                   <Button
                     onClick={() => setCreateDialogOpen(true)}
-                    className="text-gray-900 font-semibold px-6 py-3 cursor-pointer"
+                    className="font-semibold px-6 py-3 cursor-pointer"
                   >
                     <Plus className="h-4 w-4 mr-2" />
                     create your first site
@@ -1304,8 +1304,8 @@ export default function DashboardPage() {
                 </p>
 
                 {emptyStateAuthorize.success ? (
-                  <div className="mt-3 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-foreground">
-                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                  <div className="mt-3 flex items-center gap-2 rounded-md border border-success-border bg-success-surface px-3 py-2 text-sm text-foreground">
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-success/80" />
                     machine authorized — it will appear above within seconds.
                   </div>
                 ) : (
@@ -1326,7 +1326,7 @@ export default function DashboardPage() {
                       <Button
                         onClick={() => emptyStateAuthorize.authorize()}
                         disabled={!emptyStateAuthorize.phrase.trim() || emptyStateAuthorize.isAuthorizing}
-                        className="shrink-0 text-gray-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="shrink-0 cursor-pointer disabled:cursor-not-allowed"
                         data-testid="getting-started-authorize"
                       >
                         {emptyStateAuthorize.isAuthorizing ? (
@@ -1364,7 +1364,7 @@ export default function DashboardPage() {
 
       {/* Process Dialog (Create/Edit) */}
       <Dialog open={processDialogOpen} onOpenChange={setProcessDialogOpen}>
-        <DialogContent className="border-border bg-muted text-foreground sm:max-w-3xl">
+        <DialogContent className="border-border text-foreground sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle className="text-foreground">
               {processDialogMode === 'create' ? 'add process' : 'edit process'}
@@ -1400,8 +1400,8 @@ export default function DashboardPage() {
                   const isActive = editProcessForm.launch_mode === mode;
                   const colors = {
                     off: isActive ? 'bg-muted text-foreground' : '',
-                    always: isActive ? 'bg-emerald-600 text-white' : '',
-                    scheduled: isActive ? 'bg-blue-600 text-white' : '',
+                    always: isActive ? 'bg-success-solid text-success-solid-foreground' : '',
+                    scheduled: isActive ? 'bg-info-solid text-info-solid-foreground' : '',
                   };
 
                   return (
@@ -1422,7 +1422,7 @@ export default function DashboardPage() {
                     in `scheduled` the section below is pinned open, so the gear
                     reads as the marker for a section that is already showing.
                     It never selects a mode — only the segments do that. */}
-                <span className={`w-px ${editProcessForm.launch_mode === 'scheduled' ? 'bg-blue-400/50' : 'bg-border'}`} />
+                <span className={`w-px ${editProcessForm.launch_mode === 'scheduled' ? 'bg-info-solid-foreground/30' : 'bg-border'}`} />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -1431,7 +1431,7 @@ export default function DashboardPage() {
                       aria-expanded={scheduleSectionVisible}
                       data-testid="process-dialog-configure-schedule"
                       onClick={() => setScheduleSectionOpen((open) => !open)}
-                      className={`px-2 transition-colors cursor-pointer flex items-center ${editProcessForm.launch_mode === 'scheduled' ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-card text-muted-foreground hover:bg-muted/50'}`}
+                      className={`px-2 transition-colors cursor-pointer flex items-center ${editProcessForm.launch_mode === 'scheduled' ? 'bg-info-solid text-info-solid-foreground hover:brightness-125' : 'bg-card text-muted-foreground hover:bg-muted/50'}`}
                     >
                       <Settings2 className="h-3.5 w-3.5" />
                     </button>
@@ -1563,11 +1563,11 @@ export default function DashboardPage() {
                 by the gear in `off` / `always on`. Edits here are saved with the
                 rest of the form and never move the launch mode. */}
             {scheduleSectionVisible && (
-              <div className="space-y-3 rounded-lg border border-blue-600/30 bg-blue-500/5 p-3" data-testid="process-dialog-schedule-section">
+              <div className="space-y-3 rounded-lg border border-info-border bg-info-surface p-3" data-testid="process-dialog-schedule-section">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Clock className="h-3.5 w-3.5 text-blue-400" />
-                    <span className="text-xs font-medium text-blue-400">schedule configuration</span>
+                    <Clock className="h-3.5 w-3.5 text-info" />
+                    <span className="text-xs font-medium text-info">schedule configuration</span>
                   </div>
                   {/* `scheduleClockLabel` is the single source for this string — the
                       clock only belongs to the site once it has opted in. (This used
@@ -1615,7 +1615,7 @@ export default function DashboardPage() {
               </Button>
               <Button
                 onClick={handleSaveProcess}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 {processDialogMode === 'create' ? 'create process' : 'save changes'}
               </Button>
@@ -1626,7 +1626,7 @@ export default function DashboardPage() {
 
       {/* Delete Process Confirmation Dialog */}
       <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
-        <DialogContent className="border-border bg-muted text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle className="text-foreground">delete process</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -1643,7 +1643,8 @@ export default function DashboardPage() {
             </Button>
             <Button
               onClick={handleDeleteProcess}
-              className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+              variant="destructive"
+              className="cursor-pointer"
             >
               delete process
             </Button>
