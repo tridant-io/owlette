@@ -997,6 +997,11 @@ mod host {
         /// Trigger 4 of `release_all`: the input thread's watcher followed the
         /// desktop. The held sets are the session's, so the ups are too.
         DesktopSwitched,
+        /// The process that started this streamer has gone: on macOS and
+        /// Linux that is the desktop app, whose grants the injector works
+        /// under. The session ends so the page comes back under the app that
+        /// replaces it, rather than keep a picture whose keyboard is dead.
+        ParentGone,
     }
 
     /// Session → capture.
@@ -2172,6 +2177,13 @@ mod host {
                     // page stops rather than starting the next session.
                     Ok(FromWorker::StoppedAtHost) => {
                         return Some(self.teardown(Exit::Ok, ExitReason::Kill, LeftReason::Kill));
+                    }
+                    // Not a decision: `Restart` has the page start its next
+                    // session, which the service spawns under the app that
+                    // comes back. With no app it is refused and the page says so.
+                    Ok(FromWorker::ParentGone) => {
+                        ::log::warn!("swoop: the app that started this streamer is gone, ending the session");
+                        return Some(self.teardown(Exit::Ok, ExitReason::Kill, LeftReason::Restart));
                     }
                     Ok(FromWorker::Opened { .. }) => {}
                     Err(TryRecvError::Empty) => return None,
@@ -3947,6 +3959,11 @@ mod host {
         // switch, and there is nothing held to release on it.
         watcher.follow();
         let mut injector = InputInjector::new(space);
+        // The parent is checked here, on the thread whose work dies with it,
+        // once a second; the thread itself stays, so the session's closing
+        // release still reaches the machine.
+        let mut parent_checked = Instant::now();
+        let mut parent_reported = false;
 
         while !stop.load(Ordering::Relaxed) {
             // Trigger 4 of `release_all`. `follow` switches and reports in one
@@ -3956,6 +3973,13 @@ mod host {
             if watcher.follow() {
                 let _ = tx.try_send(FromWorker::DesktopSwitched);
                 injector.refresh_bounds();
+            }
+            if !parent_reported && parent_checked.elapsed() >= Duration::from_secs(1) {
+                parent_checked = Instant::now();
+                if platform::process::parent_gone() {
+                    parent_reported = true;
+                    let _ = tx.try_send(FromWorker::ParentGone);
+                }
             }
             match rx.recv_timeout(Duration::from_millis(20)) {
                 Ok(ToInput::Inject(events)) => {

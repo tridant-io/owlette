@@ -56,4 +56,10 @@ pub mod process {
         }
         .context("could not pin the dll search path")
     }
+
+    /// Never on Windows: the service starts the streamer itself and ends the
+    /// session with its own `kill` when it stops, so nothing is watched here.
+    pub fn parent_gone() -> bool {
+        false
+    }
 }
