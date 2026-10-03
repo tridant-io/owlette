@@ -236,7 +236,7 @@ export function MachineContextMenu({
             <p>machine options</p>
           </TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" className="border-border bg-raised w-48">
+        <DropdownMenuContent align="end" className="border-border bg-raised w-52">
           {isOnline && isSiteAdmin && (
             <>
               {rebooting ? (
@@ -276,7 +276,7 @@ export function MachineContextMenu({
                         setShowRestartDialog(true);
                       }}
                       data-testid="machine-context-menu-reboot"
-                      className="flex-1 text-warning focus:bg-warning-surface focus:text-warning cursor-pointer"
+                      className="flex-1 whitespace-nowrap text-warning focus:bg-warning-surface focus:text-warning cursor-pointer"
                     >
                       <RotateCcw className="mr-2 h-4 w-4" />
                       restart machine

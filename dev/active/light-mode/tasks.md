@@ -1,5 +1,5 @@
 # Light mode — Tasks
-**Progress**: 18/21 complete · branch `feat/light-mode`
+**Progress**: 20/21 complete · branch `feat/light-mode`
 
 Read `plan.md` first (Approach → token architecture and migration rules). Read `DESIGN.md` at the repo root for the visual system.
 
@@ -332,7 +332,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Wave 5: Verify and guard
 
-- [ ] **Task 5.1: e2e — theme behaviour and a light a11y pass**
+- [x] **Task 5.1: e2e — theme behaviour and a light a11y pass**
   - Files: `web/e2e/specs/account/theme.spec.ts` (new), `web/e2e/specs/a11y/route-smoke.spec.ts`, `web/playwright.config.ts`, `web/e2e/specs/account/preferences.spec.ts`
   - Do:
     - **`theme.spec.ts`:**
@@ -367,7 +367,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - Reintroducing `text-red-400` in any component fails lint.
   - Depends on: Task 3.1, Task 3.2, Task 3.3, Task 3.4, Task 3.5
 
-- [ ] **Task 5.3: Desktop checks in CI**
+- [x] **Task 5.3: Desktop checks in CI**
   - Files: `.github/workflows/rust-build.yml` (or a new `.github/workflows/desktop.yml` if cleaner)
   - Do:
     - Add a job that runs on changes to `desktop/**`: `npm ci`, `npm run lint` (oxlint), `npm test` (vitest), `npm run typecheck` in `desktop/`, on Node 22 per `.nvmrc`.
@@ -414,6 +414,10 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Log
 ### 2026-10-03
+- Wave 5 and the review gate:
+  - **5.1:** `theme.spec.ts` (the choice, no flash, account sync, os follow, signed out, no-JS dark) and route-smoke in both themes pass. The light pass found three AA misses, now fixed: the day cyan went 0.50 → 0.48, the stale-row readouts got ink-dark series, and the docs code moved to github-light-high-contrast.
+  - **5.3:** the desktop job ran green on PR #278 in 41s.
+  - **6.2:** the review gallery is published (https://claude.ai/artifact/BLFwjYzaiLoQHKxEXVktd1): 42 views x 2 themes x desktop and phone. The captures caught the machine menu wrapping "restart machine", which is fixed and re-captured. Still owed: the owner's review, and a desktop-app look once a desktop build with the new theme command is installed (the same release step as the desktop light screenshots).
 - Waves 4–6 so far (5.1 and 5.3 wait on their runs, and 6.2 is the review gate):
   - **4.1 desktop:** every component is on tokens, and the raw-palette grep of `desktop/src` is clean. Dialogs take `--raised` from the primitive, following the owner's web ruling.
     - Visible dark changes: always-on goes green-700, failed goes red-400 (3.9:1 on the selected row), running / ok / joined go green-400, faint notes /70 → /80 (AA in both themes), the checkbox glyph changes, and the remove-block hover text goes to danger.
