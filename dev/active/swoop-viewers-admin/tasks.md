@@ -1,5 +1,5 @@
 # swoop viewer count and admin sessions page — Tasks
-**Progress**: 0/10 complete
+**Progress**: 3/10 complete
 
 Standing rules: work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-swoop-mac-wt` on branch
 `swoop/macos`; never touch the main checkout; `firestore.rules` and `.claude/hooks` untouched; all user-facing
@@ -9,7 +9,7 @@ the same manual step twice, and measure before claiming.
 
 ## Wave 1: data
 
-- [ ] **Task 1.1: Store mirror and site lister** `[agent]`
+- [x] **Task 1.1: Store mirror and site lister** `[agent]`
   - Files: `web/lib/swoop/sessionStore.server.ts`, `web/__tests__/lib/swoop/sessionStore.server.test.ts`
   - Do: In the store (read its header first: every read and write of a session is shaped here), add
     `listLiveSwoopSessionsForSite({ siteId, nowMs? }): Promise<SwoopSession[]>` — the same collection-group
@@ -31,7 +31,7 @@ the same manual step twice, and measure before claiming.
   - Done when: `cd web && npx jest __tests__/lib/swoop/sessionStore.server.test.ts` passes, eslint and tsc clean.
   - Depends on: nothing.
 
-- [ ] **Task 1.2: The machine field on the web** `[agent]`
+- [x] **Task 1.2: The machine field on the web** `[agent]`
   - Files: `web/hooks/useFirestore.ts`, `web/__tests__/hooks/useMachines.swoopViewers.test.ts` (create),
     `web/app/api/sites/[siteId]/machines/[machineId]/route.ts`, `web/content/docs/reference/firestore-data-model.mdx`
   - Do: Add `swoopViewers?: number` to the `Machine` interface (:254, beside `capabilities` :277-280) with a doc
@@ -45,7 +45,7 @@ the same manual step twice, and measure before claiming.
   - Done when: the new test passes, `npx jest __tests__/hooks` passes, eslint and tsc clean.
   - Depends on: nothing.
 
-- [ ] **Task 1.3: Menu badge and trigger pill** `[agent]`
+- [x] **Task 1.3: Menu badge and trigger pill** `[agent]`
   - Files: `web/components/MachineContextMenu.tsx`, `web/__tests__/components/MachineContextMenu.test.tsx`,
     `web/__tests__/components/MachineContextMenu.a11y.test.tsx`
   - Do: Add `swoopViewers?: number` to the props (:27-60) with a comment like `swoopCapable`'s. Let
@@ -187,3 +187,12 @@ the same manual step twice, and measure before claiming.
 - Plan created from three research passes (agent events and writes; dashboard and admin patterns; tests and
   e2e), approved by the owner ("create task files and start on tasks once complete"). Server-side mirror chosen
   over the agent write (decision 1).
+- Wave 1 done in parallel (three Opus workers), reviewed and committed: 1.1 `24736621` (the store also recounts in
+  `setSwoopSessionState`, since the mint adds the viewer while the session is still pending — without it a
+  one-viewer session would read 0 for its whole life; the retention test's query list gained the second
+  `state`), 1.2 `f73547ec` (the `MachineDetail` OpenAPI schema still lacks `swoopViewers`: folded into 2.2),
+  1.3 `151347d3` (the row badge's `aria-label` on a span was invalid ARIA; replaced with `sr-only` text).
+  Also `c46c471e`, outside the plan: the keyboard menu's legend shows only where a key is converted and the
+  windows-key note says what to do (owner: "this just confuses me"). The pre-commit gate checks the main
+  checkout, which fails on the owner's own branch work; commits go through PowerShell after the worktree's
+  own lint/tsc/jest.
