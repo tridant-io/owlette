@@ -248,9 +248,12 @@ jobs:
           retention-days: 7
 
   build-macos:
-    name: build installer on macos-15
+    name: build installer on macos-26
     needs: [security-gate]
-    runs-on: macos-15
+    # macos-26 for its sdk: a window gets the macos 26 corner radius only in an
+    # app linked against the macos 26 sdk. the minimum system stays 15.0
+    # (tauri.conf.json), and on macos 15 the system draws its own corners.
+    runs-on: macos-26
     # the signing and notarization secrets live here; owner-created and
     # restricted to v* tags (see the header).
     environment: release
