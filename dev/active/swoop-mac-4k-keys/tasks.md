@@ -324,3 +324,14 @@ arms the key down until the next typed key's release, and `releaseAll` lets go o
   rendered menu read from that run's trace.
 - *Changelog line:* "the swoop quality menu shows one row per setting with its current value, and the options
   open beside it."
+
+### 2026-10-02, the owner's second sitting
+
+- Confirmed by the owner on dev (`3216218f`): audio, mute, lock screen, "hold cmd for the next key". Quitting the
+  app kept the session up: the streamer outlived its parent, and then could not type (its Accessibility grant
+  is the app's). Reopening picked an old app copy out of `~/src/owlette/agent/build/macos/work/` (Spotlight
+  finds it), which answers `unsupported_job`, so every new session stayed at "connecting" until five failed
+  spawns tripped `SPAWN_CEILING`. Cleared by killing that copy, `launchctl kickstart` of the installed app and
+  of `app.owlette.agent`. Owed: a streamer that loses its app must exit.
+- The swoop row of the machine menu wears `text-primary` in medium weight, alone in that menu, at the owner's
+  ask ("the most visually apparent/attractive color").

@@ -322,7 +322,8 @@ export function MachineContextMenu({
               {/* Swoop supersedes live view on a machine that can stream; the
                   slideshow stays for every agent that can't, so the menu never
                   loses its screen entry. It leads: the live picture is the
-                  entry people reach for, the still is the fallback. */}
+                  entry people reach for, the still is the fallback. It alone
+                  wears the brand colour, so the eye lands on it first. */}
               {swoopCapable ? (
                 <DropdownMenuItem
                   onClick={(e) => {
@@ -330,7 +331,7 @@ export function MachineContextMenu({
                     onSwoop?.();
                   }}
                   data-testid="machine-context-menu-swoop"
-                  className="text-blue-400 focus:bg-blue-950/30 focus:text-blue-300 cursor-pointer"
+                  className="text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
                 >
                   <MonitorPlay className="mr-2 h-4 w-4" />
                   swoop
