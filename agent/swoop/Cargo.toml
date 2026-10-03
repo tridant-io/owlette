@@ -89,7 +89,7 @@ serde_json = "=1.0.151"
 
 # Typed errors per module (thiserror) with one anyhow chain at the process
 # boundary, so a failure maps onto an exit code instead of a panic.
-thiserror = "=2.0.20"
+thiserror = "=2.0.21"
 anyhow = "=1.0.104"
 
 # JWT segments are base64url without padding; hex is for the golden-vector
@@ -113,7 +113,7 @@ ed25519-dalek = "=3.0.0"
 zeroize = { version = "=1.9.0", features = ["derive"] }
 
 # Single-use `jti` values and DTLS/ICE nonces.
-rand = "=0.10.2"
+rand = "=0.10.3"
 
 # capture → encode → per-viewer sender hand-offs. Bounded channels with
 # try_send are how a slow viewer drops frames instead of stalling capture.
