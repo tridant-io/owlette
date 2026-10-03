@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-02T16:36:49.527Z",
+  "generatedAt": "2026-10-03T21:25:33.789Z",
   "title": "Design System: owlette",
   "extensions": {
     "colorMeta": {
@@ -393,6 +393,141 @@
           "oklch(0.84 0.208 25.331)",
           "oklch(0.95 0.208 25.331)"
         ]
+      },
+      "day-paper": {
+        "role": "status",
+        "displayName": "Day Paper",
+        "canonical": "oklch(0.975 0.006 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.006 250)",
+          "oklch(0.26 0.006 250)",
+          "oklch(0.38 0.006 250)",
+          "oklch(0.49 0.006 250)",
+          "oklch(0.61 0.006 250)",
+          "oklch(0.72 0.006 250)",
+          "oklch(0.84 0.006 250)",
+          "oklch(0.95 0.006 250)"
+        ]
+      },
+      "day-panel": {
+        "role": "status",
+        "displayName": "Day Panel",
+        "canonical": "oklch(0.995 0.002 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.002 250)",
+          "oklch(0.26 0.002 250)",
+          "oklch(0.38 0.002 250)",
+          "oklch(0.49 0.002 250)",
+          "oklch(0.61 0.002 250)",
+          "oklch(0.72 0.002 250)",
+          "oklch(0.84 0.002 250)",
+          "oklch(0.95 0.002 250)"
+        ]
+      },
+      "day-sunken": {
+        "role": "status",
+        "displayName": "Day Sunken",
+        "canonical": "oklch(0.962 0.008 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.008 250)",
+          "oklch(0.26 0.008 250)",
+          "oklch(0.38 0.008 250)",
+          "oklch(0.49 0.008 250)",
+          "oklch(0.61 0.008 250)",
+          "oklch(0.72 0.008 250)",
+          "oklch(0.84 0.008 250)",
+          "oklch(0.95 0.008 250)"
+        ]
+      },
+      "day-control": {
+        "role": "status",
+        "displayName": "Day Control",
+        "canonical": "oklch(0.94 0.012 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.012 250)",
+          "oklch(0.26 0.012 250)",
+          "oklch(0.38 0.012 250)",
+          "oklch(0.49 0.012 250)",
+          "oklch(0.61 0.012 250)",
+          "oklch(0.72 0.012 250)",
+          "oklch(0.84 0.012 250)",
+          "oklch(0.95 0.012 250)"
+        ]
+      },
+      "day-hairline": {
+        "role": "neutral",
+        "displayName": "Day Hairline",
+        "canonical": "oklch(0.88 0.016 250)",
+        "tonalRamp": [
+          "oklch(0.15 0.016 250)",
+          "oklch(0.26 0.016 250)",
+          "oklch(0.38 0.016 250)",
+          "oklch(0.49 0.016 250)",
+          "oklch(0.61 0.016 250)",
+          "oklch(0.72 0.016 250)",
+          "oklch(0.84 0.016 250)",
+          "oklch(0.95 0.016 250)"
+        ]
+      },
+      "day-ink": {
+        "role": "status",
+        "displayName": "Day Ink",
+        "canonical": "oklch(0.21 0.03 258)",
+        "tonalRamp": [
+          "oklch(0.15 0.03 258)",
+          "oklch(0.26 0.03 258)",
+          "oklch(0.38 0.03 258)",
+          "oklch(0.49 0.03 258)",
+          "oklch(0.61 0.03 258)",
+          "oklch(0.72 0.03 258)",
+          "oklch(0.84 0.03 258)",
+          "oklch(0.95 0.03 258)"
+        ]
+      },
+      "day-slate": {
+        "role": "status",
+        "displayName": "Day Slate",
+        "canonical": "oklch(0.42 0.032 256)",
+        "tonalRamp": [
+          "oklch(0.15 0.032 256)",
+          "oklch(0.26 0.032 256)",
+          "oklch(0.38 0.032 256)",
+          "oklch(0.49 0.032 256)",
+          "oklch(0.61 0.032 256)",
+          "oklch(0.72 0.032 256)",
+          "oklch(0.84 0.032 256)",
+          "oklch(0.95 0.032 256)"
+        ]
+      },
+      "day-signal-cyan": {
+        "role": "status",
+        "displayName": "Day Signal Cyan",
+        "canonical": "oklch(0.48 0.105 218)",
+        "tonalRamp": [
+          "oklch(0.15 0.105 218)",
+          "oklch(0.26 0.105 218)",
+          "oklch(0.38 0.105 218)",
+          "oklch(0.49 0.105 218)",
+          "oklch(0.61 0.105 218)",
+          "oklch(0.72 0.105 218)",
+          "oklch(0.84 0.105 218)",
+          "oklch(0.95 0.105 218)"
+        ]
+      },
+      "day-amber": {
+        "role": "status",
+        "displayName": "Day Amber",
+        "canonical": "oklch(0.56 0.15 52)",
+        "tonalRamp": [
+          "oklch(0.15 0.15 52)",
+          "oklch(0.26 0.15 52)",
+          "oklch(0.38 0.15 52)",
+          "oklch(0.49 0.15 52)",
+          "oklch(0.61 0.15 52)",
+          "oklch(0.72 0.15 52)",
+          "oklch(0.84 0.15 52)",
+          "oklch(0.95 0.15 52)"
+        ]
       }
     },
     "typographyMeta": {
@@ -586,7 +721,7 @@
   ],
   "narrative": {
     "northStar": "Mission Control",
-    "overview": "owlette is a console for watching machines nobody is sitting in front of. the screen is a deep navy room, telemetry is the decoration, and one cyan signal marks what is live, interactive or needs you. everything else steps back. density is high on purpose: an operator scans tens of machines at once, so the type is small, the controls are compact, and every row carries five readouts before it carries any ornament.\n\nthe personality sits in a few precise mechanics, not in decoration: a hover fill that sweeps left to right like a highlighter, the owlette eye that powers on at first paint, a feather that falls while data loads, a line graph that plots itself. the blueprint and dot grids are the room's walls. they sit at low opacity behind everything and never compete with data.\n\ndark is canonical today, and the app is pinned dark (`<html class=\"dark\">`). a light theme is planned, so new work must keep the light token layer valid even though nothing renders it yet (see Do's and Don'ts).",
+    "overview": "owlette is a console for watching machines nobody is sitting in front of. the screen is a deep navy room, telemetry is the decoration, and one cyan signal marks what is live, interactive or needs you. everything else steps back. density is high on purpose: an operator scans tens of machines at once, so the type is small, the controls are compact, and every row carries five readouts before it carries any ornament.\n\nthe personality sits in a few precise mechanics, not in decoration: a hover fill that sweeps left to right like a highlighter, the owlette eye that powers on at first paint, a feather that falls while data loads, a line graph that plots itself. the blueprint and dot grids are the room's walls. they sit at low opacity behind everything and never compete with data.\n\nowlette has two themes: dark, the night shift and the brand default, and light, the same room by day. the theme follows the visitor's OS preference, and a signed-in user can pin dark or light under appearance in their profile. dark is the fallback whenever there is no signal: the server renders `<html class=\"dark\">`, so a page with no script still opens in the dark room.",
     "keyCharacteristics": [
       "deep navy surfaces in one hue family (250), separated by lightness steps, not by colour",
       "signal cyan is the only interactive accent; sodium amber is the rare warm counterpoint",
@@ -599,6 +734,11 @@
       {
         "name": "The One Signal Rule",
         "body": "cyan means interactive or live. don't use it for decoration, headings or illustration fills, or it stops meaning anything.",
+        "section": "colors"
+      },
+      {
+        "name": "The Same Room Rule",
+        "body": "light is not a second brand. it is the same console in daylight: the same hue family, the same one signal, the same depth by lightness. no grey shadcn neutrals and no new accent.",
         "section": "colors"
       },
       {
@@ -637,6 +777,11 @@
         "section": "elevation"
       },
       {
+        "name": "The Brightest Is Selected Rule",
+        "body": "emphasis is brightness in both themes. a hovered, open or selected row is the brightest thing in its list. by day that means resting rows sit a step down and the open one is lifted to white, never greyed.",
+        "section": "elevation"
+      },
+      {
         "name": "The No Twin Fills Rule",
         "body": "never place two large flat fills a hair apart in lightness against a shared hard edge. it reads as a mistake, not depth. to get a darker region, use a vignette that fades to `--card-recessed` with no boundary line (as on the auth brand panel).",
         "section": "elevation"
@@ -653,10 +798,10 @@
       "**Do** colour a readout only when it crosses a threshold, using the usage bands or the warning/critical temperature colours.",
       "**Do** standardize button styling in `web/components/ui/button.tsx` variants. hover feedback comes from `.btn-sweep`, not per-instance `hover:bg-*`.",
       "**Do** use `MENU_SURFACE` for any floating menu, on web and desktop alike.",
-      "**Do** define every new colour token in both the `:root` (light) and `.dark` blocks of `globals.css`. dark is canonical, but a light theme is planned, so light values must stay valid.",
+      "**Do** define every new colour token in both the `:root` (light) and `.dark` blocks of `globals.css`. the contrast test fails if a dark token has no light value.",
       "**Do** use `IconButton` for every icon-only control, with a lowercase label that names the action.",
       "**Do** honour `prefers-reduced-motion`: every new animation needs a reduced-motion path that ends in its final state.",
-      "**Do** keep `desktop/src/globals.css` in step with web. its dark `--btn-hover` still uses the grey foreground mix that web replaced with the blue tint, which is a known drift."
+      "**Do** keep `desktop/src/globals.css` in step with web. the two share every token and value, and the desktop design-system test fails if a dark token has no light value."
     ],
     "donts": [
       "**Don't** hardcode colours in components. use the theme tokens. existing raw Tailwind status classes (`red-600`, `green-500`, `amber-*`) are incumbent debt, not precedent.",
@@ -666,7 +811,7 @@
       "**Don't** add a second interactive accent or another icon library. lucide-react is the only icon set.",
       "**Don't** write title-case or sentence-case UI copy.",
       "**Don't** add a strong or inset focus ring. the owner rejected it on sight (2026-10-02).",
-      "**Don't** add new uses of the light theme's stock neutral palette (near-black primary, grey surfaces) as if it were the brand. it is shadcn scaffolding until the light theme is designed."
+      "**Don't** reach for raw tailwind palette classes (`text-red-400`, `bg-white`, `text-white`). they look right in one theme only. use the token families."
     ]
   }
 }

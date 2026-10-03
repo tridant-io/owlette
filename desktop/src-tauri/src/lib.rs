@@ -114,6 +114,8 @@ pub fn run() {
       commands::set_sidebar_collapsed,
       commands::detail_sections,
       commands::set_detail_section,
+      commands::appearance_theme,
+      commands::set_appearance_theme,
     ])
     .setup(|app| {
       // Both profiles. A release build is `windows_subsystem = "windows"` with no console,
@@ -168,8 +170,8 @@ pub fn run() {
         Err(error) => log::warn!("could not write the tray pid file: {error}"),
       }
 
-      // Restore last-session geometry here: tray, plain launch and a forwarded second
-      // instance all reach `show_main_window`, and this is the only point ahead of all three.
+      // Restore last-session appearance and geometry here: tray, plain launch and a forwarded
+      // second instance all reach `show_main_window`, and this is the only point ahead of all three.
       app.manage(window_state::restore(app.handle()));
 
       // Configured hidden so a `--tray` launch never flashes a window; any other launch is
@@ -223,6 +225,13 @@ pub fn run() {
             layout.persist();
           }
           tray::hide_main_window(window.app_handle());
+        }
+        // the os moved an unpinned window, or a pin landed: without this the frame
+        // keeps the old colour, which a reload or a resize edge then shows
+        WindowEvent::ThemeChanged(theme) => {
+          if let Some(window) = window.app_handle().get_webview_window("main") {
+            window_state::paint_frame(&window, *theme);
+          }
         }
         _ => {}
       }

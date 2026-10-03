@@ -12,7 +12,7 @@ import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
 
-const MENU_SURFACE = 'border-border bg-secondary/85 backdrop-blur-sm shadow-2xl shadow-black/50 ring-1 ring-white/10';
+const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
 
 const FEEDBACK_LABELS = [
   'report a bug',
@@ -369,7 +369,7 @@ export function PageHeader({
                     so destructive cross-site actions don't catch them off guard. */}
                 {isSuperadmin && (
                   <span
-                    className="hidden sm:inline-flex items-center rounded-full bg-red-600/15 border border-red-500/40 text-red-400 text-[10px] font-medium tracking-wide px-1.5 py-0.5 leading-none overflow-hidden group/superadmin"
+                    className="hidden sm:inline-flex items-center rounded-full bg-danger-solid/15 border border-danger-solid/40 text-danger text-[10px] font-medium tracking-wide px-1.5 py-0.5 leading-none overflow-hidden group/superadmin"
                     aria-label="signed in as superadmin"
                   >
                     <Crown className="h-2.5 w-2.5 shrink-0" />
@@ -550,8 +550,8 @@ export function PageHeader({
       </div>
     )}
 
-    {/* Subtle top glow for readability over dot grid */}
-    <div className="pointer-events-none absolute inset-x-0 top-14 h-48 z-0" style={{ background: 'linear-gradient(to bottom, oklch(0.20 0.03 250 / 0.7), transparent)' }} />
+    {/* the light under the header: a cool lift at night, a desk lamp's warm pool by day */}
+    <div className="pointer-events-none absolute inset-x-0 top-14 h-48 z-0" style={{ background: 'var(--header-glow)' }} />
     {/* Scrim: subtle blur + dim of page content when a nav dropdown is open */}
     {scrimMounted && (
       <div

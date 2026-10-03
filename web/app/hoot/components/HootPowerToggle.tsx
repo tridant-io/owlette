@@ -54,10 +54,12 @@ export function HootPowerToggle({ siteId, machine }: HootPowerToggleProps) {
             disabled={busy}
             aria-label={tooltip}
             aria-pressed={!enabled}
+            // the hover tint is lighter by day: the night's 20% costs the light
+            // status text too much contrast.
             className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
               enabled
-                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
-                : 'border-orange-500/50 bg-orange-500/15 text-orange-400 hover:bg-orange-500/25'
+                ? 'border-success-border bg-success-surface text-success hover:bg-success-solid/10 dark:hover:bg-success-solid/20'
+                : 'border-warning-border bg-warning-surface text-warning hover:bg-warning-solid/10 dark:hover:bg-warning-solid/20'
             }`}
           >
             <HootIcon className="h-3.5 w-3.5" />

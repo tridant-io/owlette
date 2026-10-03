@@ -23,15 +23,15 @@ import { toast } from '@/lib/toast';
 interface DownloadButtonProps {
   /**
    * `card` spells the labels out; the header default and `inline` are
-   * icon-only with tooltips — white on the dark header, muted in a dialog.
+   * icon-only with tooltips — full-strength in the header, muted in a dialog.
    */
   variant?: 'header' | 'card' | 'inline';
 }
 
-const HEADER_BUTTON = 'flex items-center hover:text-white cursor-pointer text-white p-1 sm:p-1.5 md:p-2';
+const HEADER_BUTTON = 'flex items-center hover:text-foreground cursor-pointer text-foreground p-1 sm:p-1.5 md:p-2';
 const HEADER_ICON = 'h-3 w-3 sm:h-3.5 sm:w-3.5 md:h-4 md:w-4';
-// the header is always dark; a dialog follows the theme, so its tips keep the default colours
-const HEADER_TIP = 'bg-secondary border-border text-white';
+// header tips sit on the secondary surface; a dialog's keep the default colours
+const HEADER_TIP = 'bg-secondary border-border text-foreground';
 const INLINE_BUTTON = 'text-muted-foreground cursor-pointer p-1.5';
 
 // the os word a label uses: the first segment of the platform key

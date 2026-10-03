@@ -258,7 +258,7 @@ export default function SwoopPage() {
             if (!open && !busy) setSessionToKill(null);
           }}
         >
-          <DialogContent className="bg-background border-border">
+          <DialogContent className=" border-border">
             <DialogHeader>
               <DialogTitle>end this session?</DialogTitle>
               <DialogDescription className="text-muted-foreground">

@@ -143,7 +143,7 @@ function MachineSwitcher({
                     aria-hidden
                     className={cn(
                       'h-1.5 w-1.5 rounded-full shrink-0',
-                      m.online ? 'bg-green-500' : 'bg-muted-foreground/40',
+                      m.online ? 'bg-success' : 'bg-muted-foreground/40',
                     )}
                   />
                   <span className="truncate">{m.machineId}</span>
@@ -1306,7 +1306,7 @@ export function MetricsDetailPanel({
                 <CartesianGrid
                   yAxisId="label-left"
                   strokeDasharray="3 3"
-                  stroke="oklch(0.55 0.06 250)"
+                  stroke="var(--chart-grid)"
                   opacity={0.7}
                 />
                 <XAxis
@@ -1315,7 +1315,7 @@ export function MetricsDetailPanel({
                   domain={timeDomain}
                   ticks={xTicks}
                   tickFormatter={formatXAxisTick}
-                  stroke="oklch(0.708 0.05 250)"
+                  stroke="var(--chart-axis)"
                   fontSize={11}
                   tickLine={false}
                   axisLine={false}
@@ -1330,7 +1330,7 @@ export function MetricsDetailPanel({
                   domain={[0, leftScale.domainMax]}
                   ticks={leftScale.ticks}
                   allowDataOverflow
-                  stroke="oklch(0.708 0.05 250)"
+                  stroke="var(--chart-axis)"
                   fontSize={11}
                   tickLine={false}
                   axisLine={false}
@@ -1347,7 +1347,7 @@ export function MetricsDetailPanel({
                     ticks={rightScale?.ticks}
                     tick={rightScale !== null}
                     allowDataOverflow
-                    stroke="oklch(0.708 0.05 250)"
+                    stroke="var(--chart-axis)"
                     fontSize={11}
                     tickLine={false}
                     axisLine={false}
@@ -1366,7 +1366,7 @@ export function MetricsDetailPanel({
                 {cursorTracked && <NearestDeviceProbe lines={visibleLines} onNearest={setCursorDevice} />}
                 <Tooltip content={<ChartTooltip formatTime={formatTooltipTime} gpuLabels={gpuLabels} onlyKey={activePinnedKey ?? undefined} />} />
                 {/* Baseline reference line to show full time range */}
-                <ReferenceLine yAxisId="label-left" y={0} stroke="oklch(0.35 0.08 250)" strokeDasharray="3 3" />
+                <ReferenceLine yAxisId="label-left" y={0} stroke="var(--chart-reference)" strokeDasharray="3 3" />
                 {activeLines.map((line) => {
                   if (line.hidden) {
                     // Tooltip-only lines on their own axis so raw bytes don't blow out the 0-100% scale.

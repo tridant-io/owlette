@@ -72,7 +72,7 @@ export function MachineStatusPill({
         <TooltipTrigger asChild>
           <span
             role="img"
-            className="inline-block w-2.5 h-2.5 rounded-full bg-green-500 select-none cursor-help"
+            className="inline-block w-2.5 h-2.5 rounded-full bg-success select-none cursor-help"
             aria-label="online"
             data-testid="machine-status-online"
           />
@@ -82,7 +82,7 @@ export function MachineStatusPill({
         </TooltipContent>
       </Tooltip>
     ) : (
-      <Badge className="text-xs select-none bg-red-600 text-white">offline</Badge>
+      <Badge className="text-xs select-none bg-danger-solid text-danger-solid-foreground">offline</Badge>
     );
   }
 
@@ -97,7 +97,7 @@ export function MachineStatusPill({
     return (
       <Badge
         role="img"
-        className="text-xs select-none bg-red-600 text-white animate-pulse px-1.5"
+        className="text-xs select-none bg-danger-solid text-danger-solid-foreground animate-pulse px-1.5"
         title={actionLabel}
         aria-label={actionLabel}
       >
@@ -110,7 +110,7 @@ export function MachineStatusPill({
     return (
       <Badge
         role="img"
-        className="text-xs select-none bg-red-600 text-white px-1.5"
+        className="text-xs select-none bg-danger-solid text-danger-solid-foreground px-1.5"
         title="cancelling"
         aria-label="cancelling"
       >
@@ -126,7 +126,7 @@ export function MachineStatusPill({
     return (
       <Badge
         role="img"
-        className="text-xs select-none bg-red-600 text-white animate-pulse px-1 tabular-nums"
+        className="text-xs select-none bg-danger-solid text-danger-solid-foreground animate-pulse px-1 tabular-nums"
         title={actionLabel}
         aria-label={`${actionLabel}, ${formatMMSS(remaining)} remaining`}
       >
@@ -149,7 +149,7 @@ export function MachineStatusPill({
   return (
     <Badge
       asChild
-      className="text-xs select-none bg-red-600 hover:bg-red-700 text-white animate-pulse cursor-pointer p-0 tabular-nums"
+      className="text-xs select-none bg-danger-solid hover:bg-danger-solid/85 text-danger-solid-foreground animate-pulse cursor-pointer p-0 tabular-nums"
     >
       <button
         type="button"

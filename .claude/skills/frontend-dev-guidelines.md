@@ -63,7 +63,7 @@ Use `lucide-react` exclusively — don't add other icon libraries.
 
 ### Theming
 
-Dark mode via `next-themes` (configured in layout). Use CSS variables from `globals.css` and Tailwind's `dark:` prefix. Don't use hardcoded colors.
+Two themes, dark and light. `web/components/ThemeProvider.tsx` wraps next-themes; the choices and storage key are in `web/lib/theme.ts`. The app follows the OS until the user picks one in profile → preferences (synced to `users/{uid}.preferences.theme`), and the server renders `<html class="dark">` so no-JS views stay dark. Every colour is a token in `web/app/globals.css`: `:root` is light, `.dark` is dark, and each token is defined in both. Use the token classes (`text-danger`, `bg-raised`, `bg-card-sunken`, ...) and a `dark:` pair only where a token can't express it. ESLint rejects raw palette utilities (`text-red-400`, `text-white`); the rule is in `web/eslint.config.mjs`. `web/__tests__/styles/theme-contrast.test.ts` holds both themes to WCAG AA. DESIGN.md has the system.
 
 ---
 

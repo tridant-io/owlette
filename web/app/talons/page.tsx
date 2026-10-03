@@ -206,7 +206,7 @@ export default function TalonsPage() {
             data-testid="talon-create"
             onClick={openCreate}
             disabled={!currentSiteId}
-            className="flex-shrink-0 cursor-pointer text-gray-900"
+            className="flex-shrink-0 cursor-pointer"
           >
             <Plus className="mr-2 h-4 w-4" />
             create talon
@@ -242,7 +242,7 @@ export default function TalonsPage() {
               a talon watches for something — a schedule, a threshold, an event — and acts on it.
             </p>
             <div className="mt-3 flex justify-center">
-              <Button type="button" size="sm" onClick={openCreate} className="cursor-pointer text-gray-900">
+              <Button type="button" size="sm" onClick={openCreate} className="cursor-pointer">
                 <Plus className="mr-1 h-3.5 w-3.5" />
                 create talon
               </Button>

@@ -169,7 +169,7 @@ export function VersionHistory({
           loading versions…
         </div>
       ) : error ? (
-        <p className="px-3 py-2 text-xs text-red-400/80">
+        <p className="px-3 py-2 text-xs text-danger/80">
           couldn&apos;t load versions — {error}
         </p>
       ) : displayVersions.length === 0 ? (

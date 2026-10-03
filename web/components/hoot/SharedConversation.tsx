@@ -17,8 +17,8 @@ import { HootMarkdown } from '@/components/hoot/HootMarkdown';
 import type { SharedMessage, SharedToolOutcome } from '@/lib/hoot/shareTypes';
 
 const OUTCOME: Record<SharedToolOutcome, { label: string; icon: typeof CircleCheck; className: string }> = {
-  completed: { label: 'completed', icon: CircleCheck, className: 'text-emerald-400' },
-  failed: { label: 'failed', icon: CircleX, className: 'text-red-400' },
+  completed: { label: 'completed', icon: CircleCheck, className: 'text-success' },
+  failed: { label: 'failed', icon: CircleX, className: 'text-danger' },
   denied: { label: 'denied', icon: Ban, className: 'text-muted-foreground' },
   incomplete: { label: 'not completed', icon: CircleDashed, className: 'text-muted-foreground' },
 };

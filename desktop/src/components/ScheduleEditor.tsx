@@ -283,7 +283,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                   value={block.name || ''}
                   onChange={(e) => updateBlockName(blockIndex, e.target.value)}
                   placeholder={`block ${blockIndex + 1}`}
-                  className="text-sm font-medium bg-background border border-border rounded-md px-2.5 py-1.5 text-foreground placeholder:text-muted-foreground/50 w-full min-w-0 outline-none focus:border-muted-foreground transition-colors"
+                  className="text-sm font-medium bg-background border border-border rounded-md px-2.5 py-1.5 text-foreground placeholder:text-muted-foreground dark:placeholder:text-muted-foreground/50 w-full min-w-0 outline-none focus:border-muted-foreground transition-colors"
                 />
               </div>
               {blocks.length > 1 && (
@@ -292,7 +292,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                   size="sm"
                   onClick={() => removeBlock(blockIndex)}
                   aria-label={`remove block ${blockIndex + 1}`}
-                  className="h-6 w-6 p-0 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer flex-shrink-0"
+                  className="h-6 w-6 p-0 text-danger hover:text-danger hover:bg-danger-surface cursor-pointer flex-shrink-0"
                 >
                   <Trash2 className="h-3 w-3" />
                 </Button>
@@ -327,7 +327,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                         compact={compact}
                       />
                       {isOvernight && (
-                        <span className="text-[10px] font-medium text-amber-400 bg-amber-400/10 border border-amber-400/30 rounded px-1.5 py-0.5 whitespace-nowrap">
+                        <span className="text-[10px] font-medium text-warning bg-warning-surface border border-warning-border/75 rounded px-1.5 py-0.5 whitespace-nowrap">
                           +1 day
                         </span>
                       )}
@@ -338,7 +338,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                               type="button"
                               onClick={() => removeRange(blockIndex, rangeIndex)}
                               aria-label="remove time range"
-                              className="h-6 w-6 rounded-md text-muted-foreground hover:text-red-400 hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                              className="h-6 w-6 rounded-md text-muted-foreground hover:text-danger hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
                             >
                               <Minus className="h-3 w-3" />
                             </button>
@@ -368,7 +368,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                       )}
                     </div>
                     {isOvernight && (
-                      <p className="text-[11px] text-amber-400/80 pl-0.5">
+                      <p className="text-[11px] text-warning dark:text-warning/80 pl-0.5">
                         ends the following day — schedule days control when it <em>starts</em>
                       </p>
                     )}
@@ -469,10 +469,10 @@ export function ScheduleEditor({
               that has not answered the dashboard's banner. */}
           <DialogDescription>{scheduleClockDescription(scheduleTimezone)}</DialogDescription>
 
-          <div className="space-y-3 rounded-lg border border-blue-600/30 bg-blue-950/10 p-3">
+          <div className="space-y-3 rounded-lg border border-info-border bg-info-surface p-3">
             <div className="flex items-center gap-2">
-              <Clock className="h-3.5 w-3.5 text-blue-400" />
-              <span className="text-xs font-medium text-blue-400">week at a glance</span>
+              <Clock className="h-3.5 w-3.5 text-info" />
+              <span className="text-xs font-medium text-info">week at a glance</span>
             </div>
             <div className="flex justify-center">
               <WeekSummaryBar schedules={blocks} tall />
@@ -481,7 +481,7 @@ export function ScheduleEditor({
         </div>
 
         <div className="flex min-h-0 flex-col gap-3">
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-blue-600/30 bg-blue-950/10 p-3">
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-info-border bg-info-surface p-3">
             <ScheduleBlocksEditor blocks={blocks} onChange={setBlocks} compact />
           </div>
           <DialogFooter>

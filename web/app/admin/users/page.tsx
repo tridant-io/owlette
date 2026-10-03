@@ -92,19 +92,20 @@ const SHOW_DELETED_USERS_PREF = 'adminShowDeletedUsers';
 /** Tally chip. In the header, not a card row, so the table keeps the height. */
 function StatChip({
   icon: Icon,
-  iconBg,
+  iconTone,
   count,
   label,
 }: {
   icon: typeof Users;
-  iconBg: string;
+  /** the tile's fill and the ink that sits on it */
+  iconTone: string;
   count: number;
   label: string;
 }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
-      <div className={`p-1.5 rounded-md ${iconBg}`}>
-        <Icon className="h-4 w-4 text-foreground" />
+      <div className={`p-1.5 rounded-md ${iconTone}`}>
+        <Icon className="h-4 w-4" />
       </div>
       <div className="leading-tight">
         <p className="text-lg font-bold text-foreground">{count}</p>
@@ -422,17 +423,17 @@ export default function UserManagementPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <StatChip icon={Users} iconBg="bg-accent-cyan" count={counts.total} label="total users" />
-            <StatChip icon={Users} iconBg="bg-muted" count={counts.members} label="members" />
-            <StatChip icon={Shield} iconBg="bg-green-600" count={counts.admins} label="site admins" />
-            <StatChip icon={Crown} iconBg="bg-red-600" count={counts.superadmins} label="superadmins" />
+            <StatChip icon={Users} iconTone="bg-accent-cyan text-primary-foreground" count={counts.total} label="total users" />
+            <StatChip icon={Users} iconTone="bg-muted text-foreground" count={counts.members} label="members" />
+            <StatChip icon={Shield} iconTone="bg-success-solid text-success-solid-foreground" count={counts.admins} label="site admins" />
+            <StatChip icon={Crown} iconTone="bg-danger-solid text-danger-solid-foreground" count={counts.superadmins} label="superadmins" />
           </div>
         </div>
 
       {/* Error State */}
       {error && (
-        <div className="bg-red-900/30 border border-red-700 rounded-lg p-4 mb-6">
-          <p className="text-red-300">{error}</p>
+        <div className="bg-danger-surface border border-danger-border rounded-lg p-4 mb-6">
+          <p className="text-danger">{error}</p>
         </div>
       )}
 
@@ -501,7 +502,7 @@ export default function UserManagementPage() {
                         )}
                         <p className="text-sm text-muted-foreground">{user.email}</p>
                         {user.uid === currentUser?.uid && (
-                          <Badge className="mt-1 bg-accent-cyan text-gray-900 text-xs">you</Badge>
+                          <Badge className="mt-1 text-xs">you</Badge>
                         )}
                         {isDeleted && (
                           <div className="mt-1">
@@ -519,12 +520,12 @@ export default function UserManagementPage() {
                     {/* Role Badge */}
                     <td className="p-4">
                       {user.role === 'superadmin' ? (
-                        <Badge className="bg-red-600 flex items-center gap-1 w-fit">
+                        <Badge className="bg-danger-solid text-danger-solid-foreground flex items-center gap-1 w-fit">
                           <Crown className="h-3 w-3" />
                           superadmin
                         </Badge>
                       ) : user.role === 'admin' ? (
-                        <Badge className="bg-green-600 flex items-center gap-1 w-fit">
+                        <Badge className="bg-success-solid text-success-solid-foreground flex items-center gap-1 w-fit">
                           <ShieldAlert className="h-3 w-3" />
                           admin
                         </Badge>
@@ -546,7 +547,7 @@ export default function UserManagementPage() {
                             {user.sites.map((siteId) => (
                               <span
                                 key={siteId}
-                                className="rounded bg-green-600/15 border border-green-600/40 text-green-400 text-xs font-mono px-1.5 py-0.5"
+                                className="rounded bg-success-surface border border-success-border text-success text-xs font-mono px-1.5 py-0.5"
                                 title={`admin of ${siteId}`}
                               >
                                 {siteId}
@@ -649,7 +650,7 @@ export default function UserManagementPage() {
                             <DropdownMenuItem
                               onClick={() => handleOpenMfaResetDialog(user.uid, user.email)}
                               disabled={resettingMfaUser === user.uid || user.uid === currentUser?.uid}
-                              className="text-red-400 hover:bg-red-950/30! hover:text-red-300! cursor-pointer focus:bg-red-950/30 focus:text-red-300"
+                              className="text-danger cursor-pointer focus:bg-danger-surface focus:text-danger"
                             >
                               {resettingMfaUser === user.uid ? (
                                 <>
@@ -666,7 +667,7 @@ export default function UserManagementPage() {
                             <DropdownMenuItem
                               onClick={() => handleOpenDeleteDialog(user.uid, user.email)}
                               disabled={deletingUser === user.uid || user.uid === currentUser?.uid}
-                              className="text-red-400 hover:bg-red-950/30! hover:text-red-300! cursor-pointer focus:bg-red-950/30 focus:text-red-300"
+                              className="text-danger cursor-pointer focus:bg-danger-surface focus:text-danger"
                             >
                               {deletingUser === user.uid ? (
                                 <>
@@ -757,7 +758,7 @@ export default function UserManagementPage() {
                       </Tooltip>
                     )}
                     {blocked && (
-                      <Badge className="bg-red-950/40 border border-red-900/60 text-red-300 text-xs">
+                      <Badge className="bg-danger-surface border border-danger-border text-danger text-xs">
                         {d.outcome === 'deny'
                           ? `blocked${d.denyReason ? ` · ${d.denyReason.replace(/_/g, ' ')}` : ''}`
                           : 'failed'}
@@ -786,7 +787,7 @@ export default function UserManagementPage() {
           </div>
           <div className="bg-card border border-border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
-              <ShieldAlert className="h-4 w-4 text-green-500 flex-shrink-0" />
+              <ShieldAlert className="h-4 w-4 text-success flex-shrink-0" />
               <span className="text-sm font-semibold text-foreground">admin</span>
             </div>
             <p className="text-sm text-muted-foreground">
@@ -795,7 +796,7 @@ export default function UserManagementPage() {
           </div>
           <div className="bg-card border border-border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
-              <Crown className="h-4 w-4 text-red-400 flex-shrink-0" />
+              <Crown className="h-4 w-4 text-danger flex-shrink-0" />
               <span className="text-sm font-semibold text-foreground">superadmin</span>
             </div>
             <p className="text-sm text-muted-foreground">
@@ -822,7 +823,7 @@ export default function UserManagementPage() {
 
       {/* Role Change Confirmation Dialog */}
       <Dialog open={roleChangeDialogOpen} onOpenChange={setRoleChangeDialogOpen}>
-        <DialogContent className="border-border bg-card text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle className="text-foreground flex items-center gap-2">
               <UserCog className="h-5 w-5 text-accent-cyan" />
@@ -849,13 +850,13 @@ export default function UserManagementPage() {
                 </SelectItem>
                 <SelectItem value="admin" className="text-foreground focus:bg-accent focus:text-foreground">
                   <div className="flex items-center gap-2">
-                    <ShieldAlert className="h-4 w-4 text-green-500" />
+                    <ShieldAlert className="h-4 w-4 text-success" />
                     admin
                   </div>
                 </SelectItem>
                 <SelectItem value="superadmin" className="text-foreground focus:bg-accent focus:text-foreground">
                   <div className="flex items-center gap-2">
-                    <Crown className="h-4 w-4 text-red-500" />
+                    <Crown className="h-4 w-4 text-danger" />
                     superadmin
                   </div>
                 </SelectItem>
@@ -880,7 +881,7 @@ export default function UserManagementPage() {
             <Button
               onClick={handleConfirmRoleChange}
               disabled={!userToChangeRole || userToChangeRole.newRole === userToChangeRole.currentRole}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               <UserCog className="h-4 w-4 mr-2" />
               save role
@@ -891,10 +892,10 @@ export default function UserManagementPage() {
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteConfirmDialogOpen} onOpenChange={setDeleteConfirmDialogOpen}>
-        <DialogContent className="border-border bg-card text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle className="text-foreground flex items-center gap-2">
-              <Trash2 className="h-5 w-5 text-red-400" />
+              <Trash2 className="h-5 w-5 text-danger" />
               delete user
             </DialogTitle>
             <DialogDescription className="text-foreground">
@@ -902,8 +903,8 @@ export default function UserManagementPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="my-4 space-y-3">
-            <div className="bg-red-950/30 border border-red-900/50 rounded-lg p-4">
-              <p className="text-red-300 text-sm">
+            <div className="bg-danger-surface border border-danger-border rounded-lg p-4">
+              <p className="text-danger text-sm">
                 this action cannot be undone. all user data will be permanently removed.
               </p>
             </div>
@@ -933,8 +934,9 @@ export default function UserManagementPage() {
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={handleConfirmDelete}
-              className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+              className="cursor-pointer"
             >
               <Trash2 className="h-4 w-4 mr-2" />
               delete user
@@ -948,10 +950,10 @@ export default function UserManagementPage() {
           it strips every factor, so the consequences are spelled out rather
           than left to be discovered at the target's next sign-in. */}
       <Dialog open={mfaResetDialogOpen} onOpenChange={setMfaResetDialogOpen}>
-        <DialogContent className="border-border bg-card text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle className="text-foreground flex items-center gap-2">
-              <ShieldOff className="h-5 w-5 text-red-400" />
+              <ShieldOff className="h-5 w-5 text-danger" />
               reset 2FA
             </DialogTitle>
             <DialogDescription className="text-foreground">
@@ -959,8 +961,8 @@ export default function UserManagementPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="my-4 space-y-3">
-            <div className="bg-red-950/30 border border-red-900/50 rounded-lg p-4">
-              <p className="text-red-300 text-sm">
+            <div className="bg-danger-surface border border-danger-border rounded-lg p-4">
+              <p className="text-danger text-sm">
                 their authenticator app, passkeys and backup codes all stop working. they will be
                 signed out of every trusted device, and asked to set up 2FA again the next time they
                 sign in.
@@ -980,8 +982,9 @@ export default function UserManagementPage() {
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={handleConfirmMfaReset}
-              className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+              className="cursor-pointer"
             >
               <ShieldOff className="h-4 w-4 mr-2" />
               reset 2FA

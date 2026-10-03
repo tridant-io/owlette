@@ -827,7 +827,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                 </p>
                 <button
                   onClick={() => { setSettingsInitialSection('hoot'); setAccountSettingsOpen(true); }}
-                  className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-gray-900 font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
+                  className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-primary-foreground font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
                 >
                   open account settings
                 </button>
@@ -1032,7 +1032,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                               <span className="sr-only">contains the current conversation</span>
                             </>
                           )}
-                          <span className="text-xs text-muted-foreground/80 ml-auto">
+                          <span className="text-xs text-muted-foreground dark:text-muted-foreground/80 ml-auto">
                             {group.conversations.length}
                           </span>
                         </button>
@@ -1138,7 +1138,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
             />
 
             {targetWarning && (
-              <span className="min-w-0 text-xs text-yellow-500">{targetWarning}</span>
+              <span className="min-w-0 text-xs text-warning">{targetWarning}</span>
             )}
 
             <div className="ml-auto flex items-center gap-2">
@@ -1194,9 +1194,9 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
 
           {/* Error display */}
           {chat.error && !errorDismissed && (
-            <div role="alert" className="px-4 py-2 bg-red-950/30 border-t border-red-800/50">
+            <div role="alert" className="px-4 py-2 bg-danger-surface border-t border-danger-border/50">
               <div className="flex items-center gap-2 max-w-3xl mx-auto">
-                <p className="text-xs text-red-400 flex-1">
+                <p className="text-xs text-danger flex-1">
                   {(() => {
                     const msg = chat.error?.message || 'Unknown error';
                     try {
@@ -1212,7 +1212,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                     streams a fresh response from the last user message. */}
                 <button
                   onClick={() => { setErrorDismissed(true); void chat.regenerate(); }}
-                  className="flex items-center gap-1 text-xs text-red-300 hover:text-red-200 transition-colors cursor-pointer flex-shrink-0"
+                  className="flex items-center gap-1 text-xs text-danger hover:text-foreground transition-colors cursor-pointer flex-shrink-0"
                 >
                   <RotateCw className="h-3 w-3" />
                   retry
@@ -1220,7 +1220,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                 <button
                   onClick={() => setErrorDismissed(true)}
                   aria-label="dismiss error"
-                  className="text-red-400 hover:text-red-300 transition-colors cursor-pointer flex-shrink-0"
+                  className="text-danger hover:text-foreground transition-colors cursor-pointer flex-shrink-0"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -1407,7 +1407,7 @@ function ConversationNotFoundState({ onStartNew }: { onStartNew: () => void }) {
         <button
           type="button"
           onClick={onStartNew}
-          className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-gray-900 font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
+          className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-primary-foreground font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
         >
           start new chat
         </button>
@@ -1435,8 +1435,8 @@ function ConversationItem({
 
   if (confirming) {
     return (
-      <div className="flex items-center gap-1.5 px-3 py-2 bg-red-950/30 border-y border-red-800/30">
-        <p className="text-xs text-red-400 flex-1 truncate">delete?</p>
+      <div className="flex items-center gap-1.5 px-3 py-2 bg-danger-surface border-y border-danger-border/30">
+        <p className="text-xs text-danger flex-1 truncate">delete?</p>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -1446,9 +1446,9 @@ function ConversationItem({
                 setConfirming(false);
               }}
               aria-label={`confirm delete ${conversation.title}`}
-              className="p-1 rounded hover:bg-red-900/50 transition-colors cursor-pointer"
+              className="p-1 rounded hover:bg-danger-border/50 transition-colors cursor-pointer"
             >
-              <Check className="h-3.5 w-3.5 text-red-400" />
+              <Check className="h-3.5 w-3.5 text-danger" />
             </button>
           </TooltipTrigger>
           <TooltipContent>
@@ -1609,9 +1609,9 @@ function ConversationItem({
             setConfirming(true);
           }}
           aria-label={`delete ${conversation.title}`}
-          className="relative p-1 rounded bg-card hover:bg-red-900/60 transition-colors cursor-pointer"
+          className="relative p-1 rounded bg-card hover:bg-danger-border/60 transition-colors cursor-pointer"
         >
-          <Trash2 className="h-3 w-3 text-muted-foreground hover:text-red-400 transition-colors" />
+          <Trash2 className="h-3 w-3 text-muted-foreground hover:text-danger transition-colors" />
         </button>
       </div>
     </div>

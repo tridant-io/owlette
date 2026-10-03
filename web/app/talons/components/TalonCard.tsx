@@ -253,7 +253,7 @@ function TalonRunList({ siteId, talonId }: { siteId: string; talonId: string }) 
   }
 
   if (error) {
-    return <p className="py-6 text-center text-xs text-red-400">{error}</p>;
+    return <p className="py-6 text-center text-xs text-danger">{error}</p>;
   }
 
   if (runs.length === 0) {
@@ -405,7 +405,7 @@ export function TalonCard({
                 aria-label={talon.enabled ? 'enabled' : 'disabled'}
                 className={`h-2 w-2 flex-shrink-0 rounded-full border ${
                   talon.enabled
-                    ? 'border-green-500 bg-green-500'
+                    ? 'border-success bg-success'
                     : 'border-muted-foreground bg-transparent'
                 }`}
               />
@@ -428,7 +428,7 @@ export function TalonCard({
               {failures > 0 && (
                 <Badge
                   variant="outline"
-                  className="flex-shrink-0 border-red-800 px-1.5 text-[10px] text-red-400"
+                  className="flex-shrink-0 border-danger-border px-1.5 text-[10px] text-danger"
                   title={`${failures} consecutive failure${failures === 1 ? '' : 's'}`}
                 >
                   <AlertTriangle className="h-3 w-3" />
@@ -441,7 +441,7 @@ export function TalonCard({
             {disabledReason && (
               <p
                 data-testid="talon-disabled-reason"
-                className="mt-1 truncate text-xs text-amber-600 dark:text-amber-400"
+                className="mt-1 truncate text-xs text-warning"
                 title={`switched off automatically — ${disabledReason}`}
               >
                 switched off — {disabledReason}
@@ -617,7 +617,7 @@ export function TalonCard({
                 onClick={() => setConfirmDeleteOpen(true)}
                 disabled={busyAction !== null}
                 aria-label={`delete ${talon.name}`}
-                className="h-8 w-8 cursor-pointer border-border p-0 text-red-400 hover:bg-red-950 hover:text-red-300"
+                className="h-8 w-8 cursor-pointer border-border p-0 text-danger hover:bg-danger-surface hover:text-danger"
               >
                 {busyAction === 'delete' ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

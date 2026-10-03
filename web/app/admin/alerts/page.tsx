@@ -68,10 +68,11 @@ const OPERATORS = [
 
 const SEVERITIES = ['info', 'warning', 'critical'] as const;
 
+// light takes the family surface; dark keeps the solid tint these badges always had
 const SEVERITY_COLORS: Record<string, string> = {
-  info: 'bg-blue-600/20 text-blue-400',
-  warning: 'bg-yellow-600/20 text-yellow-400',
-  critical: 'bg-red-600/20 text-red-400',
+  info: 'border-info-border bg-info-surface text-info dark:border-transparent dark:bg-info-solid/20',
+  warning: 'border-warning-border bg-warning-surface text-warning dark:border-transparent dark:bg-warning-solid/20',
+  critical: 'border-danger-border bg-danger-surface text-danger dark:border-transparent dark:bg-danger-solid/20',
 };
 
 const PRESET_TEMPLATES: Omit<AlertRule, 'id'>[] = [
@@ -417,7 +418,7 @@ export default function AlertsPage() {
 
               <Button
                 onClick={openCreateDialog}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
                 disabled={saving}
               >
                 <Plus className="h-5 w-5 mr-2" />
@@ -458,7 +459,7 @@ export default function AlertsPage() {
               </DropdownMenu>
               <Button
                 onClick={openCreateDialog}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 <Plus className="h-4 w-4 mr-2" />
                 create rule
@@ -513,14 +514,14 @@ export default function AlertsPage() {
                 </IconButton>
                 <IconButton
                   label={`delete ${rule.name}`}
-                  variant="ghost"
+                  variant="ghost-destructive"
                   onClick={(e) => {
                     e.stopPropagation();
                     setRuleToDelete(rule);
                     setDeleteDialogOpen(true);
                   }}
                   disabled={saving}
-                  className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                  className="h-8 w-8 cursor-pointer"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </IconButton>
@@ -532,7 +533,7 @@ export default function AlertsPage() {
 
       {/* Create / Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="bg-card border-border text-foreground sm:max-w-md">
+        <DialogContent className="border-border text-foreground sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editingRule ? 'edit rule' : 'create alert rule'}</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -672,7 +673,7 @@ export default function AlertsPage() {
             <Button
               onClick={handleSaveRule}
               disabled={saving}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {editingRule ? 'save' : 'create'}
@@ -683,7 +684,7 @@ export default function AlertsPage() {
 
       {/* Delete Confirmation */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="bg-card border-border text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle>delete alert rule</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -700,9 +701,10 @@ export default function AlertsPage() {
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={handleDeleteConfirm}
               disabled={saving}
-              className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+              className="cursor-pointer"
             >
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               delete

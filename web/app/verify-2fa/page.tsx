@@ -334,7 +334,9 @@ function Verify2FAContent() {
             id="trustDevice"
             checked={trustThisDevice}
             onCheckedChange={(checked) => setTrustThisDevice(checked === true)}
-            className="border-border"
+            // the hairline is dark-only (it vanishes on the light card) and
+            // unchecked-only, or the dark: variant would outrank the checked cyan.
+            className="dark:data-[state=unchecked]:border-border"
           />
           <Label
             htmlFor="trustDevice"

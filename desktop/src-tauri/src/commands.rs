@@ -11,7 +11,7 @@
 use std::time::Duration;
 
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::agent_cli::{self, Runs};
 use crate::json_io::{self, WriteOutcome};
@@ -19,7 +19,7 @@ use crate::paths::{self, SERVICE_STATUS_REL};
 use crate::process_ctl::{self, TerminateOutcome, DEFAULT_GRACEFUL_TIMEOUT};
 use crate::service_ctl::{self, ServiceCommandOutcome, ServiceStatus};
 use crate::shell_open;
-use crate::window_state::{DetailSections, LayoutState};
+use crate::window_state::{self, DetailSections, LayoutState, ThemeChoice};
 
 /// Absolute path of the owlette data root (`%PROGRAMDATA%\Owlette`). The frontend
 /// otherwise uses relative paths; this is for spawning the bundled interpreter or
@@ -306,6 +306,28 @@ pub fn set_detail_section(
   open: bool,
 ) -> Result<bool, String> {
   layout.set_detail_section(&section, open)
+}
+
+/// The stored appearance: `system`, `dark` or `light`.
+#[tauri::command(async)]
+pub fn appearance_theme(layout: State<'_, LayoutState>) -> ThemeChoice {
+  layout.theme()
+}
+
+/// Re-theme the open window, then remember the choice; returns what was kept.
+#[tauri::command(async)]
+pub fn set_appearance_theme(
+  app: AppHandle,
+  layout: State<'_, LayoutState>,
+  theme: ThemeChoice,
+) -> Result<ThemeChoice, String> {
+  // applied before it is stored, like the other layout preferences: a failed
+  // write costs the next launch, not this session
+  match app.get_webview_window("main") {
+    Some(window) => window_state::apply_theme(&window, theme),
+    None => log::warn!("no main window to apply the appearance to"),
+  }
+  layout.set_theme(theme)
 }
 
 #[cfg(test)]

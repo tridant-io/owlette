@@ -17,13 +17,19 @@ test.describe('landing — images', () => {
   test('the dashboard screenshot is optimized, sized, and fetched first', async ({ page }) => {
     await page.goto('/');
 
-    const hero = page.getByAltText(/owlette dashboard showing/i);
-    await expect(hero).toBeVisible();
+    // a capture per theme, and the theme class shows one (ThemedImage)
+    const hero = page.getByAltText(/owlette dashboard showing/i).locator('visible=true');
+    await expect(hero).toHaveCount(1);
     await expect(hero).toHaveAttribute('src', /\/_next\/image\?/);
     await expect(hero).toHaveAttribute('sizes', '(max-width: 1200px) 100vw, 1152px');
-    await expect(hero).toHaveAttribute('fetchpriority', 'high');
-    await expect(hero).not.toHaveAttribute('loading', 'lazy');
-    await expect(imagePreloads(page, 'dashboard.png')).toHaveCount(1);
+    // both captures are lazy so the hidden one is never fetched; the preload for
+    // the visitor's scheme is what fetches the shown one first
+    for (const [file, scheme] of [['dashboard.png', 'dark'], ['dashboard-light.png', 'light']]) {
+      const preload = imagePreloads(page, file);
+      await expect(preload).toHaveCount(1);
+      await expect(preload).toHaveAttribute('media', `(prefers-color-scheme: ${scheme})`);
+      await expect(preload).toHaveAttribute('fetchpriority', 'high');
+    }
   });
 
   test('the capability previews wait to be needed', async ({ page }) => {

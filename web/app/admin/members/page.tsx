@@ -76,19 +76,20 @@ const ROLE_HELP: Record<AddableSiteMemberRole, string> = {
 /** Tally chip. In the header, not a card row, so the table keeps the height. */
 function StatChip({
   icon: Icon,
-  iconBg,
+  iconTone,
   count,
   label,
 }: {
   icon: typeof Users;
-  iconBg: string;
+  /** the tile's fill and the ink that sits on it */
+  iconTone: string;
   count: number;
   label: string;
 }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
-      <div className={`p-1.5 rounded-md ${iconBg}`}>
-        <Icon className="h-4 w-4 text-foreground" />
+      <div className={`p-1.5 rounded-md ${iconTone}`}>
+        <Icon className="h-4 w-4" />
       </div>
       <div className="leading-tight">
         <p className="text-lg font-bold text-foreground">{count}</p>
@@ -352,11 +353,11 @@ export default function SiteMembersPage() {
           <div className="flex flex-wrap items-center gap-2">
             <StatChip
               icon={Users}
-              iconBg="bg-accent-cyan"
+              iconTone="bg-accent-cyan text-primary-foreground"
               count={members.length}
               label="total members"
             />
-            <StatChip icon={Shield} iconBg="bg-green-600" count={adminCount} label="admins" />
+            <StatChip icon={Shield} iconTone="bg-success-solid text-success-solid-foreground" count={adminCount} label="admins" />
             {sites.length > 1 && (
               <Select value={selectedSiteId} onValueChange={handleSiteChange}>
                 <SelectTrigger aria-label="site" className="w-[180px] bg-card border-border text-foreground">
@@ -378,7 +379,7 @@ export default function SiteMembersPage() {
             <Button
               onClick={() => setAddDialogOpen(true)}
               disabled={!selectedSiteId}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               <Plus className="h-4 w-4 mr-2" />
               add member
@@ -387,8 +388,8 @@ export default function SiteMembersPage() {
         </div>
 
         {error && (
-          <div className="bg-red-900/30 border border-red-700 rounded-lg p-4 mb-6">
-            <p className="text-red-300">{error}</p>
+          <div className="bg-danger-surface border border-danger-border rounded-lg p-4 mb-6">
+            <p className="text-danger">{error}</p>
           </div>
         )}
 
@@ -460,7 +461,7 @@ export default function SiteMembersPage() {
                               )
                             )}
                             {member.uid === currentUser?.uid && (
-                              <Badge className="mt-1 bg-accent-cyan text-gray-900 text-xs">
+                              <Badge className="mt-1 text-xs">
                                 you
                               </Badge>
                             )}
@@ -469,12 +470,12 @@ export default function SiteMembersPage() {
 
                         <td className="p-4">
                           {shown === 'owner' ? (
-                            <Badge className="bg-accent-cyan text-gray-900 flex items-center gap-1 w-fit">
+                            <Badge className="flex items-center gap-1 w-fit">
                               <Crown className="h-3 w-3" />
                               owner
                             </Badge>
                           ) : shown === 'admin' ? (
-                            <Badge className="bg-green-600 flex items-center gap-1 w-fit">
+                            <Badge className="bg-success-solid text-success-solid-foreground flex items-center gap-1 w-fit">
                               <ShieldAlert className="h-3 w-3" />
                               admin
                             </Badge>
@@ -542,7 +543,7 @@ export default function SiteMembersPage() {
                                     <DropdownMenuItem
                                       onClick={() => handleOpenRemoveDialog(member)}
                                       disabled={busy}
-                                      className="text-red-400 hover:bg-red-950/30! hover:text-red-300! cursor-pointer focus:bg-red-950/30 focus:text-red-300"
+                                      className="text-danger cursor-pointer focus:bg-danger-surface focus:text-danger"
                                     >
                                       {removingUid === member.uid ? (
                                         <>
@@ -573,7 +574,7 @@ export default function SiteMembersPage() {
 
         {/* Add Member Dialog */}
         <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-          <DialogContent className="border-border bg-card text-foreground">
+          <DialogContent className="border-border text-foreground">
             <DialogHeader>
               <DialogTitle className="text-foreground flex items-center gap-2">
                 <Plus className="h-5 w-5 text-accent-cyan" />
@@ -634,7 +635,7 @@ export default function SiteMembersPage() {
                       className="text-foreground focus:bg-accent focus:text-foreground"
                     >
                       <div className="flex items-center gap-2">
-                        <ShieldAlert className="h-4 w-4 text-green-500" />
+                        <ShieldAlert className="h-4 w-4 text-success" />
                         admin
                       </div>
                     </SelectItem>
@@ -662,7 +663,7 @@ export default function SiteMembersPage() {
               <Button
                 onClick={handleAddMember}
                 disabled={adding || addEmail.trim().length === 0}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 {adding ? (
                   <>
@@ -682,10 +683,10 @@ export default function SiteMembersPage() {
 
         {/* Remove Member Confirmation Dialog */}
         <Dialog open={removeDialogOpen} onOpenChange={setRemoveDialogOpen}>
-          <DialogContent className="border-border bg-card text-foreground">
+          <DialogContent className="border-border text-foreground">
             <DialogHeader>
               <DialogTitle className="text-foreground flex items-center gap-2">
-                <UserMinus className="h-5 w-5 text-red-400" />
+                <UserMinus className="h-5 w-5 text-danger" />
                 remove member
               </DialogTitle>
               <DialogDescription className="text-foreground">
@@ -697,8 +698,8 @@ export default function SiteMembersPage() {
               </DialogDescription>
             </DialogHeader>
             <div className="my-4 space-y-3">
-              <div className="bg-red-950/30 border border-red-900/50 rounded-lg p-4">
-                <p className="text-red-300 text-sm">
+              <div className="bg-danger-surface border border-danger-border rounded-lg p-4">
+                <p className="text-danger text-sm">
                   they lose access to this site and everything on it. their account and any other
                   sites they belong to are untouched.
                 </p>
@@ -724,8 +725,9 @@ export default function SiteMembersPage() {
                 cancel
               </Button>
               <Button
+                variant="destructive"
                 onClick={handleConfirmRemove}
-                className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+                className="cursor-pointer"
               >
                 <UserMinus className="h-4 w-4 mr-2" />
                 remove member
@@ -737,7 +739,7 @@ export default function SiteMembersPage() {
         {/* Role Change Dialog — superadmin only; the trigger is not rendered
             otherwise. The role is global, so the copy says so. */}
         <Dialog open={roleDialogOpen} onOpenChange={setRoleDialogOpen}>
-          <DialogContent className="border-border bg-card text-foreground">
+          <DialogContent className="border-border text-foreground">
             <DialogHeader>
               <DialogTitle className="text-foreground flex items-center gap-2">
                 <UserCog className="h-5 w-5 text-accent-cyan" />
@@ -777,7 +779,7 @@ export default function SiteMembersPage() {
                     className="text-foreground focus:bg-accent focus:text-foreground"
                   >
                     <div className="flex items-center gap-2">
-                      <ShieldAlert className="h-4 w-4 text-green-500" />
+                      <ShieldAlert className="h-4 w-4 text-success" />
                       admin
                     </div>
                   </SelectItem>
@@ -809,7 +811,7 @@ export default function SiteMembersPage() {
                   !memberToChangeRole ||
                   memberToChangeRole.newRole === memberToChangeRole.currentRole
                 }
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 <UserCog className="h-4 w-4 mr-2" />
                 save role

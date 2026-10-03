@@ -371,7 +371,7 @@ export default function RoostsPageClient() {
                 setNewVersionContext(null);
                 setDistributionDialogOpen(true);
               }}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               <Plus className="h-4 w-4 mr-2" />
               new roost
@@ -548,7 +548,7 @@ export default function RoostsPageClient() {
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => setPendingDelete({ roostId: roost.id, name: roost.name })}
-                              className="cursor-pointer text-red-400 focus:text-red-300 focus:bg-red-950/30"
+                              className="cursor-pointer text-danger focus:text-danger focus:bg-danger-surface"
                             >
                               <Trash2 className="h-3.5 w-3.5 mr-2" />
                               delete roost

@@ -15,6 +15,9 @@ import { defineConfig } from '@playwright/test';
  * PNGs go straight to `web/public/docs-screens/` (referenced by
  * `content/docs/agent/*.mdx`); `outputDir` is only for failure artifacts.
  *
+ * One project per theme, run against the same window: `dark` writes
+ * `agent-*.png`, `light` switches the app to light and writes `agent-*-light.png`.
+ *
  * Needs a real installed agent, so this is a release-time step, not CI — see
  * `.claude/skills/build-system.md` → "Agent Installer Release".
  */
@@ -46,4 +49,7 @@ export default defineConfig({
     video: 'off',
     actionTimeout: 15_000,
   },
+
+  // the project name is the theme the spec switches the app to
+  projects: [{ name: 'dark' }, { name: 'light' }],
 });

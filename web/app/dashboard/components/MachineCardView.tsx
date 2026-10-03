@@ -261,7 +261,7 @@ const MachineCard = memo(function MachineCard({
 
   return (
     <Card data-testid="machine-card" className="border-border/60 bg-card-sunken py-0 gap-0">
-      <CardHeader className="py-3 px-4 gap-0 bg-card-header rounded-t-xl">
+      <CardHeader className="py-3 px-4 gap-0 bg-card-header header-lit rounded-t-xl">
         {/* min-w-0: CardHeader is a grid, and a grid item's automatic min-width is
             its min-content, which now includes the full untruncated hostname */}
         <div className="flex items-center justify-between min-w-0">
@@ -279,7 +279,7 @@ const MachineCard = memo(function MachineCard({
                       openMetric?.('display');
                     }}
                     data-testid="open-display-panel"
-                    className="bg-card border border-border text-muted-foreground hover:text-white h-8 w-8 p-0"
+                    className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 w-8 p-0"
                     aria-label="view displays"
                   >
                     <Monitor className="h-4 w-4" />
@@ -291,7 +291,7 @@ const MachineCard = memo(function MachineCard({
               </Tooltip>
               {displayDriftCount > 0 && (
                 <span
-                  className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-amber-500 pointer-events-none"
+                  className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-warning-solid pointer-events-none"
                   role="img"
                   aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
                   title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
@@ -309,7 +309,7 @@ const MachineCard = memo(function MachineCard({
               )}
             </div>
             <div className="flex flex-col min-w-0">
-              <CardTitle className="text-xl font-semibold text-white select-text flex items-center gap-1.5 min-w-0">
+              <CardTitle className="text-xl font-semibold text-foreground select-text flex items-center gap-1.5 min-w-0">
                 <span className="truncate" title={machineId}>{machineId}</span>
                 {isMuted && <span title="alerts muted" className="flex-shrink-0"><BellOff className="h-3.5 w-3.5 text-muted-foreground" /></span>}
               </CardTitle>
@@ -329,7 +329,7 @@ const MachineCard = memo(function MachineCard({
                       <p className="max-w-xs mt-1">{clockTooltip.scheduleLine}</p>
                     )}
                     {clockTooltip.advisory && (
-                      <p className="max-w-xs mt-1 text-amber-400">{clockTooltip.advisory}</p>
+                      <p className="max-w-xs mt-1 text-warning-solid dark:text-warning">{clockTooltip.advisory}</p>
                     )}
                   </TooltipContent>
                 </Tooltip>
@@ -356,7 +356,7 @@ const MachineCard = memo(function MachineCard({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
-                  className={`text-xs tabular-nums flex items-center gap-1 select-none cursor-help ${heartbeat.isStale ? 'text-red-400' : 'text-foreground/80'}`}
+                  className={`text-xs tabular-nums flex items-center gap-1 select-none cursor-help ${heartbeat.isStale ? 'text-danger' : 'text-foreground/80'}`}
                 >
                   <Clock className="h-3 w-3" />
                   {heartbeat.display}
@@ -407,13 +407,13 @@ const MachineCard = memo(function MachineCard({
         <div
           data-testid="reboot-pending-banner"
           className={`mx-4 mb-2 p-3 rounded-lg border ${
-            machine.online ? 'border-amber-600/30 bg-amber-950/20' : 'border-border/60 bg-muted/20'
+            machine.online ? 'border-warning-border/60 bg-warning-surface dark:bg-warning-surface/50' : 'border-border/60 bg-muted/20'
           }`}
         >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className={`h-4 w-4 flex-shrink-0 ${machine.online ? 'text-amber-400' : 'text-muted-foreground'}`} />
-              <span className={`text-sm truncate ${machine.online ? 'text-amber-300' : 'text-muted-foreground'}`}>
+              <AlertTriangle className={`h-4 w-4 flex-shrink-0 ${machine.online ? 'text-warning' : 'text-muted-foreground'}`} />
+              <span className={`text-sm truncate ${machine.online ? 'text-warning' : 'text-muted-foreground'}`}>
                 restart pending: {machine.rebootPending.reason || 'process crashed'}
                 {!machine.online && ' — machine offline, cannot restart'}
               </span>
@@ -426,7 +426,7 @@ const MachineCard = memo(function MachineCard({
                     variant="ghost"
                     size="sm"
                     data-testid="reboot-pending-approve"
-                    className="h-7 px-2.5 text-xs bg-amber-600 hover:bg-amber-700 text-white cursor-pointer"
+                    className="h-7 px-2.5 text-xs bg-warning-solid text-warning-solid-foreground hover:text-warning-solid-foreground cursor-pointer"
                     onClick={async (e) => {
                       e.stopPropagation();
                       if (!onRestart) return;
@@ -450,7 +450,7 @@ const MachineCard = memo(function MachineCard({
                   variant="ghost"
                   size="sm"
                   data-testid="reboot-pending-dismiss"
-                  className="h-7 px-2.5 text-xs text-muted-foreground hover:text-white hover:bg-accent cursor-pointer"
+                  className="h-7 px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
                   onClick={async (e) => {
                     e.stopPropagation();
                     if (!onDismissRestartPending) return;
@@ -534,10 +534,10 @@ const MachineCard = memo(function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {nicDevice && nicDevice.txBps != null && nicDevice.rxBps != null && (
-                        <>net <span className="text-orange-400">{'\u2191 '}{formatThroughputShort(nicDevice.txBps)}</span>
-                          <span className="ml-1 text-green-400">{'\u2193 '}{formatThroughputShort(nicDevice.rxBps)}</span>
+                        <>net <span className="text-[var(--series-nic-tx-1)]">{'\u2191 '}{formatThroughputShort(nicDevice.txBps)}</span>
+                          <span className="ml-1 text-[var(--series-nic-rx-1)]">{'\u2193 '}{formatThroughputShort(nicDevice.rxBps)}</span>
                           {(machine.metrics.network?.packetLossPct ?? 0) > 0 && (
-                            <span className="ml-1 text-red-400">{Math.round(machine.metrics.network?.packetLossPct ?? 0)}% loss</span>
+                            <span className="ml-1 text-danger">{Math.round(machine.metrics.network?.packetLossPct ?? 0)}% loss</span>
                           )}
                         </>
                       )}
@@ -563,7 +563,7 @@ const MachineCard = memo(function MachineCard({
           {/* CPU Metric */}
           {cpuDevice && cpuDevice.percent != null && (
             <div
-              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
+              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
               onClick={openMetric ? () => openMetric('cpu') : undefined}
             >
               {openMetric && <TileButton label={`open cpu history for ${machineId}`} />}
@@ -588,7 +588,7 @@ const MachineCard = memo(function MachineCard({
                   )}
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
-                  <span className="text-lg font-bold text-white tabular-nums">{cpuDevice.percent}%</span>
+                  <span className="text-lg font-bold text-foreground tabular-nums">{cpuDevice.percent}%</span>
                   {cpuDevice.temperature != null && (
                     <span className={`text-sm font-medium ${getTemperatureColorClass(cpuDevice.temperature)}`}>
                       {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit)}
@@ -602,7 +602,7 @@ const MachineCard = memo(function MachineCard({
           {/* Memory Metric */}
           {memory?.percent != null && (
             <div
-              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
+              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
               onClick={openMetric ? () => openMetric('memory') : undefined}
             >
               {openMetric && <TileButton label={`open ram history for ${machineId}`} />}
@@ -622,7 +622,7 @@ const MachineCard = memo(function MachineCard({
                     </span>
                   )}
                 </div>
-                <span className="text-lg font-bold text-white tabular-nums">{memory.percent}%</span>
+                <span className="text-lg font-bold text-foreground tabular-nums">{memory.percent}%</span>
               </div>
             </div>
           )}
@@ -630,7 +630,7 @@ const MachineCard = memo(function MachineCard({
           {/* Disk Metric */}
           {diskDevice && diskDevice.percent != null && (
             <div
-              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
+              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
               onClick={openMetric ? () => openMetric('disk') : undefined}
             >
               {openMetric && <TileButton label={`open disk history for ${machineId}`} />}
@@ -671,7 +671,7 @@ const MachineCard = memo(function MachineCard({
                       </div>
                     );
                   })()}
-                  <span className="text-lg font-bold text-white tabular-nums">{diskDevice.percent}%</span>
+                  <span className="text-lg font-bold text-foreground tabular-nums">{diskDevice.percent}%</span>
                 </div>
               </div>
             </div>
@@ -680,7 +680,7 @@ const MachineCard = memo(function MachineCard({
           {/* GPU Metric */}
           {gpuDevice && gpuDevice.usagePercent != null && (
             <div
-              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
+              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
               onClick={openMetric ? () => openMetric('gpu') : undefined}
             >
               {openMetric && <TileButton label={`open gpu history for ${machineId}`} />}
@@ -707,7 +707,7 @@ const MachineCard = memo(function MachineCard({
                   )}
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
-                  <span className="text-lg font-bold text-white tabular-nums">{gpuDevice.usagePercent}%</span>
+                  <span className="text-lg font-bold text-foreground tabular-nums">{gpuDevice.usagePercent}%</span>
                   {gpuDevice.vramUsedGb != null && gpuDevice.vramTotalGb != null && gpuDevice.vramTotalGb > 0 && (
                     <span className="text-xs text-muted-foreground hidden md:block">
                       {gpuDevice.vramUsedGb.toFixed(1)}/{gpuDevice.vramTotalGb.toFixed(1)}GB
@@ -728,7 +728,7 @@ const MachineCard = memo(function MachineCard({
             const maxUtil = Math.max(nicDevice.txUtil ?? 0, nicDevice.rxUtil ?? 0);
             return (
               <div
-                className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
+                className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
                 onClick={openMetric ? () => openMetric(`${nicDevice.id}_tx_util` as MetricType) : undefined}
               >
                 {openMetric && <TileButton label={`open network history for ${machineId}`} />}
@@ -744,8 +744,8 @@ const MachineCard = memo(function MachineCard({
                     )}
                   </div>
                   <div className="flex items-center gap-3 flex-shrink-0">
-                    <span className="text-xs font-medium text-orange-400">{'\u2191 '}{formatThroughput(nicDevice.txBps)}</span>
-                    <span className="text-xs font-medium text-green-400">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
+                    <span className="text-xs font-medium text-[var(--series-nic-tx-1)]">{'\u2191 '}{formatThroughput(nicDevice.txBps)}</span>
+                    <span className="text-xs font-medium text-[var(--series-nic-rx-1)]">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
                   </div>
                 </div>
               </div>
@@ -785,7 +785,7 @@ const MachineCard = memo(function MachineCard({
                     </span>
                     {displayDriftCount > 0 && (
                       <span
-                        className="inline-block w-2 h-2 rounded-full bg-amber-500 ml-2 flex-shrink-0"
+                        className="inline-block w-2 h-2 rounded-full bg-warning-solid ml-2 flex-shrink-0"
                         role="img"
                         aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
                         title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
@@ -849,7 +849,7 @@ const MachineCard = memo(function MachineCard({
                         <span className="font-mono text-muted-foreground shrink-0">{i + 1}</span>
                         <span className="text-foreground font-medium truncate">{m.friendlyName || m.id}</span>
                         <span className="text-muted-foreground shrink-0 tabular-nums">{effW}×{effH}</span>
-                        {m.primary && <span className="text-amber-500 shrink-0" role="img" aria-label="primary">★</span>}
+                        {m.primary && <span className="text-accent-warm shrink-0" role="img" aria-label="primary">★</span>}
                       </div>
                     );
                   })}
@@ -882,10 +882,10 @@ const MachineCard = memo(function MachineCard({
                         {i > 0 && <span className="mx-1.5 text-border/60">·</span>}
                         <span className={`mr-1.5 inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                           !machine.online ? 'bg-muted-foreground/40' :
-                          proc.status === 'RUNNING' ? 'bg-green-500' :
-                          proc.status === 'INACTIVE' ? 'bg-slate-500' :
-                          proc.status === 'LAUNCH_FAILED' || proc.status === 'STOPPED' || proc.status === 'KILLED' ? 'bg-red-500' :
-                          'bg-yellow-500'
+                          proc.status === 'RUNNING' ? 'bg-success' :
+                          proc.status === 'INACTIVE' ? 'bg-muted-foreground/70' :
+                          proc.status === 'LAUNCH_FAILED' || proc.status === 'STOPPED' || proc.status === 'KILLED' ? 'bg-danger' :
+                          'bg-warning'
                         }`} />
                         <span className="text-sm text-muted-foreground truncate max-w-[160px]" title={proc.name}>{proc.name}</span>
                       </span>
@@ -915,8 +915,8 @@ const MachineCard = memo(function MachineCard({
                             flex-1 name contributes nothing, never wraps, and
                             gets squeezed to 0px by the shrink-0 action cluster */}
                         <div className="flex-1 min-w-40 flex items-center gap-2">
-                          <span className="text-sm md:text-base text-white font-medium truncate select-text">{process.name}</span>
-                          <Badge className={`text-xs flex-shrink-0 select-none ${!machine.online ? 'bg-muted text-muted-foreground' : process.status === 'RUNNING' ? 'bg-green-600' : process.status === 'INACTIVE' ? 'bg-slate-600 text-slate-200' : process.status === 'LAUNCH_FAILED' || process.status === 'STOPPED' || process.status === 'KILLED' ? 'bg-red-600 text-white' : 'bg-yellow-600'}`}>
+                          <span className="text-sm md:text-base text-foreground font-medium truncate select-text">{process.name}</span>
+                          <Badge className={`text-xs flex-shrink-0 select-none ${!machine.online ? 'bg-muted text-muted-foreground' : process.status === 'RUNNING' ? 'bg-success-solid text-success-solid-foreground' : process.status === 'INACTIVE' ? 'bg-muted-foreground/40 text-foreground' : process.status === 'LAUNCH_FAILED' || process.status === 'STOPPED' || process.status === 'KILLED' ? 'bg-danger-solid text-danger-solid-foreground' : 'bg-warning-solid text-warning-solid-foreground'}`}>
                             {(!machine.online ? 'unknown' : process.status === 'LAUNCH_FAILED' ? 'failed' : process.status).toLowerCase()}
                           </Badge>
                         </div>
@@ -929,9 +929,9 @@ const MachineCard = memo(function MachineCard({
                             const currentMode = (process._optimisticLaunchMode ?? process.launch_mode ?? (process.autolaunch ? 'always' : 'off')) as LaunchMode;
                             const modeLabels = { off: 'off', always: 'always on', scheduled: 'scheduled' } as const;
                             const modeColor = currentMode === 'always'
-                              ? 'text-emerald-400 border-emerald-600/40'
+                              ? 'text-success border-success-border'
                               : currentMode === 'scheduled'
-                              ? 'text-blue-400 border-blue-600/40'
+                              ? 'text-info border-info-border'
                               : 'text-muted-foreground border-border/50';
                             // Non-admins: static pill, since the toggle would 403.
                             if (!isSiteAdmin) {
@@ -961,7 +961,7 @@ const MachineCard = memo(function MachineCard({
                                       <ChevronDown className="h-3 w-3" />
                                     </Button>
                                   </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="start" className="border-border bg-secondary w-52">
+                                  <DropdownMenuContent align="start" className="border-border bg-raised w-52">
                                     <DropdownMenuLabel className="text-muted-foreground text-xs">
                                       launch mode
                                     </DropdownMenuLabel>
@@ -976,16 +976,16 @@ const MachineCard = memo(function MachineCard({
                                       <DropdownMenuRadioItem value="off" className="cursor-pointer">
                                         off
                                       </DropdownMenuRadioItem>
-                                      <DropdownMenuRadioItem value="always" className="text-emerald-400 cursor-pointer">
+                                      <DropdownMenuRadioItem value="always" className="text-success cursor-pointer">
                                         always on
                                       </DropdownMenuRadioItem>
-                                      <DropdownMenuRadioItem value="scheduled" className="text-blue-400 cursor-pointer">
+                                      <DropdownMenuRadioItem value="scheduled" className="text-info cursor-pointer">
                                         scheduled
                                       </DropdownMenuRadioItem>
                                     </DropdownMenuRadioGroup>
                                     <DropdownMenuItem
                                       onClick={() => onConfigureSchedule?.(machineId, process)}
-                                      className="text-blue-400 focus:bg-blue-950/30 focus:text-blue-300 cursor-pointer pl-8"
+                                      className="text-info focus:bg-info-surface focus:text-info cursor-pointer pl-8"
                                     >
                                       <Settings2 className="mr-2 h-3.5 w-3.5" />
                                       configure schedule
@@ -1001,13 +1001,13 @@ const MachineCard = memo(function MachineCard({
                                     const isActive = currentMode === mode;
                                     const activeColors = {
                                       off: 'bg-muted text-foreground',
-                                      always: 'bg-emerald-600 text-white',
-                                      scheduled: 'bg-blue-600 text-white',
+                                      always: 'bg-success-solid text-success-solid-foreground',
+                                      scheduled: 'bg-info-solid text-info-solid-foreground',
                                     };
 
                                     if (mode === 'scheduled') {
                                       return (
-                                        <span key={mode} className={`flex items-stretch ${isActive ? 'bg-blue-600 text-white' : 'bg-card text-muted-foreground'}`}>
+                                        <span key={mode} className={`flex items-stretch ${isActive ? 'bg-info-solid text-info-solid-foreground' : 'bg-card text-muted-foreground'}`}>
                                           <button
                                             type="button"
                                             aria-pressed={isActive}
@@ -1016,7 +1016,7 @@ const MachineCard = memo(function MachineCard({
                                           >
                                             {modeLabels[mode]}
                                           </button>
-                                          <span className={`w-px ${isActive ? 'bg-blue-400/50' : 'bg-border'}`} />
+                                          <span className={`w-px ${isActive ? 'bg-info-solid-foreground/30' : 'bg-border'}`} />
                                           <Tooltip>
                                             <TooltipTrigger asChild>
                                               <button
@@ -1024,7 +1024,7 @@ const MachineCard = memo(function MachineCard({
                                                 onClick={() => onConfigureSchedule?.(machineId, process)}
                                                 aria-label={`configure schedule for ${process.name}`}
                                                 data-testid="process-row-configure-schedule"
-                                                className={`px-1.5 transition-colors cursor-pointer flex items-center ${isActive ? 'hover:bg-blue-500' : 'hover:bg-accent/50'}`}
+                                                className={`px-1.5 transition-colors cursor-pointer flex items-center ${isActive ? 'hover:bg-info-solid-foreground/15' : 'hover:bg-accent/50'}`}
                                               >
                                                 <Settings2 className="h-3.5 w-3.5" />
                                               </button>
@@ -1110,7 +1110,7 @@ const MachineCard = memo(function MachineCard({
                                     size="sm"
                                     onClick={() => onKillProcess(machineId, process.id, process.name)}
                                     aria-label={`kill ${process.name}`}
-                                    className="bg-card border border-border/50 text-red-400 hover:bg-red-950/50 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50 p-2"
+                                    className="bg-card border border-border/50 text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50 p-2"
                                     disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
                                   >
                                     <Square className="h-3 w-3" />

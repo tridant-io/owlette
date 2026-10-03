@@ -10,6 +10,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { ThemeChoice } from '@/lib/theme'
 
 /** Seam files, addressed relative to the owlette data root. */
 export const OWLETTE_FILES = {
@@ -335,6 +336,20 @@ export function detailSections(): Promise<DetailSections> {
 /** Remember one section's open state; resolves to the value kept. */
 export function setDetailSection(section: DetailSectionKey, open: boolean): Promise<boolean> {
   return invoke<boolean>('set_detail_section', { section, open })
+}
+
+/** the stored appearance, from the per-user layout file */
+export function appearanceTheme(): Promise<ThemeChoice> {
+  return invoke<ThemeChoice>('appearance_theme')
+}
+
+/**
+ * re-theme the window and remember the choice; resolves to the value kept. the
+ * host sets the window theme, which drives the webview's `prefers-color-scheme`,
+ * so the page re-themes without anything calling next-themes.
+ */
+export function setAppearanceTheme(theme: ThemeChoice): Promise<ThemeChoice> {
+  return invoke<ThemeChoice>('set_appearance_theme', { theme })
 }
 
 /** Severity accepted by {@link logEvent}; anything else is recorded as info. */

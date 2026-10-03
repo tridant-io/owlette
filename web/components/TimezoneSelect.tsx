@@ -107,7 +107,7 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-[var(--radix-popover-trigger-width)] min-w-[280px] p-0 border-border bg-secondary"
+        className="w-[var(--radix-popover-trigger-width)] min-w-[280px] p-0 border-border dark:bg-secondary"
         align="start"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
@@ -120,7 +120,7 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
             onKeyDown={handleKeyDown}
             placeholder="search timezones..."
             aria-label="search timezones"
-            className="flex-1 bg-transparent text-base md:text-sm text-white placeholder:text-muted-foreground"
+            className="flex-1 bg-transparent text-base md:text-sm text-foreground placeholder:text-muted-foreground"
           />
         </div>
         <div
@@ -172,7 +172,7 @@ function TimezoneItem({ tz, selected, onSelect }: { tz: TimezoneOption; selected
       aria-current={selected ? 'true' : undefined}
       className={cn(
         'flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm cursor-pointer',
-        'text-white hover:bg-muted focus-visible:outline-none focus-visible:bg-muted',
+        'text-foreground hover:bg-muted focus-visible:outline-none focus-visible:bg-muted',
         selected && 'bg-muted'
       )}
     >

@@ -14,7 +14,7 @@ const buttonVariants = cva(
         // it and muddy the sweep. Text/border hover states stay as utilities.
         default: "bg-primary text-primary-foreground",
         destructive:
-          "bg-destructive text-white focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+          "bg-destructive text-danger-solid-foreground focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         // Dark outline must inherit the real --border (L≈0.35) from the base
         // `* { border-border }` — i.e. not override it — plus a full-strength
         // --input fill. `dark:border-input` (L≈0.25) against --card (L≈0.23)

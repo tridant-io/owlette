@@ -87,7 +87,7 @@ export default function SchedulePresetsPage() {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <p className="text-red-400 font-medium mb-2">error loading schedule presets</p>
+          <p className="text-danger font-medium mb-2">error loading schedule presets</p>
           <p className="text-muted-foreground text-sm">{error}</p>
         </div>
       </div>
@@ -121,7 +121,7 @@ export default function SchedulePresetsPage() {
               )}
               <Button
                 onClick={handleCreateNew}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 <Plus className="h-5 w-5 mr-2" />
                 create preset
@@ -143,7 +143,7 @@ export default function SchedulePresetsPage() {
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-foreground font-medium">{preset.name}</span>
                     {preset.isBuiltIn && (
-                      <Badge className="bg-blue-600/20 text-blue-400 text-[10px]">built-in</Badge>
+                      <Badge className="border-info-border bg-info-surface text-info dark:border-transparent dark:bg-info-solid/20 text-[10px]">built-in</Badge>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground truncate">
@@ -162,9 +162,9 @@ export default function SchedulePresetsPage() {
                   {!preset.isBuiltIn && (
                     <IconButton
                       label={`delete ${preset.name}`}
-                      variant="ghost"
+                      variant="ghost-destructive"
                       onClick={() => handleDelete(preset)}
-                      className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                      className="h-8 w-8 cursor-pointer"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </IconButton>
@@ -190,7 +190,7 @@ export default function SchedulePresetsPage() {
 
       {/* Delete Confirmation */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="bg-card border-border text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle>delete schedule preset</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -202,9 +202,10 @@ export default function SchedulePresetsPage() {
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={confirmDelete}
               disabled={deleting}
-              className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+              className="cursor-pointer"
             >
               {deleting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               delete

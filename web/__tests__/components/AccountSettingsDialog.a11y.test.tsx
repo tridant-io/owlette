@@ -16,6 +16,7 @@ import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 jest.mock('@/components/MfaFactorsSection', () => ({ MfaFactorsSection: () => null }));
 jest.mock('@/components/ApiKeysManager', () => ({ ApiKeysManager: () => null }));
 jest.mock('@/components/UserAvatar', () => ({ UserAvatar: () => null }));
+jest.mock('@/components/AppearanceControl', () => ({ AppearanceControl: () => null }));
 
 jest.mock('@/lib/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
@@ -94,6 +95,26 @@ describe('AccountSettingsDialog', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('please enter a valid email address');
     expect(cc).toHaveAttribute('aria-invalid', 'true');
     expect(cc).toHaveAccessibleDescription('please enter a valid email address');
+  });
+
+  // a raw palette class reads in one theme only: white body text vanishes on
+  // the light panel (light mode, task 3.2)
+  it('draws every section and the delete confirmation from theme tokens', async () => {
+    const RAW_COLOUR =
+      /\b(?:[a-z-]+:)*(?:text|bg|border|ring|fill|stroke|from|to|via|outline|divide|shadow|decoration|placeholder|caret|accent)-(?:red|green|emerald|amber|yellow|orange|blue|sky|cyan|teal|violet|purple|pink|rose|slate|gray|zinc|neutral|stone|lime|indigo|fuchsia)-\d{2,3}\b|\btext-(?:white|gray-900)\b/;
+    const rawClasses = () =>
+      [...document.body.querySelectorAll('[class]')]
+        .flatMap((el) => (el.getAttribute('class') ?? '').split(/\s+/))
+        .filter((c) => RAW_COLOUR.test(c));
+
+    const user = renderDialog();
+    for (const section of ['profile', 'preferences', 'alerts', 'hoot', 'security', 'api', 'danger zone']) {
+      await user.click(screen.getAllByRole('button', { name: section })[0]);
+      expect({ section, raw: rawClasses() }).toEqual({ section, raw: [] });
+    }
+    await user.click(screen.getByRole('button', { name: 'delete account' }));
+    expect(await screen.findByRole('heading', { name: 'delete account' })).toBeInTheDocument();
+    expect(rawClasses()).toEqual([]);
   });
 
   it('announces a password mismatch and marks the confirm field', async () => {

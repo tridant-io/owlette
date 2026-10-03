@@ -112,7 +112,7 @@ export function ApiKeysManager({ compact = false }: Props) {
       {!compact && (
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="flex items-center gap-2 text-2xl font-semibold text-white">
+            <h1 className="flex items-center gap-2 text-2xl font-semibold text-foreground">
               <Key className="h-5 w-5" />
               api keys
             </h1>
@@ -131,7 +131,7 @@ export function ApiKeysManager({ compact = false }: Props) {
           <button
             type="button"
             onClick={() => setRevealedKey(null)}
-            className="absolute top-3 right-3 text-muted-foreground hover:text-white"
+            className="absolute top-3 right-3 text-muted-foreground hover:text-foreground"
             aria-label="dismiss"
           >
             <X className="h-4 w-4" />
@@ -140,7 +140,7 @@ export function ApiKeysManager({ compact = false }: Props) {
             key issued — copy it now. it will not be shown again.
           </p>
           <div className="flex items-center gap-2">
-            <code className="flex-1 text-xs bg-background border border-border rounded px-3 py-2 text-white font-mono break-all select-all">
+            <code className="flex-1 text-xs bg-background border border-border rounded px-3 py-2 text-foreground font-mono break-all select-all">
               {revealedKey}
             </code>
             <CopyButton
@@ -153,7 +153,7 @@ export function ApiKeysManager({ compact = false }: Props) {
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label className="text-white">your keys</Label>
+          <Label className="text-foreground">your keys</Label>
           {!showForm && (
             <Button
               type="button"
@@ -162,7 +162,7 @@ export function ApiKeysManager({ compact = false }: Props) {
                 setEditingKeyId(null);
                 setCreating(true);
               }}
-              className="cursor-pointer text-gray-900"
+              className="cursor-pointer"
             >
               <Plus className="mr-1 h-3.5 w-3.5" /> create key
             </Button>
@@ -177,7 +177,7 @@ export function ApiKeysManager({ compact = false }: Props) {
           <Card className="border-border bg-card/50 p-8 text-center space-y-3">
             <KeyRound className="h-8 w-8 text-muted-foreground mx-auto" />
             <div>
-              <p className="text-sm text-white">no api keys yet</p>
+              <p className="text-sm text-foreground">no api keys yet</p>
               <p className="text-xs text-muted-foreground mt-1">
                 create a scoped key to start automating against the roost api.
               </p>
@@ -190,7 +190,7 @@ export function ApiKeysManager({ compact = false }: Props) {
                   setEditingKeyId(null);
                   setCreating(true);
                 }}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5 mr-1" /> create your first key
               </Button>
@@ -212,7 +212,7 @@ export function ApiKeysManager({ compact = false }: Props) {
                   type="button"
                   onClick={() => setShowRevoked((v) => !v)}
                   aria-expanded={showRevoked}
-                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-white cursor-pointer"
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
                 >
                   <ChevronRight
                     className={`h-3.5 w-3.5 transition-transform ${showRevoked ? 'rotate-90' : ''}`}
@@ -236,7 +236,7 @@ export function ApiKeysManager({ compact = false }: Props) {
 
       {showForm && (
         <div className="space-y-2">
-          <Label className="text-white">create key</Label>
+          <Label className="text-foreground">create key</Label>
           <ApiKeyCreateForm onSubmit={handleCreate} onCancel={() => setCreating(false)} />
         </div>
       )}

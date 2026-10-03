@@ -264,15 +264,15 @@ export function WebhookList({ siteId }: { siteId: string }) {
       return <Badge variant="outline" className="text-muted-foreground border-border">never triggered</Badge>;
     }
     if (webhook.failCount >= 10) {
-      return <Badge className="bg-red-500/20 text-red-400 border-red-500/30">auto-disabled</Badge>;
+      return <Badge className="bg-danger-surface text-danger border-danger-border">auto-disabled</Badge>;
     }
     if (webhook.lastStatus >= 200 && webhook.lastStatus < 300) {
-      return <Badge className="bg-green-500/20 text-green-400 border-green-500/30"><CheckCircle className="h-3 w-3 mr-1" />{webhook.lastStatus}</Badge>;
+      return <Badge className="bg-success-surface text-success border-success-border"><CheckCircle className="h-3 w-3 mr-1" />{webhook.lastStatus}</Badge>;
     }
     if (webhook.lastStatus === 0) {
-      return <Badge className="bg-red-500/20 text-red-400 border-red-500/30"><XCircle className="h-3 w-3 mr-1" />network error</Badge>;
+      return <Badge className="bg-danger-surface text-danger border-danger-border"><XCircle className="h-3 w-3 mr-1" />network error</Badge>;
     }
-    return <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30"><AlertTriangle className="h-3 w-3 mr-1" />{webhook.lastStatus}</Badge>;
+    return <Badge className="bg-warning-surface text-warning border-warning-border"><AlertTriangle className="h-3 w-3 mr-1" />{webhook.lastStatus}</Badge>;
   };
 
   if (loading) {
@@ -333,7 +333,7 @@ export function WebhookList({ siteId }: { siteId: string }) {
             <div className="text-right">
               <div>{getStatusBadge(webhook)}</div>
               {webhook.failCount > 0 && webhook.failCount < 10 && (
-                <p className="text-[10px] text-amber-400 mt-0.5">{webhook.failCount} failures</p>
+                <p className="text-[10px] text-warning mt-0.5">{webhook.failCount} failures</p>
               )}
             </div>
             <span className="text-xs text-muted-foreground w-36 text-right">
@@ -390,9 +390,9 @@ export function WebhookList({ siteId }: { siteId: string }) {
             ) : (
               <IconButton
                 label={`delete ${webhook.name}`}
-                variant="ghost"
+                variant="ghost-destructive"
                 onClick={() => setDeleteConfirmId(webhook.id)}
-                className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                className="h-8 w-8 cursor-pointer"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </IconButton>
@@ -403,7 +403,7 @@ export function WebhookList({ siteId }: { siteId: string }) {
 
       {/* Edit webhook dialog */}
       <Dialog open={!!editingWebhook} onOpenChange={(open) => { if (!open) setEditingWebhook(null); }}>
-        <DialogContent className="bg-background border-border sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto">
+        <DialogContent className="border-border sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Pencil className="h-5 w-5" />
@@ -555,7 +555,7 @@ export default function AddWebhookDialog({ siteId, open, onOpenChange }: AddWebh
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="bg-background border-border sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto">
+        <DialogContent className="border-border sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Webhook className="h-5 w-5" />
@@ -644,7 +644,7 @@ export default function AddWebhookDialog({ siteId, open, onOpenChange }: AddWebh
 
       {/* Generated secret dialog */}
       <Dialog open={!!generatedSecret} onOpenChange={() => setGeneratedSecret(null)}>
-        <DialogContent className="bg-background border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
             <DialogTitle>webhook created</DialogTitle>
             <DialogDescription>
@@ -652,7 +652,7 @@ export default function AddWebhookDialog({ siteId, open, onOpenChange }: AddWebh
               use it to verify webhook signatures on the receiving end.
             </DialogDescription>
           </DialogHeader>
-          <div className="p-3 bg-muted rounded-lg">
+          <div className="p-3 bg-card-sunken rounded-lg">
             <code className="text-sm font-mono text-foreground break-all">{generatedSecret}</code>
           </div>
           <DialogFooter>

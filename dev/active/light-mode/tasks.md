@@ -1,7 +1,14 @@
 # Light mode — Tasks
-**Progress**: 0/21 complete
+**Progress**: 20/21 complete · branch `feat/light-mode`
 
 Read `plan.md` first (Approach → token architecture and migration rules). Read `DESIGN.md` at the repo root for the visual system.
+
+**Owner brief, 2026-10-03 (overrides anything below that disagrees):**
+- **Theme follows the OS.** The preference is `system` by default. It resolves through `prefers-color-scheme`, and dark is the fallback whenever there is no signal: the server renders `<html class="dark">`, so no-JS views and failed scripts land on dark, never light.
+- **The switch lives only in the user's profile** (account settings → preferences). There is no header or user-menu control, and signed-out visitors simply get their OS preference. The control is understated and carefully designed, never loud.
+- **Every page is in scope,** including landing, docs, the Scalar API reference, auth, admin, hoot, swoop, roosts, talons, logs and the desktop app. Emails and OG images are not pages, so they stay out.
+- **The whole build lives on `feat/light-mode` and merges once, complete.** There is no dark-first interim on `dev`, and Task 6.2 is a visual review gate, not a default flip.
+- **Focus stays quiet** (`DESIGN.md` → "The Quiet Focus Rule"). Light gets a quiet outline of its own, never a strong or inset ring.
 
 **Global rules for every task:**
 - **Never change a `.dark` token value.** Dark rendering must stay identical.
@@ -15,9 +22,9 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
 
 ---
 
-## Wave 1: Foundation (ships invisibly; the default stays dark)
+## Wave 1: Foundation
 
-- [ ] **Task 1.1: Light palette and token families**
+- [x] **Task 1.1: Light palette and token families**
   - Files: `web/app/globals.css`, `web/app/docs/docs.css`, `DESIGN.md`, `web/__tests__/styles/theme-contrast.test.ts` (new)
   - Do:
     - **Design the light palette.** Run `/impeccable` with `DESIGN.md` as authority, as an extension of the Mission Control world, not a new one. Then fill `:root` with on-brand light values that replace the stock shadcn neutrals: a cool paper background, hue-250 navy text and borders, the same tonal-step logic as dark.
@@ -50,30 +57,35 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - With the class temporarily removed in devtools, a light page has no invisible base chrome (scrollbars, dot-grid, focus outline).
     - `DESIGN.md` documents both palettes.
 
-- [ ] **Task 1.2: Mount the theme provider**
+- [x] **Task 1.2: Mount the theme provider**
   - Files: `web/app/layout.tsx`, `web/components/ThemeProvider.tsx` (new), `web/lib/theme.ts` (new)
   - Do:
     - **Create `web/lib/theme.ts`** exporting:
-      - `THEMES = ['dark', 'light', 'system'] as const`
+      - `THEMES = ['system', 'dark', 'light'] as const`
       - `type ThemeChoice`
-      - `DEFAULT_THEME: ThemeChoice = 'dark'`, with a lowercase comment that Task 6.2 flips it to `'system'` once light is complete
+      - `DEFAULT_THEME: ThemeChoice = 'system'`
+      - `FALLBACK_THEME = 'dark'`, documented as the server-rendered class and the no-signal default
       - `THEME_STORAGE_KEY = 'owlette_theme'`
-    - **Create `ThemeProvider.tsx`**, a `'use client'` wrapper around next-themes `ThemeProvider` with `attribute="class"`, `enableSystem`, `enableColorScheme`, `disableTransitionOnChange`, `defaultTheme={DEFAULT_THEME}`, `storageKey={THEME_STORAGE_KEY}`, and a `nonce` prop passed through.
+    - **Create `ThemeProvider.tsx`**, a `'use client'` wrapper around next-themes `ThemeProvider`, with:
+      - `attribute="class"`, `enableSystem`, `enableColorScheme`, `disableTransitionOnChange`
+      - `defaultTheme={DEFAULT_THEME}`, `storageKey={THEME_STORAGE_KEY}`
+      - `themes={['dark', 'light']}` and a `nonce` prop passed through
     - **Update `layout.tsx`:**
-      - Read the nonce with `(await headers()).get('x-nonce')`; the layout already awaits `headers()` at ~:87, so reuse it.
+      - Read the nonce with `(await headers()).get('x-nonce')`. The layout already awaits `headers()` at ~:87, so reuse it.
       - Wrap the body content in the provider.
-      - Change `<html className="dark scroll-smooth">` to `<html className="scroll-smooth" suppressHydrationWarning>`.
+      - Keep `className="dark scroll-smooth"` on `<html>` as the server-rendered fallback, and add `suppressHydrationWarning`. The next-themes head script swaps the class before first paint.
       - Remove `theme="dark"` from `<Toaster>`. The sonner wrapper already reads `useTheme`.
       - Replace `other: { 'theme-color': '#0a0f1a' }` with a `viewport` export whose `themeColor` is an array of `{ media: '(prefers-color-scheme: dark)', color: '#0a0f1a' }` and `{ media: '(prefers-color-scheme: light)', color: <light --background as hex> }`.
     - Do not touch fumadocs' `RootProvider`. Its theme stays disabled, and it reads the root provider through the re-exported `useTheme`.
   - Done when:
-    - With no stored value the app renders dark exactly as before.
+    - With JS disabled, the page is dark.
+    - With `colorScheme: 'dark'` and no stored value, the app renders dark exactly as before.
+    - With `colorScheme: 'light'` it renders light with no dark flash. Light will be partly broken until Wave 3, which is fine on this branch.
     - The page source shows the next-themes inline script carrying `nonce=`.
-    - The browser console has no CSP violation and no hydration warning.
-    - Setting `localStorage.owlette_theme = 'light'` and reloading renders light with no dark flash. Light will still be partly broken; that is expected until Wave 3.
+    - The console has no CSP violation and no hydration warning.
     - `npm test` and `npx eslint` pass on the changed files.
 
-- [ ] **Task 1.3: Pin Playwright to dark**
+- [x] **Task 1.3: Pin Playwright to dark**
   - Files: `web/playwright.config.ts`, `web/playwright.screenshots.config.ts`, `web/playwright.videos.config.ts`, `web/e2e/videos/video-helpers.ts`
   - Do:
     - Add `colorScheme: 'dark'` to the `use` block of each config: main `:153-161`, screenshots `:46-55`, videos `:730-741`.
@@ -85,37 +97,34 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
 
 ## Wave 2: Plumbing and primitives
 
-- [ ] **Task 2.1: Theme preference sync and controls**
-  - Files: `web/contexts/AuthContext.tsx`, `web/components/ThemePreferenceSync.tsx` (new), `web/components/ThemeMenuItems.tsx` (new), `web/components/PageHeader.tsx`, `web/components/AccountSettingsDialog.tsx`, the file that renders children inside the auth provider (find where `LazyAuthProvider` wraps the app, likely `web/components/LazyAuthProvider.tsx` or `web/app/layout.tsx`), `web/__tests__/components/ThemePreferenceSync.test.tsx` (new)
+- [x] **Task 2.1: Theme preference sync and the profile control**
+  - Files: `web/contexts/AuthContext.tsx`, `web/components/ThemePreferenceSync.tsx` (new), `web/components/AppearanceControl.tsx` (new), `web/components/AccountSettingsDialog.tsx`, `web/components/PageHeader.tsx`, the file that renders children inside the auth provider (find where `LazyAuthProvider` wraps the app), `web/__tests__/components/ThemePreferenceSync.test.tsx` (new), `web/__tests__/components/AppearanceControl.test.tsx` (new)
   - Do:
-    - **Add `theme?: ThemeChoice` to `UserPreferences`** (`AuthContext.tsx:308-338`). Include it in the `newPrefs` construction (`:584-605`) AND in the equality check (`:619-636`). The comment at `:615-618` explains why both are required.
-    - **`ThemePreferenceSync`** is a client component with no UI, mounted inside the auth tree. It uses `useTheme()` and `useAuth()`.
-      - When `userPreferences.theme` is defined and differs from the current theme AND from the last value this component wrote, call `setTheme(pref)`.
+    - **Add `theme?: ThemeChoice` to `UserPreferences`** (`AuthContext.tsx`, the `UserPreferences` interface). Include it in the `newPrefs` construction AND in the equality check; the comment there explains why both are required.
+    - **`ThemePreferenceSync`:** a client component with no UI, mounted inside the auth tree, using `useTheme()` and `useAuth()`.
+      - When `userPreferences.theme` is defined and differs from the current theme AND from the last value written locally, call `setTheme(pref)`.
       - Expose nothing else.
-    - **`ThemeMenuItems`** writes on user change. It is a `DropdownMenuRadioGroup` with dark / light / system, lowercase labels and lucide icons `Moon`, `Sun`, `Monitor`.
-      - On select: `setTheme(v)`.
-      - If signed in, also `updateUserPreferences({ ...prefs, theme: v }, { silent: true })`.
-      - Record the value as "last written" so the snapshot echo doesn't re-apply it.
-    - **`PageHeader.tsx`:**
-      - Add `ThemeMenuItems` to the user menu (`data-testid="user-menu-trigger"`, ~:318). Put it in a labelled "theme" group, with `data-testid="theme-option-{dark|light|system}"`.
-      - Signed-out visitors still need a control: add the same group to the help or overflow menu shown when there's no user. Find the existing signed-out header menu.
-      - Theme `MENU_SURFACE` (`:15`) to use `shadow-[var(--elevation-shadow)]` and `ring-[color:var(--elevation-ring)]` (or equivalent token utilities) instead of `shadow-black/50 ring-white/10`. Dark must resolve identically.
-      - Replace the inline header fade at ~:511 with a token: `color-mix` of `--background` at 70%.
-      - Migrate any other raw palette or `text-white` in `PageHeader.tsx` per the migration rules. No Wave 3 task owns this file.
-    - **`AccountSettingsDialog.tsx`, preferences section (~469-560):** add a "theme" select with the same three options. It applies instantly via `setTheme` and saves with the dialog's normal save; mirror how `temperatureUnit` is handled.
-    - **Unit test:**
-      - Sync applies a differing Firestore value.
-      - Sync ignores the echo of its own write.
-      - It does nothing when `theme` is undefined.
+    - **`AppearanceControl`:** the profile setting, a three-way choice of `system` / `dark` / `light`.
+      - **Design it with `/impeccable`** against `DESIGN.md`. It must be understated: it sits in the preferences list like its neighbours, never a loud toggle.
+      - **The clever part is the motion and the glyph, not the size.** For example: a single owl-eye or eclipse mark that morphs between night, day and "follows your system", with a compact segmented control (`role="radiogroup"`, arrow-key navigation, `aria-checked`). Reduced motion gets a static swap.
+      - **Behaviour:** selecting applies instantly through `setTheme` (live preview, no save needed), then persists with `updateUserPreferences({ ...prefs, theme }, { silent: true })`, recording the value as last-written so the snapshot echo doesn't re-apply it.
+      - Lowercase copy: the label is "appearance", the options are "system", "dark" and "light". The `system` option shows which theme it currently resolves to (e.g. "system · dark").
+    - **`AccountSettingsDialog.tsx`:** place `AppearanceControl` in the preferences section, matching its rows.
+    - **`PageHeader.tsx`:** no theme control here.
+      - Tokenise `MENU_SURFACE` (`shadow-black/50 ring-white/10` become elevation tokens; dark must resolve identically).
+      - Replace the inline header fade with a token (`color-mix` of `--background` at 70%).
+      - Migrate any other raw palette or `text-white` in this file per the migration rules. No Wave 3 task owns it.
+    - **Unit tests:**
+      - Sync applies a differing Firestore value, ignores the echo of its own write, and does nothing when `theme` is undefined.
+      - `AppearanceControl` has radiogroup semantics, applies on select, persists on select, and supports arrow keys.
   - Done when:
-    - Choosing light in the user menu re-themes immediately, persists across reload with no flash, and writes `users/{uid}.preferences.theme`. Check in the emulator.
+    - Choosing light in the profile re-themes immediately, persists across reload with no flash, and writes `users/{uid}.preferences.theme`. Check in the emulator.
     - Signing in on a second browser with a different local theme adopts the Firestore value once and doesn't flip back.
     - Dark `MENU_SURFACE` and the header look unchanged.
-    - Unit tests pass.
-    - `npx eslint` is clean.
+    - Unit tests pass, and `npx eslint` is clean.
   - Depends on: Task 1.1, Task 1.2
 
-- [ ] **Task 2.2: Web ui primitives**
+- [x] **Task 2.2: Web ui primitives**
   - Files: `web/components/ui/sonner.tsx`, `web/components/ui/tooltip.tsx`, `web/components/ui/checkbox.tsx`, `web/components/ui/switch.tsx`, `web/components/ui/input.tsx`, `web/components/ui/alert.tsx`, `web/components/admin/AdminButton.tsx`
   - Do:
     - Replace the dark-tuned literals with tokens:
@@ -131,7 +140,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - `npm test` and `npx eslint` are clean.
   - Depends on: Task 1.1
 
-- [ ] **Task 2.3: Data-viz on tokens**
+- [x] **Task 2.3: Data-viz on tokens**
   - Files: `web/lib/usageColorUtils.ts`, `web/lib/temperatureUtils.ts`, `web/lib/networkUtils.ts`, `web/lib/diskIOUtils.ts`, `web/components/charts/ChartTooltip.tsx`, `web/components/charts/MetricsDetailPanel.tsx`, `web/components/charts/SparklineChart.tsx`, `web/__tests__/lib/diskIOUtils.test.ts`, `web/__tests__/lib/usageColorUtils.test.ts` (new)
   - Do:
     - **`usageColorUtils`:** `getUsageColorClass` returns `bg-band-calm` … `bg-band-critical`. `getUsageColor` returns `var(--band-…)`. Keep the bands (<30, <50, <70, <85).
@@ -147,8 +156,8 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - Unit tests pass.
   - Depends on: Task 1.1
 
-- [ ] **Task 2.4: Third parties and odds**
-  - Files: `web/components/TurnstileWidget.tsx`, `web/components/DownloadButton.tsx`, `web/app/hoot/components/ChatWindow.tsx`, `web/components/hoot/SharedConversation.tsx`, `web/components/mdx/mermaid.tsx`, `web/app/not-found.tsx`, `web/components/FallingFeather.tsx`
+- [x] **Task 2.4: Third parties and odds**
+  - Files: `web/components/TurnstileWidget.tsx`, `web/components/DownloadButton.tsx`, `web/app/hoot/components/ChatWindow.tsx`, `web/components/hoot/HootMarkdown.tsx`, `web/components/hoot/SharedConversation.tsx`, `web/components/mdx/mermaid.tsx`, `web/app/not-found.tsx`, `web/components/FallingFeather.tsx`, `web/app/docs/api/route.ts`
   - Do:
     - **Turnstile** (`:132-134`): pass `theme: resolvedTheme === 'light' ? 'light' : 'dark'` from `useTheme()`, and re-render the widget when it changes. Remove the comment about `'auto'`.
     - **DownloadButton** (`:31-34`): drop the "header is always dark" assumption. `text-white` becomes `text-foreground`, or primary-foreground on the cyan fill.
@@ -156,14 +165,20 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - **mermaid** (`:80-87`): theme the hex fallbacks per `resolvedTheme`, since a missing token previously fell back to dark values.
     - **not-found:** make the canvas rain, glow and glitch read `getComputedStyle` tokens (`--muted-foreground`, `--accent-cyan`) instead of literals, and re-read on theme change.
     - **FallingFeather:** keep the warm drop-shadow, but check it reads on light; reduce its alpha in light only if it smears.
+    - **Scalar API reference** (`web/app/docs/api/route.ts`): a standalone HTML page outside the root layout.
+      - Stop forcing `darkMode: true`, hide Scalar's own dark-mode toggle, and make the page follow the user's choice.
+      - Its inline bootstrap script (it already stamps the nonce) reads `localStorage.owlette_theme`, falling back to `prefers-color-scheme`, then dark. It sets Scalar's mode before Scalar mounts.
+      - Check the option names against the installed `@scalar/*` version.
+      - Theme its custom `--scalar-color-*` CSS for both modes from the app tokens' values.
   - Done when:
     - The Turnstile widget matches the theme on login and register in both themes.
     - Hoot markdown is legible in both themes.
     - The 404 page works in both.
+    - `/docs/api` matches the user's choice (and the OS when the choice is `system`) with no flash.
     - `npx eslint` is clean.
   - Depends on: Task 1.1, Task 1.2
 
-- [ ] **Task 2.5: Desktop tokens**
+- [x] **Task 2.5: Desktop tokens**
   - Files: `desktop/src/globals.css`, `desktop/src/lib/surfaces.ts`, `desktop/src/test/design-system.test.tsx`
   - Do:
     - **Port Task 1.1's token work** from `web/app/globals.css` into `desktop/src/globals.css`: the light `:root` values, the new families, and the tokenised base CSS (scrollbars, focus outline, dot-grid, select scrollbar, flash keyframe).
@@ -181,7 +196,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
 
 Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you find a file not listed in your task, leave it and note it in the Log; don't edit it. Each sweep finishes with `grep` showing zero raw palette or `text-white` / `text-gray-900` utilities in its files, except theme-invariant items listed in `plan.md` (scrims, brand marks, swoop letterbox).
 
-- [ ] **Task 3.1: Dashboard and machines**
+- [x] **Task 3.1: Dashboard and machines**
   - Files:
     - everything under `web/app/dashboard/**`
     - `web/components/MachineContextMenu.tsx`, `MachineStatusPill.tsx`, `UpdateOwletteButton.tsx`, `RestartScheduleDialog.tsx`, `ScheduleEditor.tsx`, `LiveViewModal.tsx`, `ScreenshotDialog.tsx`, `RemoveMachineDialog.tsx`, `UninstallDialog.tsx`, `SiteMachinesList.tsx`, `WeekSummaryBar.tsx`, `DayPillSelector.tsx`, `TimezoneChip.tsx`, `OsLabel.tsx`
@@ -201,7 +216,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npm test` passes and `npx eslint` is clean.
   - Depends on: Task 2.1, Task 2.2, Task 2.3
 
-- [ ] **Task 3.2: Shared dialogs and account surfaces**
+- [x] **Task 3.2: Shared dialogs and account surfaces**
   - Files: `web/components/AccountSettingsDialog.tsx`, `DeploymentDialog.tsx`, `SystemPresetDialog.tsx`, `SchedulePresetDialog.tsx`, `ApplyScheduleToMachinesDialog.tsx`, `ManageSitesDialog.tsx`, `ManageUserSitesDialog.tsx`, `CreateSiteDialog.tsx`, `WebhookSettingsDialog.tsx`, `ApiKeysManager.tsx`, `ApiKeyCreateForm.tsx`, `ApiKeyScopeEditor.tsx`, `ApiKeyScopeFields.tsx`, `MfaFactorsSection.tsx`, `PasskeyManager.tsx`, `BackupCodesPanel.tsx`, `ConfirmDialog.tsx`, `ReportBugDialog.tsx`, `InstallerChecksumStatus.tsx`, `SecurityVersionBanner.tsx`, `NoSitesEmptyState.tsx`, `InAppBrowserNotice.tsx`, `TimezoneSelect.tsx`, `CopyButton.tsx`, `UserAvatar.tsx`, `TalonSuccessorPicker.tsx`, `ErrorBoundary.tsx`, `RequireAdminAccess.tsx`, `LoadingWord.tsx`
   - Do:
     - Migrate per the rules.
@@ -214,7 +229,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npx eslint` is clean.
   - Depends on: Task 2.1, Task 2.2
 
-- [ ] **Task 3.3: Admin, settings, deployments, logs, talons, misc routes**
+- [x] **Task 3.3: Admin, settings, deployments, logs, talons, misc routes**
   - Files: `web/app/admin/**`, `web/components/admin/**` (except `AdminButton.tsx`, done in 2.2), `web/app/settings/**`, `web/app/deployments/**`, `web/app/logs/**`, `web/app/talons/**`, `web/app/cli/**`, `web/app/add/**`, `web/app/demo/**`, `web/app/legal/**`, `web/app/setup/**`, `web/app/share/**` (page UI only; leave `opengraph-image.tsx`), `web/app/unsubscribe/**`
   - Do:
     - Migrate per the rules.
@@ -226,7 +241,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npm test` and `npx eslint` are clean.
   - Depends on: Task 2.2
 
-- [ ] **Task 3.4: Hoot, roost, swoop and auth**
+- [x] **Task 3.4: Hoot, roost, swoop and auth**
   - Files: `web/app/hoot/**` (ChatWindow was done in 2.4; don't revert it), `web/components/hoot/**`, `web/app/roosts/**`, `web/components/roost/**`, `web/components/Roost*.tsx`, `web/components/ProjectDistributionDialog.tsx`, `web/components/FolderDropzone.tsx`, `web/components/PreUploadSummary.tsx`, `web/components/MinimizedUploadCard.tsx`, `web/components/EmptyStateUpload.tsx`, `web/app/swoop/**`, `web/components/swoop/**`, `web/app/login/**`, `web/app/register/**`, `web/app/forgot-password/**`, `web/app/reset-password/**`, `web/app/setup-2fa/**`, `web/app/verify-2fa/**`, `web/components/auth/**`
   - Do:
     - Migrate per the rules.
@@ -239,7 +254,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npm test` and `npx eslint` are clean.
   - Depends on: Task 2.2, Task 2.4
 
-- [ ] **Task 3.5: Landing light design**
+- [x] **Task 3.5: Landing light design**
   - Files: `web/components/landing/**`, `web/components/Footer.tsx`, `web/components/ThemedImage.tsx` (new), `web/app/page.tsx` (only if section wrappers need it), `web/app/download/**`, `web/app/for-ai/**` (page UI), `web/app/privacy/page.tsx`, `web/app/terms/page.tsx`
   - Do:
     - **Run `/impeccable` on the landing page** for a light variant of the Mission Control world, with `DESIGN.md` as authority. Persuade mode.
@@ -258,16 +273,16 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - `npx eslint` is clean.
   - Depends on: Task 2.2
 
-- [ ] **Task 3.6: Desktop theme runtime**
+- [x] **Task 3.6: Desktop theme runtime**
   - Files: `desktop/src-tauri/src/window_state.rs`, `desktop/src-tauri/src/lib.rs`, `desktop/src-tauri/src/tray.rs` (only if the window is built or shown there), `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/tauri.macos.conf.json`, `desktop/src-tauri/capabilities/default.json` (only if a JS-side permission is truly needed), `desktop/src/lib/ipc.ts`, `desktop/index.html`, `desktop/src/main.tsx`, `desktop/src/components/AppMenu.tsx`, `desktop/src/lib/theme.ts` (new), `desktop/src/components/AppMenu.test.tsx` (new or extended)
   - Do:
     - **Rust side:**
-      - **`window_state.rs`:** add an `appearance` section with `theme: "dark" | "light" | "system"`. Keep the "preserve unknown sections" behaviour. The default when absent is `DEFAULT_THEME` from a Rust const; it is `"dark"` until Task 6.2.
+      - **`window_state.rs`:** add an `appearance` section with `theme: "dark" | "light" | "system"`. Keep the "preserve unknown sections" behaviour. The default when absent is `DEFAULT_THEME` from a Rust const, `"system"` (the window follows the OS), with dark as the fallback when the OS gives no signal.
       - **Before the window is shown** (`lib.rs:160-170` / `tray.rs:481-492`): read the value. Call `window.set_theme(Some(Theme::Dark|Theme::Light))`, or `None` for system. Set the background colour to match: dark `#020B16`; light equals the light `--background` as hex; for system, decide from the OS theme.
       - **Add a `set_appearance_theme` command** that persists the value and calls `set_theme` plus the background update on the live window. Add `appearance_theme` to read it back.
       - **`tauri.conf.json` and `tauri.macos.conf.json`:** remove `"theme": "Dark"`. Keep `backgroundColor` as the dark value for the pre-setup frame; the Rust code overrides it before show.
     - **Webview side:**
-      - **`index.html`:** `class="dark scroll-smooth"` becomes `class="scroll-smooth"`.
+      - **`index.html`:** keep `class="dark scroll-smooth"` as the fallback before next-themes runs, and let next-themes swap it.
       - **`main.tsx`:** wrap the app in next-themes `ThemeProvider` with `attribute="class"`, `defaultTheme="system"`, `enableSystem`, `enableColorScheme`, and never call `setTheme` in the webview. The class then always follows `prefers-color-scheme`, which the window theme drives. Put that rationale in a lowercase comment.
       - **`desktop/src/lib/theme.ts`:** the `ThemeChoice` type and labels.
       - **`ipc.ts`:** typed wrappers for the two commands.
@@ -283,7 +298,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Wave 4: Desktop components and screenshots
 
-- [ ] **Task 4.1: Desktop component migration**
+- [x] **Task 4.1: Desktop component migration**
   - Files: `desktop/src/components/**` (except `AppMenu.tsx`, done in 3.6), `desktop/src/App.tsx`, `desktop/src/lib/processStatus.ts`, `desktop/src/lib/serviceHealth.ts`, `desktop/src/lib/scheduleDefaults.ts`, `desktop/src/components/ProcessDetail.test.tsx`, `desktop/src/components/ProcessList.test.tsx`
   - Do:
     - Apply the web migration rules. The desktop ui primitives (sonner, tooltip, checkbox, switch) mirror Task 2.2.
@@ -296,7 +311,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - The app is legible in light and unchanged in dark.
   - Depends on: Task 2.5, Task 3.6
 
-- [ ] **Task 4.2: Themed screenshot pipeline**
+- [x] **Task 4.2: Themed screenshot pipeline**
   - Files: `web/playwright.screenshots.config.ts`, `web/e2e/screenshots/docs-helpers.ts`, `web/e2e/screenshots/*.spec.ts` (output path only), `web/scripts/refresh-docs-screens.mjs`, `web/mdx-components.tsx`, `web/components/landing/*` (only the `ThemedImage` `light` paths), `web/e2e/screenshots/README.md`, `web/playwright.desktop-screenshots.config.ts`, `web/e2e/desktop-screenshots/agent-app.spec.ts`, `web/e2e/desktop-screenshots/README.md`
   - Do:
     - **Screenshots config:** two projects, `dark` (`colorScheme: 'dark'`) and `light` (`colorScheme: 'light'`). Both seed `preferences.theme` to match, via `pinAdminSiteContext` in `docs-helpers.ts:9-29`, and `localStorage.owlette_theme` via `addInitScript`.
@@ -317,15 +332,16 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Wave 5: Verify and guard
 
-- [ ] **Task 5.1: e2e — theme behaviour and a light a11y pass**
+- [x] **Task 5.1: e2e — theme behaviour and a light a11y pass**
   - Files: `web/e2e/specs/account/theme.spec.ts` (new), `web/e2e/specs/a11y/route-smoke.spec.ts`, `web/playwright.config.ts`, `web/e2e/specs/account/preferences.spec.ts`
   - Do:
     - **`theme.spec.ts`:**
-      - Choose light from the user menu (`theme-option-light`): `<html>` gets `class` containing `light` and not `dark`.
+      - Open account settings → preferences and choose light in the appearance control: `<html>` gets `class` containing `light` and not `dark`.
       - `users/{uid}.preferences.theme === 'light'`, read through the Admin SDK as `preferences.spec.ts` does.
       - Reload, and assert the class is present at `DOMContentLoaded`, before hydration. Check it from `addInitScript` with a `MutationObserver`, or by reading `document.documentElement.className` in a `page.on('domcontentloaded')` evaluate.
       - In a fresh context with no localStorage but Firestore `light`, after login the page converges to light and stays there for 5s. That covers the no ping-pong rule.
-      - A signed-out visitor can switch theme on the landing page.
+      - A signed-out visitor follows the OS: `colorScheme: 'light'` renders light and `colorScheme: 'dark'` renders dark. With JS disabled, the page is dark.
+      - A user with no `preferences.theme` follows the OS the same way, and `system` in the profile tracks an OS change live (`page.emulateMedia({ colorScheme })`).
       - Restore the user's theme in `afterEach`.
     - **`route-smoke.spec.ts`:** parameterise over `['dark', 'light']`. Seed `localStorage.owlette_theme` via `addInitScript`. Keep axe `wcag2a`/`wcag2aa`, failing on serious or critical. Add `/` (landing) and a `/docs` page to the route list if they aren't there.
     - **`preferences.spec.ts`:** its `afterEach` (`:22-34`) restores `theme` too.
@@ -335,7 +351,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - Total CI e2e time stays under the 30-minute job limit; note the delta in the Log.
   - Depends on: Task 3.1, Task 3.2, Task 3.3, Task 3.4, Task 3.5
 
-- [ ] **Task 5.2: Lint guardrail**
+- [x] **Task 5.2: Lint guardrail**
   - Files: `web/eslint.config.mjs`, `web/__tests__/eslint/no-raw-palette.test.ts` (new)
   - Do:
     - **Add a `no-restricted-syntax` rule** for `web/app/**`, `web/components/**` and `web/lib/**` (`*.ts`, `*.tsx`). It flags `Literal` and `TemplateElement` values matching `\b(?:[a-z-]+:)*(?:text|bg|border|ring|fill|stroke|from|to|via|outline|divide|shadow|decoration|placeholder|caret|accent)-(?:red|green|emerald|amber|yellow|orange|blue|sky|cyan|teal|violet|purple|pink|rose|slate|gray|zinc|neutral|stone|lime|indigo|fuchsia)-\d{2,3}\b` and `\btext-(?:white|gray-900)\b`.
@@ -351,7 +367,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - Reintroducing `text-red-400` in any component fails lint.
   - Depends on: Task 3.1, Task 3.2, Task 3.3, Task 3.4, Task 3.5
 
-- [ ] **Task 5.3: Desktop checks in CI**
+- [x] **Task 5.3: Desktop checks in CI**
   - Files: `.github/workflows/rust-build.yml` (or a new `.github/workflows/desktop.yml` if cleaner)
   - Do:
     - Add a job that runs on changes to `desktop/**`: `npm ci`, `npm run lint` (oxlint), `npm test` (vitest), `npm run typecheck` in `desktop/`, on Node 22 per `.nvmrc`.
@@ -364,7 +380,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Wave 6: Docs and release gate
 
-- [ ] **Task 6.1: Docs**
+- [x] **Task 6.1: Docs**
   - Files: `DESIGN.md`, `.impeccable/design.json`, `.claude/skills/frontend-dev-guidelines.md`, `web/content/docs/dashboard/account-settings.mdx`, `web/content/docs/reference/firestore-data-model.mdx`, `desktop/README.md`, `docs/changelog.md`, `web/content/docs/changelog.mdx`
   - Do:
     - **`DESIGN.md`:** finalise the two-theme system: the Overview line, light names for every token, status, band and series families, the theme-switch mechanics. Regenerate `.impeccable/design.json`.
@@ -379,18 +395,79 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
   - Depends on: Task 5.1, Task 5.2
 
 
-- [ ] **Task 6.2: Flip the default to follow the OS**
-  - Files: `web/lib/theme.ts`, `desktop/src-tauri/src/window_state.rs` (default const), `web/e2e/specs/account/theme.spec.ts`
+- [ ] **Task 6.2: Visual review of every page in both themes**
+  - Files: `web/e2e/screenshots/theme-review.spec.ts` (new, review-only and not part of `npm run e2e`), plus fixes in whichever files the review finds
   - Do:
-    - Set `DEFAULT_THEME = 'system'` (web) and the Rust default to `"system"`. Remove the "flips in 6.2" comments.
-    - Add to `theme.spec.ts`: a fresh context with `colorScheme: 'light'`, no localStorage, and a user with no `preferences.theme` renders light. The same with `colorScheme: 'dark'` renders dark.
-    - Confirm the Playwright configs still pin `colorScheme: 'dark'` (Task 1.3), so the rest of the suite stays dark.
+    - **Capture every route** in dark and light, at 1280×800 and 390×844. Seed realistic data the same way the docs screenshot specs do.
+      - Routes: landing, download, for-ai, privacy, terms, legal, demo, login, register, forgot/reset password, 2FA setup and verify, add, dashboard (card and list, machine detail panel open), deployments, roosts (list and detail), hoot (chat, share), swoop shell, talons, logs, settings (api keys, webhooks, alerts), every admin page, docs (index, an article, mermaid, code blocks, /docs/api), 404.
+      - Also capture the menus, dialogs and toasts that matter: machine menu, account settings with the appearance control, deployment dialog, screenshot dialog, a toast of each status.
+    - **Review every capture by eye** against `DESIGN.md` and the craft floor.
+      - Look for: contrast, hierarchy, depth, chart legibility, status colours, borders that vanish on white, glows or sheens that smear on light, and screenshots or images that clash.
+      - Fix everything found in one batch, then re-capture once to confirm.
+    - **Publish the captures as a gallery artifact** (both themes side by side) for the owner's review before merge.
+    - **Desktop:** do the same for the tray app's main screens on Windows, plus macOS via the `mba` remote.
   - Done when:
-    - Every Wave 1–5 task is checked off, and 6.1 is merged or merging alongside.
+    - No capture shows a defect.
     - `/preflight` is green.
-    - On a real OS-light machine, a first visit lands in light with no flash. The desktop app follows the OS on a machine with no stored value.
-  - Depends on: every Wave 1–5 task (runs in parallel with 6.1; disjoint files)
+    - The gallery link is in the PR description.
+  - Depends on: every Wave 1–5 task and Task 6.1
 
 ## Log
+### 2026-10-03
+- Wave 5 and the review gate:
+  - **5.1:** `theme.spec.ts` (the choice, no flash, account sync, os follow, signed out, no-JS dark) and route-smoke in both themes pass. The light pass found three AA misses, now fixed: the day cyan went 0.50 → 0.48, the stale-row readouts got ink-dark series, and the docs code moved to github-light-high-contrast.
+  - **5.3:** the desktop job ran green on PR #278 in 41s.
+  - **6.2:** the review gallery is published (https://claude.ai/artifact/BLFwjYzaiLoQHKxEXVktd1): 42 views x 2 themes x desktop and phone. The captures caught the machine menu wrapping "restart machine", which is fixed and re-captured. Still owed: the owner's review, and a desktop-app look once a desktop build with the new theme command is installed (the same release step as the desktop light screenshots).
+- Waves 4–6 so far (5.1 and 5.3 wait on their runs, and 6.2 is the review gate):
+  - **4.1 desktop:** every component is on tokens, and the raw-palette grep of `desktop/src` is clean. Dialogs take `--raised` from the primitive, following the owner's web ruling.
+    - Visible dark changes: always-on goes green-700, failed goes red-400 (3.9:1 on the selected row), running / ok / joined go green-400, faint notes /70 → /80 (AA in both themes), the checkbox glyph changes, and the remove-block hover text goes to danger.
+    - Inactive day pills (web and desktop) and the join phrase box sit on the sunken well, so they stay visible on the raised surface.
+    - Open question: by day, stalled/queued (`accent-warm`) sits close to launching (`warning`).
+  - **4.2 screenshots:** dark and light projects. There are 23 light captures (docs and landing), and the dark set was refreshed with them.
+    - The docs `img` override reads `light-variants.json`, which `npm run screenshots` now rewrites.
+    - `--check` pairs every shot. The 11 desktop light shots wait on a release exe with `set_appearance_theme`; the tray menu stays OS-drawn and dark-only.
+    - `create-site-dialog.spec.ts` was broken by the member-row change and is fixed.
+    - The dashboard greeting is random (`app/dashboard/page.tsx`), so captures differ run to run.
+  - **5.2 guardrail:** `no-restricted-syntax` flags raw palette and `text-white` / `text-gray-900` in app, components, lib, hooks and contexts. Server code and tests are exempt through the existing allowlist block. Eight scrim spots carry an inline disable with a reason. `__tests__/eslint/no-raw-palette.test.ts` runs the config's pattern through eslint's Linter.
+  - **5.3:** `.github/workflows/desktop.yml` runs oxlint, vitest and tsc on desktop changes; the Rust crate stays in `rust-build.yml`.
+  - **6.1 docs:** DESIGN.md (raised, the lamp, the copper eye, the brightest-is-selected rule) and its sidecar, the dev guidelines, account settings, the firestore data model (`preferences`), the desktop README, and both changelogs (Unreleased).
+- Owner preview on localhost, changes made from it:
+  - **The warm tint was a bug.** Chrome reads a near-neutral colour's hue as `none` (0°, rose) in an `oklch` mix. Every `color-mix` is now `in oklab`, which gives the same result for our same-hue and transparent mixes, so dark is unchanged.
+  - **The lamp:** `--header-glow` is a warm pool under the header by day (the accidental rose, made deliberate). Header surfaces catch it through the `header-lit` utility, a falloff plus a bright top edge. By day the card header is lit (between the body and the card).
+  - **Raised surfaces:** `--dialog` became `--raised`. Every dialog takes it from the primitive, and so do the app's menus: white by day, and the `--secondary` step at night (which moves the night card and background dialogs up to it).
+  - **The eye by day:** a deep copper bead (`--eye-*` tokens; no dark band, no rim, the red wash over the whole disc). Night is the original mark, unchanged. Web and desktop.
+  - **Installers:** the latest card offers every platform. Each version lists its platforms side by side, and the columns fit at 1280. e2e guards dates on one line and an unclipped "set as latest".
+  - **Wrapping:** the global orphans rule used the `text-wrap` shorthand, which reset the wrap mode and un-nowrapped paragraphs inside `whitespace-nowrap` cells. It now sets `text-wrap-style` only.
+  - **Smaller fixes:**
+    - The account settings dialog eases between section heights.
+    - In manage sites, open rows are the brightest.
+    - The machine menu's restart row is two clearly separate buttons.
+- Wave 3 done.
+  - **Dialogs:** a `--dialog` surface token (night equals `--secondary`, day a white panel); 16 dialogs moved onto it.
+  - **Schedule blocks:** `--block-1..8` with `-foreground`, `-bar` and `-ink`. A pill is a solid fill, so its fill and text are shared by both themes; bars and label ink follow the theme.
+  - **Day ink deepened:** `--warning` and `--success` (they were 4.2:1 on the menu surface), and the first net and disk-io series, which double as readout text. `theme-contrast.test.ts` now covers menus, series text, ink on amber and every block.
+  - **Visible dark changes, for the owner's review:**
+    - Four block pills go deeper (amber, emerald, cyan, orange) and amber takes dark text, because white on them was 2.2–3.7:1.
+    - Destructive confirmations use the destructive variant.
+    - The active day pill is signal cyan with ink (never white on cyan).
+    - Revoke machine goes fuchsia to danger.
+    - The update flow goes orange to sodium amber with ink, and the approve button amber with ink.
+    - The online badge in the update dialog was a day style leaking into night; it is now the night success chip.
+  - **Landing:** pastel day halos, a night-only warm glow, elevation tokens, and `ThemedImage` (only the visible theme's image is fetched).
+  - **Desktop runtime:** the window theme comes from `layout.json` before show; the app menu has a theme submenu.
+  - **Left in web on purpose:** white glyphs on black scrims (lightbox controls, spinners over images). Task 5.2 allowlists them.
+  - **Found, not ours:** privacy and terms use `prose`, but the typography plugin isn't registered, so those classes do nothing. Check in 6.2.
+- Wave 2 done.
+  - **Appearance control:** in profile → preferences. A three-way radiogroup with a morphing disc glyph; the slide lands first, then the theme applies.
+  - **Preference sync:** tolerates writes in flight and changes from other tabs.
+  - **Primitives:** moved onto control tokens (`--tooltip`, `--checkbox`, `--switch-off`, `--selection`); dark values equal the old slate and blue.
+  - **Charts:** `var()` in recharts SVG attributes resolves (checked in Chrome).
+  - **Scalar:** follows the choice through its `colorMode`.
+  - **Desktop:** tokens ported, and the hover-tint drift is fixed.
+  - **Tiny dark shifts, accepted:** over-threshold temperature colours, the online dot (green-400), one superadmin badge border.
+  - **For the review:** sonner's colour classes never applied, so dark toasts stay stock black.
+- Wave 1 done. Light palette "the same room by day" is in the `:root` block, with the status, band, series, chart, elevation and chrome families defined in both themes; every original `.dark` line is unchanged. Dark `success-solid` moved to green-700, because white on green-600 was 3.3:1. `theme-contrast.test.ts` holds both themes to AA. The provider follows the OS, with dark as the server-rendered fallback. Playwright (and the live smoke) are pinned dark.
+- Owner brief: build light mode fully, on every page. It follows the OS with dark as the fallback, and the switch is concealed in the profile. The plan was amended above (Tasks 1.2, 2.1, 2.4, 5.1 and 6.2). It moved to `dev/active/` (force-added, so it stays tracked) and runs on `feat/light-mode`.
+
 ### 2026-10-01
 - Plan created from the `/impeccable document` session (`DESIGN.md` + `PRODUCT.md` at the repo root). Owner decisions: default follows the OS, landing in scope, desktop in scope, plan tracked in `dev/planned/`.

@@ -105,7 +105,7 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
   if (error) {
     return (
       <div className="flex items-center justify-between gap-3 px-3 py-2.5">
-        <span className="text-xs text-red-400">{error}</span>
+        <span className="text-xs text-danger">{error}</span>
         <Button
           variant="ghost"
           size="sm"
@@ -152,14 +152,14 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
             <span className="flex min-w-0 items-center gap-2">
               <span
                 aria-hidden="true"
-                className={`h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-emerald-400' : 'bg-red-400/70'}`}
+                className={`h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-success' : 'bg-danger/70'}`}
               />
               <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate text-xs text-white" title={m.name}>
+              <span className="truncate text-xs text-foreground" title={m.name}>
                 {m.name}
               </span>
             </span>
-            <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-emerald-400/90' : 'text-muted-foreground'}`}>
+            <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}>
               {lastSeen(m)}
             </span>
             <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
@@ -190,7 +190,7 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
                     size="sm"
                     onClick={() => setRemoveTarget(m)}
                     aria-label={`remove ${m.name}`}
-                    className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-red-400 cursor-pointer"
+                    className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-danger cursor-pointer"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -206,11 +206,11 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
 
       {/* Restart confirmation */}
       <Dialog open={restartTarget !== null} onOpenChange={(o) => !o && setRestartTarget(null)}>
-        <DialogContent className="border-border bg-secondary text-white">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
-            <DialogTitle className="text-white">restart machine</DialogTitle>
+            <DialogTitle className="text-foreground">restart machine</DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              restart <span className="font-mono text-white">{restartTarget?.name}</span>? it will
+              restart <span className="font-mono text-foreground">{restartTarget?.name}</span>? it will
               restart in about 30 seconds and every process on it will be interrupted. the agent
               reconnects automatically.
             </DialogDescription>
@@ -227,7 +227,7 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
             <Button
               onClick={handleConfirmRestart}
               disabled={isRestarting}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               <RotateCw className="h-4 w-4 mr-1" />
               {isRestarting ? 'sending…' : 'restart'}

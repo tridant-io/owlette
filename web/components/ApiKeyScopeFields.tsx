@@ -156,7 +156,7 @@ export function ApiKeyScopeFields({
   return (
     <>
       <div className="space-y-2">
-        <Label htmlFor={scopeId} className="text-white">scope</Label>
+        <Label htmlFor={scopeId} className="text-foreground">scope</Label>
         <Select
           value={preset}
           onValueChange={(v) => {
@@ -167,7 +167,7 @@ export function ApiKeyScopeFields({
           }}
           disabled={disabled}
         >
-          <SelectTrigger id={scopeId} className="bg-background border-border text-white">
+          <SelectTrigger id={scopeId} className="bg-background border-border text-foreground">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -187,7 +187,7 @@ export function ApiKeyScopeFields({
       {preset === 'custom' && (
         <div className="space-y-2 rounded-md border border-border bg-card/40 p-3">
           <div className="flex items-center justify-between">
-            <p className="text-sm leading-none font-medium text-white">custom scopes</p>
+            <p className="text-sm leading-none font-medium text-foreground">custom scopes</p>
             <Button
               type="button"
               size="sm"
@@ -212,7 +212,7 @@ export function ApiKeyScopeFields({
               >
                 <SelectTrigger
                   aria-label={`scope ${i + 1} resource`}
-                  className="h-8 text-xs bg-background border-border text-white"
+                  className="h-8 text-xs bg-background border-border text-foreground"
                 >
                   <SelectValue />
                 </SelectTrigger>
@@ -231,7 +231,7 @@ export function ApiKeyScopeFields({
                   onChange={(e) => updateCustomScope(i, { id: e.target.value })}
                   placeholder="id (or * for all)"
                   aria-label={`scope ${i + 1} id`}
-                  className="h-8 text-base md:text-xs bg-background border-border text-white"
+                  className="h-8 text-base md:text-xs bg-background border-border text-foreground"
                   disabled={disabled}
                 />
                 <div role="group" aria-label={`scope ${i + 1} permissions`} className="flex flex-wrap gap-2">
@@ -258,7 +258,7 @@ export function ApiKeyScopeFields({
                 variant="ghost"
                 onClick={() => removeScope(i)}
                 disabled={disabled || customScopes.length <= 1}
-                className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400 cursor-pointer"
+                className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive cursor-pointer"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </IconButton>

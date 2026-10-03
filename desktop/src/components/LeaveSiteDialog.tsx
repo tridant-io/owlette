@@ -404,7 +404,7 @@ export function LeaveSiteDialog({
         )}
 
         {phase === 'working' && (
-          <p className="text-sm text-amber-400" data-testid="leave-status">
+          <p className="text-sm text-warning" data-testid="leave-status">
             {status}…
           </p>
         )}

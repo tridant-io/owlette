@@ -20,5 +20,13 @@ export default defineConfig({
     // Rewrites ```mermaid fences into <Mermaid chart="..." /> (registered in
     // mdx-components.tsx) so they render as real diagrams instead of raw text.
     remarkPlugins: [remarkMdxMermaid],
+    // fumadocs' default day theme (github-light) has keywords under 4.5:1 on our
+    // code blocks; the high-contrast one clears AA for every token. passing
+    // `themes` drops fumadocs' defaults, so `defaultColor: false` is restated to
+    // keep the per-theme css variables.
+    rehypeCodeOptions: {
+      themes: { light: "github-light-high-contrast", dark: "github-dark" },
+      defaultColor: false,
+    },
   },
 });

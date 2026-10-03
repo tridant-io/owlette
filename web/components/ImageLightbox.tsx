@@ -41,13 +41,15 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
         {/* no tooltip: radix focuses this on open, and an open tooltip would take the
-            first escape press instead of the lightbox */}
+            first escape press instead of the lightbox. white in both themes: it sits on
+            the black scrim, where ghost's navy hover ink would vanish by day */}
         <IconButton
           label="close image"
           tooltip={false}
           variant="ghost"
           onClick={onClose}
-          className="absolute top-4 right-4 text-white"
+          // eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim; ghost's navy hover ink would vanish there
+          className="absolute top-4 right-4 text-white hover:text-white"
         >
           <XIcon className="size-6" />
         </IconButton>
