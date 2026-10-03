@@ -6,7 +6,6 @@
 
 :root,
 .dark {
-  color-scheme: dark;
   --color-fd-background: var(--background);
   --color-fd-foreground: var(--foreground);
   --color-fd-muted: var(--muted);

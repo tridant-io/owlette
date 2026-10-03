@@ -52,6 +52,7 @@ export default defineConfig({
     actionTimeout: 10_000,
     navigationTimeout: 20_000,
     viewport: { width: 1280, height: 720 },
+    colorScheme: 'dark',
   },
 
   projects: [

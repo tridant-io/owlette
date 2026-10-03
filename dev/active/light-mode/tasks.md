@@ -1,5 +1,5 @@
 # Light mode — Tasks
-**Progress**: 0/21 complete · branch `feat/light-mode`
+**Progress**: 3/21 complete · branch `feat/light-mode`
 
 Read `plan.md` first (Approach → token architecture and migration rules). Read `DESIGN.md` at the repo root for the visual system.
 
@@ -24,7 +24,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
 
 ## Wave 1: Foundation
 
-- [ ] **Task 1.1: Light palette and token families**
+- [x] **Task 1.1: Light palette and token families**
   - Files: `web/app/globals.css`, `web/app/docs/docs.css`, `DESIGN.md`, `web/__tests__/styles/theme-contrast.test.ts` (new)
   - Do:
     - **Design the light palette.** Run `/impeccable` with `DESIGN.md` as authority, as an extension of the Mission Control world, not a new one. Then fill `:root` with on-brand light values that replace the stock shadcn neutrals: a cool paper background, hue-250 navy text and borders, the same tonal-step logic as dark.
@@ -57,7 +57,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - With the class temporarily removed in devtools, a light page has no invisible base chrome (scrollbars, dot-grid, focus outline).
     - `DESIGN.md` documents both palettes.
 
-- [ ] **Task 1.2: Mount the theme provider**
+- [x] **Task 1.2: Mount the theme provider**
   - Files: `web/app/layout.tsx`, `web/components/ThemeProvider.tsx` (new), `web/lib/theme.ts` (new)
   - Do:
     - **Create `web/lib/theme.ts`** exporting:
@@ -85,7 +85,7 @@ Read `plan.md` first (Approach → token architecture and migration rules). Read
     - The console has no CSP violation and no hydration warning.
     - `npm test` and `npx eslint` pass on the changed files.
 
-- [ ] **Task 1.3: Pin Playwright to dark**
+- [x] **Task 1.3: Pin Playwright to dark**
   - Files: `web/playwright.config.ts`, `web/playwright.screenshots.config.ts`, `web/playwright.videos.config.ts`, `web/e2e/videos/video-helpers.ts`
   - Do:
     - Add `colorScheme: 'dark'` to the `use` block of each config: main `:153-161`, screenshots `:46-55`, videos `:730-741`.
@@ -414,6 +414,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Log
 ### 2026-10-03
+- Wave 1 done. Light palette "the same room by day" is in the `:root` block, with the status, band, series, chart, elevation and chrome families defined in both themes; every original `.dark` line is unchanged. Dark `success-solid` moved to green-700, because white on green-600 was 3.3:1. `theme-contrast.test.ts` holds both themes to AA. The provider follows the OS, with dark as the server-rendered fallback. Playwright (and the live smoke) are pinned dark.
 - Owner brief: build light mode fully, on every page. It follows the OS with dark as the fallback, and the switch is concealed in the profile. The plan was amended above (Tasks 1.2, 2.1, 2.4, 5.1 and 6.2). It moved to `dev/active/` (force-added, so it stays tracked) and runs on `feat/light-mode`.
 
 ### 2026-10-01

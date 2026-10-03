@@ -158,6 +158,8 @@ export default defineConfig({
     // cold-emulator auth + Firestore roundtrips need more than the default
     actionTimeout: 10_000,
     navigationTimeout: 20_000,
+    // the app follows the os colour scheme; tests pin dark unless a spec opts into light
+    colorScheme: 'dark',
   },
 
   projects: [
