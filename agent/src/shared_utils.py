@@ -744,12 +744,24 @@ def get_gpu_temperatures():
         logging.debug(f"[TEMP] sensor error: {e}")
 
     # 2. pynvml — NVIDIA only. macos has no nvidia driver, so the read could only
-    # fail there, with a warning on every metrics pass.
-    if _IS_MACOS:
+    # fail there. a machine with no nvml library (linux without the nvidia
+    # driver, a windows box on another gpu) shares get_gpus()'s backoff: one
+    # debug line, then five minutes of silence, instead of a warning every pass
+    # (26,000 lines on the kiosk vm, 2026-10-03).
+    global _nvml_retry_after
+    if _IS_MACOS or time.monotonic() < _nvml_retry_after:
         return []
     try:
-        from pynvml import nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetTemperature, nvmlShutdown, NVML_TEMPERATURE_GPU
+        from pynvml import (
+            nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetTemperature,
+            nvmlShutdown, NVML_TEMPERATURE_GPU, NVMLError_DriverNotLoaded, NVMLError_LibraryNotFound,
+        )
+    except ImportError as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[TEMP] NVML unavailable: {e}")
+        return []
 
+    try:
         temps = []
         nvmlInit()
         try:
@@ -773,10 +785,11 @@ def get_gpu_temperatures():
         if temps:
             return temps
 
-    except ImportError as e:
-        logging.warning(f"[TEMP] pynvml not installed - GPU temperature unavailable: {e}")
+    except (NVMLError_LibraryNotFound, NVMLError_DriverNotLoaded) as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[TEMP] NVML unavailable: {e}")
     except Exception as e:
-        logging.warning(f"[TEMP] pynvml GPU temp failed: {e}")
+        _nvml_warn(f"[TEMP] pynvml GPU temp failed: {e}")
 
     return []
 
