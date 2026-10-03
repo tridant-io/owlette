@@ -34,7 +34,7 @@ const CUSTOM_CSS = `
   --scalar-background-3: oklch(0.92 0.02 250);
   --scalar-color-1: oklch(0.21 0.03 258);
   --scalar-color-2: oklch(0.42 0.032 256);
-  --scalar-color-accent: oklch(0.5 0.105 218);
+  --scalar-color-accent: oklch(0.48 0.105 218);
   --scalar-border-color: oklch(0.88 0.016 250);
 }
 .dark-mode,

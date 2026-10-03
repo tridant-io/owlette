@@ -35,7 +35,7 @@ colors:
   day-hairline: "oklch(0.88 0.016 250)"
   day-ink: "oklch(0.21 0.03 258)"
   day-slate: "oklch(0.42 0.032 256)"
-  day-signal-cyan: "oklch(0.5 0.105 218)"
+  day-signal-cyan: "oklch(0.48 0.105 218)"
   day-amber: "oklch(0.56 0.15 52)"
 typography:
   display:
@@ -208,14 +208,17 @@ a cool, near-monochrome navy console lit by one cyan signal and an occasional am
 ### Light (day)
 the same room by day: cool paper with a faint hue-250 cast, white panels, and navy ink. depth works the same way as at night: surfaces step by lightness inside one hue. the page is the darkest plane and panels sit a step above it.
 - **Paper** (`day-paper`): the page, with the dot grid at low opacity.
-- **Panel** (`day-panel`): cards, popovers and dialogs.
+- **Panel** (`day-panel`): cards and popovers.
+- **Raised** (`raised`): dialogs and the app's menus. by day it is the brightest panel, so what floats comes forward. at night it is the control navy step. every dialog takes it from the primitive, never per dialog.
 - **Sunken Paper** (`day-sunken`): wells inside cards.
 - **Control Paper** (`day-control`): secondary buttons and muted fills.
 - **Hairline** (`day-hairline`): borders and dividers.
 - **Navy Ink** (`day-ink`): primary text.
 - **Slate Ink** (`day-slate`): secondary text. it clears 4.5:1 on every light surface, and still clears it at 80% opacity on a card.
-- **Deep Signal Cyan** (`day-signal-cyan`): the light theme's signal. signal cyan itself can't carry text on white (about 2:1), so day uses a deeper cyan that clears AA as a link, on its own 10% tint and as a fill under white text. it keeps the one-signal meaning.
+- **Deep Signal Cyan** (`day-signal-cyan`): the light theme's signal. signal cyan itself can't carry text on white (about 2:1), so day uses a deeper cyan that clears AA as a link, on its own 10–15% tint and as a fill under white text. it keeps the one-signal meaning.
 - **Burnt Amber** (`day-amber`): sodium amber deepened to read on paper.
+- **The Lamp** (`header-glow`): the one warm light by day, a desk lamp on in a bright room. it is a soft warm pool under the page header that fades into the paper. header surfaces near it catch it through the `header-lit` utility: a short warm falloff and a bright top edge, as if the surface were faintly reflective. at night the glow is a cool lift and `header-lit` is inert.
+- **Copper Eye** (`--eye-*`): by day the owlette eye is a deep copper bead, lit from the centre out to a copper edge, with no dark band and no rim. at night it is the original mark, a light falling off into the dark.
 
 status colours come from token families rather than raw palette classes: `danger`, `warning`, `success` and `info`, each with `-surface`, `-border`, `-solid` and `-solid-foreground`. charts and load bars use `--band-*` and `--series-*`. every family is defined for both themes in `web/app/globals.css`, and `web/__tests__/styles/theme-contrast.test.ts` holds both themes to WCAG AA.
 
@@ -271,15 +274,17 @@ spacing follows Tailwind's 4px scale. inside cards, gaps are tight (4–12px) an
 
 ## Elevation & Depth
 
-depth is tonal. surfaces step up in lightness within hue 250: page 0.145 → sunken 0.19 → popover 0.205 → card 0.23 → control 0.269. machine headers use `card-header`, a 30% mix of sunken into the page tone, so a header reads as distinct from its content. shadows appear only on things that float above the page.
+depth is tonal. surfaces step up in lightness within hue 250: page 0.145 → sunken 0.19 → popover 0.205 → card 0.23 → control 0.269. machine headers use `card-header`, so a header reads as distinct from its content. at night it is a 30% mix of sunken into the page tone. by day it is lit, midway from the sunken body up to the card, and catches the lamp. shadows appear only on things that float above the page.
 
 ### Shadow Vocabulary
-- **Floating panel** (`box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.5)` plus a 1px `rgb(255 255 255 / 0.1)` ring, over 85% control navy with `backdrop-filter: blur(8px)`): dropdowns, popovers, the site switcher. the single source is `MENU_SURFACE` (`web/components/PageHeader.tsx`, mirrored in `desktop/src/lib/surfaces.ts`).
-- **Dialog** (`shadow-lg`, over a 50% black overlay with a 4px backdrop blur): modals. the overlay takes the smaller blur step so it reads like the menus.
+- **Floating panel** (`box-shadow: 0 25px 50px -12px` in `--elevation-shadow`, plus a 1px `--elevation-ring`, on `--raised`: opaque by day, 85% with `backdrop-filter: blur(8px)` at night): dropdowns, popovers, the site switcher. the single source is `MENU_SURFACE` (`web/components/PageHeader.tsx`, mirrored in `desktop/src/lib/surfaces.ts`).
+- **Dialog** (`shadow-lg` on `--raised`, over a 50% black overlay with a 4px backdrop blur): modals. the overlay takes the smaller blur step so it reads like the menus.
 - **Resting hint** (`shadow-xs` / `shadow-sm`): outline buttons, inputs and cards. barely visible on navy, so treat it as residue, not structure.
 
 ### Named Rules
 **The Shadows Float Rule.** a surface at rest gets no structural shadow. shadow plus hairline ring is the signature of "this is above the page".
+
+**The Brightest Is Selected Rule.** emphasis is brightness in both themes. a hovered, open or selected row is the brightest thing in its list. by day that means resting rows sit a step down and the open one is lifted to white, never greyed.
 
 **The No Twin Fills Rule.** never place two large flat fills a hair apart in lightness against a shared hard edge. it reads as a mistake, not depth. to get a darker region, use a vignette that fades to `--card-recessed` with no boundary line (as on the auth brand panel).
 

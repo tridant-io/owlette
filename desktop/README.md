@@ -326,10 +326,12 @@ files across, and delete the dependency again.
 
 ## Tests
 
-`npm test` runs a vitest smoke test over the seams of the port: the `@` alias,
-`cn()` + `cva()` + `tailwind-merge`, the `button.tsx` customisations, and the
-integrity of `globals.css` (unlayered rules present, font variables bound,
-stripped blocks still stripped). It is not a component test suite.
+`npm test` runs vitest over the components and the seams of the port: the `@`
+alias, `cn()` + `cva()` + `tailwind-merge`, the `button.tsx` customisations, and
+the integrity of `globals.css` (unlayered rules present, font variables bound,
+stripped blocks still stripped). CI runs `npm run lint`, `npm test` and
+`npm run typecheck` on every change under `desktop/` (`.github/workflows/desktop.yml`);
+the Rust crate is `rust-build.yml`'s.
 
 `src/globals.css` is opted into `test.css` in `vite.config.ts` — vitest stubs
 CSS imports to an empty string by default, which would silently empty the

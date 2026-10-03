@@ -14,42 +14,42 @@ const capabilities: { label: string; detail: string; expanded: string; preview: 
     label: 'monitor',
     detail: 'real-time metrics and email/webhook notifications',
     expanded: 'live cpu, memory, gpu, and disk usage for every machine. inline sparkline charts track trends over time. know instantly when something drifts.',
-    preview: { dark: '/landing-screens/monitor.png', light: '/landing-screens/monitor.png' },
+    preview: { dark: '/landing-screens/monitor.png', light: '/landing-screens/monitor-light.png' },
     icon: Activity,
   },
   {
     label: 'control',
     detail: 'start, stop, or restart any process — with a full API',
     expanded: 'full remote process control across your entire fleet. configure startup sequences, manage dependencies, and auto-restart crashed processes before anyone notices.',
-    preview: { dark: '/landing-screens/control.png', light: '/landing-screens/control.png' },
+    preview: { dark: '/landing-screens/control.png', light: '/landing-screens/control-light.png' },
     icon: Power,
   },
   {
     label: 'deploy',
     detail: 'push software updates to all machines at once',
     expanded: 'deploy software, configurations, and content to any machine, anywhere. fleet-wide rollouts or targeted single-machine updates — your call.',
-    preview: { dark: '/landing-screens/preview-deploy.png', light: '/landing-screens/preview-deploy.png' },
+    preview: { dark: '/landing-screens/preview-deploy.png', light: '/landing-screens/preview-deploy-light.png' },
     icon: Rocket,
   },
   {
     label: 'diagnose',
     detail: 'ask hoot why a process crashed, what driver is installed, or which machine just dropped offline.',
     expanded: 'hoot turns plain-english questions into real diagnostic actions across your fleet. bring your own openai or anthropic key.',
-    preview: { dark: '/landing-screens/preview-diagnose.png', light: '/landing-screens/preview-diagnose.png' },
+    preview: { dark: '/landing-screens/preview-diagnose.png', light: '/landing-screens/preview-diagnose-light.png' },
     icon: HootIcon,
   },
   {
     label: 'display',
     detail: 'displays that stay put — drift-detected and auto-restored after restarts, driver updates, or accidental changes.',
     expanded: 'owlette captures the windows display topology you want and watches for drift. when a restart, a driver update, or an accidental change moves a monitor, owlette restores the known-good layout automatically. mosaic-aware.',
-    preview: { dark: '/landing-screens/preview-displays.png', light: '/landing-screens/preview-displays.png' },
+    preview: { dark: '/landing-screens/preview-displays.png', light: '/landing-screens/preview-displays-light.png' },
     icon: Monitor,
   },
   {
     label: 'automate',
     detail: 'talons fire on a schedule, a threshold, or an event — and can look at the screen before acting.',
     expanded: 'every talon is a trigger, an optional condition, and outputs. fire on a schedule, a metric threshold, or an event like a crash. gate it on an ai visual check of a fresh screenshot. then email, post a webhook, restart the process, or hand hoot a directive.',
-    preview: { dark: '/landing-screens/preview-automate.png', light: '/landing-screens/preview-automate.png' },
+    preview: { dark: '/landing-screens/preview-automate.png', light: '/landing-screens/preview-automate-light.png' },
     icon: Zap,
   },
 ];
@@ -437,6 +437,7 @@ export function UseCaseSection() {
             onClick={closeLightbox}
             className="absolute top-4 right-4 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors cursor-pointer"
           >
+            {/* eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme */}
             <X className="w-6 h-6 text-white" />
           </button>
 
@@ -447,6 +448,7 @@ export function UseCaseSection() {
             onClick={(e) => { e.stopPropagation(); goTo((lightboxIndex - 1 + capabilities.length) % capabilities.length); }}
             className="absolute left-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors cursor-pointer"
           >
+            {/* eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme */}
             <ChevronLeft className="w-6 h-6 text-white" />
           </button>
           <button
@@ -455,6 +457,7 @@ export function UseCaseSection() {
             onClick={(e) => { e.stopPropagation(); goTo((lightboxIndex + 1) % capabilities.length); }}
             className="absolute right-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors cursor-pointer"
           >
+            {/* eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme */}
             <ChevronRight className="w-6 h-6 text-white" />
           </button>
 
@@ -488,6 +491,7 @@ export function UseCaseSection() {
           />
 
           {/* Caption under image */}
+          {/* eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme */}
           <p className="absolute bottom-14 left-1/2 -translate-x-1/2 z-10 text-lg text-white/70 text-center text-balance max-w-2xl mx-auto px-4">
             {capabilities[lightboxIndex].detail}
           </p>

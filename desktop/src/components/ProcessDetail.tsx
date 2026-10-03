@@ -55,19 +55,19 @@ const LAUNCH_MODES: { value: LaunchMode; label: string }[] = [
 ]
 
 /**
- * The dashboard's launch-mode colours (`web/.../ProcessDialog.tsx:85-105`), split
- * in two because the fill slides and the text does not. Keep in sync with web.
+ * The dashboard's launch-mode colours (`activeColors` in `web/.../MachineCardView.tsx`),
+ * split in two because the fill slides and the text does not. Keep in sync with web.
  */
 const LAUNCH_MODE_FILL: Record<LaunchMode, string> = {
   off: 'bg-muted',
-  always: 'bg-emerald-600',
-  scheduled: 'bg-blue-600',
+  always: 'bg-success-solid',
+  scheduled: 'bg-info-solid',
 }
 
 const LAUNCH_MODE_TEXT: Record<LaunchMode, string> = {
   off: 'text-foreground',
-  always: 'text-white',
-  scheduled: 'text-white',
+  always: 'text-success-solid-foreground',
+  scheduled: 'text-info-solid-foreground',
 }
 
 /**
@@ -103,7 +103,7 @@ function SectionToggle({
         className="size-3.5 self-center transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
       />
       <span>{children}</span>
-      {note && <span className="min-w-0 truncate font-normal text-muted-foreground/70">{note}</span>}
+      {note && <span className="min-w-0 truncate font-normal text-muted-foreground/80">{note}</span>}
     </CollapsibleTrigger>
   )
 }

@@ -33,7 +33,9 @@ export function ThemedImage({ dark, light, alt, preload = false, className, ...r
         as: 'image',
         imageSrcSet: props.srcSet,
         imageSizes: props.sizes,
-        fetchPriority: props.fetchPriority,
+        // a preloaded capture is the page's largest paint; both images are lazy,
+        // so the preload is what fetches it first
+        fetchPriority: 'high',
         media: `(prefers-color-scheme: ${scheme})`,
       });
     }

@@ -48,6 +48,7 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
           tooltip={false}
           variant="ghost"
           onClick={onClose}
+          // eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim; ghost's navy hover ink would vanish there
           className="absolute top-4 right-4 text-white hover:text-white"
         >
           <XIcon className="size-6" />

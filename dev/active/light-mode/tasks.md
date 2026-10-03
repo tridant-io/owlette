@@ -1,5 +1,5 @@
 # Light mode — Tasks
-**Progress**: 14/21 complete · branch `feat/light-mode`
+**Progress**: 18/21 complete · branch `feat/light-mode`
 
 Read `plan.md` first (Approach → token architecture and migration rules). Read `DESIGN.md` at the repo root for the visual system.
 
@@ -298,7 +298,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Wave 4: Desktop components and screenshots
 
-- [ ] **Task 4.1: Desktop component migration**
+- [x] **Task 4.1: Desktop component migration**
   - Files: `desktop/src/components/**` (except `AppMenu.tsx`, done in 3.6), `desktop/src/App.tsx`, `desktop/src/lib/processStatus.ts`, `desktop/src/lib/serviceHealth.ts`, `desktop/src/lib/scheduleDefaults.ts`, `desktop/src/components/ProcessDetail.test.tsx`, `desktop/src/components/ProcessList.test.tsx`
   - Do:
     - Apply the web migration rules. The desktop ui primitives (sonner, tooltip, checkbox, switch) mirror Task 2.2.
@@ -311,7 +311,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - The app is legible in light and unchanged in dark.
   - Depends on: Task 2.5, Task 3.6
 
-- [ ] **Task 4.2: Themed screenshot pipeline**
+- [x] **Task 4.2: Themed screenshot pipeline**
   - Files: `web/playwright.screenshots.config.ts`, `web/e2e/screenshots/docs-helpers.ts`, `web/e2e/screenshots/*.spec.ts` (output path only), `web/scripts/refresh-docs-screens.mjs`, `web/mdx-components.tsx`, `web/components/landing/*` (only the `ThemedImage` `light` paths), `web/e2e/screenshots/README.md`, `web/playwright.desktop-screenshots.config.ts`, `web/e2e/desktop-screenshots/agent-app.spec.ts`, `web/e2e/desktop-screenshots/README.md`
   - Do:
     - **Screenshots config:** two projects, `dark` (`colorScheme: 'dark'`) and `light` (`colorScheme: 'light'`). Both seed `preferences.theme` to match, via `pinAdminSiteContext` in `docs-helpers.ts:9-29`, and `localStorage.owlette_theme` via `addInitScript`.
@@ -351,7 +351,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
     - Total CI e2e time stays under the 30-minute job limit; note the delta in the Log.
   - Depends on: Task 3.1, Task 3.2, Task 3.3, Task 3.4, Task 3.5
 
-- [ ] **Task 5.2: Lint guardrail**
+- [x] **Task 5.2: Lint guardrail**
   - Files: `web/eslint.config.mjs`, `web/__tests__/eslint/no-raw-palette.test.ts` (new)
   - Do:
     - **Add a `no-restricted-syntax` rule** for `web/app/**`, `web/components/**` and `web/lib/**` (`*.ts`, `*.tsx`). It flags `Literal` and `TemplateElement` values matching `\b(?:[a-z-]+:)*(?:text|bg|border|ring|fill|stroke|from|to|via|outline|divide|shadow|decoration|placeholder|caret|accent)-(?:red|green|emerald|amber|yellow|orange|blue|sky|cyan|teal|violet|purple|pink|rose|slate|gray|zinc|neutral|stone|lime|indigo|fuchsia)-\d{2,3}\b` and `\btext-(?:white|gray-900)\b`.
@@ -380,7 +380,7 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Wave 6: Docs and release gate
 
-- [ ] **Task 6.1: Docs**
+- [x] **Task 6.1: Docs**
   - Files: `DESIGN.md`, `.impeccable/design.json`, `.claude/skills/frontend-dev-guidelines.md`, `web/content/docs/dashboard/account-settings.mdx`, `web/content/docs/reference/firestore-data-model.mdx`, `desktop/README.md`, `docs/changelog.md`, `web/content/docs/changelog.mdx`
   - Do:
     - **`DESIGN.md`:** finalise the two-theme system: the Overview line, light names for every token, status, band and series families, the theme-switch mechanics. Regenerate `.impeccable/design.json`.
@@ -414,6 +414,19 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Log
 ### 2026-10-03
+- Waves 4–6 so far (5.1 and 5.3 wait on their runs, and 6.2 is the review gate):
+  - **4.1 desktop:** every component is on tokens, and the raw-palette grep of `desktop/src` is clean. Dialogs take `--raised` from the primitive, following the owner's web ruling.
+    - Visible dark changes: always-on goes green-700, failed goes red-400 (3.9:1 on the selected row), running / ok / joined go green-400, faint notes /70 → /80 (AA in both themes), the checkbox glyph changes, and the remove-block hover text goes to danger.
+    - Inactive day pills (web and desktop) and the join phrase box sit on the sunken well, so they stay visible on the raised surface.
+    - Open question: by day, stalled/queued (`accent-warm`) sits close to launching (`warning`).
+  - **4.2 screenshots:** dark and light projects. There are 23 light captures (docs and landing), and the dark set was refreshed with them.
+    - The docs `img` override reads `light-variants.json`, which `npm run screenshots` now rewrites.
+    - `--check` pairs every shot. The 11 desktop light shots wait on a release exe with `set_appearance_theme`; the tray menu stays OS-drawn and dark-only.
+    - `create-site-dialog.spec.ts` was broken by the member-row change and is fixed.
+    - The dashboard greeting is random (`app/dashboard/page.tsx`), so captures differ run to run.
+  - **5.2 guardrail:** `no-restricted-syntax` flags raw palette and `text-white` / `text-gray-900` in app, components, lib, hooks and contexts. Server code and tests are exempt through the existing allowlist block. Eight scrim spots carry an inline disable with a reason. `__tests__/eslint/no-raw-palette.test.ts` runs the config's pattern through eslint's Linter.
+  - **5.3:** `.github/workflows/desktop.yml` runs oxlint, vitest and tsc on desktop changes; the Rust crate stays in `rust-build.yml`.
+  - **6.1 docs:** DESIGN.md (raised, the lamp, the copper eye, the brightest-is-selected rule) and its sidecar, the dev guidelines, account settings, the firestore data model (`preferences`), the desktop README, and both changelogs (Unreleased).
 - Owner preview on localhost, changes made from it:
   - **The warm tint was a bug.** Chrome reads a near-neutral colour's hue as `none` (0°, rose) in an `oklch` mix. Every `color-mix` is now `in oklab`, which gives the same result for our same-hue and transparent mixes, so dark is unchanged.
   - **The lamp:** `--header-glow` is a warm pool under the header by day (the accidental rose, made deliberate). Header surfaces catch it through the `header-lit` utility, a falloff plus a bright top edge. By day the card header is lit (between the body and the card).

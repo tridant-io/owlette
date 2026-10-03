@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-03T15:51:42.505Z",
+  "generatedAt": "2026-10-03T21:25:33.789Z",
   "title": "Design System: owlette",
   "extensions": {
     "colorMeta": {
@@ -487,7 +487,7 @@
       "day-slate": {
         "role": "status",
         "displayName": "Day Slate",
-        "canonical": "oklch(0.47 0.032 256)",
+        "canonical": "oklch(0.42 0.032 256)",
         "tonalRamp": [
           "oklch(0.15 0.032 256)",
           "oklch(0.26 0.032 256)",
@@ -502,7 +502,7 @@
       "day-signal-cyan": {
         "role": "status",
         "displayName": "Day Signal Cyan",
-        "canonical": "oklch(0.52 0.105 218)",
+        "canonical": "oklch(0.48 0.105 218)",
         "tonalRamp": [
           "oklch(0.15 0.105 218)",
           "oklch(0.26 0.105 218)",
@@ -777,6 +777,11 @@
         "section": "elevation"
       },
       {
+        "name": "The Brightest Is Selected Rule",
+        "body": "emphasis is brightness in both themes. a hovered, open or selected row is the brightest thing in its list. by day that means resting rows sit a step down and the open one is lifted to white, never greyed.",
+        "section": "elevation"
+      },
+      {
         "name": "The No Twin Fills Rule",
         "body": "never place two large flat fills a hair apart in lightness against a shared hard edge. it reads as a mistake, not depth. to get a darker region, use a vignette that fades to `--card-recessed` with no boundary line (as on the auth brand panel).",
         "section": "elevation"
@@ -796,7 +801,7 @@
       "**Do** define every new colour token in both the `:root` (light) and `.dark` blocks of `globals.css`. the contrast test fails if a dark token has no light value.",
       "**Do** use `IconButton` for every icon-only control, with a lowercase label that names the action.",
       "**Do** honour `prefers-reduced-motion`: every new animation needs a reduced-motion path that ends in its final state.",
-      "**Do** keep `desktop/src/globals.css` in step with web. its dark `--btn-hover` still uses the grey foreground mix that web replaced with the blue tint, which is a known drift."
+      "**Do** keep `desktop/src/globals.css` in step with web. the two share every token and value, and the desktop design-system test fails if a dark token has no light value."
     ],
     "donts": [
       "**Don't** hardcode colours in components. use the theme tokens. existing raw Tailwind status classes (`red-600`, `green-500`, `amber-*`) are incumbent debt, not precedent.",

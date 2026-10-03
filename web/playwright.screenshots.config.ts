@@ -8,11 +8,14 @@ import { defineConfig, devices } from '@playwright/test';
  *     emulators, so parallel workers wipe each other's seed data
  *   - retries 0 — screenshot output must be deterministic
  *   - chromium-only, 1280×720 (previews sit in the landing card grid);
- *     `dashboard.spec.ts` overrides to 2400×1300 for the hero
+ *     `dashboard.spec.ts` overrides to 1920×1080 for the hero
+ *   - one project per theme: `dark` writes `<name>.png`, `light` writes
+ *     `<name>-light.png` beside it (`e2e/screenshots/themes.ts`)
  *
- * Specs write PNGs themselves into `web/public/landing-screens/`; `outputDir`
- * below is only for incidental failure artifacts. Reuses the regression suite's
- * emulator boot + global-setup + webServer, so the same fixtures apply.
+ * Specs write PNGs themselves into `web/public/landing-screens/` and
+ * `web/public/docs-screens/`; `outputDir` below is only for incidental failure
+ * artifacts. Reuses the regression suite's emulator boot + global-setup +
+ * webServer, so the same fixtures apply.
  *
  * Run via its own npm script; not in CI by default.
  */
@@ -28,7 +31,7 @@ const OUTPUT_DIR = process.env.E2E_SCREENSHOTS_OUTPUT_DIR || './e2e/.output/scre
 
 export default defineConfig({
   testDir: './e2e/screenshots',
-  // Failure artifacts only — the marketing PNGs go to public/landing-screens/.
+  // Failure artifacts only — the PNGs go to public/landing-screens/ and public/docs-screens/.
   outputDir: OUTPUT_DIR,
   fullyParallel: false,
   forbidOnly: false,
@@ -52,15 +55,13 @@ export default defineConfig({
     actionTimeout: 10_000,
     navigationTimeout: 20_000,
     viewport: { width: 1280, height: 720 },
-    colorScheme: 'dark',
   },
 
-  projects: [
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 720 } },
-    },
-  ],
+  // the project name is the theme the specs pin and the file suffix they write
+  projects: (['dark', 'light'] as const).map((theme) => ({
+    name: theme,
+    use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 720 }, colorScheme: theme },
+  })),
 
   webServer: {
     command: `node scripts/e2e-next-server.mjs --port ${PORT} --hostname 127.0.0.1`,

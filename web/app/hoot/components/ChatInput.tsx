@@ -282,6 +282,7 @@ export function ChatInput({
                 </button>
                 {img.uploading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                    {/* eslint-disable-next-line no-restricted-syntax -- a white spinner on the image's black scrim, in either theme */}
                     <Loader2 className="h-4 w-4 text-white animate-spin" />
                   </div>
                 )}

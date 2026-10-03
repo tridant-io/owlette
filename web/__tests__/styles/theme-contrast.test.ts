@@ -94,10 +94,12 @@ const TEXT_PAIRS: Array<[string, string]> = [
   ['muted-foreground@0.8', 'background'],
   // ink on sodium amber (the update flow)
   ['background', 'accent-warm'],
-  // the first net and disk-io series double as readout text
+  // the first net and disk-io series double as readout text, also on stale rows dimmed to 80%
   ...(['series-nic-tx-1', 'series-nic-rx-1', 'series-disk-io-read', 'series-disk-io-write'] as const).flatMap(
-    (series): Array<[string, string]> => [[series, 'card'], [series, 'background']],
+    (series): Array<[string, string]> => [[series, 'card'], [series, 'background'], [`${series}@0.8`, 'card-sunken']],
   ),
+  // the docs sidebar marks the open page with a heavier cyan tint than the app's 10%
+  ['accent-cyan', 'accent-cyan@0.15'],
   // menus sit on --secondary
   ...(['danger', 'warning', 'success', 'info'] as const).flatMap((status): Array<[string, string]> => [
     [status, 'background'],

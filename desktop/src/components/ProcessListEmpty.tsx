@@ -33,7 +33,7 @@ export function ProcessListEmpty({ dragOver = false, className }: ProcessListEmp
       />
       <p className="text-sm font-medium">no processes yet</p>
       <p className="text-xs leading-relaxed text-muted-foreground">{launchCopy().dropHint}</p>
-      <p className="text-xs text-muted-foreground/70">or use add process, above</p>
+      <p className="text-xs text-muted-foreground/80">or use add process, above</p>
     </div>
   )
 }

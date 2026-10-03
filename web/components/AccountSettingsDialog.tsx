@@ -396,7 +396,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                       <UserAvatar user={user} size="lg" />
                       {photoUploading && (
                         <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50">
-                          {/* theme-invariant: a white spinner on the black photo scrim */}
+                          {/* eslint-disable-next-line no-restricted-syntax -- a white spinner on the black photo scrim, in either theme */}
                           <Loader2 className="h-5 w-5 text-white animate-spin" />
                         </div>
                       )}

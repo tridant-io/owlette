@@ -1251,6 +1251,7 @@ export default function LogsPage() {
             type="button"
             onClick={() => setScreenshotModalUrl(null)}
             aria-label="close screenshot"
+            // eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme
             className="absolute top-4 right-4 text-white/70 hover:text-white transition-colors"
           >
             <X className="w-6 h-6" />

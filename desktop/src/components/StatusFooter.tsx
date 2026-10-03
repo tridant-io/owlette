@@ -94,7 +94,7 @@ export function StatusFooter({
 
       {environment && (
         <span
-          className="rounded border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-amber-400"
+          className="rounded border border-warning-border/75 bg-warning-surface px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-warning"
           data-testid="footer-environment"
         >
           {environment}

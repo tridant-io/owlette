@@ -137,7 +137,7 @@ export function ValuePropSection() {
         >
           <ThemedImage
             dark="/landing-screens/dashboard.png"
-            light="/landing-screens/dashboard.png"
+            light="/landing-screens/dashboard-light.png"
             alt="owlette dashboard showing 10 machines with real-time metrics"
             width={1920}
             height={1080}

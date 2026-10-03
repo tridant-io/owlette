@@ -1,0 +1,15 @@
+[
+  "add-machine-modal",
+  "add-process-dialog",
+  "cortex-chat",
+  "create-site-dialog",
+  "deployments",
+  "email-alerts",
+  "getting-started-install-buttons",
+  "machine-card",
+  "machine-detail",
+  "process-management",
+  "roost",
+  "scalar-reference",
+  "webhooks"
+]
