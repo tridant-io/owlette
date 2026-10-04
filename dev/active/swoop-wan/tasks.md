@@ -1,5 +1,5 @@
 # swoop across the internet — Tasks
-**Progress**: 4/9 complete
+**Progress**: 5/9 complete
 
 ## Wave 1: STUN on both ends
 
@@ -35,7 +35,7 @@
     relay servers. Restarts keep running underneath.
   - Done when: jest covers the deadline and both copies; eslint and tsc clean.
 
-- [ ] **Task 2.2: A sans-IO TURN client** `[agent]`
+- [x] **Task 2.2: A sans-IO TURN client** `[agent]`
   - Files: `agent/swoop/src/transport/turn/mod.rs`, `alloc.rs`, `md5.rs`, `wire.rs`.
   - Do: Allocate (REQUESTED-TRANSPORT UDP) with the 401 realm/nonce retry and long-term credentials (key =
     MD5(username:realm:password), MESSAGE-INTEGRITY by HMAC-SHA1), Refresh at half the lifetime, CreatePermission for
@@ -84,3 +84,8 @@
   and 417 pass. 1.3: live from A4D, the srflx address equals the office's public IP (proof.md).
 - 2.1: no media path 20 s after the first answer says "can't reach this machine from your network", with or without
   a relay; 888 jest tests in the swoop suites pass, eslint and tsc clean.
+- 1.1, 1.2 and 2.1 shipped in 4.1.3 (PR #282, tag v4.1.3).
+- 2.2: transport/turn/{md5,wire,alloc}.rs behind the `turn` feature: RFC 1321 MD5, RFC 8489 framing with
+  MESSAGE-INTEGRITY (HMAC-SHA1 from str0m's provider) and FINGERPRINT, ChannelData, and an Allocation state machine
+  (401 and 438 retries, refresh, public-only permissions rate-limited, channels, Send/Data). RFC 5769 vectors 2.1 and
+  2.4 reproduce byte for byte. `cargo test --features turn`: 432 lib tests pass. CI does not build the feature yet.
