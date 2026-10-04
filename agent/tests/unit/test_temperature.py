@@ -128,6 +128,9 @@ class TestPynvmlFallback:
     def _fake_pynvml(self, temps, shutdown_calls):
         mod = types.ModuleType('pynvml')
         mod.NVML_TEMPERATURE_GPU = 0
+        # the two error classes the read imports beside the calls
+        mod.NVMLError_LibraryNotFound = type('NVMLError_LibraryNotFound', (Exception,), {})
+        mod.NVMLError_DriverNotLoaded = type('NVMLError_DriverNotLoaded', (Exception,), {})
         mod.nvmlInit = lambda: None
         mod.nvmlDeviceGetCount = lambda: len(temps)
         mod.nvmlDeviceGetHandleByIndex = lambda i: i

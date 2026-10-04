@@ -118,13 +118,15 @@ pub fn startup_link_enabled() -> bool {
 }
 
 /// Create or remove the run-on-login shortcut; returns the resulting state.
+/// The tray re-reads the setting on a slow cadence, so it is told now.
 #[tauri::command(async)]
-pub fn set_startup_link(enabled: bool) -> Result<bool, String> {
+pub fn set_startup_link(app: AppHandle, enabled: bool) -> Result<bool, String> {
   if enabled {
     crate::startup_link::enable()?;
   } else {
     crate::startup_link::disable()?;
   }
+  crate::tray::request_repaint(&app);
   Ok(crate::startup_link::is_enabled())
 }
 

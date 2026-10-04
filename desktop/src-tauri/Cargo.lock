@@ -2527,11 +2527,15 @@ dependencies = [
 
 [[package]]
 name = "owlette-desktop"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "libc",
  "log",
  "notify",
+ "notify-rust",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "tauri",
@@ -2543,6 +2547,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "windows 0.62.2",
  "windows-service",
+ "zbus",
 ]
 
 [[package]]

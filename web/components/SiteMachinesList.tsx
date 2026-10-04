@@ -23,6 +23,8 @@ interface SiteMachine {
   online: boolean;
   lastHeartbeat: string | null;
   agentVersion: string | null;
+  /** keep screens awake as the agent reports it; null before 4.1.1. only `held` is read here. */
+  displayAwake?: { held?: boolean } | null;
 }
 
 interface SiteMachinesListProps {
@@ -158,6 +160,9 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
               <span className="truncate text-xs text-foreground" title={m.name}>
                 {m.name}
               </span>
+              {m.displayAwake?.held && (
+                <span className="shrink-0 text-[10px] text-muted-foreground">awake</span>
+              )}
             </span>
             <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}>
               {lastSeen(m)}
