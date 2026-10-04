@@ -1,5 +1,5 @@
 # keep screens awake — Tasks
-**Progress**: 6/9 complete
+**Progress**: 7/9 complete
 
 Standing rules: work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-swoop-mac-wt`, branch
 `swoop/macos`; never the main checkout; no commits, pushes or `git add` by workers (the lead reviews and commits);
@@ -123,7 +123,7 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
 
 ## Wave 3: proof and release
 
-- [ ] **Task 3.1: e2e** `[agent]`
+- [x] **Task 3.1: e2e** `[agent]`
   - Files: `web/e2e/specs/sites/edit-site.spec.ts`, `web/e2e/specs/sites/site-role-boundaries.spec.ts`,
     `web/e2e/specs/mobile/sites-dialogs.spec.ts`.
   - Do: The two switches live in the edit panel and write their documents (Admin SDK read-back); a member sees
@@ -153,3 +153,6 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
 - Wave 1 committed (0829e0ab, 97c028ed, 53b8ad62, 9ef93e9d) and 2.2 (4b5ed08a). 2.1 wires the daemon hold into the
   5 s tick and mirrors displayAwake; suite green on Windows and on the Mac with CI's macOS flags. The Mac run also
   caught the gpu backoff test (d721cd8f) reading the import-time macOS flag; pinned in its own commit.
+- 3.1: the three site specs cover both switches writing at once, a member seeing neither, and 390 px reach; 13
+  passed on the emulators (twice). Release commit 9f3db30d bumps to 4.1.1 after merging dev; security gate CLEAR
+  with the standing glib waiver. Desktop crate green on Windows (140), macOS (166) and the kiosk (159).
