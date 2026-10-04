@@ -9,6 +9,88 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ---
 
+## [4.1.1] - 2026-10-03
+
+### added — keep screens awake
+
+Every site now keeps its machines' screens awake, on Windows, macOS and Linux.
+It is on by default, so a site that never touches the setting keeps its screens
+on around the clock. A site owner or admin turns it off in manage sites, in the
+site's edit panel. The switch acts at once: online machines follow within
+seconds, and an offline machine picks it up when it reconnects. Turning it off
+releases every hold, and the machine goes back to its own power and lock
+settings.
+
+Each machine holds it in two parts. The agent's service holds display and
+system sleep, which works with nobody signed in: a power request on Windows,
+power assertions on macOS, and a systemd inhibitor on Linux. The owlette app
+holds the signed-in session's blanking and lock: on Windows it keeps the display
+required and switches the session's screensaver off, then puts back the user's
+own setting when it lets go; on macOS it holds a display assertion and keeps the
+user active; on Linux it holds the GNOME session's idle inhibit. Each part lets
+go when the switch goes off or its process ends.
+
+The machine record carries `displayAwake` (what the site wants, what the
+service holds, what the session holds, and why a wanted hold is not held) and
+`capabilities.keepAwake: 1`. Manage sites marks a machine `awake` while it
+holds. The setting lives at `sites/{siteId}/settings/display`, behind
+`GET` and `PATCH /api/sites/{siteId}/display-settings`, which take a signed-in
+session and refuse API keys.
+
+### changed — the swoop switch moved
+
+A site's swoop switch moved from its machines panel to its edit panel, beside
+keep screens awake. Both switches act at once, outside the panel's save.
+
+### added — who is in a swoop session
+
+The machine menu shows how many people are in a machine's swoop session, on its
+swoop row and on the menu's button, whenever anyone is. A new admin page,
+swoop, lists the live sessions across your sites, with the people in each and
+whether they control or watch, and ends a session with a click. Site admins and
+up see it, for their own sites only.
+
+### fixed — the swoop keyboard menu
+
+Its legend appears only where a key is converted between your system and the
+machine's, and the note about the Windows key says what to do about it.
+
+### fixed — the macOS app window
+
+The window now has the macOS 26 corner radius. 4.1.0 said it did, but the SDK
+link alone changed nothing: macOS draws the large radius only on a window with a
+toolbar, so the window carries an empty one. The traffic lights sit on the
+wordmark's line.
+
+### fixed — the owlette app's notifications
+
+On Linux, notifications carry the app's icon, and their name no longer reads
+`(deleted)` after an update. On every system, the app no longer says the
+service stopped while that service is updating itself; a Linux package takes
+about a minute to install, and every update raised the alert. The app that runs
+during an update is the old one, so the 4.1.0 app still raises it once, on the
+way to 4.1.1.
+
+### fixed — the agent
+
+Batch writes go through Firestore's `:commit`, which the agent's token may use.
+`:batchWrite` answered 403, so every batch fell back to one request per
+document, 1,754 of them for a Linux machine's package list. A machine without an
+NVIDIA driver no longer logs a GPU temperature warning every pass; the read
+backs off for five minutes, as the GPU list already did. The app reads its
+start-on-login setting every 30 seconds instead of every second, which on macOS
+and Linux was a process a second.
+
+### fixed — the dashboard
+
+The list view's metric cells show again, and keyboard focus is quiet again,
+with no strong or inset ring.
+
+### docs
+
+Pairing a Mac or Linux machine that nobody stands in front of, with the pairing
+preseed, and running owlette on Ubuntu Server without a desktop.
+
 ## [4.1.0] - 2026-10-02
 
 ### added — a Mac can host a swoop session
