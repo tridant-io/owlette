@@ -39,11 +39,12 @@ use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
+#[cfg(not(target_os = "linux"))]
 use tauri_plugin_notification::NotificationExt;
 
 #[cfg(windows)]
 use crate::paths::RESTART_FLAG_REL;
-use crate::paths::{self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL};
+use crate::paths::{self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL, UPDATE_MARKER_REL};
 use crate::pid_file;
 use crate::service_ctl;
 use crate::startup_link;
@@ -85,6 +86,15 @@ const FLASH_PERIOD: Duration = Duration::from_millis(800);
 const NOTIFY_DELAY: Duration = Duration::from_secs(5);
 /// Silence window after launch, so a service still starting is not an incident.
 const NOTIFY_GRACE: Duration = Duration::from_secs(10);
+/// How often the start-on-login tick is re-read. Off windows the read is a
+/// `systemctl --user is-enabled` or `launchctl print-disabled`, a process per
+/// read; every poll was a process a second for the app's whole life. The
+/// menu's own toggle and the window's setter ask for a repaint, which re-reads
+/// at once, so the tick only lags a change made outside owlette.
+const LOGIN_ITEM_REREAD: Duration = Duration::from_secs(30);
+/// An update marker older than this is what a crashed update left behind, not
+/// a reason to stay quiet about a stopped service.
+const UPDATE_MARKER_MAX_AGE: Duration = Duration::from_secs(15 * 60);
 /// How long a cached status document stays usable after a failed read.
 const STATUS_CACHE_TTL: Duration = Duration::from_secs(60);
 /// How often the icon and tooltip are re-asserted even when nothing changed.
@@ -499,6 +509,17 @@ pub fn show_main_window(app: &AppHandle) {
   // starts the app as an accessory).
   #[cfg(target_os = "macos")]
   let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+  // macOS 26 shapes the window only once it carries a toolbar; the window
+  // exists by now, which it does not in setup (mac_window.rs). The tray and
+  // the single-instance handler call this off the main thread, and AppKit
+  // takes a toolbar only on it.
+  #[cfg(target_os = "macos")]
+  {
+    let shaped = window.clone();
+    if let Err(error) = window.run_on_main_thread(move || crate::mac_window::adopt_system_shape(&shaped)) {
+      log::warn!("could not reach the main thread for the window shape: {error}");
+    }
+  }
   let _ = window.unminimize();
   let _ = window.show();
   let _ = window.set_focus();
@@ -533,6 +554,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
   let mut swoop_toasted: Option<u64> = None;
   let mut paint = PaintState::new(started);
   let mut wanted_tooltip: Option<String> = None;
+  let mut start_on_login: Option<(bool, Instant)> = None;
 
   while !stop.load(Ordering::Relaxed) {
     let now = Instant::now();
@@ -545,6 +567,15 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
 
     if last_poll.map_or(true, |at| now.duration_since(at) >= POLL_INTERVAL) {
       last_poll = Some(now);
+
+      let login_item = match start_on_login {
+        Some((enabled, at)) if !asked && now.duration_since(at) < LOGIN_ITEM_REREAD => enabled,
+        _ => {
+          let enabled = startup_link::is_enabled();
+          start_on_login = Some((enabled, now));
+          enabled
+        }
+      };
 
       // Every poll, not only when the document is missing: it is the one input
       // that cannot be out of date, and the text below may not contradict it.
@@ -567,7 +598,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
         // Text, so the live document: a badge smoothed over a read that caught
         // a rename would outlive the capture it claims.
         swoop: swoop_view(&live, scm_running),
-        start_on_login: startup_link::is_enabled(),
+        start_on_login: login_item,
       };
 
       if current.as_ref() != Some(&view) {
@@ -603,14 +634,21 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
           degraded_since = None;
         }
         StatusCode::Error => {
-          let since = *degraded_since.get_or_insert(now);
-          if !degraded_notified
-            && now.duration_since(since) >= NOTIFY_DELAY
-            && now.duration_since(started) > NOTIFY_GRACE
-          {
-            degraded_notified = true;
-            let (title, body) = degraded_notification(&view);
-            notify(&app, title, body);
+          // A self-update stops the service for as long as the installer
+          // takes — a minute for the linux package — and that stop raised a
+          // "service stopped" toast on every update. The icon still shows it.
+          if update_in_progress(&root) {
+            degraded_since = None;
+          } else {
+            let since = *degraded_since.get_or_insert(now);
+            if !degraded_notified
+              && now.duration_since(since) >= NOTIFY_DELAY
+              && now.duration_since(started) > NOTIFY_GRACE
+            {
+              degraded_notified = true;
+              let (title, body) = degraded_notification(&view);
+              notify(&app, title, body);
+            }
           }
         }
       }
@@ -1040,8 +1078,47 @@ fn degraded_notification(view: &TrayView) -> (&'static str, String) {
   }
 }
 
+/// Whether the service is updating itself: its marker is present and fresh.
+/// Freshness matters because the marker outlives an update that crashed
+/// before the new service could clear it.
+fn update_in_progress(root: &Path) -> bool {
+  update_marker_is_fresh(&root.join(UPDATE_MARKER_REL), SystemTime::now())
+}
+
+fn update_marker_is_fresh(marker: &Path, now: SystemTime) -> bool {
+  fs::metadata(marker)
+    .and_then(|meta| meta.modified())
+    .ok()
+    .and_then(|modified| now.duration_since(modified).ok())
+    .is_some_and(|age| age < UPDATE_MARKER_MAX_AGE)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn notify(app: &AppHandle, title: &str, body: String) {
   if let Err(error) = app.notification().builder().title(title).body(body).show() {
+    log::warn!("could not show the tray notification: {error}");
+  }
+}
+
+/// The name and icon a notification carries on linux. Named explicitly: left
+/// to the plugin, gnome titles it after the running file, which after an
+/// update in place reads "owlette-desktop (deleted)" with a generic icon.
+/// Deliberately not "owlette" and no desktop-entry hint: either one makes
+/// gnome 46 file the notification under the installed `owlette.desktop`,
+/// and from the app's user service it is then dropped without a trace —
+/// measured on the kiosk vm, 2026-10-04, along with a stock app's entry.
+#[cfg(target_os = "linux")]
+const NOTIFY_NAME: &str = "owlette-desktop";
+
+#[cfg(target_os = "linux")]
+fn notify(_app: &AppHandle, title: &str, body: String) {
+  let result = notify_rust::Notification::new()
+    .appname(NOTIFY_NAME)
+    .summary(title)
+    .body(&body)
+    .icon(NOTIFY_NAME)
+    .show();
+  if let Err(error) = result {
     log::warn!("could not show the tray notification: {error}");
   }
 }
@@ -1323,6 +1400,7 @@ fn toggle_start_on_login(app: &AppHandle) {
       let _ = menu.start_on_login.set_checked(startup_link::is_enabled());
     }
   }
+  request_repaint(app);
 }
 
 /// Quit owlette: stop supervising the machine, then quit the app. owlette-host
@@ -2039,6 +2117,24 @@ mod tests {
 
     let (title, _) = degraded_notification(&view("status: disconnected", StatusCode::Warning));
     assert_eq!(title, "owlette — reconnecting");
+  }
+
+  /// The update marker holds the toast only while it is fresh: a marker a
+  /// crashed update left behind must not silence a real outage for good.
+  #[test]
+  fn a_fresh_update_marker_holds_the_toast_and_a_stale_one_does_not() {
+    let dir = std::env::temp_dir().join(format!("owlette-tray-update-{}", std::process::id()));
+    fs::create_dir_all(&dir).expect("scratch");
+    let marker = dir.join("update_in_progress.json");
+    fs::write(&marker, "{}").expect("marker");
+    let written = fs::metadata(&marker).and_then(|m| m.modified()).expect("mtime");
+
+    assert!(update_marker_is_fresh(&marker, written + Duration::from_secs(60)));
+    assert!(!update_marker_is_fresh(&marker, written + UPDATE_MARKER_MAX_AGE + Duration::from_secs(1)));
+    assert!(!update_marker_is_fresh(&dir.join("absent.json"), written));
+
+    let _ = fs::remove_file(&marker);
+    let _ = fs::remove_dir(&dir);
   }
 
   #[test]

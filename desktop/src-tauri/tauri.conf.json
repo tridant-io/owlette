@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "owlette",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "identifier": "app.owlette.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -38,6 +38,9 @@
       "app",
       "deb"
     ],
+    "category": "Utility",
+    "shortDescription": "keep your installation running",
+    "longDescription": "the owlette app: the machine's processes, their launch modes and schedules, and the service's state, beside the dashboard at owlette.app.",
     "macOS": {
       "signingIdentity": null,
       "minimumSystemVersion": "15.0"

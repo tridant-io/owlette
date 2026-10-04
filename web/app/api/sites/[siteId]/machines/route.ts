@@ -79,6 +79,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         osFamily: data.osFamily ?? null,
         arch: data.arch ?? null,
         osVersion: data.osVersion ?? null,
+        // what the agent holds for the site's keep screens awake switch
+        // ({ wanted, held, session, how, reason }), mirrored on each change;
+        // absent on an agent that predates it.
+        displayAwake: data.displayAwake ?? null,
         currentRoosts: roostsByMachine.get(d.id) ?? [],
       };
     });

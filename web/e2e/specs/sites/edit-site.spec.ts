@@ -6,6 +6,10 @@
  * sites/site-to-rename.name.
  *
  * Edge: an empty name toasts an error, stays in edit mode, and writes nothing.
+ *
+ * The same panel carries the site's two switches, swoop and keep screens awake.
+ * They act at once, outside save, so the spec flips each and reads back
+ * sites/site-to-rename/settings/{swoop,display}.
  */
 
 import { test, expect } from '@playwright/test';
@@ -81,4 +85,46 @@ test('saving an empty name shows an error and keeps the row in edit mode', async
   const db = getAdminDb();
   const snap = await db.collection('sites').doc(RENAMEABLE_SITE_ID).get();
   expect(snap.data()!.name).toBe(ORIGINAL_NAME);
+});
+
+test.describe('the site switches in the edit panel', () => {
+  const settingsDoc = (name: 'swoop' | 'display') =>
+    getAdminDb().collection('sites').doc(RENAMEABLE_SITE_ID).collection('settings').doc(name);
+
+  // the seeded site has neither document, so restoring is removing what the test wrote.
+  // seedSite's setDoc rewrites the site doc only, never its subcollections.
+  test.afterEach(async () => {
+    await settingsDoc('display').delete();
+    await settingsDoc('swoop').delete();
+  });
+
+  test('swoop and keep screens awake write their documents at once', async ({ page }) => {
+    const dialog = await openManageSitesDialog(page);
+    await dialog.getByRole('button', { name: `edit ${ORIGINAL_NAME}` }).click();
+
+    const swoop = dialog.getByRole('switch', { name: 'swoop', exact: true });
+    const keepAwake = dialog.getByRole('switch', { name: 'keep screens awake', exact: true });
+
+    // enabled means the snapshot has answered; with no documents, swoop is off and
+    // keep screens awake is on.
+    await expect(keepAwake).toBeEnabled();
+    await expect(keepAwake).toBeChecked();
+    await expect(swoop).toBeEnabled();
+    await expect(swoop).not.toBeChecked();
+
+    // each switch is controlled by its snapshot, so the flip on screen is the
+    // document answering, not the click.
+    await keepAwake.click();
+    await expect(keepAwake).not.toBeChecked();
+    await swoop.click();
+    await expect(swoop).toBeChecked();
+
+    // no save was pressed: the switches are outside it.
+    const [display, swoopSettings] = await Promise.all([
+      settingsDoc('display').get(),
+      settingsDoc('swoop').get(),
+    ]);
+    expect(display.data()?.keepAwake).toBe(false);
+    expect(swoopSettings.data()?.enabled).toBe(true);
+  });
 });

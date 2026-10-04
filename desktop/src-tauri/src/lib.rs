@@ -1,4 +1,5 @@
 mod agent_cli;
+mod awake;
 mod commands;
 mod json_io;
 mod paths;
@@ -13,6 +14,8 @@ mod tray;
 mod watchers;
 #[cfg(unix)]
 mod jobrunner;
+#[cfg(target_os = "macos")]
+mod mac_window;
 #[cfg(target_os = "macos")]
 mod menu_bar_position;
 #[cfg(target_os = "macos")]
@@ -160,6 +163,10 @@ pub fn run() {
       app.manage(jobrunner::spawn(app.handle().clone(), &root));
       #[cfg(target_os = "macos")]
       tcc::spawn(&root);
+
+      // The session's half of keep screens awake: the service asks through its
+      // status file, and this holds the idle lock and screensaver it cannot.
+      awake::spawn(&root);
 
       // Publish our PID so the service stops spawning trays at us. Process-lifetime;
       // `tmp/gui.pid` exists only while the window is up.

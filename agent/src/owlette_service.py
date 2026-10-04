@@ -20,6 +20,7 @@ import watchdog_state
 import config_sync
 import configure_site
 from command_router import COMMAND_DEFERRED, CommandRouter
+from keep_awake import KeepAwake
 from screenshot_capture import ScreenshotCaptureError, capture_and_upload
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import logging
@@ -169,6 +170,20 @@ DISPLAY_CHECK_ITERATIONS = max(1, DISPLAY_CHECK_INTERVAL_SECONDS // SLEEP_INTERV
 # the 5-second main loop never stalls.
 ROOST_SCRUB_CHECK_INTERVAL_SECONDS = 3600
 ROOST_SCRUB_CHECK_ITERATIONS = max(1, ROOST_SCRUB_CHECK_INTERVAL_SECONDS // SLEEP_INTERVAL)
+# displayAwake on the machine document is worked out again this often, and at
+# once whenever the daemon's own hold changes. The desktop app rewrites its
+# report every minute, so a session hold shows within half a minute of it.
+DISPLAY_AWAKE_CHECK_INTERVAL_SECONDS = 30
+DISPLAY_AWAKE_CHECK_ITERATIONS = max(1, DISPLAY_AWAKE_CHECK_INTERVAL_SECONDS // SLEEP_INTERVAL)
+# What the desktop app holds of keep screens awake in the user's session
+# (desktop/src-tauri/src/awake.rs): a JSON object carrying `held` (bool) and
+# `at` (unix seconds), rewritten on every change and every minute as the
+# console user. A report three rewrites old is an app that is gone.
+KEEP_AWAKE_REPORT_FILE = 'ipc/keep_awake.json'
+KEEP_AWAKE_REPORT_MAX_AGE_SECONDS = 180
+# How far ahead of this clock a report may claim to be before it is refused.
+_KEEP_AWAKE_REPORT_CLOCK_SKEW_SECONDS = 60
+_KEEP_AWAKE_REPORT_LIMIT = 4096
 # A scheduled instant older than this is MISSED: skipped and marked fired for the
 # day. Prevents a catastrophic late reboot after a restart, deploy or schedule
 # edit.
@@ -920,6 +935,102 @@ def _pid_descends_from(pid, ancestor_pid, not_before, max_depth=5):
     return False
 
 
+def _read_console_users_file(path, limit):
+    """``(seat, raw)``: whether anybody is at the console, and the first
+    ``limit + 1`` bytes of ``path`` when that user wrote it.
+
+    ``ipc/`` is writable by every local user on Windows and by the owlette
+    group elsewhere, so ``raw`` is None unless the console user owns the file:
+    on Windows a single-link file of theirs (or SYSTEM's or Administrators'),
+    elsewhere a regular file of theirs, not a link, that nobody else can
+    write — the discipline darwin.py applies to the app's tcc.json.
+    """
+    if sys.platform == 'win32':
+        user_sid = acl_hardening.console_user_sid()
+        if user_sid is None:
+            return False, None
+        if not os.path.exists(path):
+            return True, None
+        if not acl_hardening.is_trusted_owner(path, user_sid):
+            logging.debug(f"Ignoring {path}: not the console user's own")
+            return True, None
+        try:
+            with open(path, 'rb') as f:
+                return True, f.read(limit + 1)
+        except OSError as e:
+            logging.debug(f"Could not read {path}: {e}")
+            return True, None
+
+    import pwd
+    from osadapter import posix
+
+    user = osadapter.console_user()
+    if user is None:
+        return False, None
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+        fd = posix._open_entry(path, False)
+    except (KeyError, FileNotFoundError):
+        return True, None
+    except OSError as e:
+        logging.debug(f"Could not open {path}: {e}")
+        return True, None
+    try:
+        with os.fdopen(fd, 'rb') as f:
+            owner = os.fstat(f.fileno())
+            if owner.st_uid != uid or owner.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                logging.debug(f"Ignoring {path}: not the console user's own")
+                return True, None
+            return True, f.read(limit + 1)
+    except OSError as e:
+        logging.debug(f"Could not read {path}: {e}")
+        return True, None
+
+
+def _read_session_keep_awake():
+    """``(seat, held)``: whether anybody is at the console, and whether the
+    desktop app there holds the session awake — None when it has not said so
+    in a fresh report of its own."""
+    seat, raw = _read_console_users_file(
+        shared_utils.get_data_path(KEEP_AWAKE_REPORT_FILE), _KEEP_AWAKE_REPORT_LIMIT)
+    if raw is None or len(raw) > _KEEP_AWAKE_REPORT_LIMIT:
+        return seat, None
+    try:
+        report = json.loads(raw)
+    except ValueError:
+        return seat, None
+    if not isinstance(report, dict):
+        return seat, None
+    held, at = report.get('held'), report.get('at')
+    if not isinstance(held, bool) or isinstance(at, bool) or not isinstance(at, (int, float)):
+        return seat, None
+    age = time.time() - at
+    if age > KEEP_AWAKE_REPORT_MAX_AGE_SECONDS or age < -_KEEP_AWAKE_REPORT_CLOCK_SKEW_SECONDS:
+        return seat, None
+    return seat, held
+
+
+def _display_awake(daemon, seat, session):
+    """The machine document's ``displayAwake``.
+
+    ``daemon`` is KeepAwake.status(); ``session`` is the desktop app's report,
+    None without one. ``how`` names what holds the daemon's half and only
+    while it does. A wanted hold with no report and nobody at the seat has
+    nothing to hold the session with, which ``no_display`` says unless the
+    daemon has a reason of its own.
+    """
+    reason = daemon['reason']
+    if daemon['wanted'] and reason is None and session is None and not seat:
+        reason = 'no_display'
+    return {
+        'wanted': daemon['wanted'],
+        'held': daemon['held'],
+        'session': session,
+        'how': daemon['how'] if daemon['held'] else None,
+        'reason': reason,
+    }
+
+
 def _read_cortex_command(path, console_sid):
     """Load one queued Cortex command.
 
@@ -1142,6 +1253,17 @@ class OwletteService:
         # When capture started, for the tray's swoop row. Stamped by
         # _swoop_section, because the status writers are the only readers.
         self._swoop_active_since = 0
+        # keep screens awake (_check_keep_awake): the daemon's own hold, and
+        # what the loop last asked of it, which service_status.json hands on
+        # to the desktop app for the session's half. The rest paces and
+        # dedupes the displayAwake mirror; _display_awake_mirrored pairs the
+        # value with the client that wrote it, so a new client writes it again.
+        self.keep_awake = KeepAwake()
+        self._keep_awake_wanted = False
+        self._display_awake_counter = 0
+        self._display_awake_daemon = None
+        self._display_awake_thread = None
+        self._display_awake_mirrored = None
 
         # Checked BEFORE handle_firebase_command's legacy if/elif chain, falling
         # through when a type isn't registered. Register new handlers here.
@@ -1178,6 +1300,13 @@ class OwletteService:
             _register_swoop_handlers(self._command_router)
         except Exception as e:
             logging.warning(f"Failed to register swoop handlers: {e}")
+
+        # site_settings_refresh re-reads the site projection on a thread of its own.
+        try:
+            from site_commands import register_handlers as _register_site_handlers
+            _register_site_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register site handlers: {e}")
 
         self.firebase_client = None
 
@@ -1341,9 +1470,15 @@ class OwletteService:
         section['since'] = since
         return section
 
+    def _keep_awake_section(self) -> dict:
+        """Build the keep_awake section for service_status.json: whether the
+        site wants this machine's screens kept awake, which the desktop app
+        follows to hold the session's half."""
+        return {'wanted': bool(getattr(self, '_keep_awake_wanted', False))}
+
     def _write_service_status_early(self, running=True):
         """
-        Write service, health and swoop sections to service_status.json
+        Write service, health, swoop and keep_awake sections to service_status.json
         immediately after the startup health probe, before Firebase is
         initialized.
         This lets the tray icon show health alerts right away.
@@ -1371,7 +1506,8 @@ class OwletteService:
                 'health': self._health_section(),
                 # Same builder as the steady-state write, so the zero shape is
                 # the shape: no reader ever tells "key absent" from "off".
-                'swoop': self._swoop_section()
+                'swoop': self._swoop_section(),
+                'keep_awake': self._keep_awake_section()
             }
 
             shared_utils.write_json_to_file(status, status_path)
@@ -1391,6 +1527,7 @@ class OwletteService:
         - Service version
         - Health probe results
         - Live swoop state, for the tray's session row
+        - Whether the site wants the screens kept awake, for the app's session hold
 
         This provides real-time IPC from service → tray icon without log parsing.
 
@@ -1445,6 +1582,7 @@ class OwletteService:
 
             health_section = self._health_section()
             swoop_section = self._swoop_section()
+            keep_awake_section = self._keep_awake_section()
 
             status = {
                 'service': {
@@ -1461,7 +1599,8 @@ class OwletteService:
                     'last_heartbeat': last_heartbeat
                 },
                 'health': health_section,
-                'swoop': swoop_section
+                'swoop': swoop_section,
+                'keep_awake': keep_awake_section
             }
 
             # Excludes timestamps and free-form strings so it only flips on real
@@ -1486,6 +1625,9 @@ class OwletteService:
                 swoop_section['viewers'],
                 swoop_section['controllers'],
                 swoop_section['indicator'],
+                # The desktop app holds the session awake on this alone, so
+                # the site's switch reaches it on the next tick too.
+                keep_awake_section['wanted'],
             )
 
             now_mono = time.monotonic()
@@ -1689,10 +1831,23 @@ class OwletteService:
         else:
             logging.warning("[SHUTDOWN] No Firebase client — presence not flushed")
 
+        # A stopped service asks nothing: the final status write tells the
+        # desktop app to let go of the session at once, rather than once the
+        # file has gone stale.
+        self._keep_awake_wanted = False
         try:
             self._write_service_status(running=False)
         except Exception as e:
             logging.debug(f"[SHUTDOWN] Final status write failed: {e}")
+
+        # After the writes that matter: the hold would go with the process
+        # anyway, and release() waits up to two seconds for the let-go.
+        keep_awake = getattr(self, 'keep_awake', None)
+        if keep_awake is not None:
+            try:
+                keep_awake.release()
+            except Exception as e:
+                logging.debug(f"[SHUTDOWN] keep-awake release failed: {e}")
 
         elapsed = time.monotonic() - started
         if elapsed > SCM_STOP_GRACE_SECONDS:
@@ -2925,6 +3080,70 @@ class OwletteService:
         self._swoop_session_thread = t
 
     # ─── End swoop ────────────────────────────────────────────────────────
+
+    # ─── keep screens awake ───────────────────────────────────────────────
+
+    def _check_keep_awake(self):
+        """Hold the machine awake while its site asks, and mirror what is held.
+        Runs on the 5s tick.
+
+        The switch is the cloud client's cached site_keep_awake, refreshed off
+        the loop, and set_wanted returns at once, so the hold costs the tick no
+        I/O. displayAwake does cost some — the desktop app's report and the
+        seat lookup, loginctl round-trips on Linux — so it is worked out
+        single-flight on a daemon thread: at once when the daemon's hold
+        changes, and every DISPLAY_AWAKE_CHECK_INTERVAL_SECONDS besides.
+        """
+        if not self.is_alive:
+            # graceful_shutdown has let go; a tick still under way must not
+            # take the hold back.
+            return
+        client = self.firebase_client
+        # No client is no site, and nobody asking.
+        wanted = client is not None and bool(client.site_keep_awake)
+        if wanted != self._keep_awake_wanted:
+            self.keep_awake.set_wanted(wanted)
+            self._keep_awake_wanted = wanted
+
+        daemon = self.keep_awake.status()
+        self._display_awake_counter += 1
+        if (daemon == self._display_awake_daemon
+                and self._display_awake_counter < DISPLAY_AWAKE_CHECK_ITERATIONS):
+            return
+        if self._display_awake_thread is not None and self._display_awake_thread.is_alive():
+            return
+        self._display_awake_daemon = daemon
+        self._display_awake_counter = 0
+        thread = threading.Thread(
+            target=self._mirror_display_awake, args=(client, daemon),
+            daemon=True, name='display-awake',
+        )
+        thread.start()
+        self._display_awake_thread = thread
+
+    def _mirror_display_awake(self, client, daemon):
+        """Write displayAwake onto the machine document when it has changed.
+
+        Off the loop (see _check_keep_awake). A write that does not land, the
+        client not connected included, is tried again on the next check.
+        """
+        if client is None:
+            return
+        try:
+            seat, session = _read_session_keep_awake()
+        except Exception as e:
+            # an unknown seat is not reported as no display.
+            logging.debug(f"Could not read the keep-awake report: {e}")
+            seat, session = True, None
+        value = _display_awake(daemon, seat, session)
+        if self._display_awake_mirrored == (client, value):
+            return
+        try:
+            client.set_machine_flags({'displayAwake': value})
+        except Exception as e:
+            logging.debug(f"displayAwake not mirrored: {e}")
+            return
+        self._display_awake_mirrored = (client, value)
 
     def _find_running_process_by_exe(self, exe_path, file_path=None, strict=False):
         """Find a running process by its executable path.
@@ -5326,10 +5545,12 @@ class OwletteService:
             # key collapses to the type alone: a second viewer's session
             # request, a revocation kill behind an operator kill, or a second
             # enablement toggle inside five seconds would be refused and
-            # recorded as a failed command.
+            # recorded as a failed command. site_settings_refresh is exempt for
+            # the same reason: an admin flipping a site switch twice inside five
+            # seconds must land the second flip too.
             if cmd_type not in ('mcp_tool_call', 'ack_display_topology',
                                 'swoop_session_requested', 'swoop_kill',
-                                'swoop_refresh'):
+                                'swoop_refresh', 'site_settings_refresh'):
                 now = time.time()
                 rate_key = f"{cmd_type}:{cmd_data.get('process_id') or cmd_data.get('processId') or cmd_data.get('process_name') or ''}"
                 last_time = self._command_rate_limits.get(rate_key, 0)
@@ -9214,6 +9435,9 @@ class OwletteService:
                 # to take effect.
                 if self.firebase_client:
                     self._cached_site_timezone = self.firebase_client.site_timezone
+
+                # The site's keep screens awake switch, read the same way.
+                self._check_keep_awake()
 
                 self.current_time = datetime.datetime.now()
 

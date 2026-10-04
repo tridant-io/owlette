@@ -255,6 +255,30 @@ class TestGetGpus:
         # Driver older than 510: the reading still arrives, off a v1 struct.
         assert gpus[0].memoryUsed == 7 * 1024
 
+    def test_gpu_temperature_shares_the_backoff_when_nvml_is_absent(self):
+        """The kiosk vm logged 'NVML Shared Library Not Found' 26,000 times, once a
+        pass: the temperature read had no memory of the miss. It now backs off
+        like get_gpus(), and says so once, at debug."""
+        fake = self._fake_pynvml(init_error=self.LibraryNotFound('NVML Shared Library Not Found'))
+        # the temperature read imports two names the gpu list does not.
+        fake.nvmlDeviceGetTemperature = Mock(return_value=55)
+        fake.NVML_TEMPERATURE_GPU = 0
+        config = {('temperature', 'enabled'): True}
+
+        # the temperature read checks the import-time flag, not sys.platform.
+        with patch.dict(sys.modules, {'pynvml': fake}), \
+                patch.object(shared_utils, '_IS_MACOS', False), \
+                patch.object(shared_utils, 'read_config', side_effect=lambda path: config.get(tuple(path))), \
+                patch.dict(sys.modules, {'temp_sensors': None}), \
+                patch.object(shared_utils.logging, 'warning') as warning:
+            first = shared_utils.get_gpu_temperatures()
+            second = shared_utils.get_gpu_temperatures()
+
+        assert first == [] and second == []
+        assert fake.nvmlInit.call_count == 1
+        assert shared_utils._nvml_retry_after > 0.0
+        warning.assert_not_called()
+
     def test_apple_gpu_comes_from_the_ioregistry(self):
         import plistlib
         plist = plistlib.dumps([{

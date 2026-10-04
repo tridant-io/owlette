@@ -6501,6 +6501,83 @@ paths:
         '422': { $ref: '#/components/responses/Problem422' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
+  /api/sites/{siteId}/display-settings:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+    get:
+      operationId: getDisplaySettings
+      tags: [Sites]
+      summary: read a site's display policy
+      description: |
+        Whether the site's machines keep their screens awake. On until a site
+        turns it off. Site-admin surface: requires `site=<siteId>:read` and the
+        machine-config capability.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: Current settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data: { $ref: '#/components/schemas/DisplaySiteSettings' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+    patch:
+      operationId: setDisplaySettings
+      tags: [Sites]
+      summary: change a site's display policy
+      description: |
+        Turns keeping screens awake on or off for every machine on the site.
+        Requires `site=<siteId>:write` and the machine-config capability.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+
+        A change reaches machines that are already connected at once:
+        `refreshed` counts the online machines told to re-read the setting.
+        Offline machines pick it up when they reconnect.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/DisplaySiteSettings'
+                - required: [keepAwake]
+      responses:
+        '200':
+          description: Settings updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      settings: { $ref: '#/components/schemas/DisplaySiteSettings' }
+                      refreshed:
+                        type: integer
+                        description: How many online machines were told to re-read the setting.
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
 
   /api/sites/{siteId}/presets/distribution:
     parameters:
@@ -9416,6 +9493,16 @@ components:
           type: string
           enum: [banner, tray, none]
           description: What the machine shows while a session is live.
+    DisplaySiteSettings:
+      type: object
+      description: A site's display policy.
+      properties:
+        keepAwake:
+          type: boolean
+          default: true
+          description: |
+            Whether the site's machines keep their displays awake and unlocked:
+            no sleep, no blanking, no idle lock. On unless set to `false`.
     ProblemDetails:
       type: object
       description: |

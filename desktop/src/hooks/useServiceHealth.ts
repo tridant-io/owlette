@@ -139,16 +139,22 @@ export function useServiceHealth(): ServiceHealthStore {
     return () => clearInterval(timer)
   }, [queryScm])
 
-  // Auto-start once, on the first status that needs it, unless a claim is
-  // holding the service down. Two rules keep this path silent: it never
-  // elevates (an unattended UAC prompt is never acceptable — the footer's
-  // start button is the consent path), and it stands down entirely while a
-  // self-update owns the service, whose installer stops it on purpose and
-  // restarts it itself. Without the second rule every machine's tray app
-  // raised a UAC prompt over whatever was running, on every fleet update.
+  // Auto-start once, at launch, when the service is found down, unless a claim
+  // is holding it down. Two rules keep this path silent: it never elevates (an
+  // unattended UAC prompt is never acceptable — the footer's start button is
+  // the consent path), and it stands down entirely while a self-update owns the
+  // service, whose installer stops it on purpose and restarts it itself.
+  // Without the second rule every machine's tray app raised a UAC prompt over
+  // whatever was running, on every fleet update.
   useEffect(() => {
     if (autoStarted.current || holds.current > 0 || !status) return
-    if (!status.installed || status.running || status.state === 'start_pending') return
+    // a service seen running and later down was stopped by someone; linux's
+    // polkit rule let this start through and cancel their `systemctl stop`.
+    if (status.running) {
+      autoStarted.current = true
+      return
+    }
+    if (!status.installed || status.state === 'start_pending') return
     let cancelled = false
     void readOwletteJson<UpdateMarker>(UPDATE_MARKER_PATH)
       // Missing marker file = no update = clear to start.

@@ -895,3 +895,89 @@ def test_the_drain_hears_when_the_daemons_own_cloud_client_has_wound_down(monkey
     svc._privileged_requests_thread.join(5)
 
     assert asked == [False, True]
+
+
+@pytest.fixture
+def keep_awake_report(tmp_path, monkeypatch, console_user):
+    """The desktop app's keep-awake report, as the console user writes it: a
+    file of their own, 0644, rewritten every minute."""
+    monkeypatch.setattr(
+        shared_utils, 'get_data_path', lambda rel: str(tmp_path / rel))
+    path = tmp_path / 'ipc' / 'keep_awake.json'
+    path.parent.mkdir()
+
+    def write(held=True, at=None):
+        path.write_text(json.dumps({
+            'held': held, 'how': 'gnome_session', 'reason': None,
+            'at': int(time.time()) if at is None else at,
+        }))
+        path.chmod(0o644)
+        return path
+
+    return write
+
+
+def _read_session_keep_awake():
+    from owlette_service import _read_session_keep_awake as read
+
+    return read()
+
+
+def test_the_console_users_own_report_is_the_sessions_hold(keep_awake_report):
+    """The negative control for the refusals below: the app's own report, as
+    it writes it, is read."""
+    keep_awake_report()
+    assert _read_session_keep_awake() == (True, True)
+
+    keep_awake_report(held=False)
+    assert _read_session_keep_awake() == (True, False)
+
+
+def test_nobody_at_a_graphical_seat_is_no_seat_and_no_report(
+        keep_awake_report, monkeypatch):
+    keep_awake_report()
+    monkeypatch.setattr(osadapter, 'console_user', lambda: None)
+
+    assert _read_session_keep_awake() == (False, None)
+
+
+def test_no_report_with_somebody_at_the_seat_is_no_session(keep_awake_report):
+    assert _read_session_keep_awake() == (True, None)
+
+
+def test_a_report_another_member_of_the_group_wrote_is_ignored(
+        keep_awake_report, monkeypatch):
+    """`ipc/` is writable by the whole owlette group, so a report counts only
+    from the account at the seat."""
+    import pwd
+
+    keep_awake_report()
+    monkeypatch.setattr(
+        pwd, 'getpwnam', lambda name: SimpleNamespace(pw_uid=os.getuid() + 1))
+
+    assert _read_session_keep_awake() == (True, None)
+
+
+def test_a_report_others_can_write_is_ignored(keep_awake_report):
+    keep_awake_report().chmod(0o664)
+
+    assert _read_session_keep_awake() == (True, None)
+
+
+def test_a_link_to_the_users_own_report_is_not_followed(keep_awake_report):
+    """A link planted under the name carries its target's owner and mode."""
+    path = keep_awake_report()
+    target = path.with_name('elsewhere.json')
+    path.rename(target)
+    path.symlink_to(target)
+
+    assert _read_session_keep_awake() == (True, None)
+
+
+def test_a_stale_report_is_an_app_that_is_gone(keep_awake_report):
+    import owlette_service
+
+    keep_awake_report(
+        at=int(time.time()) - owlette_service.KEEP_AWAKE_REPORT_MAX_AGE_SECONDS - 5)
+
+    assert _read_session_keep_awake() == (True, None)

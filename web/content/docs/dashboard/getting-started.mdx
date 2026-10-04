@@ -1,6 +1,7 @@
 ---
 title: "dashboard getting started"
 description: "This guide walks you through your first experience with the owlette dashboard - from login to seeing your first machine."
+keywords: ["manage sites", "site settings", "keep screens awake", "screen goes to sleep", "monitor turns off", "screensaver", "lock screen", "display sleep"]
 ---
 
 ---
@@ -68,6 +69,33 @@ Sites are the top-level organizational unit - think of them as locations, depart
 4. Click **"create site"**.
 
 You're automatically assigned as the owner with full access.
+
+---
+
+## site settings
+
+Open the site switcher, choose **"manage sites"**, then click the pencil (**"edit site"**) on a site's row. Site admins and owners see the pencil; members don't. The panel changes the **"site name"** and **"timezone"**, which apply on **"save"**, and holds the site's two switches, which take effect the moment they move:
+
+| switch | default | what it does |
+|---|---|---|
+| **swoop** | off | Lets admins watch and control this site's machines remotely. See [swoop](/docs/dashboard/swoop#turning-it-on). |
+| **keep screens awake** | on | Machines on this site never sleep, blank or lock. |
+
+### keep screens awake
+
+Keep screens awake is **on** for every site until a site admin turns it off. An online machine follows a change within seconds; an offline one picks it up when it reconnects. Turning it off releases every hold, and the machine goes back to its own power and lock settings.
+
+Each machine holds it in two parts: the agent holds sleep, which works with nobody logged in, and the desktop app holds the logged-in session's blanking and lock.
+
+| OS | what is held |
+|---|---|
+| windows | a display and sleep power request, and the session's screensaver is switched off (and put back on release) |
+| macos | display and system sleep assertions, and the session's user is kept active so the screensaver and lock stay away |
+| linux | a systemd sleep inhibitor, and the GNOME session's idle inhibit |
+
+A machine with nobody logged in keeps only the sleep part: there is no session to keep from blanking or locking. In manage sites, a machine's row in the machines panel reads **awake** while it holds. Agents older than 4.1.1 ignore the setting.
+
+Over the API, `PATCH /api/sites/{siteId}/display-settings` with `{ "keepAwake": false }` turns it off. It needs a site admin or owner signed in; an API key is refused.
 
 ---
 

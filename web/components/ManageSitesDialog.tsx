@@ -14,6 +14,7 @@ import { useUserManagement } from '@/hooks/useUserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import { useScrollFade } from '@/hooks/useScrollFade';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
+import { useDisplaySettings } from '@/hooks/useDisplaySettings';
 import { Switch } from '@/components/ui/switch';
 
 interface Site {
@@ -49,52 +50,93 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   return parts;
 }
 
+interface SiteSettingSwitchProps {
+  id: string;
+  label: string;
+  description: string;
+  checked: boolean;
+  loading: boolean;
+  /** PATCHed with `{ [field]: next }` the moment the switch moves. */
+  url: string;
+  field: string;
+}
+
 /**
- * Site-wide swoop switch. Off is the safe state and the default, and turning it
- * off reaches machines that are already connected — the api tells every online
- * machine to re-dial, and their next doorbell request is refused.
+ * One immediate site setting. It is not part of the edit panel's save: the
+ * PATCH nudges the site's online machines, which a cancel could not take back.
+ * The switch follows its snapshot hook, so only a failure needs saying.
  */
-function SwoopSiteToggle({ siteId }: { siteId: string }) {
-  const { settings, loading } = useSwoopSettings(siteId);
+function SiteSettingSwitch({ id, label, description, checked, loading, url, field }: SiteSettingSwitchProps) {
   const [busy, setBusy] = useState(false);
 
-  const setEnabled = async (next: boolean) => {
+  const save = async (next: boolean) => {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/swoop-settings`, {
+      const res = await fetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: next }),
+        body: JSON.stringify({ [field]: next }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        throw new Error(body?.detail || body?.title || 'failed to update swoop');
+        throw new Error(body?.detail || body?.title || `failed to update ${label}`);
       }
-      // The switch itself follows the snapshot, so only the failure needs saying.
     } catch (err) {
-      console.error('Failed to update swoop settings:', err);
-      toast.error(err instanceof Error ? err.message : 'failed to update swoop');
+      console.error(`Failed to update ${label}:`, err);
+      toast.error(err instanceof Error ? err.message : `failed to update ${label}`);
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
-      <div className="space-y-0.5">
-        <Label htmlFor={`swoop-${siteId}`} className="text-white">
-          swoop
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0 space-y-0.5">
+        <Label htmlFor={id} className="text-foreground">
+          {label}
         </Label>
-        <p className="text-xs text-muted-foreground">
-          let admins watch and control this site&apos;s machines remotely
-        </p>
+        <p className="text-xs text-muted-foreground">{description}</p>
       </div>
       <Switch
-        id={`swoop-${siteId}`}
-        checked={settings.enabled}
-        onCheckedChange={(next) => void setEnabled(next)}
+        id={id}
+        checked={checked}
+        onCheckedChange={(next) => void save(next)}
         disabled={busy || loading}
+      />
+    </div>
+  );
+}
+
+/**
+ * The site's switches, in its edit panel. Swoop is off until a site turns it
+ * on, and turning it off ends live sessions; keep screens awake is on unless a
+ * site turns it off.
+ */
+function SiteSettingsSwitches({ siteId }: { siteId: string }) {
+  const swoop = useSwoopSettings(siteId);
+  const display = useDisplaySettings(siteId);
+  const base = `/api/sites/${encodeURIComponent(siteId)}`;
+
+  return (
+    <div className="mt-3 space-y-3 border-t border-border/60 pt-3">
+      <SiteSettingSwitch
+        id={`swoop-${siteId}`}
+        label="swoop"
+        description="let admins watch and control this site's machines remotely"
+        checked={swoop.settings.enabled}
+        loading={swoop.loading}
+        url={`${base}/swoop-settings`}
+        field="enabled"
+      />
+      <SiteSettingSwitch
+        id={`keep-awake-${siteId}`}
+        label="keep screens awake"
+        description="machines on this site never sleep, blank or lock"
+        checked={display.settings.keepAwake}
+        loading={display.loading}
+        url={`${base}/display-settings`}
+        field="keepAwake"
       />
     </div>
   );
@@ -561,7 +603,8 @@ export function ManageSitesDialog({
                     {/* Edit panel — attached beneath the row inside the same
                         card so the site being edited stays visible above its
                         own form. Name + timezone share one line (wrapping on
-                        narrow screens) to keep the panel short. */}
+                        narrow screens) to keep the panel short; the site's
+                        switches sit below and act at once, outside save. */}
                     {editingSiteId === site.id && (
                       <div className="animate-in slide-in-from-top-2 fade-in duration-200 border-t border-border/60 p-3">
                         <div className="flex flex-wrap items-end gap-3">
@@ -613,6 +656,7 @@ export function ManageSitesDialog({
                             </Button>
                           </div>
                         </div>
+                        <SiteSettingsSwitches siteId={site.id} />
                       </div>
                     )}
 
@@ -621,7 +665,6 @@ export function ManageSitesDialog({
                         can act when things go wrong for a customer. */}
                     {expandedSiteId === site.id && (
                       <div className="animate-in slide-in-from-top-2 fade-in duration-200 border-t border-border/60">
-                        {isSiteAdmin(site.id) && <SwoopSiteToggle siteId={site.id} />}
                         <SiteMachinesList siteId={site.id} onCountLoaded={handleMachineCountLoaded} />
                       </div>
                     )}
