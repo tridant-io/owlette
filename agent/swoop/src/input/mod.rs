@@ -667,6 +667,7 @@ mod win32 {
         SetThreadDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, DESKTOP_JOURNALPLAYBACK,
         DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS, HDESK, UOI_NAME,
     };
+    use windows::Win32::System::Shutdown::LockWorkStation;
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
@@ -937,6 +938,54 @@ mod win32 {
         polled: Instant,
         /// The failure episode currently being suppressed, if any.
         failure: Option<Failure>,
+        lock_chord: LockChord,
+    }
+
+    /// Win+L, watched for in the injected keys.
+    ///
+    /// Windows takes the lock from a real keyboard only: injected, the chord
+    /// locks nothing. And a viewer cannot send a real one — on a Windows viewer
+    /// it locks the viewer's own machine, fullscreen or not — so the host locks
+    /// itself when the chord comes through, from the keyboard menu or a held key.
+    #[derive(Debug, Default)]
+    pub(super) struct LockChord {
+        left_windows: bool,
+        right_windows: bool,
+    }
+
+    impl LockChord {
+        /// Set-1 scancodes, as `testdata/keymap.json` gives them.
+        const L: u16 = 0x26;
+        const LEFT_WINDOWS: u16 = 0x5B;
+        const RIGHT_WINDOWS: u16 = 0x5C;
+
+        /// True on the L that goes down while a Windows key is held.
+        pub(super) fn on(&mut self, event: &InputEvent) -> bool {
+            let InputEvent::Key {
+                scancode,
+                extended,
+                down,
+            } = *event
+            else {
+                return false;
+            };
+            match (scancode, extended) {
+                (Self::LEFT_WINDOWS, true) => self.left_windows = down,
+                (Self::RIGHT_WINDOWS, true) => self.right_windows = down,
+                (Self::L, false) => return down && (self.left_windows || self.right_windows),
+                _ => {}
+            }
+            false
+        }
+    }
+
+    /// Callable from here because the streamer is in the console session, on
+    /// its interactive desktop; from the service in session 0 it would not be.
+    fn lock_workstation() {
+        match unsafe { LockWorkStation() } {
+            Ok(()) => ::log::info!("swoop: a viewer's win+l locked the machine"),
+            Err(e) => ::log::warn!("swoop: win+l did not lock the machine: {e}"),
+        }
     }
 
     /// One run of identical failures, reported on its first event only.
@@ -959,6 +1008,7 @@ mod win32 {
                 desktop: InputDesktop::new(),
                 polled: Instant::now(),
                 failure: None,
+                lock_chord: LockChord::default(),
             }
         }
 
@@ -1142,7 +1192,12 @@ mod win32 {
     impl Injector for SendInputInjector {
         fn inject(&mut self, event: &InputEvent) -> anyhow::Result<()> {
             let inputs = self.build(event);
-            self.send(&inputs)
+            let lock = self.lock_chord.on(event);
+            let sent = self.send(&inputs);
+            if lock {
+                lock_workstation();
+            }
+            sent
         }
 
         /// The poll, and a `recover` that crossed to a new desktop since the
@@ -1156,11 +1211,17 @@ mod win32 {
         /// not interleaved with any other thread's input, which is also what
         /// keeps a chord from being split.
         fn inject_all(&mut self, events: &[InputEvent]) -> anyhow::Result<()> {
-            let inputs: Vec<INPUT> = coalesce(events)
+            let events = coalesce(events);
+            let inputs: Vec<INPUT> = events.iter().flat_map(|event| self.build(event)).collect();
+            // every event, not up to the first hit: the chord follows them all
+            let lock = events
                 .iter()
-                .flat_map(|event| self.build(event))
-                .collect();
-            self.send(&inputs)
+                .fold(false, |hit, event| self.lock_chord.on(event) | hit);
+            let sent = self.send(&inputs);
+            if lock {
+                lock_workstation();
+            }
+            sent
         }
     }
 
@@ -1254,6 +1315,7 @@ mod win32 {
                 desktop: InputDesktop::new(),
                 polled: Instant::now(),
                 failure: None,
+                lock_chord: LockChord::default(),
             }
         }
 
@@ -1871,6 +1933,29 @@ mod tests {
         let landed = injector.inject(&InputEvent::MouseMoveRelative { dx: 0, dy: 0 });
         println!("first event after the bad attach: {landed:?}");
         landed.expect("the injector re-attached and the event landed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn win_l_from_a_viewer_is_the_lock_chord() {
+        let map = keymap();
+        let mut chord = win32::LockChord::default();
+        let mut locks = |code: &str, down: bool| {
+            map.press(code, down)
+                .iter()
+                .filter(|event| chord.on(event))
+                .count()
+        };
+        assert_eq!(locks("KeyL", true), 0, "l alone");
+        assert_eq!(locks("KeyL", false), 0);
+        assert_eq!(locks("MetaLeft", true), 0);
+        assert_eq!(locks("KeyL", true), 1, "left win + l");
+        assert_eq!(locks("KeyL", false), 0, "the release locks nothing");
+        assert_eq!(locks("MetaLeft", false), 0);
+        assert_eq!(locks("KeyL", true), 0, "win already let go");
+        assert_eq!(locks("KeyL", false), 0);
+        assert_eq!(locks("MetaRight", true), 0);
+        assert_eq!(locks("KeyL", true), 1, "right win + l");
     }
 
     /// The same bad attach, but **after** the injector already holds the
