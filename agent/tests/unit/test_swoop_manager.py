@@ -694,6 +694,73 @@ class TestOffWindows:
         assert calls == []
 
 
+class TestSas:
+    """ctrl+alt+del: SendSAS honours a caller in session 0 only, so the
+    streamer asks on stdout and the manager calls it and answers on stdin."""
+
+    def _live(self, firebase, monkeypatch, raised=True):
+        calls = []
+
+        def send_sas():
+            calls.append(threading.current_thread().name)
+            return raised
+
+        monkeypatch.setattr(swoop_manager, '_send_sas', send_sas)
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1)
+        return manager, backend.proc, calls
+
+    @staticmethod
+    def _answers(proc):
+        return [w for w in proc.written if w.get('type') == 'sas_result']
+
+    def test_a_request_raises_it_off_the_callers_thread_and_answers(self, firebase, monkeypatch):
+        manager, proc, calls = self._live(firebase, monkeypatch)
+        manager._handle_line('{"type":"sas_request","sid":"sid_1","viewer":"v1"}')
+        assert wait_for(lambda: self._answers(proc))
+        assert self._answers(proc) == [{'type': 'sas_result', 'ok': True}]
+        assert calls == ['swoop-manager']
+        manager.kill()
+
+    def test_a_failed_call_is_answered_false(self, firebase, monkeypatch):
+        manager, proc, _ = self._live(firebase, monkeypatch, raised=False)
+        manager._handle_line('{"type":"sas_request","sid":"sid_1","viewer":"v1"}')
+        assert wait_for(lambda: self._answers(proc))
+        assert self._answers(proc) == [{'type': 'sas_result', 'ok': False}]
+        manager.kill()
+
+    def test_a_second_request_inside_the_floor_is_refused(self, firebase, monkeypatch):
+        monkeypatch.setattr(swoop_manager, 'SAS_MIN_INTERVAL_S', 0.5)
+        manager, proc, calls = self._live(firebase, monkeypatch)
+        manager._handle_line('{"type":"sas_request","sid":"sid_1","viewer":"v1"}')
+        manager._handle_line('{"type":"sas_request","sid":"sid_1","viewer":"v1"}')
+        assert wait_for(lambda: len(self._answers(proc)) == 2)
+        assert [a['ok'] for a in self._answers(proc)] == [True, False]
+        assert len(calls) == 1
+
+        time.sleep(0.5)
+        manager._handle_line('{"type":"sas_request","sid":"sid_1","viewer":"v1"}')
+        assert wait_for(lambda: len(self._answers(proc)) == 3)
+        assert self._answers(proc)[-1]['ok'] is True
+        assert len(calls) == 2
+        manager.kill()
+
+    def test_a_request_for_another_session_is_ignored(self, firebase, monkeypatch):
+        manager, proc, calls = self._live(firebase, monkeypatch)
+        manager._handle_line('{"type":"sas_request","sid":"sid_other","viewer":"v1"}')
+        time.sleep(0.2)
+        assert calls == []
+        assert self._answers(proc) == []
+        manager.kill()
+
+    @pytest.mark.parametrize('policy', [swoop_manager.SAS_ABSENT, 0, 2, None])
+    def test_send_sas_refuses_without_a_policy_that_allows_services(self, monkeypatch, policy):
+        monkeypatch.setattr(swoop_manager, '_read_sas_value', lambda: policy)
+        assert swoop_manager._send_sas() is False
+
+
 class TestHostTokenRefresh:
     """The host's room token lives 300 s and the streamer cannot mint one: the
     manager re-mints a minute ahead and hands it over on stdin."""

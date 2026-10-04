@@ -200,9 +200,8 @@ mod win {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
     use windows::Win32::System::StationsAndDesktops::{
-        CloseDesktop, GetUserObjectInformationW, OpenDesktopW, OpenInputDesktop, SetThreadDesktop,
-        DESKTOP_CONTROL_FLAGS, DESKTOP_CREATEWINDOW, DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS,
-        UOI_NAME,
+        CloseDesktop, OpenDesktopW, SetThreadDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_CREATEWINDOW,
+        DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
@@ -210,13 +209,16 @@ mod win {
         WM_CLIPBOARDUPDATE, WM_DESTROYCLIPBOARD, WM_RENDERALLFORMATS, WM_RENDERFORMAT, WNDCLASSW,
     };
 
+    // read at every clip, not taken from another feature's state: sync is
+    // refused on `Winlogon` whether or not anything else is watching for it
+    use crate::securedesk::input_desktop;
+
     use super::super::formats::{
         self, dib_len, dib_to_png, text_from_utf16, text_to_utf16, Payload, CF_DIB, CF_DIBV5,
         CF_HDROP, CF_UNICODETEXT,
     };
     use super::super::wic;
     use super::{Echo, Mailbox};
-    use crate::ipc::Desktop;
     use crate::signal::messages::channel::{ClipFormat, CLIPBOARD_IMAGE_MAX_BYTES};
 
     /// There is a payload waiting on the write channel.
@@ -457,35 +459,6 @@ mod win {
                 None,
             )
         }
-    }
-
-    /// The input desktop, read here rather than taken from another feature:
-    /// clipboard sync is refused on `Winlogon` whether or not anything else in
-    /// the process is watching for the switch.
-    fn input_desktop() -> Desktop {
-        let opened =
-            unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) };
-        let Ok(desktop) = opened else {
-            // Equally what a thread without rights to the current desktop gets,
-            // which is why `sync_allowed` treats `Unknown` as a refusal.
-            return Desktop::Unknown;
-        };
-        let mut buffer = [0u16; 128];
-        let mut needed = 0u32;
-        let named = unsafe {
-            GetUserObjectInformationW(
-                HANDLE(desktop.0),
-                UOI_NAME,
-                Some(buffer.as_mut_ptr().cast()),
-                std::mem::size_of_val(&buffer) as u32,
-                Some(&mut needed),
-            )
-        };
-        let _ = unsafe { CloseDesktop(desktop) };
-        if named.is_err() {
-            return Desktop::Unknown;
-        }
-        formats::desktop_from_name(&text_from_utf16(&buffer))
     }
 
     /// One `WM_CLIPBOARDUPDATE`, filtered: our own echo, a file list, an

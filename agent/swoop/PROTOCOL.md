@@ -377,9 +377,11 @@ a control line:
   which viewers are told to come back from (`bye` with `reason: "restart"`); every other kill byes them
   `kill`.
 - `{"type":"sas_result","ok":true}` — the answer to a `sas_request`; the service, not the streamer, calls
-  `SendSAS`. the streamer routes it to whichever feature raised that `sas_request` and to nothing else; an
-  answer to a question nobody put is dropped with a log line. `"ok": false` means the service could not
-  raise the sequence at all.
+  `SendSAS`. the streamer routes it to whichever feature raised that `sas_request` and to nothing else, and
+  passes it on as `sas-result` to the viewer who asked, and to no other; an answer to a question nobody put
+  is dropped with a log line. `"ok": false` means the service did not raise the sequence: the
+  `SoftwareSASGeneration` policy does not allow a service to, or one was raised in the last 2 s.
+  windows honours `SendSAS` only from session 0, which is why the streamer asks rather than calls it.
 
 **eof on stdin means the service is gone.** the streamer byes its viewers `restart`, tears the session down
 and exits 0. it does not try to carry on, and it does not try to reach the service any other way.
@@ -421,7 +423,7 @@ out. with a single viewer every one of these is the number it always was.
 
 | field | meaning |
 |---|---|
-| `desktop` | the input desktop: `default` \| `winlogon` \| `screensaver` \| `unknown`. an `OpenInputDesktop` that failed is `unknown` and is **never** reported as a lock. on macos it is always `default`: the streamer runs in the console user's own session, which has one desktop. |
+| `desktop` | the input desktop: `default` \| `winlogon` \| `screensaver` \| `unknown`. an `OpenInputDesktop` that failed is `unknown` and is **never** reported as a lock. a UAC prompt, the lock screen and the logon screen are all `winlogon`. absent on macos: the streamer runs in the console user's own session, which has one desktop. |
 | `audio` | the render endpoint: `ok` \| `no_endpoint`. swoop never creates a device and never moves the default. |
 | `displays` | `ok` \| `headless` — headless is no attached output, or a duplication that yields nothing but black. |
 | `inputDropped` | the input rate limiter's cumulative drop count. **absent means zero**, not unknown. |

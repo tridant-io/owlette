@@ -9,6 +9,24 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ---
 
+## [Unreleased]
+
+### fixed — swoop through UAC prompts on Windows
+
+A UAC prompt during a swoop session could leave the mouse and keyboard dead,
+either on the prompt or on the desktop after it closed, until the next lock or
+prompt. The prompt runs on Windows' secure desktop, and the host followed it
+with two watchers on one thread that undid each other. The picture could also
+freeze for ten seconds and end the session when the prompt opened. Now you see
+the prompt and answer it from the viewer, including typing an administrator's
+name and password.
+
+### added — ctrl + alt + del from the viewer
+
+**ctrl + alt + del** in the special keys menu brings up the Windows security
+screen on the machine, for sign-in and UAC prompts that ask for it. It did
+nothing before. The service raises it, at most once every two seconds.
+
 ## [4.1.3] - 2026-10-03
 
 ### added — swoop from another network

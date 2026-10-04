@@ -63,11 +63,11 @@
 //! [`crate::clipboard`], whose thread must own a message-only window and
 //! therefore binds `Default` once, before creating it, and never follows.
 //!
-//! **Not here, deliberately:** making the secure desktop *work* — `SendSAS`,
-//! and anything that treats `Winlogon` as a destination rather than as a
-//! desktop that happens to be current. Spike 0.3 was never run, so nothing
-//! about injection across that boundary is established and Task 6.1 owns it.
-//! What this module does promise is that landing there is legible: the failure
+//! `Winlogon` — a UAC prompt, the lock screen, the logon screen — is followed
+//! like any other desktop: the streamer is SYSTEM, so injection into the
+//! prompt is not blocked by UIPI. Ctrl+alt+del is not here; only the service
+//! can raise it (see `securedesk`). What this module does promise is
+//! that a desktop it cannot drive is legible: the failure
 //! names the desktop this thread is on, the desktop the input actually went to
 //! and the real last error, **once** — every repeat of it is counted rather
 //! than logged — and the session releases everything the viewer was holding on
@@ -182,6 +182,14 @@ pub trait Injector {
             self.inject(&event)?;
         }
         Ok(())
+    }
+
+    /// Follow the input desktop between events, true when this injector has
+    /// moved its thread to another desktop since the last call. The input
+    /// thread calls it every turn and answers a switch with the session's
+    /// release of every held key. Only Windows has more than one desktop.
+    fn follow_desktop(&mut self) -> bool {
+        false
     }
 }
 
@@ -757,6 +765,9 @@ mod win32 {
         held: Option<HDESK>,
         /// The input desktop's name at the last look, empty before the first.
         seen: String,
+        /// A take moved this thread to a differently named desktop since
+        /// [`SendInputInjector::follow_desktop`] last asked.
+        moved: bool,
     }
 
     impl InputDesktop {
@@ -768,6 +779,7 @@ mod win32 {
             let mut desktop = Self {
                 held: None,
                 seen: String::new(),
+                moved: false,
             };
             if let Some((handle, name)) = look() {
                 let _ = unsafe { CloseDesktop(handle) };
@@ -827,9 +839,11 @@ mod win32 {
         /// anything else in the process can have put this thread on the input
         /// desktop through a handle that cannot inject — `capture`'s watcher
         /// does exactly that if it is ever run on this thread — and re-taking
-        /// it with [`INJECT_ACCESS`] is the fix. Once we hold the desktop that
-        /// is current, a further failure is something else and re-attaching
-        /// would only hide it, so it is reported instead.
+        /// it with [`INJECT_ACCESS`] is the fix. That holds after we have taken
+        /// a desktop too, so "ours" is the handle the thread is on now, not the
+        /// one we last took. Once the thread is on our handle for the desktop
+        /// that is current, a further failure is something else and
+        /// re-attaching would only hide it, so it is reported instead.
         ///
         /// Nothing pre-emptive slips in here: a UIPI block does not shorten
         /// `SendInput`'s return, so it never reaches this.
@@ -837,7 +851,9 @@ mod win32 {
             let Some((handle, name)) = look() else {
                 return false;
             };
-            if self.held.is_some() && name == self.seen {
+            let on_ours = unsafe { GetThreadDesktop(GetCurrentThreadId()) }
+                .is_ok_and(|current| Some(current) == self.held);
+            if on_ours && name == self.seen {
                 let _ = unsafe { CloseDesktop(handle) };
                 return false;
             }
@@ -853,6 +869,8 @@ mod win32 {
             if let Some(previous) = self.held.replace(handle) {
                 let _ = unsafe { CloseDesktop(previous) };
             }
+            // a re-take of the desktop already current is a repair, not a switch
+            self.moved |= name != self.seen;
             self.seen = name;
             true
         }
@@ -909,9 +927,9 @@ mod win32 {
     /// `SendInput`, following the input desktop across switches.
     ///
     /// Create it on the input thread and leave it there: the desktop it takes
-    /// is that thread's. A switch *to* `Winlogon` is followed like any other,
-    /// because it is where the input has gone; making the secure desktop
-    /// actually usable is Task 6.1's, gated on a spike that was never run.
+    /// is that thread's, and it must be that thread's only follower. A switch
+    /// *to* `Winlogon` is followed like any other, because it is where the
+    /// input has gone.
     pub struct SendInputInjector {
         space: PointerSpace,
         bounds: Rect,
@@ -1125,6 +1143,13 @@ mod win32 {
         fn inject(&mut self, event: &InputEvent) -> anyhow::Result<()> {
             let inputs = self.build(event);
             self.send(&inputs)
+        }
+
+        /// The poll, and a `recover` that crossed to a new desktop since the
+        /// last turn: both are this thread's switch, whichever saw it first.
+        fn follow_desktop(&mut self) -> bool {
+            self.poll_if_due();
+            std::mem::take(&mut self.desktop.moved)
         }
 
         /// One syscall for the whole frame: `SendInput` guarantees the array is
@@ -1836,7 +1861,6 @@ mod tests {
             capture_side.follow(),
             "capture's watcher could not attach; run this unlocked, from an ordinary shell"
         );
-        println!("attached through capture's watcher: {:?}", capture_side.name());
 
         let outputs = crate::capture::enumerate_outputs().expect("enumerate");
         let primary = outputs.first().expect("an attached output").clone();
@@ -1847,6 +1871,56 @@ mod tests {
         let landed = injector.inject(&InputEvent::MouseMoveRelative { dx: 0, dy: 0 });
         println!("first event after the bad attach: {landed:?}");
         landed.expect("the injector re-attached and the event landed");
+    }
+
+    /// The same bad attach, but **after** the injector already holds the
+    /// desktop: the UAC round trip. The input thread's own look and capture's
+    /// watcher both followed the switch, and whichever came second left the
+    /// thread on a handle that cannot inject while the injector still believed
+    /// it held the current desktop — so it refused to re-take it, and mouse and
+    /// keyboard stayed dead on the prompt or after it, until the next switch.
+    ///
+    /// ```text
+    /// cargo test -- --ignored --nocapture another_attach
+    /// ```
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "attaches this thread to a real desktop; cargo test -- --ignored --nocapture another_attach"]
+    fn injection_recovers_after_another_attach_moves_its_thread() {
+        let outputs = crate::capture::enumerate_outputs().expect("enumerate");
+        let primary = outputs.first().expect("an attached output").clone();
+        let mut injector = SendInputInjector::new(PointerSpace::from_output(&primary));
+        let probe = InputEvent::MouseMoveRelative { dx: 0, dy: 0 };
+
+        // A first recovery, so the injector holds the input desktop itself.
+        attach_without_inject_rights();
+        injector.inject(&probe).expect("the first recovery");
+
+        // Then the thread is moved again, onto the same desktop by name.
+        attach_without_inject_rights();
+        let landed = injector.inject(&probe);
+        println!("first event after the second attach: {landed:?}");
+        landed.expect("the injector re-took the desktop it had lost");
+    }
+
+    /// What capture's watcher does to a thread: the input desktop, opened with
+    /// capture's rights. The handle is left open: it is this thread's desktop
+    /// now, and closing a thread's desktop fails anyway.
+    #[cfg(windows)]
+    fn attach_without_inject_rights() {
+        use windows::Win32::System::StationsAndDesktops::{
+            OpenInputDesktop, SetThreadDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS,
+            DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS,
+        };
+        let handle = unsafe {
+            OpenInputDesktop(
+                DESKTOP_CONTROL_FLAGS(0),
+                false,
+                DESKTOP_ACCESS_FLAGS(DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0),
+            )
+        }
+        .expect("open the input desktop; run this unlocked");
+        unsafe { SetThreadDesktop(handle) }.expect("attach this thread");
     }
 
     /// The only check there is for the desktop half, and it needs a human.

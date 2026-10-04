@@ -47,7 +47,7 @@
 //!   `Frame` handle is only valid until the next acquire and `Duplication` is
 //!   not `Send`. Encoded bytes leave over a bounded channel. It opens the
 //!   duplication per pass rather than once, because the session pauses it.
-//! - **input** — its own `DesktopWatcher` and the `SendInput` injector.
+//! - **input** — the `SendInput` injector, which follows the desktop itself.
 //!   Injection is off the capture thread so a key press is not queued behind an
 //!   8 ms acquire and an 8 ms encode. The held-key sets are **not** here: they
 //!   are per viewer and the gate on them is the roster, so
@@ -66,7 +66,7 @@
 //! - **viewer disconnect** (bye, kick, dead peer, lapsed lease) — `on_viewer_gone`.
 //! - **control revoked** — a re-verified token that no longer carries `ctl`.
 //! - **idle timeout / session end** — `teardown`, which releases every viewer.
-//! - **desktop switch** — the input thread's watcher notices it and reports it;
+//! - **desktop switch** — the input thread's injector follows it and reports it;
 //!   the session owns the held sets, so it answers with the ups.
 //!
 //! # Loss recovery, and the floor
@@ -443,7 +443,7 @@ impl Outbox {
     /// Drained after **each** feature's poll, not after all of them: the
     /// session has to know which feature asked, and a `Sas` whose answer went
     /// to the wrong feature is a handshake that never completes.
-    fn take_requests(&mut self) -> Vec<FeatureRequest> {
+    pub(crate) fn take_requests(&mut self) -> Vec<FeatureRequest> {
         std::mem::take(&mut self.requests)
     }
 }
@@ -995,7 +995,7 @@ mod host {
         /// Which backend the selection chain actually opened on. Sent when it
         /// changes, which on a machine with one compiled backend is once.
         Backend(&'static str),
-        /// Trigger 4 of `release_all`: the input thread's watcher followed the
+        /// Trigger 4 of `release_all`: the input thread's injector followed the
         /// desktop. The held sets are the session's, so the ups are too.
         DesktopSwitched,
         /// The process that started this streamer has gone: on macOS and
@@ -1479,6 +1479,7 @@ mod host {
             encoder: None,
             display: 0,
             sas_pending: None,
+            sas_viewer: None,
             control_viewer: None,
             test_override: describe_override(bundle),
             features: Vec::new(),
@@ -1614,9 +1615,14 @@ mod host {
         /// Which output is being captured, in the numbering `hello-host`
         /// advertises. Zero until a feature picks another one.
         display: u32,
-        /// The feature whose [`FeatureRequest::Sas`] is outstanding, by name.
-        /// `sas_result` goes to it and to nothing else.
-        sas_pending: Option<&'static str>,
+        /// The feature whose [`FeatureRequest::Sas`] is outstanding, by name,
+        /// and the viewer it was asked for. `sas_result` goes to that feature
+        /// and to nothing else, and §5's `sas-result` to that viewer alone.
+        sas_pending: Option<(&'static str, String)>,
+        /// The controller whose `sas` passed the gate last. Recorded at the
+        /// gate, not taken from `control_viewer`: the feature raises its
+        /// request a turn later, after anyone's swoop-control traffic.
+        sas_viewer: Option<String>,
         /// Whose `swoop-control` payload the features were last offered.
         /// [`Feature::on_message`] carries the `ctl` verdict but not the id, so
         /// this is how a [`FeatureRequest`] raised from inside one — a
@@ -2205,9 +2211,10 @@ mod host {
                         self.retier();
                     }
                     Ok(FromWorker::Backend(backend)) => self.encoder = Some(backend),
-                    // Trigger 4 of `release_all`. The watcher is on the input
-                    // thread because a desktop association belongs to the thread
-                    // that made it; the held sets are here, so the ups are too.
+                    // Trigger 4 of `release_all`. The injector follows on the
+                    // input thread because a desktop association belongs to the
+                    // thread that made it; the held sets are here, so the ups are
+                    // too.
                     Ok(FromWorker::DesktopSwitched) => {
                         let events = self.input.release_all();
                         self.inject_release(events);
@@ -2673,13 +2680,19 @@ mod host {
             match request {
                 FeatureRequest::Sas => {
                     // §6's `sas_request` names a viewer, and there is no
-                    // ctrl+alt+del without one to have asked for it. The trait
-                    // carries the `ctl` verdict but not the id, so the viewer is
-                    // whichever one's control payload the features last saw.
-                    let Some(viewer) = self.control_viewer.clone() else {
+                    // ctrl+alt+del without a controller still here to have
+                    // asked for it. One in flight: the service answers in
+                    // order, so a second would take the first one's answer.
+                    let asker = self.sas_viewer.take().filter(|viewer| {
+                        self.is_viewer(viewer) && self.roster.control_granted(viewer)
+                    });
+                    let (Some(viewer), None) = (asker, &self.sas_pending) else {
+                        // answered, so the feature is not left waiting on a
+                        // request that was never sent
+                        self.route_sas_result(feature, false);
                         return;
                     };
-                    self.sas_pending = Some(feature);
+                    self.sas_pending = Some((feature, viewer.clone()));
                     let event = Event::SasRequest {
                         sid: self.sid.clone(),
                         viewer,
@@ -2718,10 +2731,17 @@ mod host {
         /// The service's answer to a `sas_request`, routed to the feature that
         /// asked and to nothing else.
         fn on_sas_result(&mut self, ok: bool) {
-            let Some(name) = self.sas_pending.take() else {
+            let Some((name, viewer)) = self.sas_pending.take() else {
                 ::log::warn!("swoop: unexpected sas_result ok={ok}");
                 return;
             };
+            if self.is_viewer(&viewer) {
+                self.write_json(&viewer, Channel::SwoopControl, &ControlMessage::SasResult { ok });
+            }
+            self.route_sas_result(name, ok);
+        }
+
+        fn route_sas_result(&mut self, name: &'static str, ok: bool) {
             match self.features.iter_mut().find(|f| f.name() == name) {
                 Some(feature) => feature.on_sas_result(ok),
                 None => ::log::warn!("swoop: feature {name} is gone, sas_result dropped"),
@@ -2978,9 +2998,12 @@ mod host {
                     // narrowest of its members.
                     self.apply_ladder(viewer);
                 }
-                // Task 6.1 owns the secure desktop and `SendSAS`; spike 0.3 was
-                // never run, so nothing here crosses that boundary.
-                ControlMessage::Sas => ::log::info!("swoop: sas requested (task 6.1)"),
+                // The `securedesk` feature asks the service for it, for this
+                // viewer: past the gate above, so a controller.
+                ControlMessage::Sas => {
+                    ::log::info!("swoop: viewer {viewer} asked for ctrl+alt+del");
+                    self.sas_viewer = Some(viewer.to_owned());
+                }
                 ControlMessage::Display { index } => {
                     ::log::info!("swoop: display {index} requested (task 6.4)")
                 }
@@ -3997,10 +4020,10 @@ mod host {
         rx: Receiver<ToInput>,
         stop: Arc<AtomicBool>,
     ) {
-        let mut watcher = DesktopWatcher::new();
-        // Same reason as the capture thread: the initial attach is not a
-        // switch, and there is nothing held to release on it.
-        watcher.follow();
+        // The injector is this thread's only desktop follower. Capture's
+        // watcher ran here too once, and whichever of the two followed a switch
+        // second left the thread on a handle the other did not expect: through
+        // capture's, nothing could be injected until the next switch.
         let mut injector = InputInjector::new(space);
         // The parent is checked here, on the thread whose work dies with it,
         // once a second; the thread itself stays, so the session's closing
@@ -4009,11 +4032,11 @@ mod host {
         let mut parent_reported = false;
 
         while !stop.load(Ordering::Relaxed) {
-            // Trigger 4 of `release_all`. `follow` switches and reports in one
-            // call, so this thread is already on the new desktop when the ups
-            // the session answers with arrive — and it is the session that
+            // Trigger 4 of `release_all`. `follow_desktop` switches and reports
+            // in one call, so this thread is already on the new desktop when the
+            // ups the session answers with arrive — and it is the session that
             // answers, because the held sets are per viewer and live there.
-            if watcher.follow() {
+            if injector.follow_desktop() {
                 let _ = tx.try_send(FromWorker::DesktopSwitched);
                 injector.refresh_bounds();
             }
