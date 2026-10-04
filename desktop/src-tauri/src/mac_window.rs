@@ -13,6 +13,13 @@
 //! is empty and without a separator, and the header is made the unified bar's
 //! height (52 pt) so the whole title area stays the drag surface: the shape,
 //! and nothing else.
+//!
+//! No `trafficLightPosition` goes with it. Tauri (tao) applies that by
+//! resizing the title-bar container view on every draw, and with a toolbar
+//! in that container the two fought over it: the second show of the window
+//! after a hide crashed in `-[NSThemeFrame _toolbarViewFrame]` on a freed
+//! view (2026-10-03). The unified bar puts the lights where the header wants
+//! them anyway.
 
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSTitlebarSeparatorStyle, NSToolbar, NSWindow, NSWindowToolbarStyle};
