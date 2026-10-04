@@ -153,3 +153,14 @@ describe('SwoopStage touch', () => {
     expect(stageRef.current).toHaveClass('touch-none', 'overscroll-none');
   });
 });
+
+describe('SwoopStage theme', () => {
+  it('keeps the video surface in the night palette whatever the page theme', () => {
+    // jsdom computes no tokens, so the scoping class is the guard: without it a
+    // light page turns the letterbox to paper and leaves the fullscreen hints
+    // in light-theme grey on black.
+    const stageRef = renderStage();
+
+    expect(stageRef.current).toHaveClass('dark');
+  });
+});

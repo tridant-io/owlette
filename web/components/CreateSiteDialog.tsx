@@ -213,11 +213,11 @@ export function CreateSiteDialog({
       case 'checking':
         return <Loader2 className="h-4 w-4 animate-spin text-accent-cyan" />;
       case 'available':
-        return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+        return <CheckCircle2 className="h-4 w-4 text-success" />;
       case 'taken':
-        return <XCircle className="h-4 w-4 text-red-500" />;
+        return <XCircle className="h-4 w-4 text-danger" />;
       case 'invalid':
-        return <XCircle className="h-4 w-4 text-orange-500" />;
+        return <XCircle className="h-4 w-4 text-warning" />;
       default:
         return null;
     }
@@ -225,9 +225,9 @@ export function CreateSiteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border bg-secondary text-white">
+      <DialogContent className="border-border text-foreground">
         <DialogHeader>
-          <DialogTitle className="text-white">create new site</DialogTitle>
+          <DialogTitle className="text-foreground">create new site</DialogTitle>
           <DialogDescription className="text-muted-foreground">
             sites organize your machines by location, purpose, or project. for example, create separate sites for different offices, studios, or installations.
           </DialogDescription>
@@ -235,13 +235,13 @@ export function CreateSiteDialog({
         <div className="space-y-4 py-4">
           {/* Site Name Input */}
           <div className="space-y-2">
-            <Label htmlFor="site-name" className="text-white">site name</Label>
+            <Label htmlFor="site-name" className="text-foreground">site name</Label>
             <Input
               id="site-name"
               placeholder="e.g., NYC Office"
               value={newSiteName}
               onChange={(e) => setNewSiteName(e.target.value)}
-              className="border-border bg-background text-white"
+              className="border-border bg-background text-foreground"
               autoFocus
             />
           </div>
@@ -293,8 +293,8 @@ export function CreateSiteDialog({
                   onChange={(e) => handleSiteIdChange(e.target.value)}
                   aria-invalid={hasIdError || undefined}
                   aria-describedby={validationError ? 'site-id-error' : undefined}
-                  className={`border-border bg-background text-white pr-10 ${
-                    availabilityStatus === 'available' ? 'border-green-500/50 focus-visible:ring-green-500' : ''
+                  className={`border-border bg-background text-foreground pr-10 ${
+                    availabilityStatus === 'available' ? 'border-success/50 focus-visible:ring-success' : ''
                   }`}
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -345,7 +345,7 @@ export function CreateSiteDialog({
                   id="site-timezone"
                   value={timezone}
                   onValueChange={setTimezone}
-                  className="border-border bg-background text-white"
+                  className="border-border bg-background text-foreground"
                 />
               </>
             )}
@@ -362,7 +362,7 @@ export function CreateSiteDialog({
           <Button
             onClick={handleCreateSite}
             disabled={isCreating || availabilityStatus !== 'available'}
-            className="text-gray-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isCreating ? 'creating...' : 'create site'}
           </Button>

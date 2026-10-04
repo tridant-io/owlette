@@ -20,6 +20,7 @@ import { auth, db, storage } from '@/lib/firebase';
 import { handleError, logError } from '@/lib/errorHandler';
 import { inAppDiagnostics, isPopupUnavailableError } from '@/lib/inAppBrowser';
 import { getBrowserTimezone } from '@/lib/timeUtils';
+import { THEMES, type ThemeChoice } from '@/lib/theme';
 import { toast } from '@/lib/toast';
 import * as Sentry from '@sentry/nextjs';
 // Type-only: mfaFactors.server.ts is Admin-SDK code that must never reach the
@@ -334,6 +335,9 @@ export interface UserPreferences {
   activeGraphPanel?: { machineId: string; metric: string } | null;
   /** MetricsDetailPanel range, global not per-machine: '1h'|'1d'|'1w'|'1m'|'1y'|'all'. Default '1h'. */
   graphTimeRange?: '1h' | '1d' | '1w' | '1m' | '1y' | 'all';
+  /** appearance, synced across devices. undefined = never chosen, so the
+   * browser's own (localStorage, else the os) stands. applied by ThemePreferenceSync. */
+  theme?: ThemeChoice;
 }
 
 /**
@@ -601,6 +605,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   graphTabs: preferences.graphTabs || undefined,
                   activeGraphPanel: preferences.activeGraphPanel || null,
                   graphTimeRange: preferences.graphTimeRange || undefined,
+                  // an unknown value drops to undefined rather than reach setTheme
+                  theme: THEMES.find((t) => t === preferences.theme),
                 };
                 setUserPreferences(prev => {
                   // Keep prev's reference for unchanged fields — identity churn
@@ -632,7 +638,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     prev.processesExpanded === newPrefs.processesExpanded &&
                     prev.displaysExpanded === newPrefs.displaysExpanded &&
                     mutedEqual && ccEqual && graphTabsEqual && activeGraphPanelEqual &&
-                    prev.graphTimeRange === newPrefs.graphTimeRange;
+                    prev.graphTimeRange === newPrefs.graphTimeRange &&
+                    prev.theme === newPrefs.theme;
                   if (allEqual) return prev;
 
                   // Something changed: rebuild, keeping refs for unchanged fields.

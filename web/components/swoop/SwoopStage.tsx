@@ -114,7 +114,10 @@ export function SwoopStage({ session, state, stageRef, videoRef, onLeave, childr
 
   return (
     // touch-none: a drag is the machine's, never a page pan, and android's
-    // pull-to-refresh must not reload the page mid-session.
+    // pull-to-refresh must not reload the page mid-session. `dark` scopes the
+    // night palette to the stage in both themes: it is a video surface, not
+    // chrome, so the letterbox, hints and overlays read the same over any
+    // picture and on the black of fullscreen.
     <div
       ref={stageRef}
       tabIndex={-1}
@@ -128,7 +131,7 @@ export function SwoopStage({ session, state, stageRef, videoRef, onLeave, childr
       onBlur={(e) => {
         if (e.target === e.currentTarget) setLeaveHint(false);
       }}
-      className="relative h-full w-full overflow-hidden bg-background outline-none touch-none overscroll-none [&:fullscreen]:bg-black"
+      className="dark relative h-full w-full overflow-hidden bg-background outline-none touch-none overscroll-none [&:fullscreen]:bg-black"
     >
       <video
         ref={videoRef}

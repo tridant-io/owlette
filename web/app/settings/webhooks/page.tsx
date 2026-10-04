@@ -112,7 +112,7 @@ export default function WebhooksSettingsPage() {
   return (
     <div className="min-h-screen bg-background">
       <PageHeader currentPage="webhooks" />
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <main className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 py-8">
           {/* Developer-preview banner. Subscription management, manual probes,
               delivery history, and retry are all live. Automatic dispatch of
               roost lifecycle events (`version.published`, `version.rolled_back`,
@@ -121,9 +121,10 @@ export default function WebhooksSettingsPage() {
               silently to events that won't fire. It stays up on a gated site
               that still has subscriptions: it is a caveat about delivery, which
               is exactly what those subscriptions are still doing. */}
-          <div className="mb-6 rounded-md border border-accent-cyan/30 bg-accent-cyan/10 px-4 py-3">
-            <div className="flex items-start gap-3">
-              <span className="inline-flex items-center rounded-full border border-accent-cyan/30 bg-accent-cyan/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-cyan flex-shrink-0">
+          <div className="mb-6 rounded-md border border-accent-cyan/30 bg-accent-cyan/10 px-3 py-3 sm:px-4">
+            {/* the pill sits above the note on a phone, so the note keeps the full width */}
+            <div className="flex flex-col items-start gap-2 sm:flex-row sm:gap-3">
+              <span className="inline-flex items-center rounded-full border border-accent-cyan/30 bg-card dark:bg-accent-cyan/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-cyan flex-shrink-0">
                 developer preview
               </span>
               <div className="text-xs text-foreground/80 leading-relaxed">
@@ -137,7 +138,7 @@ export default function WebhooksSettingsPage() {
           </div>
           <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
             <div>
-              <h1 className="text-2xl font-semibold text-white flex items-center gap-2">
+              <h1 className="text-2xl font-semibold text-foreground flex items-center gap-2">
                 <Webhook className="h-5 w-5" />
                 webhooks
               </h1>
@@ -149,7 +150,7 @@ export default function WebhooksSettingsPage() {
             <div className="flex items-center gap-2">
               {siteIds.length > 1 && (
                 <Select value={selectedSite} onValueChange={setUserPickedSite}>
-                  <SelectTrigger aria-label="site" className="w-48 bg-card border-border text-white">
+                  <SelectTrigger aria-label="site" className="w-48 bg-card border-border text-foreground">
                     <SelectValue placeholder="pick a site" />
                   </SelectTrigger>
                   <SelectContent>
@@ -165,7 +166,7 @@ export default function WebhooksSettingsPage() {
                 <Button
                   type="button"
                   onClick={() => setCreateOpen(true)}
-                  className="text-gray-900 cursor-pointer"
+                  className="cursor-pointer"
                 >
                   <Plus className="h-4 w-4 mr-1" /> create webhook
                 </Button>
@@ -178,7 +179,7 @@ export default function WebhooksSettingsPage() {
               <button
                 type="button"
                 onClick={() => setRevealedSecret(null)}
-                className="absolute top-3 right-3 text-muted-foreground hover:text-white cursor-pointer"
+                className="absolute top-3 right-3 text-muted-foreground hover:text-foreground cursor-pointer"
                 aria-label="dismiss"
               >
                 <X className="h-4 w-4" />
@@ -187,7 +188,7 @@ export default function WebhooksSettingsPage() {
                 signing secret issued — copy it now. it will not be shown again.
               </p>
               <div className="flex items-center gap-2">
-                <code className="flex-1 text-xs bg-background border border-border rounded px-3 py-2 text-white font-mono break-all select-all">
+                <code className="flex-1 text-xs bg-background border border-border rounded px-3 py-2 text-foreground font-mono break-all select-all">
                   {revealedSecret}
                 </code>
                 <CopyButton
@@ -200,7 +201,7 @@ export default function WebhooksSettingsPage() {
 
           {!selectedSite ? (
             <Card className="border-border bg-card/50 p-8 text-center">
-              <p className="text-sm text-white">no sites available</p>
+              <p className="text-sm text-foreground">no sites available</p>
               <p className="text-xs text-muted-foreground mt-1">
                 you need site access to manage webhooks. ask a site admin to add you.
               </p>
@@ -215,7 +216,7 @@ export default function WebhooksSettingsPage() {
               {canManage ? (
                 <>
                   <div>
-                    <p className="text-sm text-white">no webhooks yet</p>
+                    <p className="text-sm text-foreground">no webhooks yet</p>
                     <p className="text-xs text-muted-foreground mt-1">
                       subscribe to events so your ci/cd, slack bot, or monitoring can react to
                       roost activity.
@@ -225,14 +226,14 @@ export default function WebhooksSettingsPage() {
                     type="button"
                     size="sm"
                     onClick={() => setCreateOpen(true)}
-                    className="text-gray-900 cursor-pointer"
+                    className="cursor-pointer"
                   >
                     <Plus className="h-3.5 w-3.5 mr-1" /> create your first webhook
                   </Button>
                 </>
               ) : (
                 <div>
-                  <p className="text-sm text-white">no webhooks configured for this site</p>
+                  <p className="text-sm text-foreground">no webhooks configured for this site</p>
                   <p className="text-xs text-muted-foreground mt-1">
                     a site admin can add webhooks.
                   </p>

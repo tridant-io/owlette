@@ -22,7 +22,6 @@
         "decorations": false,
         "visible": false,
         "center": true,
-        "theme": "Dark",
         "backgroundColor": "#020B16",
         "dragDropEnabled": true
       }

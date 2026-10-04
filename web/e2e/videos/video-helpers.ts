@@ -64,6 +64,8 @@ export async function recordScene(
   const context = await browser.newContext({
     baseURL: opts.baseURL,
     storageState: opts.storageState,
+    // explicit, not inherited: footage must stay dark even if this runs outside a test's use block
+    colorScheme: 'dark',
     // viewport + DPR come from the project use block in playwright.videos.config.ts
   });
   const page = await context.newPage();

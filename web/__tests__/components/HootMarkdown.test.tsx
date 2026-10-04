@@ -33,4 +33,12 @@ describe('HootMarkdown', () => {
     // react-markdown's hast node is a prop, never a DOM attribute.
     expect(table).not.toHaveAttribute('node');
   });
+
+  it('inverts its prose in the dark theme only', () => {
+    render(<HootMarkdown text="hello" />);
+
+    const body = screen.getByRole('table').closest('.hoot-markdown');
+    expect(body).toHaveClass('dark:prose-invert');
+    expect(body).not.toHaveClass('prose-invert');
+  });
 });

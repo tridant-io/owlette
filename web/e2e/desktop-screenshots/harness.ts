@@ -205,7 +205,11 @@ function delay(ms: number): Promise<void> {
  *
  * The geometry is a parameter because the video sibling (`e2e/desktop-videos`)
  * needs a larger window than a docs column wants; the defaults are the stills
- * geometry, so an existing caller writes the same bytes it always did.
+ * geometry.
+ *
+ * The appearance is pinned dark: with none stored the window follows the os,
+ * and a capture machine in light mode would otherwise film every take light. The
+ * stills' light project switches the live window itself (`set_appearance_theme`).
  */
 export function snapshotLayout(
   windowSize: { width: number; height: number } = CAPTURE_WINDOW,
@@ -225,6 +229,7 @@ export function snapshotLayout(
       {
         sidebar: { width: sidebarWidth },
         window: { width: windowSize.width, height: windowSize.height, maximized: false },
+        appearance: { theme: 'dark' },
       },
       null,
       2,

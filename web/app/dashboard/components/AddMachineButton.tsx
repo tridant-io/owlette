@@ -160,7 +160,7 @@ export function AddMachineButton({
       </TooltipProvider>
 
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="sm:max-w-md bg-card border-border">
+        <DialogContent className="sm:max-w-md border-border">
           <DialogHeader>
             <DialogTitle className="text-foreground">add machine</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -169,10 +169,11 @@ export function AddMachineButton({
           </DialogHeader>
 
           {/* Tab switcher */}
-          <div className="relative grid grid-cols-2 rounded-lg bg-muted p-1">
-            {/* Sliding indicator */}
+          <div className="relative grid grid-cols-2 rounded-lg bg-card-sunken p-1">
+            {/* Sliding indicator. by day it lifts to the panel tone: the page tone
+                sits a hair off the light track and the thumb disappears */}
             <div
-              className="absolute rounded-md bg-background transition-transform duration-200 ease-in-out pointer-events-none"
+              className="absolute rounded-md bg-card shadow-xs dark:bg-background dark:shadow-none transition-transform duration-200 ease-in-out pointer-events-none"
               style={{
                 top: '4px', bottom: '4px', left: '4px',
                 width: 'calc(50% - 4px)',
@@ -206,8 +207,8 @@ export function AddMachineButton({
             <div className="space-y-5 mt-5">
               {enterSuccess ? (
                 <div className="text-center space-y-4 py-4">
-                  <div className="mx-auto w-16 h-16 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                    <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+                  <div className="mx-auto w-16 h-16 rounded-full bg-success/15 flex items-center justify-center">
+                    <CheckCircle2 className="h-8 w-8 text-success/80" />
                   </div>
                   <p className="text-foreground font-medium">machine authorized</p>
                   <p className="text-sm text-muted-foreground">
@@ -242,7 +243,7 @@ export function AddMachineButton({
                   <Button
                     onClick={handleAuthorize}
                     disabled={!enterPhrase.trim() || isAuthorizing}
-                    className="w-full text-gray-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full cursor-pointer disabled:cursor-not-allowed"
                   >
                     {isAuthorizing ? (
                       <>
@@ -267,8 +268,8 @@ export function AddMachineButton({
               {generateSuccess && generatedPhrase ? (
                 <div className="space-y-4">
                   <div className="text-center space-y-2">
-                    <div className="mx-auto w-16 h-16 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                      <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+                    <div className="mx-auto w-16 h-16 rounded-full bg-success/15 flex items-center justify-center">
+                      <CheckCircle2 className="h-8 w-8 text-success/80" />
                     </div>
                     <p className="text-foreground font-medium">code ready</p>
                   </div>
@@ -341,14 +342,14 @@ export function AddMachineButton({
                     </div>
                     <p className="text-xs text-muted-foreground">
                       generate a pre-authorized pairing phrase. use it with the installer&apos;s
-                      <code className="mx-1 px-1 py-0.5 bg-muted rounded text-foreground">/ADD=</code>
+                      <code className="mx-1 px-1 py-0.5 bg-card-sunken rounded text-foreground">/ADD=</code>
                       flag to silently add machines to this site.
                     </p>
                   </div>
                   <Button
                     onClick={handleGenerate}
                     disabled={isGenerating}
-                    className="w-full text-gray-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full cursor-pointer disabled:cursor-not-allowed"
                   >
                     {isGenerating ? (
                       <>

@@ -9,6 +9,19 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ---
 
+## [Unreleased]
+
+### added — light mode
+
+owlette now has a light theme, on every page of the dashboard, the docs, the API
+reference and the sign-in screens, and in the desktop app. It follows your
+computer's setting until you choose: pick light, dark or system under account
+settings → preferences → appearance, and the choice follows you to every browser
+you sign in on. Dark stays the default wherever there is no signal. By day the
+console is the same room in daylight: cool paper, navy ink, one deeper signal
+cyan, and a warm lamp glow under the header. The desktop app has its own
+appearance setting in its menu.
+
 ## [4.1.1] - 2026-10-03
 
 ### added — keep screens awake

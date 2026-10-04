@@ -43,7 +43,7 @@ command, and the quick build re-copies the exe from `target/release/`.
 
 ```
 desktop/
-├─ index.html            # <html class="dark">, body font-sans antialiased
+├─ index.html            # <html class="dark"> until the host answers (main.tsx), body font-sans antialiased
 ├─ components.json       # shadcn config (new-york, neutral, cssVariables)
 ├─ vite.config.ts        # @ alias, tailwind 4 plugin, tauri dev server, vitest
 ├─ public/               # icon.svg, owlette-eye.svg
@@ -62,6 +62,7 @@ desktop/
 │  ├─ lib/fsProbe.ts     # the real disk behind it + per-machine search paths
 │  ├─ lib/dropQueue.ts   # the confirm-card queue between a drop and a write
 │  ├─ lib/sidebarWidth.ts    # the sidebar clamp + drag/keyboard geometry
+│  ├─ lib/theme.ts       # the appearance choices (system / dark / light)
 │  └─ test/              # vitest setup + design-system smoke test
 └─ src-tauri/
    ├─ src/paths.rs       # %PROGRAMDATA%\Owlette layout + path scoping
@@ -74,7 +75,7 @@ desktop/
    ├─ src/tray.rs        # notification-area icon, menu, status monitor
    ├─ src/startup_link.rs # "start on login": {userstartup}\Owlette.lnk; on macos / linux this user's
    │                      #   override of the installer's login item (launchctl disable / systemctl --user mask)
-   ├─ src/window_state.rs # per-user layout memory (window size, sidebar width)
+   ├─ src/window_state.rs # per-user layout memory (window size, sidebar width, appearance)
    ├─ src/commands.rs    # #[tauri::command] adapters (no logic)
    └─ src/lib.rs         # builder, plugins, watcher wiring, exit cleanup
 ```
@@ -325,10 +326,12 @@ files across, and delete the dependency again.
 
 ## Tests
 
-`npm test` runs a vitest smoke test over the seams of the port: the `@` alias,
-`cn()` + `cva()` + `tailwind-merge`, the `button.tsx` customisations, and the
-integrity of `globals.css` (unlayered rules present, font variables bound,
-stripped blocks still stripped). It is not a component test suite.
+`npm test` runs vitest over the components and the seams of the port: the `@`
+alias, `cn()` + `cva()` + `tailwind-merge`, the `button.tsx` customisations, and
+the integrity of `globals.css` (unlayered rules present, font variables bound,
+stripped blocks still stripped). CI runs `npm run lint`, `npm test` and
+`npm run typecheck` on every change under `desktop/` (`.github/workflows/desktop.yml`);
+the Rust crate is `rust-build.yml`'s.
 
 `src/globals.css` is opted into `test.css` in `vite.config.ts` — vitest stubs
 CSS imports to an empty string by default, which would silently empty the
@@ -336,8 +339,36 @@ CSS imports to an empty string by default, which would silently empty the
 
 ## Window
 
-`src-tauri/tauri.conf.json` sets the window to 1280×800 with a 900×600 minimum,
-centred, `theme: "Dark"`, and `backgroundColor: "#020B16"` — the sRGB value of
-the dark `--background` token (`oklch(0.145 0.03 250)`), so the native window
-paints the app's background instead of white before the webview's first frame.
-`dragDropEnabled` is on.
+`src-tauri/tauri.conf.json` sets the window to 1060×640 with a 780×540 minimum,
+centred, and `backgroundColor: "#020B16"` — the sRGB value of the dark
+`--background` token (`oklch(0.145 0.03 250)`), so the native window paints the
+app's background instead of white before setup runs. `dragDropEnabled` is on.
+Neither config pins a `theme`.
+
+### Appearance
+
+The operator picks system, dark or light from `appearance` in the app menu. It is
+stored in `layout.json` as `{"appearance": {"theme": "system"}}` (`system` when
+absent) and it is the **window** theme, set from Rust; the webview never picks a
+theme itself.
+
+- Before the window first shows, `window_state::restore` pins the window theme
+  for dark or light (`system` leaves it unpinned) and paints the window and
+  webview background to match: `#020B16` dark, `#F4F7FB` light (the light
+  `--background`, `oklch(0.975 0.006 250)`). Under `system` the colour follows
+  the theme the OS reports, and dark when it reports nothing.
+- The page never reads its own `prefers-color-scheme`: WebView2 keeps the colour
+  scheme the webview was created with, and tauri changes it only on an OS theme
+  change, never when the window is pinned or freed. So the host tells the page.
+  `resolved_appearance` returns the theme to draw (the pin, or the OS's answer
+  under `system`, dark when it gives none), and the `appearance-resolved` event
+  announces each change. `main.tsx` asks before its first render, so the page
+  never paints the other theme first, and `HostTheme` forces next-themes to the
+  host's answer. `class="dark"` in `index.html` covers the moment before that.
+- `set_appearance_theme` re-themes the open window at once, announces the theme
+  and then stores the choice. `WindowEvent::ThemeChanged` repaints the background
+  and announces the theme when the OS re-themes an unpinned window.
+- Linux is the least certain: tao takes the OS theme from GTK's
+  `prefer-dark-theme` setting, a portal reporting no preference reads as light,
+  and switching back to `system` while running clears the OS dark preference
+  until the next launch.

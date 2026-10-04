@@ -6,7 +6,6 @@
 
 :root,
 .dark {
-  color-scheme: dark;
   --color-fd-background: var(--background);
   --color-fd-foreground: var(--foreground);
   --color-fd-muted: var(--muted);
@@ -103,7 +102,7 @@
   gap: 0.5rem;
 }
 
-.docs-nav-title img {
+.docs-nav-title svg {
   height: 1.25rem;
   width: 1.25rem;
 }

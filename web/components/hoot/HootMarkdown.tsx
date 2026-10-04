@@ -19,7 +19,7 @@ const COMPONENTS: Components = {
 
 export function HootMarkdown({ text }: { text: string }) {
   return (
-    <div className="hoot-markdown text-sm text-foreground prose prose-invert prose-sm max-w-none break-words prose-code:before:content-none prose-code:after:content-none">
+    <div className="hoot-markdown text-sm text-foreground prose dark:prose-invert prose-sm max-w-none break-words prose-code:before:content-none prose-code:after:content-none">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
         {text}
       </ReactMarkdown>

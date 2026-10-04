@@ -1,0 +1,58 @@
+name: desktop checks
+
+# The Tauri app's webview (desktop/src) had vitest, oxlint and tsc but no
+# workflow ran them: rust-build.yml compiles the crate in desktop/src-tauri and
+# nothing else, so a red desktop test reached dev unseen. This job runs the
+# webview's own checks on any change under desktop/. The cargo side stays in
+# rust-build.yml.
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '!desktop/src-tauri/**'
+      - '.github/workflows/desktop.yml'
+  push:
+    branches: [main, dev]
+    paths:
+      - 'desktop/**'
+      - '!desktop/src-tauri/**'
+      - '.github/workflows/desktop.yml'
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege default: this job only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  webview:
+    name: lint + tests + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: install
+        run: npm ci
+
+      - name: lint
+        run: npm run lint
+
+      - name: tests
+        run: npm test
+
+      - name: typecheck
+        run: npm run typecheck

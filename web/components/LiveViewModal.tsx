@@ -247,7 +247,7 @@ export function LiveViewModal({
       )}
 
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent showCloseButton={false} className="bg-card border-border w-[calc(100vw-2rem)] sm:max-w-4xl max-w-none p-0 gap-0 h-[calc(100dvh-4rem)] max-h-[700px]">
+        <DialogContent showCloseButton={false} className="border-border w-[calc(100vw-2rem)] sm:max-w-4xl max-w-none p-0 gap-0 h-[calc(100dvh-4rem)] max-h-[700px]">
           <div className="flex flex-col h-full">
 
             <DialogHeader className="px-4 py-2 border-b border-border flex-shrink-0">
@@ -262,10 +262,10 @@ export function LiveViewModal({
                 {liveViewActive && (
                   <span className="ml-2 inline-flex items-center gap-1">
                     <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-success" />
                     </span>
-                    <span className="text-xs font-normal text-green-400">live</span>
+                    <span className="text-xs font-normal text-success">live</span>
                   </span>
                 )}
                 {/* no tooltip: as the first tabbable control it takes focus on open,
@@ -282,7 +282,8 @@ export function LiveViewModal({
               </DialogTitle>
             </DialogHeader>
 
-            <div className="flex-1 relative bg-black/30 flex items-center justify-center overflow-hidden min-h-0">
+            {/* black/30 is a letterbox only at night; day uses the sunken well, see ScreenshotDialog */}
+            <div className="flex-1 relative bg-card-sunken dark:bg-black/30 flex items-center justify-center overflow-hidden min-h-0">
               {!screenshot && !liveViewActive && (
                 <div className="flex flex-col items-center gap-3 py-12 text-muted-foreground text-center px-6">
                   <Eye className="h-8 w-8" />
@@ -369,7 +370,7 @@ export function LiveViewModal({
                     size="sm"
                     onClick={handleStop}
                     disabled={isStopping}
-                    className="bg-red-900/30 border-red-800 text-red-300 hover:bg-red-900/50 hover:text-red-200"
+                    className="bg-danger-surface border-danger-border text-danger hover:text-danger"
                   >
                     {isStopping ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />

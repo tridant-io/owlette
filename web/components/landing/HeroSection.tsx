@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { InteractiveBackground } from './InteractiveBackground';
-import { OwletteEye } from './OwletteEye';
+import { EYE_HALO_DAY, EYE_HALO_GRADIENT, OwletteEye } from './OwletteEye';
 import type { HeroHeadline } from '@/lib/heroHeadlines';
 import { LICENSE_URL } from '@/lib/repoLinks';
 
@@ -14,19 +14,21 @@ interface HeroSectionProps {
 
 export function HeroSection({ headline }: HeroSectionProps) {
   return (
-    <section className="relative sm:h-[100dvh] flex flex-col pt-16 overflow-hidden">
+    <section className="relative sm:min-h-[100dvh] flex flex-col pt-16 overflow-hidden">
       {/* Interactive mouse-reactive background */}
       <InteractiveBackground />
 
-      {/* Content wrapper — headline pinned to vertical center, eye grows upward, CTA grows downward */}
-      <div className="relative z-10 w-full max-w-5xl mx-auto px-4 sm:px-6 text-center flex flex-col items-center flex-1 justify-center py-12 sm:py-0 sm:-mt-[18vh]">
+      {/* Content wrapper — the block sits 18vh above centre, so the headline lands
+          near the middle with the eye above it. two spacers share the free space
+          (the lower one starts 36vh ahead), and the upper one never shrinks past a
+          gap under the header, so a short window can't push the eye beneath it. */}
+      <div className="relative z-10 w-full max-w-5xl mx-auto px-4 sm:px-6 text-center flex flex-col items-center flex-1 justify-center py-12 sm:py-0">
+        <div aria-hidden className="hidden sm:block flex-[1_1_0%] min-h-8" />
         {/* The Eye */}
         <div className="relative flex items-center justify-center mb-6 sm:mb-8">
           <div
-            className="absolute w-[300px] h-[300px] sm:w-[500px] sm:h-[500px] rounded-full blur-3xl"
-            style={{
-              background: 'radial-gradient(circle, oklch(0.70 0.14 30 / 0.15) 0%, oklch(0.72 0.16 55 / 0.08) 40%, transparent 70%)',
-            }}
+            className={`absolute w-[300px] h-[300px] sm:w-[500px] sm:h-[500px] rounded-full blur-3xl ${EYE_HALO_DAY} dark:[--halo-core:color-mix(in_oklch,var(--accent-coral)_15%,transparent)] dark:[--halo-edge:color-mix(in_oklch,var(--accent-warm)_8%,transparent)]`}
+            style={{ background: EYE_HALO_GRADIENT }}
           />
           <OwletteEye
             size={220}
@@ -72,6 +74,7 @@ export function HeroSection({ headline }: HeroSectionProps) {
             FSL-1.1 source on github
           </a>
         </p>
+        <div aria-hidden className="hidden sm:block flex-[1_1_36vh]" />
       </div>
 
     </section>

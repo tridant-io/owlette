@@ -468,7 +468,7 @@ function LoginForm() {
             onFocus={() => setEmailFormOpen(true)}
             required
             disabled={loading}
-            className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+            className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
           />
         </div>
 
@@ -490,7 +490,7 @@ function LoginForm() {
                 }}
                 required
                 disabled={loading}
-                className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+                className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
               />
             </div>
             <FormError message={formError?.message} id="login-form-error" />

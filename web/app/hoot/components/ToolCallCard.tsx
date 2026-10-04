@@ -116,15 +116,15 @@ export function ToolCallCard({
   }
 
   const statusIcon = awaitingApproval ? (
-    <ShieldAlert className="h-4 w-4 text-amber-400" />
+    <ShieldAlert className="h-4 w-4 text-warning" />
   ) : isLoading ? (
     <Loader2 className="h-4 w-4 text-accent-cyan animate-spin" />
   ) : denied ? (
     <Ban className="h-4 w-4 text-muted-foreground" />
   ) : hasError ? (
-    <AlertCircle className="h-4 w-4 text-red-400" />
+    <AlertCircle className="h-4 w-4 text-danger" />
   ) : (
-    <CheckCircle2 className="h-4 w-4 text-green-400" />
+    <CheckCircle2 className="h-4 w-4 text-success" />
   );
 
   return (
@@ -132,7 +132,7 @@ export function ToolCallCard({
       open={expanded}
       onOpenChange={setExpanded}
       className={`my-2 rounded-lg border overflow-hidden ${
-        awaitingApproval ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-secondary/50'
+        awaitingApproval ? 'border-warning-border bg-warning-solid/5' : 'border-border bg-secondary/50'
       }`}
     >
       {/* Cancel is a sibling of the expand toggle, never nested inside it —
@@ -147,22 +147,23 @@ export function ToolCallCard({
             <span className="font-mono text-xs text-foreground truncate">{toolName}</span>
 
             {tierLabel && (
-              /* `--muted-foreground` on `--accent` is 4.40:1 in the app's forced-dark
-                 theme — under the 4.5:1 axe enforces on /hoot, and this is 10px text,
-                 so it is held to the normal-text threshold with no large-text relief.
-                 `--accent-foreground` at 70% composites to rgb(178,194,208) for 6.22:1,
-                 while staying quieter than the tool name beside it — which is what keeps
-                 the chip reading as metadata. (Work that ratio in GAMMA-ENCODED sRGB, the
-                 space the browser actually blends in: computing the same blend in linear
-                 light flatters it to 7.87:1.) The accent fill stays — against the card it
-                 is what makes the chip a chip, where `--secondary` would all but vanish. */
+              /* `--muted-foreground` on `--accent` is 4.40:1 in dark — under the 4.5:1
+                 axe enforces on /hoot, and this is 10px text, so it is held to the
+                 normal-text threshold with no large-text relief. `--accent-foreground`
+                 at 70% composites to rgb(178,194,208) for 6.22:1 while staying quieter
+                 than the tool name beside it, which keeps the chip reading as metadata.
+                 by day the same class lands at rgb(77,86,99) on the light accent, 5.87:1.
+                 (work these ratios in gamma-encoded srgb, the space the browser blends
+                 in: linear light flatters the dark blend to 7.87:1.) the accent fill
+                 stays: against the card it is what makes the chip a chip, where
+                 `--secondary` would all but vanish. */
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-accent-foreground/70 flex-shrink-0">
                 {tierLabel}
               </span>
             )}
 
             <span className="ml-auto flex items-center gap-1 text-muted-foreground flex-shrink-0">
-              {awaitingApproval && <span className="text-xs text-amber-400">awaiting approval</span>}
+              {awaitingApproval && <span className="text-xs text-warning">awaiting approval</span>}
               {denied && <span className="text-xs">denied</span>}
               {isLoading && !awaitingApproval && <span className="text-xs">executing...</span>}
               <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
@@ -191,7 +192,7 @@ export function ToolCallCard({
       {/* Approval banner. Payload stays collapsed so it isn't duplicated here
           and in the expanded view. */}
       {awaitingApproval && (
-        <div className="border-t border-amber-500/30 px-3 py-2.5 space-y-2.5">
+        <div className="border-t border-warning-solid/30 px-3 py-2.5 space-y-2.5">
           <p className="text-xs text-foreground">
             hoot wants to run the privileged <span className="font-mono">{toolName}</span> tool
             {approvalTarget ? <> on <span className="font-medium">{approvalTarget}</span></> : null}. approve to continue, or expand to inspect the input.
@@ -281,7 +282,7 @@ export function ToolCallCard({
                 <pre
                   className={`mt-1 text-xs font-mono rounded p-2 overflow-x-auto max-h-64 ${
                     hasError
-                      ? 'text-red-300 bg-red-950/30'
+                      ? 'text-danger bg-danger-surface'
                       : 'text-foreground bg-background'
                   }`}
                 >

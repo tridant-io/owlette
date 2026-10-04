@@ -1,8 +1,10 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
 import { LazyAuthProvider } from "@/components/LazyAuthProvider";
+import { ThemeProvider } from "@/components/ThemeProvider";
+import { FALLBACK_THEME } from "@/lib/theme";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Footer } from "@/components/Footer";
@@ -72,9 +74,13 @@ export const metadata: Metadata = {
       'text/plain': '/llms.txt',
     },
   },
-  other: {
-    'theme-color': '#0a0f1a',
-  },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: dark)', color: '#0a0f1a' },
+    { media: '(prefers-color-scheme: light)', color: '#f4f7fb' },
+  ],
 };
 
 export default async function RootLayout({
@@ -83,16 +89,19 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   // Reading request headers opts the app into per-request rendering so the
-  // proxy CSP nonce can be applied to Next.js framework inline scripts.
-  await headers();
+  // proxy CSP nonce can be applied to Next.js framework inline scripts, and
+  // to the theme script, which strict-dynamic blocks without it.
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   // Validate Firebase environment variables
   // In development: logs warnings
   // In production: throws error if misconfigured
   // TEMPORARILY DISABLED for initial Railway deployment
   // validateEnvironmentOrThrow();
 
+  // the theme script swaps the server's fallback class before first paint, so
+  // <html> never matches what was rendered
   return (
-    <html lang="en" className="dark scroll-smooth">
+    <html lang="en" className={`${FALLBACK_THEME} scroll-smooth`} suppressHydrationWarning>
       <body
         className={`${geist.variable} ${geistMono.variable} font-sans antialiased text-foreground`}
       >
@@ -134,17 +143,19 @@ export default async function RootLayout({
 
 
 -->` }} style={{ display: 'none' }} />
-        <SentryInit />
-        <SecurityVersionBanner />
-        <ErrorBoundary>
-          <LazyAuthProvider>
-            <TooltipProvider delayDuration={300}>
-              {children}
-              <Footer />
-              <Toaster theme="dark" />
-            </TooltipProvider>
-          </LazyAuthProvider>
-        </ErrorBoundary>
+        <ThemeProvider nonce={nonce}>
+          <SentryInit />
+          <SecurityVersionBanner />
+          <ErrorBoundary>
+            <LazyAuthProvider>
+              <TooltipProvider delayDuration={300}>
+                {children}
+                <Footer />
+                <Toaster />
+              </TooltipProvider>
+            </LazyAuthProvider>
+          </ErrorBoundary>
+        </ThemeProvider>
       </body>
     </html>
   );

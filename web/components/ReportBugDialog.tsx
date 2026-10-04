@@ -136,7 +136,7 @@ export function ReportBugDialog({ open, onOpenChange }: ReportBugDialogProps) {
       if (!isOpen) resetForm();
       onOpenChange(isOpen);
     }}>
-      <DialogContent className="bg-secondary border-border sm:max-w-[480px]">
+      <DialogContent className="border-border sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle
             className="transition-opacity duration-300"

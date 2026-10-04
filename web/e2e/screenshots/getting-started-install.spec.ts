@@ -5,7 +5,7 @@
  * Out: `web/public/docs-screens/getting-started-install-buttons.png`
  * Used by: `web/content/docs/getting-started.mdx`
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
@@ -13,6 +13,8 @@ import { FIXED_NOW_MS, seedScreenshotFixtures } from './fixtures';
 import {
   installFixedClock,
   pinAdminSiteContext,
+  test,
+  themedPath,
 } from './docs-helpers';
 
 test.use({ ...roleState('admin'), viewport: { width: 1440, height: 900 } });
@@ -85,7 +87,7 @@ test('getting-started install buttons docs screenshot', async ({ page }) => {
     const clipX = Math.floor(headerBox.x + headerBox.width - cropWidth);
 
     await page.screenshot({
-      path: 'public/docs-screens/getting-started-install-buttons.png',
+      path: themedPath('public/docs-screens/getting-started-install-buttons.png'),
       clip: {
         x: clipX,
         y: Math.floor(headerBox.y),

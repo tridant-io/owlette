@@ -28,6 +28,15 @@ colors:
   band-working-sky: "rgb(14, 165, 233)"
   band-strained-amber: "rgb(245, 158, 11)"
   band-critical-red: "rgb(239, 68, 68)"
+  day-paper: "oklch(0.975 0.006 250)"
+  day-panel: "oklch(0.995 0.002 250)"
+  day-sunken: "oklch(0.962 0.008 250)"
+  day-control: "oklch(0.94 0.012 250)"
+  day-hairline: "oklch(0.88 0.016 250)"
+  day-ink: "oklch(0.21 0.03 258)"
+  day-slate: "oklch(0.42 0.032 256)"
+  day-signal-cyan: "oklch(0.48 0.105 218)"
+  day-amber: "oklch(0.56 0.15 52)"
 typography:
   display:
     fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif"
@@ -165,7 +174,7 @@ owlette is a console for watching machines nobody is sitting in front of. the sc
 
 the personality sits in a few precise mechanics, not in decoration: a hover fill that sweeps left to right like a highlighter, the owlette eye that powers on at first paint, a feather that falls while data loads, a line graph that plots itself. the blueprint and dot grids are the room's walls. they sit at low opacity behind everything and never compete with data.
 
-dark is canonical today, and the app is pinned dark (`<html class="dark">`). a light theme is planned, so new work must keep the light token layer valid even though nothing renders it yet (see Do's and Don'ts).
+owlette has two themes: dark, the night shift and the brand default, and light, the same room by day. the theme follows the visitor's OS preference, and a signed-in user can pin dark or light under appearance in their profile. dark is the fallback whenever there is no signal: the server renders `<html class="dark">`, so a page with no script still opens in the dark room.
 
 **Key Characteristics:**
 - deep navy surfaces in one hue family (250), separated by lightness steps, not by colour
@@ -196,6 +205,23 @@ a cool, near-monochrome navy console lit by one cyan signal and an occasional am
 - **Readout White** (`readout-white`): primary text, very slightly blue.
 - **Muted Steel** (`muted-steel`): secondary text, metadata, units, placeholder text, breadcrumb separators.
 
+### Light (day)
+the same room by day: cool paper with a faint hue-250 cast, white panels, and navy ink. depth works the same way as at night: surfaces step by lightness inside one hue. the page is the darkest plane and panels sit a step above it.
+- **Paper** (`day-paper`): the page, with the dot grid at low opacity.
+- **Panel** (`day-panel`): cards and popovers.
+- **Raised** (`raised`): dialogs and the app's menus. by day it is the brightest panel, so what floats comes forward. at night it is the control navy step. every dialog takes it from the primitive, never per dialog.
+- **Sunken Paper** (`day-sunken`): wells inside cards.
+- **Control Paper** (`day-control`): secondary buttons and muted fills.
+- **Hairline** (`day-hairline`): borders and dividers.
+- **Navy Ink** (`day-ink`): primary text.
+- **Slate Ink** (`day-slate`): secondary text. it clears 4.5:1 on every light surface, and still clears it at 80% opacity on a card.
+- **Deep Signal Cyan** (`day-signal-cyan`): the light theme's signal. signal cyan itself can't carry text on white (about 2:1), so day uses a deeper cyan that clears AA as a link, on its own 10–15% tint and as a fill under white text. it keeps the one-signal meaning.
+- **Burnt Amber** (`day-amber`): sodium amber deepened to read on paper.
+- **The Lamp** (`header-glow`): the one warm light by day, a desk lamp on in a bright room. it is a soft warm pool under the page header that fades into the paper. header surfaces near it catch it through the `header-lit` utility: a short warm falloff and a bright top edge, as if the surface were faintly reflective. at night the glow is a cool lift and `header-lit` is inert.
+- **Copper Eye** (`--eye-*`): by day the owlette eye is a deep copper bead, lit from the centre out to a copper edge, with no dark band and no rim. at night it is the original mark, a light falling off into the dark.
+
+status colours come from token families rather than raw palette classes: `danger`, `warning`, `success` and `info`, each with `-surface`, `-border`, `-solid` and `-solid-foreground`. charts and load bars use `--band-*` and `--series-*`. every family is defined for both themes in `web/app/globals.css`, and `web/__tests__/styles/theme-contrast.test.ts` holds both themes to WCAG AA.
+
 ### Status and load
 - **Online Green** (`online-green`): the online dot.
 - **Offline Red** (`offline-red`): the offline pill and the restarting / shutting-down countdown pill (which pulses).
@@ -205,6 +231,8 @@ a cool, near-monochrome navy console lit by one cyan signal and an occasional am
 
 ### Named Rules
 **The One Signal Rule.** cyan means interactive or live. don't use it for decoration, headings or illustration fills, or it stops meaning anything.
+
+**The Same Room Rule.** light is not a second brand. it is the same console in daylight: the same hue family, the same one signal, the same depth by lightness. no grey shadcn neutrals and no new accent.
 
 **The Colour Is an Alarm Rule.** colour on a readout is reserved for crossed thresholds. normal values stay readout white, so a wall of numbers can't hide the one that matters.
 
@@ -246,15 +274,17 @@ spacing follows Tailwind's 4px scale. inside cards, gaps are tight (4–12px) an
 
 ## Elevation & Depth
 
-depth is tonal. surfaces step up in lightness within hue 250: page 0.145 → sunken 0.19 → popover 0.205 → card 0.23 → control 0.269. machine headers use `card-header`, a 30% mix of sunken into the page tone, so a header reads as distinct from its content. shadows appear only on things that float above the page.
+depth is tonal. surfaces step up in lightness within hue 250: page 0.145 → sunken 0.19 → popover 0.205 → card 0.23 → control 0.269. machine headers use `card-header`, so a header reads as distinct from its content. at night it is a 30% mix of sunken into the page tone. by day it is lit, midway from the sunken body up to the card, and catches the lamp. shadows appear only on things that float above the page.
 
 ### Shadow Vocabulary
-- **Floating panel** (`box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.5)` plus a 1px `rgb(255 255 255 / 0.1)` ring, over 85% control navy with `backdrop-filter: blur(8px)`): dropdowns, popovers, the site switcher. the single source is `MENU_SURFACE` (`web/components/PageHeader.tsx`, mirrored in `desktop/src/lib/surfaces.ts`).
-- **Dialog** (`shadow-lg`, over a 50% black overlay with a 4px backdrop blur): modals. the overlay takes the smaller blur step so it reads like the menus.
+- **Floating panel** (`box-shadow: 0 25px 50px -12px` in `--elevation-shadow`, plus a 1px `--elevation-ring`, on `--raised`: opaque by day, 85% with `backdrop-filter: blur(8px)` at night): dropdowns, popovers, the site switcher. the single source is `MENU_SURFACE` (`web/components/PageHeader.tsx`, mirrored in `desktop/src/lib/surfaces.ts`).
+- **Dialog** (`shadow-lg` on `--raised`, over a 50% black overlay with a 4px backdrop blur): modals. the overlay takes the smaller blur step so it reads like the menus.
 - **Resting hint** (`shadow-xs` / `shadow-sm`): outline buttons, inputs and cards. barely visible on navy, so treat it as residue, not structure.
 
 ### Named Rules
 **The Shadows Float Rule.** a surface at rest gets no structural shadow. shadow plus hairline ring is the signature of "this is above the page".
+
+**The Brightest Is Selected Rule.** emphasis is brightness in both themes. a hovered, open or selected row is the brightest thing in its list. by day that means resting rows sit a step down and the open one is lifted to white, never greyed.
 
 **The No Twin Fills Rule.** never place two large flat fills a hair apart in lightness against a shared hard edge. it reads as a mistake, not depth. to get a darker region, use a vignette that fades to `--card-recessed` with no boundary line (as on the auth brand panel).
 
@@ -317,10 +347,10 @@ the signature loaders: charts plot a miniature line graph on a loop (2.4s), and 
 - **Do** colour a readout only when it crosses a threshold, using the usage bands or the warning/critical temperature colours.
 - **Do** standardize button styling in `web/components/ui/button.tsx` variants. hover feedback comes from `.btn-sweep`, not per-instance `hover:bg-*`.
 - **Do** use `MENU_SURFACE` for any floating menu, on web and desktop alike.
-- **Do** define every new colour token in both the `:root` (light) and `.dark` blocks of `globals.css`. dark is canonical, but a light theme is planned, so light values must stay valid.
+- **Do** define every new colour token in both the `:root` (light) and `.dark` blocks of `globals.css`. the contrast test fails if a dark token has no light value.
 - **Do** use `IconButton` for every icon-only control, with a lowercase label that names the action.
 - **Do** honour `prefers-reduced-motion`: every new animation needs a reduced-motion path that ends in its final state.
-- **Do** keep `desktop/src/globals.css` in step with web. its dark `--btn-hover` still uses the grey foreground mix that web replaced with the blue tint, which is a known drift.
+- **Do** keep `desktop/src/globals.css` in step with web. the two share every token and value, and the desktop design-system test fails if a dark token has no light value.
 
 ### Don't:
 - **Don't** hardcode colours in components. use the theme tokens. existing raw Tailwind status classes (`red-600`, `green-500`, `amber-*`) are incumbent debt, not precedent.
@@ -330,4 +360,4 @@ the signature loaders: charts plot a miniature line graph on a loop (2.4s), and 
 - **Don't** add a second interactive accent or another icon library. lucide-react is the only icon set.
 - **Don't** write title-case or sentence-case UI copy.
 - **Don't** add a strong or inset focus ring. the owner rejected it on sight (2026-10-02).
-- **Don't** add new uses of the light theme's stock neutral palette (near-black primary, grey surfaces) as if it were the brand. it is shadcn scaffolding until the light theme is designed.
+- **Don't** reach for raw tailwind palette classes (`text-red-400`, `bg-white`, `text-white`). they look right in one theme only. use the token families.

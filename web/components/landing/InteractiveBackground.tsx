@@ -26,6 +26,11 @@ const getTouchSnapshot = () =>
  */
 const getServerSnapshot = () => false;
 
+// the signal's pool of light. paper can't be lit, so by day it is the signal hue
+// raised to a pastel tint; translucent cyan at night's strength reads as a grey smudge
+const DAY_SIGNAL = '[--glow:oklch(from_var(--accent-cyan)_0.93_0.06_h_/_0.55)]';
+const SIGNAL_GRADIENT = 'radial-gradient(circle, var(--glow) 0%, transparent 60%)';
+
 export function InteractiveBackground() {
   const containerRef = useRef<HTMLDivElement>(null);
   const primaryRef = useRef<HTMLDivElement>(null);
@@ -116,10 +121,8 @@ export function InteractiveBackground() {
     return (
       <div className="absolute inset-0 overflow-hidden">
         <div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(600px,90vw)] h-[min(600px,90vw)] rounded-full blur-3xl"
-          style={{
-            background: 'radial-gradient(circle, oklch(0.75 0.18 195 / 0.15) 0%, transparent 60%)',
-          }}
+          className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(600px,90vw)] h-[min(600px,90vw)] rounded-full blur-3xl ${DAY_SIGNAL} dark:[--glow:color-mix(in_oklch,var(--accent-cyan)_15%,transparent)]`}
+          style={{ background: SIGNAL_GRADIENT }}
         />
       </div>
     );
@@ -133,20 +136,23 @@ export function InteractiveBackground() {
       {/* Primary glow - follows mouse, responsive size */}
       <div
         ref={primaryRef}
-        className="absolute w-[min(900px,150vw)] h-[min(900px,150vw)] rounded-full blur-3xl will-change-transform"
+        className={`absolute w-[min(900px,150vw)] h-[min(900px,150vw)] rounded-full blur-3xl will-change-transform ${DAY_SIGNAL} dark:[--glow:color-mix(in_oklch,var(--accent-cyan)_10%,transparent)]`}
         style={{
-          background: 'radial-gradient(circle, oklch(0.75 0.18 195 / 0.10) 0%, transparent 60%)',
+          background: SIGNAL_GRADIENT,
           left: 'calc(50% - min(450px, 75vw))',
           top: 'calc(50% - min(450px, 75vw))',
         }}
       />
 
-      {/* Secondary warm glow - offset from mouse for depth */}
+      {/* Secondary warm glow - offset from mouse for depth. night only: on paper
+          its amber crosses the cyan pool and the eye's halo, and complementary
+          tints laid over each other cancel to grey */}
       <div
         ref={secondaryRef}
-        className="absolute w-[min(600px,100vw)] h-[min(600px,100vw)] rounded-full blur-3xl will-change-transform"
+        className="absolute w-[min(600px,100vw)] h-[min(600px,100vw)] rounded-full blur-3xl will-change-transform hidden dark:block"
         style={{
-          background: 'radial-gradient(circle, oklch(0.72 0.16 55 / 0.06) 0%, oklch(0.70 0.14 30 / 0.03) 40%, transparent 70%)',
+          background:
+            'radial-gradient(circle, color-mix(in oklab, var(--accent-warm) 6%, transparent) 0%, color-mix(in oklab, var(--accent-coral) 3%, transparent) 40%, transparent 70%)',
           left: 'calc(50% - min(300px, 50vw))',
           top: 'calc(50% - min(300px, 50vw))',
         }}

@@ -328,7 +328,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                       compact={compact}
                     />
                     {isOvernight && (
-                      <span className="text-[10px] font-medium text-amber-400 bg-amber-400/10 border border-amber-400/30 rounded px-1.5 py-0.5 whitespace-nowrap">
+                      <span className="text-[10px] font-medium text-warning bg-warning-surface border border-warning-border/75 rounded px-1.5 py-0.5 whitespace-nowrap">
                         +1 day
                       </span>
                     )}
@@ -355,7 +355,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                     )}
                   </div>
                   {isOvernight && (
-                    <p className="text-[11px] text-amber-400/80 pl-0.5">
+                    <p className="text-[11px] text-warning dark:text-warning/80 pl-0.5">
                       ends the following day — schedule days control when it <em>starts</em>
                     </p>
                   )}
@@ -514,7 +514,7 @@ export default function ScheduleEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg bg-card border-border text-foreground gap-6">
+      <DialogContent className="sm:max-w-lg border-border text-foreground gap-6">
         <DialogHeader>
           <DialogTitle>configure schedule</DialogTitle>
           {/* Which clock evaluates these windows is a per-site setting
@@ -539,7 +539,7 @@ export default function ScheduleEditor({
           {targetBelowMinAgent && (
             <p
               data-testid="schedule-editor-agent-advisory"
-              className="text-xs text-amber-400/90 bg-amber-400/10 border border-amber-400/20 rounded-md px-3 py-2"
+              className="text-xs text-warning dark:text-warning/90 bg-warning-surface border border-warning-border/50 rounded-md px-3 py-2"
             >
               this machine runs agent {targetMachineAgentVersion} — site time needs{' '}
               {SITE_TIME_MIN_AGENT_VERSION} or newer. until it updates, it keeps evaluating
@@ -596,8 +596,8 @@ export default function ScheduleEditor({
                           onClick={() => applyPreset(preset)}
                           className={`px-2.5 py-1 rounded-full text-[13px] font-medium transition-colors duration-150 cursor-pointer ${
                             isActive
-                              ? 'bg-blue-600/20 text-blue-100 ring-1 ring-blue-500/40'
-                              : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+                              ? 'bg-info-solid/20 text-foreground/90 ring-1 ring-info-solid/40'
+                              : 'bg-card-sunken text-muted-foreground hover:bg-accent hover:text-foreground'
                           }`}
                         >
                           {preset.name}
@@ -653,7 +653,7 @@ export default function ScheduleEditor({
                               <button
                                 type="button"
                                 onClick={() => onDeletePreset(selectedPreset.id)}
-                                className="flex items-center gap-1 hover:text-red-400 cursor-pointer transition-colors"
+                                className="flex items-center gap-1 hover:text-danger cursor-pointer transition-colors"
                               >
                                 <Trash2 className="h-3 w-3" />
                                 delete
@@ -706,7 +706,7 @@ export default function ScheduleEditor({
         </div>
 
         {currentLaunchMode === 'scheduled' && !isCurrentlyInSchedule(blocks, siteTimezone) && (
-          <p className="text-xs text-amber-400/90 bg-amber-400/10 border border-amber-400/20 rounded-md px-3 py-2">
+          <p className="text-xs text-warning dark:text-warning/90 bg-warning-surface border border-warning-border/50 rounded-md px-3 py-2">
             this looks outside the current window — a machine outside it will stop the process shortly after saving.
           </p>
         )}
@@ -715,7 +715,7 @@ export default function ScheduleEditor({
           <Button variant="ghost" onClick={() => onOpenChange(false)} className="bg-secondary border border-border cursor-pointer">
             cancel
           </Button>
-          <Button onClick={handleSave} className="text-gray-900 cursor-pointer">
+          <Button onClick={handleSave} className="cursor-pointer">
             save schedule
           </Button>
         </DialogFooter>

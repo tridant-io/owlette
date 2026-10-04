@@ -20,6 +20,8 @@ import {
 import { MonitorPlay, Power, RefreshCw } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { AdminButton } from '@/components/admin/AdminButton';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
 
 /** One viewer, as `GET /api/sites/{siteId}/swoop/sessions` answers it. */
 interface SwoopViewerInfo {
@@ -160,16 +162,13 @@ export default function SwoopPage() {
   const timeFormat = userPreferences.timeFormat || '12h';
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold text-foreground mb-2">swoop</h1>
-              <p className="text-muted-foreground">
-                who is in a swoop session on your sites, and a way to end it
-              </p>
-            </div>
+        <AdminPageHeader
+          className="mb-4 md:mb-6"
+          title="swoop"
+          description="who is in a swoop session on your sites, and a way to end it"
+          actions={
             <IconButton
               label="refresh sessions"
               variant="outline"
@@ -179,11 +178,11 @@ export default function SwoopPage() {
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </IconButton>
-          </div>
-        </div>
+          }
+        />
 
-        <Card className="bg-card border-border">
-          <CardContent className="pt-6">
+        <Card className="bg-card border-border py-3 md:py-6">
+          <CardContent className="px-3 sm:px-6 md:pt-6">
             {!loaded ? (
               <div className="text-center py-8 text-muted-foreground">loading sessions...</div>
             ) : sessions.length === 0 ? (
@@ -192,9 +191,11 @@ export default function SwoopPage() {
                 <p>no one is in a swoop session right now</p>
               </div>
             ) : (
+              // below md each session stacks: machine and kill, then its viewers; the
+              // rest are desktop columns
               <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
+                <Table className="block md:table">
+                  <TableHeader className="hidden md:table-header-group">
                     <TableRow className="border-border hover:bg-card">
                       <TableHead className="text-foreground">machine</TableHead>
                       <TableHead className="text-foreground">site</TableHead>
@@ -205,19 +206,29 @@ export default function SwoopPage() {
                       <TableHead className="text-foreground text-right">actions</TableHead>
                     </TableRow>
                   </TableHeader>
-                  <TableBody>
+                  <TableBody className="block md:table-row-group">
                     {sessions.map((session) => (
-                      <TableRow key={`${session.siteId}/${session.sid}`} className="border-border hover:bg-muted/50">
-                        <TableCell className="font-mono text-foreground">{session.machineId}</TableCell>
-                        <TableCell className="text-foreground">{session.siteName}</TableCell>
-                        <TableCell>
+                      <TableRow
+                        key={`${session.siteId}/${session.sid}`}
+                        className="flex flex-wrap items-center md:table-row border-border hover:bg-muted/50"
+                      >
+                        <TableCell className="order-1 flex-1 min-w-0 font-mono text-foreground whitespace-normal md:whitespace-nowrap max-md:wrap-anywhere">
+                          {session.machineId}
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell text-foreground">{session.siteName}</TableCell>
+                        <TableCell className="order-3 basis-full pt-0 md:pt-2 whitespace-normal md:whitespace-nowrap">
                           {session.viewers.length === 0 ? (
                             <span className="text-muted-foreground">none</span>
                           ) : (
                             <ul className="space-y-1">
                               {session.viewers.map((viewer, i) => (
-                                <li key={`${viewer.uid}:${i}`} className="flex items-center gap-2 text-foreground">
-                                  <span>{viewer.email || viewer.displayName || viewer.uid}</span>
+                                <li
+                                  key={`${viewer.uid}:${i}`}
+                                  className="flex flex-wrap md:flex-nowrap items-center gap-x-2 gap-y-1 text-foreground"
+                                >
+                                  <span className="min-w-0 max-md:wrap-anywhere">
+                                    {viewer.email || viewer.displayName || viewer.uid}
+                                  </span>
                                   <Badge variant={viewer.ctl ? 'default' : 'secondary'}>
                                     {viewer.ctl ? 'control' : 'watch'}
                                   </Badge>
@@ -226,22 +237,22 @@ export default function SwoopPage() {
                             </ul>
                           )}
                         </TableCell>
-                        <TableCell className="text-foreground">{session.state}</TableCell>
-                        <TableCell className="text-muted-foreground text-sm">
+                        <TableCell className="hidden md:table-cell text-foreground">{session.state}</TableCell>
+                        <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
                           {formatTimeOnly(session.startedAt / 1000, timezone, timeFormat)}
                         </TableCell>
-                        <TableCell className="text-muted-foreground text-sm tabular-nums">
+                        <TableCell className="hidden md:table-cell text-muted-foreground text-sm tabular-nums">
                           {formatDuration(now - session.startedAt)}
                         </TableCell>
-                        <TableCell className="text-right">
-                          <Button
+                        <TableCell className="order-2 text-right">
+                          <CompactButton
+                            icon={Power}
+                            label="kill"
+                            iconClassName=""
                             variant="ghost-destructive"
                             size="sm"
                             onClick={() => setSessionToKill(session)}
-                          >
-                            <Power className="h-4 w-4" />
-                            kill
-                          </Button>
+                          />
                         </TableCell>
                       </TableRow>
                     ))}
@@ -258,7 +269,7 @@ export default function SwoopPage() {
             if (!open && !busy) setSessionToKill(null);
           }}
         >
-          <DialogContent className="bg-background border-border">
+          <DialogContent className=" border-border">
             <DialogHeader>
               <DialogTitle>end this session?</DialogTitle>
               <DialogDescription className="text-muted-foreground">

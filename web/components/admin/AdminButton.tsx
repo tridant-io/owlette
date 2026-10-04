@@ -10,8 +10,8 @@ import type { ComponentProps } from 'react';
 const VARIANT_CLASSES = {
   outline: 'border-border bg-background text-foreground hover:bg-accent! hover:text-foreground!',
   card:    'border-border bg-card text-foreground hover:bg-accent! hover:text-foreground!',
-  danger:  'border-border text-red-400 hover:bg-red-900! hover:border-red-800! hover:text-red-200!',
-  primary: '! text-gray-900',
+  danger:  'border-border text-destructive hover:text-destructive!',
+  primary: '',
 } as const;
 
 type AdminVariant = keyof typeof VARIANT_CLASSES;

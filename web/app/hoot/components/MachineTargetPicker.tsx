@@ -48,11 +48,12 @@ function statusText(machine: MachineTargetOption): string | null {
 
 /**
  * The small print beside a row's name. `--muted-foreground` over the focused
- * row's `--accent` fill is 4.37:1 in the app's forced-dark theme — under the
- * 4.5:1 that axe's `color-contrast` rule enforces on /hoot — so the focused row
- * alone gets a lighter tone and every other row keeps the muted hierarchy.
- * Radix focuses a row on pointer move, so this covers hover too; the rows carry
- * `group` for it.
+ * row's `--accent` fill is 4.37:1 in dark — under the 4.5:1 that axe's
+ * `color-contrast` rule enforces on /hoot — so the focused row alone gets a
+ * stronger tone and every other row keeps the muted hierarchy. by day the muted
+ * token already clears it (5.39:1), and the same class reads one step darker at
+ * 8.09:1. Radix focuses a row on pointer move, so this covers hover too; the
+ * rows carry `group` for it.
  */
 const STATUS_TEXT_CLASS = 'text-xs text-muted-foreground group-focus:text-accent-foreground/80';
 
@@ -130,7 +131,7 @@ export function MachineTargetPicker({ machines, selection, onChange }: MachineTa
         <Button
           variant="secondary"
           aria-label="hoot target"
-          className="w-full max-w-[220px] min-w-0 justify-between border border-border font-normal"
+          className="w-full max-w-[220px] min-w-0 flex-1 basis-0 md:flex-initial md:basis-auto justify-between border border-border font-normal"
         >
           <span className="flex min-w-0 items-center gap-2">
             {selected === null ? (

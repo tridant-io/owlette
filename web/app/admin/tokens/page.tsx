@@ -23,6 +23,8 @@ import { KeyRound, Trash2, RefreshCw, AlertTriangle, Clock, CheckCircle, Search,
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { AdminButton } from '@/components/admin/AdminButton';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
 
 interface TokenInfo {
   id: string;
@@ -36,6 +38,14 @@ interface TokenInfo {
 }
 
 const ALL = 'all';
+
+// tinted chips: light takes the family surface, dark keeps the 20% tints they always had
+const CHIP = {
+  success: 'border-success-border bg-success-surface text-success dark:bg-success/20',
+  warning: 'border-warning-border bg-warning-surface text-warning dark:border-warning-solid/30 dark:bg-warning-solid/20',
+  danger: 'border-danger-border bg-danger-surface text-danger dark:border-danger-solid/30 dark:bg-danger-solid/20',
+  signal: 'border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan dark:bg-accent-cyan/20',
+};
 
 export default function TokensPage() {
   const { user, isSuperadmin, userSites, lastSiteId, updateLastSite, userPreferences } = useAuth();
@@ -245,18 +255,18 @@ export default function TokensPage() {
 
   const getExpiryStatus = (expiresAt: string | null) => {
     if (!expiresAt) {
-      return { label: 'Never expires', color: 'bg-green-500/20 text-green-400 border-green-500/30' };
+      return { label: 'Never expires', color: CHIP.success };
     }
     const expiry = new Date(expiresAt);
     const now = new Date();
     if (expiry < now) {
-      return { label: 'Expired', color: 'bg-red-500/20 text-red-400 border-red-500/30' };
+      return { label: 'Expired', color: CHIP.danger };
     }
     const daysUntil = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     if (daysUntil <= 7) {
-      return { label: `Expires in ${daysUntil}d`, color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' };
+      return { label: `Expires in ${daysUntil}d`, color: CHIP.warning };
     }
-    return { label: `Expires ${expiry.toLocaleDateString()}`, color: 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/30' };
+    return { label: `Expires ${expiry.toLocaleDateString()}`, color: CHIP.signal };
   };
 
   // Distinct versions present, newest-first, for the version filter.
@@ -298,30 +308,28 @@ export default function TokensPage() {
   }, [tokens, search, versionFilter, duplicatesOnly, machineCounts]);
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-      {/* Header with inline site selector */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground mb-2">agent tokens</h1>
-            <p className="text-muted-foreground">
-              view and revoke agent authentication tokens
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-              <SelectTrigger aria-label="site" className="w-[180px] bg-card border-border text-foreground">
-                <SelectValue placeholder="select site" />
-              </SelectTrigger>
-              <SelectContent className="bg-card border-border">
-                {sites.map((site) => (
-                  <SelectItem key={site.id} value={site.id} className="text-foreground hover:bg-muted!">
-                    {site.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+      <AdminPageHeader
+        className="mb-4 md:mb-6"
+        title="agent tokens"
+        description="view and revoke agent authentication tokens"
+        toolbar={
+          <Select value={selectedSiteId} onValueChange={handleSiteChange}>
+            <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none bg-card border-border text-foreground">
+              <SelectValue placeholder="select site" />
+            </SelectTrigger>
+            <SelectContent className="bg-card border-border">
+              {sites.map((site) => (
+                <SelectItem key={site.id} value={site.id} className="text-foreground hover:bg-muted!">
+                  {site.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+        actions={
+          <>
             <IconButton
               label="refresh tokens"
               variant="outline"
@@ -332,23 +340,21 @@ export default function TokensPage() {
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </IconButton>
             {tokens.length > 0 && (
-              <Button
+              <CompactButton
+                icon={Trash2}
+                label="revoke all"
                 variant="destructive"
                 size="sm"
                 onClick={() => setRevokeAllDialogOpen(true)}
-                className="bg-red-600 hover:bg-red-700 cursor-pointer"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                revoke all
-              </Button>
+              />
             )}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* Filter toolbar */}
       {selectedSiteId && (
-        <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4">
           <div className="relative flex-1 min-w-[220px] max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
             <Input
@@ -360,8 +366,9 @@ export default function TokensPage() {
             />
           </div>
 
+          {/* a desktop nicety: on a phone the duplicates and prune controls keep the row */}
           <Select value={versionFilter} onValueChange={setVersionFilter}>
-            <SelectTrigger aria-label="agent version" className="w-[160px] bg-card border-border text-foreground">
+            <SelectTrigger aria-label="agent version" className="hidden sm:flex w-[160px] bg-card border-border text-foreground">
               <SelectValue placeholder="all versions" />
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
@@ -380,7 +387,7 @@ export default function TokensPage() {
                 onClick={() => setDuplicatesOnly((v) => !v)}
                 aria-pressed={duplicatesOnly}
                 className={`border-border cursor-pointer ${duplicatesOnly
-                  ? 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/40 hover:bg-accent-cyan/30!'
+                  ? 'bg-accent-cyan/10 text-accent-cyan border-accent-cyan/40 dark:hover:bg-accent-cyan/30!'
                   : 'text-foreground hover:bg-accent! hover:text-foreground!'}`}
               >
                 <Layers className="h-4 w-4 mr-2" />
@@ -400,7 +407,7 @@ export default function TokensPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => setPruneDialogOpen(true)}
-                    className="border-amber-500/40 text-amber-400 hover:bg-amber-950/30! hover:text-amber-300! cursor-pointer"
+                    className="border-warning-border text-warning hover:bg-warning-surface! hover:text-warning! cursor-pointer"
                   >
                     <Eraser className="h-4 w-4 mr-2" />
                     prune dead ({prunableCount})
@@ -422,8 +429,8 @@ export default function TokensPage() {
 
       {/* Tokens Table */}
       {selectedSiteId && (
-        <Card className="bg-card border-border">
-          <CardContent className="pt-6">
+        <Card className="bg-card border-border py-3 md:py-6">
+          <CardContent className="px-3 sm:px-6 md:pt-6">
             {loading ? (
               <div className="text-center py-8 text-muted-foreground">loading tokens...</div>
             ) : tokens.length === 0 ? (
@@ -438,9 +445,11 @@ export default function TokensPage() {
                 <p>no tokens match your filters</p>
               </div>
             ) : (
+              // below md each token stacks: machine and revoke, then its status; version
+              // and dates are desktop columns
               <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
+                <Table className="block md:table">
+                  <TableHeader className="hidden md:table-header-group">
                     <TableRow className="border-border hover:bg-card">
                       <TableHead className="text-foreground">machine ID</TableHead>
                       <TableHead className="text-foreground">version</TableHead>
@@ -450,23 +459,23 @@ export default function TokensPage() {
                       <TableHead className="text-foreground text-right">actions</TableHead>
                     </TableRow>
                   </TableHeader>
-                  <TableBody>
+                  <TableBody className="block md:table-row-group">
                     {filteredTokens.map((token) => {
                       const expiryStatus = getExpiryStatus(token.expiresAt);
                       const dupCount = machineCounts.get(token.machineId) || 0;
                       const isDuplicated = dupCount > 1;
                       return (
-                        <TableRow key={token.id} className="border-border hover:bg-muted/50">
-                          <TableCell className="font-mono text-foreground">
-                            <div className="flex items-center gap-2">
-                              <span>{token.machineId}</span>
+                        <TableRow key={token.id} className="flex flex-wrap items-center md:table-row border-border hover:bg-muted/50">
+                          <TableCell className="order-1 flex-1 min-w-0 font-mono text-foreground whitespace-normal md:whitespace-nowrap">
+                            <div className="flex flex-wrap md:flex-nowrap items-center gap-x-2 gap-y-1">
+                              <span className="min-w-0 max-md:wrap-anywhere">{token.machineId}</span>
                               {isDuplicated && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Badge
                                       tabIndex={0}
                                       aria-label={`one of ${dupCount} tokens sharing machine id ${token.machineId}; revoking disconnects whichever agent holds this one`}
-                                      className="cursor-help bg-amber-500/20 text-amber-400 border-amber-500/30"
+                                      className={`cursor-help ${CHIP.warning}`}
                                     >
                                       duplicate
                                     </Badge>
@@ -480,8 +489,8 @@ export default function TokensPage() {
                               )}
                             </div>
                           </TableCell>
-                          <TableCell className="text-foreground">{token.version || 'N/A'}</TableCell>
-                          <TableCell>
+                          <TableCell className="hidden md:table-cell text-foreground">{token.version || 'N/A'}</TableCell>
+                          <TableCell className="order-3 basis-full pt-0 md:pt-2">
                             <Badge className={expiryStatus.color}>
                               {expiryStatus.label === 'Never expires' && <CheckCircle className="h-3 w-3 mr-1" />}
                               {expiryStatus.label.includes('Expires') && <Clock className="h-3 w-3 mr-1" />}
@@ -489,25 +498,25 @@ export default function TokensPage() {
                               {expiryStatus.label}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
+                          <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
                             {formatDate(token.createdAt)}
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
+                          <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
                             {formatDate(token.lastUsed)}
                           </TableCell>
-                          <TableCell className="text-right">
-                            <Button
+                          <TableCell className="order-2 text-right">
+                            <CompactButton
+                              icon={KeyRound}
+                              label="revoke"
+                              iconClassName="sm:mr-1"
                               variant="ghost"
                               size="sm"
                               onClick={() => {
                                 setTokenToRevoke(token);
                                 setRevokeDialogOpen(true);
                               }}
-                              className="text-amber-400 hover:text-amber-300! hover:bg-amber-950/30!"
-                            >
-                              <KeyRound className="h-4 w-4 mr-1" />
-                              revoke
-                            </Button>
+                              className="text-warning hover:text-warning! hover:bg-warning-surface!"
+                            />
                           </TableCell>
                         </TableRow>
                       );
@@ -522,7 +531,7 @@ export default function TokensPage() {
 
       {/* Revoke Single Token Dialog */}
       <Dialog open={revokeDialogOpen} onOpenChange={setRevokeDialogOpen}>
-        <DialogContent className="bg-background border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
             <DialogTitle>revoke token for {tokenToRevoke?.machineId}?</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -540,7 +549,7 @@ export default function TokensPage() {
             <Button
               onClick={handleRevokeToken}
               disabled={isRevoking}
-              className="bg-amber-600 hover:bg-amber-700"
+              className="bg-warning-solid text-warning-solid-foreground"
             >
               {isRevoking ? 'revoking...' : 'revoke token'}
             </Button>
@@ -550,9 +559,9 @@ export default function TokensPage() {
 
       {/* Revoke All Tokens Dialog */}
       <Dialog open={revokeAllDialogOpen} onOpenChange={setRevokeAllDialogOpen}>
-        <DialogContent className="bg-background border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-red-400">
+            <DialogTitle className="flex items-center gap-2 text-danger">
               <AlertTriangle className="h-5 w-5" />
               revoke all tokens?
             </DialogTitle>
@@ -560,7 +569,7 @@ export default function TokensPage() {
               This will immediately invalidate ALL agent tokens for this site ({tokens.length} tokens).
               All agents will disconnect and require re-registration to reconnect.
               <br /><br />
-              <strong className="text-amber-400">this action cannot be undone.</strong>
+              <strong className="text-warning">this action cannot be undone.</strong>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -571,9 +580,9 @@ export default function TokensPage() {
               Cancel
             </AdminButton>
             <Button
+              variant="destructive"
               onClick={handleRevokeAll}
               disabled={isRevoking}
-              className="bg-red-600 hover:bg-red-700"
             >
               {isRevoking ? 'revoking...' : `revoke all ${tokens.length} tokens`}
             </Button>
@@ -583,9 +592,9 @@ export default function TokensPage() {
 
       {/* Prune Dead Tokens Dialog */}
       <Dialog open={pruneDialogOpen} onOpenChange={setPruneDialogOpen}>
-        <DialogContent className="bg-background border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-amber-400">
+            <DialogTitle className="flex items-center gap-2 text-warning">
               <Eraser className="h-5 w-5" />
               prune dead tokens?
             </DialogTitle>
@@ -605,7 +614,7 @@ export default function TokensPage() {
             <Button
               onClick={handlePrune}
               disabled={isPruning}
-              className="bg-amber-600 hover:bg-amber-700"
+              className="bg-warning-solid text-warning-solid-foreground"
             >
               {isPruning ? 'pruning...' : `prune ${prunableCount} dead tokens`}
             </Button>

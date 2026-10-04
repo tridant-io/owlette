@@ -436,6 +436,7 @@ Server APIs manage roles, site assignments, and deletion.
 | `role` | string | `member`, `admin`, or `superadmin`. |
 | `sites` | string[] | **Legacy**: still maintained on membership changes, but no rule reads it and no access decision consults it. Site access comes from `sites/{siteId}/members/{uid}`. |
 | `createdAt` | timestamp | Creation time. |
+| `preferences` | map | The user's own settings, written by the user through `AuthContext`'s `updateUserPreferences` (a merge). Display: `temperatureUnit`, `timezone`, `timeFormat`, `timeDisplayMode`, and `theme` (`system`, `dark` or `light`; absent means `system`). Alert email opt-outs: `healthAlerts`, `processAlerts`, `thresholdAlerts`, `cortexAlerts`, `displayAlerts`, `talonAlerts`, `apiKeyAlerts`, plus `mutedMachines` and `alertCcEmails`. Dashboard layout memory: `statsExpanded`, `processesExpanded`, `displaysExpanded`, `graphTabs`, `activeGraphPanel`, `graphTimeRange`. |
 | `mfaSecret`, `backupCodes` | string/array | Encrypted TOTP secret and hashed backup codes. Server-written only. |
 | `mfaFactors` | map | `{ totp: boolean, passkeys: number }` — the authoritative second-factor tally. Server-maintained; `mfaEnrolled` is derived from it. |
 | `mfaEnrolled` | boolean | **Derived**, server-written only: `mfaFactors.totp || mfaFactors.passkeys > 0`. A passkey counts as a second factor. |

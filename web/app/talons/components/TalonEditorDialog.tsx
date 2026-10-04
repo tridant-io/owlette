@@ -310,7 +310,7 @@ export function TalonEditorDialog({
           (see ManageSitesDialog for the same pattern). */}
       <DialogContent
         data-testid="talon-editor"
-        className="bg-card border-border sm:max-w-5xl lg:max-w-6xl max-h-[90dvh] overflow-y-auto"
+        className="border-border sm:max-w-5xl lg:max-w-6xl max-h-[90dvh] overflow-y-auto"
       >
         {/* Header renders inside the form — see the comment there. */}
         <TalonEditorForm
@@ -846,7 +846,7 @@ function TalonEditorForm({ siteId, machines, talon, isSiteAdmin, onClose }: Talo
                     disabled={busy || templateBusy}
                     aria-label="delete template"
                     title="delete template"
-                    className="shrink-0 cursor-pointer border-border text-red-400 hover:bg-red-950 hover:text-red-300"
+                    className="shrink-0 cursor-pointer border-border text-danger hover:bg-danger-surface hover:text-danger"
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -987,7 +987,7 @@ function TalonEditorForm({ siteId, machines, talon, isSiteAdmin, onClose }: Talo
                     )
                   }
                   disabled={templateBusy}
-                  className="flex items-center gap-1 rounded bg-cyan-600/20 px-2 py-0.5 font-medium text-cyan-300 transition-colors hover:bg-cyan-600/40 hover:text-cyan-200 cursor-pointer disabled:cursor-not-allowed"
+                  className="flex items-center gap-1 rounded bg-accent-cyan/10 px-2 py-0.5 font-medium text-accent-cyan transition-colors hover:bg-accent-cyan/15 hover:text-accent-cyan-hover dark:bg-accent-cyan/20 dark:hover:bg-accent-cyan/40 cursor-pointer disabled:cursor-not-allowed"
                 >
                   <Save className="h-3 w-3" /> yes, replace
                 </button>
@@ -1156,7 +1156,7 @@ function TalonEditorForm({ siteId, machines, talon, isSiteAdmin, onClose }: Talo
           type="submit"
           data-testid="talon-editor-save"
           disabled={busy}
-          className="text-gray-900 cursor-pointer"
+          className="cursor-pointer"
         >
           {busy ? (
             <Loader2 className="h-4 w-4 animate-spin" />

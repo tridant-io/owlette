@@ -51,6 +51,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from '@/lib/toast';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
+import { StatChip } from '@/components/admin/StatChip';
 import { displayRole } from './displayRole';
 
 /**
@@ -72,31 +75,6 @@ const ROLE_HELP: Record<AddableSiteMemberRole, string> = {
   admin:
     'elevated access on every site they belong to — dispatch commands and restarts, edit machine and process settings, author talons, and manage members.',
 };
-
-/** Tally chip. In the header, not a card row, so the table keeps the height. */
-function StatChip({
-  icon: Icon,
-  iconBg,
-  count,
-  label,
-}: {
-  icon: typeof Users;
-  iconBg: string;
-  count: number;
-  label: string;
-}) {
-  return (
-    <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
-      <div className={`p-1.5 rounded-md ${iconBg}`}>
-        <Icon className="h-4 w-4 text-foreground" />
-      </div>
-      <div className="leading-tight">
-        <p className="text-lg font-bold text-foreground">{count}</p>
-        <p className="text-xs text-muted-foreground whitespace-nowrap">{label}</p>
-      </div>
-    </div>
-  );
-}
 
 /** How a member is addressed in dialogs and toasts. Never their uid. */
 function memberLabel(member: Pick<SiteMember, 'email' | 'displayName'>): string {
@@ -339,56 +317,57 @@ export default function SiteMembersPage() {
   const showEmptySites = !sitesLoading && sites.length === 0;
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-        {/* Header — tally chips sit beside the title (not in a full-width card
-            row) so the members table keeps the vertical space. */}
-        <div className="mb-8 flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground mb-2">members</h1>
-            <p className="text-muted-foreground">manage who can access this site</p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <StatChip
-              icon={Users}
-              iconBg="bg-accent-cyan"
-              count={members.length}
-              label="total members"
-            />
-            <StatChip icon={Shield} iconBg="bg-green-600" count={adminCount} label="admins" />
-            {sites.length > 1 && (
-              <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-                <SelectTrigger aria-label="site" className="w-[180px] bg-card border-border text-foreground">
-                  <SelectValue placeholder="select site" />
-                </SelectTrigger>
-                <SelectContent className="bg-card border-border">
-                  {sites.map((site) => (
-                    <SelectItem
-                      key={site.id}
-                      value={site.id}
-                      className="text-foreground hover:bg-muted"
-                    >
-                      {site.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <Button
+        {/* tally chips sit beside the title (not in a full-width card row) so the
+            members table keeps the vertical space */}
+        <AdminPageHeader
+          className="mb-6 md:mb-8 md:flex-wrap md:gap-x-6 md:gap-y-4"
+          controlsClassName="md:flex-wrap md:gap-2"
+          title="members"
+          description="manage who can access this site"
+          actions={
+            <CompactButton
+              icon={Plus}
+              label="add member"
               onClick={() => setAddDialogOpen(true)}
               disabled={!selectedSiteId}
-              className="text-gray-900 cursor-pointer"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              add member
-            </Button>
-          </div>
-        </div>
+            />
+          }
+          toolbar={
+            <>
+              <StatChip
+                icon={Users}
+                iconTone="bg-accent-cyan text-primary-foreground"
+                count={members.length}
+                label="total members"
+              />
+              <StatChip icon={Shield} iconTone="bg-success-solid text-success-solid-foreground" count={adminCount} label="admins" />
+              {sites.length > 1 && (
+                <Select value={selectedSiteId} onValueChange={handleSiteChange}>
+                  <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none bg-card border-border text-foreground">
+                    <SelectValue placeholder="select site" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-card border-border">
+                    {sites.map((site) => (
+                      <SelectItem
+                        key={site.id}
+                        value={site.id}
+                        className="text-foreground hover:bg-muted"
+                      >
+                        {site.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </>
+          }
+        />
 
         {error && (
-          <div className="bg-red-900/30 border border-red-700 rounded-lg p-4 mb-6">
-            <p className="text-red-300">{error}</p>
+          <div className="bg-danger-surface border border-danger-border rounded-lg p-4 mb-6">
+            <p className="text-danger">{error}</p>
           </div>
         )}
 
@@ -400,7 +379,7 @@ export default function SiteMembersPage() {
         )}
 
         {showEmptySites && (
-          <div className="bg-card border border-border rounded-lg p-8 text-center">
+          <div className="bg-card border border-border rounded-lg p-6 md:p-8 text-center">
             <p className="text-sm text-foreground">no sites available</p>
             <p className="text-xs text-muted-foreground mt-1">
               you need site access to manage members. ask a site admin to add you.
@@ -410,18 +389,20 @@ export default function SiteMembersPage() {
 
         {!sitesLoading && !loading && !error && selectedSiteId && (
           <div className="bg-card border border-border rounded-lg overflow-x-auto">
-            <table className="w-full">
-              <thead>
+            {/* below md each member stacks into a block: name and options, then the
+                email, then the role */}
+            <table className="block w-full md:table">
+              <thead className="hidden md:table-header-group">
                 <tr className="border-b border-border bg-background/50">
                   <th className="text-left p-4 text-sm font-medium text-foreground">member</th>
                   <th className="text-left p-4 text-sm font-medium text-foreground">role</th>
                   <th className="text-right p-4 text-sm font-medium text-foreground">actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="block md:table-row-group">
                 {members.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="p-8 text-center text-muted-foreground">
+                  <tr className="block md:table-row">
+                    <td colSpan={3} className="block md:table-cell p-6 md:p-8 text-center text-muted-foreground">
                       no members found
                     </td>
                   </tr>
@@ -443,38 +424,47 @@ export default function SiteMembersPage() {
                     return (
                       <tr
                         key={member.uid}
-                        className="border-b border-border hover:bg-muted/50 transition-colors"
+                        className="flex flex-wrap items-start md:table-row border-b border-border hover:bg-muted/50 transition-colors"
                       >
-                        <td className="p-4">
-                          <div>
+                        <td className="order-1 basis-[calc(100%_-_3rem)] min-w-0 px-3 pt-3 pb-1 md:p-4">
+                          {/* below md the "you" pill rides the first line instead of its own */}
+                          <div className="flex flex-wrap items-center gap-x-2 md:block">
                             {member.displayName && (
-                              <p className="text-foreground font-medium">{member.displayName}</p>
+                              <p className="order-1 min-w-0 text-foreground font-medium max-md:text-sm max-md:wrap-anywhere">
+                                {member.displayName}
+                              </p>
                             )}
                             {member.email ? (
-                              <p className="text-sm text-muted-foreground">{member.email}</p>
+                              <p
+                                className={`text-sm text-muted-foreground max-md:wrap-anywhere ${
+                                  member.displayName ? 'order-3 basis-full' : 'order-1 min-w-0'
+                                }`}
+                              >
+                                {member.email}
+                              </p>
                             ) : (
                               !member.displayName && (
-                                <p className="text-sm text-muted-foreground italic">
+                                <p className="order-1 text-sm text-muted-foreground italic">
                                   no email on file
                                 </p>
                               )
                             )}
                             {member.uid === currentUser?.uid && (
-                              <Badge className="mt-1 bg-accent-cyan text-gray-900 text-xs">
+                              <Badge className="order-2 md:mt-1 text-xs">
                                 you
                               </Badge>
                             )}
                           </div>
                         </td>
 
-                        <td className="p-4">
+                        <td className="order-3 px-3 pt-1 pb-3 md:p-4">
                           {shown === 'owner' ? (
-                            <Badge className="bg-accent-cyan text-gray-900 flex items-center gap-1 w-fit">
+                            <Badge className="flex items-center gap-1 w-fit">
                               <Crown className="h-3 w-3" />
                               owner
                             </Badge>
                           ) : shown === 'admin' ? (
-                            <Badge className="bg-green-600 flex items-center gap-1 w-fit">
+                            <Badge className="bg-success-solid text-success-solid-foreground flex items-center gap-1 w-fit">
                               <ShieldAlert className="h-3 w-3" />
                               admin
                             </Badge>
@@ -486,7 +476,7 @@ export default function SiteMembersPage() {
                           )}
                         </td>
 
-                        <td className="p-4">
+                        <td className="order-2 w-12 pr-3 pt-2 pb-1 md:w-auto md:p-4">
                           {!canRemove && !canChangeRole ? (
                             <div className="flex items-center justify-end text-muted-foreground">
                               —
@@ -542,7 +532,7 @@ export default function SiteMembersPage() {
                                     <DropdownMenuItem
                                       onClick={() => handleOpenRemoveDialog(member)}
                                       disabled={busy}
-                                      className="text-red-400 hover:bg-red-950/30! hover:text-red-300! cursor-pointer focus:bg-red-950/30 focus:text-red-300"
+                                      className="text-danger cursor-pointer focus:bg-danger-surface focus:text-danger"
                                     >
                                       {removingUid === member.uid ? (
                                         <>
@@ -573,7 +563,7 @@ export default function SiteMembersPage() {
 
         {/* Add Member Dialog */}
         <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-          <DialogContent className="border-border bg-card text-foreground">
+          <DialogContent className="border-border text-foreground">
             <DialogHeader>
               <DialogTitle className="text-foreground flex items-center gap-2">
                 <Plus className="h-5 w-5 text-accent-cyan" />
@@ -634,7 +624,7 @@ export default function SiteMembersPage() {
                       className="text-foreground focus:bg-accent focus:text-foreground"
                     >
                       <div className="flex items-center gap-2">
-                        <ShieldAlert className="h-4 w-4 text-green-500" />
+                        <ShieldAlert className="h-4 w-4 text-success" />
                         admin
                       </div>
                     </SelectItem>
@@ -662,7 +652,7 @@ export default function SiteMembersPage() {
               <Button
                 onClick={handleAddMember}
                 disabled={adding || addEmail.trim().length === 0}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 {adding ? (
                   <>
@@ -682,10 +672,10 @@ export default function SiteMembersPage() {
 
         {/* Remove Member Confirmation Dialog */}
         <Dialog open={removeDialogOpen} onOpenChange={setRemoveDialogOpen}>
-          <DialogContent className="border-border bg-card text-foreground">
+          <DialogContent className="border-border text-foreground">
             <DialogHeader>
               <DialogTitle className="text-foreground flex items-center gap-2">
-                <UserMinus className="h-5 w-5 text-red-400" />
+                <UserMinus className="h-5 w-5 text-danger" />
                 remove member
               </DialogTitle>
               <DialogDescription className="text-foreground">
@@ -697,8 +687,8 @@ export default function SiteMembersPage() {
               </DialogDescription>
             </DialogHeader>
             <div className="my-4 space-y-3">
-              <div className="bg-red-950/30 border border-red-900/50 rounded-lg p-4">
-                <p className="text-red-300 text-sm">
+              <div className="bg-danger-surface border border-danger-border rounded-lg p-4">
+                <p className="text-danger text-sm">
                   they lose access to this site and everything on it. their account and any other
                   sites they belong to are untouched.
                 </p>
@@ -724,8 +714,9 @@ export default function SiteMembersPage() {
                 cancel
               </Button>
               <Button
+                variant="destructive"
                 onClick={handleConfirmRemove}
-                className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+                className="cursor-pointer"
               >
                 <UserMinus className="h-4 w-4 mr-2" />
                 remove member
@@ -737,7 +728,7 @@ export default function SiteMembersPage() {
         {/* Role Change Dialog — superadmin only; the trigger is not rendered
             otherwise. The role is global, so the copy says so. */}
         <Dialog open={roleDialogOpen} onOpenChange={setRoleDialogOpen}>
-          <DialogContent className="border-border bg-card text-foreground">
+          <DialogContent className="border-border text-foreground">
             <DialogHeader>
               <DialogTitle className="text-foreground flex items-center gap-2">
                 <UserCog className="h-5 w-5 text-accent-cyan" />
@@ -777,7 +768,7 @@ export default function SiteMembersPage() {
                     className="text-foreground focus:bg-accent focus:text-foreground"
                   >
                     <div className="flex items-center gap-2">
-                      <ShieldAlert className="h-4 w-4 text-green-500" />
+                      <ShieldAlert className="h-4 w-4 text-success" />
                       admin
                     </div>
                   </SelectItem>
@@ -809,7 +800,7 @@ export default function SiteMembersPage() {
                   !memberToChangeRole ||
                   memberToChangeRole.newRole === memberToChangeRole.currentRole
                 }
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 <UserCog className="h-4 w-4 mr-2" />
                 save role

@@ -10,6 +10,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { ResolvedTheme, ThemeChoice } from '@/lib/theme'
 
 /** Seam files, addressed relative to the owlette data root. */
 export const OWLETTE_FILES = {
@@ -335,6 +336,32 @@ export function detailSections(): Promise<DetailSections> {
 /** Remember one section's open state; resolves to the value kept. */
 export function setDetailSection(section: DetailSectionKey, open: boolean): Promise<boolean> {
   return invoke<boolean>('set_detail_section', { section, open })
+}
+
+/** the stored appearance, from the per-user layout file */
+export function appearanceTheme(): Promise<ThemeChoice> {
+  return invoke<ThemeChoice>('appearance_theme')
+}
+
+/**
+ * re-theme the window and remember the choice; resolves to the value kept. the
+ * host then announces the theme to draw on {@link onResolvedAppearance}.
+ */
+export function setAppearanceTheme(theme: ThemeChoice): Promise<ThemeChoice> {
+  return invoke<ThemeChoice>('set_appearance_theme', { theme })
+}
+
+/** the theme to draw now: the pinned one, or the os's under `system` */
+export function resolvedAppearance(): Promise<ResolvedTheme> {
+  return invoke<ResolvedTheme>('resolved_appearance')
+}
+
+/** `RESOLVED_EVENT` in `src-tauri/src/window_state.rs` */
+const EVENT_APPEARANCE_RESOLVED = 'appearance-resolved'
+
+/** the theme to draw, each time a choice lands or the os changes theme under `system` */
+export function onResolvedAppearance(handler: (theme: ResolvedTheme) => void): Promise<UnlistenFn> {
+  return listen<ResolvedTheme>(EVENT_APPEARANCE_RESOLVED, (event) => handler(event.payload))
 }
 
 /** Severity accepted by {@link logEvent}; anything else is recorded as info. */

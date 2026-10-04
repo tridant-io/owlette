@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Plus, Loader2, Pencil, Trash2, Package } from 'lucide-react';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
 import { toast } from '@/lib/toast';
 import SystemPresetDialog from '@/components/SystemPresetDialog';
 
@@ -92,7 +94,7 @@ export default function SystemPresetsPage() {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <p className="text-red-400 font-medium mb-2">error loading presets</p>
+          <p className="text-danger font-medium mb-2">error loading presets</p>
           <p className="text-muted-foreground text-sm">{error}</p>
         </div>
       </div>
@@ -100,28 +102,18 @@ export default function SystemPresetsPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold text-foreground mb-2">template library</h1>
-              <p className="text-muted-foreground">
-                Admin-curated software catalog for deployments (TouchDesigner, VLC, owlette Agent, etc.)
-              </p>
-            </div>
-            <Button
-              onClick={handleCreateNew}
-              className="text-gray-900 cursor-pointer"
-            >
-              <Plus className="h-5 w-5 mr-2" />
-              add template
-            </Button>
-          </div>
+        <div className="mb-6 md:mb-8">
+          <AdminPageHeader
+            className="mb-4"
+            title="template library"
+            description="Admin-curated software catalog for deployments (TouchDesigner, VLC, owlette Agent, etc.)"
+            actions={<CompactButton icon={Plus} label="add template" onClick={handleCreateNew} />}
+          />
 
           {/* Category Filter Tabs */}
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-1.5 sm:gap-2 flex-wrap">
             <Button
               variant={selectedCategory === 'All' ? 'default' : 'outline'}
               size="sm"
@@ -129,7 +121,7 @@ export default function SystemPresetsPage() {
               aria-pressed={selectedCategory === 'All'}
               className={
                 selectedCategory === 'All'
-                  ? 'bg-accent-cyan text-gray-900 cursor-pointer'
+                  ? 'cursor-pointer'
                   : 'border-border bg-card text-foreground hover:bg-accent! hover:text-foreground! cursor-pointer'
               }
             >
@@ -146,7 +138,7 @@ export default function SystemPresetsPage() {
                   aria-pressed={selectedCategory === category}
                   className={
                     selectedCategory === category
-                      ? 'bg-accent-cyan text-gray-900 cursor-pointer'
+                      ? 'cursor-pointer'
                       : 'border-border bg-card text-foreground hover:bg-accent! hover:text-foreground! cursor-pointer'
                   }
                 >
@@ -159,8 +151,8 @@ export default function SystemPresetsPage() {
 
         {/* Presets Table/Grid */}
         {filteredPresets.length === 0 ? (
-          <div className="bg-card border border-border rounded-lg p-12 text-center">
-            <Package className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+          <div className="bg-card border border-border rounded-lg p-6 sm:p-12 text-center">
+            <Package className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4" />
             <h2 className="text-xl font-medium text-foreground mb-2">no presets found</h2>
             <p className="text-muted-foreground mb-6">
               {selectedCategory === 'All'
@@ -170,7 +162,7 @@ export default function SystemPresetsPage() {
             {selectedCategory === 'All' && (
               <Button
                 onClick={handleCreateNew}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 <Plus className="h-5 w-5 mr-2" />
                 add first preset
@@ -253,11 +245,11 @@ export default function SystemPresetsPage() {
                               <Pencil className="h-3.5 w-3.5" />
                             </Button>
                             <Button
-                              variant="ghost"
+                              variant="ghost-destructive"
                               size="icon"
                               onClick={() => handleDelete(preset)}
                               aria-label={`delete ${preset.name}`}
-                              className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                              className="h-8 w-8 cursor-pointer"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
@@ -271,17 +263,17 @@ export default function SystemPresetsPage() {
             </div>
 
             {/* Mobile Card View */}
-            <div className="lg:hidden space-y-4">
+            <div className="lg:hidden space-y-3 sm:space-y-4">
               {filteredPresets.map((preset) => (
-                <div key={preset.id} className="bg-card border border-border rounded-lg p-4 hover:border-muted-foreground transition-colors">
+                <div key={preset.id} className="bg-card border border-border rounded-lg p-3 sm:p-4 hover:border-muted-foreground transition-colors">
                   {/* Header with Icon and Name */}
                   <div className="flex items-start gap-3 mb-3">
                     {preset.icon && (
-                      <span className="text-3xl flex-shrink-0">{preset.icon}</span>
+                      <span className="text-2xl sm:text-3xl flex-shrink-0">{preset.icon}</span>
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2 mb-1">
-                        <div>
+                        <div className="min-w-0">
                           <h2 className="text-foreground font-medium text-base">{preset.software_name}</h2>
                           <p className="text-muted-foreground text-sm">{preset.name}</p>
                         </div>
@@ -327,11 +319,11 @@ export default function SystemPresetsPage() {
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
                     <Button
-                      variant="ghost"
+                      variant="ghost-destructive"
                       size="icon"
                       onClick={() => handleDelete(preset)}
                       aria-label={`delete ${preset.name}`}
-                      className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                      className="h-8 w-8 cursor-pointer"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -351,7 +343,7 @@ export default function SystemPresetsPage() {
 
         {/* Delete Confirmation Dialog */}
         <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-          <DialogContent className="border-border bg-card text-foreground">
+          <DialogContent className="border-border text-foreground">
             <DialogHeader>
               <DialogTitle>delete preset</DialogTitle>
               <DialogDescription className="text-muted-foreground">
@@ -371,9 +363,10 @@ export default function SystemPresetsPage() {
                 cancel
               </Button>
               <Button
+                variant="destructive"
                 onClick={confirmDelete}
                 disabled={deleting}
-                className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+                className="cursor-pointer"
               >
                 {deleting ? (
                   <>

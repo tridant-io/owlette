@@ -1,23 +1,45 @@
-import { BookOpen, Bug, FileCog, LogIn, LogOut, Menu, RotateCcw, RotateCw, ScrollText } from 'lucide-react'
-import { useCallback } from 'react'
+import {
+  BookOpen,
+  Bug,
+  FileCog,
+  LogIn,
+  LogOut,
+  Menu,
+  Monitor,
+  Moon,
+  RotateCcw,
+  RotateCw,
+  ScrollText,
+  Sun,
+  type LucideIcon,
+} from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { openExternalUrl, openOwlettePath } from '@/lib/agentCli'
-import { OWLETTE_FILES } from '@/lib/ipc'
+import { OWLETTE_FILES, appearanceTheme, setAppearanceTheme } from '@/lib/ipc'
 import { MENU_SURFACE } from '@/lib/surfaces'
+import { DEFAULT_THEME, THEMES, type ThemeChoice } from '@/lib/theme'
 
 /** Where the logs the operator wants live, relative to the data root. */
 export const LOGS_DIR = 'logs'
 
 /** Public docs — both environments read the same site. */
 export const DOCS_URL = 'https://owlette.app/docs'
+
+const THEME_ICONS: Record<ThemeChoice, LucideIcon> = { system: Monitor, dark: Moon, light: Sun }
 
 interface AppMenuProps {
   /** True when this machine belongs to a site — decides join vs leave. */
@@ -47,6 +69,9 @@ interface AppMenuProps {
  *
  * Opening a file/folder/link goes through the host (`src-tauri/src/shell_open.rs`);
  * nothing is spawned from here.
+ *
+ * appearance is a submenu so it costs the menu one quiet row. the host owns it:
+ * it stores the choice and sets the window theme, and the page follows.
  */
 export function AppMenu({
   paired,
@@ -72,6 +97,32 @@ export function AppMenu({
       })
     })
   }, [])
+
+  const [appearance, setAppearance] = useState<ThemeChoice>(DEFAULT_THEME)
+
+  useEffect(() => {
+    let disposed = false
+    void appearanceTheme()
+      .then((stored) => {
+        if (!disposed) setAppearance(stored)
+      })
+      .catch(() => {
+        // no bridge (browser dev run) or an unreadable file: the default stands
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  const chooseAppearance = useCallback((value: string) => {
+    const next = value as ThemeChoice
+    setAppearance(next)
+    // the host re-themes the window before it writes, so a failed write costs
+    // only the next launch, as with the other layout preferences
+    void setAppearanceTheme(next).catch(() => {})
+  }, [])
+
+  const AppearanceIcon = THEME_ICONS[appearance]
 
   return (
     <DropdownMenu>
@@ -115,6 +166,29 @@ export function AppMenu({
           submit bug report
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger data-testid="menu-appearance">
+            <AppearanceIcon aria-hidden className="size-4" />
+            appearance
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className={MENU_SURFACE}>
+            <DropdownMenuRadioGroup value={appearance} onValueChange={chooseAppearance}>
+              {THEMES.map((theme) => {
+                const Icon = THEME_ICONS[theme]
+                return (
+                  <DropdownMenuRadioItem
+                    key={theme}
+                    value={theme}
+                    data-testid={`menu-appearance-${theme}`}
+                  >
+                    <Icon aria-hidden className="size-4 text-muted-foreground" />
+                    {theme}
+                  </DropdownMenuRadioItem>
+                )
+              })}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
         {/* Mirrors the tray's checkbox — same startup_link, same state. */}
         {startOnLogin !== null && (
           <DropdownMenuCheckboxItem
