@@ -5,7 +5,7 @@ or lock. This is the half the service holds itself, which works with nobody
 logged in: a power request on Windows, two IOKit assertions on macOS, and a
 `systemd-inhibit` child on Linux. Each dies with the agent's process, so a
 crash never leaves a machine held. The session half (the idle lock, the
-screensaver) is the desktop app's.
+screensaver, and on Windows the display) is the desktop app's.
 
 `KeepAwake.set_wanted` returns at once; the OS calls run on one daemon thread
 of its own, so the service's 5 s loop never waits on them.
@@ -128,9 +128,11 @@ def _platform_backend():
 
 _POWER_REQUEST_CONTEXT_VERSION = 0
 _POWER_REQUEST_CONTEXT_SIMPLE_STRING = 0x1
-_POWER_REQUEST_DISPLAY_REQUIRED = 0
+# the system only: from the service's session 0, Windows refuses
+# PowerRequestDisplayRequired (ERROR_NOT_SUPPORTED, TEC-A4D on 4.1.1). the app
+# holds the display in the user's session.
 _POWER_REQUEST_SYSTEM_REQUIRED = 1
-_POWER_REQUEST_TYPES = (_POWER_REQUEST_DISPLAY_REQUIRED, _POWER_REQUEST_SYSTEM_REQUIRED)
+_POWER_REQUEST_TYPES = (_POWER_REQUEST_SYSTEM_REQUIRED,)
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 
@@ -154,7 +156,7 @@ class _ReasonContext(ctypes.Structure):
 
 
 class PowerRequest:
-    """Windows: one power request asking for the display and the system."""
+    """Windows: one power request keeping the system from sleeping."""
 
     how = 'power_request'
 

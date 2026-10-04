@@ -89,7 +89,7 @@ Each machine holds it in two parts: the agent holds sleep, which works with nobo
 
 | OS | what is held |
 |---|---|
-| windows | a display and sleep power request, and the session's screensaver is switched off (and put back on release) |
+| windows | a sleep power request from the service; the app keeps the display on and switches the session's screensaver off (and put back on release) |
 | macos | display and system sleep assertions, and the session's user is kept active so the screensaver and lock stay away |
 | linux | a systemd sleep inhibitor, and the GNOME session's idle inhibit |
 
