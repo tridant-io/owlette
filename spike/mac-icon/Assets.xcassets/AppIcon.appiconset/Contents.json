@@ -1,0 +1,188 @@
+{
+  "images": [
+    {
+      "filename": "day-16.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "16x16"
+    },
+    {
+      "filename": "night-16.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "16x16",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "day-32.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "16x16"
+    },
+    {
+      "filename": "night-32.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "16x16",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "day-32.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "32x32"
+    },
+    {
+      "filename": "night-32.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "32x32",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "day-64.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "32x32"
+    },
+    {
+      "filename": "night-64.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "32x32",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "day-128.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "128x128"
+    },
+    {
+      "filename": "night-128.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "128x128",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "day-256.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "128x128"
+    },
+    {
+      "filename": "night-256.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "128x128",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "day-256.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "256x256"
+    },
+    {
+      "filename": "night-256.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "256x256",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "day-512.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "256x256"
+    },
+    {
+      "filename": "night-512.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "256x256",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "day-512.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "512x512"
+    },
+    {
+      "filename": "night-512.png",
+      "idiom": "mac",
+      "scale": "1x",
+      "size": "512x512",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "filename": "day-1024.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "512x512"
+    },
+    {
+      "filename": "night-1024.png",
+      "idiom": "mac",
+      "scale": "2x",
+      "size": "512x512",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}
