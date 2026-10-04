@@ -1,5 +1,5 @@
 # swoop viewer count and admin sessions page — Tasks
-**Progress**: 9/10 complete
+**Progress**: 10/10 complete
 
 Standing rules: work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-swoop-mac-wt` on branch
 `swoop/macos`; never touch the main checkout; `firestore.rules` and `.claude/hooks` untouched; all user-facing
@@ -172,7 +172,7 @@ the same manual step twice, and measure before claiming.
   - Done when: the spec passes locally with the emulators.
   - Depends on: 3.1.
 
-- [ ] **Task 4.2: Verification and the PR** `[agent+human]`
+- [x] **Task 4.2: Verification and the PR** `[agent+human]`
   - Do: `cd web && npm run lint && npm run typecheck && npm test`; the full local e2e (`npm run e2e`);
     `node scripts/check-security-alerts.mjs`; `npx tsx scripts/validate-openapi.ts`. Commit per task on
     `swoop/macos` (`type: details`), push, open one PR to dev with the usual body, and merge on the owner's word.
@@ -202,3 +202,6 @@ the same manual step twice, and measure before claiming.
   `watch` badges; `useSites` lives in `@/hooks/useFirestore`), 4.1 `8b9c51a3` (admin e2e 2 of 2 plus the route
   guards, 34 of 34 in that run). Verification so far: lint 0 errors (5 old warnings in untouched files),
   typecheck clean, jest 6371 passed, security CLEAR, OpenAPI valid; the full local e2e is running.
+
+### 2026-10-04 audit
+- Ticked 4.2: #277 merged 2026-10-03 (e299de6b) and shipped in 4.1.1.

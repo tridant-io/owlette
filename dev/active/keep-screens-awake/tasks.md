@@ -1,5 +1,5 @@
 # keep screens awake — Tasks
-**Progress**: 7/9 complete
+**Progress**: 8/9 complete
 
 Standing rules: work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-swoop-mac-wt`, branch
 `swoop/macos`; never the main checkout; no commits, pushes or `git add` by workers (the lead reviews and commits);
@@ -139,7 +139,7 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
   - Done when: proof.md has the measurements for all three.
   - Depends on: 2.1, 2.2.
 
-- [ ] **Task 3.3: Release 4.1.1** `[agent+human]`
+- [x] **Task 3.3: Release 4.1.1** `[agent+human]`
   - Do: Changelog section in both changelogs (the ten fixes since 4.1.0 and this feature, noting default on),
     `sync-versions 4.1.1`, lockfiles follow, security check, PR to dev, tag, CI installers, upload + latest on the
     owner's word (already given for 4.1.1 by "update it to 4.1.1 after you release that"), update A4D, B4A, MBA,
@@ -166,3 +166,10 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
   5e320550 with a vitest that failed first. A4D and MBA proofs and the switch-off half wait for #279's merge (A4D,
   the switch's API) and for the Mac to be free. Side note for the backlog: postinst restarts the app's user unit
   without a user-manager daemon-reload, harmless while the unit file is unchanged.
+
+### 2026-10-04 audit
+- Ticked 3.3: 4.1.1 released (tag v4.1.1, CI installers on the dev catalog, B4A and A4D updated). Windows refused the
+  service's request on it; the fix (fdab366e) ships in 4.1.2 (PR #281).
+- 3.2 stays open: the kiosk and B4A proofs are in proof.md; the Mac's holds and release are shown but its display
+  outcome is confounded by Synergy; the service half on Windows waits for 4.1.2; the switch-off half needs a signed-in
+  dashboard session.

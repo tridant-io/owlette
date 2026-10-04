@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 63/80 complete
+**Progress**: 66/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -87,7 +87,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `dev/active/swoop/spikes/0.9-nvenc-config.md` reports all six as numbers with n, states the driver version and SDK version used, and shows the VUI result as a before/after pair (the claim under test is ~208 ms → ~8 ms). `cargo clippy -- -D warnings` and `cargo test` pass with the working directory set to `agent/swoop/spikes/nvenc-probe`. The memo ends with a recommendation: the exact settings struct Task 3.7 should ship, and any setting the measurement contradicts.
   - Blocks: Tasks 3.7 (NVENC), 4.5 (GPU convert/scale), 4.7 (governor), 6.5 (quality + resolution change), 6.7 (encoder breadth spike).
 
-- [ ] **Task 0.10: Web presentation probe** `[agent+human]`
+- [x] **Task 0.10: Web presentation probe** `[agent+human]`
   - Files: `agent/swoop/spikes/present-probe-web/**` (create: static page, worker scripts and a tiny local node http server that receives per-run JSON; its own `package.json` only if one is genuinely needed), `dev/active/swoop/spikes/0.10-web-presentation.md` (create)
   - Do: Settle plan.md D17's presentation contract empirically, browser-side only — no host, no Rust. Use a same-page loopback `RTCPeerConnection` pair and locally generated encoded chunks. Measure: (1) present from the `VideoDecoder` output callback vs from `requestAnimationFrame`, over 60 s at 60 fps into this box's panel, counting dropped and duplicated presents — use `requestVideoFrameCallback`'s `presentedFrames` and `expectedDisplayTime` only to measure, never to schedule; (2) `desynchronized` canvas vs WebGPU `importExternalTexture` vs canvas 2D `drawImage` vs `ImageBitmapRenderingContext`, reporting submit→present and throughput, and confirming the `desynchronized` readback-empty behaviour that constrains telemetry (`review-1-latency.md` F7); (3) decode in a worker with `OffscreenCanvas`, including whether `desynchronized` and OffscreenCanvas-in-a-worker combine (`research/02-browser-client.md` §2.4 says this is undocumented); (4) **whether transferable `RTCDataChannel` is available in stable Chrome today** — `research/01-parsec-and-peers.md:1002` says developer trial behind a flag at M130, `review-1-latency.md:300-305` says shipped at M130; transfer a channel to a dedicated worker and record the exact Chrome version and result; (5) receive-side `RTCRtpScriptTransform` — where in the pipeline frames appear relative to libwebrtc's frame buffer, and what happens when frames are **not** written back (watch `getStats()` `pliCount`). Call `frame.close()` immediately everywhere. Do not `npm install` into `web/` and do not create anything under `web/lib/swoop/` (Tasks 1.3 / 2.9 / 3.11 own it).
   - Human: runs the same page on Safari (macOS) and Firefox and reports the same fields, since neither browser is on this box.
@@ -740,7 +740,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`; table-driven tests map each `PathProfile` plus MTU to the expected budget, including the TLS degraded profile and the fragment size; `npx eslint web/components/swoop/SwoopStatsOverlay.tsx` clean; a forced-relay session shows "relayed" within 2 s of connecting and never exceeds the cap.
   - Depends on: 3.8, 4.7, 6.8
 
-- [ ] **Task 7.7: Enable/disable side effects + uninstall cleanup** `[agent+human]`
+- [x] **Task 7.7: Enable/disable side effects + uninstall cleanup** `[agent+human]`
   - Files: `agent/src/swoop_manager.py`, `agent/owlette_installer.iss`, `agent/tests/unit/test_swoop_side_effects.py`
   - Do: **Read `.claude/skills/build-system.md` before touching the `.iss`, and get the owner's explicit ack for that edit** — it is a guardrailed file and only the three approved swoop edits are allowed. In `swoop_manager.py`, when swoop is enabled for this machine, apply two side effects on a worker thread (never on the 5-second loop; the service is already SYSTEM, so nothing elevates): (1) an idempotent inbound-UDP Windows Firewall allow rule named `Owlette swoop`, scoped to `{app}\swoop\owlette-swoop.exe`, plus inbound UDP 5353 for mDNS candidate resolution; (2) `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\SoftwareSASGeneration = 3`, **recording the prior value — including "absent" — in local agent state first**. On disable, delete the rule and restore the recorded value exactly (delete the value when it was absent). Both paths log through `log_event` and never raise. In `owlette_installer.iss`, add `[UninstallRun]` entries that remove the rule and revert the policy, mirroring the existing powershell entries in that block (`runhidden waituntilterminated`, `exit 0` so a missing rule is not an error), and sweep `logs\swoop` and `ipc\swoop`.
   - Done when: `agent/.venv/Scripts/python -m pytest agent/tests/unit/test_swoop_side_effects.py` proves enable and disable are idempotent, restore the exact prior SAS value (absent → value deleted), run off the main loop and never elevate; `python -m py_compile agent/src/swoop_manager.py` clean. Human: ack the `.iss` edit; then upgrade from the **oldest fielded version** (not from dev), confirm no streamer is stranded, uninstall, and confirm the firewall rule is gone and `SoftwareSASGeneration` is back to its pre-install state.
@@ -799,7 +799,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 9: `#[cfg]` platform seams
 
-- [ ] **Task 9.1: `#[cfg]` platform seams** `[agent]`
+- [x] **Task 9.1: `#[cfg]` platform seams** `[agent]`
   - Status 2026-09-30: executed for macOS as `dev/active/swoop-macos/`, one plan with the tri-platform plan's Wave 8; the seams are `platform/{win,macos,unsupported}.rs` exporting one set of names, chosen by `cfg` (its decision 1). There, Waves 1–5 are done in code (17 of 24 tasks ticked; the Mac runs of 4.3, 4.4 and 4.9 are open), gate M0 was go on 2026-09-30, and gate M1 (the first real session) and the release are ahead. Linux is still to come: not started, with its own plan; until then it compiles against `platform/unsupported.rs`.
   - Files: `agent/swoop/src/platform/mod.rs`, `agent/swoop/src/platform/windows.rs`, `agent/swoop/src/platform/macos.rs`, `agent/swoop/src/platform/linux.rs`, `agent/swoop/src/main.rs`, `.github/workflows/rust-build.yml`
   - Do: Turn `platform/` into the documented seam the tri-platform plan's Wave 8 fills. Define traits for capture source, encoder factory, input injector, cursor source, clipboard, audio source, and — the one the delivery review says is missing — **process lifetime and bundle delivery**: "who owns my lifetime, and where does my bundle come from". On Windows the streamer is a child of the SYSTEM service in the console session, held in a Job Object with `KILL_ON_JOB_CLOSE` and the bundle on an inherited stdin pipe; on macOS/Linux it is a child of the user's desktop app (cross-plan rule C2), which is what carries TCC responsibility. Implement `windows.rs` purely by delegating to the existing modules — no behaviour change anywhere. Write `macos.rs` and `linux.rs` as compiling stubs returning `Unsupported`, each with a doc comment naming what a real backend must implement: macOS = ScreenCaptureKit + VideoToolbox, **Apple silicon only, macOS 15.0 floor**; Linux = X11/XShm (Wayland out of scope) with VAAPI or NVENC. Re-home every Windows-only module declaration behind `#[cfg(windows)]` in `main.rs` — the one exception to the no-`main.rs` rule, stated in the standing rules, and only for declarations Task 1.2 did not already gate — so the ubuntu and macos legs compile against the platform stubs; behaviour on Windows is unchanged. Add `ubuntu-latest` and `macos-latest` `cargo check` legs to `.github/workflows/rust-build.yml`, copying the shape of `.github/workflows/agent-tests.yml` (SHA-pinned actions with `# vN`, least-privilege `permissions`, `concurrency`, `timeout-minutes`, path filters).
@@ -2139,3 +2139,21 @@ recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A st
   latency overlay with honest stage names and a codec row (#224). Still open: why str0m closed `swoop-feedback`
   under the browser on B4A (needs the log window before the first drop on 3.3.15 — the flood is gone, so the next
   one is readable), audio and a second viewer on hardware.
+
+### 2026-10-04 audit against the code (read-only pass, then ticks)
+- Ticked: 7.7 (f6dbafa6 set_enabled from the doorbell; 67736897, 02db1027 [UninstallRun] and the swoop dir sweep;
+  VM uninstall proof 20/20; the mDNS rule deferred by owner ruling), 9.1 (done through swoop-macos:
+  platform/{win,macos,unsupported}.rs; swoop-posix CI green), 0.10 (superseded: G1 closed on arm B 2026-09-18 and
+  3.11/3.12 shipped RTP into <video>; the probe was never built).
+- Open, with what is missing:
+  - 0.3: the spawn half is superseded by swoop_spawn.py; the memo still has the secure-desktop rows blank.
+  - 6.1: securedesk/mod.rs is a stub; nothing calls SendSAS. Over swoop on Windows the UAC prompt, lock screen and
+    logon screen take no keyboard or mouse (owner hit it on TEC-B4A, 2026-10-03).
+  - 5.7: no memo; perform mode, 24H2, hybrid GPU, Mosaic, HDR, display off, RDP and headless are unmeasured.
+  - 6.7, 7.1, 7.2: encode/{qsv,amf,mf,soft} are stubs and the default feature is encode-nvenc only. A Windows box
+    without NVIDIA, or a VM, advertises capabilities.swoop=1 and the streamer exits 13 (no_encoder) with no copy for it.
+  - 6.8, 7.4: no host STUN or TURN (transport/turn is a stub); CLOUDFLARE_TURN_KEY_* were empty on Railway on
+    2026-09-22. swoop works on the LAN and fails off it. Taken up as the swoop-wan plan, 2026-10-04.
+  - 7.8, 8.6: Authenticode is not wired (build-installer.yml:34); the 4.1.1 exe reads NotSigned.
+  - 8.4: no relayed-GB metering (moot until TURN). 8.7: browser-side session.spec.ts only; no CI test runs the
+    real streamer. 10.1: G4 unmet (unsigned pilot, defaults unchanged). 11.1: deferred by its gate.
