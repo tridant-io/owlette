@@ -1092,9 +1092,10 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
           <h1 className="sr-only">hoot</h1>
           {/* Machine selector bar — matches sidebar header height above `md`
               (`md:h-12` + `md:py-0` keep that row pixel-identical). Below it the
-              row wraps instead: the target selector, the offline warning and the
-              approval/power toggles cannot share a single 366px line. */}
-          <div className="min-h-12 md:h-12 px-3 py-2 md:py-0 border-b border-border flex flex-wrap md:flex-nowrap items-center gap-x-3 gap-y-2">
+              controls still hold one row: the toggles drop to icons and the target
+              selector takes what width is left. Only the offline warning, while
+              there is one, takes a line of its own. */}
+          <div className="min-h-12 md:h-12 px-3 py-2 md:py-0 border-b border-border flex flex-wrap md:flex-nowrap items-center gap-x-2 md:gap-x-3 gap-y-2">
             {/* Two icon controls, one per breakpoint: below `md` the only entry
                 point to conversation history and "new conversation" (both live
                 in the sheet at that width), above it the sidebar collapse. Both
@@ -1138,7 +1139,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
             />
 
             {targetWarning && (
-              <span className="min-w-0 text-xs text-warning">{targetWarning}</span>
+              <span className="min-w-0 basis-full order-last md:basis-auto md:order-none text-xs text-warning">{targetWarning}</span>
             )}
 
             <div className="ml-auto flex items-center gap-2">

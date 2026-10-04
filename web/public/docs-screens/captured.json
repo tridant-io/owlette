@@ -1,6 +1,12 @@
 {
   "version": "4.1.0",
-  "capturedAt": "2026-10-03T15:08:59.565Z",
+  "capturedAt": "2026-10-04T00:43:27.930Z",
   "installedExe": "4.1.0",
-  "missing": []
+  "themes": [
+    "dark",
+    "light"
+  ],
+  "missing": [
+    "agent-right-click.png (tray menu — icon likely in the hidden-icons overflow)"
+  ]
 }

@@ -56,7 +56,8 @@ export function Footer() {
   }
 
   return (
-    <footer className="fixed bottom-0 left-0 right-0 w-full bg-gradient-to-t from-background via-background/95 to-transparent pt-8 pb-6 z-10 pointer-events-none">
+    // pinned over the page from `sm` up; on a phone it closes the page instead of covering it
+    <footer className="relative sm:fixed sm:bottom-0 sm:left-0 sm:right-0 w-full bg-gradient-to-t from-background via-background/95 to-transparent pt-8 pb-6 z-10 pointer-events-none">
       <div className="container mx-auto px-4 pointer-events-auto">
         <p className="text-center text-xs text-muted-foreground flex items-center justify-center gap-1">
           <span>made with</span>

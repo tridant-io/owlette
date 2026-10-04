@@ -68,18 +68,18 @@ export function HootApprovalToggle({ siteId }: HootApprovalToggleProps) {
             aria-pressed={requireApproval}
             // the hover tint is lighter by day: the night's 20% costs the light
             // status text too much contrast.
-            className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
+            className={`flex items-center justify-center gap-1.5 size-8 md:size-auto md:px-2 md:py-1 rounded border transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
               requireApproval
                 ? 'border-warning-border bg-warning-surface text-warning hover:bg-warning-solid/10 dark:hover:bg-warning-solid/20'
                 : 'border-border bg-secondary text-muted-foreground hover:bg-accent'
             }`}
           >
             {requireApproval ? (
-              <ShieldCheck className="h-3.5 w-3.5" />
+              <ShieldCheck className="h-4 w-4 md:h-3.5 md:w-3.5" />
             ) : (
-              <ShieldOff className="h-3.5 w-3.5" />
+              <ShieldOff className="h-4 w-4 md:h-3.5 md:w-3.5" />
             )}
-            <span className="text-xs font-medium">{label}</span>
+            <span className="hidden md:inline text-xs font-medium">{label}</span>
           </button>
         </TooltipTrigger>
         <TooltipContent>

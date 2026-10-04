@@ -2,14 +2,8 @@
 <html lang="en" class="dark scroll-smooth">
   <head>
     <meta charset="UTF-8" />
-    <!-- next-themes sets the class only once react has mounted, after the window has
-         painted; resolving it here the same way keeps a light window from showing a
-         dark first frame. `dark` stays when this cannot run. -->
-    <script>
-      if (!matchMedia('(prefers-color-scheme: dark)').matches) {
-        document.documentElement.classList.replace('dark', 'light')
-      }
-    </script>
+    <!-- `dark` until main.tsx has asked the host which theme to draw; it renders
+         nothing before that answer, and the host paints the frame to match -->
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>owlette</title>

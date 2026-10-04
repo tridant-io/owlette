@@ -21,6 +21,8 @@ const {
   serviceStart,
   serviceStatus,
   serviceStop,
+  onResolvedAppearance,
+  resolvedAppearance,
   setAppearanceTheme,
   setSidebarWidth,
   sidebarWidth,
@@ -195,6 +197,12 @@ describe('layout memory', () => {
     await expect(setAppearanceTheme('dark')).resolves.toBe('dark')
     expect(invoke).toHaveBeenCalledWith('set_appearance_theme', { theme: 'dark' })
   })
+
+  it('asks the host which theme to draw', async () => {
+    invoke.mockResolvedValue('light')
+    await expect(resolvedAppearance()).resolves.toBe('light')
+    expect(invoke).toHaveBeenCalledWith('resolved_appearance')
+  })
 })
 
 describe('event subscriptions', () => {
@@ -203,6 +211,15 @@ describe('event subscriptions', () => {
     path: 'C:\\ProgramData\\Owlette\\config\\config.json',
     at: 1_700_000_000_000,
   }
+
+  it('hands over the theme the host resolved', async () => {
+    const handler = vi.fn()
+    await onResolvedAppearance(handler)
+
+    expect(listen).toHaveBeenCalledWith('appearance-resolved', expect.any(Function))
+    emit('light')
+    expect(handler).toHaveBeenCalledWith('light')
+  })
 
   it('unwraps the payload of a file-changed event', async () => {
     const handler = vi.fn()

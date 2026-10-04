@@ -20,6 +20,7 @@ import {
   ChevronRight,
   Eye,
   Loader2,
+  MoreVertical,
   Pause,
   Pencil,
   Play,
@@ -30,6 +31,13 @@ import {
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Machine } from '@/hooks/useFirestore';
@@ -380,7 +388,7 @@ export function TalonCard({
   return (
     <div data-testid="talon-row">
       <div
-        className={`flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/50 dark:hover:bg-muted/30 ${TALON_ROW_GRID}`}
+        className={`relative flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/50 dark:hover:bg-muted/30 ${TALON_ROW_GRID}`}
       >
         {/* (a) chevron + enabled state */}
         <div className="flex flex-shrink-0 items-center gap-1.5 pt-0.5 md:pt-0">
@@ -421,7 +429,7 @@ export function TalonCard({
         <div className="min-w-0 flex-1 md:contents">
           {/* (b) name */}
           <div className="flex min-w-0 flex-col">
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2 pr-9 md:pr-0">
               <span className="truncate text-sm font-medium text-foreground" title={nameTitle}>
                 {talon.name}
               </span>
@@ -518,8 +526,52 @@ export function TalonCard({
           </div>
         </div>
 
-        {/* (g) actions */}
-        <div className="flex flex-shrink-0 items-center gap-1 md:justify-self-end">
+        {/* (g) actions. below `md` one menu with a label per action, pinned to the
+            corner so the lines under the name keep the full width */}
+        <div className="absolute right-2 top-1.5 md:hidden">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                data-testid="talon-menu"
+                disabled={busyAction !== null}
+                aria-label={`actions for ${talon.name}`}
+                className="text-muted-foreground"
+              >
+                {busyAction !== null ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48 border-border bg-raised">
+              <DropdownMenuItem onSelect={() => void handleRerun()} className="cursor-pointer">
+                <RotateCcw className="h-4 w-4" />
+                run now
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void handleToggleEnabled()} className="cursor-pointer">
+                {talon.enabled ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                {talon.enabled ? 'disable' : 'enable'}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={onEdit} className="cursor-pointer">
+                <Pencil className="h-4 w-4" />
+                edit
+              </DropdownMenuItem>
+              {onSaveAsTemplate && (
+                <DropdownMenuItem onSelect={() => void handleSaveAsTemplate()} className="cursor-pointer">
+                  <BookmarkPlus className="h-4 w-4" />
+                  save as template
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDeleteOpen(true)} className="cursor-pointer">
+                <Trash2 className="h-4 w-4" />
+                delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div className="hidden flex-shrink-0 items-center gap-1 md:flex md:justify-self-end">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

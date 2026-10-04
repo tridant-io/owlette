@@ -9,3 +9,9 @@ export type ThemeChoice = (typeof THEMES)[number]
 
 /** the host's answer before anything is stored */
 export const DEFAULT_THEME: ThemeChoice = 'system'
+
+/** what the page draws: the choice, with `system` resolved against the os by the host */
+export type ResolvedTheme = 'dark' | 'light'
+
+/** drawn when the host can't be asked (a browser dev run), as `<html class="dark">` */
+export const FALLBACK_THEME: ResolvedTheme = 'dark'

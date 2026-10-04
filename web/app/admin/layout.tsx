@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import RequireAdminAccess from '@/components/RequireAdminAccess';
 import { ArrowLeft, Menu, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import Image from 'next/image';
+import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
@@ -61,7 +61,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   );
   const [resizing, setResizing] = useState(false);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
-  // on mobile the pane runs under the fixed top bar (pt-16), so it fades instead of cutting
+  // on mobile the pane runs under the fixed menu button (pt-12/pt-16), so it fades instead of cutting
   const mainRef = useScrollFade<HTMLElement>();
 
   const onResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -133,7 +133,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <div className="flex min-h-screen">
         {/* Mobile Menu Button */}
         {!mobileMenuOpen && (
-          <div className="lg:hidden fixed top-4 left-4 z-50">
+          <div className="lg:hidden fixed top-3 left-3 md:top-4 md:left-4 z-50">
             <Button
               ref={menuButtonRef}
               variant="outline"
@@ -199,9 +199,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             />
           )}
           {/* Vertical padding is constant across states so the logo can't shift as the rail folds. */}
-          <div className={`p-6 ${collapsed ? 'lg:px-3 lg:py-6' : 'lg:p-6'} border-b border-border`}>
+          <div className={`p-4 md:p-6 ${collapsed ? 'lg:px-3 lg:py-6' : 'lg:p-6'} border-b border-border`}>
             {/* Mobile Header */}
-            <div className="lg:hidden mb-4">
+            <div className="lg:hidden mb-3 md:mb-4">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xl font-bold text-foreground">admin panel</p>
                 <button
@@ -229,11 +229,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                       aria-label="expand sidebar"
                       className="group relative flex items-center justify-center h-10 w-10 rounded-lg transition-colors hover:bg-accent! focus-visible:bg-accent! outline-none cursor-pointer"
                     >
-                      <Image
-                        src="/owlette-icon.png"
-                        alt="Owlette"
-                        width={36}
-                        height={36}
+                      <OwletteEyeIcon
+                        size={36}
                         className="transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
                       />
                       <PanelLeftOpen className="absolute h-5 w-5 text-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
@@ -246,7 +243,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               ) : (
                 <>
                   <div className="flex-shrink-0">
-                    <Image src="/owlette-icon.png" alt="Owlette" width={36} height={36} />
+                    <OwletteEyeIcon size={36} />
                   </div>
                   <div className="block pr-8">
                     <p className="text-xl font-bold text-foreground">admin panel</p>
@@ -280,7 +277,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </div>
 
           {/* Navigation Links */}
-          <nav className={`flex-1 p-4 ${collapsed ? 'lg:p-2' : 'lg:p-4'}`}>
+          {/* the drawer is viewport-tall, so on a short phone its nav scrolls */}
+          <nav className={`flex-1 min-h-0 overflow-y-auto lg:overflow-visible p-3 md:p-4 ${collapsed ? 'lg:p-2' : 'lg:p-4'}`}>
             {navItems.map((item) => {
               const isActive = pathname === item.href;
               const Icon = item.icon;
@@ -297,7 +295,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     >
                       <div
                         className={`
-                          flex items-start gap-3 p-3 ${collapsed ? 'lg:p-2 lg:justify-center' : 'lg:p-3 lg:justify-start'} rounded-lg cursor-pointer transition-colors mb-2
+                          flex items-start gap-3 p-2.5 md:p-3 ${collapsed ? 'lg:p-2 lg:justify-center' : 'lg:p-3 lg:justify-start'} rounded-lg cursor-pointer transition-colors mb-1 md:mb-2
                           ${
                             isActive
                               ? 'bg-accent-cyan/10 dark:bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30'
@@ -332,7 +330,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </aside>
 
         {/* Main Content */}
-        <main ref={mainRef} className="flex-1 overflow-auto pt-16 lg:pt-0">
+        <main ref={mainRef} className="flex-1 overflow-auto pt-12 md:pt-16 lg:pt-0">
           {children}
         </main>
       </div>

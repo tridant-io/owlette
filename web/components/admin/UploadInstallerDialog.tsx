@@ -162,7 +162,7 @@ export default function UploadInstallerDialog({
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
               className={`
-                border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
+                border-2 border-dashed rounded-lg p-4 sm:p-8 text-center cursor-pointer transition-colors
                 ${isDragging ? 'border-accent-cyan bg-accent-cyan/10' : 'border-border hover:border-muted-foreground'}
               `}
             >
@@ -192,11 +192,12 @@ export default function UploadInstallerDialog({
                   <p className="text-xs text-muted-foreground mt-4">Only .exe, .pkg or .deb files accepted</p>
                 </div>
               ) : (
-                <div className="flex items-center justify-between bg-background rounded p-4">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle className="h-5 w-5 text-success" />
-                    <div className="text-left">
-                      <p className="text-foreground font-medium flex items-center gap-2">
+                <div className="flex items-center justify-between gap-2 bg-background rounded p-3 sm:p-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <CheckCircle className="h-5 w-5 shrink-0 text-success" />
+                    <div className="min-w-0 text-left">
+                      {/* a long file name breaks, and the platform badge wraps under it */}
+                      <p className="text-foreground font-medium flex flex-wrap items-center gap-x-2 gap-y-1 wrap-anywhere">
                         {file.name}
                         {platform && <Badge variant="outline">{PLATFORM_LABEL[platform]}</Badge>}
                       </p>

@@ -112,7 +112,7 @@ export default function WebhooksSettingsPage() {
   return (
     <div className="min-h-screen bg-background">
       <PageHeader currentPage="webhooks" />
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <main className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 py-8">
           {/* Developer-preview banner. Subscription management, manual probes,
               delivery history, and retry are all live. Automatic dispatch of
               roost lifecycle events (`version.published`, `version.rolled_back`,
@@ -121,8 +121,9 @@ export default function WebhooksSettingsPage() {
               silently to events that won't fire. It stays up on a gated site
               that still has subscriptions: it is a caveat about delivery, which
               is exactly what those subscriptions are still doing. */}
-          <div className="mb-6 rounded-md border border-accent-cyan/30 bg-accent-cyan/10 px-4 py-3">
-            <div className="flex items-start gap-3">
+          <div className="mb-6 rounded-md border border-accent-cyan/30 bg-accent-cyan/10 px-3 py-3 sm:px-4">
+            {/* the pill sits above the note on a phone, so the note keeps the full width */}
+            <div className="flex flex-col items-start gap-2 sm:flex-row sm:gap-3">
               <span className="inline-flex items-center rounded-full border border-accent-cyan/30 bg-card dark:bg-accent-cyan/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-cyan flex-shrink-0">
                 developer preview
               </span>

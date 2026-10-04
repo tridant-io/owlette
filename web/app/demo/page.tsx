@@ -137,7 +137,7 @@ export default function DemoPage() {
         />
 
         {/* Demo banner */}
-        <div className="bg-accent-cyan/10 border-b border-accent-cyan/20">
+        <div className="relative z-10 bg-accent-cyan/10 border-b border-accent-cyan/20">
           <div className="mx-auto max-w-screen-2xl px-3 md:px-4 py-2">
             <p className="text-sm text-muted-foreground">
               you&apos;re viewing a demo with sample data

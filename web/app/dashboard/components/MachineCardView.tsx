@@ -245,7 +245,7 @@ const MachineCard = memo(function MachineCard({
     >
       <SelectTrigger
         size="sm"
-        className="h-5 px-1.5 py-0 text-xs border-0 bg-transparent shadow-none gap-1 text-muted-foreground hover:text-foreground focus-visible:ring-0"
+        className="hidden sm:flex h-5 px-1.5 py-0 text-xs border-0 bg-transparent shadow-none gap-1 text-muted-foreground hover:text-foreground focus-visible:ring-0"
         onClick={(e) => e.stopPropagation()}
       >
         <SelectValue />

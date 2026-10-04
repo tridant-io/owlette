@@ -25,7 +25,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::window::Color;
-use tauri::{AppHandle, LogicalSize, Manager, PhysicalSize, Theme, WebviewWindow, Window};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalSize, Theme, WebviewWindow, Window};
 
 /// File name inside the per-user app-data directory.
 pub const LAYOUT_FILE: &str = "layout.json";
@@ -457,12 +457,38 @@ impl LayoutState {
   }
 }
 
-/// pin the window theme, or hand it back to the os, and paint the frame to match.
+/// the event that tells the page which theme to draw. the page can't read it from
+/// its own `prefers-color-scheme`: tauri sets webview2's colour scheme when the
+/// webview is created and when the os changes theme, never when the window is
+/// pinned or freed, so the page would keep its launch theme.
+pub const RESOLVED_EVENT: &str = "appearance-resolved";
+
+/// pin the window theme, or hand it back to the os, then paint and tell the page.
 pub fn apply_theme(window: &WebviewWindow, choice: ThemeChoice) {
   if let Err(error) = window.set_theme(choice.window_theme()) {
     log::warn!("could not set the window theme: {error}");
   }
-  paint_frame(window, current_theme(window));
+  show_theme(window, current_theme(window));
+}
+
+/// paint the frame and tell the page for the theme the window now shows.
+pub fn show_theme(window: &WebviewWindow, theme: Theme) {
+  paint_frame(window, theme);
+  if let Err(error) = window.emit(RESOLVED_EVENT, theme_name(theme)) {
+    log::warn!("could not tell the page the appearance: {error}");
+  }
+}
+
+/// the theme the page should draw now, as the word the page uses.
+pub fn resolved_name(window: &WebviewWindow) -> &'static str {
+  theme_name(current_theme(window))
+}
+
+fn theme_name(theme: Theme) -> &'static str {
+  match theme {
+    Theme::Light => "light",
+    _ => "dark",
+  }
 }
 
 /// under `system` only the window knows what the os said. no answer is dark, the
@@ -471,7 +497,7 @@ fn current_theme(window: &WebviewWindow) -> Theme {
   window.theme().unwrap_or(Theme::Dark)
 }
 
-pub fn paint_frame(window: &WebviewWindow, theme: Theme) {
+fn paint_frame(window: &WebviewWindow, theme: Theme) {
   let color = match theme {
     Theme::Light => LIGHT_BACKGROUND,
     _ => DARK_BACKGROUND,
@@ -655,6 +681,12 @@ mod tests {
       css.contains("--background: oklch(0.145 0.03 250);"),
       "dark --background moved"
     );
+  }
+
+  #[test]
+  fn the_page_hears_light_or_dark_and_dark_for_anything_else() {
+    assert_eq!(theme_name(Theme::Light), "light");
+    assert_eq!(theme_name(Theme::Dark), "dark");
   }
 
   #[test]

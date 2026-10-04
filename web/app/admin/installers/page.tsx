@@ -13,6 +13,8 @@ import { Package, Plus, Loader2, Download, Trash2, CheckCircle, Copy, Sparkles, 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import UploadInstallerDialog from '@/components/admin/UploadInstallerDialog';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
 import { formatFileSize } from '@/lib/storageUtils';
 import { INSTALLER_PLATFORMS, PLATFORM_LABEL, type InstallerFile, type InstallerPlatform } from '@/lib/installerPlatform';
 import { cn } from '@/lib/utils';
@@ -259,57 +261,51 @@ export default function InstallerVersionsPage() {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground mb-2">installers</h1>
-          <p className="text-muted-foreground">manage owlette Agent installer versions and downloads</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button
-            onClick={() => setCleanupDialogOpen(true)}
-            variant="outline"
-            className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground! cursor-pointer"
-            disabled={versions.length < 2}
-          >
-            <Paintbrush className="h-4 w-4 mr-2" />
-            clean up
-          </Button>
-          <Button
-            onClick={() => setUploadDialogOpen(true)}
-            className="cursor-pointer"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            upload new version
-          </Button>
-        </div>
-      </div>
+        <AdminPageHeader
+          className="mb-6 md:mb-8"
+          title="installers"
+          description="manage owlette Agent installer versions and downloads"
+          actions={
+            <>
+              <CompactButton
+                icon={Paintbrush}
+                label="clean up"
+                onClick={() => setCleanupDialogOpen(true)}
+                variant="outline"
+                className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground!"
+                disabled={versions.length < 2}
+              />
+              <CompactButton icon={Plus} label="upload new version" onClick={() => setUploadDialogOpen(true)} />
+            </>
+          }
+        />
 
       {/* Stats Card */}
       {latestVersion && (
-        <div className="bg-card border border-border rounded-lg p-6 mb-8">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-success-solid rounded-lg">
-              <Package className="h-6 w-6 text-success-solid-foreground" />
+        <div className="bg-card border border-border rounded-lg p-4 sm:p-6 mb-6 md:mb-8">
+          {/* on a phone the upload date wraps under the version, in line with its text */}
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-3">
+            <div className="p-2 sm:p-3 bg-success-solid rounded-lg">
+              <Package className="h-5 w-5 sm:h-6 sm:w-6 text-success-solid-foreground" />
             </div>
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <p className="text-sm text-muted-foreground">current latest version</p>
               <div className="flex items-center gap-2 mt-1">
-                <p className="text-2xl font-bold text-foreground">{latestVersion.version}</p>
+                <p className="text-xl sm:text-2xl font-bold text-foreground">{latestVersion.version}</p>
                 <Badge className="bg-success-solid text-success-solid-foreground">Latest</Badge>
               </div>
             </div>
-            <div className="text-right">
+            <div className="flex basis-full items-baseline gap-1.5 pl-12 sm:block sm:basis-auto sm:pl-0 sm:text-right">
               <p className="text-sm text-muted-foreground">uploaded</p>
-              <p className="text-lg text-foreground font-medium whitespace-nowrap">
+              <p className="text-sm sm:text-lg text-foreground font-medium whitespace-nowrap">
                 {formatDate(latestVersion.release_date)}
               </p>
             </div>
           </div>
           {/* the public link serves each visitor their own platform; these are every file */}
-          <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <div className="mt-4 sm:mt-5 grid gap-2 sm:gap-3 md:grid-cols-3">
             {INSTALLER_PLATFORMS.map((platform) => (
               <PlatformFile
                 key={platform}
@@ -341,10 +337,11 @@ export default function InstallerVersionsPage() {
       {/* Versions Table */}
       {!loading && !error && (
         <div className="bg-card border border-border rounded-lg overflow-x-auto">
-          {/* a floor width, so a phone scrolls the table instead of wrapping dates; it fits
-              the admin layout from a 1280 window up */}
-          <table className="w-full min-w-[48rem]">
-            <thead>
+          {/* below md each version stacks into a block: version and actions, then the
+              date, then the notes. from md the floor width keeps dates on one line; it
+              fits the admin layout from a 1280 window up */}
+          <table className="block w-full md:table md:min-w-[48rem]">
+            <thead className="hidden md:table-header-group">
               <tr className="border-b border-border bg-background/50">
                 <th className="text-left p-4 text-sm font-medium text-foreground">version</th>
                 <th className="text-left p-4 text-sm font-medium text-foreground">uploaded</th>
@@ -353,9 +350,9 @@ export default function InstallerVersionsPage() {
               </tr>
             </thead>
             {versions.length === 0 ? (
-              <tbody>
-                <tr>
-                  <td colSpan={4} className="p-8 text-center text-muted-foreground">
+              <tbody className="block md:table-row-group">
+                <tr className="block md:table-row">
+                  <td colSpan={4} className="block md:table-cell p-6 md:p-8 text-center text-muted-foreground">
                     No versions uploaded yet. Click &quot;upload new version&quot; to get started.
                   </td>
                 </tr>
@@ -366,11 +363,13 @@ export default function InstallerVersionsPage() {
                 const isDeleting = deletingVersion === version.version;
                 const isSetting = settingLatest === version.version;
 
-                // one row group per version: the version row, then its platforms side by side
+                // one row group per version: the version row, then its platforms side by
+                // side. a phone gets the version row alone: the latest card above carries
+                // the platform files, and older builds are a desktop errand
                 return (
-                  <tbody key={version.id} className="border-b border-border last:border-b-0">
-                    <tr>
-                      <td className="px-4 pt-4 pb-3 whitespace-nowrap">
+                  <tbody key={version.id} className="block md:table-row-group border-b border-border last:border-b-0">
+                    <tr className="flex flex-wrap items-center md:table-row">
+                      <td className="order-1 flex-1 min-w-0 px-3 pt-3 pb-1 md:px-4 md:pt-4 md:pb-3 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <span className="text-foreground font-medium">{version.version}</span>
                           {isLatest && (
@@ -382,22 +381,22 @@ export default function InstallerVersionsPage() {
                         </div>
                       </td>
 
-                      <td className="px-4 pt-4 pb-3 whitespace-nowrap">
+                      <td className="order-3 flex basis-full min-w-0 items-baseline gap-2 px-3 pb-1 md:table-cell md:px-4 md:pt-4 md:pb-3 whitespace-nowrap">
                         <p className="text-sm text-muted-foreground">{formatDate(version.release_date)}</p>
-                        <p className="text-xs text-muted-foreground/80 max-w-[12rem] truncate" title={version.uploaded_by}>
+                        <p className="min-w-0 text-xs text-muted-foreground/80 max-w-[12rem] truncate" title={version.uploaded_by}>
                           by {version.uploaded_by}
                         </p>
                       </td>
 
-                      <td className="px-4 pt-4 pb-3 min-w-[14rem]">
+                      <td className="order-4 basis-full px-3 pb-3 md:px-4 md:pt-4 md:min-w-[14rem]">
                         {version.release_notes ? (
                           <TruncatedReleaseNotes text={version.release_notes} />
                         ) : (
-                          <span className="text-xs text-muted-foreground/80">no notes</span>
+                          <span className="hidden md:inline text-xs text-muted-foreground/80">no notes</span>
                         )}
                       </td>
 
-                      <td className="px-4 pt-4 pb-3">
+                      <td className="order-2 px-3 pt-3 pb-1 md:px-4 md:pt-4 md:pb-3">
                         {!isLatest && (
                           <div className="flex items-center justify-end gap-2 whitespace-nowrap">
                             <Button
@@ -436,7 +435,7 @@ export default function InstallerVersionsPage() {
                         )}
                       </td>
                     </tr>
-                    <tr>
+                    <tr className="hidden md:table-row">
                       <td colSpan={4} className="px-4 pb-4">
                         <div className="grid gap-2 md:grid-cols-3">
                           {INSTALLER_PLATFORMS.map((platform) => (
@@ -461,7 +460,7 @@ export default function InstallerVersionsPage() {
 
       {/* Info Box */}
       {!loading && !error && versions.length > 0 && (
-        <div className="mt-6 bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg p-4">
+        <div className="mt-4 sm:mt-6 bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg p-3 sm:p-4">
           <p className="text-accent-cyan text-sm">
             <strong>Note:</strong> The &quot;Latest&quot; version is what users will download from the public
             download link. You can upload multiple versions and switch between them at any time.

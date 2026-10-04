@@ -331,9 +331,12 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
         <VisuallyHidden>
           <DialogTitle>account settings</DialogTitle>
         </VisuallyHidden>
-        <div ref={boxRef} className="flex flex-col sm:flex-row sm:min-h-[480px] min-h-0 max-h-[85dvh]">
+        {/* min-w-0: DialogContent is a grid, and its auto column grows to the widest
+            child's min-content, which on a phone is the whole tab bar */}
+        <div ref={boxRef} className="flex flex-col sm:flex-row sm:min-h-[480px] min-h-0 min-w-0 max-h-[85dvh]">
           {/* Mobile: horizontal scrollable tabs */}
-          <nav aria-label="settings sections" className="sm:hidden flex overflow-x-auto border-b border-border bg-card/50 p-1.5 gap-1 flex-shrink-0">
+          {/* mr-10 leaves the dialog's close button its own slot at the end of the row */}
+          <nav aria-label="settings sections" className="sm:hidden flex overflow-x-auto border-b border-border bg-card/50 p-1.5 mr-10 gap-1 flex-shrink-0">
             {SECTIONS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}

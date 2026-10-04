@@ -299,7 +299,9 @@ export function WebhookList({ siteId }: { siteId: string }) {
       {webhooks.map((webhook) => (
         <div
           key={webhook.id}
-          className={`flex items-center gap-4 p-4 rounded-lg border border-border bg-card ${!webhook.enabled ? 'opacity-80' : ''}`}
+          // on a phone the switch and details take the first row and the status and
+          // actions wrap under them, so nothing is pushed past the edge
+          className={`flex flex-wrap sm:flex-nowrap items-center gap-x-4 gap-y-2 p-3 sm:p-4 rounded-lg border border-border bg-card ${!webhook.enabled ? 'opacity-80' : ''}`}
         >
           <Switch
             checked={webhook.enabled}
@@ -308,7 +310,7 @@ export function WebhookList({ siteId }: { siteId: string }) {
           />
 
           {/* Left: name inline, url + pills stacked below */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 basis-[calc(100%-3.5rem)] sm:basis-0">
             <div className="flex items-center gap-2 mb-1.5">
               <span className="text-foreground font-medium">{webhook.name}</span>
               {webhook.url.includes('hooks.slack.com') && (
@@ -336,7 +338,7 @@ export function WebhookList({ siteId }: { siteId: string }) {
                 <p className="text-[10px] text-warning mt-0.5">{webhook.failCount} failures</p>
               )}
             </div>
-            <span className="text-xs text-muted-foreground w-36 text-right">
+            <span className="text-xs text-muted-foreground sm:w-36 sm:text-right">
               {webhook.lastTriggered
                 ? webhook.lastTriggered.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
                 : '—'}
@@ -344,19 +346,20 @@ export function WebhookList({ siteId }: { siteId: string }) {
           </div>
 
           {/* Right: actions */}
-          <div className="flex items-center gap-1 flex-shrink-0">
+          <div className="flex items-center gap-1 flex-shrink-0 ml-auto sm:ml-0">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => handleTest(webhook)}
               disabled={testingId === webhook.id || !webhook.enabled}
+              aria-label={`test ${webhook.name}`}
               className="text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
             >
-              test
+              <span className="hidden sm:inline">test</span>
               {testingId === webhook.id ? (
-                <Loader2 className="h-3.5 w-3.5 ml-1 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 sm:ml-1 animate-spin" />
               ) : (
-                <Send className="h-3.5 w-3.5 ml-1" />
+                <Send className="h-3.5 w-3.5 sm:ml-1" />
               )}
             </Button>
             <IconButton

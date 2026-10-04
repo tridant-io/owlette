@@ -23,6 +23,8 @@ import { KeyRound, Trash2, RefreshCw, AlertTriangle, Clock, CheckCircle, Search,
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { AdminButton } from '@/components/admin/AdminButton';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
 
 interface TokenInfo {
   id: string;
@@ -306,30 +308,28 @@ export default function TokensPage() {
   }, [tokens, search, versionFilter, duplicatesOnly, machineCounts]);
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-      {/* Header with inline site selector */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground mb-2">agent tokens</h1>
-            <p className="text-muted-foreground">
-              view and revoke agent authentication tokens
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-              <SelectTrigger aria-label="site" className="w-[180px] bg-card border-border text-foreground">
-                <SelectValue placeholder="select site" />
-              </SelectTrigger>
-              <SelectContent className="bg-card border-border">
-                {sites.map((site) => (
-                  <SelectItem key={site.id} value={site.id} className="text-foreground hover:bg-muted!">
-                    {site.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+      <AdminPageHeader
+        className="mb-4 md:mb-6"
+        title="agent tokens"
+        description="view and revoke agent authentication tokens"
+        toolbar={
+          <Select value={selectedSiteId} onValueChange={handleSiteChange}>
+            <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none bg-card border-border text-foreground">
+              <SelectValue placeholder="select site" />
+            </SelectTrigger>
+            <SelectContent className="bg-card border-border">
+              {sites.map((site) => (
+                <SelectItem key={site.id} value={site.id} className="text-foreground hover:bg-muted!">
+                  {site.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+        actions={
+          <>
             <IconButton
               label="refresh tokens"
               variant="outline"
@@ -340,23 +340,21 @@ export default function TokensPage() {
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </IconButton>
             {tokens.length > 0 && (
-              <Button
+              <CompactButton
+                icon={Trash2}
+                label="revoke all"
                 variant="destructive"
                 size="sm"
                 onClick={() => setRevokeAllDialogOpen(true)}
-                className="cursor-pointer"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                revoke all
-              </Button>
+              />
             )}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* Filter toolbar */}
       {selectedSiteId && (
-        <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4">
           <div className="relative flex-1 min-w-[220px] max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
             <Input
@@ -368,8 +366,9 @@ export default function TokensPage() {
             />
           </div>
 
+          {/* a desktop nicety: on a phone the duplicates and prune controls keep the row */}
           <Select value={versionFilter} onValueChange={setVersionFilter}>
-            <SelectTrigger aria-label="agent version" className="w-[160px] bg-card border-border text-foreground">
+            <SelectTrigger aria-label="agent version" className="hidden sm:flex w-[160px] bg-card border-border text-foreground">
               <SelectValue placeholder="all versions" />
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
@@ -430,8 +429,8 @@ export default function TokensPage() {
 
       {/* Tokens Table */}
       {selectedSiteId && (
-        <Card className="bg-card border-border">
-          <CardContent className="pt-6">
+        <Card className="bg-card border-border py-3 md:py-6">
+          <CardContent className="px-3 sm:px-6 md:pt-6">
             {loading ? (
               <div className="text-center py-8 text-muted-foreground">loading tokens...</div>
             ) : tokens.length === 0 ? (
@@ -446,9 +445,11 @@ export default function TokensPage() {
                 <p>no tokens match your filters</p>
               </div>
             ) : (
+              // below md each token stacks: machine and revoke, then its status; version
+              // and dates are desktop columns
               <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
+                <Table className="block md:table">
+                  <TableHeader className="hidden md:table-header-group">
                     <TableRow className="border-border hover:bg-card">
                       <TableHead className="text-foreground">machine ID</TableHead>
                       <TableHead className="text-foreground">version</TableHead>
@@ -458,16 +459,16 @@ export default function TokensPage() {
                       <TableHead className="text-foreground text-right">actions</TableHead>
                     </TableRow>
                   </TableHeader>
-                  <TableBody>
+                  <TableBody className="block md:table-row-group">
                     {filteredTokens.map((token) => {
                       const expiryStatus = getExpiryStatus(token.expiresAt);
                       const dupCount = machineCounts.get(token.machineId) || 0;
                       const isDuplicated = dupCount > 1;
                       return (
-                        <TableRow key={token.id} className="border-border hover:bg-muted/50">
-                          <TableCell className="font-mono text-foreground">
-                            <div className="flex items-center gap-2">
-                              <span>{token.machineId}</span>
+                        <TableRow key={token.id} className="flex flex-wrap items-center md:table-row border-border hover:bg-muted/50">
+                          <TableCell className="order-1 flex-1 min-w-0 font-mono text-foreground whitespace-normal md:whitespace-nowrap">
+                            <div className="flex flex-wrap md:flex-nowrap items-center gap-x-2 gap-y-1">
+                              <span className="min-w-0 max-md:wrap-anywhere">{token.machineId}</span>
                               {isDuplicated && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
@@ -488,8 +489,8 @@ export default function TokensPage() {
                               )}
                             </div>
                           </TableCell>
-                          <TableCell className="text-foreground">{token.version || 'N/A'}</TableCell>
-                          <TableCell>
+                          <TableCell className="hidden md:table-cell text-foreground">{token.version || 'N/A'}</TableCell>
+                          <TableCell className="order-3 basis-full pt-0 md:pt-2">
                             <Badge className={expiryStatus.color}>
                               {expiryStatus.label === 'Never expires' && <CheckCircle className="h-3 w-3 mr-1" />}
                               {expiryStatus.label.includes('Expires') && <Clock className="h-3 w-3 mr-1" />}
@@ -497,14 +498,17 @@ export default function TokensPage() {
                               {expiryStatus.label}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
+                          <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
                             {formatDate(token.createdAt)}
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
+                          <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
                             {formatDate(token.lastUsed)}
                           </TableCell>
-                          <TableCell className="text-right">
-                            <Button
+                          <TableCell className="order-2 text-right">
+                            <CompactButton
+                              icon={KeyRound}
+                              label="revoke"
+                              iconClassName="sm:mr-1"
                               variant="ghost"
                               size="sm"
                               onClick={() => {
@@ -512,10 +516,7 @@ export default function TokensPage() {
                                 setRevokeDialogOpen(true);
                               }}
                               className="text-warning hover:text-warning! hover:bg-warning-surface!"
-                            >
-                              <KeyRound className="h-4 w-4 mr-1" />
-                              revoke
-                            </Button>
+                            />
                           </TableCell>
                         </TableRow>
                       );

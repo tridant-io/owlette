@@ -43,7 +43,7 @@ command, and the quick build re-copies the exe from `target/release/`.
 
 ```
 desktop/
-├─ index.html            # <html class="dark"> fallback + pre-paint theme class, body font-sans antialiased
+├─ index.html            # <html class="dark"> until the host answers (main.tsx), body font-sans antialiased
 ├─ components.json       # shadcn config (new-york, neutral, cssVariables)
 ├─ vite.config.ts        # @ alias, tailwind 4 plugin, tauri dev server, vitest
 ├─ public/               # icon.svg, owlette-eye.svg
@@ -357,15 +357,18 @@ theme itself.
   webview background to match: `#020B16` dark, `#F4F7FB` light (the light
   `--background`, `oklch(0.975 0.006 250)`). Under `system` the colour follows
   the theme the OS reports, and dark when it reports nothing.
-- The window theme drives the webview's `prefers-color-scheme`. `main.tsx` runs
-  next-themes in `system` and never calls `setTheme`, so the `.dark` / `.light`
-  class follows the window. A head script in `index.html` resolves that class
-  before first paint, the way next-themes does after mount, so a light window
-  never paints a dark first frame; `class="dark"` stays as the fallback.
-- `set_appearance_theme` re-themes the open window at once, then stores the
-  choice. `WindowEvent::ThemeChanged` repaints the background when the OS
-  re-themes an unpinned window.
-- Linux is the least certain: tao drives WebKitGTK through GTK's
+- The page never reads its own `prefers-color-scheme`: WebView2 keeps the colour
+  scheme the webview was created with, and tauri changes it only on an OS theme
+  change, never when the window is pinned or freed. So the host tells the page.
+  `resolved_appearance` returns the theme to draw (the pin, or the OS's answer
+  under `system`, dark when it gives none), and the `appearance-resolved` event
+  announces each change. `main.tsx` asks before its first render, so the page
+  never paints the other theme first, and `HostTheme` forces next-themes to the
+  host's answer. `class="dark"` in `index.html` covers the moment before that.
+- `set_appearance_theme` re-themes the open window at once, announces the theme
+  and then stores the choice. `WindowEvent::ThemeChanged` repaints the background
+  and announces the theme when the OS re-themes an unpinned window.
+- Linux is the least certain: tao takes the OS theme from GTK's
   `prefer-dark-theme` setting, a portal reporting no preference reads as light,
   and switching back to `system` while running clears the OS dark preference
   until the next launch.

@@ -19,7 +19,10 @@ const LIGHT_TOASTER =
   "data-[sonner-theme=light]:[--normal-bg:var(--popover)]! data-[sonner-theme=light]:[--normal-border:var(--border)]! data-[sonner-theme=light]:[--normal-text:var(--popover-foreground)]!"
 
 const Toaster = ({ theme, ...props }: ToasterProps) => {
-  const { theme: systemTheme = "system" } = useTheme()
+  // the host forces the page's theme (main.tsx); `system` would ask the webview's
+  // prefers-color-scheme, which doesn't follow the app
+  const { forcedTheme, resolvedTheme } = useTheme()
+  const systemTheme = forcedTheme ?? resolvedTheme ?? "dark"
 
   return (
     <Sonner

@@ -14,6 +14,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
 
 export default function SchedulePresetsPage() {
   const { user, isSuperadmin, userSites, userPreferences } = useAuth();
@@ -95,40 +97,28 @@ export default function SchedulePresetsPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold text-foreground mb-2">schedules</h1>
-              <p className="text-muted-foreground">
-                manage reusable schedule presets for process scheduling across machines
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              {sites.length > 1 && (
-                <Select value={selectedSiteId || ''} onValueChange={setSelectedSiteId}>
-                  <SelectTrigger aria-label="site" className="w-[180px] border-border bg-card text-foreground">
-                    <SelectValue placeholder="select site" />
-                  </SelectTrigger>
-                  <SelectContent className="border-border bg-card text-foreground">
-                    {sites.map(site => (
-                      <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-              <Button
-                onClick={handleCreateNew}
-                className="cursor-pointer"
-              >
-                <Plus className="h-5 w-5 mr-2" />
-                create preset
-              </Button>
-            </div>
-          </div>
-        </div>
+        <AdminPageHeader
+          className="mb-6 md:mb-8"
+          title="schedules"
+          description="manage reusable schedule presets for process scheduling across machines"
+          toolbar={
+            sites.length > 1 && (
+              <Select value={selectedSiteId || ''} onValueChange={setSelectedSiteId}>
+                <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none border-border bg-card text-foreground">
+                  <SelectValue placeholder="select site" />
+                </SelectTrigger>
+                <SelectContent className="border-border bg-card text-foreground">
+                  {sites.map(site => (
+                    <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )
+          }
+          actions={<CompactButton icon={Plus} label="create preset" onClick={handleCreateNew} />}
+        />
 
         {/* Presets list */}
         {presets.length > 0 && (
@@ -136,21 +126,22 @@ export default function SchedulePresetsPage() {
             {presets.map((preset) => (
               <div
                 key={preset.id}
-                className="flex items-center gap-4 p-4 rounded-lg border border-border bg-card"
+                className="flex items-center gap-3 p-3 sm:gap-4 sm:p-4 rounded-lg border border-border bg-card"
               >
-                <WeekSummaryBar schedules={preset.blocks} />
+                {/* a phone gives the name and summary the width; the summary says the same */}
+                <WeekSummaryBar schedules={preset.blocks} className="max-sm:hidden" />
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-foreground font-medium">{preset.name}</span>
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 mb-1">
+                    <span className="min-w-0 text-foreground font-medium">{preset.name}</span>
                     {preset.isBuiltIn && (
                       <Badge className="border-info-border bg-info-surface text-info dark:border-transparent dark:bg-info-solid/20 text-[10px]">built-in</Badge>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground truncate">
+                  <p className="text-xs text-muted-foreground truncate max-sm:line-clamp-2 max-sm:whitespace-normal">
                     {preset.description || formatScheduleSummary(preset.blocks, userPreferences.timeFormat || '12h')}
                   </p>
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
                   <IconButton
                     label={`edit ${preset.name}`}
                     variant="ghost"

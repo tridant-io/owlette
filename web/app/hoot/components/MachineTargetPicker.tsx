@@ -131,7 +131,7 @@ export function MachineTargetPicker({ machines, selection, onChange }: MachineTa
         <Button
           variant="secondary"
           aria-label="hoot target"
-          className="w-full max-w-[220px] min-w-0 justify-between border border-border font-normal"
+          className="w-full max-w-[220px] min-w-0 flex-1 basis-0 md:flex-initial md:basis-auto justify-between border border-border font-normal"
         >
           <span className="flex min-w-0 items-center gap-2">
             {selected === null ? (

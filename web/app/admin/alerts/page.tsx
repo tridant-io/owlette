@@ -29,6 +29,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Bell, Plus, Trash2, Loader2, Zap, Pencil, Sparkles, X } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
 
 /**
  * [B4.3] Display-alerts launch banner cutoff — 30 days after launch. Auto-hides
@@ -337,7 +339,7 @@ export default function AlertsPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
         {/* [B4.3] Migration banner for the new display-alerts feature.
             Surfaces the new alert category to existing operators who already
@@ -346,7 +348,7 @@ export default function AlertsPage() {
             user; auto-hides at DISPLAY_ALERTS_BANNER_END. */}
         {showDisplayAlertsBanner && (
           <div
-            className="mb-6 flex items-start gap-3 rounded-lg border border-accent-cyan/30 bg-accent-cyan/5 p-4"
+            className="mb-4 sm:mb-6 flex items-start gap-3 rounded-lg border border-accent-cyan/30 bg-accent-cyan/5 p-3 sm:p-4"
             role="status"
           >
             <Sparkles className="h-5 w-5 text-accent-cyan shrink-0 mt-0.5" aria-hidden="true" />
@@ -371,19 +373,15 @@ export default function AlertsPage() {
           </div>
         )}
 
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold text-foreground mb-2">alerts</h1>
-              <p className="text-muted-foreground">
-                configure rules to get notified when machine metrics exceed thresholds
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
+        <AdminPageHeader
+          className="mb-6 md:mb-8"
+          title="alerts"
+          description="configure rules to get notified when machine metrics exceed thresholds"
+          toolbar={
+            <>
               {sites.length > 1 && (
                 <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-                  <SelectTrigger aria-label="site" className="w-[180px] border-border bg-card text-foreground">
+                  <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none border-border bg-card text-foreground">
                     <SelectValue placeholder="select site" />
                   </SelectTrigger>
                   <SelectContent className="border-border bg-card text-foreground">
@@ -415,29 +413,21 @@ export default function AlertsPage() {
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
-
-              <Button
-                onClick={openCreateDialog}
-                className="cursor-pointer"
-                disabled={saving}
-              >
-                <Plus className="h-5 w-5 mr-2" />
-                create rule
-              </Button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          actions={<CompactButton icon={Plus} label="create rule" onClick={openCreateDialog} disabled={saving} />}
+        />
 
         {/* Empty state */}
         {rules.length === 0 && !loading && (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="flex flex-col items-center justify-center py-10 sm:py-16 text-center">
             <Bell className="h-12 w-12 text-muted-foreground/30 mb-4" />
             <h2 className="text-lg font-medium text-foreground mb-2">no alert rules configured</h2>
             <p className="text-muted-foreground text-sm mb-6 max-w-md">
               create alert rules to get notified when machine metrics like CPU, memory, disk, or
               GPU exceed your defined thresholds.
             </p>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap justify-center gap-3">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer">
@@ -474,7 +464,7 @@ export default function AlertsPage() {
             {rules.map((rule) => (
               <div
                 key={rule.id}
-                className="flex items-center gap-4 p-4 rounded-lg border border-border bg-card"
+                className="flex items-center gap-2 p-3 sm:gap-4 sm:p-4 rounded-lg border border-border bg-card"
               >
                 <Switch
                   checked={rule.enabled}
@@ -486,8 +476,8 @@ export default function AlertsPage() {
                   className="flex-1 min-w-0 cursor-pointer"
                   onClick={() => openEditDialog(rule)}
                 >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-foreground font-medium">{rule.name}</span>
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 mb-1">
+                    <span className="min-w-0 text-foreground font-medium">{rule.name}</span>
                     <Badge className={`${SEVERITY_COLORS[rule.severity]} text-[10px]`}>
                       {rule.severity}
                     </Badge>

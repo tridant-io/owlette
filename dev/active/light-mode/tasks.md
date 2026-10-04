@@ -414,6 +414,18 @@ Apply `plan.md` → "migration rules". These tasks touch disjoint files. If you 
 
 ## Log
 ### 2026-10-03
+- **Desktop theme runtime, corrected.** Task 3.6 assumed the window theme drives the webview's `prefers-color-scheme`. On Windows it doesn't. tauri-runtime-wry sets WebView2's colour scheme only when the webview is created and on an os `ThemeChanged`, never on `Window::set_theme`. A probe against the installed app showed the page stuck light: at launch on a dark os, and after pinning dark and switching to system.
+  - **Now the host drives the page.** `resolved_appearance` gives the theme to draw (the pin, or the os under `system`), and `appearance-resolved` announces each change from the menu or the os. `main.tsx` asks before its first render and `HostTheme` forces next-themes to the answer. The index.html matchMedia script is gone, since WebView2's media query can't be trusted.
+  - Proven on the real app (start dark, light, dark, system, light), then the desktop light screenshots were captured: 22 of 23, with the tray menu dark-only and in the overflow.
+- **Owner phone review:**
+  - The settings dialog's grid column grew to the tab bar's width; fixed with `min-w-0`, and the close button got its own slot.
+  - The hoot header holds one row (icon toggles, a flexible picker).
+  - Talons actions are a labelled ⋮ menu, and the webhooks callout stacks.
+  - The card's device pickers hide on phones, and the footer ends the page on phones instead of covering it.
+  - The header glow covered unpositioned page content (api keys, webhooks, demo); that content is now `relative z-10`.
+  - Docs and admin logos use the themed eye.
+  - The hero eye can no longer slide under the header on short windows.
+  - Day schedule hues are calmer, with night unchanged.
 - Wave 5 and the review gate:
   - **5.1:** `theme.spec.ts` (the choice, no flash, account sync, os follow, signed out, no-JS dark) and route-smoke in both themes pass. The light pass found three AA misses, now fixed: the day cyan went 0.50 → 0.48, the stale-row readouts got ink-dark series, and the docs code moved to github-light-high-contrast.
   - **5.3:** the desktop job ran green on PR #278 in 41s.

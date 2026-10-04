@@ -11,6 +11,8 @@ import { Label } from '@/components/ui/label';
 import { Users, Shield, ShieldAlert, ShieldOff, Crown, Loader2, Settings, MoreVertical, UserCog, Trash2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { StatChip } from '@/components/admin/StatChip';
 import { useAuth } from '@/contexts/AuthContext';
 import { ManageUserSitesDialog } from '@/components/ManageUserSitesDialog';
 import { NO_SUCCESSOR, TalonSuccessorPicker } from '@/components/TalonSuccessorPicker';
@@ -88,32 +90,6 @@ const PLATFORM_TARGET_ID = '__platform__';
 
 /** Per-device pref field on `users/{uid}/devicePrefs/global`. */
 const SHOW_DELETED_USERS_PREF = 'adminShowDeletedUsers';
-
-/** Tally chip. In the header, not a card row, so the table keeps the height. */
-function StatChip({
-  icon: Icon,
-  iconTone,
-  count,
-  label,
-}: {
-  icon: typeof Users;
-  /** the tile's fill and the ink that sits on it */
-  iconTone: string;
-  count: number;
-  label: string;
-}) {
-  return (
-    <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
-      <div className={`p-1.5 rounded-md ${iconTone}`}>
-        <Icon className="h-4 w-4" />
-      </div>
-      <div className="leading-tight">
-        <p className="text-lg font-bold text-foreground">{count}</p>
-        <p className="text-xs text-muted-foreground whitespace-nowrap">{label}</p>
-      </div>
-    </div>
-  );
-}
 
 /** Admin-only page for viewing users and changing their roles. */
 export default function UserManagementPage() {
@@ -411,24 +387,26 @@ export default function UserManagementPage() {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-        {/* Header — tally chips sit beside the title (not in a full-width card
-            row) so the users table keeps the vertical space. Chips are ordered
-            by ascending privilege, so the platform tier sits last. */}
-        <div className="mb-8 flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground mb-2">user management</h1>
-            <p className="text-muted-foreground">manage user roles and permissions</p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <StatChip icon={Users} iconTone="bg-accent-cyan text-primary-foreground" count={counts.total} label="total users" />
-            <StatChip icon={Users} iconTone="bg-muted text-foreground" count={counts.members} label="members" />
-            <StatChip icon={Shield} iconTone="bg-success-solid text-success-solid-foreground" count={counts.admins} label="site admins" />
-            <StatChip icon={Crown} iconTone="bg-danger-solid text-danger-solid-foreground" count={counts.superadmins} label="superadmins" />
-          </div>
-        </div>
+        {/* tally chips sit beside the title (not in a full-width card row) so the
+            users table keeps the vertical space. Chips are ordered by ascending
+            privilege, so the platform tier sits last. On a phone they split one
+            row evenly. */}
+        <AdminPageHeader
+          className="mb-6 md:mb-8 md:flex-wrap md:gap-x-6 md:gap-y-4"
+          controlsClassName="md:flex-wrap md:gap-2"
+          title="user management"
+          description="manage user roles and permissions"
+          toolbar={
+            <>
+              <StatChip className="flex-1 sm:flex-initial" icon={Users} iconTone="bg-accent-cyan text-primary-foreground" count={counts.total} label="total users" />
+              <StatChip className="flex-1 sm:flex-initial" icon={Users} iconTone="bg-muted text-foreground" count={counts.members} label="members" />
+              <StatChip className="flex-1 sm:flex-initial" icon={Shield} iconTone="bg-success-solid text-success-solid-foreground" count={counts.admins} label="site admins" />
+              <StatChip className="flex-1 sm:flex-initial" icon={Crown} iconTone="bg-danger-solid text-danger-solid-foreground" count={counts.superadmins} label="superadmins" />
+            </>
+          }
+        />
 
       {/* Error State */}
       {error && (
@@ -450,7 +428,7 @@ export default function UserManagementPage() {
         <div className="bg-card border border-border rounded-lg overflow-hidden">
           {/* Table toolbar — deleted accounts are soft-deleted and stay listed
               for auditability, so they're filterable rather than dropped. */}
-          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 px-4 py-3 border-b border-border">
+          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 px-3 py-2 md:px-4 md:py-3 border-b border-border">
             {!showDeletedUsers && counts.deleted > 0 && (
               <span className="text-xs text-muted-foreground mr-auto">
                 {counts.deleted} deleted account{counts.deleted === 1 ? '' : 's'} hidden
@@ -466,10 +444,11 @@ export default function UserManagementPage() {
               aria-label="show deleted accounts"
             />
           </div>
-          {/* scrolls sideways on phones so the actions column stays reachable */}
+          {/* below md each user stacks into a block: name and options, then the email,
+              then role and sites; joined and last seen are desktop columns */}
           <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
+          <table className="block w-full md:table">
+            <thead className="hidden md:table-header-group">
               <tr className="border-b border-border bg-background/50">
                 <th className="text-left p-4 text-sm font-medium text-foreground">user</th>
                 <th className="text-left p-4 text-sm font-medium text-foreground">role</th>
@@ -479,10 +458,10 @@ export default function UserManagementPage() {
                 <th className="text-right p-4 text-sm font-medium text-foreground">actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="block md:table-row-group">
               {visibleUsers.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="p-8 text-center text-muted-foreground">
+                <tr className="block md:table-row">
+                  <td colSpan={6} className="block md:table-cell p-6 md:p-8 text-center text-muted-foreground">
                     {users.length === 0 ? 'no users found' : 'no active users — every account here is deleted'}
                   </td>
                 </tr>
@@ -492,20 +471,28 @@ export default function UserManagementPage() {
                   return (
                   <tr
                     key={user.uid}
-                    className={`border-b border-border hover:bg-muted/50 transition-colors${isDeleted ? ' opacity-80' : ''}`}
+                    className={`flex flex-wrap items-start md:table-row border-b border-border hover:bg-muted/50 transition-colors${isDeleted ? ' opacity-80' : ''}`}
                   >
-                    {/* User Info */}
-                    <td className="p-4">
-                      <div>
+                    {/* User Info — below md the "you" pill rides the first line */}
+                    <td className="order-1 basis-[calc(100%_-_3rem)] min-w-0 px-3 pt-3 pb-1 md:p-4">
+                      <div className="flex flex-wrap items-center gap-x-2 md:block">
                         {user.displayName && (
-                          <p className="text-foreground font-medium">{user.displayName}</p>
+                          <p className="order-1 min-w-0 text-foreground font-medium max-md:text-sm max-md:wrap-anywhere">
+                            {user.displayName}
+                          </p>
                         )}
-                        <p className="text-sm text-muted-foreground">{user.email}</p>
+                        <p
+                          className={`text-sm text-muted-foreground max-md:wrap-anywhere ${
+                            user.displayName ? 'order-3 basis-full' : 'order-1 min-w-0'
+                          }`}
+                        >
+                          {user.email}
+                        </p>
                         {user.uid === currentUser?.uid && (
-                          <Badge className="mt-1 text-xs">you</Badge>
+                          <Badge className="order-2 md:mt-1 text-xs">you</Badge>
                         )}
                         {isDeleted && (
-                          <div className="mt-1">
+                          <div className="order-4 basis-full mt-1">
                             <Badge className="bg-secondary border border-border text-muted-foreground text-xs">
                               deleted
                             </Badge>
@@ -518,7 +505,7 @@ export default function UserManagementPage() {
                     </td>
 
                     {/* Role Badge */}
-                    <td className="p-4">
+                    <td className="order-3 pl-3 pr-2 pt-1 pb-3 md:p-4">
                       {user.role === 'superadmin' ? (
                         <Badge className="bg-danger-solid text-danger-solid-foreground flex items-center gap-1 w-fit">
                           <Crown className="h-3 w-3" />
@@ -538,7 +525,7 @@ export default function UserManagementPage() {
                     </td>
 
                     {/* Sites */}
-                    <td className="p-4">
+                    <td className="order-4 flex-1 min-w-0 pr-3 pt-1 pb-3 md:p-4">
                       {user.role === 'admin' ? (
                         // Admins are site-scoped; name the sites so a superadmin
                         // can see who is responsible for what.
@@ -574,12 +561,12 @@ export default function UserManagementPage() {
                     </td>
 
                     {/* Join Date */}
-                    <td className="p-4 text-muted-foreground text-sm">
+                    <td className="hidden md:table-cell p-4 text-muted-foreground text-sm">
                       {formatDate(user.createdAt)}
                     </td>
 
                     {/* Last Seen — last refresh, falling back to last sign-in. */}
-                    <td className="p-4 text-muted-foreground text-sm">
+                    <td className="hidden md:table-cell p-4 text-muted-foreground text-sm">
                       {(() => {
                         const lastSeen = activity[user.uid]?.lastRefreshTime ?? activity[user.uid]?.lastSignInTime;
                         if (!lastSeen) {
@@ -599,7 +586,7 @@ export default function UserManagementPage() {
                     </td>
 
                     {/* Actions — deleted accounts have no actionable operations. */}
-                    <td className="p-4">
+                    <td className="order-2 w-12 pr-3 pt-2 pb-1 md:w-auto md:p-4">
                       {isDeleted ? (
                         <div className="flex items-center justify-end text-muted-foreground">—</div>
                       ) : (
@@ -698,7 +685,7 @@ export default function UserManagementPage() {
 
       {/* Account-deletions audit feed — self-deletes + admin-deletes, newest-first. */}
       {!loading && !error && (
-        <div className="mt-6 bg-card border border-border rounded-lg p-6">
+        <div className="mt-4 sm:mt-6 bg-card border border-border rounded-lg p-4 sm:p-6">
           <h2 className="text-lg font-semibold text-foreground">account deletions</h2>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
             a record of accounts that were removed — anyone can delete their own account from
@@ -773,9 +760,10 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* Role-description cards — ascending privilege order, matches the stats cards above. */}
+      {/* Role-description cards — ascending privilege order, matches the stats cards above.
+          Not on a phone: the change-role dialog carries the same descriptions. */}
       {!loading && !error && users.length > 0 && (
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="mt-6 hidden sm:grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-card border border-border rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
               <Users className="h-4 w-4 text-muted-foreground flex-shrink-0" />

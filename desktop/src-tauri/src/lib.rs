@@ -116,6 +116,7 @@ pub fn run() {
       commands::set_detail_section,
       commands::appearance_theme,
       commands::set_appearance_theme,
+      commands::resolved_appearance,
     ])
     .setup(|app| {
       // Both profiles. A release build is `windows_subsystem = "windows"` with no console,
@@ -226,11 +227,11 @@ pub fn run() {
           }
           tray::hide_main_window(window.app_handle());
         }
-        // the os moved an unpinned window, or a pin landed: without this the frame
-        // keeps the old colour, which a reload or a resize edge then shows
+        // the os moved an unpinned window: repaint the frame, which a reload or a
+        // resize edge would otherwise show in the old colour, and tell the page
         WindowEvent::ThemeChanged(theme) => {
           if let Some(window) = window.app_handle().get_webview_window("main") {
-            window_state::paint_frame(&window, *theme);
+            window_state::show_theme(&window, *theme);
           }
         }
         _ => {}

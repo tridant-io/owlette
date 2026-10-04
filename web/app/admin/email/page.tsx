@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/lib/toast';
 import { CheckCircle2, XCircle, Send, Loader2, ChevronDown } from 'lucide-react';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 
 interface EmailConfig {
   provider: string;
@@ -104,28 +105,23 @@ export default function EmailPage() {
   const currentTemplate = EMAIL_TEMPLATES.find(t => t.id === selectedTemplate);
 
   return (
-    <div className="p-8">
-      <div className="max-w-screen-2xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-foreground mb-2">email</h1>
-        <p className="text-muted-foreground">
-          Email notification configuration and testing
-        </p>
-      </div>
+    <div className="p-4 sm:p-6 md:p-8">
+      <div className="max-w-screen-2xl mx-auto space-y-4 sm:space-y-6">
+      <AdminPageHeader title="email" description="Email notification configuration and testing" />
 
       {/* Configuration */}
-      <Card className="bg-card border-border">
-        <CardHeader>
+      <Card className="bg-card border-border gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle>configuration</CardTitle>
           <CardDescription>
             current email provider settings and status
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-4 sm:px-6">
           {configLoading ? (
             <div className="space-y-3">
               {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-5 bg-muted rounded animate-pulse w-64" />
+                <div key={i} className="h-5 bg-muted rounded animate-pulse w-full max-w-64" />
               ))}
             </div>
           ) : config ? (
@@ -148,13 +144,13 @@ export default function EmailPage() {
               </div>
               <div>
                 <dt className="text-muted-foreground font-medium">from address</dt>
-                <dd className="mt-1 font-mono text-xs">{config.fromEmail}</dd>
+                <dd className="mt-1 font-mono text-xs wrap-anywhere">{config.fromEmail}</dd>
               </div>
               <div>
                 <dt className="text-muted-foreground font-medium">admin email</dt>
                 <dd className="mt-1 flex items-center gap-2">
                   {config.adminEmailConfigured ? (
-                    <span className="font-mono text-xs">{config.adminEmail}</span>
+                    <span className="min-w-0 font-mono text-xs wrap-anywhere">{config.adminEmail}</span>
                   ) : (
                     <span className="text-destructive">not configured</span>
                   )}
@@ -168,14 +164,14 @@ export default function EmailPage() {
       </Card>
 
       {/* Test Email */}
-      <Card className="bg-card border-border">
-        <CardHeader>
+      <Card className="bg-card border-border gap-4 py-4 sm:gap-6 sm:py-6">
+        <CardHeader className="px-4 sm:px-6">
           <CardTitle>test email</CardTitle>
           <CardDescription>
             send a test email to preview any notification template with sample data
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 px-4 sm:px-6">
           {/* Template selector */}
           <div className="space-y-2">
             <label htmlFor="template-select" className="text-sm font-medium text-muted-foreground">
@@ -242,7 +238,7 @@ export default function EmailPage() {
                   <>
                     <p>Template: <span className="text-foreground font-medium">{EMAIL_TEMPLATES.find(t => t.id === lastResult.template)?.label || lastResult.template}</span></p>
                     <p>Sent to <span className="text-foreground font-medium">{lastResult.to}</span></p>
-                    <p>email ID: <span className="font-mono text-xs">{lastResult.emailId}</span></p>
+                    <p>email ID: <span className="font-mono text-xs wrap-anywhere">{lastResult.emailId}</span></p>
                   </>
                 ) : (
                   <>

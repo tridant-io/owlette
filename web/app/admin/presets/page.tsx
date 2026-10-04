@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Plus, Loader2, Pencil, Trash2, Package } from 'lucide-react';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
 import { toast } from '@/lib/toast';
 import SystemPresetDialog from '@/components/SystemPresetDialog';
 
@@ -100,28 +102,18 @@ export default function SystemPresetsPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold text-foreground mb-2">template library</h1>
-              <p className="text-muted-foreground">
-                Admin-curated software catalog for deployments (TouchDesigner, VLC, owlette Agent, etc.)
-              </p>
-            </div>
-            <Button
-              onClick={handleCreateNew}
-              className="cursor-pointer"
-            >
-              <Plus className="h-5 w-5 mr-2" />
-              add template
-            </Button>
-          </div>
+        <div className="mb-6 md:mb-8">
+          <AdminPageHeader
+            className="mb-4"
+            title="template library"
+            description="Admin-curated software catalog for deployments (TouchDesigner, VLC, owlette Agent, etc.)"
+            actions={<CompactButton icon={Plus} label="add template" onClick={handleCreateNew} />}
+          />
 
           {/* Category Filter Tabs */}
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-1.5 sm:gap-2 flex-wrap">
             <Button
               variant={selectedCategory === 'All' ? 'default' : 'outline'}
               size="sm"
@@ -159,8 +151,8 @@ export default function SystemPresetsPage() {
 
         {/* Presets Table/Grid */}
         {filteredPresets.length === 0 ? (
-          <div className="bg-card border border-border rounded-lg p-12 text-center">
-            <Package className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+          <div className="bg-card border border-border rounded-lg p-6 sm:p-12 text-center">
+            <Package className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4" />
             <h2 className="text-xl font-medium text-foreground mb-2">no presets found</h2>
             <p className="text-muted-foreground mb-6">
               {selectedCategory === 'All'
@@ -271,17 +263,17 @@ export default function SystemPresetsPage() {
             </div>
 
             {/* Mobile Card View */}
-            <div className="lg:hidden space-y-4">
+            <div className="lg:hidden space-y-3 sm:space-y-4">
               {filteredPresets.map((preset) => (
-                <div key={preset.id} className="bg-card border border-border rounded-lg p-4 hover:border-muted-foreground transition-colors">
+                <div key={preset.id} className="bg-card border border-border rounded-lg p-3 sm:p-4 hover:border-muted-foreground transition-colors">
                   {/* Header with Icon and Name */}
                   <div className="flex items-start gap-3 mb-3">
                     {preset.icon && (
-                      <span className="text-3xl flex-shrink-0">{preset.icon}</span>
+                      <span className="text-2xl sm:text-3xl flex-shrink-0">{preset.icon}</span>
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2 mb-1">
-                        <div>
+                        <div className="min-w-0">
                           <h2 className="text-foreground font-medium text-base">{preset.software_name}</h2>
                           <p className="text-muted-foreground text-sm">{preset.name}</p>
                         </div>

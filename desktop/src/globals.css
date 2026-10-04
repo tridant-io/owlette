@@ -274,12 +274,13 @@
   --raised: oklch(0.995 0.002 250);
 
   /* schedule blocks: eight hues kept apart. a pill is a solid fill, so its fill and
-     text are the same in both themes; the week bar and the label ink follow the theme */
-  --block-1: oklch(0.546 0.245 262.881);
+     text work in both themes; by day the vivid hues are calmed (night keeps them, below),
+     and the week bar and label ink follow the theme */
+  --block-1: oklch(0.546 0.16 262.881);
   --block-1-foreground: oklch(1 0 0);
   --block-1-bar: var(--block-1);
   --block-1-ink: oklch(0.488 0.243 264.376);
-  --block-2: oklch(0.666 0.179 58.318);
+  --block-2: oklch(0.666 0.145 58.318);
   --block-2-foreground: oklch(0.21 0.034 264.665);
   --block-2-bar: var(--block-2);
   --block-2-ink: oklch(0.555 0.163 48.998);
@@ -287,11 +288,11 @@
   --block-3-foreground: oklch(1 0 0);
   --block-3-bar: var(--block-3);
   --block-3-ink: oklch(0.508 0.118 165.612);
-  --block-4: oklch(0.586 0.253 17.585);
+  --block-4: oklch(0.586 0.165 17.585);
   --block-4-foreground: oklch(1 0 0);
   --block-4-bar: var(--block-4);
   --block-4-ink: oklch(0.514 0.222 16.935);
-  --block-5: oklch(0.541 0.281 293.009);
+  --block-5: oklch(0.541 0.18 293.009);
   --block-5-foreground: oklch(1 0 0);
   --block-5-bar: var(--block-5);
   --block-5-ink: oklch(0.491 0.27 292.581);
@@ -299,11 +300,11 @@
   --block-6-foreground: oklch(1 0 0);
   --block-6-bar: var(--block-6);
   --block-6-ink: oklch(0.52 0.105 223.128);
-  --block-7: oklch(0.553 0.195 38.402);
+  --block-7: oklch(0.553 0.15 38.402);
   --block-7-foreground: oklch(1 0 0);
   --block-7-bar: var(--block-7);
   --block-7-ink: oklch(0.47 0.157 37.304);
-  --block-8: oklch(0.592 0.249 0.584);
+  --block-8: oklch(0.58 0.165 0.584);
   --block-8-foreground: oklch(1 0 0);
   --block-8-bar: var(--block-8);
   --block-8-ink: oklch(0.525 0.223 3.958);
@@ -449,7 +450,13 @@
   /* raised: the --secondary step dialogs and menus were lifted to before tokens */
   --raised: oklch(0.269 0.05 250);
 
-  /* schedule blocks: night keeps the brighter bars and labels */
+  /* schedule blocks: night keeps the vivid fills and the brighter bars and labels */
+  --block-1: oklch(0.546 0.245 262.881);
+  --block-2: oklch(0.666 0.179 58.318);
+  --block-4: oklch(0.586 0.253 17.585);
+  --block-5: oklch(0.541 0.281 293.009);
+  --block-7: oklch(0.553 0.195 38.402);
+  --block-8: oklch(0.592 0.249 0.584);
   --block-1-bar: oklch(0.623 0.214 259.815);
   --block-1-ink: oklch(0.707 0.165 254.624);
   --block-2-bar: oklch(0.769 0.188 70.08);

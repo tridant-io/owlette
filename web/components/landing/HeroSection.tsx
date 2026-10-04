@@ -14,12 +14,16 @@ interface HeroSectionProps {
 
 export function HeroSection({ headline }: HeroSectionProps) {
   return (
-    <section className="relative sm:h-[100dvh] flex flex-col pt-16 overflow-hidden">
+    <section className="relative sm:min-h-[100dvh] flex flex-col pt-16 overflow-hidden">
       {/* Interactive mouse-reactive background */}
       <InteractiveBackground />
 
-      {/* Content wrapper — headline pinned to vertical center, eye grows upward, CTA grows downward */}
-      <div className="relative z-10 w-full max-w-5xl mx-auto px-4 sm:px-6 text-center flex flex-col items-center flex-1 justify-center py-12 sm:py-0 sm:-mt-[18vh]">
+      {/* Content wrapper — the block sits 18vh above centre, so the headline lands
+          near the middle with the eye above it. two spacers share the free space
+          (the lower one starts 36vh ahead), and the upper one never shrinks past a
+          gap under the header, so a short window can't push the eye beneath it. */}
+      <div className="relative z-10 w-full max-w-5xl mx-auto px-4 sm:px-6 text-center flex flex-col items-center flex-1 justify-center py-12 sm:py-0">
+        <div aria-hidden className="hidden sm:block flex-[1_1_0%] min-h-8" />
         {/* The Eye */}
         <div className="relative flex items-center justify-center mb-6 sm:mb-8">
           <div
@@ -70,6 +74,7 @@ export function HeroSection({ headline }: HeroSectionProps) {
             FSL-1.1 source on github
           </a>
         </p>
+        <div aria-hidden className="hidden sm:block flex-[1_1_36vh]" />
       </div>
 
     </section>

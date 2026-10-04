@@ -314,6 +314,16 @@ pub fn appearance_theme(layout: State<'_, LayoutState>) -> ThemeChoice {
   layout.theme()
 }
 
+/// the theme the page should draw now: the pinned one, or the os's under `system`.
+/// the page asks once before its first render and then follows
+/// [`window_state::RESOLVED_EVENT`].
+#[tauri::command(async)]
+pub fn resolved_appearance(app: AppHandle) -> &'static str {
+  app
+    .get_webview_window("main")
+    .map_or("dark", |window| window_state::resolved_name(&window))
+}
+
 /// Re-theme the open window, then remember the choice; returns what was kept.
 #[tauri::command(async)]
 pub fn set_appearance_theme(
