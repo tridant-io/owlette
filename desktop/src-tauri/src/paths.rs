@@ -32,6 +32,11 @@ pub const GUI_PID_REL: &str = "tmp/gui.pid";
 /// — the same singleton lock the python tray used.
 pub const TRAY_PID_REL: &str = "tmp/tray.pid";
 
+/// Rewritten by this app every minute and on every change: what it holds to
+/// keep the session's screens awake ([`crate::awake`]), for the service to
+/// mirror onto the machine.
+pub const KEEP_AWAKE_REPORT_REL: &str = "ipc/keep_awake.json";
+
 /// Touched to ask a running service to exit 42 so NSSM restarts it
 /// (`owlette_service.main`, the restart-flag branch). Windows only: off it the
 /// daemon ignores a flag it did not write itself.

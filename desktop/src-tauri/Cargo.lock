@@ -2547,6 +2547,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "windows 0.62.2",
  "windows-service",
+ "zbus",
 ]
 
 [[package]]
