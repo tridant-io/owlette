@@ -67,6 +67,13 @@ about a minute to install, and every update raised the alert. The app that runs
 during an update is the old one, so the 4.1.0 app still raises it once, on the
 way to 4.1.1.
 
+### fixed — stopping the service on Linux
+
+The first `systemctl stop owlette-agent` after the owlette app started was
+undone a quarter second later: the app started the service again, which
+cancelled the stop. The app now starts the service only when it finds it
+stopped at launch, never after it has seen it running.
+
 ### fixed — the agent
 
 Batch writes go through Firestore's `:commit`, which the agent's token may use.
