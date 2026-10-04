@@ -86,6 +86,12 @@ const FLASH_PERIOD: Duration = Duration::from_millis(800);
 const NOTIFY_DELAY: Duration = Duration::from_secs(5);
 /// Silence window after launch, so a service still starting is not an incident.
 const NOTIFY_GRACE: Duration = Duration::from_secs(10);
+/// How often the start-on-login tick is re-read. Off windows the read is a
+/// `systemctl --user is-enabled` or `launchctl print-disabled`, a process per
+/// read; every poll was a process a second for the app's whole life. The
+/// menu's own toggle and the window's setter ask for a repaint, which re-reads
+/// at once, so the tick only lags a change made outside owlette.
+const LOGIN_ITEM_REREAD: Duration = Duration::from_secs(30);
 /// An update marker older than this is what a crashed update left behind, not
 /// a reason to stay quiet about a stopped service.
 const UPDATE_MARKER_MAX_AGE: Duration = Duration::from_secs(15 * 60);
@@ -548,6 +554,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
   let mut swoop_toasted: Option<u64> = None;
   let mut paint = PaintState::new(started);
   let mut wanted_tooltip: Option<String> = None;
+  let mut start_on_login: Option<(bool, Instant)> = None;
 
   while !stop.load(Ordering::Relaxed) {
     let now = Instant::now();
@@ -560,6 +567,15 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
 
     if last_poll.map_or(true, |at| now.duration_since(at) >= POLL_INTERVAL) {
       last_poll = Some(now);
+
+      let login_item = match start_on_login {
+        Some((enabled, at)) if !asked && now.duration_since(at) < LOGIN_ITEM_REREAD => enabled,
+        _ => {
+          let enabled = startup_link::is_enabled();
+          start_on_login = Some((enabled, now));
+          enabled
+        }
+      };
 
       // Every poll, not only when the document is missing: it is the one input
       // that cannot be out of date, and the text below may not contradict it.
@@ -582,7 +598,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
         // Text, so the live document: a badge smoothed over a read that caught
         // a rename would outlive the capture it claims.
         swoop: swoop_view(&live, scm_running),
-        start_on_login: startup_link::is_enabled(),
+        start_on_login: login_item,
       };
 
       if current.as_ref() != Some(&view) {
@@ -1384,6 +1400,7 @@ fn toggle_start_on_login(app: &AppHandle) {
       let _ = menu.start_on_login.set_checked(startup_link::is_enabled());
     }
   }
+  request_repaint(app);
 }
 
 /// Quit owlette: stop supervising the machine, then quit the app. owlette-host
