@@ -1,5 +1,5 @@
 # keep screens awake — Tasks
-**Progress**: 0/9 complete
+**Progress**: 6/9 complete
 
 Standing rules: work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-swoop-mac-wt`, branch
 `swoop/macos`; never the main checkout; no commits, pushes or `git add` by workers (the lead reviews and commits);
@@ -10,7 +10,7 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
 
 ## Wave 1: the setting, the push, and both holders (parallel; disjoint files)
 
-- [ ] **Task 1.1: The site setting, its API, hook and nudge** `[agent]`
+- [x] **Task 1.1: The site setting, its API, hook and nudge** `[agent]`
   - Files: `web/lib/display/settings.server.ts` (create: doc name `display`, `parseDisplaySettings` with
     `keepAwake: raw.keepAwake !== false`, `loadDisplaySettings(siteId)`), `web/lib/actions/setDisplaySettings.server.ts`
     (create), `web/app/api/sites/[siteId]/display-settings/route.ts` (create), `web/hooks/useDisplaySettings.ts`
@@ -30,7 +30,7 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
   - Done when: `cd web && npx eslint <files> && npx tsc --noEmit -p . && npx jest <the two tests>` clean, and
     `npx tsx scripts/validate-openapi.ts` passes.
 
-- [ ] **Task 1.2: The agent's view of the setting** `[agent]`
+- [x] **Task 1.2: The agent's view of the setting** `[agent]`
   - Files: `web/app/api/agent/site/route.ts`, `web/__tests__/api/agent/site.test.ts`, `agent/src/firebase_client.py`,
     `agent/src/owlette_service.py` (command registration only), `agent/src/swoop_commands.py` **or** a new
     `agent/src/site_commands.py` (pick the new file), `agent/tests/unit/test_site_commands.py` (create),
@@ -47,7 +47,7 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
   - Done when: jest for `site.test.ts` and `agent/.venv/Scripts/python -m pytest agent/tests/unit/test_site_commands.py
     agent/tests/unit/test_firebase_client.py agent/tests/unit/test_command_router.py -q` pass, lint/tsc clean.
 
-- [ ] **Task 1.3: The daemon holder** `[agent]`
+- [x] **Task 1.3: The daemon holder** `[agent]`
   - Files: `agent/src/keep_awake.py` (create), `agent/src/osadapter/darwin.py` (only if adding IOPMAssertion
     prototypes there is cleaner than in `keep_awake.py`; prefer keeping them in `keep_awake.py` via
     `darwin._frameworks()`), `agent/tests/unit/test_keep_awake.py` (create).
@@ -66,7 +66,7 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
     passes; on this Windows box also a manual real hold proven with `powercfg /requests` (paste the output in the
     report), then released.
 
-- [ ] **Task 1.4: The app holder** `[agent]`
+- [x] **Task 1.4: The app holder** `[agent]`
   - Files: `desktop/src-tauri/src/awake.rs` (create), `desktop/src-tauri/src/lib.rs` (spawn it in setup only),
     `desktop/src-tauri/Cargo.toml` (`Win32_System_Power` feature on `windows`; `zbus` as a Linux direct dep at the
     version already in the lock; macOS: IOKit via `extern "C"` link, no new crate), `desktop/src-tauri/Cargo.lock`
@@ -88,7 +88,7 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
 
 ## Wave 2: wiring and the dashboard
 
-- [ ] **Task 2.1: The service wires both layers and reports** `[agent]`
+- [x] **Task 2.1: The service wires both layers and reports** `[agent]`
   - Files: `agent/src/owlette_service.py`, `agent/src/firebase_client.py` (heartbeat capability only),
     `agent/tests/unit/test_posix_loop_duties.py`, `agent/tests/unit/test_service_status_file.py`,
     `agent/tests/unit/test_keep_awake_wiring.py` (create), `web/hooks/useFirestore.ts`, 
@@ -105,7 +105,7 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
   - Done when: full `agent/.venv/Scripts/python -m pytest agent/tests/ -q` and the web jest suites touched pass.
   - Depends on: 1.2, 1.3, 1.4.
 
-- [ ] **Task 2.2: The Manage Sites edit panel** `[agent]`
+- [x] **Task 2.2: The Manage Sites edit panel** `[agent]`
   - Files: `web/components/ManageSitesDialog.tsx`, `web/components/SiteMachinesList.tsx`,
     `web/__tests__/components/ManageSitesDialog.test.tsx` (create), `web/content/docs/dashboard/swoop.mdx`,
     `web/content/docs/dashboard/sites.mdx` (or the docs page that covers manage sites — find it),
@@ -150,3 +150,6 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
 ### 2026-10-03
 - Plan created from the research pass and approved by the owner ("go on keep screens awake for 4.1.1"; default
   on per "keep the screens awake 24/7 regardless of operating system").
+- Wave 1 committed (0829e0ab, 97c028ed, 53b8ad62, 9ef93e9d) and 2.2 (4b5ed08a). 2.1 wires the daemon hold into the
+  5 s tick and mirrors displayAwake; suite green on Windows and on the Mac with CI's macOS flags. The Mac run also
+  caught the gpu backoff test (d721cd8f) reading the import-time macOS flag; pinned in its own commit.

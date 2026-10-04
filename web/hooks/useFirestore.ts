@@ -90,6 +90,20 @@ function parseFirestoreSeconds(value: unknown): number {
   return 0;
 }
 
+/** The agent's `displayAwake` mirror, or undefined when it is absent or not that shape. */
+function parseDisplayAwake(value: unknown): Machine['displayAwake'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.wanted !== 'boolean' || typeof v.held !== 'boolean') return undefined;
+  return {
+    wanted: v.wanted,
+    held: v.held,
+    session: typeof v.session === 'boolean' ? v.session : null,
+    how: typeof v.how === 'string' ? v.how : null,
+    reason: typeof v.reason === 'string' ? v.reason : null,
+  };
+}
+
 /**
  * Non-2xx from {@link apiJson}. Carries status + RFC-7807 `code` so callers can
  * tell an expected 401/403 from a real fault and keep it out of Sentry.
@@ -277,9 +291,25 @@ export interface Machine {
   capabilities?: {
     swoop?: number;
     displayRemoteApply?: number;
+    keepAwake?: number;
   };
   /** live swoop viewers, mirrored from the session records by the server; absent until the first session */
   swoopViewers?: number;
+  /**
+   * What the agent holds for the site's keep screens awake switch, mirrored on
+   * each change. `held` is the service's own hold (display and sleep), `session`
+   * the desktop app's (idle lock, screensaver), null without a fresh report from
+   * it. `reason` says why a wanted hold is not fully held (`no_display` when
+   * nobody is signed in at the machine). Absent on agents without
+   * `capabilities.keepAwake`.
+   */
+  displayAwake?: {
+    wanted: boolean;
+    held: boolean;
+    session: boolean | null;
+    how: string | null;
+    reason: string | null;
+  };
   // `reboot*` are agent-written wire contracts; the legacy spelling is deliberate (UI says "restart").
   rebooting?: boolean;
   shuttingDown?: boolean;
@@ -1395,6 +1425,7 @@ export function useMachines(siteId: string) {
               cortexEnabled: data.cortexEnabled !== false,
               capabilities: data.capabilities,
               swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : undefined,
+              displayAwake: parseDisplayAwake(data.displayAwake),
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
               rebootScheduledAt: restartScheduledAt,

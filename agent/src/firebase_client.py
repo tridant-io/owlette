@@ -1587,6 +1587,9 @@ class FirebaseClient:
                 # Swoop: binary presence only, so it costs one stat per beat.
                 # capabilities.swoop == 1 is the gate the dashboard reads.
                 'capabilities.swoop': swoop_capability.swoop_capability_value(),
+                # This agent follows the site's keep screens awake switch and
+                # mirrors displayAwake; an older one does neither.
+                'capabilities.keepAwake': 1,
                 'metrics.schemaVersion': 2,
                 'metrics.profileHash': profile_hash,
                 'metrics.timestamp': SERVER_TIMESTAMP,
