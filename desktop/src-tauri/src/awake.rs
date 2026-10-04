@@ -13,7 +13,8 @@
 //!   set it, so it is set and cleared here and nowhere else; and the session's
 //!   screensaver flag, turned off when the user's own setting
 //!   (`HKCU\Control Panel\Desktop`, `ScreenSaveActive` with a `SCRNSAVE.EXE`
-//!   to run) has it on. fWinIni 0 sets
+//!   to run) has it on, and turned off again within a minute when the user
+//!   or a settings change turns it back on during the hold. fWinIni 0 sets
 //!   the session's copy only and never that setting, so the flag is put back
 //!   from the setting, not from memory: at release, and at the first read that
 //!   asks for nothing, which heals a flag left off by a holder killed mid-hold.
@@ -90,6 +91,15 @@ fn screensaver_configured(active: Option<&str>, program: Option<&str>) -> bool {
 fn screensaver_off(saver: &mut impl Screensaver) {
   if saver.configured() {
     saver.set_live(false);
+  }
+}
+
+/// While held: the session's flag off again when it has come back on since
+/// the hold was taken, as choosing a screensaver in Settings does.
+#[cfg(any(windows, test))]
+fn screensaver_recheck(saver: &mut impl Screensaver) {
+  if saver.live() == Some(true) {
+    screensaver_off(saver);
   }
 }
 
@@ -267,6 +277,7 @@ pub fn spawn(root: &Path) {
 #[cfg(windows)]
 mod os {
   use std::ffi::c_void;
+  use std::time::{Duration, Instant};
 
   use windows::core::{w, BOOL, PCWSTR};
   use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
@@ -279,16 +290,24 @@ mod os {
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
   };
 
-  use super::{screensaver_configured, screensaver_off, screensaver_restore, Hold, Screensaver};
+  use super::{
+    screensaver_configured, screensaver_off, screensaver_recheck, screensaver_restore, Hold,
+    Screensaver,
+  };
 
   /// fWinIni 0: the session's copy of the setting, never the user's profile.
   const SESSION_ONLY: SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS = SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0);
 
-  /// Nothing to remember: the screensaver is put back from the user's setting.
-  /// Braced, not a unit struct, so `spawn` builds every OS's session with
-  /// `default()`.
+  /// How often a held session looks at the screensaver again; renew runs on
+  /// every five-second poll.
+  const RECHECK_EVERY: Duration = Duration::from_secs(60);
+
+  /// Remembers only when it last looked at the screensaver: the flag is put
+  /// back from the user's setting, not from memory.
   #[derive(Default)]
-  pub struct Session {}
+  pub struct Session {
+    checked: Option<Instant>,
+  }
 
   impl Hold for Session {
     fn take(&mut self) -> Result<&'static str, String> {
@@ -301,7 +320,16 @@ mod os {
         return Err("windows refused the execution state".to_owned());
       }
       screensaver_off(self);
+      self.checked = Some(Instant::now());
       Ok("execution_state")
+    }
+
+    fn renew(&mut self) {
+      if self.checked.is_some_and(|at| at.elapsed() < RECHECK_EVERY) {
+        return;
+      }
+      self.checked = Some(Instant::now());
+      screensaver_recheck(self);
     }
 
     fn release(&mut self) {
@@ -786,6 +814,22 @@ mod tests {
     screensaver_off(&mut saver);
     screensaver_restore(&mut saver);
     assert_eq!(saver.sets, [false, true]);
+  }
+
+  #[test]
+  fn a_screensaver_turned_on_during_a_hold_is_turned_off_again() {
+    // Taken on a box with no screensaver: nothing to turn off.
+    let mut saver = Saver::new(Some(false), false);
+    screensaver_off(&mut saver);
+    screensaver_recheck(&mut saver);
+    assert!(saver.sets.is_empty(), "{:?}", saver.sets);
+    // The user picks one in Settings mid-hold, which turns the flag on.
+    saver.configured = true;
+    saver.live = Some(true);
+    screensaver_recheck(&mut saver);
+    assert_eq!(saver.sets, [false]);
+    screensaver_recheck(&mut saver);
+    assert_eq!(saver.sets, [false], "once off, left alone");
   }
 
   #[test]
