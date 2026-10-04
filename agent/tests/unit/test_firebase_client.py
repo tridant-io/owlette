@@ -391,6 +391,65 @@ class TestSiteMetadataFromApi:
 
         assert firebase_client.site_name == 'TEC'
 
+    # keep screens awake — on by default (owner, 2026-10-03)
+
+    def test_keep_awake_is_on_before_the_first_answer(self, firebase_client):
+        assert firebase_client.site_keep_awake is True
+
+    def test_mirrors_the_keep_awake_switch_both_ways(self, firebase_client):
+        payload = self._response(200, {'name': 'TEC', 'keepAwake': False})
+        with patch('firebase_client.shared_utils.get_api_base_url',
+                   return_value='https://dev.owlette.app/api'), \
+             patch('requests.get', return_value=payload):
+            firebase_client._fetch_site_metadata()
+            assert firebase_client.site_keep_awake is False
+
+            payload.json.return_value = {'name': 'TEC', 'keepAwake': True}
+            firebase_client._fetch_site_metadata()
+            assert firebase_client.site_keep_awake is True
+
+    def test_an_answer_without_keep_awake_reads_as_on(self, firebase_client):
+        # A server that predates the field answers without it; only an explicit
+        # false turns the switch off.
+        firebase_client.site_keep_awake = False
+        with patch('firebase_client.shared_utils.get_api_base_url',
+                   return_value='https://dev.owlette.app/api'), \
+             patch('requests.get', return_value=self._response(200, {'name': 'TEC'})):
+            firebase_client._fetch_site_metadata()
+
+        assert firebase_client.site_keep_awake is True
+
+    @pytest.mark.parametrize('failure', [
+        {'return_value': MagicMock(status_code=500)},
+        {'side_effect': OSError('connection reset by peer')},
+    ])
+    def test_a_failed_fetch_keeps_the_last_keep_awake_value(
+        self, firebase_client, mock_rest_client, failure
+    ):
+        # Falling back to the default here would switch a site that turned it off
+        # back on for every blip. The Firestore fallback answering does not count
+        # either: keepAwake does not live on the site document.
+        firebase_client.site_keep_awake = False
+        mock_rest_client.get_document.return_value = {'name': 'TEC'}
+        with patch('firebase_client.shared_utils.get_api_base_url',
+                   return_value='https://dev.owlette.app/api'), \
+             patch('requests.get', **failure):
+            firebase_client._fetch_site_metadata()
+
+        assert firebase_client.site_keep_awake is False
+
+    def test_only_keep_awake_transitions_are_logged(self, firebase_client):
+        payload = self._response(200, {'name': 'TEC', 'keepAwake': False})
+        with patch('firebase_client.shared_utils.get_api_base_url',
+                   return_value='https://dev.owlette.app/api'), \
+             patch('requests.get', return_value=payload), \
+             patch.object(firebase_client, 'logger') as logger:
+            firebase_client._fetch_site_metadata()
+            firebase_client._fetch_site_metadata()
+
+        keep_awake_lines = [c for c in logger.info.call_args_list if 'Keep screens awake' in c[0][0]]
+        assert len(keep_awake_lines) == 1
+
 
 # TestSiteMetadata — the sites/{siteId} read kept for a future rule grant
 class TestSiteMetadata:

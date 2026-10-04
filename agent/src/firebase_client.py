@@ -232,8 +232,11 @@ class FirebaseClient:
         # server decides, the agent mirrors. site_name is the operator label
         # published via tmp/service_status.json. None when unreadable/opted out —
         # consumers fall back to the site id and to each machine's local clock.
+        # site_keep_awake is the site's keep-screens-awake switch: on by default,
+        # and a failed lookup keeps the last answer rather than this default.
         self.site_timezone: Optional[str] = None
         self.site_name: Optional[str] = None
+        self.site_keep_awake: bool = True
         # A denial never changes for this client's life: log once, stop asking.
         # Cleared by construction (_initialize_or_restart_firebase_client).
         self._site_metadata_denied: bool = False
@@ -426,16 +429,19 @@ class FirebaseClient:
     # Site Metadata
 
     def _fetch_site_metadata(self):
-        """Cache the site's display name and its schedule timezone.
+        """Cache the site's display name, schedule timezone and keep-awake switch.
 
-        1. ``GET /api/agent/site`` — name + timezone; the path that works today.
+        1. ``GET /api/agent/site`` — name + timezone + keepAwake; the path that
+           works today.
         2. Direct read of ``sites/{siteId}`` — firestore.rules scopes agents to
            their machine subtree, so it 403s; kept wired for a future rule grant.
+           It never touches keepAwake, which lives in ``settings/display``.
 
-        Runs on connect/reconnect and every 900s from the metrics thread (never
-        the 5s main loop — this is a network round trip). Both values are optional
-        and a failed lookup keeps the previous cache; callers fall back to the
-        site id and to each machine's local clock.
+        Runs on connect/reconnect, every 900s from the metrics thread, and on a
+        ``site_settings_refresh`` command from that handler's own thread (never
+        the 5s main loop — this is a network round trip). Name and timezone are
+        optional, and a failed lookup keeps the previous cache of all three;
+        callers fall back to the site id and to each machine's local clock.
         """
         if self._fetch_site_metadata_from_api():
             return
@@ -471,10 +477,10 @@ class FirebaseClient:
             return None
 
     def _fetch_site_metadata_from_api(self) -> bool:
-        """Resolve the site's display name and schedule timezone through the web API.
+        """Resolve the site's name, schedule timezone and keep-awake switch via the web API.
 
-        True = the API answered (both values cached, including "the site has
-        neither"); False = fall back to the Firestore read.
+        True = the API answered (all three cached, including "the site has no
+        name or timezone"); False = fall back to the Firestore read.
 
         The SERVER owns the policy: it returns a `timezone` only when the site's
         `schedulesFollowSiteTime` is true and it has one set, and `null` in every
@@ -497,6 +503,13 @@ class FirebaseClient:
             timezone = payload.get('timezone')
             timezone = timezone.strip() if isinstance(timezone, str) and timezone.strip() else None
             self._apply_site_timezone(timezone)
+
+            # Default on: only an explicit false turns it off, including from a
+            # server that predates the field.
+            keep_awake = payload.get('keepAwake') is not False
+            if keep_awake != self.site_keep_awake:
+                self.logger.info(f"Keep screens awake: {'on' if keep_awake else 'off'}")
+            self.site_keep_awake = keep_awake
             return True
         except Exception as e:
             self._warn_site_metadata_api_once(str(e))
@@ -1607,9 +1620,11 @@ class FirebaseClient:
     # Heavy roost work (sync_pull, rollback) stays on the slow lane.
     # The three swoop types belong here too: on the slow lane they would queue
     # behind an in-flight install, which would make the kill switch minutes late.
+    # site_settings_refresh likewise: a site switch should land in seconds.
     _FAST_COMMAND_TYPES = frozenset({
         'mcp_tool_call', 'capture_screenshot', 'cancel_sync', 'cancel_mcp_tool',
         'swoop_session_requested', 'swoop_kill', 'swoop_refresh',
+        'site_settings_refresh',
     })
 
     def _process_command(self, cmd_id: str, cmd_data: Dict[str, Any]):

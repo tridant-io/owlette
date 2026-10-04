@@ -1179,6 +1179,13 @@ class OwletteService:
         except Exception as e:
             logging.warning(f"Failed to register swoop handlers: {e}")
 
+        # site_settings_refresh re-reads the site projection on a thread of its own.
+        try:
+            from site_commands import register_handlers as _register_site_handlers
+            _register_site_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register site handlers: {e}")
+
         self.firebase_client = None
 
         # install-tree hardening: main() does the start-up repair and sets
@@ -5326,10 +5333,12 @@ class OwletteService:
             # key collapses to the type alone: a second viewer's session
             # request, a revocation kill behind an operator kill, or a second
             # enablement toggle inside five seconds would be refused and
-            # recorded as a failed command.
+            # recorded as a failed command. site_settings_refresh is exempt for
+            # the same reason: an admin flipping a site switch twice inside five
+            # seconds must land the second flip too.
             if cmd_type not in ('mcp_tool_call', 'ack_display_topology',
                                 'swoop_session_requested', 'swoop_kill',
-                                'swoop_refresh'):
+                                'swoop_refresh', 'site_settings_refresh'):
                 now = time.time()
                 rate_key = f"{cmd_type}:{cmd_data.get('process_id') or cmd_data.get('processId') or cmd_data.get('process_name') or ''}"
                 last_time = self._command_rate_limits.get(rate_key, 0)
