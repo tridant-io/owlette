@@ -52,7 +52,7 @@ function Hint({ children, onDone }: { children: React.ReactNode; onDone: () => v
     return () => clearTimeout(timer);
   }, [onDone]);
   return (
-    <p className="pointer-events-none absolute inset-x-0 bottom-4 text-center text-xs text-muted-foreground">
+    <p className="pointer-events-none absolute inset-x-0 bottom-4 text-center text-xs text-swoop-stage-ink">
       {children}
     </p>
   );
@@ -119,8 +119,9 @@ export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave
     // touch-none: a drag is the machine's, never a page pan, and android's
     // pull-to-refresh must not reload the page mid-session. `dark` scopes the
     // night palette to the stage in both themes: it is a video surface, not
-    // chrome, so the letterbox, hints and overlays read the same over any
-    // picture and on the black of fullscreen.
+    // chrome, so its overlays read the same over any picture and on the black
+    // of fullscreen. the letterbox and hints follow the page instead: mid grey
+    // by day, the night page at night.
     <div
       ref={stageRef}
       tabIndex={-1}
@@ -134,7 +135,7 @@ export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave
       onBlur={(e) => {
         if (e.target === e.currentTarget) setLeaveHint(false);
       }}
-      className="dark relative h-full w-full overflow-hidden bg-background outline-none touch-none overscroll-none [&:fullscreen]:bg-black"
+      className="dark relative h-full w-full overflow-hidden bg-swoop-stage outline-none touch-none overscroll-none [&:fullscreen]:bg-black"
     >
       <video
         ref={videoRef}
@@ -144,7 +145,7 @@ export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave
         aria-label="remote screen"
       />
       {state !== 'connected' && (
-        <p className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+        <p className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-swoop-stage-ink">
           {state !== 'ended' && <Loader2 className="size-6 animate-spin" aria-hidden />}
           {state === 'ended' ? 'session ended' : noPath ? "can't reach this machine from your network" : 'connecting'}
           {state !== 'ended' && noPath && (
@@ -157,7 +158,7 @@ export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave
         </p>
       )}
       {state === 'connected' && fullscreen && !locked && (
-        <p className="pointer-events-none absolute inset-x-0 top-4 text-center text-xs text-muted-foreground">
+        <p className="pointer-events-none absolute inset-x-0 top-4 text-center text-xs text-swoop-stage-ink">
           click to capture the mouse
         </p>
       )}

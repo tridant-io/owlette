@@ -12,7 +12,7 @@
  */
 
 import crypto from 'crypto';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { authenticator } from 'otplib';
 import { getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
@@ -254,6 +254,16 @@ test.describe('the viewer page', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByText(/view only/i)).toBeVisible();
     await expect(page.getByText(/connecting/i).first()).toBeVisible();
+
+    // the letterbox follows the page: the night page at night, a neutral grey by day
+    const stage = page.locator('video[aria-label="remote screen"]').locator('..');
+    const background = (target: Locator) => target.evaluate((node) => getComputedStyle(node).backgroundColor);
+    expect(await background(stage)).toBe(await background(page.locator('body')));
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
+    // zero chroma either way chrome writes it: lab(42 0 0) or oklch(0.5 0 0)
+    expect(await background(stage)).toMatch(/^(?:lab|oklch)\([\d.]+ 0 0\)$/);
+
     await page.getByRole('button', { name: /end session/i }).click();
   });
 

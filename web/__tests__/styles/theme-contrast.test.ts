@@ -136,6 +136,13 @@ describe.each([
   });
 });
 
+// the swoop stage is themed from the page root, since it scopes `.dark` onto
+// itself. at night it is the page's own background and muted text, covered above
+it('the day swoop stage hints clear 4.5:1 on the stage', () => {
+  const day = block(':root');
+  expect(contrast(parse(day['swoop-stage-ink']).rgb, parse(day['swoop-stage']).rgb)).toBeGreaterThanOrEqual(TEXT);
+});
+
 describe('token coverage', () => {
   it('defines every dark token in the light block too', () => {
     const light = block(':root');

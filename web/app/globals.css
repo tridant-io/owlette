@@ -78,6 +78,8 @@
   --color-elevation-shadow: var(--elevation-shadow);
   --color-elevation-ring: var(--elevation-ring);
   --color-raised: var(--raised);
+  --color-swoop-stage: var(--swoop-stage);
+  --color-swoop-stage-ink: var(--swoop-stage-ink);
   --color-block-1: var(--block-1);
   --color-block-1-foreground: var(--block-1-foreground);
   --color-block-1-bar: var(--block-1-bar);
@@ -1267,4 +1269,18 @@ input[type="week"] {
 @utility header-lit {
   background-image: var(--header-sheen);
   box-shadow: var(--header-edge);
+}
+
+/* the swoop stage around the remote picture, and the hints on it: a neutral mid
+   grey by day, the night page and its muted text at night. set on the page root,
+   not in `.dark`, because the stage scopes `.dark` onto itself and would always
+   read the night values. the day ink is near-white: past about l 0.56 the grey
+   would need dark hints instead */
+:root {
+  --swoop-stage: oklch(0.5 0 0);
+  --swoop-stage-ink: oklch(0.97 0 0);
+}
+:root.dark {
+  --swoop-stage: var(--background);
+  --swoop-stage-ink: var(--muted-foreground);
 }
