@@ -269,7 +269,7 @@ import os
 import mss
 from mss.tools import to_png
 
-with mss.mss() as sct:
+with mss.MSS() as sct:
     mon_idx = {monitor} if {monitor} > 0 and {monitor} < len(sct.monitors) else 0
     grabbed = sct.grab(sct.monitors[mon_idx])
     png_bytes = to_png(grabbed.rgb, grabbed.size)

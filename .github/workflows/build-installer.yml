@@ -317,7 +317,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "building installer version $v"
 
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           # the lockfile is desktop/package-lock.json, not at the root, and
@@ -326,7 +326,7 @@ jobs:
 
       # same pin and rationale as rust-build.yml: no version tags upstream, the
       # toolchain comes through the input.
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-09-12
         with:
           toolchain: '1.98.1'
 
@@ -477,12 +477,12 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libxdo-dev libssl-dev build-essential
 
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           package-manager-cache: false
 
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-09-12
         with:
           toolchain: '1.98.1'
 

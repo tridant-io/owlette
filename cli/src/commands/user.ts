@@ -33,7 +33,7 @@ interface UserListItem {
   deletedAt: number | null;
 }
 
-interface UserDetail extends UserListItem {}
+type UserDetail = UserListItem;
 
 interface ListResponse {
   users?: UserListItem[];

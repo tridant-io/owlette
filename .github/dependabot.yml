@@ -62,6 +62,12 @@ updates:
       # or raises its engines floor to >=22.12, then delete this rule and take the PR.
       - dependency-name: "commander"
         update-types: ["version-update:semver-major"]
+      # eslint 10 is held back in web: eslint-plugin-react 7.37, jsx-a11y 6.10 and import 2.32 (all
+      # pulled in by eslint-config-next) call context APIs eslint 10 removed, and lint crashes
+      # (2026-10-04). The cli already runs 10. Exit: those plugins declare eslint 10 support; then
+      # delete this rule and take the web PR.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
 
   # Rust crates: the owlette-host service wrapper, the Tauri desktop app, and
   # the swoop remote-desktop host crate.
