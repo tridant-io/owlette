@@ -102,6 +102,12 @@ SAS_VALUE_MAX = 3
 # the policy's unset state is a value in its own right: restoring "absent" as a
 # zero would turn a policy nobody set into one explicitly disabled.
 SAS_ABSENT = 'absent'
+# the values under which windows honours SendSAS from a service: 1 services,
+# 3 services and ease of access. anything else and the call does nothing.
+SAS_SERVICE_VALUES = (1, 3)
+# one ctrl+alt+del per this many seconds: a page that repeats the key must not
+# be able to hold the machine on the security screen.
+SAS_MIN_INTERVAL_S = 2.0
 
 STATE_KEY_FIREWALL = 'firewall'
 STATE_KEY_SAS_PRIOR = 'sasPrior'
@@ -154,6 +160,7 @@ class SwoopManager:
         self._token_timer = None
         self._token_expires_at = 0.0
         self._token_minted_at = 0.0
+        self._sas_at = None
 
         self._backoff_s = 0
         self._retry_after = 0.0
@@ -254,6 +261,8 @@ class SwoopManager:
                     self._do_side_effects(payload)
                 elif action == 'token':
                     self._do_token(payload)
+                elif action == 'sas':
+                    self._do_sas(payload)
             except Exception as e:
                 logger.error('swoop: %s failed: %s', action, e)
 
@@ -518,6 +527,27 @@ class SwoopManager:
         )
         self._retry_after = time.monotonic() + self._backoff_s
 
+    # ctrl+alt+del
+
+    def _do_sas(self, sid):
+        """Raise the secure attention sequence for the live session, answer on stdin."""
+        with self._lock:
+            proc = self._proc
+            live = proc is not None and self._sid == sid
+            recent = (self._sas_at is not None
+                      and time.monotonic() - self._sas_at < SAS_MIN_INTERVAL_S)
+        if not live:
+            return
+        ok = not recent and _send_sas()
+        if ok:
+            with self._lock:
+                self._sas_at = time.monotonic()
+        logger.info('swoop: ctrl+alt+del for %s %s', sid, 'raised' if ok else 'refused')
+        try:
+            proc.write_line({'type': 'sas_result', 'ok': ok})
+        except Exception as e:
+            logger.warning('swoop: sas_result not delivered: %s', e)
+
     # stdout reader
 
     def _reader_loop(self, proc, sid):
@@ -568,6 +598,8 @@ class SwoopManager:
             self._queue_host_event(event)
         elif event_type == EVENT_TOKEN_NEEDED:
             self._on_token_needed(event.get('sid'))
+        elif event_type == EVENT_SAS_REQUEST:
+            self._submit(('sas', event.get('sid')))
 
         with self._lock:
             if event_type == EVENT_READY:
@@ -887,6 +919,32 @@ def _read_sas_value():
     except (OSError, TypeError, ValueError) as e:
         logger.warning('swoop: sas policy not readable: %s', e)
         return None
+
+
+def _send_sas():
+    """``SendSAS(FALSE)`` from this process, and whether it could be made.
+
+    Here and not in the streamer: windows honours the call from a session-0
+    caller under the policy, and from the streamer -- SYSTEM, but in the console
+    session -- it returns and raises nothing. SendSAS reports nothing either way,
+    so True means the policy allows it and the call was made.
+    """
+    policy = _read_sas_value()
+    if policy not in SAS_SERVICE_VALUES:
+        logger.warning('swoop: ctrl+alt+del refused, SoftwareSASGeneration is %s', policy)
+        return False
+    import ctypes
+    # by full path: a bare name is searched for, and this process is SYSTEM.
+    path = os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'System32', 'sas.dll')
+    try:
+        send_sas = ctypes.WinDLL(path).SendSAS
+    except (OSError, AttributeError) as e:
+        logger.warning('swoop: SendSAS unavailable: %s', e)
+        return False
+    send_sas.argtypes = [ctypes.c_int]
+    send_sas.restype = None
+    send_sas(0)
+    return True
 
 
 def _write_sas_value(value):

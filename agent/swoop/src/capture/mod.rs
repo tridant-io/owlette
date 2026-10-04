@@ -717,6 +717,12 @@ impl Duplication {
         self.live = None;
         let deadline = Instant::now() + REDUPLICATE_DEADLINE;
         loop {
+            // Only the input desktop can be duplicated, and only from a thread
+            // on it: left on the desktop a UAC prompt switched away from, every
+            // attempt is E_ACCESSDENIED, and the capture loop's own look never
+            // came round inside this retry — a frozen picture for the whole
+            // deadline, then exit 12.
+            follow_input_desktop();
             match open_live(&self.output.device_name) {
                 Ok((live, output, size)) => {
                     self.output = output;
@@ -899,45 +905,34 @@ impl Source for Duplication {
     }
 }
 
-/// Follows the input desktop for one thread.
-///
-/// Deliberately not `Send`: a desktop association belongs to the thread that
-/// made it, so the watcher is created on the capture thread and stays there.
 #[cfg(windows)]
-pub struct DesktopWatcher {
-    desktop: Option<HDESK>,
-    name: String,
+thread_local! {
+    /// The desktop this thread took through [`follow_input_desktop`], by handle
+    /// and name. Per thread because the attachment is, and shared by every look
+    /// on the thread — the capture loop's and a rebuild's — so one switch is
+    /// taken once and costs one re-duplication, not two. Never closed: a
+    /// thread's own desktop cannot be, and the capture thread lives as long as
+    /// the process.
+    static ATTACHED: std::cell::RefCell<Option<(HDESK, String)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
+/// [`DesktopWatcher::follow`], for a look that has no watcher: a rebuild.
 #[cfg(windows)]
-impl DesktopWatcher {
-    pub fn new() -> Self {
-        Self {
-            desktop: None,
-            name: String::new(),
-        }
-    }
-
-    /// Attach this thread to the input desktop, returning true when it changed
-    /// and the caller's duplications therefore have to be rebuilt.
-    ///
-    /// A failed `OpenInputDesktop` is not proof that the machine is locked: it
-    /// is equally what a thread without the rights to the current desktop gets,
-    /// and what a switch in progress returns. The previous desktop is kept and
-    /// capture carries on.
-    pub fn follow(&mut self) -> bool {
-        let opened = unsafe {
-            OpenInputDesktop(
-                DESKTOP_CONTROL_FLAGS(0),
-                false,
-                DESKTOP_ACCESS_FLAGS(DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0),
-            )
-        };
-        let Ok(desktop) = opened else {
-            return false;
-        };
-        let name = desktop_name(desktop).unwrap_or_default();
-        if self.desktop.is_some() && name == self.name {
+fn follow_input_desktop() -> bool {
+    let opened = unsafe {
+        OpenInputDesktop(
+            DESKTOP_CONTROL_FLAGS(0),
+            false,
+            DESKTOP_ACCESS_FLAGS(DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0),
+        )
+    };
+    let Ok(desktop) = opened else {
+        return false;
+    };
+    let name = desktop_name(desktop).unwrap_or_default();
+    ATTACHED.with_borrow_mut(|attached| {
+        if attached.as_ref().is_some_and(|(_, current)| *current == name) {
             let _ = unsafe { CloseDesktop(desktop) };
             return false;
         }
@@ -945,17 +940,36 @@ impl DesktopWatcher {
             let _ = unsafe { CloseDesktop(desktop) };
             return false;
         }
-        if let Some(previous) = self.desktop.replace(desktop) {
+        if let Some((previous, _)) = attached.replace((desktop, name)) {
             let _ = unsafe { CloseDesktop(previous) };
         }
-        self.name = name;
         true
+    })
+}
+
+/// Follows the input desktop for the thread it is used on.
+///
+/// Deliberately not `Send`: a desktop association belongs to the thread that
+/// made it, so the watcher is created on the capture thread and stays there.
+#[cfg(windows)]
+pub struct DesktopWatcher(std::marker::PhantomData<*const ()>);
+
+#[cfg(windows)]
+impl DesktopWatcher {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
     }
 
-    /// The input desktop this thread is attached to (`Default`, `Winlogon`,
-    /// `Screen-saver`), empty until the first successful `follow`.
-    pub fn name(&self) -> &str {
-        &self.name
+    /// Attach this thread to the input desktop, returning true when this call
+    /// moved it, so the caller's duplications have to be rebuilt. A switch a
+    /// rebuild already followed returns false: that rebuild was the one.
+    ///
+    /// A failed `OpenInputDesktop` is not proof that the machine is locked: it
+    /// is equally what a thread without the rights to the current desktop gets,
+    /// and what a switch in progress returns. The previous desktop is kept and
+    /// capture carries on.
+    pub fn follow(&mut self) -> bool {
+        follow_input_desktop()
     }
 }
 
@@ -963,17 +977,6 @@ impl DesktopWatcher {
 impl Default for DesktopWatcher {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(windows)]
-impl Drop for DesktopWatcher {
-    fn drop(&mut self) {
-        if let Some(desktop) = self.desktop.take() {
-            // Fails while this thread is still attached; there is nothing to do
-            // about it and the handle dies with the thread either way.
-            let _ = unsafe { CloseDesktop(desktop) };
-        }
     }
 }
 
