@@ -9,6 +9,31 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ---
 
+## [4.1.3] - 2026-10-03
+
+### added — swoop from another network
+
+A swoop session now connects across the internet through most home and office
+routers. The machine asks a public STUN server for the address its router shows
+the world and offers it to the viewer beside its local one, as the viewer
+already did. Before, a machine offered only its local address, so a viewer on
+another network saw "connecting" and nothing else. When both ends sit behind
+strict routers, as on many mobile networks, a relay is still needed, and none is
+set up on dev yet.
+
+### changed — swoop says when it cannot connect
+
+After 20 seconds without a path the viewer says "can't reach this machine from
+your network", and whether a relay was there to try, instead of "connecting"
+for as long as the tab is open. It keeps trying, and the picture appears if a
+path comes up later.
+
+### changed — the macOS app icon follows light and dark
+
+On macOS 26 the app's icon follows the Mac's icon style: the day eye on a light
+tile in the default style, the night eye on a dark tile in the dark style. Older
+macOS shows the day icon.
+
 ## [4.1.2] - 2026-10-03
 
 ### added — light mode
