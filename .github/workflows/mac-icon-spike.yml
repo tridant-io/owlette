@@ -1,6 +1,6 @@
 name: mac icon spike
 
-# one-off: compile the light/dark app icon catalog with xcode's actool, which only a macos runner has.
+# one-off: compile the light/dark app icon with xcode's actool, which only a macos runner has.
 on:
   push:
     branches: [spike/mac-icon]
@@ -15,17 +15,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: compile the catalog
+      - name: icon composer examples shipped with xcode
         run: |
           xcodebuild -version
+          xcode="$(xcode-select -p)/../.."
+          find "$xcode" -name "icon.json" -path "*.icon/*" 2>/dev/null | head -5 | while read -r f; do echo "== $f"; cat "$f"; ls "$(dirname "$f")/Assets" 2>/dev/null; done
+          find /Applications -maxdepth 3 -name "Icon Composer.app" 2>/dev/null
+      - name: compile the .icon
+        run: |
           mkdir -p out
-          xcrun actool spike/mac-icon/Assets.xcassets --compile out --platform macosx \
+          xcrun actool spike/mac-icon/AppIcon.icon --compile out --platform macosx \
             --minimum-deployment-target 15.0 --app-icon AppIcon \
             --output-partial-info-plist out/partial.plist \
-            --output-format human-readable-text --notices --warnings --errors
-          xcrun assetutil --info out/Assets.car > out/assetutil.json
+            --output-format human-readable-text --notices --warnings --errors 2>&1 | tee out/actool.txt
+          xcrun assetutil --info out/Assets.car > out/assetutil.json || true
           ls -la out
-          cat out/partial.plist
+          cat out/partial.plist || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mac-icon
