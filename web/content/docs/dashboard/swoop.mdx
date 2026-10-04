@@ -19,7 +19,7 @@ a machine with someone in a session shows the count on its menu button and on th
 
 swoop is **off** until a site turns it on — that is the default, and it is per site.
 
-a site admin flips it in **manage sites** → the site's **swoop** switch. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
+a site admin flips it in **manage sites** → the site's pencil (**edit site**) → the **swoop** switch, beside [keep screens awake](/docs/dashboard/getting-started#site-settings). the switch takes effect the moment it moves; it is not part of the panel's save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
 
 once a site is on, the rest of the policy is available over the API (`PATCH /api/sites/{siteId}/swoop-settings`) rather than the dashboard:
 
