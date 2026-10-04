@@ -1,12 +1,14 @@
 {
-  "fill" : {
-    "solid" : "srgb:0.95600,0.96911,0.98327,1.00000"
-  },
   "fill-specializations" : [
+    {
+      "value" : {
+        "solid" : "display-p3:0.95834,0.96868,0.98180,1.00000"
+      }
+    },
     {
       "appearance" : "dark",
       "value" : {
-        "solid" : "srgb:0.00903,0.04209,0.08658,1.00000"
+        "solid" : "display-p3:0.01491,0.04103,0.08305,1.00000"
       }
     }
   ],
@@ -14,20 +16,39 @@
     {
       "layers" : [
         {
-          "image-name" : "eye-day.png",
-          "image-name-specializations" : [
+          "glass" : false,
+          "hidden-specializations" : [
+            {
+              "value" : true
+            },
             {
               "appearance" : "dark",
-              "value" : "eye-night.png"
+              "value" : false
             }
           ],
-          "name" : "eye"
+          "image-name" : "eye-night.png",
+          "name" : "eye-night"
+        },
+        {
+          "glass" : false,
+          "hidden-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "dark",
+              "value" : true
+            }
+          ],
+          "image-name" : "eye-day.png",
+          "name" : "eye-day"
         }
       ],
       "shadow" : {
-        "kind" : "none",
+        "kind" : "neutral",
         "opacity" : 0
       },
+      "specular" : false,
       "translucency" : {
         "enabled" : false,
         "value" : 0
