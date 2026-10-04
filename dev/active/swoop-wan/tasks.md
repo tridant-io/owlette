@@ -1,9 +1,9 @@
 # swoop across the internet — Tasks
-**Progress**: 0/9 complete
+**Progress**: 1/9 complete
 
 ## Wave 1: STUN on both ends
 
-- [ ] **Task 1.1: The agent's bundle carries STUN** `[agent]`
+- [x] **Task 1.1: The agent's bundle carries STUN** `[agent]`
   - Files: `web/lib/swoop/turn.server.ts`, `web/app/api/agent/swoop/bundle/route.ts`,
     `web/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/route.ts`, their tests.
   - Do: Export one `STUN_ONLY` from `turn.server.ts`; both routes fall back to it when the mint fails. Route tests
@@ -77,3 +77,5 @@
 ### 2026-10-04
 - Plan written from two research passes (host transport; viewer, API and signaling), on the owner's instruction to lay
   the groundwork and execute it overnight.
+- 1.1: the bundle route falls back to the shared STUN_ONLY; 119 jest tests across four suites, the new bundle test
+  failed with `[]` restored; eslint and tsc clean.

@@ -122,3 +122,20 @@ The display never turned off, even stopped at 175 s idle: Synergy (keyboard and 
 Mac HID activity, which WindowServer turns into a `UserIsActive` assertion with a 7 to 10 minute timeout. The Mac's idle
 counter reset to single digits several times during the run with nobody at it. A display-power proof on the Mac
 needs Synergy quit first. At 21:50 a 12-hour `caffeinate` (not owlette's) also started holding display and system.
+
+## All four on the official 4.1.2 (2026-10-03 22:28 local)
+
+Updated by update_owlette from the dev catalog (4.1.2 set as latest). Every machine mirrors a full hold:
+
+```
+owlette-kiosk {"wanted": true, "held": true, "how": "systemd_inhibit", "session": true, "reason": null}
+TEC-A4D       {"wanted": true, "held": true, "how": "power_request",   "session": true, "reason": null}
+TEC-B4A       {"wanted": true, "held": true, "how": "power_request",   "session": true, "reason": null}
+TEC-MBA       {"wanted": true, "held": true, "how": "iopm_assertion",  "session": true, "reason": null}
+```
+
+B4A `powercfg /requests`: SYSTEM from `ProgramData\Owlette\python\python.exe` ("owlette keep screens awake") and
+from `owlette-desktop.exe`; DISPLAY from `owlette-desktop.exe`. The 4.1.1 refusal is gone.
+
+Still owed for 3.2: the switch-off half (it needs a signed-in dashboard session to flip the site switch) and a Mac
+display-power reading with Synergy quit.

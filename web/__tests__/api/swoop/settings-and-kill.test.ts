@@ -93,6 +93,7 @@ jest.mock('@/lib/swoop/signal.server', () => ({
 }));
 
 jest.mock('@/lib/swoop/turn.server', () => ({
+  ...jest.requireActual('@/lib/swoop/turn.server'),
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
 }));
 

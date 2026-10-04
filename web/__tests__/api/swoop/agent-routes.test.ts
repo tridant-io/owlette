@@ -55,6 +55,7 @@ jest.mock('@/lib/securityBoundaryMetrics.server', () => ({
   emitSecurityBoundaryMetric: jest.fn(),
 }));
 jest.mock('@/lib/swoop/turn.server', () => ({
+  ...jest.requireActual('@/lib/swoop/turn.server'),
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
 }));
 
@@ -62,6 +63,7 @@ import { POST as bundlePOST } from '@/app/api/agent/swoop/bundle/route';
 import { POST as doorbellPOST } from '@/app/api/agent/swoop/doorbell-token/route';
 import { POST as eventsPOST } from '@/app/api/agent/swoop/events/route';
 import { validateBundle, SWOOP_PROTOCOL_VERSION } from '@/lib/swoop/protocol';
+import { STUN_ONLY, mintTurnCredentials } from '@/lib/swoop/turn.server';
 import { SWOOP_MIN_AGENT_VERSION } from '@/lib/versionUtils';
 
 const SITE = 'site-a';
@@ -219,6 +221,33 @@ describe('POST /api/agent/swoop/bundle', () => {
     // required u64 it ends a session at.
     expect(parsed.value.enablement.sessionCapSeconds).toBe(100 * 365 * 24 * 60 * 60);
     expect(parsed.value.jwtKeys).toHaveLength(1);
+  });
+
+  it('carries stun when turn is not configured, so the streamer can gather a public candidate', async () => {
+    agentToken();
+    const body = await (await bundlePOST(bundleRequest())).json();
+    expect(body.iceServers).toEqual(STUN_ONLY);
+  });
+
+  it('carries the minted ice servers unchanged when turn is configured', async () => {
+    const minted = [
+      { urls: ['stun:stun.cloudflare.com:3478'] },
+      {
+        urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
+        username: 'turn-user',
+        credential: 'turn-credential',
+      },
+    ];
+    jest.mocked(mintTurnCredentials).mockResolvedValueOnce({
+      ok: true,
+      iceServers: minted,
+      username: 'turn-user',
+      expiresAt: Date.now() + 60_000,
+    });
+    agentToken();
+    const body = await (await bundlePOST(bundleRequest())).json();
+    expect(body.iceServers).toEqual(minted);
+    expect(mintTurnCredentials).toHaveBeenCalledWith({ siteId: SITE });
   });
 
   it('carries the previous public key during a rotation overlap', async () => {

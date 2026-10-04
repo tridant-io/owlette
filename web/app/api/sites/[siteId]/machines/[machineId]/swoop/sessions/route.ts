@@ -46,7 +46,7 @@ import {
 } from '@/lib/swoop/policy.server';
 import { viewerKeyForResponse } from '@/lib/swoop/keys.server';
 import { mintViewerToken, canonicalizeFingerprint } from '@/lib/swoop/tokens.server';
-import { mintTurnCredentials, type SwoopIceServer } from '@/lib/swoop/turn.server';
+import { STUN_ONLY, mintTurnCredentials } from '@/lib/swoop/turn.server';
 import { ringDoorbell } from '@/lib/swoop/signal.server';
 import { continuityInherits, mintContinuity, parseContinuity } from '@/lib/swoop/continuity.server';
 import {
@@ -75,9 +75,6 @@ interface SessionBody {
   /** the continuity token of this tab's previous control session, in place of a proof. */
   continuity?: unknown;
 }
-
-/** P2P first (plan.md D13); relays are added only when a mint succeeds. */
-const STUN_ONLY: SwoopIceServer[] = [{ urls: ['stun:stun.cloudflare.com:3478'] }];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
