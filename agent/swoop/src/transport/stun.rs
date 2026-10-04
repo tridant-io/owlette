@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 
 /// RFC 8489 §5: what tells a STUN message from anything else on the port, and
 /// the mask XOR-MAPPED-ADDRESS is written under.
-const MAGIC_COOKIE: u32 = 0x2112_a442;
-const HEADER_LEN: usize = 20;
-const TRANSACTION_LEN: usize = 12;
+pub(super) const MAGIC_COOKIE: u32 = 0x2112_a442;
+pub(super) const HEADER_LEN: usize = 20;
+pub(super) const TRANSACTION_LEN: usize = 12;
 
 const BINDING_REQUEST: u16 = 0x0001;
 const BINDING_SUCCESS: u16 = 0x0101;
@@ -28,7 +28,7 @@ const BINDING_ERROR: u16 = 0x0111;
 
 const MAPPED_ADDRESS: u16 = 0x0001;
 const XOR_MAPPED_ADDRESS: u16 = 0x0020;
-const FAMILY_IPV4: u8 = 0x01;
+pub(super) const FAMILY_IPV4: u8 = 0x01;
 
 /// The port a `stun:` URL means when it names none (RFC 7064 §3.2).
 const DEFAULT_PORT: u16 = 3478;
@@ -37,9 +37,9 @@ const DEFAULT_PORT: u16 = 3478;
 /// requests in all and a wait of sixteen initial RTOs after the last — sent at
 /// 0, 0.5, 1.5, 3.5, 7.5, 15.5 and 31.5 s, given up at 39.5 s. A late answer
 /// still helps, because the candidate trickles whenever it arrives.
-const INITIAL_RTO: Duration = Duration::from_millis(500);
-const MAX_REQUESTS: u32 = 7;
-const LAST_WAIT_RTOS: u32 = 16;
+pub(super) const INITIAL_RTO: Duration = Duration::from_millis(500);
+pub(super) const MAX_REQUESTS: u32 = 7;
+pub(super) const LAST_WAIT_RTOS: u32 = 16;
 
 /// One Binding request: a bare header, no attributes.
 pub type Request = [u8; HEADER_LEN];
@@ -234,7 +234,7 @@ fn read_answer(datagram: &[u8]) -> Option<Answer> {
 
 /// An IPv4 (XOR-)MAPPED-ADDRESS value: reserved, family, port, address, with
 /// the port under the cookie's top half and the address under all of it.
-fn ipv4(value: &[u8], mask: u32) -> Option<SocketAddr> {
+pub(super) fn ipv4(value: &[u8], mask: u32) -> Option<SocketAddr> {
     let &[_, FAMILY_IPV4, p0, p1, a0, a1, a2, a3] = value else {
         return None;
     };
