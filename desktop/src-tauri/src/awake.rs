@@ -11,8 +11,12 @@
 //! Per OS, all on this one long-lived thread:
 //! * Windows: `SetThreadExecutionState`, whose state belongs to the thread that
 //!   set it, so it is set and cleared here and nowhere else; and the session's
-//!   screensaver, turned off when it was on and back on at release. Both calls
-//!   leave the user's own settings alone: fWinIni 0 is the session's copy only.
+//!   screensaver flag, turned off when the user's own setting
+//!   (`HKCU\Control Panel\Desktop`, `ScreenSaveActive` with a `SCRNSAVE.EXE`
+//!   to run) has it on. fWinIni 0 sets
+//!   the session's copy only and never that setting, so the flag is put back
+//!   from the setting, not from memory: at release, and at the first read that
+//!   asks for nothing, which heals a flag left off by a holder killed mid-hold.
 //! * macOS: a `PreventUserIdleDisplaySleep` assertion, plus the user declared
 //!   active every 30 s, which is what keeps the screensaver and the lock away.
 //! * Linux: an idle inhibitor from gnome-session, or from the freedesktop
@@ -54,6 +58,49 @@ trait Hold {
   fn renew(&mut self) {}
   /// Let go of everything `take` took. Called only while held.
   fn release(&mut self);
+  /// Put back what a holder killed mid-hold left behind. Called once, at the
+  /// first read, when it asks for no hold.
+  fn settle(&mut self) {}
+}
+
+/// The session's screensaver flag beside the user's own setting (Windows),
+/// behind a trait so what is done with them is tested on every OS.
+#[cfg(any(windows, test))]
+trait Screensaver {
+  /// The session's flag; `None` when it could not be read.
+  fn live(&self) -> Option<bool>;
+  /// The user's own setting, which the session's flag starts from at logon.
+  fn configured(&self) -> bool;
+  fn set_live(&mut self, active: bool);
+}
+
+/// The user's own setting, from `HKCU\Control Panel\Desktop`: on only with a
+/// program to run (`SCRNSAVE.EXE`), and unless `ScreenSaveActive` is "0"; a
+/// missing `ScreenSaveActive` is Windows' default, on. Without a program the
+/// session's flag reads off whatever `ScreenSaveActive` says, so going by that
+/// alone would set the flag on every start of a default Windows box.
+#[cfg(any(windows, test))]
+fn screensaver_configured(active: Option<&str>, program: Option<&str>) -> bool {
+  active.map_or(true, |active| active.trim() != "0")
+    && program.is_some_and(|program| !program.trim().is_empty())
+}
+
+/// Taking a hold: the session's flag off, unless the user has it off already.
+#[cfg(any(windows, test))]
+fn screensaver_off(saver: &mut impl Screensaver) {
+  if saver.configured() {
+    saver.set_live(false);
+  }
+}
+
+/// Releasing a hold, or settling: the session's flag back to the user's
+/// setting, when it is not that already.
+#[cfg(any(windows, test))]
+fn screensaver_restore(saver: &mut impl Screensaver) {
+  let configured = saver.configured();
+  if saver.live() != Some(configured) {
+    saver.set_live(configured);
+  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +115,8 @@ enum State {
 struct Keeper<H: Hold> {
   hold: H,
   state: State,
+  /// A first read has been applied.
+  started: bool,
 }
 
 impl<H: Hold> Keeper<H> {
@@ -75,12 +124,18 @@ impl<H: Hold> Keeper<H> {
     Self {
       hold,
       state: State::Free(NOT_WANTED.to_owned()),
+      started: false,
     }
   }
 
   /// Bring the hold in line with `wanted`. True when the state changed, which
   /// is when a report is due. A refused hold is tried again on the next call.
   fn apply(&mut self, wanted: bool) -> bool {
+    // Only a first read that asks for nothing settles: a hold taken instead
+    // is released, and released holds put everything back themselves.
+    if !std::mem::replace(&mut self.started, true) && !wanted {
+      self.hold.settle();
+    }
     let next = match (&self.state, wanted) {
       (State::Held(_), true) => {
         self.hold.renew();
@@ -197,7 +252,8 @@ fn run(root: &Path, hold: impl Hold) {
 }
 
 /// Start the holder. Everything it takes is let go when the process ends,
-/// except the Windows screensaver flag, which lasts the session.
+/// except the Windows screensaver flag, which lasts the session until the next
+/// start settles it.
 pub fn spawn(root: &Path) {
   let root = root.to_path_buf();
   let spawned = thread::Builder::new()
@@ -210,25 +266,29 @@ pub fn spawn(root: &Path) {
 
 #[cfg(windows)]
 mod os {
-  use windows::core::BOOL;
+  use std::ffi::c_void;
+
+  use windows::core::{w, BOOL, PCWSTR};
+  use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
   use windows::Win32::System::Power::{
     SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED,
   };
+  use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
   use windows::Win32::UI::WindowsAndMessaging::{
     SystemParametersInfoW, SPI_GETSCREENSAVEACTIVE, SPI_SETSCREENSAVEACTIVE,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
   };
 
-  use super::Hold;
+  use super::{screensaver_configured, screensaver_off, screensaver_restore, Hold, Screensaver};
 
   /// fWinIni 0: the session's copy of the setting, never the user's profile.
   const SESSION_ONLY: SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS = SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0);
 
+  /// Nothing to remember: the screensaver is put back from the user's setting.
+  /// Braced, not a unit struct, so `spawn` builds every OS's session with
+  /// `default()`.
   #[derive(Default)]
-  pub struct Session {
-    /// The screensaver was on and `take` turned it off.
-    screensaver_was_on: bool,
-  }
+  pub struct Session {}
 
   impl Hold for Session {
     fn take(&mut self) -> Result<&'static str, String> {
@@ -240,60 +300,108 @@ mod os {
       if previous.0 == 0 {
         return Err("windows refused the execution state".to_owned());
       }
-      // Off only when it was on, so release puts back exactly what was found.
-      self.screensaver_was_on = screensaver_active() == Some(true);
-      if self.screensaver_was_on {
-        set_screensaver(false);
-      }
+      screensaver_off(self);
       Ok("execution_state")
     }
 
     fn release(&mut self) {
       // SAFETY: as above; ES_CONTINUOUS alone clears what `take` set.
       unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
-      if std::mem::take(&mut self.screensaver_was_on) {
-        set_screensaver(true);
+      screensaver_restore(self);
+    }
+
+    fn settle(&mut self) {
+      screensaver_restore(self);
+    }
+  }
+
+  impl Screensaver for Session {
+    fn live(&self) -> Option<bool> {
+      let mut active = BOOL::default();
+      // SAFETY: SPI_GETSCREENSAVEACTIVE writes one BOOL through the pointer,
+      // which outlives the call.
+      let read = unsafe {
+        SystemParametersInfoW(
+          SPI_GETSCREENSAVEACTIVE,
+          0,
+          Some(std::ptr::addr_of_mut!(active).cast()),
+          SESSION_ONLY,
+        )
+      };
+      match read {
+        Ok(()) => Some(active.as_bool()),
+        Err(error) => {
+          log::warn!("keep screens awake: could not read the screensaver flag: {error}");
+          None
+        }
+      }
+    }
+
+    fn configured(&self) -> bool {
+      screensaver_configured(
+        desktop_value(w!("ScreenSaveActive")).as_deref(),
+        desktop_value(w!("SCRNSAVE.EXE")).as_deref(),
+      )
+    }
+
+    fn set_live(&mut self, active: bool) {
+      // SAFETY: SPI_SETSCREENSAVEACTIVE reads uiParam only.
+      let set = unsafe {
+        SystemParametersInfoW(
+          SPI_SETSCREENSAVEACTIVE,
+          u32::from(active),
+          None,
+          SESSION_ONLY,
+        )
+      };
+      if let Err(error) = set {
+        log::warn!(
+          "keep screens awake: could not turn the screensaver {}: {error}",
+          if active { "on" } else { "off" }
+        );
       }
     }
   }
 
-  /// Whether the session's screensaver is on; `None` when Windows would not say.
-  fn screensaver_active() -> Option<bool> {
-    let mut active = BOOL::default();
-    // SAFETY: SPI_GETSCREENSAVEACTIVE writes one BOOL through the pointer,
-    // which outlives the call.
-    let read = unsafe {
-      SystemParametersInfoW(
-        SPI_GETSCREENSAVEACTIVE,
-        0,
-        Some(std::ptr::addr_of_mut!(active).cast()),
-        SESSION_ONLY,
-      )
+  /// A string under `HKCU\Control Panel\Desktop`; `None` when it is not there
+  /// or could not be read, which leaves the screensaver alone.
+  fn desktop_value(name: PCWSTR) -> Option<String> {
+    let read = |data: Option<*mut c_void>, size: &mut u32| {
+      // SAFETY: without a buffer it writes only the byte count into `size`;
+      // with one, at most `size` bytes into it, NUL-terminated under
+      // RRF_RT_REG_SZ. Both outlive the call.
+      unsafe {
+        RegGetValueW(
+          HKEY_CURRENT_USER,
+          w!("Control Panel\\Desktop"),
+          name,
+          RRF_RT_REG_SZ,
+          None,
+          data,
+          Some(size),
+        )
+      }
     };
-    match read {
-      Ok(()) => Some(active.as_bool()),
-      Err(error) => {
-        log::warn!("keep screens awake: could not read the screensaver setting: {error}");
+    let mut size = 0u32;
+    let mut status = read(None, &mut size);
+    let mut data = Vec::new();
+    if status == ERROR_SUCCESS {
+      data = vec![0u16; (size as usize).div_ceil(2)];
+      status = read(Some(data.as_mut_ptr().cast()), &mut size);
+    }
+    match status {
+      ERROR_SUCCESS => {
+        let end = data
+          .iter()
+          .position(|&unit| unit == 0)
+          .unwrap_or(data.len());
+        Some(String::from_utf16_lossy(&data[..end]))
+      }
+      ERROR_FILE_NOT_FOUND => None,
+      error => {
+        log::warn!("keep screens awake: could not read the screensaver setting ({error:?})");
         None
       }
-    }
-  }
-
-  fn set_screensaver(active: bool) {
-    // SAFETY: SPI_SETSCREENSAVEACTIVE reads uiParam only.
-    let set = unsafe {
-      SystemParametersInfoW(
-        SPI_SETSCREENSAVEACTIVE,
-        u32::from(active),
-        None,
-        SESSION_ONLY,
-      )
-    };
-    if let Err(error) = set {
-      log::warn!(
-        "keep screens awake: could not turn the screensaver {}: {error}",
-        if active { "on" } else { "off" }
-      );
     }
   }
 }
@@ -497,6 +605,7 @@ mod tests {
     takes: usize,
     renews: usize,
     releases: usize,
+    settles: usize,
     refuse: Option<&'static str>,
   }
 
@@ -515,6 +624,42 @@ mod tests {
 
     fn release(&mut self) {
       self.releases += 1;
+    }
+
+    fn settle(&mut self) {
+      self.settles += 1;
+    }
+  }
+
+  /// A session's screensaver flag and the user's setting, recording each set.
+  struct Saver {
+    live: Option<bool>,
+    configured: bool,
+    sets: Vec<bool>,
+  }
+
+  impl Saver {
+    fn new(live: Option<bool>, configured: bool) -> Self {
+      Self {
+        live,
+        configured,
+        sets: Vec::new(),
+      }
+    }
+  }
+
+  impl Screensaver for Saver {
+    fn live(&self) -> Option<bool> {
+      self.live
+    }
+
+    fn configured(&self) -> bool {
+      self.configured
+    }
+
+    fn set_live(&mut self, active: bool) {
+      self.live = Some(active);
+      self.sets.push(active);
     }
   }
 
@@ -614,6 +759,83 @@ mod tests {
       (0, 0),
       "nothing was held"
     );
+  }
+
+  #[test]
+  fn only_a_first_read_that_asks_for_nothing_settles() {
+    let mut keeper = Keeper::new(Fake::default());
+    assert!(!keeper.apply(false));
+    assert!(!keeper.apply(false));
+    assert!(keeper.apply(true));
+    assert!(keeper.apply(false));
+    assert_eq!(keeper.hold.settles, 1, "once, at start");
+
+    let mut keeper = Keeper::new(Fake::default());
+    assert!(keeper.apply(true));
+    assert!(keeper.apply(false));
+    assert_eq!(
+      (keeper.hold.settles, keeper.hold.releases),
+      (0, 1),
+      "a release puts back"
+    );
+  }
+
+  #[test]
+  fn a_hold_turns_the_screensaver_off_and_release_restores_the_users_setting() {
+    let mut saver = Saver::new(Some(true), true);
+    screensaver_off(&mut saver);
+    screensaver_restore(&mut saver);
+    assert_eq!(saver.sets, [false, true]);
+  }
+
+  #[test]
+  fn release_restores_from_the_setting_not_from_what_was_live() {
+    // A holder killed mid-hold left the flag off; the next one takes over.
+    let mut saver = Saver::new(Some(false), true);
+    screensaver_off(&mut saver);
+    screensaver_restore(&mut saver);
+    assert_eq!(saver.live, Some(true));
+    assert_eq!(saver.sets, [false, true]);
+  }
+
+  #[test]
+  fn settling_at_start_heals_a_flag_a_killed_holder_left_off() {
+    let mut saver = Saver::new(Some(false), true);
+    screensaver_restore(&mut saver);
+    assert_eq!(saver.sets, [true]);
+    screensaver_restore(&mut saver);
+    assert_eq!(saver.sets, [true], "once healed, left alone");
+  }
+
+  #[test]
+  fn nothing_is_touched_when_the_user_has_the_screensaver_off() {
+    let mut saver = Saver::new(Some(false), false);
+    screensaver_restore(&mut saver);
+    screensaver_off(&mut saver);
+    screensaver_restore(&mut saver);
+    assert!(saver.sets.is_empty(), "{:?}", saver.sets);
+  }
+
+  #[test]
+  fn the_users_setting_is_on_only_with_a_program_to_run() {
+    let program = Some(r"C:\Windows\System32\Mystify.scr");
+    assert!(screensaver_configured(Some("1"), program));
+    assert!(screensaver_configured(None, program), "Windows' default");
+    assert!(!screensaver_configured(Some("0"), program));
+    assert!(!screensaver_configured(Some("1"), None));
+    assert!(!screensaver_configured(Some("1"), Some(" ")));
+    assert!(!screensaver_configured(None, None));
+  }
+
+  #[test]
+  fn registry_on_without_a_program_is_never_touched() {
+    // A default Windows box: ScreenSaveActive "1", no SCRNSAVE.EXE, and the
+    // session's flag reads off (measured on A4D, 2026-10-03).
+    let mut saver = Saver::new(Some(false), screensaver_configured(Some("1"), None));
+    screensaver_restore(&mut saver); // start
+    screensaver_off(&mut saver); // hold
+    screensaver_restore(&mut saver); // release
+    assert!(saver.sets.is_empty(), "{:?}", saver.sets);
   }
 
   #[test]
