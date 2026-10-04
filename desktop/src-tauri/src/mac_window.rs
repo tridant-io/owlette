@@ -21,13 +21,23 @@
 //! view (2026-10-03). The unified bar puts the lights where the header wants
 //! them anyway.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSTitlebarSeparatorStyle, NSToolbar, NSWindow, NSWindowToolbarStyle};
 use objc2_foundation::NSString;
 
+/// Set once the toolbar is on the window. The main window is built once and
+/// only ever hidden, never closed, so once is the whole lifetime. The window's
+/// own `toolbar` getter is deliberately not read back: on macOS 26 the second
+/// show read it, dropped the reference, and that drop freed the window's
+/// toolbar (`-[NSToolbar dealloc]` stopped inside it under lldb), and the
+/// next `makeKeyAndOrderFront` crashed on the freed view (2026-10-03).
+static ATTACHED: AtomicBool = AtomicBool::new(false);
+
 /// Attach the empty toolbar to the main window. Called when the window is
-/// shown, hopped onto the main thread by the caller; a second call finds the
-/// toolbar and returns.
+/// shown, hopped onto the main thread by the caller; every call after the
+/// first returns at once.
 /// (Setup is too early: the window from the config is not built yet there,
 /// which is how 4.1.0's first attempt attached nothing.)
 pub fn adopt_system_shape(window: &tauri::WebviewWindow) {
@@ -43,7 +53,7 @@ pub fn adopt_system_shape(window: &tauri::WebviewWindow) {
   // setup runs on the main thread, the only one AppKit windows may be touched
   // from. The pointer is read, never freed.
   let ns_window: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
-  if ns_window.toolbar().is_some() {
+  if ATTACHED.swap(true, Ordering::Relaxed) {
     return;
   }
   let identifier = NSString::from_str("app.owlette.desktop.shape");
