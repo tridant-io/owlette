@@ -156,3 +156,13 @@ the Bash tool mangles backslashes in heredocs — use the Write/Edit tools for f
 - 3.1: the three site specs cover both switches writing at once, a member seeing neither, and 390 px reach; 13
   passed on the emulators (twice). Release commit 9f3db30d bumps to 4.1.1 after merging dev; security gate CLEAR
   with the standing glib waiver. Desktop crate green on Windows (140), macOS (166) and the kiosk (159).
+- PR #279 (swoop/macos to dev, release 4.1.1): 24 of 24 checks green at 4f3dfcc4. The merge waits on the owner's
+  word for this PR (the permission gate refused it under the general go-ahead). 4f3dfcc4 also re-turns the Windows
+  screensaver off once a minute while held, found while planning the A4D proof.
+- 3.2 runs on a local 4.1.1 build until the release: kiosk installed from its own build.sh; A4D needs the release
+  (loading service code there needs elevation); the MBA waits for the owner's open swoop session to end.
+- Kiosk proof done on the local build: 15 min held at 84+ min idle against a 60 s blank; release on stop blanks and
+  locks one idle-delay later. The first stop was undone by the app's launch-time auto-start firing late; fixed in
+  5e320550 with a vitest that failed first. A4D and MBA proofs and the switch-off half wait for #279's merge (A4D,
+  the switch's API) and for the Mac to be free. Side note for the backlog: postinst restarts the app's user unit
+  without a user-manager daemon-reload, harmless while the unit file is unchanged.
