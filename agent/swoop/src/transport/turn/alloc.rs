@@ -1604,4 +1604,65 @@ mod tests {
             format!("Send(<{} bytes>)", USER.len())
         );
     }
+
+    /// Allocates and releases on a real TURN server named by `SWOOP_TURN_LIVE` (`host:port,username,password`):
+    /// `cargo test --features turn -- --ignored live_allocation`. Prints the relayed and mapped addresses, never
+    /// the credentials.
+    #[test]
+    #[ignore = "needs a turn server; set SWOOP_TURN_LIVE"]
+    fn live_allocation_against_a_real_server() {
+        let Ok(spec) = std::env::var("SWOOP_TURN_LIVE") else {
+            return;
+        };
+        let mut parts = spec.splitn(3, ',');
+        let (Some(server), Some(username), Some(password)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            panic!("SWOOP_TURN_LIVE is host:port,username,password");
+        };
+        let server: SocketAddr = std::net::ToSocketAddrs::to_socket_addrs(server)
+            .expect("resolve the server")
+            .find(SocketAddr::is_ipv4)
+            .expect("an ipv4 address");
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").expect("bind");
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+            .expect("read timeout");
+        let mut allocation = Allocation::new(server, username, password, Instant::now());
+        let mut buf = [0u8; 2048];
+        let started = Instant::now();
+        let mut allocated = None;
+        while allocated.is_none() && started.elapsed() < std::time::Duration::from_secs(10) {
+            for step in allocation.poll(Instant::now()) {
+                match step {
+                    Step::Send(bytes) => {
+                        socket.send_to(&bytes, server).expect("send");
+                    }
+                    other => panic!("the allocation stopped: {other:?}"),
+                }
+            }
+            if let Ok((n, from)) = socket.recv_from(&mut buf) {
+                assert_eq!(from, server, "only the server answers");
+                if let Event::Allocated { relayed, mapped } = allocation.on_datagram(&buf[..n]) {
+                    allocated = Some((relayed, mapped));
+                }
+            }
+        }
+        let (relayed, mapped) = allocated.expect("allocated within 10 s");
+        println!("allocated: relayed {relayed}, mapped {mapped:?}");
+        assert_eq!(allocation.relayed_addr(), Some(relayed));
+
+        let release = allocation.release().expect("a release to send");
+        socket.send_to(&release, server).expect("send the release");
+        let started = Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(3) {
+            if let Ok((n, _)) = socket.recv_from(&mut buf) {
+                let _ = allocation.on_datagram(&buf[..n]);
+                if matches!(allocation.state(), State::Released) {
+                    break;
+                }
+            }
+        }
+        println!("after release: {:?}", allocation.state());
+    }
 }

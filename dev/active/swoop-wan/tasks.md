@@ -89,3 +89,9 @@
   MESSAGE-INTEGRITY (HMAC-SHA1 from str0m's provider) and FINGERPRINT, ChannelData, and an Allocation state machine
   (401 and 438 retries, refresh, public-only permissions rate-limited, channels, Send/Data). RFC 5769 vectors 2.1 and
   2.4 reproduce byte for byte. `cargo test --features turn`: 432 lib tests pass. CI does not build the feature yet.
+- 3.2 (partly): an opt-in live test allocated and released on a lab coturn (proof.md), proving the long-term
+  credential path against a real server. Still open: relayed media through permissions and channels, and Cloudflare
+  with the owner's key.
+- 3.1 not started: host-side relay wiring into rtc.rs. With the owner's Cloudflare key set, the browser's stage-2
+  relay already works against a host that now offers its public address, so 3.1 is the cheaper path (D13) and the
+  fix for UDP-blocked host networks, not a prerequisite for relayed sessions.
