@@ -978,3 +978,30 @@ input[type="week"] {
     transition: none;
   }
 }
+
+/* a modal dims the whole window. the titlebar sits above dialog overlays so the
+   window stays draggable (App.tsx), so it carries the same scrim over itself,
+   its bottom hairline included, fading with the overlay. pointer-events: none
+   keeps the drag region live under it. */
+body:has([data-slot="dialog-overlay"]) [data-titlebar]::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 -1px;
+  background: rgb(0 0 0 / 0.5);
+  pointer-events: none;
+  animation: titlebar-dim-in 150ms ease-out;
+}
+body:has([data-slot="dialog-overlay"][data-state="closed"]) [data-titlebar]::after {
+  animation: titlebar-dim-out 150ms ease-in forwards;
+}
+@keyframes titlebar-dim-in {
+  from { opacity: 0; }
+}
+@keyframes titlebar-dim-out {
+  to { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body:has([data-slot="dialog-overlay"]) [data-titlebar]::after {
+    animation: none;
+  }
+}
