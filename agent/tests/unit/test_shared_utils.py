@@ -265,7 +265,9 @@ class TestGetGpus:
         fake.NVML_TEMPERATURE_GPU = 0
         config = {('temperature', 'enabled'): True}
 
+        # the temperature read checks the import-time flag, not sys.platform.
         with patch.dict(sys.modules, {'pynvml': fake}), \
+                patch.object(shared_utils, '_IS_MACOS', False), \
                 patch.object(shared_utils, 'read_config', side_effect=lambda path: config.get(tuple(path))), \
                 patch.dict(sys.modules, {'temp_sensors': None}), \
                 patch.object(shared_utils.logging, 'warning') as warning:
