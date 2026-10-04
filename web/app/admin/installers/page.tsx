@@ -13,8 +13,11 @@ import { Package, Plus, Loader2, Download, Trash2, CheckCircle, Copy, Sparkles, 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import UploadInstallerDialog from '@/components/admin/UploadInstallerDialog';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
 import { formatFileSize } from '@/lib/storageUtils';
-import { INSTALLER_PLATFORMS, PLATFORM_LABEL } from '@/lib/installerPlatform';
+import { INSTALLER_PLATFORMS, PLATFORM_LABEL, type InstallerFile, type InstallerPlatform } from '@/lib/installerPlatform';
+import { cn } from '@/lib/utils';
 
 /**
  * Installers Admin Page
@@ -59,6 +62,64 @@ function TruncatedReleaseNotes({ text }: { text: string }) {
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
+  );
+}
+
+/** one platform's installer in a release: size and checksum, with download and copy-link */
+function PlatformFile({
+  platform,
+  file,
+  version,
+  onCopyLink,
+}: {
+  platform: InstallerPlatform;
+  file: InstallerFile | undefined;
+  version: string;
+  onCopyLink: (url: string, what: string) => void;
+}) {
+  const label = PLATFORM_LABEL[platform];
+  return (
+    <div
+      data-platform={platform}
+      className={cn(
+        'flex items-center justify-between gap-3 min-w-0 rounded-md border px-3 py-2',
+        file ? 'border-border bg-card-sunken' : 'border-dashed border-border',
+      )}
+    >
+      <div className="min-w-0">
+        <p className="text-sm text-foreground truncate">{label}</p>
+        {file ? (
+          <p className="text-xs text-muted-foreground tabular-nums truncate">
+            {file.file_size != null ? formatFileSize(file.file_size) : 'size unknown'}
+            {file.checksum_sha256 && (
+              <code className="ml-2" title={file.checksum_sha256}>
+                sha256 {file.checksum_sha256.slice(0, 12)}
+              </code>
+            )}
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">not uploaded</p>
+        )}
+      </div>
+      {file && (
+        <div className="flex items-center gap-1 shrink-0">
+          <IconButton asChild label={`download ${label}`} variant="ghost" size="icon-sm" className="text-muted-foreground">
+            <a href={file.download_url} target="_blank" rel="noreferrer">
+              <Download className="h-3.5 w-3.5" />
+            </a>
+          </IconButton>
+          <IconButton
+            label={`copy ${label} download link`}
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onCopyLink(file.download_url, `${label} ${version}`)}
+            className="text-muted-foreground"
+          >
+            <Copy className="h-3.5 w-3.5" />
+          </IconButton>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -200,86 +261,68 @@ export default function InstallerVersionsPage() {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground mb-2">installers</h1>
-          <p className="text-muted-foreground">manage owlette Agent installer versions and downloads</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button
-            onClick={() => setCleanupDialogOpen(true)}
-            variant="outline"
-            className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground! cursor-pointer"
-            disabled={versions.length < 2}
-          >
-            <Paintbrush className="h-4 w-4 mr-2" />
-            clean up
-          </Button>
-          <Button
-            onClick={() => setUploadDialogOpen(true)}
-            className="text-gray-900 cursor-pointer"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            upload new version
-          </Button>
-        </div>
-      </div>
+        <AdminPageHeader
+          className="mb-6 md:mb-8"
+          title="installers"
+          description="manage owlette Agent installer versions and downloads"
+          actions={
+            <>
+              <CompactButton
+                icon={Paintbrush}
+                label="clean up"
+                onClick={() => setCleanupDialogOpen(true)}
+                variant="outline"
+                className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground!"
+                disabled={versions.length < 2}
+              />
+              <CompactButton icon={Plus} label="upload new version" onClick={() => setUploadDialogOpen(true)} />
+            </>
+          }
+        />
 
       {/* Stats Card */}
       {latestVersion && (
-        <div className="bg-card border border-border rounded-lg p-6 mb-8">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-green-600 rounded-lg">
-              <Package className="h-6 w-6 text-white" />
+        <div className="bg-card border border-border rounded-lg p-4 sm:p-6 mb-6 md:mb-8">
+          {/* on a phone the upload date wraps under the version, in line with its text */}
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-3">
+            <div className="p-2 sm:p-3 bg-success-solid rounded-lg">
+              <Package className="h-5 w-5 sm:h-6 sm:w-6 text-success-solid-foreground" />
             </div>
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <p className="text-sm text-muted-foreground">current latest version</p>
               <div className="flex items-center gap-2 mt-1">
-                <p className="text-2xl font-bold text-foreground">{latestVersion.version}</p>
-                <Badge className="bg-green-600">Latest</Badge>
+                <p className="text-xl sm:text-2xl font-bold text-foreground">{latestVersion.version}</p>
+                <Badge className="bg-success-solid text-success-solid-foreground">Latest</Badge>
               </div>
             </div>
-            <div className="text-right">
+            <div className="flex basis-full items-baseline gap-1.5 pl-12 sm:block sm:basis-auto sm:pl-0 sm:text-right">
               <p className="text-sm text-muted-foreground">uploaded</p>
-              <p className="text-lg text-foreground font-medium">
+              <p className="text-sm sm:text-lg text-foreground font-medium whitespace-nowrap">
                 {formatDate(latestVersion.release_date)}
               </p>
             </div>
-            <div className="text-right">
-              <p className="text-sm text-muted-foreground">file size</p>
-              <p className="text-lg text-foreground font-medium">
-                {formatFileSize(latestVersion.file_size)}
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <IconButton
-                label="download installer"
-                onClick={() => window.open(latestVersion.download_url, '_blank')}
-                variant="outline"
-                className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground! cursor-pointer"
-              >
-                <Download className="h-4 w-4" />
-              </IconButton>
-              <IconButton
-                label="copy download link"
-                onClick={() => copyDownloadLink(latestVersion.download_url, latestVersion.version)}
-                variant="outline"
-                className="border-border bg-background text-foreground hover:bg-muted! hover:text-foreground! cursor-pointer"
-              >
-                <Copy className="h-4 w-4" />
-              </IconButton>
-            </div>
+          </div>
+          {/* the public link serves each visitor their own platform; these are every file */}
+          <div className="mt-4 sm:mt-5 grid gap-2 sm:gap-3 md:grid-cols-3">
+            {INSTALLER_PLATFORMS.map((platform) => (
+              <PlatformFile
+                key={platform}
+                platform={platform}
+                file={latestVersion.files[platform]}
+                version={latestVersion.version}
+                onCopyLink={copyDownloadLink}
+              />
+            ))}
           </div>
         </div>
       )}
 
       {/* Error State */}
       {error && (
-        <div className="bg-red-900/30 border border-red-700 rounded-lg p-4 mb-6">
-          <p className="text-red-300">{error}</p>
+        <div className="bg-danger-surface border border-danger-border rounded-lg p-4 mb-6">
+          <p className="text-danger">{error}</p>
         </div>
       )}
 
@@ -294,21 +337,22 @@ export default function InstallerVersionsPage() {
       {/* Versions Table */}
       {!loading && !error && (
         <div className="bg-card border border-border rounded-lg overflow-x-auto">
-          <table className="w-full">
-            <thead>
+          {/* below md each version stacks into a block: version and actions, then the
+              date, then the notes. from md the floor width keeps dates on one line; it
+              fits the admin layout from a 1280 window up */}
+          <table className="block w-full md:table md:min-w-[48rem]">
+            <thead className="hidden md:table-header-group">
               <tr className="border-b border-border bg-background/50">
                 <th className="text-left p-4 text-sm font-medium text-foreground">version</th>
-                <th className="text-left p-4 text-sm font-medium text-foreground">file size</th>
                 <th className="text-left p-4 text-sm font-medium text-foreground">uploaded</th>
-                <th className="text-left p-4 text-sm font-medium text-foreground">uploaded by</th>
-                <th className="text-left p-4 text-sm font-medium text-foreground">release notes</th>
+                <th className="text-left p-4 text-sm font-medium text-foreground w-full">release notes</th>
                 <th className="text-right p-4 text-sm font-medium text-foreground">actions</th>
               </tr>
             </thead>
             {versions.length === 0 ? (
-              <tbody>
-                <tr>
-                  <td colSpan={6} className="p-8 text-center text-muted-foreground">
+              <tbody className="block md:table-row-group">
+                <tr className="block md:table-row">
+                  <td colSpan={4} className="block md:table-cell p-6 md:p-8 text-center text-muted-foreground">
                     No versions uploaded yet. Click &quot;upload new version&quot; to get started.
                   </td>
                 </tr>
@@ -319,16 +363,17 @@ export default function InstallerVersionsPage() {
                 const isDeleting = deletingVersion === version.version;
                 const isSetting = settingLatest === version.version;
 
-                // one row group per version: the version row, then one file row per platform
+                // one row group per version: the version row, then its platforms side by
+                // side. a phone gets the version row alone: the latest card above carries
+                // the platform files, and older builds are a desktop errand
                 return (
-                  <tbody key={version.id}>
-                    <tr className="hover:bg-muted/50 transition-colors">
-                      {/* Version */}
-                      <td className="p-4">
+                  <tbody key={version.id} className="block md:table-row-group border-b border-border last:border-b-0">
+                    <tr className="flex flex-wrap items-center md:table-row">
+                      <td className="order-1 flex-1 min-w-0 px-3 pt-3 pb-1 md:px-4 md:pt-4 md:pb-3 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <span className="text-foreground font-medium">{version.version}</span>
                           {isLatest && (
-                            <Badge className="bg-green-600 flex items-center gap-1">
+                            <Badge className="bg-success-solid text-success-solid-foreground flex items-center gap-1">
                               <CheckCircle className="h-3 w-3" />
                               Latest
                             </Badge>
@@ -336,137 +381,75 @@ export default function InstallerVersionsPage() {
                         </div>
                       </td>
 
-                      {/* File Size */}
-                      <td className="p-4 text-muted-foreground">
-                        {formatFileSize(version.file_size)}
+                      <td className="order-3 flex basis-full min-w-0 items-baseline gap-2 px-3 pb-1 md:table-cell md:px-4 md:pt-4 md:pb-3 whitespace-nowrap">
+                        <p className="text-sm text-muted-foreground">{formatDate(version.release_date)}</p>
+                        <p className="min-w-0 text-xs text-muted-foreground/80 max-w-[12rem] truncate" title={version.uploaded_by}>
+                          by {version.uploaded_by}
+                        </p>
                       </td>
 
-                      {/* Upload Date */}
-                      <td className="p-4 text-muted-foreground text-sm">
-                        {formatDate(version.release_date)}
-                      </td>
-
-                      {/* Uploaded By */}
-                      <td className="p-4 text-muted-foreground text-sm">
-                        {version.uploaded_by}
-                      </td>
-
-                      {/* Release Notes */}
-                      <td className="p-4">
+                      <td className="order-4 basis-full px-3 pb-3 md:px-4 md:pt-4 md:min-w-[14rem]">
                         {version.release_notes ? (
                           <TruncatedReleaseNotes text={version.release_notes} />
                         ) : (
-                          <span className="text-xs text-muted-foreground/80">no notes</span>
+                          <span className="hidden md:inline text-xs text-muted-foreground/80">no notes</span>
                         )}
                       </td>
 
-                      {/* Actions */}
-                      <td className="p-4">
-                        <div className="flex items-center justify-between gap-2">
-                          {/* Left side: Set as Latest button (or empty space) */}
-                          <div className="min-w-[100px]">
-                            {!isLatest && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleSetAsLatest(version.version)}
-                                disabled={isSetting || isDeleting}
-                                className="text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer text-sm"
-                              >
-                                {isSetting ? (
-                                  <>
-                                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                                    setting...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                                    set as latest (all platforms)
-                                  </>
-                                )}
-                              </Button>
-                            )}
-                          </div>
-
-                          {/* Right side: Icon buttons (always aligned) */}
-                          <div className="flex items-center gap-2">
-                            <IconButton
-                              label={`download installer ${version.version}`}
+                      <td className="order-2 px-3 pt-3 pb-1 md:px-4 md:pt-4 md:pb-3">
+                        {!isLatest && (
+                          <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                            <Button
                               variant="ghost"
-                              onClick={() => window.open(version.download_url, '_blank')}
-                              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
+                              size="sm"
+                              onClick={() => handleSetAsLatest(version.version)}
+                              disabled={isSetting || isDeleting}
+                              className="text-muted-foreground hover:text-foreground cursor-pointer text-sm"
                             >
-                              <Download className="h-3.5 w-3.5" />
-                            </IconButton>
+                              {isSetting ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                  setting...
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                                  set as latest
+                                </>
+                              )}
+                            </Button>
                             <IconButton
-                              label={`copy download link for ${version.version}`}
-                              variant="ghost"
-                              onClick={() => copyDownloadLink(version.download_url, version.version)}
-                              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
+                              label={`delete ${version.version}`}
+                              variant="ghost-destructive"
+                              onClick={() => handleDelete(version.version)}
+                              disabled={isDeleting || isSetting}
+                              className="h-8 w-8 cursor-pointer"
                             >
-                              <Copy className="h-3.5 w-3.5" />
+                              {isDeleting ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
                             </IconButton>
-                            {!isLatest ? (
-                              <IconButton
-                                label={`delete ${version.version}`}
-                                variant="ghost"
-                                onClick={() => handleDelete(version.version)}
-                                disabled={isDeleting || isSetting}
-                                className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
-                              >
-                                {isDeleting ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                )}
-                              </IconButton>
-                            ) : (
-                              <div className="w-[36px]" />
-                            )}
                           </div>
+                        )}
+                      </td>
+                    </tr>
+                    <tr className="hidden md:table-row">
+                      <td colSpan={4} className="px-4 pb-4">
+                        <div className="grid gap-2 md:grid-cols-3">
+                          {INSTALLER_PLATFORMS.map((platform) => (
+                            <PlatformFile
+                              key={platform}
+                              platform={platform}
+                              file={version.files[platform]}
+                              version={version.version}
+                              onCopyLink={copyDownloadLink}
+                            />
+                          ))}
                         </div>
                       </td>
                     </tr>
-
-                    {INSTALLER_PLATFORMS.map((platform) => {
-                      const file = version.files[platform];
-                      return (
-                        <tr
-                          key={platform}
-                          data-platform={platform}
-                          className="bg-background/30 text-sm text-muted-foreground last:border-b last:border-border"
-                        >
-                          <td className="py-2 pl-10 pr-4">{PLATFORM_LABEL[platform]}</td>
-                          <td className="py-2 px-4">
-                            {file?.file_size != null ? formatFileSize(file.file_size) : '—'}
-                          </td>
-                          <td colSpan={3} className="py-2 px-4">
-                            {file?.checksum_sha256 ? (
-                              <code className="text-xs" title={file.checksum_sha256}>
-                                sha256 {file.checksum_sha256.slice(0, 12)}
-                              </code>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
-                          <td className="py-2 px-4 text-right">
-                            {file ? (
-                              <a
-                                href={file.download_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1.5 hover:text-foreground"
-                              >
-                                <Download className="h-3.5 w-3.5" />
-                                download
-                              </a>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
                   </tbody>
                 );
               })
@@ -477,7 +460,7 @@ export default function InstallerVersionsPage() {
 
       {/* Info Box */}
       {!loading && !error && versions.length > 0 && (
-        <div className="mt-6 bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg p-4">
+        <div className="mt-4 sm:mt-6 bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg p-3 sm:p-4">
           <p className="text-accent-cyan text-sm">
             <strong>Note:</strong> The &quot;Latest&quot; version is what users will download from the public
             download link. You can upload multiple versions and switch between them at any time.
@@ -495,7 +478,7 @@ export default function InstallerVersionsPage() {
 
       {/* Set as Latest Confirmation Dialog */}
       <Dialog open={setLatestDialogOpen} onOpenChange={setSetLatestDialogOpen}>
-        <DialogContent className="border-border bg-card text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle className="text-foreground">set as latest version</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -512,7 +495,7 @@ export default function InstallerVersionsPage() {
             </Button>
             <Button
               onClick={confirmSetAsLatest}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               OK
             </Button>
@@ -522,7 +505,7 @@ export default function InstallerVersionsPage() {
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="border-border bg-card text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle className="text-foreground">delete version</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -538,8 +521,9 @@ export default function InstallerVersionsPage() {
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={confirmDelete}
-              className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+              className="cursor-pointer"
             >
               delete
             </Button>
@@ -549,7 +533,7 @@ export default function InstallerVersionsPage() {
 
       {/* Cleanup Dialog */}
       <Dialog open={cleanupDialogOpen} onOpenChange={(open) => { if (!cleaningUp) setCleanupDialogOpen(open); }}>
-        <DialogContent className="border-border bg-card text-foreground sm:max-w-lg">
+        <DialogContent className="border-border text-foreground sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="text-foreground">clean up old installers</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -576,13 +560,13 @@ export default function InstallerVersionsPage() {
             </div>
 
             {cleanupCandidates.length === 0 ? (
-              <div className="bg-green-900/20 border border-green-700/30 rounded-lg p-4">
-                <p className="text-green-400 text-sm">Nothing to clean up — all versions are either the latest patch in their series or within the retention window.</p>
+              <div className="bg-success-surface border border-success-border rounded-lg p-4">
+                <p className="text-success text-sm">Nothing to clean up — all versions are either the latest patch in their series or within the retention window.</p>
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="bg-red-900/20 border border-red-700/30 rounded-lg p-4">
-                  <p className="text-red-400 text-sm font-medium mb-2">
+                <div className="bg-danger-surface border border-danger-border rounded-lg p-4">
+                  <p className="text-danger text-sm font-medium mb-2">
                     {cleanupCandidates.length} version{cleanupCandidates.length !== 1 ? 's' : ''} will
                     be permanently deleted ({formatFileSize(totalCleanupSize)}):
                   </p>
@@ -591,7 +575,7 @@ export default function InstallerVersionsPage() {
                       <Badge
                         key={v.version}
                         variant="outline"
-                        className="border-red-700/50 text-red-400 text-xs"
+                        className="border-danger-border text-danger text-xs"
                       >
                         v{v.version}
                       </Badge>
@@ -612,9 +596,10 @@ export default function InstallerVersionsPage() {
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={handleCleanup}
               disabled={cleanupCandidates.length === 0 || cleaningUp}
-              className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+              className="cursor-pointer"
             >
               {cleaningUp ? (
                 <>

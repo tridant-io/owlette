@@ -137,7 +137,7 @@ export default function DemoPage() {
         />
 
         {/* Demo banner */}
-        <div className="bg-accent-cyan/10 border-b border-accent-cyan/20">
+        <div className="relative z-10 bg-accent-cyan/10 border-b border-accent-cyan/20">
           <div className="mx-auto max-w-screen-2xl px-3 md:px-4 py-2">
             <p className="text-sm text-muted-foreground">
               you&apos;re viewing a demo with sample data
@@ -164,12 +164,12 @@ export default function DemoPage() {
                 wrap so the row can never widen the page. */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6 md:gap-8">
               <div className="flex items-center gap-2.5">
-                <div className={`rounded-md p-1.5 ${onlineMachines > 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+                <div className={`rounded-md p-1.5 ${onlineMachines > 0 ? 'bg-success-surface text-success' : 'bg-muted text-muted-foreground'}`}>
                   <Monitor className="h-4 w-4" />
                 </div>
                 <div>
                   <div className="flex items-baseline gap-0.5">
-                    <span className={`text-xl font-bold ${onlineMachines > 0 ? 'text-emerald-400' : 'text-foreground'}`}>{onlineMachines}</span>
+                    <span className={`text-xl font-bold ${onlineMachines > 0 ? 'text-success' : 'text-foreground'}`}>{onlineMachines}</span>
                     <span className="text-xs text-muted-foreground">/ {machines.length}</span>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-tight">online</p>

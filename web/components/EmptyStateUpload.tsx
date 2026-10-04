@@ -47,7 +47,7 @@ export function EmptyStateUpload({
           <>
             <Button
               onClick={onAddMachine}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               <Download className="h-4 w-4 mr-2" />
               install agent
@@ -64,7 +64,7 @@ export function EmptyStateUpload({
         ) : (
           <Button
             onClick={onNewRoost}
-            className="text-gray-900 cursor-pointer"
+            className="cursor-pointer"
           >
             <Plus className="h-4 w-4 mr-2" />
             new roost

@@ -3,6 +3,7 @@
 import { type ReactNode, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import { AuthProvider } from '@/contexts/AuthContext';
+import { ThemePreferenceSync } from '@/components/ThemePreferenceSync';
 
 /**
  * Wraps children in AuthProvider. Previously lazy-loaded to defer Firebase SDK,
@@ -19,5 +20,10 @@ export function LazyAuthProvider({ children }: { children: ReactNode }) {
     }
   }, [pathname]);
 
-  return <AuthProvider>{children}</AuthProvider>;
+  return (
+    <AuthProvider>
+      <ThemePreferenceSync />
+      {children}
+    </AuthProvider>
+  );
 }

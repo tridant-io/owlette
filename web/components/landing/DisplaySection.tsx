@@ -18,17 +18,19 @@ export function DisplaySection() {
           </p>
         </div>
 
-        {/* Storyboard — three frames cycling baseline → drift → restored */}
+        {/* Storyboard — three frames cycling baseline → drift → restored. by day
+            the translucent mono captions print at full strength, and amber on its
+            own tint a step deeper: on paper the night's inks fall under 4.5:1 */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6 mb-8">
 
           {/* Frame 1 — baseline captured */}
           <figure className="flex flex-col">
-            <div className="flex-1 rounded-xl border border-accent-cyan/30 bg-card/60 p-5 shadow-2xl shadow-black/30 ring-1 ring-white/5 display-section-frame display-section-frame-baseline">
+            <div className="flex-1 rounded-xl border border-accent-cyan/30 bg-card/60 p-5 shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50 display-section-frame display-section-frame-baseline">
               <div className="flex items-center justify-between mb-4">
-                <span className="text-[10px] uppercase tracking-wider text-accent-cyan/80 font-mono">
+                <span className="text-[10px] uppercase tracking-wider text-accent-cyan dark:text-accent-cyan/80 font-mono">
                   baseline
                 </span>
-                <span className="flex items-center gap-1 text-[10px] text-accent-cyan/70 font-mono">
+                <span className="flex items-center gap-1 text-[10px] text-accent-cyan dark:text-accent-cyan/70 font-mono">
                   <span className="w-1.5 h-1.5 rounded-full bg-accent-cyan" />
                   captured
                 </span>
@@ -41,7 +43,7 @@ export function DisplaySection() {
                     key={n}
                     className="rounded-md border border-accent-cyan/30 bg-accent-cyan/5 flex items-center justify-center"
                   >
-                    <span className="text-[10px] text-accent-cyan/70 font-mono">{n}</span>
+                    <span className="text-[10px] text-accent-cyan dark:text-accent-cyan/70 font-mono">{n}</span>
                   </div>
                 ))}
               </div>
@@ -59,12 +61,12 @@ export function DisplaySection() {
 
           {/* Frame 2 — drift detected: monitors 2 and 3 off-baseline */}
           <figure className="flex flex-col">
-            <div className="flex-1 rounded-xl border border-accent-warm/40 bg-card/60 p-5 shadow-2xl shadow-black/30 ring-1 ring-white/5 display-section-frame display-section-frame-drift">
+            <div className="flex-1 rounded-xl border border-accent-warm/40 bg-card/60 p-5 shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50 display-section-frame display-section-frame-drift">
               <div className="flex items-center justify-between mb-4">
-                <span className="text-[10px] uppercase tracking-wider text-accent-warm/80 font-mono">
+                <span className="text-[10px] uppercase tracking-wider text-accent-warm dark:text-accent-warm/80 font-mono">
                   drift
                 </span>
-                <span className="flex items-center gap-1 text-[10px] text-accent-warm/80 font-mono">
+                <span className="flex items-center gap-1 text-[10px] text-accent-warm dark:text-accent-warm/80 font-mono">
                   <span className="w-1.5 h-1.5 rounded-full bg-accent-warm display-section-pulse" />
                   detected
                 </span>
@@ -73,10 +75,10 @@ export function DisplaySection() {
               {/* Same 2x2 mosaic, but monitors 2 and 3 visibly displaced */}
               <div className="grid grid-cols-2 gap-1.5 mb-4 aspect-[16/9]">
                 <div className="rounded-md border border-accent-cyan/30 bg-accent-cyan/5 flex items-center justify-center">
-                  <span className="text-[10px] text-accent-cyan/70 font-mono">1</span>
+                  <span className="text-[10px] text-accent-cyan dark:text-accent-cyan/70 font-mono">1</span>
                 </div>
                 <div className="relative rounded-md border border-accent-warm/60 bg-accent-warm/10 flex items-center justify-center display-section-drift-2">
-                  <span className="text-[10px] text-accent-warm font-mono">2</span>
+                  <span className="text-[10px] text-accent-warm-hover dark:text-accent-warm font-mono">2</span>
                   <AlertTriangle
                     className="absolute -top-1.5 -right-1.5 w-3 h-3 text-accent-warm"
                     strokeWidth={2.5}
@@ -84,15 +86,15 @@ export function DisplaySection() {
                   />
                 </div>
                 <div className="relative rounded-md border border-accent-warm/60 bg-accent-warm/10 flex items-center justify-center display-section-drift-3">
-                  <span className="text-[10px] text-accent-warm font-mono">3</span>
+                  <span className="text-[10px] text-accent-warm-hover dark:text-accent-warm font-mono">3</span>
                 </div>
                 <div className="rounded-md border border-accent-cyan/30 bg-accent-cyan/5 flex items-center justify-center">
-                  <span className="text-[10px] text-accent-cyan/70 font-mono">4</span>
+                  <span className="text-[10px] text-accent-cyan dark:text-accent-cyan/70 font-mono">4</span>
                 </div>
               </div>
 
               <div className="rounded-md bg-accent-warm/10 border border-accent-warm/30 px-3 py-2 text-center">
-                <span className="text-xs font-medium text-accent-warm">
+                <span className="text-xs font-medium text-accent-warm-hover dark:text-accent-warm">
                   layout changed
                 </span>
               </div>
@@ -104,12 +106,12 @@ export function DisplaySection() {
 
           {/* Frame 3 — restored to baseline */}
           <figure className="flex flex-col">
-            <div className="flex-1 rounded-xl border border-accent-cyan/30 bg-card/60 p-5 shadow-2xl shadow-black/30 ring-1 ring-white/5 display-section-frame display-section-frame-restored">
+            <div className="flex-1 rounded-xl border border-accent-cyan/30 bg-card/60 p-5 shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50 display-section-frame display-section-frame-restored">
               <div className="flex items-center justify-between mb-4">
-                <span className="text-[10px] uppercase tracking-wider text-accent-cyan/80 font-mono">
+                <span className="text-[10px] uppercase tracking-wider text-accent-cyan dark:text-accent-cyan/80 font-mono">
                   restored
                 </span>
-                <span className="flex items-center gap-1 text-[10px] text-accent-cyan/70 font-mono">
+                <span className="flex items-center gap-1 text-[10px] text-accent-cyan dark:text-accent-cyan/70 font-mono">
                   <span className="w-1.5 h-1.5 rounded-full bg-accent-cyan" />
                   ack
                 </span>
@@ -122,7 +124,7 @@ export function DisplaySection() {
                     key={n}
                     className="rounded-md border border-accent-cyan/30 bg-accent-cyan/5 flex items-center justify-center"
                   >
-                    <span className="text-[10px] text-accent-cyan/70 font-mono">{n}</span>
+                    <span className="text-[10px] text-accent-cyan dark:text-accent-cyan/70 font-mono">{n}</span>
                   </div>
                 ))}
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -146,11 +148,11 @@ export function DisplaySection() {
 
         {/* Lifecycle arrows — linear: captured → drift detected → auto-restored */}
         <div className="flex items-center justify-center gap-2 flex-wrap mb-14 sm:mb-16 text-[11px] sm:text-xs font-mono text-muted-foreground/80">
-          <span className="text-accent-cyan/80">captured</span>
+          <span className="text-accent-cyan dark:text-accent-cyan/80">captured</span>
           <ArrowRight className="w-3 h-3" aria-hidden="true" />
-          <span className="text-accent-warm/80">drift detected</span>
+          <span className="text-accent-warm dark:text-accent-warm/80">drift detected</span>
           <ArrowRight className="w-3 h-3" aria-hidden="true" />
-          <span className="text-accent-cyan/80">auto-restored</span>
+          <span className="text-accent-cyan dark:text-accent-cyan/80">auto-restored</span>
         </div>
 
         {/* Three proof bullets */}

@@ -3,6 +3,69 @@
 import { useId } from 'react';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 
+/**
+ * the glow behind a large eye: paint EYE_HALO_GRADIENT and set --halo-core and
+ * --halo-edge. at night the halo is warm light on navy, set per caller with
+ * dark:[--halo-core:…]. paper can't be lit, so by day it is the same warm hue
+ * raised to a pastel tint, which reads as warmth where a translucent amber would
+ * read as a grey smudge.
+ */
+export const EYE_HALO_DAY =
+  '[--halo-core:oklch(from_var(--accent-warm)_0.94_0.06_h)] [--halo-edge:oklch(from_var(--accent-warm)_0.95_0.045_h_/_0.5)]';
+export const EYE_HALO_GRADIENT = 'radial-gradient(circle, var(--halo-core) 0%, var(--halo-edge) 40%, transparent 70%)';
+
+/**
+ * light to warm to dark. all but the centre are theme tokens (globals.css --eye-*):
+ * at night the falloff ends in near-black, a light in the dark; by day it stays
+ * copper to the edge, a lit bead on the paper.
+ */
+const EYE_STOPS = [
+  ['0%', '#FFE8DC'],
+  ['45%', 'var(--eye-glow)'],
+  ['65%', 'var(--eye-iris)'],
+  ['78%', 'var(--eye-band-1)'],
+  ['83%', 'var(--eye-band-2)'],
+  ['87%', 'var(--eye-band-3)'],
+  ['100%', 'var(--eye-edge)'],
+] as const;
+
+/** the mark itself, shared by both components; `sheen` is the highlight's opacity */
+function EyeArt({ uid, sheen }: { uid: string; sheen: string }) {
+  return (
+    <>
+      <defs>
+        <radialGradient id={`${uid}-eye`} cx="50%" cy="50%" r="50%">
+          {EYE_STOPS.map(([offset, color]) => (
+            <stop key={offset} offset={offset} style={{ stopColor: color }} />
+          ))}
+        </radialGradient>
+        <radialGradient id={`${uid}-sheen`} cx="42%" cy="40%" r="25%">
+          <stop offset="0%" style={{ stopColor: '#FFFFFF', stopOpacity: sheen }} />
+          <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id={`${uid}-red-wash`} x1="0%" y1="50%" x2="100%" y2="50%">
+          <stop offset="0%" stopColor="#C03020" stopOpacity="0.55" />
+          <stop offset="35%" stopColor="#C03020" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+
+      {/* The eye — single gradient, light to warm to dark */}
+      <circle cx="100" cy="100" r="88" fill={`url(#${uid}-eye)`} />
+
+      {/* Red wash — left to right. at night only over the bright centre (the dark
+          band hides its edge); by day over the whole disc, or the copper shows it */}
+      <circle cx="100" cy="100" r="68" fill={`url(#${uid}-red-wash)`} style={{ opacity: 'var(--eye-wash-core)' }} />
+      <circle cx="100" cy="100" r="88" fill={`url(#${uid}-red-wash)`} style={{ opacity: 'var(--eye-wash-disc)' }} />
+
+      {/* Rim — dark at night, none by day */}
+      <circle cx="100" cy="100" r="88" fill="none" style={{ stroke: 'var(--eye-rim)' }} strokeWidth="2" />
+
+      {/* White sheen */}
+      <circle cx="88" cy="86" r="18" fill={`url(#${uid}-sheen)`} />
+    </>
+  );
+}
+
 interface OwletteEyeProps {
   size?: number;
   className?: string;
@@ -25,37 +88,7 @@ export function OwletteEye({ size = 400, className = '', animated = false }: Owl
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden
     >
-      <defs>
-        <radialGradient id={`${uid}-eye`} cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#FFE8DC" />
-          <stop offset="45%" stopColor="#F0B89A" />
-          <stop offset="65%" stopColor="#D08060" />
-          <stop offset="78%" stopColor="#8B4525" />
-          <stop offset="83%" stopColor="#3A1810" />
-          <stop offset="87%" stopColor="#1A0A06" />
-          <stop offset="100%" stopColor="#0E0604" />
-        </radialGradient>
-        <radialGradient id={`${uid}-sheen`} cx="42%" cy="40%" r="25%">
-          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.7" />
-          <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
-        </radialGradient>
-        <linearGradient id={`${uid}-red-wash`} x1="0%" y1="50%" x2="100%" y2="50%">
-          <stop offset="0%" stopColor="#C03020" stopOpacity="0.55" />
-          <stop offset="35%" stopColor="#C03020" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-
-      {/* The eye — single gradient, dark to warm to light */}
-      <circle cx="100" cy="100" r="88" fill={`url(#${uid}-eye)`} />
-
-      {/* Red wash — left to right, only over bright center */}
-      <circle cx="100" cy="100" r="68" fill={`url(#${uid}-red-wash)`} />
-
-      {/* Dark rim */}
-      <circle cx="100" cy="100" r="88" fill="none" stroke="#0A0604" strokeWidth="2" />
-
-      {/* White sheen */}
-      <circle cx="88" cy="86" r="18" fill={`url(#${uid}-sheen)`} />
+      <EyeArt uid={uid} sheen="var(--eye-sheen)" />
 
       {/* Animated breath */}
       {breathe && (
@@ -80,29 +113,7 @@ export function OwletteEyeIcon({ size = 32, className = '' }: { size?: number; c
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden
     >
-      <defs>
-        <radialGradient id={`${uid}-eye`} cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#FFE8DC" />
-          <stop offset="45%" stopColor="#F0B89A" />
-          <stop offset="65%" stopColor="#D08060" />
-          <stop offset="78%" stopColor="#8B4525" />
-          <stop offset="83%" stopColor="#3A1810" />
-          <stop offset="87%" stopColor="#1A0A06" />
-          <stop offset="100%" stopColor="#0E0604" />
-        </radialGradient>
-        <radialGradient id={`${uid}-sheen`} cx="42%" cy="40%" r="25%">
-          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.65" />
-          <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
-        </radialGradient>
-        <linearGradient id={`${uid}-red-wash`} x1="0%" y1="50%" x2="100%" y2="50%">
-          <stop offset="0%" stopColor="#C03020" stopOpacity="0.55" />
-          <stop offset="35%" stopColor="#C03020" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <circle cx="100" cy="100" r="88" fill={`url(#${uid}-eye)`} />
-      <circle cx="100" cy="100" r="68" fill={`url(#${uid}-red-wash)`} />
-      <circle cx="100" cy="100" r="88" fill="none" stroke="#0A0604" strokeWidth="2" />
-      <circle cx="88" cy="86" r="18" fill={`url(#${uid}-sheen)`} />
+      <EyeArt uid={uid} sheen="var(--eye-icon-sheen)" />
     </svg>
   );
 }

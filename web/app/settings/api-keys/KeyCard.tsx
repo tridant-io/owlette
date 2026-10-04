@@ -179,7 +179,7 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
           aria-label={`${expanded ? 'hide' : 'show'} details for ${apiKey.name}`}
-          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-white cursor-pointer"
+          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground cursor-pointer"
         >
           <ChevronRight
             className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`}
@@ -189,7 +189,7 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
         <div className="flex min-w-0 items-center gap-2">
           {/* p.font-medium is load-bearing: rowFor() in api-keys-states.spec.ts
               locates the row by it. */}
-          <p className="min-w-0 truncate text-sm text-white font-medium">
+          <p className="min-w-0 truncate text-sm text-foreground font-medium">
             {apiKey.name || '(unnamed key)'}
           </p>
           {/* Only legacy `test` keys get a badge — live is the only environment
@@ -198,7 +198,7 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
           {apiKey.environment === 'test' && (
             <Badge
               variant="outline"
-              className="border-amber-500/50 text-amber-400 text-xs flex-shrink-0"
+              className="border-warning/50 text-warning text-xs flex-shrink-0"
             >
               legacy test
             </Badge>
@@ -207,11 +207,11 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
             variant="outline"
             className={
               status.tone === 'ok'
-                ? 'border-green-500/50 text-green-400 text-xs flex-shrink-0'
+                ? 'border-success/50 text-success text-xs flex-shrink-0'
                 : status.tone === 'warn'
-                  ? 'border-amber-500/50 text-amber-400 text-xs flex-shrink-0'
+                  ? 'border-warning/50 text-warning text-xs flex-shrink-0'
                   : status.tone === 'error'
-                    ? 'border-red-500/50 text-red-400 text-xs flex-shrink-0'
+                    ? 'border-danger/50 text-danger text-xs flex-shrink-0'
                     : 'border-border text-muted-foreground text-xs flex-shrink-0'
             }
           >
@@ -236,14 +236,14 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
         <div className="hidden min-w-0 sm:block">
           <div
             className={`text-[11px] leading-tight ${
-              apiKey.expired ? 'text-red-400' : 'text-muted-foreground/80'
+              apiKey.expired ? 'text-danger' : 'text-muted-foreground/80'
             }`}
           >
             {apiKey.expired ? 'expired' : apiKey.retired ? 'retired' : 'expires'}
           </div>
           <div
             className={`text-xs leading-tight tabular-nums ${
-              apiKey.expired ? 'text-red-400' : 'text-muted-foreground'
+              apiKey.expired ? 'text-danger' : 'text-muted-foreground'
             }`}
           >
             {formatDate(apiKey.retired ? apiKey.retiresAt : apiKey.expiresAt)}
@@ -255,14 +255,14 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
             away rather than offering a button that cannot change anything. */}
         {apiKey.revoked ? null : confirmRevoke ? (
           <div className="flex items-center justify-end gap-1.5">
-            <span className="text-xs text-red-400">revoke?</span>
+            <span className="text-xs text-danger">revoke?</span>
             <Button
               type="button"
               size="sm"
-              variant="ghost"
+              variant="ghost-destructive"
               onClick={handleRevoke}
               disabled={revoking}
-              className="h-7 px-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+              className="h-7 px-2 text-xs cursor-pointer"
             >
               {revoking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'yes'}
             </Button>
@@ -281,10 +281,10 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
           <Button
             type="button"
             size="sm"
-            variant="ghost"
+            variant="ghost-destructive"
             onClick={() => setConfirmRevoke(true)}
             aria-label={`revoke ${apiKey.name}`}
-            className="h-7 w-7 justify-self-end p-0 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+            className="h-7 w-7 justify-self-end p-0 cursor-pointer"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -296,7 +296,7 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
                 size="sm"
                 variant="ghost"
                 aria-label={`actions for ${apiKey.name}`}
-                className="h-7 w-7 justify-self-end p-0 text-muted-foreground hover:text-white cursor-pointer"
+                className="h-7 w-7 justify-self-end p-0 text-muted-foreground hover:text-foreground cursor-pointer"
               >
                 {rotating ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -354,13 +354,13 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
       )}
 
       {status.tone === 'warn' && status.label === 'expiring soon' && daysUntilExpiry !== null && (
-        <div className="flex items-center gap-2 pl-8 text-xs text-amber-400">
+        <div className="flex items-center gap-2 pl-8 text-xs text-warning">
           <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
           this key expires in {daysUntilExpiry} day(s). rotate it soon.
         </div>
       )}
       {status.label === 'rotated (grace)' && apiKey.retiresAt && (
-        <div className="flex items-center gap-2 pl-8 text-xs text-amber-400">
+        <div className="flex items-center gap-2 pl-8 text-xs text-warning">
           <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
           old key stops working {formatDate(apiKey.retiresAt)}
         </div>

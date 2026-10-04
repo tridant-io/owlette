@@ -20,6 +20,7 @@ import {
   ChevronRight,
   Eye,
   Loader2,
+  MoreVertical,
   Pause,
   Pencil,
   Play,
@@ -30,6 +31,13 @@ import {
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Machine } from '@/hooks/useFirestore';
@@ -253,7 +261,7 @@ function TalonRunList({ siteId, talonId }: { siteId: string; talonId: string }) 
   }
 
   if (error) {
-    return <p className="py-6 text-center text-xs text-red-400">{error}</p>;
+    return <p className="py-6 text-center text-xs text-danger">{error}</p>;
   }
 
   if (runs.length === 0) {
@@ -380,7 +388,7 @@ export function TalonCard({
   return (
     <div data-testid="talon-row">
       <div
-        className={`flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/50 dark:hover:bg-muted/30 ${TALON_ROW_GRID}`}
+        className={`relative flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/50 dark:hover:bg-muted/30 ${TALON_ROW_GRID}`}
       >
         {/* (a) chevron + enabled state */}
         <div className="flex flex-shrink-0 items-center gap-1.5 pt-0.5 md:pt-0">
@@ -405,7 +413,7 @@ export function TalonCard({
                 aria-label={talon.enabled ? 'enabled' : 'disabled'}
                 className={`h-2 w-2 flex-shrink-0 rounded-full border ${
                   talon.enabled
-                    ? 'border-green-500 bg-green-500'
+                    ? 'border-success bg-success'
                     : 'border-muted-foreground bg-transparent'
                 }`}
               />
@@ -421,14 +429,14 @@ export function TalonCard({
         <div className="min-w-0 flex-1 md:contents">
           {/* (b) name */}
           <div className="flex min-w-0 flex-col">
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2 pr-9 md:pr-0">
               <span className="truncate text-sm font-medium text-foreground" title={nameTitle}>
                 {talon.name}
               </span>
               {failures > 0 && (
                 <Badge
                   variant="outline"
-                  className="flex-shrink-0 border-red-800 px-1.5 text-[10px] text-red-400"
+                  className="flex-shrink-0 border-danger-border px-1.5 text-[10px] text-danger"
                   title={`${failures} consecutive failure${failures === 1 ? '' : 's'}`}
                 >
                   <AlertTriangle className="h-3 w-3" />
@@ -441,7 +449,7 @@ export function TalonCard({
             {disabledReason && (
               <p
                 data-testid="talon-disabled-reason"
-                className="mt-1 truncate text-xs text-amber-600 dark:text-amber-400"
+                className="mt-1 truncate text-xs text-warning"
                 title={`switched off automatically — ${disabledReason}`}
               >
                 switched off — {disabledReason}
@@ -518,8 +526,52 @@ export function TalonCard({
           </div>
         </div>
 
-        {/* (g) actions */}
-        <div className="flex flex-shrink-0 items-center gap-1 md:justify-self-end">
+        {/* (g) actions. below `md` one menu with a label per action, pinned to the
+            corner so the lines under the name keep the full width */}
+        <div className="absolute right-2 top-1.5 md:hidden">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                data-testid="talon-menu"
+                disabled={busyAction !== null}
+                aria-label={`actions for ${talon.name}`}
+                className="text-muted-foreground"
+              >
+                {busyAction !== null ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48 border-border bg-raised">
+              <DropdownMenuItem onSelect={() => void handleRerun()} className="cursor-pointer">
+                <RotateCcw className="h-4 w-4" />
+                run now
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void handleToggleEnabled()} className="cursor-pointer">
+                {talon.enabled ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                {talon.enabled ? 'disable' : 'enable'}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={onEdit} className="cursor-pointer">
+                <Pencil className="h-4 w-4" />
+                edit
+              </DropdownMenuItem>
+              {onSaveAsTemplate && (
+                <DropdownMenuItem onSelect={() => void handleSaveAsTemplate()} className="cursor-pointer">
+                  <BookmarkPlus className="h-4 w-4" />
+                  save as template
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDeleteOpen(true)} className="cursor-pointer">
+                <Trash2 className="h-4 w-4" />
+                delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div className="hidden flex-shrink-0 items-center gap-1 md:flex md:justify-self-end">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -617,7 +669,7 @@ export function TalonCard({
                 onClick={() => setConfirmDeleteOpen(true)}
                 disabled={busyAction !== null}
                 aria-label={`delete ${talon.name}`}
-                className="h-8 w-8 cursor-pointer border-border p-0 text-red-400 hover:bg-red-950 hover:text-red-300"
+                className="h-8 w-8 cursor-pointer border-border p-0 text-danger hover:bg-danger-surface hover:text-danger"
               >
                 {busyAction === 'delete' ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

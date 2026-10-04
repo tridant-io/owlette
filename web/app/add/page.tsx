@@ -197,8 +197,8 @@ export default function AddMachinePage() {
         brandDescription="pairing complete"
       >
         <div className="space-y-6 text-center">
-          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500/20">
-            <CheckCircle2 className="h-10 w-10 text-emerald-500" />
+          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-success/20">
+            <CheckCircle2 className="h-10 w-10 text-success" />
           </div>
           <p className="text-muted-foreground">
             {machineId ? (
@@ -212,7 +212,7 @@ export default function AddMachinePage() {
           </p>
           <Button
             onClick={() => router.push('/dashboard')}
-            className="w-full text-background cursor-pointer"
+            className="w-full cursor-pointer"
           >
             go to dashboard
           </Button>
@@ -273,7 +273,7 @@ export default function AddMachinePage() {
         <Button
           onClick={handleAuthorize}
           disabled={isAuthorizing}
-          className="w-full text-background cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           size="lg"
         >
           {isAuthorizing ? (

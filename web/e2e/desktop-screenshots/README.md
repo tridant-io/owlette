@@ -6,7 +6,7 @@ UI that actually ships.
 
 ```bash
 cd web
-npm run screenshots:desktop     # ~25 s
+npm run screenshots:desktop     # ~50 s, both themes
 ```
 
 ## When to run it
@@ -22,6 +22,27 @@ first (or copy `agent/build/installer_package/app/owlette-desktop.exe` over
 it does not build one.
 
 `git diff --stat web/public/docs-screens` is the review. No diff is a valid result.
+
+## Themes
+
+Every shot is taken twice, once per Playwright project, against the same window. The
+capture opens dark: `snapshotLayout` pins `appearance.theme` to `dark` in the layout file,
+because with nothing stored the window follows the os and a machine in light mode would
+otherwise photograph the dark set light. The `light` project then switches the live window
+the way the app menu does, through the `set_appearance_theme` command, waits for `<html>`
+to carry `light`, and writes `agent-*-light.png` beside each dark file.
+
+- **The binary must know the command.** An app built before light mode has no
+  `set_appearance_theme`, so the `light` project fails at its first step and says so. The
+  `dark` project asks nothing of the binary and still runs. Light desktop shots therefore
+  come from the first release build that ships light mode.
+- **The tray menu is dark only.** It is a native popup, and Windows draws it in the os
+  theme, never the app's, so a light run would photograph the same menu again. The `light`
+  project skips it, and `--check` expects no light pair for `agent-right-click.png`.
+- `scripts/refresh-docs-screens.mjs` records `"themes": ["dark", "light"]` in
+  `captured.json` once a full refresh has taken both. Until then `--check` reports the
+  desktop light shots as pending a release build rather than failing; after it, a missing
+  one fails.
 
 ## Prerequisites
 
@@ -112,7 +133,8 @@ comment in `agent-app.spec.ts`; do not fake it.
 
 ## Determinism
 
-Output is byte-identical across runs — all twelve files, the native tray menu included.
+Output is byte-identical across runs — all twelve dark files, the native tray menu
+included. The light set has not had its first run yet (see Themes).
 Nothing in this UI is time-relative, so unlike the landing-page pipeline there is no clock
 to pin; what has to be controlled is:
 

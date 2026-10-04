@@ -35,23 +35,23 @@ export function RemoveMachineDialog({
 }: RemoveMachineDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border bg-secondary text-white sm:max-w-lg">
+      <DialogContent className="border-border text-foreground sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="text-white flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-red-400" />
+          <DialogTitle className="text-foreground flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-danger" />
             remove machine from site
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            this action will permanently remove <span className="font-mono text-white">{machineName}</span> from this site.
+            this action will permanently remove <span className="font-mono text-foreground">{machineName}</span> from this site.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
           {/* Active Deployment Warning (Blocks Removal) */}
           {hasActiveDeployments && (
-            <Alert className="border-red-800 bg-red-950/30">
-              <AlertTriangle className="h-4 w-4 text-red-400" />
-              <AlertDescription className="text-red-300 text-sm ml-2">
+            <Alert className="border-danger-border bg-danger-surface">
+              <AlertTriangle className="h-4 w-4 text-danger" />
+              <AlertDescription className="text-danger text-sm ml-2">
                 this machine has active deployments in progress. please wait for them to complete before removing the machine.
               </AlertDescription>
             </Alert>
@@ -59,9 +59,9 @@ export function RemoveMachineDialog({
 
           {/* Online Machine Warning */}
           {isOnline && !hasActiveDeployments && (
-            <Alert className="border-yellow-800 bg-yellow-950/30">
-              <AlertTriangle className="h-4 w-4 text-yellow-400" />
-              <AlertDescription className="text-yellow-300 text-sm ml-2">
+            <Alert className="border-warning-border bg-warning-surface">
+              <AlertTriangle className="h-4 w-4 text-warning" />
+              <AlertDescription className="text-warning text-sm ml-2">
                 this machine is currently online. the owlette agent will detect the removal and stop syncing automatically.
               </AlertDescription>
             </Alert>
@@ -98,9 +98,10 @@ export function RemoveMachineDialog({
             cancel
           </Button>
           <Button
+            variant="destructive"
             onClick={onConfirmRemove}
             disabled={hasActiveDeployments || isRemoving}
-            className="bg-red-600 hover:bg-red-700 text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            className="cursor-pointer disabled:cursor-not-allowed"
           >
             {isRemoving ? 'removing...' : 'remove machine'}
           </Button>

@@ -21,7 +21,7 @@ const buttonVariants = cva(
         // it and muddy the sweep. Text/border hover stays ordinary utilities.
         default: "btn-sweep bg-primary text-primary-foreground",
         destructive:
-          "btn-sweep bg-destructive text-white focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+          "btn-sweep bg-destructive text-danger-solid-foreground focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         // Do NOT reinstate `dark:border-input` here: --input (L≈0.25) against a
         // --card surface (L≈0.23) is a 0.02 delta, i.e. no visible edge, and
         // the control read as a stray background. Inheriting the real --border

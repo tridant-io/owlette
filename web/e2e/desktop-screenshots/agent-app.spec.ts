@@ -3,6 +3,7 @@
  * against the release binary at `C:\ProgramData\Owlette\app\owlette-desktop.exe`
  * with a scratch `%PROGRAMDATA%` of fixtures (see `harness.ts` / `fixtures.ts`).
  * Output: `web/public/docs-screens/`, referenced by `web/content/docs/agent/*.mdx`.
+ * Each shot is taken once per project theme; the light one is `agent-*-light.png`.
  *
  * Serial by construction — one window, and each scenario replaces the previous
  * one's seam files underneath it.
@@ -21,6 +22,7 @@ import {
   type Scenario,
 } from './fixtures'
 import { CAPTURE_HOSTNAME, SCRATCH_ROOT, readSession } from './harness'
+import { projectTheme, themedPath, type ShotTheme } from '../screenshots/themes'
 
 const DOCS_DIR = 'public/docs-screens'
 
@@ -43,6 +45,7 @@ const POINTER_PARK = { x: 420, y: 5 }
 
 let browser: Browser
 let page: Page
+let theme: ShotTheme
 
 test.describe.configure({ mode: 'serial' })
 
@@ -59,6 +62,9 @@ test.beforeAll(async () => {
 
   await page.addStyleTag({ content: NO_MOTION })
   fs.mkdirSync(DOCS_DIR, { recursive: true })
+
+  theme = projectTheme()
+  await useAppTheme(theme)
 })
 
 test.afterAll(async () => {
@@ -66,6 +72,32 @@ test.afterAll(async () => {
   // the layout file.
   await browser?.close()
 })
+
+/**
+ * Put the window in this project's theme, the way the app menu does: the host
+ * pins the window theme, the webview's `prefers-color-scheme` follows it, and
+ * next-themes swaps the class, so the class is the proof. The capture opens dark
+ * (`snapshotLayout`), so a dark run asks nothing of the binary; switching needs
+ * `set_appearance_theme`, which an app built before light mode does not have.
+ */
+async function useAppTheme(target: ShotTheme): Promise<void> {
+  const html = page.locator('html')
+  if (await html.evaluate((el, name) => el.classList.contains(name), target)) return
+
+  try {
+    await page.evaluate(async (choice) => {
+      const tauri = (window as unknown as {
+        __TAURI_INTERNALS__: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown> }
+      }).__TAURI_INTERNALS__
+      await tauri.invoke('set_appearance_theme', { theme: choice })
+    }, target)
+  } catch (error) {
+    throw new Error(
+      `could not switch the app to ${target}; an app built before light mode has no set_appearance_theme (${String(error)})`,
+    )
+  }
+  await expect(html).toContainClass(target)
+}
 
 /** Drop focus the previous test left behind — it draws a ring in the next shot. */
 async function clearFocus(): Promise<void> {
@@ -115,7 +147,7 @@ async function settle(): Promise<void> {
 
 async function shoot(name: string, target?: Locator): Promise<void> {
   await settle()
-  await (target ?? page).screenshot({ path: `${DOCS_DIR}/${name}` })
+  await (target ?? page).screenshot({ path: themedPath(`${DOCS_DIR}/${name}`, theme) })
 }
 
 /** The right-hand pane, identified by the control only it contains. */
@@ -336,8 +368,13 @@ test('joining a site', async () => {
  * Last, because it is the only step that takes the pointer. The tray menu is a
  * native Win32 popup that CDP can't reach, so UI Automation captures it; its
  * hostname/version are the fixture's, from the same capture instance.
+ *
+ * Dark only. Windows draws the popup in the os theme, never the window's (tao
+ * allows dark menus for the app once and leaves the choice to the os), so a
+ * light project would photograph the same menu again.
  */
 test('the tray right-click menu', async () => {
+  test.skip(theme === 'light', 'native menu: windows draws it in the os theme, not the app theme')
   await useScenario('paired')
 
   const script = path.resolve('e2e/desktop-screenshots/capture-tray-menu.ps1')

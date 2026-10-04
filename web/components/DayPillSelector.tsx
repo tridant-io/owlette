@@ -31,7 +31,7 @@ interface DayPillSelectorProps {
    * 'pill' = single-letter labels in circles (used in ScheduleEditor blocks)
    */
   variant?: 'rect' | 'pill';
-  /** Tailwind classes applied when a day is active. Defaults to a cyan style. */
+  /** Tailwind classes applied when a day is active. Defaults to the primary (signal) style. */
   activeClassName?: string;
   /** Tailwind classes applied when a day is inactive. Has a sensible default. */
   inactiveClassName?: string;
@@ -121,12 +121,12 @@ export default function DayPillSelector({
 
   const defaultActive =
     variant === 'pill'
-      ? 'bg-cyan-600 text-white'
-      : 'bg-cyan-600 border-cyan-500 text-white';
+      ? 'bg-primary text-primary-foreground'
+      : 'bg-primary border-primary text-primary-foreground';
   const defaultInactive =
     variant === 'pill'
-      ? 'bg-muted text-muted-foreground hover:bg-muted/80'
-      : 'bg-secondary border-border text-muted-foreground hover:text-white hover:border-accent';
+      ? 'bg-card-sunken text-muted-foreground hover:bg-accent'
+      : 'bg-card-sunken border-border text-muted-foreground hover:text-foreground';
 
   const activeCls = activeClassName ?? defaultActive;
   const inactiveCls = inactiveClassName ?? defaultInactive;

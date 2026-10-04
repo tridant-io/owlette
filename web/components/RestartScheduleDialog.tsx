@@ -391,7 +391,7 @@ export default function RestartScheduleDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="bg-card border-border sm:max-w-xl">
+        <DialogContent className="border-border sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>restart schedule — {machineName}</DialogTitle>
             <DialogDescription className="text-muted-foreground text-pretty">
@@ -431,8 +431,8 @@ export default function RestartScheduleDialog({
                         onClick={() => applyPreset(preset)}
                         className={`px-2.5 py-1 rounded-full text-[13px] font-medium transition-colors duration-150 cursor-pointer ${
                           isActive
-                            ? 'bg-cyan-600/20 text-cyan-100 ring-1 ring-cyan-500/40'
-                            : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+                            ? 'bg-accent-cyan/20 text-foreground/90 ring-1 ring-accent-cyan/40'
+                            : 'bg-card-sunken text-muted-foreground hover:bg-accent hover:text-foreground'
                         }`}
                       >
                         {preset.name}
@@ -487,7 +487,7 @@ export default function RestartScheduleDialog({
                                 toast.error('failed to delete preset', { description: message });
                               }
                             }}
-                            className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-600/20 text-red-400 hover:bg-red-600/40 hover:text-red-300 cursor-pointer transition-colors font-medium"
+                            className="flex items-center gap-1 px-2 py-0.5 rounded bg-danger-surface text-danger hover:bg-danger-border dark:bg-danger-solid/20 dark:hover:bg-danger-solid/40 cursor-pointer transition-colors font-medium"
                           >
                             <Trash2 className="h-3 w-3" /> yes, delete
                           </button>
@@ -520,7 +520,7 @@ export default function RestartScheduleDialog({
                                   setUpdatingPreset(false);
                                 }
                               }}
-                              className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="flex items-center gap-1 text-accent-cyan hover:text-accent-cyan-hover cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <Save className={`h-3 w-3 ${updatingPreset ? 'animate-pulse' : ''}`} />
                               {updatingPreset ? 'updating...' : 'update preset'}
@@ -536,7 +536,7 @@ export default function RestartScheduleDialog({
                           <button
                             type="button"
                             onClick={() => setConfirmDeletePresetId(selectedPreset.id)}
-                            className="flex items-center gap-1 hover:text-red-400 cursor-pointer transition-colors"
+                            className="flex items-center gap-1 hover:text-danger cursor-pointer transition-colors"
                           >
                             <Trash2 className="h-3 w-3" /> delete
                           </button>
@@ -597,7 +597,7 @@ export default function RestartScheduleDialog({
                   <button
                     type="button"
                     onClick={handleConfirmReplace}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/40 hover:text-cyan-200 cursor-pointer transition-colors font-medium"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan-hover hover:bg-accent-cyan/20 dark:bg-accent-cyan/20 dark:hover:bg-accent-cyan/40 cursor-pointer transition-colors font-medium"
                   >
                     <Save className="h-3 w-3" /> yes, replace
                   </button>
@@ -678,7 +678,7 @@ export default function RestartScheduleDialog({
             {enabled && entries.length > 0 && (
               <div className="text-sm text-muted-foreground">
                 next scheduled restart:{' '}
-                <span className="text-cyan-400">
+                <span className="text-accent-cyan">
                   {nextRestart === 'none' || !tzShort ? nextRestart : `${nextRestart} ${tzShort}`}
                 </span>
               </div>

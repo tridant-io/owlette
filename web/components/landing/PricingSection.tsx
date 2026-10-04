@@ -66,7 +66,9 @@ function TierCard({ name, price, unit, features, highlighted = false, preludeNot
         <h3 className="text-2xl font-heading font-bold text-foreground mb-4">
           {name}
         </h3>
-        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 mb-1 opacity-35">
+        {/* translucent ink loses more contrast on paper than on navy, so the
+            struck price takes more of it by day to fade by the same amount */}
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 mb-1 opacity-50 dark:opacity-35">
           <span className="text-5xl sm:text-6xl font-heading font-bold text-foreground line-through decoration-2">
             {price}
           </span>

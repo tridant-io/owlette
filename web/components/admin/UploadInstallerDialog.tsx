@@ -145,9 +145,9 @@ export default function UploadInstallerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border bg-secondary text-white sm:max-w-2xl">
+      <DialogContent className="border-border text-foreground sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="text-white">upload new installer version</DialogTitle>
+          <DialogTitle className="text-foreground">upload new installer version</DialogTitle>
           <DialogDescription className="text-muted-foreground">
             Upload a new owlette Agent installer version to Firebase Storage
           </DialogDescription>
@@ -156,20 +156,20 @@ export default function UploadInstallerDialog({
         <div className="space-y-4 py-4">
           {/* File Upload Area */}
           <div className="space-y-2">
-            <p className="text-sm leading-none font-medium text-white">installer file</p>
+            <p className="text-sm leading-none font-medium text-foreground">installer file</p>
             <div
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
               className={`
-                border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
+                border-2 border-dashed rounded-lg p-4 sm:p-8 text-center cursor-pointer transition-colors
                 ${isDragging ? 'border-accent-cyan bg-accent-cyan/10' : 'border-border hover:border-muted-foreground'}
               `}
             >
               {!file ? (
                 <div>
                   <FileUp className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                  <p className="text-white mb-2">drag & drop installer file here</p>
+                  <p className="text-foreground mb-2">drag & drop installer file here</p>
                   <p className="text-sm text-muted-foreground mb-4">or</p>
                   <label htmlFor="file-upload">
                     <AdminButton
@@ -192,11 +192,12 @@ export default function UploadInstallerDialog({
                   <p className="text-xs text-muted-foreground mt-4">Only .exe, .pkg or .deb files accepted</p>
                 </div>
               ) : (
-                <div className="flex items-center justify-between bg-background rounded p-4">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle className="h-5 w-5 text-green-500" />
-                    <div className="text-left">
-                      <p className="text-white font-medium flex items-center gap-2">
+                <div className="flex items-center justify-between gap-2 bg-background rounded p-3 sm:p-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <CheckCircle className="h-5 w-5 shrink-0 text-success" />
+                    <div className="min-w-0 text-left">
+                      {/* a long file name breaks, and the platform badge wraps under it */}
+                      <p className="text-foreground font-medium flex flex-wrap items-center gap-x-2 gap-y-1 wrap-anywhere">
                         {file.name}
                         {platform && <Badge variant="outline">{PLATFORM_LABEL[platform]}</Badge>}
                       </p>
@@ -221,21 +222,21 @@ export default function UploadInstallerDialog({
 
           {/* Version Input */}
           <div className="space-y-2">
-            <Label htmlFor="version" className="text-white">version number</Label>
+            <Label htmlFor="version" className="text-foreground">version number</Label>
             <Input
               id="version"
               placeholder="2.0.0"
               value={version}
               onChange={(e) => setVersion(e.target.value)}
               disabled={uploading}
-              className="border-border bg-background text-white"
+              className="border-border bg-background text-foreground"
             />
             <p className="text-xs text-muted-foreground">Format: X.Y.Z (e.g., 2.0.0, 2.1.5)</p>
           </div>
 
           {/* Release Notes */}
           <div className="space-y-2">
-            <Label htmlFor="release-notes" className="text-white">release notes (optional)</Label>
+            <Label htmlFor="release-notes" className="text-foreground">release notes (optional)</Label>
             <Textarea
               id="release-notes"
               placeholder="What's new in this version?"
@@ -243,7 +244,7 @@ export default function UploadInstallerDialog({
               onChange={(e) => setReleaseNotes(e.target.value)}
               disabled={uploading}
               rows={4}
-              className="border-border bg-background text-white resize-none"
+              className="border-border bg-background text-foreground resize-none"
             />
           </div>
 
@@ -256,7 +257,7 @@ export default function UploadInstallerDialog({
               disabled={uploading}
               className="cursor-pointer"
             />
-            <Label htmlFor="set-latest" className="text-white cursor-pointer">
+            <Label htmlFor="set-latest" className="text-foreground cursor-pointer">
               set as latest (all platforms)
             </Label>
           </div>
@@ -266,9 +267,9 @@ export default function UploadInstallerDialog({
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">uploading...</span>
-                <span className="text-white font-medium">{uploadProgress}%</span>
+                <span className="text-foreground font-medium">{uploadProgress}%</span>
               </div>
-              <div className="w-full bg-background rounded-full h-2">
+              <div className="w-full bg-secondary dark:bg-background rounded-full h-2">
                 <div
                   className="bg-accent-cyan h-2 rounded-full transition-all duration-300"
                   style={{ width: `${uploadProgress}%` }}
@@ -290,7 +291,7 @@ export default function UploadInstallerDialog({
           <Button
             onClick={handleUpload}
             disabled={uploading || !file || !version}
-            className="text-gray-900 cursor-pointer"
+            className="cursor-pointer"
           >
             {uploading ? (
               <>

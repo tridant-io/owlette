@@ -43,7 +43,7 @@ export default function ApplyScheduleToMachinesDialog({
   // (which violates react-hooks/set-state-in-effect).
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-card border-border sm:max-w-md">
+      <DialogContent className="border-border sm:max-w-md">
         {open && (
           <ApplyScheduleToMachinesDialogBody
             onOpenChange={onOpenChange}
@@ -174,7 +174,7 @@ function ApplyScheduleToMachinesDialogBody({
                       <span className="text-[10px] text-muted-foreground">(current)</span>
                     )}
                   </span>
-                  <Badge className={`text-xs ${machine.online ? 'bg-green-600' : 'bg-red-600'}`}>
+                  <Badge className={`text-xs ${machine.online ? 'bg-success-solid text-success-solid-foreground' : 'bg-danger-solid text-danger-solid-foreground'}`}>
                     {machine.online ? 'online' : 'offline'}
                   </Badge>
                 </label>
@@ -198,7 +198,6 @@ function ApplyScheduleToMachinesDialogBody({
           type="button"
           onClick={handleApply}
           disabled={applying || otherSelectedCount === 0}
-          className="bg-cyan-600 hover:bg-cyan-700"
         >
           {applying ? 'applying...' : `apply to ${otherSelectedCount}`}
         </Button>

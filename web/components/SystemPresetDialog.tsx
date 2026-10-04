@@ -216,7 +216,7 @@ export default function SystemPresetDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border bg-secondary text-white sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="border-border text-foreground sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEditMode ? 'edit template' : 'create template'}</DialogTitle>
           <DialogDescription className="text-muted-foreground">
@@ -229,12 +229,13 @@ export default function SystemPresetDialog({
         {/* Auto-fill TouchDesigner - Only show when creating new preset */}
         {!isEditMode && (
           <div className="pb-4 border-b border-border">
+            {/* the deeper cyan by day: the base cyan on its own tint over --secondary misses aa */}
             <Button
               type="button"
               variant="outline"
               onClick={handleAutoFillTd}
               disabled={fetchingTd}
-              className="w-full border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20 hover:text-accent-cyan cursor-pointer"
+              className="w-full border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan-hover dark:text-accent-cyan hover:bg-accent-cyan/20 hover:text-accent-cyan-hover cursor-pointer"
             >
               {fetchingTd ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -252,7 +253,7 @@ export default function SystemPresetDialog({
         <div className="space-y-4 py-4">
           {/* Name */}
           <div className="space-y-2">
-            <Label htmlFor="name" className="text-white">
+            <Label htmlFor="name" className="text-foreground">
               name *
             </Label>
             <Input
@@ -260,14 +261,14 @@ export default function SystemPresetDialog({
               placeholder="e.g., TouchDesigner 2025.31550"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="border-border bg-background text-white"
+              className="border-border bg-background text-foreground"
             />
             <p className="text-xs text-muted-foreground">display name shown in UI</p>
           </div>
 
           {/* Software Name */}
           <div className="space-y-2">
-            <Label htmlFor="softwareName" className="text-white">
+            <Label htmlFor="softwareName" className="text-foreground">
               software name *
             </Label>
             <Input
@@ -275,26 +276,26 @@ export default function SystemPresetDialog({
               placeholder="e.g., TouchDesigner"
               value={softwareName}
               onChange={(e) => setSoftwareName(e.target.value)}
-              className="border-border bg-background text-white"
+              className="border-border bg-background text-foreground"
             />
             <p className="text-xs text-muted-foreground">short identifier for grouping</p>
           </div>
 
           {/* Category */}
           <div className="space-y-2">
-            <Label htmlFor="category" className="text-white">
+            <Label htmlFor="category" className="text-foreground">
               category *
             </Label>
             <Select value={category} onValueChange={setCategory}>
-              <SelectTrigger className="border-border bg-background text-white">
+              <SelectTrigger className="border-border bg-background text-foreground">
                 <SelectValue placeholder="select a category..." />
               </SelectTrigger>
-              <SelectContent className="border-border bg-secondary">
+              <SelectContent className="border-border dark:bg-secondary">
                 {predefinedCategories.map((cat) => (
                   <SelectItem
                     key={cat}
                     value={cat}
-                    className="text-white focus:bg-accent focus:text-white"
+                    className="text-foreground focus:bg-accent focus:text-foreground"
                   >
                     {cat}
                   </SelectItem>
@@ -306,7 +307,7 @@ export default function SystemPresetDialog({
 
           {/* Icon (optional) */}
           <div className="space-y-2">
-            <Label htmlFor="icon" className="text-white">
+            <Label htmlFor="icon" className="text-foreground">
               icon (emoji)
             </Label>
             <Input
@@ -315,14 +316,14 @@ export default function SystemPresetDialog({
               value={icon}
               onChange={(e) => setIcon(e.target.value)}
               maxLength={2}
-              className="border-border bg-background text-white"
+              className="border-border bg-background text-foreground"
             />
             <p className="text-xs text-muted-foreground">optional emoji icon (one character)</p>
           </div>
 
           {/* Description (optional) */}
           <div className="space-y-2">
-            <Label htmlFor="description" className="text-white">
+            <Label htmlFor="description" className="text-foreground">
               description
             </Label>
             <Textarea
@@ -331,13 +332,13 @@ export default function SystemPresetDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
-              className="border-border bg-background text-white resize-none"
+              className="border-border bg-background text-foreground resize-none"
             />
           </div>
 
           {/* Installer Name */}
           <div className="space-y-2">
-            <Label htmlFor="installerName" className="text-white">
+            <Label htmlFor="installerName" className="text-foreground">
               installer filename *
             </Label>
             <Input
@@ -345,14 +346,14 @@ export default function SystemPresetDialog({
               placeholder="e.g., TouchDesigner.2025.31550.exe"
               value={installerName}
               onChange={(e) => setInstallerName(e.target.value)}
-              className="border-border bg-background text-white font-mono text-sm"
+              className="border-border bg-background text-foreground font-mono text-sm"
             />
             <p className="text-xs text-muted-foreground">name of the installer file</p>
           </div>
 
           {/* Installer URL */}
           <div className="space-y-2">
-            <Label htmlFor="installerUrl" className="text-white">
+            <Label htmlFor="installerUrl" className="text-foreground">
               installer URL *
             </Label>
             <Input
@@ -360,7 +361,7 @@ export default function SystemPresetDialog({
               placeholder="https://example.com/installer.exe"
               value={installerUrl}
               onChange={(e) => setInstallerUrl(e.target.value)}
-              className="border-border bg-background text-white font-mono text-sm"
+              className="border-border bg-background text-foreground font-mono text-sm"
             />
             <p className="text-xs text-muted-foreground">
               direct download link for the installer
@@ -371,7 +372,7 @@ export default function SystemPresetDialog({
 
           {/* Silent Flags */}
           <div className="space-y-2">
-            <Label htmlFor="silentFlags" className="text-white">
+            <Label htmlFor="silentFlags" className="text-foreground">
               silent install flags *
             </Label>
             <Textarea
@@ -381,7 +382,7 @@ export default function SystemPresetDialog({
               // Flags are one command line: wrap visually, but collapse typed/pasted newlines
               // so the agent never gets a broken multi-line invocation.
               onChange={(e) => setSilentFlags(e.target.value.replace(/\s*[\r\n]+\s*/g, ' '))}
-              className="border-border bg-background text-white font-mono text-sm"
+              className="border-border bg-background text-foreground font-mono text-sm"
             />
             <p className="text-xs text-muted-foreground">
               Command-line flags for silent installation. Include custom directory here (e.g., /DIR=&quot;C:\Custom\Path&quot;)
@@ -390,7 +391,7 @@ export default function SystemPresetDialog({
 
           {/* Verify Path (optional) */}
           <div className="space-y-2">
-            <Label htmlFor="verifyPath" className="text-white">
+            <Label htmlFor="verifyPath" className="text-foreground">
               verification path
             </Label>
             <Input
@@ -398,7 +399,7 @@ export default function SystemPresetDialog({
               placeholder='C:\\Program Files\\Software\\app.exe'
               value={verifyPath}
               onChange={(e) => setVerifyPath(e.target.value)}
-              className="border-border bg-background text-white font-mono text-sm"
+              className="border-border bg-background text-foreground font-mono text-sm"
             />
             <p className="text-xs text-muted-foreground">optional: file path to verify installation success</p>
           </div>
@@ -407,7 +408,7 @@ export default function SystemPresetDialog({
           <div className="grid grid-cols-2 gap-4">
             {/* Timeout */}
             <div className="space-y-2">
-              <Label htmlFor="timeout" className="text-white">
+              <Label htmlFor="timeout" className="text-foreground">
                 timeout (seconds)
               </Label>
               <Input
@@ -417,14 +418,14 @@ export default function SystemPresetDialog({
                 max="3600"
                 value={timeoutSeconds}
                 onChange={(e) => setTimeoutSeconds(parseInt(e.target.value) || 600)}
-                className="border-border bg-background text-white"
+                className="border-border bg-background text-foreground"
               />
               <p className="text-xs text-muted-foreground">Max install time (default: 600)</p>
             </div>
 
             {/* Order */}
             <div className="space-y-2">
-              <Label htmlFor="order" className="text-white">
+              <Label htmlFor="order" className="text-foreground">
                 display order
               </Label>
               <Input
@@ -433,7 +434,7 @@ export default function SystemPresetDialog({
                 min="1"
                 value={order}
                 onChange={(e) => setOrder(parseInt(e.target.value) || 100)}
-                className="border-border bg-background text-white"
+                className="border-border bg-background text-foreground"
               />
               <p className="text-xs text-muted-foreground">sort priority (lower = first)</p>
             </div>
@@ -452,7 +453,7 @@ export default function SystemPresetDialog({
           <Button
             onClick={handleSave}
             disabled={saving || checksum.checksumStatus === 'computing'}
-            className="text-gray-900 cursor-pointer"
+            className="cursor-pointer"
           >
             {saving ? (
               <>

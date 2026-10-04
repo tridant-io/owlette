@@ -211,7 +211,7 @@ export function MachineContextMenu({
                 size="sm"
                 data-testid="machine-context-menu-trigger"
                 aria-label={`machine options for ${machineName}`}
-                className="relative h-8 w-8 pointer-coarse:h-10 pointer-coarse:w-10 p-0 bg-card border border-border text-muted-foreground hover:text-white"
+                className="relative h-8 w-8 pointer-coarse:h-10 pointer-coarse:w-10 p-0 bg-card border border-border text-muted-foreground hover:text-foreground"
                 onClick={(e) => {
                   // Prevent row click event from firing
                   e.stopPropagation();
@@ -236,7 +236,7 @@ export function MachineContextMenu({
             <p>machine options</p>
           </TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" className="border-border bg-secondary w-48">
+        <DropdownMenuContent align="end" className="border-border bg-raised w-52">
           {isOnline && isSiteAdmin && (
             <>
               {rebooting ? (
@@ -247,7 +247,7 @@ export function MachineContextMenu({
                   }}
                   disabled={isSendingCommand}
                   data-testid="machine-context-menu-cancel-reboot"
-                  className="text-red-400 focus:bg-red-950/30 focus:text-red-300 cursor-pointer"
+                  className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
                 >
                   <XCircle className="mr-2 h-4 w-4" />
                   cancel restart
@@ -260,25 +260,28 @@ export function MachineContextMenu({
                   }}
                   disabled={isSendingCommand}
                   data-testid="machine-context-menu-cancel-shutdown"
-                  className="text-red-400 focus:bg-red-950/30 focus:text-red-300 cursor-pointer"
+                  className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
                 >
                   <XCircle className="mr-2 h-4 w-4" />
                   cancel shutdown
                 </DropdownMenuItem>
               ) : (
                 <>
-                  <div className="flex items-center justify-between px-2 py-1.5 text-sm text-amber-400 rounded-sm hover:bg-amber-950/30 hover:text-amber-300">
+                  {/* a split row: restart now, or schedule restarts. each half lights
+                      on its own, with a hairline between, so it reads as two buttons */}
+                  <div className="flex items-stretch gap-1">
                     <DropdownMenuItem
                       onClick={(e) => {
                         e.stopPropagation();
                         setShowRestartDialog(true);
                       }}
                       data-testid="machine-context-menu-reboot"
-                      className="flex-1 p-0 text-amber-400 focus:bg-transparent focus:text-amber-300 cursor-pointer"
+                      className="flex-1 whitespace-nowrap text-warning focus:bg-warning-surface focus:text-warning cursor-pointer"
                     >
                       <RotateCcw className="mr-2 h-4 w-4" />
                       restart machine
                     </DropdownMenuItem>
+                    <div aria-hidden className="my-1.5 w-px bg-border" />
                     <Tooltip>
                       <TooltipTrigger asChild>
                         {/* A menu item, not a plain button: menu focus moves by
@@ -291,9 +294,9 @@ export function MachineContextMenu({
                           }}
                           aria-label="schedule restarts"
                           data-testid="machine-context-menu-schedule-restarts-gear"
-                          className="ml-2 p-0.5 rounded hover:bg-amber-950/50 focus:bg-amber-950/50 transition-colors cursor-pointer"
+                          className="w-8 justify-center px-0 text-muted-foreground focus:bg-warning-surface focus:text-warning cursor-pointer"
                         >
-                          <Settings2 className="h-3.5 w-3.5 text-muted-foreground hover:text-amber-300 transition-colors" />
+                          <Settings2 className="h-3.5 w-3.5 text-current" />
                         </DropdownMenuItem>
                       </TooltipTrigger>
                       <TooltipContent>
@@ -307,14 +310,14 @@ export function MachineContextMenu({
                       setShowShutdownDialog(true);
                     }}
                     data-testid="machine-context-menu-shutdown"
-                    className="text-orange-400 focus:bg-orange-950/30 focus:text-orange-300 cursor-pointer"
+                    className="text-accent-warm-hover focus:bg-accent-warm/10 focus:text-accent-warm-hover cursor-pointer"
                   >
                     <Power className="mr-2 h-4 w-4" />
                     shutdown machine
                   </DropdownMenuItem>
                 </>
               )}
-              <DropdownMenuSeparator className="bg-accent" />
+              <DropdownMenuSeparator className="bg-border" />
             </>
           )}
           {!isOnline && isSiteAdmin && (
@@ -329,12 +332,12 @@ export function MachineContextMenu({
                   setShowRestartScheduleDialog(true);
                 }}
                 data-testid="machine-context-menu-schedule-restarts"
-                className="text-amber-400 focus:bg-amber-950/30 focus:text-amber-300 cursor-pointer"
+                className="text-warning focus:bg-warning-surface focus:text-warning cursor-pointer"
               >
                 <Settings2 className="mr-2 h-4 w-4" />
                 schedule restarts
               </DropdownMenuItem>
-              <DropdownMenuSeparator className="bg-accent" />
+              <DropdownMenuSeparator className="bg-border" />
             </>
           )}
           {isOnline && (
@@ -369,7 +372,7 @@ export function MachineContextMenu({
                     onLiveView?.();
                   }}
                   data-testid="machine-context-menu-live-view"
-                  className="text-blue-400 focus:bg-blue-950/30 focus:text-blue-300 cursor-pointer"
+                  className="text-info focus:bg-info-surface focus:text-info cursor-pointer"
                 >
                   <Eye className="mr-2 h-4 w-4" />
                   live view
@@ -380,7 +383,7 @@ export function MachineContextMenu({
                   e.stopPropagation();
                   onScreenshot?.();
                 }}
-                className="text-sky-400 focus:bg-sky-950/30 focus:text-sky-300 cursor-pointer"
+                className="text-info focus:bg-info-surface focus:text-info cursor-pointer"
               >
                 <Camera className="mr-2 h-4 w-4" />
                 screenshot
@@ -394,35 +397,35 @@ export function MachineContextMenu({
                 onViewDisplays();
               }}
               data-testid="machine-context-menu-view-displays"
-              className="text-indigo-400 focus:bg-indigo-950/30 focus:text-indigo-300 cursor-pointer"
+              className="text-[var(--series-display)] focus:bg-info-surface focus:text-[var(--series-display)] cursor-pointer"
             >
               <Monitor className="mr-2 h-4 w-4" />
               view displays
             </DropdownMenuItem>
           )}
           {(isOnline || onViewDisplays) && (
-            <DropdownMenuSeparator className="bg-accent" />
+            <DropdownMenuSeparator className="bg-border" />
           )}
           <DropdownMenuItem
             onClick={(e) => {
               e.stopPropagation();
               handleToggleMute();
             }}
-            className="text-muted-foreground focus:bg-accent focus:text-white cursor-pointer"
+            className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
           >
             {isMuted ? <Bell className="mr-2 h-4 w-4" /> : <BellOff className="mr-2 h-4 w-4" />}
             {isMuted ? 'unmute alerts' : 'mute alerts'}
           </DropdownMenuItem>
           {isSiteAdmin && (
             <>
-              <DropdownMenuSeparator className="bg-accent" />
+              <DropdownMenuSeparator className="bg-border" />
               <DropdownMenuItem
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowRevokeDialog(true);
                 }}
                 data-testid="machine-context-menu-revoke-token"
-                className="text-fuchsia-400 focus:bg-fuchsia-950/30 focus:text-fuchsia-300 cursor-pointer"
+                className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
               >
                 <KeyRound className="mr-2 h-4 w-4" />
                 revoke token
@@ -436,7 +439,7 @@ export function MachineContextMenu({
                   onRemoveMachine();
                 }}
                 data-testid="machine-context-menu-remove"
-                className="text-red-400 focus:bg-red-950/30 focus:text-red-300 cursor-pointer"
+                className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
               >
                 <Trash2 className="mr-2 h-4 w-4" />
                 remove machine
@@ -448,7 +451,7 @@ export function MachineContextMenu({
 
       {/* Revoke Token Dialog */}
       <Dialog open={showRevokeDialog} onOpenChange={setShowRevokeDialog}>
-        <DialogContent className="bg-card border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
             <DialogTitle>revoke token for {machineName}?</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -458,7 +461,7 @@ export function MachineContextMenu({
               <br />
               • <strong className="text-foreground">revoke current token</strong> — removes only the single most-recently-used token for this hostname.
               <br />
-              • <strong className="text-red-400">revoke all for hostname</strong> — removes every token, disconnecting any other machine that shares this hostname too.
+              • <strong className="text-danger">revoke all for hostname</strong> — removes every token, disconnecting any other machine that shares this hostname too.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -473,14 +476,14 @@ export function MachineContextMenu({
             <Button
               onClick={() => handleRevokeToken('all')}
               disabled={isRevoking}
-              className="bg-red-600 hover:bg-red-700"
+              variant="destructive"
             >
               {isRevoking && revokingScope === 'all' ? 'revoking...' : 'revoke all for hostname'}
             </Button>
             <Button
               onClick={() => handleRevokeToken('latest')}
               disabled={isRevoking}
-              className="bg-amber-600 hover:bg-amber-700"
+              className="bg-warning-solid text-warning-solid-foreground"
             >
               {isRevoking && revokingScope === 'latest' ? 'revoking...' : 'revoke current token'}
             </Button>
@@ -490,7 +493,7 @@ export function MachineContextMenu({
 
       {/* Restart Confirmation Dialog */}
       <Dialog open={showRestartDialog} onOpenChange={setShowRestartDialog}>
-        <DialogContent className="bg-card border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
             <DialogTitle>restart {machineName}?</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -509,7 +512,7 @@ export function MachineContextMenu({
             <Button
               onClick={handleRestart}
               disabled={isSendingCommand}
-              className="bg-red-600 hover:bg-red-700"
+              variant="destructive"
             >
               {isSendingCommand ? 'sending...' : 'restart'}
             </Button>
@@ -519,7 +522,7 @@ export function MachineContextMenu({
 
       {/* Shutdown Confirmation Dialog */}
       <Dialog open={showShutdownDialog} onOpenChange={setShowShutdownDialog}>
-        <DialogContent className="bg-card border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
             <DialogTitle>shutdown {machineName}?</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -538,7 +541,7 @@ export function MachineContextMenu({
             <Button
               onClick={handleShutdown}
               disabled={isSendingCommand}
-              className="bg-red-600 hover:bg-red-700"
+              variant="destructive"
             >
               {isSendingCommand ? 'sending...' : 'shutdown'}
             </Button>

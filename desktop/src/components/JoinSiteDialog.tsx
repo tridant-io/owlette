@@ -224,7 +224,7 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
             {environment && (
               <span
                 data-testid="join-environment"
-                className="rounded border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 font-mono text-[10px] font-medium whitespace-nowrap text-amber-400"
+                className="rounded border border-warning-border/75 bg-warning-surface px-1.5 py-0.5 font-mono text-[10px] font-medium whitespace-nowrap text-warning"
               >
                 {environment}
               </span>
@@ -260,7 +260,7 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
             <p className="font-mono text-xs text-muted-foreground">{error}</p>
           </InlineNotice>
         ) : phase === 'joined' ? (
-          <p className="text-sm text-green-500" data-testid="join-status">
+          <p className="text-sm text-success" data-testid="join-status">
             {status}
           </p>
         ) : (
@@ -270,12 +270,12 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
               disabled={!phrase}
               onClick={handleCopy}
               data-testid="join-phrase"
-              className="btn-sweep flex items-center justify-center gap-2 rounded-md border bg-secondary px-4 py-4 font-mono text-xl font-semibold tracking-tight text-primary disabled:opacity-60"
+              className="btn-sweep flex items-center justify-center gap-2 rounded-md border bg-card-sunken px-4 py-4 font-mono text-xl font-semibold tracking-tight text-primary disabled:opacity-60"
             >
               {phrase?.pairPhrase ?? '…'}
               {phrase &&
                 (copied ? (
-                  <Check className="size-4 text-green-500" />
+                  <Check className="size-4 text-success" />
                 ) : (
                   <Copy className="size-4 text-muted-foreground" />
                 ))}
@@ -283,7 +283,7 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
             <p className="text-center text-xs text-muted-foreground">
               {phrase ? (copied ? 'copied to clipboard' : 'click to copy') : 'asking owlette…'}
             </p>
-            <p className="text-center text-sm text-amber-400" data-testid="join-status">
+            <p className="text-center text-sm text-warning" data-testid="join-status">
               {status}
             </p>
           </div>

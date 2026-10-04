@@ -164,7 +164,7 @@ export function PasskeyManager({
               {passkeys.map((pk) => (
                 <div
                   key={pk.credentialId}
-                  className="flex items-center justify-between rounded-md border border-border bg-input/50 px-3 py-2"
+                  className="flex items-center justify-between rounded-md border border-border bg-background dark:bg-input/50 px-3 py-2"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     {getDeviceIcon(pk.deviceType)}
@@ -175,7 +175,7 @@ export function PasskeyManager({
                             value={editName}
                             onChange={(e) => setEditName(e.target.value)}
                             aria-label="passkey name"
-                            className="h-7 w-40 text-base md:text-sm bg-input border-border text-foreground"
+                            className="h-7 w-40 text-base md:text-sm bg-background border-border text-foreground"
                             maxLength={50}
                             autoFocus
                             onKeyDown={(e) => {
@@ -189,7 +189,7 @@ export function PasskeyManager({
                             className="h-7 w-7 cursor-pointer"
                             onClick={() => handleRename(pk.credentialId)}
                           >
-                            <Check className="h-3.5 w-3.5 text-green-400" />
+                            <Check className="h-3.5 w-3.5 text-success" />
                           </IconButton>
                           <IconButton
                             label="cancel rename"
@@ -233,7 +233,7 @@ export function PasskeyManager({
                         className="h-7 w-7 cursor-pointer"
                         onClick={() => setDeleteTarget({ id: pk.credentialId, name: pk.friendlyName })}
                       >
-                        <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-red-400" />
+                        <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
                       </IconButton>
                     </div>
                   )}
@@ -247,7 +247,7 @@ export function PasskeyManager({
                     onChange={(e) => setNewPasskeyName(e.target.value)}
                     placeholder="passkey name (e.g. MacBook, iPhone)"
                     aria-label="new passkey name"
-                    className="h-9 text-base md:text-sm bg-input border-border text-foreground placeholder:text-muted-foreground"
+                    className="h-9 text-base md:text-sm bg-background border-border text-foreground placeholder:text-muted-foreground"
                     maxLength={50}
                     autoFocus
                     disabled={registering}
@@ -271,7 +271,7 @@ export function PasskeyManager({
               <Button
                 variant="outline"
                 size="sm"
-                className="w-full bg-input border-border text-foreground cursor-pointer"
+                className="w-full border-border text-foreground cursor-pointer"
                 onClick={handleRegister}
                 disabled={registering}
               >
@@ -295,19 +295,19 @@ export function PasskeyManager({
       </Card>
 
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <DialogContent className="border-border bg-secondary text-white sm:max-w-sm">
+        <DialogContent className="border-border text-foreground sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle className="text-white">remove passkey</DialogTitle>
+            <DialogTitle className="text-foreground">remove passkey</DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              are you sure you want to remove <span className="font-mono text-white">{deleteTarget?.name}</span>?
+              are you sure you want to remove <span className="font-mono text-foreground">{deleteTarget?.name}</span>?
               you won&apos;t be able to sign in with this passkey anymore.
             </DialogDescription>
           </DialogHeader>
           {/* Warn, never block — removal is always allowed. */}
           {isLastFactor && passkeys.length === 1 && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-              <p className="text-xs text-amber-200">
+            <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <p className="text-xs text-warning">
                 this is your last second factor — you&apos;ll be asked to set one up again
                 next time you sign in.
               </p>

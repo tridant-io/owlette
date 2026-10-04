@@ -364,7 +364,7 @@ function DisplayMonitorTableImpl({
                 <td
                   className={cn(
                     'py-1.5 px-1 tabular-nums',
-                    resolutionDrifted ? 'text-amber-400' : 'text-foreground',
+                    resolutionDrifted ? 'text-warning' : 'text-foreground',
                   )}
                   onClick={canEdit ? undefined : rowClick}
                   onDoubleClick={canEdit ? undefined : rowDblClick}
@@ -501,7 +501,7 @@ function DisplayMonitorTableImpl({
                 <td
                   className={cn(
                     'py-1.5 px-1 tabular-nums',
-                    scaleDrifted ? 'text-amber-400' : 'text-foreground',
+                    scaleDrifted ? 'text-warning' : 'text-foreground',
                   )}
                 >
                   {canEdit ? (
@@ -529,7 +529,7 @@ function DisplayMonitorTableImpl({
                 <td
                   className={cn(
                     'py-1.5 px-1',
-                    orientationDrifted ? 'text-amber-400' : 'text-muted-foreground',
+                    orientationDrifted ? 'text-warning' : 'text-muted-foreground',
                   )}
                 >
                   {canEdit ? (
@@ -586,11 +586,11 @@ function DisplayMonitorTableImpl({
                           : undefined
                       }
                     >
-                      <span className={xDrifted ? 'text-amber-400' : undefined}>
+                      <span className={xDrifted ? 'text-warning' : undefined}>
                         {monitor.position.x}
                       </span>
                       ,{' '}
-                      <span className={yDrifted ? 'text-amber-400' : undefined}>
+                      <span className={yDrifted ? 'text-warning' : undefined}>
                         {monitor.position.y}
                       </span>
                     </span>
