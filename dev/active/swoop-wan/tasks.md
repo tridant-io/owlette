@@ -1,5 +1,5 @@
 # swoop across the internet — Tasks
-**Progress**: 1/9 complete
+**Progress**: 4/9 complete
 
 ## Wave 1: STUN on both ends
 
@@ -10,7 +10,7 @@
     assert `iceServers` in the session response and in the bundle, configured and not.
   - Done when: jest for both routes and `turn.server`, eslint and tsc clean.
 
-- [ ] **Task 1.2: The host gathers a server-reflexive candidate** `[agent]`
+- [x] **Task 1.2: The host gathers a server-reflexive candidate** `[agent]`
   - Files: `agent/swoop/src/transport/stun.rs` (new), `agent/swoop/src/transport/mod.rs`,
     `agent/swoop/src/transport/rtc.rs`, `agent/swoop/src/session/mod.rs`.
   - Do: Resolve the bundle's first `stun:` URL off the session thread; `PeerConfig` gains `stun_server`. After bind,
@@ -21,14 +21,14 @@
     decode (RFC 5769 vectors), a reply from the wrong source or transaction ignored, retransmit and give-up, and a
     loopback fake STUN server that yields a srflx candidate on a real peer.
 
-- [ ] **Task 1.3: Measured on real networks** `[agent]`
+- [x] **Task 1.3: Measured on real networks** `[agent]`
   - Do: A `probe` key or an ignored live test that binds like a peer and asks `stun.cloudflare.com`; run it on B4A and
     the Mac; the mapped IPv4 must equal the network's public address (compared with an HTTP echo service).
   - Done when: the readings are in `dev/active/swoop-wan/proof.md`.
 
 ## Wave 2: the viewer, and the TURN client
 
-- [ ] **Task 2.1: The viewer says when no path exists** `[agent]`
+- [x] **Task 2.1: The viewer says when no path exists** `[agent]`
   - Files: `web/lib/swoop/peer.ts`, `web/hooks/useSwoopSession.ts`, `web/components/swoop/SwoopStage.tsx`, tests.
   - Do: No selected pair 20 s after the first answer (and across restarts) surfaces a `no_path` state; the stage says
     "can't reach this machine from your network", plus "no relay is set up for this site" when the session had no
@@ -79,3 +79,8 @@
   the groundwork and execute it overnight.
 - 1.1: the bundle route falls back to the shared STUN_ONLY; 119 jest tests across four suites, the new bundle test
   failed with `[]` restored; eslint and tsc clean.
+- 1.2: transport/stun.rs, a sans-IO RFC 8489 binding from each peer's own socket, the reply taken off the socket before
+  str0m, a srflx candidate trickled when the mapping differs; clippy clean (default and audio-opus), lib tests 408
+  and 417 pass. 1.3: live from A4D, the srflx address equals the office's public IP (proof.md).
+- 2.1: no media path 20 s after the first answer says "can't reach this machine from your network", with or without
+  a relay; 888 jest tests in the swoop suites pass, eslint and tsc clean.

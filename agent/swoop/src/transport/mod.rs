@@ -15,6 +15,7 @@ pub mod governor;
 pub mod ice_policy;
 pub mod pacer;
 pub mod rtc;
+pub mod stun;
 #[cfg(feature = "turn")]
 pub mod turn;
 

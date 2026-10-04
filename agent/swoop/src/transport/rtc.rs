@@ -53,8 +53,10 @@
 //!
 //! One socket bound to one explicit address, so `Receive::destination` is
 //! exactly the candidate str0m advertised and no `IP_PKTINFO` is needed.
-//! That means one host candidate: multi-interface gathering, server-reflexive
-//! candidates and the relay path are Task 7.4/7.5's, through
+//! That means one host candidate, plus the server-reflexive address a STUN
+//! server sees that same socket at ([`crate::transport::stun`], whose replies
+//! are taken off the socket before str0m sees them). Multi-interface gathering
+//! and the relay path are Task 7.4/7.5's, through
 //! [`add_local_candidate`](RtcPeer::add_local_candidate), which trickles
 //! whatever it is given.
 //!
@@ -108,6 +110,7 @@ use crate::encode::{Codec, EncodedFrame};
 use crate::signal::messages::channel::Channel;
 use crate::transport::ice_policy::{self, IceEvent};
 use crate::transport::pacer::{Admission, PacerStats, SendPacer};
+use crate::transport::stun::{self, Binding};
 use crate::transport::VideoSink;
 
 /// Chrome's low-latency render path needs `min = 0` and `max ≤ 500 ms`; the
@@ -185,6 +188,9 @@ pub struct PeerConfig {
     /// step-response experiments spike 0.2 §7 did not run can be run without
     /// editing this file.
     pub enable_bwe: bool,
+    /// The IPv4 STUN server this peer asks for its server-reflexive address.
+    /// `None` gathers the host candidate alone.
+    pub stun_server: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,6 +295,23 @@ fn send_datagram(
     }
 }
 
+/// Count one received datagram that was thrown away, and report the first and
+/// every hundredth with the running count.
+fn drop_datagram(
+    stats: &mut PeerStats,
+    reason: impl std::fmt::Display,
+    events: &mut Vec<PeerEvent>,
+) {
+    stats.datagrams_dropped += 1;
+    let dropped = stats.datagrams_dropped;
+    if dropped == 1 || dropped.is_multiple_of(100) {
+        events.push(PeerEvent::DatagramDropped {
+            dropped,
+            reason: reason.to_string(),
+        });
+    }
+}
+
 /// One peer's counters, which is what a governor reads.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PeerStats {
@@ -299,9 +322,10 @@ pub struct PeerStats {
     /// answering WSAENETUNREACH) is a fact about that pair, not the peer, and
     /// ICE drops the pair itself when nothing answers on it.
     pub datagrams_send_failed: u64,
-    /// Datagrams received and thrown away: one that does not demultiplex, or a
-    /// STUN message that does not parse. A stray packet is a fact about that
-    /// packet, not the peer.
+    /// Datagrams received and thrown away: one that does not demultiplex, a
+    /// STUN message that does not parse, or one from the STUN server that is
+    /// not an answer to this peer's binding. A stray packet is a fact about
+    /// that packet, not the peer.
     pub datagrams_dropped: u64,
     /// Access units handed to str0m's packetizer.
     pub frames_written: u64,
@@ -474,6 +498,10 @@ pub struct RtcPeer {
     remote_relays: Vec<SocketAddr>,
     /// Where str0m last asked for a packet to go. See [`RtcPeer::on_send_addr`].
     sending_to: Option<SocketAddr>,
+    /// The STUN binding that learns this socket's server-reflexive address.
+    /// It stays after it is answered, so a retransmit's second answer is
+    /// still recognised and kept away from str0m.
+    stun: Option<Binding>,
     /// Emitted on the next poll: candidates are gathered while answering, and
     /// the caller's event vector only exists inside `poll`.
     pending_events: VecDeque<PeerEvent>,
@@ -541,6 +569,19 @@ impl RtcPeer {
             rtc.bwe().set_desired_bitrate(desired);
         }
 
+        // started at bind and not on the first offer: the mapping has to be
+        // this socket's, and nothing in it depends on the offer. the session
+        // answers in the turn it binds, so the request still leaves on the
+        // first poll after the answer and the candidate trickles. a loopback
+        // socket cannot reach a server off the box, so it does not try.
+        let stun = cfg
+            .stun_server
+            .filter(|server| {
+                server.is_ipv4() == local_addr.is_ipv4()
+                    && (server.ip().is_loopback() || !local_addr.ip().is_loopback())
+            })
+            .map(|server| Binding::new(server, Instant::now()));
+
         Ok(Self {
             rtc,
             socket,
@@ -559,6 +600,7 @@ impl RtcPeer {
             closed_channels: Vec::new(),
             remote_relays: Vec::new(),
             sending_to: None,
+            stun,
             pending_events: VecDeque::new(),
             keyframe_requested: false,
             irap_sent: false,
@@ -651,8 +693,8 @@ impl RtcPeer {
     }
 
     /// Add one local candidate and queue it for trickling. The host candidate
-    /// is added while answering; Task 7.4 adds server-reflexive and relayed
-    /// ones through here.
+    /// is added while answering, the server-reflexive one when the STUN server
+    /// answers; Task 7.4 adds relayed ones through here.
     pub fn add_local_candidate(&mut self, candidate: Candidate) -> Result<()> {
         // §2 of the ICE policy: a passive ICE-TCP candidate is unreachable from
         // every browser we serve, so one is never gathered — and a relay
@@ -745,6 +787,7 @@ impl RtcPeer {
     ) -> Result<()> {
         events.extend(self.pending_events.drain(..));
         self.drain_out(events);
+        self.send_stun(now);
 
         // str0m does not packetise on `write`: a write is queued per media
         // and ONE queued write per media is packetised by each
@@ -796,6 +839,12 @@ impl RtcPeer {
             return Ok(());
         }
 
+        // a stun retransmit is a timer str0m does not know about
+        let deadline = self
+            .stun
+            .as_ref()
+            .and_then(Binding::deadline)
+            .map_or(deadline, |due| due.min(deadline));
         let wait = deadline
             .saturating_duration_since(now)
             .min(budget)
@@ -804,6 +853,9 @@ impl RtcPeer {
             .set_read_timeout(Some(wait))
             .context("set_read_timeout")?;
         match self.socket.recv_from(&mut self.buf) {
+            Ok((n, source)) if self.stun.as_ref().is_some_and(|b| b.server() == source) => {
+                self.on_stun_datagram(n, events)
+            }
             Ok((n, source)) => match self.buf[..n].try_into() {
                 Ok(contents) => {
                     self.rtc
@@ -820,16 +872,7 @@ impl RtcPeer {
                 }
                 // the socket takes whatever reaches its port, and a packet
                 // nothing here can demultiplex never reached the association.
-                Err(error) => {
-                    self.stats.datagrams_dropped += 1;
-                    let dropped = self.stats.datagrams_dropped;
-                    if dropped == 1 || dropped.is_multiple_of(100) {
-                        events.push(PeerEvent::DatagramDropped {
-                            dropped,
-                            reason: error.to_string(),
-                        });
-                    }
-                }
+                Err(error) => drop_datagram(&mut self.stats, error, events),
             },
             // Anything else is a timeout, a would-block, or Windows reporting
             // an ICMP port-unreachable from a *previous* send on the next
@@ -846,6 +889,58 @@ impl RtcPeer {
     /// [`PeerState::Closed`], so the DTLS close and RTCP BYE go out.
     pub fn disconnect(&mut self) {
         self.rtc.disconnect();
+    }
+
+    /// The STUN request that is due, from this peer's own socket.
+    fn send_stun(&mut self, now: Instant) {
+        let Some(binding) = self.stun.as_mut() else {
+            return;
+        };
+        match binding.poll(now) {
+            Some(stun::Step::Send(request)) => {
+                send_datagram(&self.socket, &mut self.stats, &request, binding.server());
+            }
+            Some(stun::Step::GaveUp) => {
+                ::log::info!("swoop: the stun server never answered; no server-reflexive candidate")
+            }
+            None => {}
+        }
+    }
+
+    /// A datagram from the STUN server, which never reaches str0m: its parser
+    /// refuses a binding answer without MESSAGE-INTEGRITY, and its agent one to
+    /// a transaction it did not start.
+    fn on_stun_datagram(&mut self, len: usize, events: &mut Vec<PeerEvent>) {
+        let Some(binding) = self.stun.as_mut() else {
+            return;
+        };
+        match binding.on_datagram(&self.buf[..len]) {
+            stun::Reply::Mapped(mapped) if mapped == self.local_addr => ::log::info!(
+                "swoop: no nat between this peer and the stun server; the host candidate is the public one"
+            ),
+            stun::Reply::Mapped(mapped) => {
+                let added = Candidate::server_reflexive(
+                    mapped,
+                    self.local_addr,
+                    ice_policy::LOCAL_TRANSPORT,
+                )
+                .map_err(|e| anyhow!("{e}"))
+                .and_then(|candidate| self.add_local_candidate(candidate));
+                match added {
+                    Ok(()) => ::log::info!("swoop: server-reflexive candidate gathered"),
+                    Err(e) => ::log::warn!("swoop: no server-reflexive candidate: {e}"),
+                }
+            }
+            stun::Reply::Unusable => ::log::info!(
+                "swoop: the stun server's answer held no ipv4 mapping; no server-reflexive candidate"
+            ),
+            stun::Reply::Repeat => {}
+            stun::Reply::Foreign => drop_datagram(
+                &mut self.stats,
+                "not an answer to this peer's stun binding",
+                events,
+            ),
+        }
     }
 
     fn drain_out(&mut self, events: &mut Vec<PeerEvent>) {
@@ -1208,16 +1303,56 @@ mod tests {
         Vec::new()
     }
 
-    fn loopback_peer() -> RtcPeer {
-        RtcPeer::bind(PeerConfig {
+    fn loopback_config() -> PeerConfig {
+        PeerConfig {
             bind_addr: "127.0.0.1:0".parse().expect("a literal address"),
             codec: Codec::H264,
             fps: 60,
             bitrate_bps: 20_000_000,
             qpc_hz: 10_000_000,
             enable_bwe: false,
+            stun_server: None,
+        }
+    }
+
+    fn loopback_peer() -> RtcPeer {
+        RtcPeer::bind(loopback_config()).expect("bind on loopback")
+    }
+
+    /// A loopback peer that asks a fake STUN server, that server, and the
+    /// request the peer's first poll sent it.
+    fn asking_a_fake_stun_server() -> (RtcPeer, UdpSocket, Vec<u8>) {
+        let server = UdpSocket::bind("127.0.0.1:0").expect("bind a fake stun server");
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("read timeout");
+        let mut peer = RtcPeer::bind(PeerConfig {
+            stun_server: Some(server.local_addr().expect("server address")),
+            ..loopback_config()
         })
-        .expect("bind on loopback")
+        .expect("bind on loopback");
+        peer.poll(Instant::now(), Duration::from_millis(1), &mut events())
+            .expect("poll");
+        let mut buf = [0u8; 64];
+        let (n, from) = server.recv_from(&mut buf).expect("the first poll asks");
+        assert_eq!(from, peer.local_addr(), "asked from the peer's own socket");
+        (peer, server, buf[..n].to_vec())
+    }
+
+    /// Ten turns, more than the datagrams any test here queues: each poll
+    /// reads one, and a candidate surfaces on the poll after its answer.
+    fn local_candidates_over_ten_polls(peer: &mut RtcPeer) -> Vec<String> {
+        let mut ev = events();
+        for _ in 0..10 {
+            peer.poll(Instant::now(), Duration::from_millis(20), &mut ev)
+                .expect("poll");
+        }
+        ev.into_iter()
+            .filter_map(|event| match event {
+                PeerEvent::LocalCandidate(candidate) => Some(candidate),
+                _ => None,
+            })
+            .collect()
     }
 
     /// What the session reads to hold feature records back: every byte waiting
@@ -1277,6 +1412,53 @@ mod tests {
             ),
             "the first drop is reported and the second only counted: {ev:?}"
         );
+    }
+
+    /// The STUN server's answer, naming an address that is not the socket's,
+    /// is one server-reflexive candidate on the trickle. Only an answer from
+    /// the server to this binding counts: the same bytes from anywhere else go
+    /// to str0m, which refuses them, and another transaction from the server
+    /// is counted and dropped.
+    #[test]
+    fn the_stun_servers_answer_becomes_one_trickled_srflx_candidate() {
+        let (mut peer, server, request) = asking_a_fake_stun_server();
+        let answer = stun::success_for(&request, "192.0.2.1:32853".parse().expect("an address"));
+        let stray = UdpSocket::bind("127.0.0.1:0").expect("bind a stray sender");
+        stray.send_to(&answer, peer.local_addr()).expect("send");
+        let mut other = answer.clone();
+        other[19] ^= 0x01;
+        server.send_to(&other, peer.local_addr()).expect("send");
+        server.send_to(&answer, peer.local_addr()).expect("send");
+        // a retransmit's answer, which is not a second candidate
+        server.send_to(&answer, peer.local_addr()).expect("send");
+
+        let candidates = local_candidates_over_ten_polls(&mut peer);
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        assert!(
+            candidates[0].contains(" 192.0.2.1 32853 typ srflx"),
+            "{}",
+            candidates[0]
+        );
+        assert_eq!(
+            peer.stats().datagrams_dropped,
+            2,
+            "the stray and the other transaction"
+        );
+    }
+
+    /// No NAT: the server sees the socket's own address, which the host
+    /// candidate already is.
+    #[test]
+    fn a_mapping_that_is_the_sockets_own_address_is_no_candidate() {
+        let (mut peer, server, request) = asking_a_fake_stun_server();
+        let answer = stun::success_for(&request, peer.local_addr());
+        server.send_to(&answer, peer.local_addr()).expect("send");
+
+        assert_eq!(
+            local_candidates_over_ten_polls(&mut peer),
+            Vec::<String>::new()
+        );
+        assert_eq!(peer.stats().datagrams_dropped, 0);
     }
 
     #[test]
@@ -1389,6 +1571,7 @@ mod tests {
             bitrate_bps: 20_000_000,
             qpc_hz: 10_000_000,
             enable_bwe: false,
+            stun_server: None,
         })
         .expect("bind host");
 
@@ -1681,6 +1864,7 @@ mod tests {
             bitrate_bps: 20_000_000,
             qpc_hz: 10_000_000,
             enable_bwe: false,
+            stun_server: None,
         })
         .expect("bind");
         let answer = peer.accept_offer(&offer).expect("the host answers");
@@ -1720,6 +1904,7 @@ mod tests {
             bitrate_bps: 20_000_000,
             qpc_hz: 10_000_000,
             enable_bwe: false,
+            stun_server: None,
         })
         .expect("bind");
         assert!(peer.local_addr().port() > 0);
@@ -1744,6 +1929,7 @@ mod tests {
             bitrate_bps: 20_000_000,
             qpc_hz: 10_000_000,
             enable_bwe: false,
+            stun_server: None,
         })
         .expect("bind host");
 
@@ -1888,6 +2074,7 @@ mod tests {
             bitrate_bps: 20_000_000,
             qpc_hz: 10_000_000,
             enable_bwe: false,
+            stun_server: None,
         })
         .expect("bind host");
         let (audio_tx, track) = AudioTrack::channel();

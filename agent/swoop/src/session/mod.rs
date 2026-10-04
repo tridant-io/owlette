@@ -838,7 +838,7 @@ pub use host::run;
 
 mod host {
     use std::io::{self, BufRead};
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::thread;
@@ -884,6 +884,7 @@ mod host {
         IcePolicy, SystemResolver, DISCONNECTED_LIMIT,
     };
     use crate::transport::rtc::{PeerConfig, PeerEvent, PeerState, RtcPeer};
+    use crate::transport::stun;
     use crate::transport::VideoSink;
     use crate::viewers::lease::LeaseLedger;
     use crate::viewers::roster::Roster;
@@ -1220,6 +1221,28 @@ mod host {
             .spawn(move || resolver_thread(resolver_work, resolved_tx))
             .ok();
 
+        // Detached too, and started before the room is dialled, so the address
+        // is almost always in by the first offer. A peer bound before it simply
+        // gathers no server-reflexive candidate.
+        let (stun_tx, stun_rx) = bounded::<SocketAddr>(1);
+        let stun_url = bundle
+            .ice_servers
+            .iter()
+            .flat_map(|server| &server.urls)
+            .find_map(|url| stun::server_host_port(url));
+        match stun_url {
+            Some((host, port)) => {
+                let host = host.to_owned();
+                thread::Builder::new()
+                    .name("swoop-stun".into())
+                    .spawn(move || stun_thread(&host, port, stun_tx))
+                    .ok();
+            }
+            None => ::log::info!(
+                "swoop: no stun server in the bundle; peers gather host candidates only"
+            ),
+        }
+
         let outcome = connect_and_serve(
             &bundle,
             Wiring {
@@ -1235,6 +1258,7 @@ mod host {
                 service_rx,
                 resolver_tx,
                 resolved_rx,
+                stun_rx,
             },
         );
 
@@ -1352,6 +1376,7 @@ mod host {
         service_rx: Receiver<FromService>,
         resolver_tx: Sender<ToResolver>,
         resolved_rx: Receiver<FromResolver>,
+        stun_rx: Receiver<SocketAddr>,
     }
 
     fn connect_and_serve(bundle: &Bundle, w: Wiring) -> (Exit, ExitReason) {
@@ -1432,6 +1457,8 @@ mod host {
             service_rx: w.service_rx,
             resolver_tx: w.resolver_tx,
             resolved_rx: w.resolved_rx,
+            stun_rx: w.stun_rx,
+            stun_server: None,
             ifwatch: match InterfaceWatcher::start() {
                 Ok(watcher) => Some(watcher),
                 Err(rc) => {
@@ -1562,6 +1589,10 @@ mod host {
         service_rx: Receiver<FromService>,
         resolver_tx: Sender<ToResolver>,
         resolved_rx: Receiver<FromResolver>,
+        /// The bundle's STUN server, once the stun thread has resolved it; read
+        /// through `Live::stun_server()`.
+        stun_rx: Receiver<SocketAddr>,
+        stun_server: Option<SocketAddr>,
         /// The interface watcher (`NotifyIpInterfaceChange` on Windows, a
         /// `getifaddrs` walk elsewhere), as a flag this loop reads. A machine
         /// that would not start it carries on without the trigger rather than
@@ -1988,6 +2019,16 @@ mod host {
             }
         }
 
+        /// The STUN server each new peer asks for its server-reflexive address:
+        /// `None` until the stun thread has resolved it, and for good when the
+        /// bundle names none or the name did not resolve.
+        fn stun_server(&mut self) -> Option<SocketAddr> {
+            if self.stun_server.is_none() {
+                self.stun_server = self.stun_rx.try_recv().ok();
+            }
+            self.stun_server
+        }
+
         /// This viewer's first offer: pick its codec, bind its peer, and put the
         /// tier it lands on in front of the capture thread. `false` means the
         /// viewer was refused and is already on its way out.
@@ -2025,6 +2066,7 @@ mod host {
             // yet keeps the session-wide address.
             let bind_addr = bind_addr_toward_offer(sdp).unwrap_or(self.bind_addr);
             ::log::info!("swoop: viewer {viewer} peer binds {bind_addr}");
+            let stun_server = self.stun_server();
             let peer = match RtcPeer::bind(PeerConfig {
                 bind_addr,
                 codec,
@@ -2035,6 +2077,7 @@ mod host {
                 // pacer with it, which the bake-off measured holding
                 // 1015 ms p50 of queue with every loss counter at zero.
                 enable_bwe: false,
+                stun_server,
             }) {
                 Ok(peer) => peer,
                 Err(e) => {
@@ -4029,6 +4072,27 @@ mod host {
         }
     }
 
+    /// The bundle's STUN server, resolved off the session thread for the same
+    /// reason as the candidates: a name lookup blocks for as long as the
+    /// system resolver takes. IPv4 only, because every peer binds IPv4.
+    fn stun_thread(host: &str, port: u16, tx: Sender<SocketAddr>) {
+        let found = (host, port)
+            .to_socket_addrs()
+            .map(|mut addrs| addrs.find(SocketAddr::is_ipv4));
+        match found {
+            Ok(Some(server)) => {
+                ::log::info!("swoop: stun server {host}:{port} is {server}");
+                let _ = tx.send(server);
+            }
+            Ok(None) => ::log::info!(
+                "swoop: stun server {host} has no ipv4 address; no server-reflexive candidates"
+            ),
+            Err(e) => ::log::info!(
+                "swoop: stun server {host} did not resolve ({e}); no server-reflexive candidates"
+            ),
+        }
+    }
+
     /// Control lines. Line 1 was the bundle and was read before this started.
     fn stdin_thread(mut stdin: impl BufRead, tx: Sender<FromService>) {
         let mut line = String::new();
@@ -4069,9 +4133,6 @@ mod host {
             .unwrap_or(&outputs[0])
     }
 
-    /// One host candidate, on the interface that would reach the internet. A
-    /// udp `connect` sends nothing; it only picks the route. Task 7.4/7.5 adds
-    /// server-reflexive and relayed candidates through `add_local_candidate`.
     /// The address to bind for one viewer: the interface the os routes to
     /// the viewer's first host candidate (then its first server-reflexive
     /// one), port 0. None when the offer carries no usable candidate.
@@ -4122,6 +4183,10 @@ mod host {
         (!ip.is_unspecified()).then_some(ip)
     }
 
+    /// One host candidate, on the interface that would reach the internet. A
+    /// udp `connect` sends nothing; it only picks the route. Each peer learns
+    /// its own server-reflexive candidate (`transport::stun`); Task 7.4/7.5
+    /// adds relayed ones through `add_local_candidate`.
     fn local_bind_addr() -> SocketAddr {
         let found = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
             .and_then(|socket| {
