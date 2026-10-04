@@ -678,10 +678,11 @@ export const MachineRow = memo(function MachineRow({
               <button
                 type="button"
                 aria-label={`open network history for ${machine.machineId}`}
-                className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible xl:visible', staleClass)}
+                className={cn('relative block h-[52px] w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible xl:visible', staleClass)}
               >
-                <div className={`absolute left-0 top-1/2 -translate-y-1/2 h-[52px] w-0.5 ${getUsageColorClass(maxUtil)}`} />
-                <div className="p-2 pl-2.5">
+                <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(maxUtil)}`} />
+                {/* the same 52px box as the sparkline cells; three lines fit with no vertical padding */}
+                <div className="absolute inset-0 flex flex-col justify-center px-2 pl-2.5 overflow-hidden">
                   <div className="text-xs text-muted-foreground truncate" title={titleText}>
                     {nicDevice.id}
                   </div>
