@@ -2803,6 +2803,13 @@ mod host {
                     let effects = self.client.end_viewer(viewer, LeftReason::Timeout);
                     let _ = self.apply(effects);
                 }
+                // A machine watched from itself is a picture of the picture,
+                // and its input lands on the page that sends it.
+                PeerEvent::SameMachine => {
+                    ::log::info!("swoop: viewer {viewer} is on this machine; ending its session");
+                    let effects = self.client.end_viewer(viewer, LeftReason::SameMachine);
+                    let _ = self.apply(effects);
+                }
                 PeerEvent::LocalCandidate(candidate) => {
                     // One bundled m-line, so mid 0 is the only one there is.
                     let message = Message::Candidate {

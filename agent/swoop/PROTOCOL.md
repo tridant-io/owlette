@@ -111,7 +111,8 @@ fields, beyond `type`, `from`, `fromRole` and `serverTimeMs`:
 - `kill`: `sid` (may be null — "kill whatever is running")
 - `bye`: optional `reason`, optional `to`. from the host, `restart` means the service is stopping to come
   back (an update, a restart) and the viewer starts its next session; `kill` is somebody's decision and the
-  viewer stops
+  viewer stops; `same_machine` means the viewer reached the host at one of the host's own addresses — it is
+  on the machine it asked to watch — and the viewer stops and remembers the machine as its own
 - `error`: `code`
 
 golden vectors: one per type in `testdata/protocol/signaling/`, plus `signal-viewer-sends-answer.json`
@@ -395,7 +396,7 @@ loop.
 |---|---|
 | `ready` | `sid`, `pid`, `version`, `protocolVersion`, `codecs[]`, `displays` |
 | `viewer_joined` | `sid`, `viewer`, `ctl`, `codec` |
-| `viewer_left` | `sid`, `viewer`, `reason` (`bye` \| `timeout` \| `lease_expired` \| `kill` \| `restart`) |
+| `viewer_left` | `sid`, `viewer`, `reason` (`bye` \| `timeout` \| `lease_expired` \| `kill` \| `restart` \| `same_machine`) |
 | `sas_request` | `sid`, `viewer` |
 | `token_needed` | `sid` — the signaling socket closed under a live session; the service answers with a `token` line and the streamer redials. repeated every 20 s while the room stays unreachable; a session with no live viewer exits `SignalLost` instead |
 | `host_event` | `sid`, `kind`, `viewer` (optional), `reason` (optional) |

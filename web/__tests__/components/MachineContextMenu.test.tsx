@@ -20,6 +20,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
+import { markThisMachine } from '@/lib/swoop/thisMachine';
 
 // jsdom ships no ResizeObserver; Radix's dropdown positioning constructs one.
 global.ResizeObserver = class {
@@ -107,6 +108,33 @@ describe('MachineContextMenu — swoop entry', () => {
     await user.click(screen.getByTestId('machine-context-menu-swoop'));
 
     expect(onSwoop).toHaveBeenCalledTimes(1);
+  });
+});
+
+// a machine cannot be watched from itself: once its streamer has said this
+// browser is on it, swoop is greyed out there and says why.
+describe('MachineContextMenu — the machine this browser is on', () => {
+  afterEach(() => localStorage.clear());
+
+  it('greys swoop out and says why', async () => {
+    markThisMachine('site-A', 'kiosk-1');
+    const onSwoop = jest.fn();
+    const user = await openMenu({ swoopCapable: true, onSwoop });
+
+    const item = screen.getByTestId('machine-context-menu-swoop');
+    expect(item).toHaveAttribute('aria-disabled', 'true');
+    expect(item).toHaveTextContent("you're on this machine");
+    await user.click(item);
+    expect(onSwoop).not.toHaveBeenCalled();
+  });
+
+  it('leaves every other machine alone', async () => {
+    markThisMachine('site-A', 'kiosk-2');
+    await openMenu({ swoopCapable: true });
+
+    const item = screen.getByTestId('machine-context-menu-swoop');
+    expect(item).not.toHaveAttribute('aria-disabled');
+    expect(item).not.toHaveTextContent("you're on this machine");
   });
 });
 

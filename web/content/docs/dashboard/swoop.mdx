@@ -40,6 +40,8 @@ the viewer opens at `/swoop/<siteId>/<machineId>`. you can also get there from a
 
 a session needs the machine to be online. swoop cannot reach a machine that has not dialled in, and the request is refused with `machine_offline` rather than queued.
 
+swoop does not open the machine you are sitting at. a browser cannot tell which computer it runs on, so the first try reaches the machine, which sees the session coming from itself and ends it with "you're on this machine". from then on that browser shows swoop greyed out for that machine, labelled **you're on this machine**. the record lives in that browser only, and a session that does connect to the machine clears it.
+
 ---
 
 ## watching versus control

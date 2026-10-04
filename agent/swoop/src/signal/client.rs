@@ -572,6 +572,7 @@ fn left_reason_text(reason: LeftReason) -> &'static str {
         LeftReason::LeaseExpired => "lease_expired",
         LeftReason::Kill => "kill",
         LeftReason::Restart => "restart",
+        LeftReason::SameMachine => "same_machine",
     }
 }
 
@@ -928,6 +929,24 @@ pub(crate) mod tests {
         };
         assert_eq!(reason.as_deref(), Some("restart"));
         assert_eq!(to.as_deref(), Some(viewer.as_str()));
+    }
+
+    /// The page reads `same_machine` as the one end that says why it cannot
+    /// come back, and greys the machine out for that browser.
+    #[test]
+    fn a_viewer_on_this_machine_is_told_so() {
+        let (mut client, viewer) = client_with_viewer();
+        let effects = client.end_viewer(&viewer, LeftReason::SameMachine);
+        let Some(Effect::Send(Message::Bye { reason, to, .. })) = effects.first() else {
+            panic!("a bye leads the effects: {effects:?}");
+        };
+        assert_eq!(reason.as_deref(), Some("same_machine"));
+        assert_eq!(to.as_deref(), Some(viewer.as_str()));
+        assert_eq!(
+            serde_json::to_value(LeftReason::SameMachine).expect("serialise"),
+            "same_machine",
+            "viewer_left spells it the same way"
+        );
     }
 
     #[test]

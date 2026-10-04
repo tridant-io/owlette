@@ -210,6 +210,9 @@ pub enum PeerEvent {
     /// this peer — where ICE losing its pair is an `Ice` edge the policy
     /// waits out, because a lid, a roam or a blip comes back.
     Closed,
+    /// The nominated pair sends to one of this machine's own addresses: the
+    /// viewer is on the machine it is watching.
+    SameMachine,
     /// A local candidate to trickle to the viewer through the signaling
     /// client, as an SDP `candidate:` attribute value.
     LocalCandidate(String),
@@ -310,6 +313,14 @@ fn drop_datagram(
             reason: reason.to_string(),
         });
     }
+}
+
+/// Whether `ip` is one of this machine's own addresses: only those can be
+/// bound. A viewer reached at one is on this machine — the address is
+/// delivered locally, so nothing on another network can answer at it, however
+/// its own private addresses happen to be numbered.
+fn is_this_machine(ip: std::net::IpAddr) -> bool {
+    !ip.is_unspecified() && UdpSocket::bind(SocketAddr::new(ip, 0)).is_ok()
 }
 
 /// One peer's counters, which is what a governor reads.
@@ -757,6 +768,9 @@ impl RtcPeer {
         events.push(PeerEvent::Ice(IceEvent::PairChanged {
             relayed: self.sending_over_relay(),
         }));
+        if !self.sending_over_relay() && is_this_machine(destination.ip()) {
+            events.push(PeerEvent::SameMachine);
+        }
     }
 
     /// Queue one record for a channel. Never blocks and never writes straight
@@ -1282,6 +1296,21 @@ fn channel_from_label(label: &str) -> Option<Channel> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_this_machines_own_addresses_are_this_machine() {
+        let ip = |s: &str| s.parse::<std::net::IpAddr>().expect("ip");
+        assert!(super::is_this_machine(ip("127.0.0.1")));
+        assert!(!super::is_this_machine(ip("0.0.0.0")), "binds, but is no one's address");
+        // TEST-NET-1, for documentation only: never anyone's address
+        assert!(!super::is_this_machine(ip("192.0.2.1")));
+        // the address this machine sends to the world from, when it has a route
+        let probe = std::net::UdpSocket::bind("0.0.0.0:0").expect("bind");
+        if probe.connect("192.0.2.1:9").is_ok() {
+            let own = probe.local_addr().expect("local addr").ip();
+            assert!(super::is_this_machine(own), "{own} is this machine's");
+        }
+    }
+
     #[test]
     fn a_refused_send_is_counted_and_survived() {
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind");
