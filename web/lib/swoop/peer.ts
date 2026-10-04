@@ -114,6 +114,20 @@ export const RESTART_ANSWER_TIMEOUT_MS = 10_000;
 /** the restart ladder: the second restart 1 s after a failure, then doubling to the cap. */
 export const RESTART_BASE_MS = 1000;
 export const RESTART_CAP_MS = 15000;
+/**
+ * how long after the first answer the page waits for a media path before it
+ * says there is none. signalling and the answer cross any network, so a viewer
+ * off the machine's lan with no relay saw "connecting" for as long as the
+ * restart ladder runs, which is forever. the ladder keeps running underneath,
+ * and a path found later clears it.
+ */
+export const NO_PATH_MS = 20_000;
+
+/** what the page is told when no media path came up within `NO_PATH_MS`. */
+export interface SwoopNoPath {
+  /** the session had a relay (the browser's turn, or the host's allocation), so even that failed. */
+  relayConfigured: boolean;
+}
 
 export interface PlayoutDelay {
   minMs: number;
@@ -237,6 +251,9 @@ export interface SwoopPeerOptions {
   relayProbeMs?: number;
   disconnectedGraceMs?: number;
   answerTimeoutMs?: number;
+  noPathMs?: number;
+  /** no path `noPathMs` after the first answer; `null` once one comes up after all. */
+  onNoPath?: (noPath: SwoopNoPath | null) => void;
   onTrack?: (stream: MediaStream, receiver: RTCRtpReceiver) => void;
   onChannelOpen?: (label: SwoopChannel, channel: RTCDataChannel) => void;
   onError?: (code: SwoopPeerError) => void;
@@ -352,6 +369,12 @@ export class SwoopPeer {
   private answerTimer: ReturnType<typeof setTimeout> | null = null;
   /** the signalling socket is open, so an answer can come back; see `signalOpen`. */
   private signalingOpen = true;
+  private readonly noPathMs: number;
+  /** armed once, by the first answer; see `NO_PATH_MS`. */
+  private noPathTimer: ReturnType<typeof setTimeout> | null = null;
+  private noPathArmed = false;
+  /** the page was told there is no path, so it must be told when one comes up. */
+  private noPathShown = false;
 
   constructor(options: SwoopPeerOptions) {
     this.options = options;
@@ -360,6 +383,7 @@ export class SwoopPeer {
     this.relayProbeMs = options.relayProbeMs ?? RELAY_PROBE_MS;
     this.disconnectedGraceMs = options.disconnectedGraceMs ?? DISCONNECTED_GRACE_MS;
     this.answerTimeoutMs = options.answerTimeoutMs ?? ANSWER_TIMEOUT_MS;
+    this.noPathMs = options.noPathMs ?? NO_PATH_MS;
 
     const { direct, relay } = partitionIceServers(options.iceServers);
     this.directServers = direct;
@@ -683,6 +707,32 @@ export class SwoopPeer {
     for (const candidate of pending) await this.pc.addIceCandidate(candidate);
 
     this.armRelayProbe();
+    this.armNoPath();
+  }
+
+  private armNoPath(): void {
+    if (this.noPathArmed) return;
+    this.noPathArmed = true;
+    this.noPathTimer = setTimeout(() => {
+      this.noPathTimer = null;
+      if (this.closed || this.linkUp()) return;
+      this.noPathShown = true;
+      this.options.onNoPath?.({ relayConfigured: this.relayServers.length > 0 || this.hostRelay });
+    }, this.noPathMs);
+  }
+
+  /** a path came up: the deadline is moot, and a page told otherwise is told again. */
+  private settleNoPath(): void {
+    this.clearNoPathTimer();
+    if (!this.noPathShown) return;
+    this.noPathShown = false;
+    this.options.onNoPath?.(null);
+  }
+
+  private clearNoPathTimer(): void {
+    if (this.noPathTimer === null) return;
+    clearTimeout(this.noPathTimer);
+    this.noPathTimer = null;
   }
 
   private async addRemoteCandidate(candidate: RTCIceCandidateInit): Promise<void> {
@@ -795,6 +845,7 @@ export class SwoopPeer {
       case 'completed':
         this.clearLinkTimer();
         this.clearRestartTimer();
+        this.settleNoPath();
         // the link is up; the next episode starts its ladder from the bottom.
         this.restartAttempt = 0;
         return;
@@ -883,6 +934,7 @@ export class SwoopPeer {
     }
     this.clearLinkTimer();
     this.clearAnswerTimer();
+    this.clearNoPathTimer();
     try {
       this.pc.close();
     } catch {

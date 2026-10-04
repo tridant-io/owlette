@@ -115,6 +115,7 @@ jest.mock('@/lib/swoop/signal.server', () => ({
 }));
 
 jest.mock('@/lib/swoop/turn.server', () => ({
+  ...jest.requireActual('@/lib/swoop/turn.server'),
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
 }));
 
@@ -125,6 +126,7 @@ import {
 } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route';
 import { stepUpMachineBinding } from '@/lib/swoop/policy.server';
 import { mintContinuity } from '@/lib/swoop/continuity.server';
+import { STUN_ONLY, mintTurnCredentials } from '@/lib/swoop/turn.server';
 
 const SITE = 'site-a';
 const MACHINE = 'machine-1';
@@ -446,6 +448,44 @@ describe('POST swoop/sessions', () => {
     );
 
     expect(res.status).toBe(201);
+  });
+
+  it('offers stun only when turn is not configured', async () => {
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: false, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).iceServers).toEqual(STUN_ONLY);
+  });
+
+  it('passes the minted ice servers through unchanged when turn is configured', async () => {
+    const minted = [
+      { urls: ['stun:stun.cloudflare.com:3478'] },
+      {
+        urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
+        username: 'turn-user',
+        credential: 'turn-credential',
+      },
+    ];
+    jest.mocked(mintTurnCredentials).mockResolvedValueOnce({
+      ok: true,
+      iceServers: minted,
+      username: 'turn-user',
+      expiresAt: Date.now() + 60_000,
+    });
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: false, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).iceServers).toEqual(minted);
+    expect(mintTurnCredentials).toHaveBeenCalledWith({ siteId: SITE });
   });
 
   it('opens the window from a live proof and grants control in the same request', async () => {

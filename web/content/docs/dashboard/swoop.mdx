@@ -1,7 +1,7 @@
 ---
 title: "swoop"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a machine's screen, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard"]
+keywords: ["remote control", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "nat", "relay", "turn"]
 ---
 
 swoop puts a machine's screen in your browser, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -84,6 +84,22 @@ a copy made on the machine reaches your clipboard at once when you have just cli
 - an update or restart of the machine's agent sends the viewer to reconnect too, once the agent is back. agents older than 4.0.4 end the session instead, and so does the update from one of them
 - what does end it: the **end** button, closing the tab, an admin's kill, another tab or device opening swoop on the same machine, or the lease check below refusing
 - a viewer holds a **5-minute lease**, renewed silently while the tab is open. the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
+
+---
+
+## from another network
+
+swoop connects the browser to the machine directly. on the same network that always works. across the internet,
+both ends ask a public STUN server for the address their router shows the world, and each offers it to the other:
+that gets through most home and office routers.
+
+- when both ends sit behind strict routers (many mobile networks, some corporate firewalls), a direct path is not
+  possible and swoop needs a **relay**. a relay is set up per deployment, not per site, by whoever runs owlette
+- after 20 seconds without a path the viewer stops saying **connecting** and says **can't reach this machine from
+  your network**, and whether a relay was there to try. it keeps trying underneath, and the picture appears if a
+  path comes up later
+- a machine's own firewall must let the owlette agent receive on UDP. on Windows the agent adds that rule itself
+  when swoop is turned on for the site
 
 ---
 

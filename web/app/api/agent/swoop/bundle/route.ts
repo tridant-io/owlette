@@ -21,7 +21,7 @@ import { SWOOP_LEASE_SECONDS, loadSwoopSettings } from '@/lib/swoop/policy.serve
 import { SWOOP_PROTOCOL_VERSION } from '@/lib/swoop/protocol';
 import { getSwoopSession } from '@/lib/swoop/sessionStore.server';
 import { mintHostToken, swoopJwtPublicKeys, type SwoopJwtKeyEntry } from '@/lib/swoop/tokens.server';
-import { mintTurnCredentials, type SwoopIceServer } from '@/lib/swoop/turn.server';
+import { STUN_ONLY, mintTurnCredentials, type SwoopIceServer } from '@/lib/swoop/turn.server';
 import { SWOOP_MIN_AGENT_VERSION, compareVersions, isValidVersion } from '@/lib/versionUtils';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { NO_STORE, SWOOP_ID_PATTERN, requireSwoopAgent, swoopRoomUrl } from '../_shared';
@@ -171,8 +171,8 @@ export const POST = withRateLimit(
       }
 
       // P2P first (plan.md D13). A TURN outage costs the relay fallback, never
-      // the session, so an empty list beats a 500.
-      let iceServers: SwoopIceServer[] = [];
+      // the session, so stun alone beats a 500.
+      let iceServers: SwoopIceServer[] = STUN_ONLY;
       const turn = await mintTurnCredentials({ siteId });
       if (turn.ok) {
         iceServers = turn.iceServers;

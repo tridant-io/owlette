@@ -1,5 +1,5 @@
 # prod promotion — Tasks
-**Progress**: 10/20 complete — **promotion base frozen at `fdcf86d1` (dev, 2026-09-22 22:33 UTC, #175 merged)**
+**Progress**: 14/18 complete — **promotion base frozen at `fdcf86d1` (dev, 2026-09-22 22:33 UTC, #175 merged)**
 
 Read [plan.md](plan.md), then [research/main-vs-dev.md](research/main-vs-dev.md) and
 [research/env-vars.md](research/env-vars.md), then only the files your task names. **The owner's explicit go is
@@ -346,7 +346,7 @@ Task 0.4. If `dev` has moved, re-freeze and re-run — do not reason about which
     machine is recorded as an explicit unverified item.
   - Depends on: 0.2 (the rate-limit change must be the code under test).
 
-- [ ] **Task 2.5: Staging walkthrough** `[human]`
+- [x] **Task 2.5: Staging walkthrough** `[human]`
   - Files: none
   - Do: Plan D11. Check first whether a Railway PR environment or a Vercel preview of the promotion base is
     actually available: the research found one Railway project with one environment and exactly two services
@@ -370,7 +370,7 @@ Task 0.4. If `dev` has moved, re-freeze and re-run — do not reason about which
 
 Nothing in this wave starts until Waves 0-2 are complete and the owner says go, in this sitting.
 
-- [ ] **Task 3.1: PR `dev` → `main`, merged as a regular merge commit** `[human]`
+- [x] **Task 3.1: PR `dev` → `main`, merged as a regular merge commit** `[human]`
   - Files: none
   - Do: Immediately first: `git fetch origin dev && git rev-parse origin/dev` — it must equal the promotion base
     Task 2.2 smoked. If `dev` has moved, stop and re-run Wave 2 on the new commit. Then open the PR `dev` → `main`
@@ -387,7 +387,7 @@ Nothing in this wave starts until Waves 0-2 are complete and the owner says go, 
     shows it, and `git diff origin/main origin/dev --stat` is empty.
   - Depends on: 2.1, 2.2, 2.3, 2.4, 2.5, and A.1 being written.
 
-- [ ] **Task 3.2: Watch Railway and the `main` workflows to completion, then read back** `[human]`
+- [x] **Task 3.2: Watch Railway and the `main` workflows to completion, then read back** `[human]`
   - Files: none
   - Do: Watch the Railway build for `owlette-prod` to completion before anything else (`manual-infrastructure.md:8`
     — "watch the build to completion before smoke checks"). Then read back:
@@ -409,7 +409,7 @@ Nothing in this wave starts until Waves 0-2 are complete and the owner says go, 
     merge commit, and `signal.owlette.app` is still NXDOMAIN. Paste each result.
   - Depends on: 3.1.
 
-- [ ] **Task 3.3: Vercel — sync the mirror, deploy the same commit, prove one build on both origins** `[human]`
+- [x] **Task 3.3: Vercel — sync the mirror, deploy the same commit, prove one build on both origins** `[human]`
   - Files: none
   - Do: `node scripts/sync-env.mjs sync vercel-prod --apply`. It reads `railway-prod` as the source and is the
     **only** way to guarantee `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY` and `SWOOP_SIGNAL_RING_SECRET`
@@ -740,3 +740,12 @@ Nothing in this wave starts until Waves 0-2 are complete and the owner says go, 
   `py-sdk-publish.yml` `py-sdk-v*` — `web-3.3.6` matches none, safe if the owner wants a marker. **Owner
   items left in 4.1:** the two 403 behaviour checks with a real prod session (`cannot_modify_own_membership`,
   `swoop_disabled`) and the flow walkthrough on owlette.app. 4.2 (cron-job.org entry) is vendor-UI only.
+
+### 2026-10-04 audit against the code (read-only pass, then ticks)
+- Ticked: 2.5 (owner walkthrough on dev 2026-09-23; finding fixed by #176), 3.1 (#177 merged as c68638a8),
+  3.2 (Railway success, health c68638a8), 3.3 (vercel-origin served c68638a8; the load balancer went live).
+- Open: 4.1 (the two 403 checks with a real prod session and the owlette.app walkthrough), 4.2 (cron registration
+  unrecorded; swoop is off on prod), 4.3 (the 24-hour watch was never recorded and has lapsed; prod is healthy),
+  A.1 (never rehearsed or copied into hotfix-rollback.md).
+- This plan's promotion (3.3.6) is complete. Prod still serves c68638a8 with installer 3.3.7; dev is 400+ commits
+  ahead (4.x, tri-platform, swoop, light mode). The next promotion has no plan yet.

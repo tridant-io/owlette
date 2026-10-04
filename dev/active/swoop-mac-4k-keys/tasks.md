@@ -63,7 +63,7 @@ notarizes and installs.
 
 ## Wave 5: verification
 
-- [ ] **Task 5.1: The 4K run** `[agent+human]`
+- [x] **Task 5.1: The 4K run** `[agent+human]`
   - Files: `dev/active/swoop-mac-4k-keys/spikes/5.1-4k-run.md` (create)
   - Do: Build, install, one session from Chrome in fullscreen and one from Brave: stats overlay (fps, resolution, breakdown), window drags, text sharpness, smear; copy and paste in both directions after Task 3; the Windows key and the switch in both states; the pasteboard setting as found.
   - Human: the clicks at the Mac (pasteboard *allow* if chosen), the viewer side.
@@ -343,3 +343,9 @@ arms the key down until the next typed key's release, and `releaseAll` lets go o
   AI facts, project notes, the glib ack's reason); `@fastify/busboy` 3.2.2 for GHSA-xjh9-v7x6-24jw, which
   appeared today and blocked the security check. Decisions taken by the owner: version 4.1.0; 80 Mbps auto
   stays for large screens.
+
+### 2026-10-04 audit
+- Ticked 5.1: the owner's 4K session on 2026-10-02 ('looks great' at 80 Mbps; copy and paste both ways; hold-cmd
+  confirmed). The memo spikes/5.1-4k-run.md was never written.
+- Open 5.2: no Windows-host swoop session is recorded since the governor and auto-bitrate changes, which reach
+  Windows hosts of 2.5 MP and up.

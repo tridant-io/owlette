@@ -13,6 +13,7 @@ import { PLAYOUT_DELAY_URI, base64UrlDecode, type SignalingMessage } from '@/lib
 import {
   ANSWER_TIMEOUT_MS,
   DISCONNECTED_GRACE_MS,
+  NO_PATH_MS,
   RELAY_PROBE_MS,
   RESTART_ANSWER_TIMEOUT_MS,
   SwoopPeer,
@@ -23,6 +24,7 @@ import {
   playoutDelayNegotiated,
   type RtcPeerConnectionFactory,
   type SwoopIdentity,
+  type SwoopNoPath,
   type SwoopPeerError,
 } from '@/lib/swoop/peer';
 
@@ -225,6 +227,8 @@ interface PeerHarness {
   errors: SwoopPeerError[];
   /** `error:<code>` and `closed:<reason>`, in the order the page is told. */
   endings: string[];
+  /** every word the page got about the media path, in order. */
+  noPaths: (SwoopNoPath | null)[];
   refreshes: number;
 }
 
@@ -240,6 +244,7 @@ function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): P
   const sent: SignalingMessage[] = [];
   const errors: SwoopPeerError[] = [];
   const endings: string[] = [];
+  const noPaths: (SwoopNoPath | null)[] = [];
   const counters = { refreshes: 0, leases: 0 };
 
   const peer = new SwoopPeer({
@@ -257,6 +262,7 @@ function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): P
       endings.push(`error:${code}`);
     },
     onClosed: (reason) => endings.push(`closed:${reason}`),
+    onNoPath: (value) => noPaths.push(value),
     leaseToken: async () => `viewer.jwt.${(counters.leases += 1)}`,
     factory: factoryFor(state, IDENTITY.certificate),
   });
@@ -268,6 +274,7 @@ function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): P
     sent,
     errors,
     endings,
+    noPaths,
     get refreshes() {
       return counters.refreshes;
     },
@@ -1345,3 +1352,60 @@ function peerHarnessWithDelay(playoutDelay: { minMs: number; maxMs: number }): S
     factory: factoryFor(newState(), IDENTITY.certificate),
   });
 }
+
+describe('swoop peer — no media path', () => {
+  async function answered(iceServers: RTCIceServer[] = [STUN]): Promise<PeerHarness> {
+    const h = peerHarness(newState(), iceServers);
+    await h.peer.start();
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+    return h;
+  }
+
+  it('says there is no path when none comes up within the deadline, and not before', async () => {
+    jest.useFakeTimers();
+    const h = await answered();
+
+    await jest.advanceTimersByTimeAsync(NO_PATH_MS - 1);
+    expect(h.noPaths).toEqual([]);
+    await jest.advanceTimersByTimeAsync(1);
+    // stun only: nothing was relayed, so the page can say a relay would help.
+    expect(h.noPaths).toEqual([{ relayConfigured: false }]);
+    // the session stays open; the restart ladder keeps trying underneath.
+    expect(h.state.closed).toBe(0);
+  });
+
+  it('says nothing at all when a path comes up before the deadline', async () => {
+    jest.useFakeTimers();
+    const h = await answered();
+    (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
+
+    await jest.advanceTimersByTimeAsync(NO_PATH_MS * 3);
+    expect(h.noPaths).toEqual([]);
+  });
+
+  it('takes the word back when a path comes up after it', async () => {
+    jest.useFakeTimers();
+    const h = await answered();
+    await jest.advanceTimersByTimeAsync(NO_PATH_MS);
+    (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
+
+    expect(h.noPaths).toEqual([{ relayConfigured: false }, null]);
+  });
+
+  it('says a relay was there when the session had turn servers', async () => {
+    jest.useFakeTimers();
+    const h = await answered([STUN, TURN]);
+
+    await jest.advanceTimersByTimeAsync(NO_PATH_MS);
+    expect(h.noPaths).toEqual([{ relayConfigured: true }]);
+  });
+
+  it('is quiet once the peer is closed', async () => {
+    jest.useFakeTimers();
+    const h = await answered();
+    h.peer.close();
+
+    await jest.advanceTimersByTimeAsync(NO_PATH_MS * 3);
+    expect(h.noPaths).toEqual([]);
+  });
+});

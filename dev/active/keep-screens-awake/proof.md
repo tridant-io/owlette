@@ -90,3 +90,52 @@ The kiosk and the Mac, on local 4.1.1 builds, mirror a full hold:
 owlette-kiosk {"wanted": true, "held": true, "how": "systemd_inhibit", "session": true, "reason": null}
 TEC-MBA       {"wanted": true, "held": true, "how": "iopm_assertion",  "session": true, "reason": null}
 ```
+
+## B4A on the official 4.1.1: the app's half, 15 minutes
+
+2026-10-03 21:33 to 21:48 local, run in admin's console session through a one-off interactive task (removed
+afterwards). AC display timeout set from never to 1 minute; a blank screensaver (180 s) switched on with
+`SPI_SETSCREENSAVEACTIVE` right after the start, as Settings does, to exercise 4f3dfcc4's recheck. Everything put back
+from `a4d-before.json` (display never, `ScreenSaveActive` 0, no `SCRNSAVE.EXE`, no timeout).
+`powercfg /requests` before: DISPLAY and SYSTEM from `owlette-desktop.exe`, nothing from the service (the 4.1.1 bug).
+
+```
+21:33:01 tick idle_s=3   screensaver_active=1 screensaver_running=0
+21:33:01 display on
+21:33:31 tick idle_s=33  screensaver_active=0 screensaver_running=0
+21:40:01 tick idle_s=423 screensaver_active=0 screensaver_running=0
+21:46:31 tick idle_s=813 screensaver_active=0 screensaver_running=0
+21:48:01 watch end
+```
+
+No display-off in 15 minutes at up to 873 s idle against a 60 s timeout; the screensaver switched on mid-hold was
+turned off within 30 s and never ran.
+
+## MBA on a local 4.1.1 build (5e320550): holds present and released; the display outcome is confounded
+
+21:26 to 21:46 local, AC display sleep 1 minute (restored to 10). While on, `pmset -g assertions` listed both halves
+every minute: the service's `PreventUserIdleSystemSleep` + `PreventUserIdleDisplaySleep` and the app's
+`PreventUserIdleDisplaySleep` + `UserIsActive`, all named `owlette keep screens awake`. After `launchctl bootout` of the
+agent every owlette assertion was gone at the next reading (`owlette=[]`), and they came back on restart.
+
+The display never turned off, even stopped at 175 s idle: Synergy (keyboard and mouse sharing, pid 49972) feeds the
+Mac HID activity, which WindowServer turns into a `UserIsActive` assertion with a 7 to 10 minute timeout. The Mac's idle
+counter reset to single digits several times during the run with nobody at it. A display-power proof on the Mac
+needs Synergy quit first. At 21:50 a 12-hour `caffeinate` (not owlette's) also started holding display and system.
+
+## All four on the official 4.1.2 (2026-10-03 22:28 local)
+
+Updated by update_owlette from the dev catalog (4.1.2 set as latest). Every machine mirrors a full hold:
+
+```
+owlette-kiosk {"wanted": true, "held": true, "how": "systemd_inhibit", "session": true, "reason": null}
+TEC-A4D       {"wanted": true, "held": true, "how": "power_request",   "session": true, "reason": null}
+TEC-B4A       {"wanted": true, "held": true, "how": "power_request",   "session": true, "reason": null}
+TEC-MBA       {"wanted": true, "held": true, "how": "iopm_assertion",  "session": true, "reason": null}
+```
+
+B4A `powercfg /requests`: SYSTEM from `ProgramData\Owlette\python\python.exe` ("owlette keep screens awake") and
+from `owlette-desktop.exe`; DISPLAY from `owlette-desktop.exe`. The 4.1.1 refusal is gone.
+
+Still owed for 3.2: the switch-off half (it needs a signed-in dashboard session to flip the site switch) and a Mac
+display-power reading with Synergy quit.

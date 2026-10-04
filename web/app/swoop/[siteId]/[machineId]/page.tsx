@@ -34,7 +34,7 @@ export default function SwoopPage({
   params: Promise<{ siteId: string; machineId: string }>;
 }) {
   const { siteId, machineId } = use(params);
-  const { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn } = useSwoopSession(
+  const { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath } = useSwoopSession(
     siteId,
     machineId,
   );
@@ -74,7 +74,7 @@ export default function SwoopPage({
       </SwoopToolbar>
 
       <div className="min-h-0 flex-1">
-        <SwoopStage session={session} state={state} stageRef={stageRef} videoRef={videoRef} onLeave={leaveStage}>
+        <SwoopStage session={session} state={state} noPath={noPath} stageRef={stageRef} videoRef={videoRef} onLeave={leaveStage}>
           <SwoopCursor session={session} />
           <SwoopPresence session={session} />
           <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />

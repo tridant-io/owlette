@@ -35,6 +35,13 @@ export interface SwoopIceServer {
   credential?: string;
 }
 
+/**
+ * what both ends get when the mint fails: p2p first (plan.md D13), relays only
+ * from a minted list. the viewer and the host streamer must gather the same
+ * kind of candidate, or a nat on either side leaves no pair.
+ */
+export const STUN_ONLY: SwoopIceServer[] = [{ urls: ['stun:stun.cloudflare.com:3478'] }];
+
 export type TurnFailureReason =
   | 'not_configured'
   | 'unreachable'
