@@ -297,23 +297,27 @@ def power_request(kernel32):
     return PowerRequest(kernel32=kernel32, last_error=lambda: ACCESS_DENIED)
 
 
-def test_power_request_holds_the_display_and_the_system():
-    kernel32 = FakeKernel32()
+def test_power_request_holds_the_system_only():
+    # TEC-A4D on 4.1.1, 2026-10-03: from the service's session 0, Windows
+    # refuses PowerRequestDisplayRequired with ERROR_NOT_SUPPORTED, and asking
+    # for it first lost the system request too. The display is the app's to
+    # hold, in the user's session.
+    kernel32 = FakeKernel32(failing_kinds={0})
 
     assert power_request(kernel32).hold() == 0x1234
 
     # REASON_CONTEXT version 0, POWER_REQUEST_CONTEXT_SIMPLE_STRING.
     assert kernel32.contexts == [(0, 1, 'owlette keep screens awake')]
-    # PowerRequestDisplayRequired, then PowerRequestSystemRequired.
-    assert kernel32.calls == [('create',), ('set', 0x1234, 0), ('set', 0x1234, 1)]
+    # PowerRequestSystemRequired, and never PowerRequestDisplayRequired.
+    assert kernel32.calls == [('create',), ('set', 0x1234, 1)]
 
 
-def test_power_request_release_clears_both_and_closes():
+def test_power_request_release_clears_and_closes():
     kernel32 = FakeKernel32()
 
     power_request(kernel32).release(0x1234)
 
-    assert kernel32.calls == [('clear', 0x1234, 0), ('clear', 0x1234, 1), ('close', 0x1234)]
+    assert kernel32.calls == [('clear', 0x1234, 1), ('close', 0x1234)]
 
 
 @pytest.mark.parametrize('refused', [None, keep_awake._INVALID_HANDLE_VALUE])
@@ -326,7 +330,7 @@ def test_power_request_reports_a_refused_create(refused):
     assert kernel32.calls == [('create',)]
 
 
-def test_power_request_closes_a_half_set_request():
+def test_power_request_closes_a_request_it_could_not_set():
     kernel32 = FakeKernel32(failing_kinds={1})
 
     with pytest.raises(RuntimeError, match=r'^PowerSetRequest: \[WinError 5\]'):
@@ -341,7 +345,7 @@ def test_power_request_reports_a_failed_close():
 
 
 def test_a_refused_power_request_reaches_status():
-    keeper = KeepAwake(power_request(FakeKernel32(failing_kinds={0})))
+    keeper = KeepAwake(power_request(FakeKernel32(failing_kinds={1})))
 
     keeper.set_wanted(True)
     assert settled(keeper)

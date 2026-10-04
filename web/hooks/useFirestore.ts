@@ -297,8 +297,9 @@ export interface Machine {
   swoopViewers?: number;
   /**
    * What the agent holds for the site's keep screens awake switch, mirrored on
-   * each change. `held` is the service's own hold (display and sleep), `session`
-   * the desktop app's (idle lock, screensaver), null without a fresh report from
+   * each change. `held` is the service's own hold (system sleep, and on macOS
+   * the display), `session` the desktop app's (idle lock, screensaver, and on
+   * Windows the display), null without a fresh report from
    * it. `reason` says why a wanted hold is not fully held (`no_display` when
    * nobody is signed in at the machine). Absent on agents without
    * `capabilities.keepAwake`.

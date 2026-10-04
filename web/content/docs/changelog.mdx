@@ -5,7 +5,7 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ---
 
-## [Unreleased]
+## [4.1.2] - 2026-10-03
 
 ### added — light mode
 
@@ -16,7 +16,19 @@ settings → preferences → appearance, and the choice follows you to every bro
 you sign in on. Dark stays the default wherever there is no signal. By day the
 console is the same room in daylight: cool paper, navy ink, one deeper signal
 cyan, and a warm lamp glow under the header. The desktop app has its own
-appearance setting in its menu.
+appearance setting in its menu, and it now follows the computer's appearance
+by default, so on a computer set to light it opens light for the first time;
+it was always dark before.
+
+### fixed — keep screens awake on Windows
+
+On Windows, 4.1.1's service held nothing. Windows refuses a display request
+from a service, and the service asked for the display first, so it never asked
+for sleep either. The service now asks for system sleep only, and the owlette
+app keeps the display on in the signed-in session, as it already did in 4.1.1.
+A signed-in machine stayed awake on 4.1.1 through the app alone; a machine with
+nobody signed in is now kept out of sleep too. The dashboard reported the
+refusal as `PowerSetRequest: [WinError 50]` in the machine's `displayAwake`.
 
 ## [4.1.1] - 2026-10-03
 

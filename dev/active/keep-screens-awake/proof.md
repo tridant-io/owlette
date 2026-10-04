@@ -69,3 +69,24 @@ stopped at launch). This was the unexplained "2 of 6 stops cancelled" seen on th
 
 Fix checked on the kiosk with a build of 5e320550: the reinstall restarted the app, and the first stop after it held
 (`agent after the stop, fresh app running: inactive`).
+
+## Windows on the 4.1.1 release: the service's half is refused
+
+A4D (21:02) and B4A (21:09), both updated to the official 4.1.1 by update_owlette, mirror the same `displayAwake`:
+
+```
+{"wanted": true, "held": false, "how": null, "reason": "PowerSetRequest: [WinError 50] The request is not supported.", "session": true}
+```
+
+The app's half holds (`ipc/keep_awake.json`: `{"held":true,"how":"execution_state"}`), so with a user signed in the
+display and sleep are still held through `SetThreadExecutionState`. The service's request asked for the display
+first; from session 0 Windows refuses that with ERROR_NOT_SUPPORTED, and the sleep request was never made. The same
+two calls succeed from the interactive session (checked on A4D with the agent's own module). Fixed in fdab366e for
+4.1.2: the service asks for system sleep only, and the docs say the app holds the display on Windows.
+
+The kiosk and the Mac, on local 4.1.1 builds, mirror a full hold:
+
+```
+owlette-kiosk {"wanted": true, "held": true, "how": "systemd_inhibit", "session": true, "reason": null}
+TEC-MBA       {"wanted": true, "held": true, "how": "iopm_assertion",  "session": true, "reason": null}
+```
