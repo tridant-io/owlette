@@ -1,5 +1,5 @@
 # swoop across the internet — Tasks
-**Progress**: 5/9 complete
+**Progress**: 6/9 complete
 
 ## Wave 1: STUN on both ends
 
@@ -63,7 +63,7 @@
 
 ## Wave 4: ship it
 
-- [ ] **Task 4.1: Docs and release** `[agent]`
+- [x] **Task 4.1: Docs and release** `[agent]`
   - Do: `swoop.mdx` says what networks work and what a relay adds; both changelogs; release with the next version.
   - Done when: released to dev and installed on the four machines.
 
@@ -95,3 +95,6 @@
 - 3.1 not started: host-side relay wiring into rtc.rs. With the owner's Cloudflare key set, the browser's stage-2
   relay already works against a host that now offers its public address, so 3.1 is the cheaper path (D13) and the
   fix for UDP-blocked host networks, not a prerequisite for relayed sessions.
+- 4.1: swoop.mdx "from another network" and the 4.1.3 release (tag v4.1.3, latest on dev, A4D, B4A, MBA and the kiosk on
+  it, keep-awake held on all four afterwards). #283 merged the TURN client with CI building `--features turn` on
+  Windows and macOS. Left: 3.1, 3.2's relayed-media and Cloudflare halves, and 4.2 (the owner's key and phone test).
