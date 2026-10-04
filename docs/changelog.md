@@ -9,6 +9,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ---
 
+## [4.1.5] - 2026-10-04
+
+### fixed — win + l locks a Windows machine from swoop
+
+**win + l** in the special keys menu now locks the machine. Windows ignores a
+lock shortcut that a program types, so the menu item did nothing; the machine
+now locks itself when the shortcut comes through. Pressing win+l on your own
+keyboard still locks your own computer.
+
 ## [4.1.4] - 2026-10-04
 
 ### fixed — swoop through UAC prompts on Windows
