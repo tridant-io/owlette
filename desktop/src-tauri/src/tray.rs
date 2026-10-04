@@ -1084,21 +1084,23 @@ fn notify(app: &AppHandle, title: &str, body: String) {
   }
 }
 
-/// The desktop entry the package installs, which is how gnome maps a
-/// notification to the app's name and icon. Without the hint it titles the
-/// notification after the process, "owlette-desktop", and after an update
-/// "owlette-desktop (deleted)".
+/// The name and icon a notification carries on linux. Named explicitly: left
+/// to the plugin, gnome titles it after the running file, which after an
+/// update in place reads "owlette-desktop (deleted)" with a generic icon.
+/// Deliberately not "owlette" and no desktop-entry hint: either one makes
+/// gnome 46 file the notification under the installed `owlette.desktop`,
+/// and from the app's user service it is then dropped without a trace —
+/// measured on the kiosk vm, 2026-10-04, along with a stock app's entry.
 #[cfg(target_os = "linux")]
-const DESKTOP_ENTRY: &str = "owlette-desktop";
+const NOTIFY_NAME: &str = "owlette-desktop";
 
 #[cfg(target_os = "linux")]
 fn notify(_app: &AppHandle, title: &str, body: String) {
   let result = notify_rust::Notification::new()
-    .appname("owlette")
+    .appname(NOTIFY_NAME)
     .summary(title)
     .body(&body)
-    .icon(DESKTOP_ENTRY)
-    .hint(notify_rust::Hint::DesktopEntry(DESKTOP_ENTRY.to_string()))
+    .icon(NOTIFY_NAME)
     .show();
   if let Err(error) = result {
     log::warn!("could not show the tray notification: {error}");
