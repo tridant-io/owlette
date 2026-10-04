@@ -42,7 +42,7 @@ import {
 } from '@/lib/swoop/features';
 import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
 import { leaseFailure, SwoopLeaseRefused } from '@/lib/swoop/lease';
-import { createSwoopIdentity, createSwoopPeer, type SwoopPeer } from '@/lib/swoop/peer';
+import { createSwoopIdentity, createSwoopPeer, type SwoopNoPath, type SwoopPeer } from '@/lib/swoop/peer';
 import { backoffDelayMs, isTransientEnd, isWithdrawal } from '@/lib/swoop/backoff';
 import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
@@ -143,6 +143,8 @@ export interface UseSwoopSession {
    * again on a ladder, and the operator can reconnect now instead.
    */
   retryIn: number | null;
+  /** set while connecting finds no media path between this browser and the machine; see `NO_PATH_MS`. */
+  noPath: SwoopNoPath | null;
 }
 
 interface SessionGrant {
@@ -232,6 +234,7 @@ export function useSwoopSession(
   const [stats, setStats] = useState<SwoopStats>(EMPTY_STATS);
   const [stepUpRequired, setStepUpRequired] = useState(false);
   const [session, setSession] = useState<SwoopSession | null>(null);
+  const [noPath, setNoPath] = useState<SwoopNoPath | null>(null);
   // bumping this is what re-runs the sequence after a step-up ceremony.
   const [attempt, setAttempt] = useState(0);
   // the automatic reconnect: when it is due, and which rung of the ladder it
@@ -539,6 +542,7 @@ export function useSwoopSession(
       }
 
       setState('connecting');
+      setNoPath(null);
 
       receiver = new SwoopReceiver({
         video,
@@ -591,6 +595,9 @@ export function useSwoopSession(
         send: (message) => signaling?.send(message),
         refreshToken: () => signaling?.refresh() ?? Promise.resolve(),
         leaseToken: () => mintViewerToken(identity.fingerprint),
+        onNoPath: (value) => {
+          if (!disposed) setNoPath(value);
+        },
         onTrack: (stream, rtpReceiver) => {
           // two tracks arrive now, and only one of them is a picture: audio is
           // its own m-line and `lib/swoop/audio.ts` takes it off the connection
@@ -712,5 +719,5 @@ export function useSwoopSession(
     [stepUpRequired, enrolled, submitProof, cancel],
   );
 
-  return { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn };
+  return { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath };
 }

@@ -164,3 +164,28 @@ describe('SwoopStage theme', () => {
     expect(stageRef.current).toHaveClass('dark');
   });
 });
+
+describe('SwoopStage — no media path', () => {
+  it('says connecting while there is no word about the path', () => {
+    renderStage({ state: 'connecting' });
+    expect(screen.getByText('connecting')).toBeTruthy();
+  });
+
+  it('says the machine cannot be reached, and that no relay is set up', () => {
+    renderStage({ state: 'connecting', noPath: { relayConfigured: false } });
+    expect(screen.getByText("can't reach this machine from your network")).toBeTruthy();
+    expect(screen.getByText(/no relay is set up for this site/)).toBeTruthy();
+    expect(screen.queryByText('connecting')).toBeNull();
+  });
+
+  it('says even the relay failed when there was one', () => {
+    renderStage({ state: 'connecting', noPath: { relayConfigured: true } });
+    expect(screen.getByText("can't reach this machine from your network")).toBeTruthy();
+    expect(screen.getByText(/even the relay could not get through/)).toBeTruthy();
+  });
+
+  it('shows the picture, not the message, once connected', () => {
+    renderStage({ state: 'connected', noPath: { relayConfigured: false } });
+    expect(screen.queryByText("can't reach this machine from your network")).toBeNull();
+  });
+});

@@ -28,10 +28,13 @@ import { Loader2 } from 'lucide-react';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
 import type { SwoopSessionState } from '@/hooks/useSwoopSession';
+import type { SwoopNoPath } from '@/lib/swoop/peer';
 
 export interface SwoopStageProps {
   session: SwoopSession | null;
   state: SwoopSessionState;
+  /** connecting found no media path; the stage says so instead of a bare "connecting". */
+  noPath?: SwoopNoPath | null;
   stageRef: RefObject<HTMLDivElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
   /**
@@ -55,7 +58,7 @@ function Hint({ children, onDone }: { children: React.ReactNode; onDone: () => v
   );
 }
 
-export function SwoopStage({ session, state, stageRef, videoRef, onLeave, children }: SwoopStageProps) {
+export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave, children }: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   // the way out, said once fullscreen holds and only where it is not obvious:
@@ -143,7 +146,14 @@ export function SwoopStage({ session, state, stageRef, videoRef, onLeave, childr
       {state !== 'connected' && (
         <p className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
           {state !== 'ended' && <Loader2 className="size-6 animate-spin" aria-hidden />}
-          {state === 'ended' ? 'session ended' : 'connecting'}
+          {state === 'ended' ? 'session ended' : noPath ? "can't reach this machine from your network" : 'connecting'}
+          {state !== 'ended' && noPath && (
+            <span className="max-w-sm text-center text-xs">
+              {noPath.relayConfigured
+                ? 'even the relay could not get through. check that this network allows udp, or try another network.'
+                : 'no relay is set up for this site, so swoop only connects when both ends can reach each other directly.'}
+            </span>
+          )}
         </p>
       )}
       {state === 'connected' && fullscreen && !locked && (
