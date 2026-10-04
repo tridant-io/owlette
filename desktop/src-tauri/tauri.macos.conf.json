@@ -21,6 +21,11 @@
     ]
   },
   "bundle": {
-    "externalBin": ["binaries/owlette-swoop"]
+    "externalBin": ["binaries/owlette-swoop"],
+    "macOS": {
+      "files": {
+        "Resources/Assets.car": "icons/macos/Assets.car"
+      }
+    }
   }
 }
