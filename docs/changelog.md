@@ -9,7 +9,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ---
 
-## [Unreleased]
+## [4.1.4] - 2026-10-04
 
 ### fixed — swoop through UAC prompts on Windows
 
