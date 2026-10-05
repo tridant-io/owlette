@@ -15,10 +15,9 @@ Terraform (IaC) in `infra/cloudflare/` for a Cloudflare load balancer that fails
   Experiential scope it started in is blocked) — standby; builds production from `main`
   only (its Ignored Build Step cancels every other deployment)
 
-**Status: not live.** As of 2026-09-10 no load balancer, pool, or monitor exists —
-`owlette.app` is a plain proxied CNAME to Railway, and the May 2026 apply was destroyed
-the same day. Verify with a GET on `zones/{zone_id}/load_balancers` before assuming
-otherwise.
+**Status: live since ~2026-09-24.** There is no terraform state on the dev box; the
+live pools were last changed by API (2026-10-04, `check_regions`). Verify with a GET on
+`accounts/{account_id}/load_balancers/pools` before assuming anything.
 
 Companion systems: [[env-management]] (env var parity across both origins) and the
 `/api/health` readiness probe both origins are checked against.
@@ -86,6 +85,11 @@ and **Zone › Load Balancers › Edit** (for the owlette.app zone). Pass via en
 ## Critical Rules
 
 ### Do
+- **Keep `check_regions = ["ENAM"]` on every pool.** Unset (null) means every Cloudflare
+  data center probes `/api/health`: ~12-23 req/s per origin, each a Firestore read, and
+  Vercel bills each one. That ran ~$190/cycle on Vercel from 2026-09-24 to 2026-10-04
+  unnoticed. Our plan allows one region. Before any LB change, multiply probe count by
+  the per-request price of every origin.
 - **Keep `vercel-origin.owlette.app` DNS-only** (grey cloud). Proxying it breaks Vercel's
   HTTP-01 certificate renewals.
 - **Keep state safe.** Local `*.tfstate` is gitignored. For shared/durable state,

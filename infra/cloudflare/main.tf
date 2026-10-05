@@ -45,6 +45,11 @@ resource "cloudflare_load_balancer_pool" "railway" {
   minimum_origins    = 1
   notification_email = var.notification_email
 
+  # never leave this unset: null probes from every cloudflare data center
+  # (~12-23 req/s per origin, each a firestore read, billed per call on
+  # vercel). our plan allows one region; ENAM is where vercel runs (iad1).
+  check_regions = ["ENAM"]
+
   origins {
     name    = "railway"
     address = var.railway_origin
@@ -64,6 +69,7 @@ resource "cloudflare_load_balancer_pool" "vercel" {
   enabled            = true
   minimum_origins    = 1
   notification_email = var.notification_email
+  check_regions      = ["ENAM"] # see the railway pool
 
   origins {
     name    = "vercel"
