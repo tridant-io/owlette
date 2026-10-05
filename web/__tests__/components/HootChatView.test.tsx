@@ -158,15 +158,18 @@ jest.mock('@/hooks/useHoot', () => ({
   },
 }));
 
+let mockCollapsedGroups = new Set<string>();
+let mockPrefsHydrated = true;
+
 jest.mock('@/hooks/useHootSidebarPrefs', () => ({
   useHootSidebarPrefs: () => ({
     sidebarOpen: true,
     setSidebarOpen: jest.fn(),
-    collapsedGroups: new Set<string>(),
+    collapsedGroups: mockCollapsedGroups,
     setCollapsedGroups: jest.fn(),
     sidebarWidth: 256,
     setSidebarWidth: jest.fn(),
-    hydrated: true,
+    hydrated: mockPrefsHydrated,
   }),
   HOOT_SIDEBAR_DEFAULT_WIDTH: 256,
   HOOT_SIDEBAR_MIN_WIDTH: 180,
@@ -284,6 +287,23 @@ beforeEach(() => {
   mockLastMachineIds = {};
   mockChat.chatId = CHAT_ID;
   mockChatOptions = null;
+  mockCollapsedGroups = new Set<string>();
+  mockPrefsHydrated = true;
+});
+
+describe('HootChatView conversation groups', () => {
+  it('holds the list until the saved collapsed groups arrive, so a collapsed group never opens first', () => {
+    mockConversations = [conversation({ id: 'convo-ops', title: 'cache cleanup', category: 'Operations' })];
+    mockPrefsHydrated = false;
+    const { rerender } = renderView();
+    expect(screen.queryByText('cache cleanup')).not.toBeInTheDocument();
+
+    mockCollapsedGroups = new Set(['Operations']);
+    mockPrefsHydrated = true;
+    rerender();
+    expect(screen.getByRole('button', { name: /^operations/i })).toBeInTheDocument();
+    expect(screen.queryByText('cache cleanup')).not.toBeInTheDocument();
+  });
 });
 
 describe('HootChatView target selection', () => {

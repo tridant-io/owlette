@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — hoot's conversation groups open as you left them
+
+hoot's conversation list no longer opens with every group expanded and then
+folds the ones you had collapsed. The list waits for your saved groups, which
+takes a moment, and appears with them already as you left them.
+
 ### changed — pages fade in, top to bottom
 
 Every page now fades in one row after another as it opens: the header, each

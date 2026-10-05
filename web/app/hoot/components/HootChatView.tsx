@@ -965,7 +965,9 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
             className={`${conversationPanelClass} flex-1 overflow-y-auto ${isDesktop ? 'border-r border-border' : ''}`}
             style={conversationPanelStyle}
           >
-            {chat.conversations.length === 0 ? (
+            {/* held until the saved collapsed groups land: the conversations can
+                arrive first, and every group would render open, then shut */}
+            {!prefsHydrated ? null : chat.conversations.length === 0 ? (
               <div className="p-4 text-center text-xs text-muted-foreground">
                 {chat.searchQuery ? 'no matches' : 'no conversations yet'}
               </div>
