@@ -44,6 +44,7 @@ import {
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import { encodeControlMessage, type SwoopCodec } from '@/lib/swoop/protocol';
 import type { SwoopSession } from '@/lib/swoop/features';
+import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
 
 /** kbps, because that is the unit the wire uses. `0` means "unstated". */
 const BANDWIDTH: { value: number; label: string }[] = [
@@ -135,6 +136,7 @@ export interface SwoopQualityMenuProps {
 }
 
 export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
+  const menuPlacement = useBarMenuPlacement();
   const [ceiling, setCeiling] = useState<Ceiling>(DEFAULTS);
   const [owner, setOwner] = useState(session);
   const [offerable, setOfferable] = useState<SwoopCodec[]>([]);
@@ -185,7 +187,7 @@ export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
           <SlidersHorizontal aria-hidden />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuContent {...menuPlacement} align="end" className="w-56">
         <Axis
           label="bandwidth"
           value={BANDWIDTH.find((option) => option.value === ceiling.bandwidth)?.label ?? 'auto'}
@@ -246,7 +248,7 @@ export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
 
         <DropdownMenuSeparator />
         <p className="px-2 py-1.5 text-xs text-muted-foreground">
-          a ceiling, not a rate — the machine still adapts below it.
+          bandwidth, resolution and frame rate are upper limits: the machine lowers them when the connection needs it.
         </p>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -31,6 +31,7 @@ import { isMacViewer, modifierSwap, type ModifierMapping, type ModifierSwap } fr
 import { modifierLegend } from '@/lib/swoop/modifierLegend';
 import { decodeControlMessage } from '@/lib/swoop/protocol';
 import { sendSpecialKey, specialKeysFor } from '@/lib/swoop/specialKeys';
+import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
 
 /** the two settings, named for what each keeps the same. */
 const SETTING_LABELS: Readonly<Record<ModifierSwap, Readonly<Record<ModifierMapping, string>>>> = {
@@ -60,6 +61,7 @@ export interface SwoopSpecialKeysProps {
 }
 
 export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
+  const menuPlacement = useBarMenuPlacement();
   const [note, setNote] = useState<string | null>(null);
   const [mapping, setMapping] = useState<ModifierMapping>('swap');
   const viewerIsMac = useSyncExternalStore(subscribeNever, isMacViewer, onServer);
@@ -98,6 +100,7 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
+        {...menuPlacement}
         align="end"
         className="w-72"
         onCloseAutoFocus={(event) => {

@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { NO_DISPLAYS, swoopDisplays } from '@/lib/swoop/displays';
 import type { SwoopSession } from '@/lib/swoop/features';
+import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
 
 const subscribeNever = (): (() => void) => () => {};
 const noDisplays = () => NO_DISPLAYS;
@@ -45,6 +46,7 @@ export interface SwoopDisplayPickerProps {
 }
 
 export function SwoopDisplayPicker({ session }: SwoopDisplayPickerProps) {
+  const menuPlacement = useBarMenuPlacement();
   const store = swoopDisplays(session);
   const state = useSyncExternalStore(
     store?.subscribe ?? subscribeNever,
@@ -65,7 +67,7 @@ export function SwoopDisplayPicker({ session }: SwoopDisplayPickerProps) {
           <Monitor aria-hidden />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuContent {...menuPlacement} align="end" className="w-56">
         <DropdownMenuLabel>display</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={state.selected === null ? '' : String(state.selected)}

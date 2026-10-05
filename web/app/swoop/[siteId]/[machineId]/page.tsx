@@ -14,8 +14,10 @@
  * session-create request; the page never inspects, stores or logs a proof.
  */
 
-import { use, useCallback, useRef, useState } from 'react';
+import { use, useCallback, useRef, useState, useSyncExternalStore } from 'react';
 import { useMachines } from '@/hooks/useFirestore';
+import { readBarPosition, subscribeBarPosition, type SwoopBarPosition } from '@/lib/swoop/barPosition';
+import { cn } from '@/lib/utils';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
@@ -27,6 +29,9 @@ import { SwoopSpecialKeys } from '@/components/swoop/SwoopSpecialKeys';
 import { SwoopAudioToggle } from '@/components/swoop/SwoopAudioToggle';
 import { SwoopPresence } from '@/components/swoop/SwoopPresence';
 import { SwoopCursor } from '@/components/swoop/SwoopCursor';
+import { SwoopBarPositionMenu } from '@/components/swoop/SwoopBarPositionMenu';
+
+const barOnTop = (): SwoopBarPosition => 'top';
 
 export default function SwoopPage({
   params,
@@ -51,9 +56,17 @@ export default function SwoopPage({
   const leaveStage = useCallback(() => {
     toolbarRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
   }, []);
+  // the server renders the bar on top; a side choice lands on hydration.
+  const position = useSyncExternalStore(subscribeBarPosition, readBarPosition, barOnTop);
 
   return (
-    <main className="flex h-full w-full flex-col">
+    <main
+      className={cn(
+        'flex h-full w-full flex-col',
+        position === 'left' && 'md:flex-row',
+        position === 'right' && 'md:flex-row-reverse',
+      )}
+    >
       <SwoopToolbar
         ref={toolbarRef}
         machineId={machineId}
@@ -66,29 +79,33 @@ export default function SwoopPage({
         onReconnect={reconnect}
         statsOpen={statsOpen}
         onToggleStats={() => setStatsOpen((open) => !open)}
+        position={position}
       >
         <SwoopDisplayPicker session={session} />
         <SwoopQualityMenu session={session} />
         <SwoopAudioToggle session={session} />
         <SwoopSpecialKeys session={session} osFamily={osFamily} />
+        <SwoopBarPositionMenu position={position} />
       </SwoopToolbar>
 
-      <div className="min-h-0 flex-1">
-        <SwoopStage session={session} state={state} noPath={noPath} stageRef={stageRef} videoRef={videoRef} onLeave={leaveStage}>
-          <SwoopCursor session={session} />
-          <SwoopPresence session={session} />
-          <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
-        </SwoopStage>
-      </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1">
+          <SwoopStage session={session} state={state} noPath={noPath} stageRef={stageRef} videoRef={videoRef} onLeave={leaveStage}>
+            <SwoopCursor session={session} />
+            <SwoopPresence session={session} />
+            <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
+          </SwoopStage>
+        </div>
 
-      {error && (
-        <p role="alert" className="px-4 py-2 text-center text-sm text-destructive">
-          {error}
-          {retryIn !== null && (
-            <span className="text-muted-foreground"> reconnecting in {retryIn} s…</span>
-          )}
-        </p>
-      )}
+        {error && (
+          <p role="alert" className="px-4 py-2 text-center text-sm text-destructive">
+            {error}
+            {retryIn !== null && (
+              <span className="text-muted-foreground"> reconnecting in {retryIn} s…</span>
+            )}
+          </p>
+        )}
+      </div>
 
       <SwoopStepUpDialog
         open={stepUp.required}
