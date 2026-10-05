@@ -45,6 +45,7 @@ import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import { encodeControlMessage, type SwoopCodec } from '@/lib/swoop/protocol';
 import type { SwoopSession } from '@/lib/swoop/features';
 import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
+import { BarTooltip } from '@/components/swoop/BarTooltip';
 
 /** kbps, because that is the unit the wire uses. `0` means "unstated". */
 const BANDWIDTH: { value: number; label: string }[] = [
@@ -182,11 +183,13 @@ export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" disabled={!live} aria-label="quality ceiling">
-          <SlidersHorizontal aria-hidden />
-        </Button>
-      </DropdownMenuTrigger>
+      <BarTooltip label="quality">
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" disabled={!live} aria-label="quality ceiling">
+            <SlidersHorizontal aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+      </BarTooltip>
       <DropdownMenuContent {...menuPlacement} align="end" className="w-56">
         <Axis
           label="bandwidth"

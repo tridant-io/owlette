@@ -32,6 +32,7 @@ import { modifierLegend } from '@/lib/swoop/modifierLegend';
 import { decodeControlMessage } from '@/lib/swoop/protocol';
 import { sendSpecialKey, specialKeysFor } from '@/lib/swoop/specialKeys';
 import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
+import { BarTooltip } from '@/components/swoop/BarTooltip';
 
 /** the two settings, named for what each keeps the same. */
 const SETTING_LABELS: Readonly<Record<ModifierSwap, Readonly<Record<ModifierMapping, string>>>> = {
@@ -94,11 +95,13 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="send a key combination" disabled={!enabled}>
-          <Keyboard aria-hidden />
-        </Button>
-      </DropdownMenuTrigger>
+      <BarTooltip label="send a key combination">
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label="send a key combination" disabled={!enabled}>
+            <Keyboard aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+      </BarTooltip>
       <DropdownMenuContent
         {...menuPlacement}
         align="end"

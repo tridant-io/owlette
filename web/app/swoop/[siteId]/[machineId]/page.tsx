@@ -14,9 +14,15 @@
  * session-create request; the page never inspects, stores or logs a proof.
  */
 
-import { use, useCallback, useRef, useState, useSyncExternalStore } from 'react';
+import { use, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useMachines } from '@/hooks/useFirestore';
-import { readBarPosition, subscribeBarPosition, type SwoopBarPosition } from '@/lib/swoop/barPosition';
+import {
+  applyBarPosition,
+  currentBarPosition,
+  setPictureAspect,
+  subscribeBarPosition,
+  type SwoopBarPosition,
+} from '@/lib/swoop/barPosition';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
@@ -56,7 +62,19 @@ export default function SwoopPage({
     toolbarRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
   }, []);
   // the menus' and tooltips' side; the layout follows `data-swoop-bar`.
-  const position = useSyncExternalStore(subscribeBarPosition, readBarPosition, barOnTop);
+  const position = useSyncExternalStore(subscribeBarPosition, currentBarPosition, barOnTop);
+  // auto sums with the window and the picture, so both are watched
+  useEffect(() => {
+    window.addEventListener('resize', applyBarPosition);
+    return () => window.removeEventListener('resize', applyBarPosition);
+  }, []);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onResize = () => setPictureAspect(video.videoWidth, video.videoHeight);
+    video.addEventListener('resize', onResize);
+    return () => video.removeEventListener('resize', onResize);
+  }, [videoRef]);
 
   return (
     <main className="flex h-full w-full flex-col md:bar-left:flex-row md:bar-right:flex-row-reverse">

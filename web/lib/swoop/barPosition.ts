@@ -1,51 +1,108 @@
 /**
- * where the session bar sits: on top, or down the left or right edge.
+ * where the session bar sits: on top, down the left or right edge, or `auto`,
+ * which picks whichever leaves the picture bigger in this window.
  *
  * a 16:9 picture in a 16:9 window is letterboxed at its sides, so a bar on top
  * costs the picture height it could have had, while a bar down one side sits
  * in space the letterbox wastes anyway. the choice is this browser's, kept in
  * its storage; storage that is missing or refused means the bar stays on top.
  *
- * the layout reads it from `data-swoop-bar` on <html> (the `bar-side`,
- * `bar-left` and `bar-right` variants in globals.css), not from react state:
- * the server cannot see this browser's storage, so a layout that waited for
- * hydration drew the bar on top for a frame first. the swoop layout's inline
- * script sets the attribute before first paint, and every change here keeps it.
+ * the layout reads where the bar *is* from `data-swoop-bar` on <html> (the
+ * `bar-side`, `bar-left` and `bar-right` variants in globals.css), not from
+ * react state: the server cannot see this browser's storage or window, so a
+ * layout that waited for hydration drew the bar on top for a frame first. the
+ * swoop layout's inline script sets the attribute before first paint, and
+ * every change here — a choice, a resize, the picture's real shape — keeps it.
  */
 
 export type SwoopBarPosition = 'top' | 'left' | 'right';
+export type SwoopBarChoice = SwoopBarPosition | 'auto';
 
 const KEY = 'owlette.swoop.barPosition';
 const listeners = new Set<() => void>();
 
-/** run inline, before the page paints. */
-export const BAR_POSITION_SCRIPT = `try{var p=localStorage.getItem('${KEY}');if(p==='left'||p==='right')document.documentElement.dataset.swoopBar=p}catch(e){}`;
+// the bar's own size, for the sum auto makes: a top bar is a 32 px button row
+// with 8 px padding and a border; a side bar is `w-11`. below tailwind's md
+// the bar is always on top.
+const TOP_BAR_PX = 49;
+const SIDE_BAR_PX = 44;
+const MD_PX = 768;
+// until a picture arrives, auto assumes the common shape
+const DEFAULT_ASPECT = 16 / 9;
 
-export function readBarPosition(): SwoopBarPosition {
+let aspect = DEFAULT_ASPECT;
+
+/**
+ * where `auto` puts the bar in a window this size: the side that leaves the
+ * picture taller, top on a tie. the inline script below makes the same sum, and
+ * a test holds the two to the same answers.
+ */
+export function autoPosition(width: number, height: number, pictureAspect = DEFAULT_ASPECT): 'top' | 'left' {
+  if (width < MD_PX) return 'top';
+  const onTop = Math.min(width / pictureAspect, height - TOP_BAR_PX);
+  const beside = Math.min((width - SIDE_BAR_PX) / pictureAspect, height);
+  return beside > onTop ? 'left' : 'top';
+}
+
+/** run inline, before the page paints. */
+export const BAR_POSITION_SCRIPT =
+  `try{var p=localStorage.getItem('${KEY}');` +
+  `if(p==='auto'){var w=innerWidth,h=innerHeight,a=${DEFAULT_ASPECT};` +
+  `p=w>=${MD_PX}&&Math.min((w-${SIDE_BAR_PX})/a,h)>Math.min(w/a,h-${TOP_BAR_PX})?'left':''}` +
+  `if(p==='left'||p==='right')document.documentElement.dataset.swoopBar=p}catch(e){}`;
+
+/** what this browser chose. */
+export function readBarChoice(): SwoopBarChoice {
   try {
     const stored = localStorage.getItem(KEY);
-    return stored === 'left' || stored === 'right' ? stored : 'top';
+    return stored === 'left' || stored === 'right' || stored === 'auto' ? stored : 'top';
   } catch {
     return 'top';
   }
 }
 
-/** the attribute the layout's css reads, from what is stored. */
-function applyBarPosition(): void {
-  const position = readBarPosition();
-  if (position === 'top') delete document.documentElement.dataset.swoopBar;
-  else document.documentElement.dataset.swoopBar = position;
+/** where the bar is now: the choice, with auto worked out for this window. */
+export function currentBarPosition(): SwoopBarPosition {
+  const marked = document.documentElement.dataset.swoopBar;
+  return marked === 'left' || marked === 'right' ? marked : 'top';
 }
 
-export function setBarPosition(position: SwoopBarPosition): void {
-  try {
-    if (position === 'top') localStorage.removeItem(KEY);
-    else localStorage.setItem(KEY, position);
-  } catch {
-    // unstorable: the read says top, so the bar stays where it was
-  }
-  applyBarPosition();
+/** mark <html> with where the bar is; true when that moved it. */
+function mark(): boolean {
+  const choice = readBarChoice();
+  const position = choice === 'auto' ? autoPosition(innerWidth, innerHeight, aspect) : choice;
+  if (position === currentBarPosition()) return false;
+  if (position === 'top') delete document.documentElement.dataset.swoopBar;
+  else document.documentElement.dataset.swoopBar = position;
+  return true;
+}
+
+function notify(): void {
   for (const listener of listeners) listener();
+}
+
+/** follow the window, or anything else auto sums with. */
+export function applyBarPosition(): void {
+  if (mark()) notify();
+}
+
+export function setBarChoice(choice: SwoopBarChoice): void {
+  try {
+    if (choice === 'top') localStorage.removeItem(KEY);
+    else localStorage.setItem(KEY, choice);
+  } catch {
+    // unstorable: the read says top, so the bar stays on top
+  }
+  mark();
+  // once, and even when the bar does not move: the radio follows the choice
+  notify();
+}
+
+/** the picture's real shape, once the video knows it: auto sums with it from then on. */
+export function setPictureAspect(width: number, height: number): void {
+  if (width <= 0 || height <= 0) return;
+  aspect = width / height;
+  applyBarPosition();
 }
 
 /**
@@ -54,7 +111,7 @@ export function setBarPosition(position: SwoopBarPosition): void {
  */
 export function subscribeBarPosition(onChange: () => void): () => void {
   const onStorage = () => {
-    applyBarPosition();
+    mark();
     onChange();
   };
   listeners.add(onChange);

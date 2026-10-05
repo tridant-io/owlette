@@ -4,6 +4,7 @@
 import React from 'react';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { SwoopSpecialKeys } from '@/components/swoop/SwoopSpecialKeys';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import type { InputCapture } from '@/lib/swoop/input';
@@ -36,7 +37,7 @@ const session = { ctl: true, send: () => true, onChannelMessage: () => () => {} 
 
 async function open(osFamily: 'macos' | 'windows') {
   const user = userEvent.setup();
-  render(<SwoopSpecialKeys session={session} osFamily={osFamily} />);
+  render(<SwoopSpecialKeys session={session} osFamily={osFamily} />, { wrapper: TooltipProvider });
   const trigger = screen.getByRole('button', { name: 'send a key combination' });
   await user.click(trigger);
   await screen.findByRole('menu');
@@ -78,7 +79,7 @@ describe('SwoopSpecialKeys', () => {
       const capture = { holdNextKey: jest.fn(), pressChord: jest.fn(), setModifierMapping: jest.fn() };
       jest.mocked(swoopInputCapture).mockReturnValue(capture as unknown as InputCapture);
       const user = userEvent.setup();
-      render(<SwoopSpecialKeys session={{ ...session, stage } as SwoopSession} osFamily="macos" />);
+      render(<SwoopSpecialKeys session={{ ...session, stage } as SwoopSession} osFamily="macos" />, { wrapper: TooltipProvider });
       const trigger = screen.getByRole('button', { name: 'send a key combination' });
       return { stage, capture, user, trigger };
     };
