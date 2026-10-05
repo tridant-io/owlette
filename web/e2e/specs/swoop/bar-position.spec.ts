@@ -84,6 +84,43 @@ test.describe('swoop bar position — admin on site-A', () => {
     expect((await bar.boundingBox())!.width).toBeGreaterThan(1500);
   });
 
+  test('a side bar is drawn on its side from first paint, before any app script runs', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('owlette.swoop.barPosition', 'left'));
+    // no app javascript at all: what is on screen is the server's markup, the
+    // css, and the layout's inline script, which is what the first frame is
+    await page.route(
+      (url) => url.pathname.startsWith('/_next/static/') && url.pathname.endsWith('.js'),
+      (route) => route.abort(),
+    );
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
+    const bar = page.getByTestId('session-bar');
+    await expect(bar).toBeVisible();
+
+    const box = await bar.boundingBox();
+    expect(box!.x).toBeLessThan(1);
+    expect(box!.width).toBeLessThan(60);
+    await expect(bar.getByTitle(MACHINE_ID)).toHaveCSS('writing-mode', 'vertical-rl');
+  });
+
+  test('the latency stats open at the bottom beside a side bar, next to their button', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('owlette.swoop.barPosition', 'left'));
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
+    const bar = (await page.getByTestId('session-bar').boundingBox())!;
+
+    const toggle = page.getByRole('button', { name: 'show latency stats' });
+    const button = (await toggle.boundingBox())!;
+    await toggle.click();
+    const stats = (await page.getByRole('complementary', { name: 'latency breakdown' }).boundingBox())!;
+    // beside the bar, and level with the button that opened it
+    expect(stats.x).toBeGreaterThanOrEqual(bar.x + bar.width);
+    expect(stats.x).toBeLessThan(bar.x + bar.width + 24);
+    expect(stats.y).toBeLessThanOrEqual(button.y);
+    expect(stats.y + stats.height).toBeGreaterThanOrEqual(button.y + button.height);
+    await shot(page, 'left-stats');
+  });
+
   test('a phone keeps the bar on top whatever was chosen', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('owlette.swoop.barPosition', 'left'));
     await page.setViewportSize({ width: 390, height: 844 });

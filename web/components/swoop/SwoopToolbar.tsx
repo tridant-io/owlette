@@ -21,7 +21,8 @@
  * and the picture should be every pixel. the bar is off screen while fullscreen
  * holds, which is why the stage carries its own click-to-recapture hint.
  *
- * on a side (`position`, from md up) the bar is a narrow column: the name and
+ * on a side (from md up, marked as `data-swoop-bar` on <html> before first
+ * paint, see `lib/swoop/barPosition.ts`) the bar is a narrow column: the name and
  * the badges run vertically, the buttons stack at the bottom, and a notice
  * that is a sentence becomes an icon that says it on hover. the name reads
  * toward the picture: up a left bar, down a right one.
@@ -73,30 +74,26 @@ function badgeFor(
 const hostReadsUnknown = (): boolean => true;
 const nothingHeld = (): boolean => false;
 
-/** vertical text, turned so it reads toward the picture. */
-function vertical(position: SwoopBarPosition): string | false {
-  return position !== 'top' && cn('md:[writing-mode:vertical-rl]', position === 'left' && 'md:rotate-180');
-}
+/** vertical text on a side bar, turned so it reads toward the picture. */
+const VERTICAL = 'md:bar-side:[writing-mode:vertical-rl] md:bar-left:rotate-180';
 
 /** a sentence in a top bar; on a side, an icon that says it on hover. */
-function Notice({ text, side, testId }: { text: string; side: boolean; testId?: string }) {
+function Notice({ text, testId }: { text: string; testId?: string }) {
   return (
     <>
-      <span className={cn('text-xs text-muted-foreground', side && 'md:hidden')} data-testid={testId}>
+      <span className="text-xs text-muted-foreground md:bar-side:hidden" data-testid={testId}>
         {text}
       </span>
-      {side && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label={text} className="max-md:hidden">
-              <Info aria-hidden />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p className="max-w-xs">{text}</p>
-          </TooltipContent>
-        </Tooltip>
-      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={text} className="hidden md:bar-side:inline-flex">
+            <Info aria-hidden />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p className="max-w-xs">{text}</p>
+        </TooltipContent>
+      </Tooltip>
     </>
   );
 }
@@ -121,7 +118,8 @@ export interface SwoopToolbarProps {
   /** whether the latency overlay is showing; the page owns the flag. */
   statsOpen: boolean;
   onToggleStats: () => void;
-  /** where the page put the bar. a side takes effect from md up. */
+  /** where the bar is, for which way its menus and tooltips open. the layout
+   *  itself follows `data-swoop-bar`, which is right from first paint. */
   position?: SwoopBarPosition;
   /** the bar itself, where the page sends keyboard focus off the stage. */
   ref?: React.Ref<HTMLDivElement>;
@@ -210,7 +208,6 @@ export function SwoopToolbar({
 
   const live = state === 'connected' && session !== null;
   const badge = badgeFor(state, stats, retryIn);
-  const side = position !== 'top';
   const tipSide = position === 'left' ? 'right' : position === 'right' ? 'left' : undefined;
 
   return (
@@ -219,48 +216,45 @@ export function SwoopToolbar({
       data-testid="session-bar"
       className={cn(
         'flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2',
-        side && 'md:w-11 md:shrink-0 md:flex-col md:flex-nowrap md:border-b-0 md:px-0 md:py-3',
-        position === 'left' && 'md:border-r',
-        position === 'right' && 'md:border-l',
+        'md:bar-side:w-11 md:bar-side:shrink-0 md:bar-side:flex-col md:bar-side:flex-nowrap md:bar-side:border-b-0',
+        'md:bar-side:px-0 md:bar-side:py-3 md:bar-left:border-r md:bar-right:border-l',
       )}
     >
       <span
-        className={cn('truncate text-sm font-medium text-foreground', side && 'md:min-h-0', vertical(position))}
+        className={cn('truncate text-sm font-medium text-foreground md:bar-side:min-h-0', VERTICAL)}
         title={machineId}
       >
         {machineId}
       </span>
 
       {badge && (
-        <Badge variant={badge.tone} data-testid="session-badge" className={cn(vertical(position))}>
+        <Badge variant={badge.tone} data-testid="session-badge" className={VERTICAL}>
           {badge.label}
         </Badge>
       )}
 
       {session && !session.ctl && (
-        <Badge variant="outline" className={cn(vertical(position))}>
+        <Badge variant="outline" className={VERTICAL}>
           <Eye aria-hidden />
           view only
         </Badge>
       )}
 
-      {notice && <Notice text={notice} side={side} />}
+      {notice && <Notice text={notice} />}
       {!hostReads && (
         <Notice
           text="the machine's clipboard is not shared: on a mac, allow owlette under paste from other apps in system settings"
-          side={side}
           testId="clipboard-notice"
         />
       )}
       {clipboardHeld && (
         <Notice
           text="your browser held back the machine's copy: click the picture to take it, or allow the clipboard for this site"
-          side={side}
           testId="clipboard-held-notice"
         />
       )}
 
-      <div className={cn('ml-auto flex items-center gap-1', side && 'md:ml-0 md:mt-auto md:flex-col')}>
+      <div className="ml-auto flex items-center gap-1 md:bar-side:ml-0 md:bar-side:mt-auto md:bar-side:flex-col">
         <SwoopBarMenuPlacement.Provider value={menuPlacementFor(position)}>{children}</SwoopBarMenuPlacement.Provider>
 
         <Tooltip>

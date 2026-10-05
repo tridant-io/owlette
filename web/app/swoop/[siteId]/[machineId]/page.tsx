@@ -17,7 +17,6 @@
 import { use, useCallback, useRef, useState, useSyncExternalStore } from 'react';
 import { useMachines } from '@/hooks/useFirestore';
 import { readBarPosition, subscribeBarPosition, type SwoopBarPosition } from '@/lib/swoop/barPosition';
-import { cn } from '@/lib/utils';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
@@ -56,17 +55,11 @@ export default function SwoopPage({
   const leaveStage = useCallback(() => {
     toolbarRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
   }, []);
-  // the server renders the bar on top; a side choice lands on hydration.
+  // the menus' and tooltips' side; the layout follows `data-swoop-bar`.
   const position = useSyncExternalStore(subscribeBarPosition, readBarPosition, barOnTop);
 
   return (
-    <main
-      className={cn(
-        'flex h-full w-full flex-col',
-        position === 'left' && 'md:flex-row',
-        position === 'right' && 'md:flex-row-reverse',
-      )}
-    >
+    <main className="flex h-full w-full flex-col md:bar-left:flex-row md:bar-right:flex-row-reverse">
       <SwoopToolbar
         ref={toolbarRef}
         machineId={machineId}
