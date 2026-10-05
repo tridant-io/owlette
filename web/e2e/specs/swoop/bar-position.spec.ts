@@ -28,7 +28,7 @@ test.afterAll(async () => {
   await machineDoc().delete();
 });
 
-async function choose(page: Page, position: 'top' | 'left' | 'right') {
+async function choose(page: Page, position: 'auto' | 'top' | 'left' | 'right') {
   await page.getByRole('button', { name: 'bar position' }).click();
   await page.getByRole('menuitemradio', { name: position }).click();
 }
@@ -119,6 +119,67 @@ test.describe('swoop bar position — admin on site-A', () => {
     expect(stats.y).toBeLessThanOrEqual(button.y);
     expect(stats.y + stats.height).toBeGreaterThanOrEqual(button.y + button.height);
     await shot(page, 'left-stats');
+  });
+
+  test('auto puts the bar where the picture is bigger, and follows the window', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
+    const bar = page.getByTestId('session-bar');
+    await expect(bar).toBeVisible();
+
+    // a 16:9 window: the side letterbox is free, so the bar goes there
+    await choose(page, 'auto');
+    await expect.poll(async () => (await bar.boundingBox())!.width).toBeLessThan(60);
+
+    // a squarer window: the top letterbox is free instead
+    await page.setViewportSize({ width: 1500, height: 1000 });
+    await expect.poll(async () => (await bar.boundingBox())!.width).toBeGreaterThan(1400);
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await expect.poll(async () => (await bar.boundingBox())!.width).toBeLessThan(60);
+  });
+
+  test('auto is worked out before first paint too', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('owlette.swoop.barPosition', 'auto'));
+    await page.route(
+      (url) => url.pathname.startsWith('/_next/static/') && url.pathname.endsWith('.js'),
+      (route) => route.abort(),
+    );
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
+    const bar = page.getByTestId('session-bar');
+    await expect(bar).toBeVisible();
+    expect((await bar.boundingBox())!.width).toBeLessThan(60);
+  });
+
+  test('every bar button says what it is on hover, a disabled one included, toward the picture', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('owlette.swoop.barPosition', 'left'));
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
+    const bar = (await page.getByTestId('session-bar').boundingBox())!;
+
+    // quality waits for a live session, so it is disabled here
+    for (const [button, tip] of [
+      ['quality ceiling', 'quality'],
+      ['send a key combination', 'send a key combination'],
+      ['bar position', 'bar position'],
+      ['show latency stats', 'latency stats'],
+      ['reconnect', 'reconnect'],
+    ]) {
+      // force: a disabled button lets the pointer through to the wrapper that
+      // carries its tooltip, which playwright reads as the button being covered
+      await page.getByRole('button', { name: button, exact: true }).hover({ force: true });
+      const tooltip = page.getByRole('tooltip');
+      await expect(tooltip).toHaveText(tip);
+      // polled: it slides in from the bar, so it is over it until it lands
+      await expect.poll(async () => (await tooltip.boundingBox())!.x).toBeGreaterThanOrEqual(bar.x + bar.width);
+      // in steps, as a hand moves: radix closes on a move outside its grace
+      // area, which one jump never makes
+      await page.mouse.move(800, 450, { steps: 8 });
+      await expect(tooltip).toBeHidden();
+    }
+    await page.getByRole('button', { name: 'quality ceiling', exact: true }).hover({ force: true });
+    await expect(page.getByRole('tooltip')).toBeVisible();
+    await shot(page, 'left-tooltip');
   });
 
   test('a phone keeps the bar on top whatever was chosen', async ({ page }) => {

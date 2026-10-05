@@ -37,6 +37,7 @@ import {
 import { NO_DISPLAYS, swoopDisplays } from '@/lib/swoop/displays';
 import type { SwoopSession } from '@/lib/swoop/features';
 import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
+import { BarTooltip } from '@/components/swoop/BarTooltip';
 
 const subscribeNever = (): (() => void) => () => {};
 const noDisplays = () => NO_DISPLAYS;
@@ -62,11 +63,13 @@ export function SwoopDisplayPicker({ session }: SwoopDisplayPickerProps) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="display">
-          <Monitor aria-hidden />
-        </Button>
-      </DropdownMenuTrigger>
+      <BarTooltip label="display">
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label="display">
+            <Monitor aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+      </BarTooltip>
       <DropdownMenuContent {...menuPlacement} align="end" className="w-56">
         <DropdownMenuLabel>display</DropdownMenuLabel>
         <DropdownMenuRadioGroup

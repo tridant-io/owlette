@@ -4,6 +4,7 @@
 import React from 'react';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { SwoopQualityMenu } from '@/components/swoop/SwoopQualityMenu';
 import type { SwoopSession } from '@/lib/swoop/features';
 
@@ -31,7 +32,7 @@ describe('SwoopQualityMenu', () => {
   it('shows one row per axis with what is chosen, and no option until a row is opened', async () => {
     const user = userEvent.setup();
     const session = { send: jest.fn(() => true) } as unknown as SwoopSession;
-    render(<SwoopQualityMenu session={session} />);
+    render(<SwoopQualityMenu session={session} />, { wrapper: TooltipProvider });
     await user.click(screen.getByRole('button', { name: 'quality ceiling' }));
     await screen.findByRole('menu');
 
@@ -46,7 +47,7 @@ describe('SwoopQualityMenu', () => {
   it('sends the ceiling chosen in a submenu, and the row then says it', async () => {
     const user = userEvent.setup();
     const send = jest.fn(() => true);
-    render(<SwoopQualityMenu session={{ send } as unknown as SwoopSession} />);
+    render(<SwoopQualityMenu session={{ send } as unknown as SwoopSession} />, { wrapper: TooltipProvider });
     const trigger = screen.getByRole('button', { name: 'quality ceiling' });
     await user.click(trigger);
     await screen.findByRole('menu');
@@ -73,7 +74,7 @@ describe('SwoopQualityMenu', () => {
 
   it('offers the codecs the browser can receive, and says when the choice applies', async () => {
     const user = userEvent.setup();
-    render(<SwoopQualityMenu session={{ send: jest.fn() } as unknown as SwoopSession} />);
+    render(<SwoopQualityMenu session={{ send: jest.fn() } as unknown as SwoopSession} />, { wrapper: TooltipProvider });
     await user.click(screen.getByRole('button', { name: 'quality ceiling' }));
     await user.click(row(/^codec/));
 

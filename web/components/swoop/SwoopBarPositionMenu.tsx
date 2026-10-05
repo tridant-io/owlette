@@ -1,11 +1,12 @@
 'use client';
 
 /**
- * where the session bar sits: top, left or right. the icon shows where it is
- * now. needs no session, so it works while connecting too, and it is hidden on
- * narrow screens, where the bar always runs along the top.
+ * where the session bar sits: auto, top, left or right. the icon shows where it
+ * is now, auto included. needs no session, so it works while connecting too,
+ * and it is hidden on narrow screens, where the bar always runs along the top.
  */
 
+import { useSyncExternalStore } from 'react';
 import { PanelLeft, PanelRight, PanelTop } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,31 +17,45 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { setBarPosition, type SwoopBarPosition } from '@/lib/swoop/barPosition';
+import {
+  readBarChoice,
+  setBarChoice,
+  subscribeBarPosition,
+  type SwoopBarChoice,
+  type SwoopBarPosition,
+} from '@/lib/swoop/barPosition';
 import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
+import { BarTooltip } from '@/components/swoop/BarTooltip';
 
 const ICON = { top: PanelTop, left: PanelLeft, right: PanelRight } as const;
-const POSITIONS: SwoopBarPosition[] = ['top', 'left', 'right'];
+const CHOICES: { value: SwoopBarChoice; hint?: string }[] = [
+  { value: 'auto', hint: 'biggest picture' },
+  { value: 'top' },
+  { value: 'left' },
+  { value: 'right' },
+];
+const choseTop = (): SwoopBarChoice => 'top';
 
 export function SwoopBarPositionMenu({ position }: { position: SwoopBarPosition }) {
   const menuPlacement = useBarMenuPlacement();
+  const choice = useSyncExternalStore(subscribeBarPosition, readBarChoice, choseTop);
   const Icon = ICON[position];
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="bar position" className="max-md:hidden">
-          <Icon aria-hidden />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent {...menuPlacement} align="end" className="w-40">
+      <BarTooltip label="bar position" className="max-md:hidden">
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label="bar position">
+            <Icon aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+      </BarTooltip>
+      <DropdownMenuContent {...menuPlacement} align="end" className="w-56">
         <DropdownMenuLabel>bar position</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={position}
-          onValueChange={(value) => setBarPosition(value as SwoopBarPosition)}
-        >
-          {POSITIONS.map((option) => (
-            <DropdownMenuRadioItem key={option} value={option}>
-              {option}
+        <DropdownMenuRadioGroup value={choice} onValueChange={(value) => setBarChoice(value as SwoopBarChoice)}>
+          {CHOICES.map((option) => (
+            <DropdownMenuRadioItem key={option.value} value={option.value}>
+              {option.value}
+              {option.hint && <span className="ml-auto text-xs text-muted-foreground">{option.hint}</span>}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

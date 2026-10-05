@@ -1,4 +1,13 @@
-import { BAR_POSITION_SCRIPT, readBarPosition, setBarPosition, subscribeBarPosition } from '@/lib/swoop/barPosition';
+import {
+  BAR_POSITION_SCRIPT,
+  applyBarPosition,
+  autoPosition,
+  currentBarPosition,
+  readBarChoice,
+  setBarChoice,
+  setPictureAspect,
+  subscribeBarPosition,
+} from '@/lib/swoop/barPosition';
 
 const mark = () => document.documentElement.dataset.swoopBar;
 
@@ -10,11 +19,11 @@ describe('barPosition', () => {
   });
 
   it('marks <html> with a side and clears the mark for top, where the layout reads it', () => {
-    setBarPosition('left');
+    setBarChoice('left');
     expect(mark()).toBe('left');
-    setBarPosition('right');
+    setBarChoice('right');
     expect(mark()).toBe('right');
-    setBarPosition('top');
+    setBarChoice('top');
     expect(mark()).toBeUndefined();
   });
 
@@ -36,19 +45,19 @@ describe('barPosition', () => {
   });
 
   it('is on top until a side is chosen, and keeps the side', () => {
-    expect(readBarPosition()).toBe('top');
-    setBarPosition('left');
-    expect(readBarPosition()).toBe('left');
-    setBarPosition('right');
-    expect(readBarPosition()).toBe('right');
-    setBarPosition('top');
-    expect(readBarPosition()).toBe('top');
+    expect(readBarChoice()).toBe('top');
+    setBarChoice('left');
+    expect(readBarChoice()).toBe('left');
+    setBarChoice('right');
+    expect(readBarChoice()).toBe('right');
+    setBarChoice('top');
+    expect(readBarChoice()).toBe('top');
     expect(localStorage.getItem('owlette.swoop.barPosition')).toBeNull();
   });
 
   it('reads anything it did not write as top', () => {
     localStorage.setItem('owlette.swoop.barPosition', 'bottom');
-    expect(readBarPosition()).toBe('top');
+    expect(readBarChoice()).toBe('top');
   });
 
   it('reads storage that refuses as top', () => {
@@ -58,14 +67,14 @@ describe('barPosition', () => {
     jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('blocked');
     });
-    expect(() => setBarPosition('left')).not.toThrow();
-    expect(readBarPosition()).toBe('top');
+    expect(() => setBarChoice('left')).not.toThrow();
+    expect(readBarChoice()).toBe('top');
   });
 
   it("tells this tab's subscribers, and another tab's change too", () => {
     const onChange = jest.fn();
     const unsubscribe = subscribeBarPosition(onChange);
-    setBarPosition('left');
+    setBarChoice('left');
     expect(onChange).toHaveBeenCalledTimes(1);
     // another tab wrote right: this tab's mark follows before it re-renders
     localStorage.setItem('owlette.swoop.barPosition', 'right');
@@ -73,7 +82,57 @@ describe('barPosition', () => {
     expect(onChange).toHaveBeenCalledTimes(2);
     expect(mark()).toBe('right');
     unsubscribe();
-    setBarPosition('right');
+    setBarChoice('right');
     expect(onChange).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('auto', () => {
+  const windowSize = (width: number, height: number) => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+  };
+
+  afterEach(() => {
+    localStorage.clear();
+    delete document.documentElement.dataset.swoopBar;
+    setPictureAspect(16, 9);
+  });
+
+  it('takes the side whose picture is taller, and the top on a phone', () => {
+    // a 16:9 window: the side letterbox is free, the top bar costs height
+    expect(autoPosition(1600, 900)).toBe('left');
+    // a 16:10 window: the top letterbox is free instead
+    expect(autoPosition(1920, 1200)).toBe('top');
+    expect(autoPosition(700, 400)).toBe('top');
+    // a 4:3 picture is height-bound in a window a 16:9 one is not
+    expect(autoPosition(1500, 1000)).toBe('top');
+    expect(autoPosition(1500, 1000, 4 / 3)).toBe('left');
+  });
+
+  it('gets the same answer from the inline script as from the page, so first paint never jumps', () => {
+    localStorage.setItem('owlette.swoop.barPosition', 'auto');
+    for (const width of [640, 800, 1024, 1280, 1366, 1440, 1600, 1920, 2560, 3440]) {
+      for (const height of [480, 600, 768, 800, 900, 1000, 1080, 1200, 1440]) {
+        windowSize(width, height);
+        delete document.documentElement.dataset.swoopBar;
+        new Function(BAR_POSITION_SCRIPT)();
+        expect([width, height, currentBarPosition()]).toEqual([width, height, autoPosition(width, height)]);
+      }
+    }
+  });
+
+  it('follows the window, and then the shape of the picture once it is known', () => {
+    windowSize(1600, 900);
+    setBarChoice('auto');
+    expect(readBarChoice()).toBe('auto');
+    expect(mark()).toBe('left');
+
+    windowSize(1500, 1000);
+    applyBarPosition();
+    expect(mark()).toBeUndefined();
+
+    setPictureAspect(1024, 768);
+    expect(mark()).toBe('left');
   });
 });

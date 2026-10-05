@@ -34,6 +34,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopBarMenuPlacement, menuPlacementFor } from '@/components/swoop/barMenuPlacement';
+import { BarTooltip } from '@/components/swoop/BarTooltip';
 import type { SwoopBarPosition } from '@/lib/swoop/barPosition';
 import { swoopClipboard } from '@/lib/swoop/clipboard';
 import { cn } from '@/lib/utils';
@@ -208,7 +209,6 @@ export function SwoopToolbar({
 
   const live = state === 'connected' && session !== null;
   const badge = badgeFor(state, stats, retryIn);
-  const tipSide = position === 'left' ? 'right' : position === 'right' ? 'left' : undefined;
 
   return (
     <div
@@ -255,10 +255,10 @@ export function SwoopToolbar({
       )}
 
       <div className="ml-auto flex items-center gap-1 md:bar-side:ml-0 md:bar-side:mt-auto md:bar-side:flex-col">
-        <SwoopBarMenuPlacement.Provider value={menuPlacementFor(position)}>{children}</SwoopBarMenuPlacement.Provider>
+        <SwoopBarMenuPlacement.Provider value={menuPlacementFor(position)}>
+          {children}
 
-        <Tooltip>
-          <TooltipTrigger asChild>
+          <BarTooltip label={statsOpen ? 'hide latency stats' : 'latency stats'}>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -268,12 +268,22 @@ export function SwoopToolbar({
             >
               <Gauge aria-hidden />
             </Button>
-          </TooltipTrigger>
-          <TooltipContent side={tipSide}>latency stats</TooltipContent>
-        </Tooltip>
+          </BarTooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
+          {/* keyboard lock is chromium-only and brave ships with it off: the
+              tooltip says which case this browser is, and the keyboard menu
+              covers the rest either way. */}
+          <BarTooltip
+            label={
+              <p className="max-w-xs">
+                {fullscreen
+                  ? 'exit fullscreen'
+                  : lockSupported
+                    ? 'fullscreen captures the keyboard and mouse: shortcuts like alt+tab go to the machine.'
+                    : 'fullscreen captures the mouse; this browser keeps its own shortcuts (alt+tab, ctrl+w). the keyboard menu sends those.'}
+              </p>
+            }
+          >
             <Button
               variant="ghost"
               size="icon-sm"
@@ -283,40 +293,24 @@ export function SwoopToolbar({
             >
               {fullscreen ? <Minimize aria-hidden /> : <Maximize aria-hidden />}
             </Button>
-          </TooltipTrigger>
-          <TooltipContent side={tipSide}>
-            {/* keyboard lock is chromium-only and brave ships with it off: the
-                tooltip says which case this browser is, and the keyboard menu
-                covers the rest either way. */}
-            <p className="max-w-xs">
-              {lockSupported
-                ? 'fullscreen captures the keyboard and mouse: shortcuts like alt+tab go to the machine.'
-                : 'fullscreen captures the mouse; this browser keeps its own shortcuts (alt+tab, ctrl+w). the keyboard menu sends those.'}
-            </p>
-          </TooltipContent>
-        </Tooltip>
+          </BarTooltip>
 
-        {/* swoop runs in its own tab, so the only way on from an ended or failed
-            session is another one; "end" has nothing left to end there. */}
-        {state === 'ended' || state === 'error' ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
+          {/* swoop runs in its own tab, so the only way on from an ended or failed
+              session is another one; "end" has nothing left to end there. */}
+          {state === 'ended' || state === 'error' ? (
+            <BarTooltip label="reconnect">
               <Button variant="ghost" size="icon-sm" aria-label="reconnect" onClick={onReconnect}>
                 <RotateCcw aria-hidden />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent side={tipSide}>reconnect</TooltipContent>
-          </Tooltip>
-        ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
+            </BarTooltip>
+          ) : (
+            <BarTooltip label="end session">
               <Button variant="ghost-destructive" size="icon-sm" aria-label="end session" onClick={onEnd}>
                 <PowerOff aria-hidden />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent side={tipSide}>end session</TooltipContent>
-          </Tooltip>
-        )}
+            </BarTooltip>
+          )}
+        </SwoopBarMenuPlacement.Provider>
       </div>
     </div>
   );
