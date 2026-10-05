@@ -117,6 +117,30 @@ describe('SwoopToolbar', () => {
     expect(screen.queryByTestId('clipboard-notice')).toBeNull();
   });
 
+  it('on a side bar, a notice is also an icon that says it, for the narrow column', () => {
+    jest.mocked(swoopClipboard).mockReturnValue({ subscribe: () => () => {}, get: () => true, held: () => true });
+    render(
+      <TooltipProvider>
+        <SwoopToolbar
+          session={null}
+          machineId="TEC-B4A"
+          state="connected"
+          error={null}
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={false}
+          onToggleStats={() => {}}
+          position="left"
+        />
+      </TooltipProvider>,
+    );
+    // the sentence stays for a narrow window, where the bar is on top whatever
+    // was chosen; the icon is the side bar's
+    expect(screen.getByTestId('clipboard-held-notice')).toHaveClass('md:hidden');
+    expect(screen.getByRole('button', { name: /allow the clipboard for this site/ })).toHaveClass('max-md:hidden');
+    expect(screen.getByTestId('session-bar')).toHaveClass('md:flex-col');
+  });
+
   it('badges a poor connection from the measured round trip, and only then', () => {
     const stats = (rttUs: number): SwoopStats => ({
       signal: 'open',
