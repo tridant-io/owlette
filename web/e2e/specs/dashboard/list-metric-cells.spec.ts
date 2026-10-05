@@ -45,14 +45,22 @@ test.describe('machine list metric cells — admin on site-A', () => {
     await page.goto('/dashboard');
     await page.getByTestId('view-toggle-list').click();
 
-    const cpu = page.getByRole('button', { name: `open cpu history for ${MACHINE_ID}` });
     const network = page.getByRole('button', { name: `open network history for ${MACHINE_ID}` });
     await expect(network).toBeVisible();
     await expect(network).toContainText('eth0');
 
-    const cpuBox = (await cpu.boundingBox())!;
-    const networkBox = (await network.boundingBox())!;
-    expect(Math.abs(networkBox.height - cpuBox.height)).toBeLessThanOrEqual(0.5);
-    expect(Math.abs(networkBox.y - cpuBox.y)).toBeLessThanOrEqual(0.5);
+    // both boxes from one frame: other specs seed machines into this site in
+    // parallel, so the row can move between two separate reads
+    const offsets = () =>
+      page.evaluate((machineId) => {
+        const box = (metric: string) =>
+          document
+            .querySelector(`button[aria-label="open ${metric} history for ${machineId}"]`)!
+            .getBoundingClientRect();
+        const cpu = box('cpu');
+        const net = box('network');
+        return { height: Math.round(net.height - cpu.height), top: Math.round(net.top - cpu.top) };
+      }, MACHINE_ID);
+    await expect.poll(offsets).toEqual({ height: 0, top: 0 });
   });
 });
