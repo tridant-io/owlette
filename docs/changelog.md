@@ -11,11 +11,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
-### changed — pages rise in, top to bottom
+### changed — pages fade in, top to bottom
 
-Every page now fades up as it opens: the header first, then each section in
-turn, quickly. The admin pages do the same while their sidebar stays put. People
-who ask their system for reduced motion get the page without the movement.
+Every page now fades in one row after another as it opens: the header, each
+section, then the rows of its lists and tables, about a second for the whole
+page. Nothing moves; it is opacity only. A row that arrives after the page has
+opened fades in straight away instead of waiting its turn. The admin pages do
+the same while their sidebar stays put. People who ask their system for reduced
+motion get the page without the fade.
 
 ### changed — small interface polish
 

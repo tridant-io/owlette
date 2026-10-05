@@ -418,18 +418,7 @@ test('the empty state sits where the list did, without pushing the page down', a
   // resolved to. Measuring the second child compares the two branches directly.
   const branch = page.locator('main > *:nth-child(2)');
   const heading = page.getByRole('heading', { name: 'talons', exact: true });
-  // each branch rises in as it mounts (page-cascade), so measure where it rests
-  const settled = () =>
-    page.locator('main').evaluate((main) =>
-      Promise.all(
-        [...main.children]
-          .flatMap((child) => child.getAnimations())
-          .filter((a) => (a as CSSAnimation).animationName === 'page-rise')
-          .map((a) => a.finished),
-      ).then(() => undefined),
-    );
 
-  await settled();
   const listBox = await branch.boundingBox();
   const listHeadingBox = await heading.boundingBox();
   if (!listBox || !listHeadingBox) {
@@ -443,7 +432,6 @@ test('the empty state sits where the list did, without pushing the page down', a
   await expect(page.getByText('no talons yet', { exact: true })).toBeVisible();
   await expect(page.getByTestId('talon-row')).toHaveCount(0);
 
-  await settled();
   const emptyBox = await branch.boundingBox();
   const emptyHeadingBox = await heading.boundingBox();
   if (!emptyBox || !emptyHeadingBox) {

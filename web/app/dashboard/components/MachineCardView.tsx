@@ -1196,7 +1196,7 @@ export function MachineCardView({
     // `grid-cols-1` is load-bearing below md: an implicit `auto` track sizes to
     // min-content, so any nowrap label or nested fr split drags it past the
     // viewport and scrolls the page sideways. minmax(0, 1fr) pins it.
-    <div className="machines-grid grid grid-cols-1 gap-4 md:grid-cols-2">
+    <div className="machines-grid cascade-rows grid grid-cols-1 gap-4 md:grid-cols-2">
       {machines.map((machine) => (
         <MachineCard
           key={machine.machineId}

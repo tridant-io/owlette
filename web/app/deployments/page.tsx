@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
+import { PageCascade } from '@/components/PageCascade';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { useDeploymentManager, type Deployment, type DeploymentTarget } from '@/hooks/useDeployments';
 import { Button } from '@/components/ui/button';
@@ -476,7 +477,7 @@ export default function DeploymentsPage() {
 
   return (
     <TooltipProvider delayDuration={200}>
-    <div className="page-cascade relative min-h-screen pb-8">
+    <PageCascade className="relative min-h-screen pb-8">
       <PageHeader
         currentPage="deploy"
         sites={sites}
@@ -645,7 +646,7 @@ export default function DeploymentsPage() {
               </Button>
             </div>
           ) : (
-            <div className="divide-y divide-border">
+            <div className="cascade-rows divide-y divide-border">
               {deployments.map((deployment) => (
                 <DeploymentRow
                   key={deployment.id}
@@ -673,7 +674,7 @@ export default function DeploymentsPage() {
         open={accountSettingsOpen}
         onOpenChange={setAccountSettingsOpen}
       />
-    </div>
+    </PageCascade>
     </TooltipProvider>
   );
 }

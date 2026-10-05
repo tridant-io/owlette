@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSites } from '@/hooks/useFirestore';
+import { PageCascade } from '@/components/PageCascade';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -110,7 +111,7 @@ export default function WebhooksSettingsPage() {
   }
 
   return (
-    <div className="page-cascade min-h-screen bg-background">
+    <PageCascade className="min-h-screen bg-background">
       <PageHeader currentPage="webhooks" />
       <main className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 py-8">
           {/* Developer-preview banner. Subscription management, manual probes,
@@ -241,7 +242,7 @@ export default function WebhooksSettingsPage() {
               )}
             </Card>
           ) : (
-            <div className="space-y-3">
+            <div className="cascade-rows space-y-3">
               {webhooks.map((w) => (
                 <WebhookCard
                   key={w.id}
@@ -267,6 +268,6 @@ export default function WebhooksSettingsPage() {
           }}
         />
       )}
-    </div>
+    </PageCascade>
   );
 }

@@ -12,6 +12,7 @@ import { useSchedulePresets } from '@/hooks/useSchedulePresets';
 import { useDeployments } from '@/hooks/useDeployments';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
 import { useAgentAlertToasts, type ExeMissingToastAlert } from '@/hooks/useAgentAlertToasts';
+import { PageCascade } from '@/components/PageCascade';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -939,7 +940,7 @@ export default function DashboardPage() {
   const editLaunchCopy = launchCopyOf(editingMachineId);
 
   return (
-    <div className="page-cascade relative min-h-screen pb-24">
+    <PageCascade className="relative min-h-screen pb-24">
       {/* Header */}
       <PageHeader
         currentPage="dashboard"
@@ -1209,7 +1210,7 @@ export default function DashboardPage() {
               /* overflow-x-auto (not hidden) gives the fixed-layout table's own scroller
                  somewhere to go instead of clipping; overflow-y-hidden keeps the rounded
                  corners clipping the first/last rows. */
-              <div className="rounded-xl border border-border/60 bg-card-sunken overflow-x-auto overflow-y-hidden animate-in fade-in duration-300">
+              <div className="rounded-xl border border-border/60 bg-card-sunken overflow-x-auto overflow-y-hidden">
                 <Table style={{ contain: 'layout', tableLayout: 'fixed' }}>
                   <MachineTableHeader
                     deviceUnion={deviceUnion}
@@ -1792,6 +1793,6 @@ export default function DashboardPage() {
           onStopLiveView={stopLiveView}
         />
       )}
-    </div>
+    </PageCascade>
   );
 }
