@@ -45,11 +45,11 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     const options = await generateAuthenticationOptions({
       rpID: getRpId(),
       // This account's own credentials only — the discoverable-credential prompt
-      // used at sign-in may return any passkey on the device.
-      allowCredentials: passkeys.map((p) => ({
-        id: p.credentialId,
-        transports: p.transports,
-      })),
+      // used at sign-in may return any passkey on the device. No transports:
+      // chrome on android routes by them, and a passkey saved through a desktop
+      // password manager's extension came back without "this device", so the
+      // phone offered usb, nfc or another device and never asked that manager.
+      allowCredentials: passkeys.map((p) => ({ id: p.credentialId })),
       // A passkey counts as a second factor only when the authenticator actually
       // verified the human; the verify sibling pins requireUserVerification too.
       userVerification: 'required',
