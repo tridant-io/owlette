@@ -274,7 +274,7 @@ export default function RoostsPageClient() {
   }
 
   return (
-    <div className="relative min-h-screen pb-8">
+    <div className="page-cascade relative min-h-screen pb-8">
       {/* Header */}
       <PageHeader
         currentPage="roost"

@@ -125,7 +125,7 @@ export default function DemoPage() {
 
   return (
     <DemoContext.Provider value={demoContextValue}>
-      <div className="relative min-h-screen pb-24">
+      <div className="page-cascade relative min-h-screen pb-24">
         {/* Header */}
         <PageHeader
           currentPage="dashboard"

@@ -14,6 +14,9 @@ import { HootIcon } from '@/components/icons/HootIcon';
 
 const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
 
+/** between the breadcrumb's parts: a straight rule, not a slash glyph. */
+const CRUMB_DIVIDER = <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-muted-foreground/60" />;
+
 const FEEDBACK_LABELS = [
   'report a bug',
   'share feedback',
@@ -230,7 +233,7 @@ export function PageHeader({
           <div className="hidden md:flex items-center gap-1.5 min-w-0">
             {selectSite && (
               <>
-                <span className="text-muted-foreground/60 text-lg select-none">/</span>
+                {CRUMB_DIVIDER}
                 <DropdownMenu onOpenChange={handleMenuOpenChange}>
                   <DropdownMenuTrigger asChild>
                     <button
@@ -269,7 +272,7 @@ export function PageHeader({
               </>
             )}
 
-            <span className="text-muted-foreground/60 text-lg select-none">/</span>
+            {CRUMB_DIVIDER}
 
             {disableNav ? (
               <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground px-1.5 py-1">

@@ -939,7 +939,7 @@ export default function DashboardPage() {
   const editLaunchCopy = launchCopyOf(editingMachineId);
 
   return (
-    <div className="relative min-h-screen pb-24 animate-in fade-in duration-300">
+    <div className="page-cascade relative min-h-screen pb-24">
       {/* Header */}
       <PageHeader
         currentPage="dashboard"

@@ -110,7 +110,7 @@ export default function WebhooksSettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="page-cascade min-h-screen bg-background">
       <PageHeader currentPage="webhooks" />
       <main className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 py-8">
           {/* Developer-preview banner. Subscription management, manual probes,

@@ -476,7 +476,7 @@ export default function DeploymentsPage() {
 
   return (
     <TooltipProvider delayDuration={200}>
-    <div className="relative min-h-screen pb-8">
+    <div className="page-cascade relative min-h-screen pb-8">
       <PageHeader
         currentPage="deploy"
         sites={sites}

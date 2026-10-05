@@ -861,7 +861,7 @@ export default function LogsPage() {
   }
 
   return (
-    <div className="relative min-h-screen pb-8">
+    <div className="page-cascade relative min-h-screen pb-8">
       <PageHeader
         currentPage="logs"
         sites={sites}
