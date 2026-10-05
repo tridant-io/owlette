@@ -29,6 +29,7 @@ describe('isTransientEnd', () => {
     ['kill', false],
     ['lease_refused', false],
     ['refused', false],
+    ['same_machine', false],
     ['lease_expired', true],
     ['host_gone', true],
     ['signal_lost', true],

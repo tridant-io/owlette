@@ -39,7 +39,8 @@ export type SwoopEndReason =
   | 'signal_lost'
   | 'peer_failed'
   | 'start_failed'
-  | 'refused';
+  | 'refused'
+  | 'same_machine';
 
 /** every reason above, as the api's `viewerReason` allow-list. */
 export const SWOOP_END_REASONS: readonly SwoopEndReason[] = [
@@ -53,6 +54,7 @@ export const SWOOP_END_REASONS: readonly SwoopEndReason[] = [
   'peer_failed',
   'start_failed',
   'refused',
+  'same_machine',
 ];
 
 export function isSwoopEndReason(value: unknown): value is SwoopEndReason {

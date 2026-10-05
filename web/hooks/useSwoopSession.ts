@@ -46,6 +46,7 @@ import { createSwoopIdentity, createSwoopPeer, type SwoopNoPath, type SwoopPeer 
 import { backoffDelayMs, isTransientEnd, isWithdrawal } from '@/lib/swoop/backoff';
 import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
+import { clearThisMachine, markThisMachine } from '@/lib/swoop/thisMachine';
 import {
   base64UrlDecode,
   encodeControlMessage,
@@ -611,7 +612,11 @@ export function useSwoopSession(
             receiver: rtpReceiver,
           } as unknown as RTCTrackEvent);
           void receiver?.start().then(() => {
-            if (!disposed) setState('connected');
+            if (disposed) return;
+            setState('connected');
+            // a picture from it is a session the machine let in, so a record
+            // naming it as this browser's own is stale
+            clearThisMachine(siteId, machineId);
           });
         },
         onChannelOpen: (label, channel) => {
@@ -642,6 +647,13 @@ export function useSwoopSession(
             // way too; later agents say `restart`, which lands below.
             continuityRef.current = null;
             finish('kill', 'this session was ended from elsewhere.');
+            return;
+          }
+          if (reason === 'same_machine') {
+            // the machine saw this browser reach it at one of its own
+            // addresses. a decision, and the dashboard greys it out from now on.
+            markThisMachine(siteId, machineId);
+            finish('same_machine', "you're on this machine. swoop opens other computers, not the one you're using.");
             return;
           }
           // a host that let this viewer go, a service going away to come back,

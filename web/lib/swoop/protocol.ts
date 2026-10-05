@@ -1097,7 +1097,7 @@ export const encodeFeedbackMessage = (message: FeedbackMessage): string => JSON.
 export type PipeEvent =
   | { type: 'ready'; sid: string; pid: number; version: string; protocolVersion: number; codecs: string[]; displays: number }
   | { type: 'viewer_joined'; sid: string; viewer: string; ctl: boolean; codec: string }
-  | { type: 'viewer_left'; sid: string; viewer: string; reason: 'bye' | 'timeout' | 'lease_expired' | 'kill' | 'restart' }
+  | { type: 'viewer_left'; sid: string; viewer: string; reason: ViewerLeftReason }
   | { type: 'sas_request'; sid: string; viewer: string }
   | {
       type: 'status';
@@ -1113,7 +1113,8 @@ export type PipeEvent =
     }
   | { type: 'exiting'; sid: string; code: number; reason: 'idle' | 'kill' | 'signal_lost' | 'session_cap' | 'error' };
 
-const VIEWER_LEFT_REASONS = ['bye', 'timeout', 'lease_expired', 'kill', 'restart'];
+const VIEWER_LEFT_REASONS = ['bye', 'timeout', 'lease_expired', 'kill', 'restart', 'same_machine'] as const;
+type ViewerLeftReason = (typeof VIEWER_LEFT_REASONS)[number];
 const EXIT_REASONS = ['idle', 'kill', 'signal_lost', 'session_cap', 'error'];
 
 export function decodePipeEvent(line: string): SwoopResult<PipeEvent> {
@@ -1149,14 +1150,14 @@ export function decodePipeEvent(line: string): SwoopResult<PipeEvent> {
     case 'viewer_left': {
       const viewer = str(o, 'viewer');
       const reason = str(o, 'reason');
-      if (viewer === undefined || reason === undefined || !VIEWER_LEFT_REASONS.includes(reason)) {
+      if (viewer === undefined || reason === undefined || !(VIEWER_LEFT_REASONS as readonly string[]).includes(reason)) {
         return reject('malformed_message', 'viewer_left');
       }
       return accept({
         type: 'viewer_left',
         sid,
         viewer,
-        reason: reason as 'bye' | 'timeout' | 'lease_expired' | 'kill' | 'restart',
+        reason: reason as ViewerLeftReason,
       });
     }
     case 'sas_request': {

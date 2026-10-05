@@ -76,6 +76,9 @@ pub enum LeftReason {
     /// update or a restart. The page starts its next session, where `Kill` is
     /// somebody's decision and the page stops.
     Restart,
+    /// The viewer is on this machine. A machine cannot be watched from itself,
+    /// and the page stops rather than try again.
+    SameMachine,
 }
 
 /// Why the streamer is exiting, alongside the numeric code.

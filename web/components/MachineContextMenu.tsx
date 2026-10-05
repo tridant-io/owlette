@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,6 +24,7 @@ import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import RestartScheduleDialog from '@/components/RestartScheduleDialog';
 import type { RestartSchedule } from '@/hooks/useFirestore';
+import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
 
 interface MachineContextMenuProps {
   machineId: string;
@@ -97,6 +98,12 @@ export function MachineContextMenu({
   const { userPreferences, updateUserPreferences } = useAuth();
   const isMuted = userPreferences.mutedMachines.includes(machineId);
   const watching = isOnline && swoopCapable ? (swoopViewers ?? 0) : 0;
+  // the machine this browser runs on, once its streamer has said so
+  const onThisMachine = useSyncExternalStore(
+    subscribeThisMachine,
+    () => isThisMachine(siteId, machineId),
+    () => false,
+  );
 
   const handleToggleMute = async () => {
     const mutedMachines = isMuted
@@ -351,13 +358,17 @@ export function MachineContextMenu({
                 <DropdownMenuItem
                   onClick={(e) => {
                     e.stopPropagation();
-                    onSwoop?.();
+                    if (!onThisMachine) onSwoop?.();
                   }}
+                  disabled={onThisMachine}
                   data-testid="machine-context-menu-swoop"
                   className="text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
                 >
                   <MonitorPlay className="mr-2 h-4 w-4" />
                   swoop
+                  {onThisMachine && (
+                    <span className="ml-auto text-xs font-normal text-muted-foreground">you&apos;re on this machine</span>
+                  )}
                   {watching > 0 && (
                     <Badge className="ml-auto tabular-nums" data-testid="machine-context-menu-swoop-count">
                       {watching}
