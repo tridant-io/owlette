@@ -47,10 +47,19 @@ test.describe('swoop bar position — admin on site-A', () => {
     const name = bar.getByTitle(MACHINE_ID);
     await expect(bar).toBeVisible();
 
+    // auto is the default, and a 16:9 window has room at its sides
     let box = await bar.boundingBox();
+    expect(box!.width).toBeLessThan(60);
+
+    await choose(page, 'top');
+    await expect(name).toHaveCSS('writing-mode', 'horizontal-tb');
+    box = await bar.boundingBox();
     expect(box!.width).toBeGreaterThan(1500);
     expect(box!.height).toBeLessThan(80);
     await shot(page, 'top');
+    // a chosen top is kept, not read back as the default
+    await page.reload();
+    await expect(name).toHaveCSS('writing-mode', 'horizontal-tb');
 
     await choose(page, 'left');
     await expect(name).toHaveCSS('writing-mode', 'vertical-rl');
@@ -127,8 +136,7 @@ test.describe('swoop bar position — admin on site-A', () => {
     const bar = page.getByTestId('session-bar');
     await expect(bar).toBeVisible();
 
-    // a 16:9 window: the side letterbox is free, so the bar goes there
-    await choose(page, 'auto');
+    // the default: a 16:9 window has its side letterbox free, so the bar goes there
     await expect.poll(async () => (await bar.boundingBox())!.width).toBeLessThan(60);
 
     // a squarer window: the top letterbox is free instead
@@ -138,8 +146,7 @@ test.describe('swoop bar position — admin on site-A', () => {
     await expect.poll(async () => (await bar.boundingBox())!.width).toBeLessThan(60);
   });
 
-  test('auto is worked out before first paint too', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('owlette.swoop.barPosition', 'auto'));
+  test('auto, the default, is worked out before first paint too', async ({ page }) => {
     await page.route(
       (url) => url.pathname.startsWith('/_next/static/') && url.pathname.endsWith('.js'),
       (route) => route.abort(),
