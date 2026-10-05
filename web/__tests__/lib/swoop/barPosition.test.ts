@@ -11,11 +11,17 @@ import {
 
 const mark = () => document.documentElement.dataset.swoopBar;
 
+const windowSize = (width: number, height: number) => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+};
+
 describe('barPosition', () => {
   afterEach(() => {
     localStorage.clear();
     delete document.documentElement.dataset.swoopBar;
     jest.restoreAllMocks();
+    windowSize(1024, 768);
   });
 
   it('marks <html> with a side and clears the mark for top, where the layout reads it', () => {
@@ -33,34 +39,50 @@ describe('barPosition', () => {
     expect(mark()).toBe('right');
   });
 
-  it('has the inline script leave anything else on top, and survive refused storage', () => {
+  it('has the inline script treat nothing stored, anything unknown and refused storage as auto', () => {
+    // a 16:9 window, where auto puts the bar on the side
+    windowSize(1600, 900);
+    new Function(BAR_POSITION_SCRIPT)();
+    expect(mark()).toBe('left');
+
+    delete document.documentElement.dataset.swoopBar;
     localStorage.setItem('owlette.swoop.barPosition', 'bottom');
     new Function(BAR_POSITION_SCRIPT)();
-    expect(mark()).toBeUndefined();
+    expect(mark()).toBe('left');
+
+    delete document.documentElement.dataset.swoopBar;
     jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('blocked');
     });
     expect(() => new Function(BAR_POSITION_SCRIPT)()).not.toThrow();
+    expect(mark()).toBe('left');
+  });
+
+  it('has the inline script keep a stored top on top, wherever auto would go', () => {
+    windowSize(1600, 900);
+    localStorage.setItem('owlette.swoop.barPosition', 'top');
+    new Function(BAR_POSITION_SCRIPT)();
     expect(mark()).toBeUndefined();
   });
 
-  it('is on top until a side is chosen, and keeps the side', () => {
-    expect(readBarChoice()).toBe('top');
+  it('is auto until a position is chosen, and keeps the one chosen, top included', () => {
+    expect(readBarChoice()).toBe('auto');
     setBarChoice('left');
     expect(readBarChoice()).toBe('left');
-    setBarChoice('right');
-    expect(readBarChoice()).toBe('right');
     setBarChoice('top');
     expect(readBarChoice()).toBe('top');
+    expect(localStorage.getItem('owlette.swoop.barPosition')).toBe('top');
+    setBarChoice('auto');
+    expect(readBarChoice()).toBe('auto');
     expect(localStorage.getItem('owlette.swoop.barPosition')).toBeNull();
   });
 
-  it('reads anything it did not write as top', () => {
+  it('reads anything it did not write as auto', () => {
     localStorage.setItem('owlette.swoop.barPosition', 'bottom');
-    expect(readBarChoice()).toBe('top');
+    expect(readBarChoice()).toBe('auto');
   });
 
-  it('reads storage that refuses as top', () => {
+  it('reads storage that refuses as auto', () => {
     jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('blocked');
     });
@@ -68,7 +90,7 @@ describe('barPosition', () => {
       throw new Error('blocked');
     });
     expect(() => setBarChoice('left')).not.toThrow();
-    expect(readBarChoice()).toBe('top');
+    expect(readBarChoice()).toBe('auto');
   });
 
   it("tells this tab's subscribers, and another tab's change too", () => {
@@ -88,11 +110,6 @@ describe('barPosition', () => {
 });
 
 describe('auto', () => {
-  const windowSize = (width: number, height: number) => {
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
-    Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
-  };
-
   afterEach(() => {
     localStorage.clear();
     delete document.documentElement.dataset.swoopBar;

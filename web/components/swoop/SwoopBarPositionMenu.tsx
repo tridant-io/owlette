@@ -34,11 +34,11 @@ const CHOICES: { value: SwoopBarChoice; hint?: string }[] = [
   { value: 'left' },
   { value: 'right' },
 ];
-const choseTop = (): SwoopBarChoice => 'top';
+const choseAuto = (): SwoopBarChoice => 'auto';
 
 export function SwoopBarPositionMenu({ position }: { position: SwoopBarPosition }) {
   const menuPlacement = useBarMenuPlacement();
-  const choice = useSyncExternalStore(subscribeBarPosition, readBarChoice, choseTop);
+  const choice = useSyncExternalStore(subscribeBarPosition, readBarChoice, choseAuto);
   const Icon = ICON[position];
   return (
     <DropdownMenu>

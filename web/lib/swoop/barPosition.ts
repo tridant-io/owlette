@@ -5,7 +5,8 @@
  * a 16:9 picture in a 16:9 window is letterboxed at its sides, so a bar on top
  * costs the picture height it could have had, while a bar down one side sits
  * in space the letterbox wastes anyway. the choice is this browser's, kept in
- * its storage; storage that is missing or refused means the bar stays on top.
+ * its storage, and auto until one is made: storage that is empty, unreadable or
+ * refused means auto too, which needs nothing stored to work.
  *
  * the layout reads where the bar *is* from `data-swoop-bar` on <html> (the
  * `bar-side`, `bar-left` and `bar-right` variants in globals.css), not from
@@ -44,20 +45,20 @@ export function autoPosition(width: number, height: number, pictureAspect = DEFA
   return beside > onTop ? 'left' : 'top';
 }
 
-/** run inline, before the page paints. */
+/** run inline, before the page paints. anything but a stored side or top is auto. */
 export const BAR_POSITION_SCRIPT =
-  `try{var p=localStorage.getItem('${KEY}');` +
-  `if(p==='auto'){var w=innerWidth,h=innerHeight,a=${DEFAULT_ASPECT};` +
+  `try{var p;try{p=localStorage.getItem('${KEY}')}catch(e){}` +
+  `if(p!=='top'&&p!=='left'&&p!=='right'){var w=innerWidth,h=innerHeight,a=${DEFAULT_ASPECT};` +
   `p=w>=${MD_PX}&&Math.min((w-${SIDE_BAR_PX})/a,h)>Math.min(w/a,h-${TOP_BAR_PX})?'left':''}` +
   `if(p==='left'||p==='right')document.documentElement.dataset.swoopBar=p}catch(e){}`;
 
-/** what this browser chose. */
+/** what this browser chose: auto until it chooses. */
 export function readBarChoice(): SwoopBarChoice {
   try {
     const stored = localStorage.getItem(KEY);
-    return stored === 'left' || stored === 'right' || stored === 'auto' ? stored : 'top';
+    return stored === 'top' || stored === 'left' || stored === 'right' ? stored : 'auto';
   } catch {
-    return 'top';
+    return 'auto';
   }
 }
 
@@ -88,10 +89,10 @@ export function applyBarPosition(): void {
 
 export function setBarChoice(choice: SwoopBarChoice): void {
   try {
-    if (choice === 'top') localStorage.removeItem(KEY);
+    if (choice === 'auto') localStorage.removeItem(KEY);
     else localStorage.setItem(KEY, choice);
   } catch {
-    // unstorable: the read says top, so the bar stays on top
+    // unstorable: the read says auto, so the bar goes where auto puts it
   }
   mark();
   // once, and even when the bar does not move: the radio follows the choice
