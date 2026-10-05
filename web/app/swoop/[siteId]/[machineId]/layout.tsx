@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
+import { BAR_POSITION_SCRIPT } from '@/lib/swoop/barPosition';
 
 /**
  * the swoop shell: the whole window, and nothing else in it.
@@ -23,6 +25,20 @@ export async function generateMetadata({
   return { title: { absolute: `swoop - ${machineId}` } };
 }
 
-export default function SwoopLayout({ children }: { children: React.ReactNode }) {
-  return <div className="fixed inset-0 overflow-hidden bg-background">{children}</div>;
+/**
+ * the bar's position is this browser's, so the server renders it on top; the
+ * script ahead of the page marks the side before anything is painted, and the
+ * page's layout follows the mark rather than waiting for hydration. nonced, as
+ * the CSP requires of every inline script.
+ */
+export default async function SwoopLayout({ children }: { children: React.ReactNode }) {
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
+  return (
+    <div className="fixed inset-0 overflow-hidden bg-background">
+      {/* suppressHydrationWarning: the browser blanks the nonce attribute once
+          the script is inserted, so hydration reads "" against the real one */}
+      <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: BAR_POSITION_SCRIPT }} />
+      {children}
+    </div>
+  );
 }

@@ -2,6 +2,10 @@
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
+/* the swoop bar on a side, marked on <html> before first paint (lib/swoop/barPosition.ts) */
+@custom-variant bar-side (&:is([data-swoop-bar] *));
+@custom-variant bar-left (&:is([data-swoop-bar="left"] *));
+@custom-variant bar-right (&:is([data-swoop-bar="right"] *));
 
 @theme inline {
   --color-background: var(--background);

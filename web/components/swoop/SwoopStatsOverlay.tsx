@@ -17,6 +17,9 @@
  * there is no honest number to show, so that row and the total read as unknown
  * rather than as zero. every other row subtracts two stamps from one clock and
  * needs no offset at all.
+ *
+ * it sits top right under a top bar, and at the bottom beside a side bar, next
+ * to the button that opens it.
  */
 
 import { Fragment, useEffect, useState } from 'react';
@@ -187,7 +190,7 @@ export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayPro
   return (
     <aside
       aria-label="latency breakdown"
-      className="pointer-events-none absolute right-3 top-3 w-72 rounded-md border border-border bg-card/90 p-3 text-xs text-muted-foreground shadow-sm"
+      className="pointer-events-none absolute right-3 top-3 w-72 md:bar-side:top-auto md:bar-side:bottom-3 md:bar-left:left-3 md:bar-left:right-auto rounded-md border border-border bg-card/90 p-3 text-xs text-muted-foreground shadow-sm"
     >
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 whitespace-nowrap [&>dd]:tabular-nums">
         {rows.map((row) => (

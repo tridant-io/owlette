@@ -17,7 +17,9 @@ The session bar can run down the left or right edge instead of along the top,
 from its new bar position button. A 16:9 picture in a 16:9 window has empty
 space at its sides, so a side bar gives the picture back the height a top bar
 takes. The machine's name runs vertically and the buttons stack at the bottom.
-Phones keep the bar on top. The choice is kept in your browser.
+The latency stats open beside a side bar, next to their button. Phones keep the
+bar on top. The choice is kept in your browser, and a side bar is on its side
+from the first frame.
 
 ### changed — the quality menu says which settings are limits
 
