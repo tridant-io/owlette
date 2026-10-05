@@ -304,6 +304,18 @@ describe('HootChatView conversation groups', () => {
     expect(screen.getByRole('button', { name: /^operations/i })).toBeInTheDocument();
     expect(screen.queryByText('cache cleanup')).not.toBeInTheDocument();
   });
+
+  it('keeps never-categorized conversations in their own unsorted group, after general', () => {
+    mockConversations = [
+      conversation({ id: 'convo-unsorted', title: 'kiosk reboot loop' }),
+      conversation({ id: 'convo-general', title: 'hello there', category: 'General' }),
+    ];
+    renderView();
+
+    const groups = screen.getAllByRole('button', { name: /^(general|unsorted)/i });
+    expect(groups.map((g) => g.textContent)).toEqual(['General1', 'Unsorted1']);
+    expect(screen.getByRole('button', { name: 'categorize 1 unsorted' })).toBeInTheDocument();
+  });
 });
 
 describe('HootChatView target selection', () => {
