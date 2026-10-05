@@ -385,11 +385,17 @@ function LoginForm() {
           <a href="/forgot-password" className={authFooterLinkClass}>
             forgot password?
           </a>
-          <AuthFooterDot />
-          don&apos;t have an account?{' '}
-          <a href="/register" className={authFooterLinkClass}>
-            sign up
-          </a>
+          {/* a phone's card is too narrow for both on one line: the sign-up
+              line wraps whole onto its own row instead of mid-phrase */}
+          <span className="hidden sm:inline">
+            <AuthFooterDot />
+          </span>
+          <span className="block whitespace-nowrap sm:inline">
+            don&apos;t have an account?{' '}
+            <a href="/register" className={authFooterLinkClass}>
+              sign up
+            </a>
+          </span>
         </>
       }
     >

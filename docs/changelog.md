@@ -11,6 +11,22 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — pages rise in, top to bottom
+
+Every page now fades up as it opens: the header first, then each section in
+turn, quickly. The admin pages do the same while their sidebar stays put. People
+who ask their system for reduced motion get the page without the movement.
+
+### changed — small interface polish
+
+- The breadcrumb's separators are straight rules instead of slashes.
+- A machine card's metric rows line up with the centre of their collapse
+  chevron, as the displays already did.
+- hoot's conversation list sits on a darker surface, so the conversation itself
+  comes forward.
+- On a phone, the sign-in page's "don't have an account? sign up" sits on its
+  own line instead of wrapping into "forgot password?".
+
 ### fixed — hoot's model changes without the key
 
 Choosing a different model in account settings no longer means typing the API

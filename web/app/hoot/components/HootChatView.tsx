@@ -799,7 +799,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
   return (
     // `h-dvh`, not `h-screen`: on iOS Safari `100vh` is the URL-bar-collapsed
     // height, so the shell overflows and pushes the composer below the fold.
-    <div className="h-dvh flex flex-col">
+    <div className="page-cascade h-dvh flex flex-col">
       <PageHeader
         currentPage="hoot"
         sites={sites}
@@ -1357,7 +1357,7 @@ function ConversationPanelShell({
           [PANEL_WIDTH_VAR]: `${width}px`,
           width: sidebarOpen ? `var(${PANEL_WIDTH_VAR})` : 0,
         } as React.CSSProperties}
-        className={`relative bg-card flex-col hidden md:flex rounded-lg border border-border ${animate ? 'transition-all duration-300 ease-in-out' : 'transition-none'} ${sidebarOpen ? '' : 'border-0'}`}
+        className={`relative bg-card-sunken flex-col hidden md:flex rounded-lg border border-border ${animate ? 'transition-all duration-300 ease-in-out' : 'transition-none'} ${sidebarOpen ? '' : 'border-0'}`}
       >
         {/* Collapsed there is no edge to grab, and nothing to resize. */}
         {sidebarOpen && resizeHandle}
@@ -1554,7 +1554,9 @@ function ConversationItem({
               {conversation.title}
             </p>
             {conversation.source === 'autonomous' && (
-              <span className="text-[10px] px-1 py-0.5 rounded bg-accent-cyan/15 text-accent-cyan font-medium flex-shrink-0">
+              // /10, not /15: on the sunken panel a /15 tint darkens the chip
+              // until its cyan text misses AA (4.43:1 in light)
+              <span className="text-[10px] px-1 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan font-medium flex-shrink-0">
                 auto
               </span>
             )}

@@ -558,8 +558,11 @@ const MachineCard = memo(function MachineCard({
         </CollapsibleTrigger>
         <CardContent className="select-none pt-0 pb-4">
           {/* Section enclosure: one surface holding the metric rows, separated by
-              hairline dividers instead of dark gaps. */}
-          <div className="overflow-hidden rounded-lg border border-border/30 bg-card divide-y divide-border/60">
+              hairline dividers instead of dark gaps. -ml-px: the rows' accent
+              bars sit inside the enclosure's border, so this puts the bars, the
+              edge the eye reads, under the chevron's centre, where the displays
+              enclosure's own edge already is. */}
+          <div className="-ml-px overflow-hidden rounded-lg border border-border/30 bg-card divide-y divide-border/60">
           {/* CPU Metric */}
           {cpuDevice && cpuDevice.percent != null && (
             <div
