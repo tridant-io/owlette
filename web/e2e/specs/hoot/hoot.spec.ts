@@ -1,4 +1,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { FieldValue } from 'firebase-admin/firestore';
+import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
 import { grantMembership, revokeMembership, TEST_USERS } from '../../helpers/seed';
 import {
@@ -93,6 +95,47 @@ test.describe('hoot conversations and controls', () => {
     await page.getByRole('button', { name: /delete Deployment RCA/i }).click();
     await page.getByRole('button', { name: /confirm delete Deployment RCA/i }).click();
     await expect(page.getByText('Deployment RCA')).toHaveCount(0);
+  });
+
+  test('a group collapsed last visit opens collapsed, never expanded first', async ({ page }) => {
+    const prefs = getAdminDb().collection('users').doc(TEST_USERS.admin.uid).collection('devicePrefs').doc('global');
+    await prefs.set({ cortexCollapsedGroups: ['Operations'] }, { merge: true });
+    try {
+      // the collapsed group's conversations unmount, so any frame that shows
+      // them is the list rendering before the saved state reached it
+      await page.addInitScript(() => {
+        const w = window as unknown as { __shown?: boolean };
+        new MutationObserver(() => {
+          if (document.body?.textContent?.includes('Deployment triage')) w.__shown = true;
+        }).observe(document, { childList: true, subtree: true, characterData: true });
+      });
+      await page.goto('/hoot');
+      await expect(page.getByText('Nightly auto investigation')).toBeVisible();
+      await expect(page.getByRole('button', { name: /^operations/i })).toBeVisible();
+
+      expect(await page.evaluate(() => (window as unknown as { __shown?: boolean }).__shown ?? false)).toBe(false);
+      await expect(page.getByText('Deployment triage')).toHaveCount(0);
+    } finally {
+      await prefs.set({ cortexCollapsedGroups: FieldValue.delete() }, { merge: true });
+    }
+  });
+
+  test('the conversation groups fade in one after another as the page opens', async ({ page }) => {
+    // read the delays as the groups mount: by the time a locator resolves, the
+    // opening window may already have closed
+    await page.addInitScript(() => {
+      const w = window as unknown as { __groups?: string[] };
+      new MutationObserver((_, observer) => {
+        const rows = document.querySelectorAll('.page-cascade-opening .cascade-rows > *');
+        if (rows.length < 2) return;
+        w.__groups = [...rows].slice(0, 2).map((el) => getComputedStyle(el).animationDelay);
+        observer.disconnect();
+      }).observe(document, { childList: true, subtree: true });
+    });
+    await page.goto('/hoot');
+    await expect(page.getByRole('button', { name: /^operations/i })).toBeVisible();
+
+    expect(await page.evaluate(() => (window as unknown as { __groups?: string[] }).__groups)).toEqual(['0s', '0.07s']);
   });
 
   test('names the page and keeps a reply log for screen readers', async ({ page }) => {
@@ -234,6 +277,28 @@ test.describe('hoot conversations and controls', () => {
     await expect(approvalCard).not.toContainText(HOOT_FIXTURE_OFFLINE_MACHINE_ID);
     await expect(approvalCard.getByRole('button', { name: /^approve$/i })).toBeVisible();
     await expect(approvalCard.getByRole('button', { name: /^deny$/i })).toBeVisible();
+  });
+
+  test('with the sidebar collapsed, the chat sits the same distance from both page edges', async ({ page }) => {
+    const prefs = getAdminDb().collection('users').doc(TEST_USERS.admin.uid).collection('devicePrefs').doc('global');
+    await prefs.set({ cortexSidebarOpen: false }, { merge: true });
+    try {
+      await page.goto('/hoot');
+      await expect(page.getByRole('button', { name: 'show hoot sidebar' })).toBeVisible();
+
+      const chat = page.locator('main').filter({ has: page.getByRole('heading', { level: 1, name: 'hoot' }) });
+      // left gap minus right gap, polled: the collapse settles after the prefs land
+      await expect
+        .poll(() =>
+          chat.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            return Math.round(box.left - (document.documentElement.clientWidth - box.right));
+          }),
+        )
+        .toBe(0);
+    } finally {
+      await prefs.set({ cortexSidebarOpen: FieldValue.delete() }, { merge: true });
+    }
   });
 
   test('resizes the conversation sidebar and remembers the width and the collapsed state', async ({ page }) => {

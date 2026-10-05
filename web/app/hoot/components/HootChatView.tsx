@@ -139,6 +139,18 @@ function timeUntil(runAtMs: number, nowMs: number): string {
   return `in ${days}d`;
 }
 
+/**
+ * The group a never-categorized conversation sits in — its own, not General:
+ * General is a category the categorizer assigns, and folding these into it hid
+ * the ones "categorize N unsorted" is about.
+ */
+const UNSORTED = 'Unsorted';
+
+/** The sidebar group a conversation is listed under. */
+function groupLabel(convo: ChatConversation): string {
+  return convo.category || UNSORTED;
+}
+
 /** Group conversations by category for sidebar display. */
 function groupConversationsByCategory(
   conversations: ChatConversation[]
@@ -146,19 +158,14 @@ function groupConversationsByCategory(
   const groups: Record<string, ChatConversation[]> = {};
 
   for (const convo of conversations) {
-    const label = convo.category || 'General';
-    (groups[label] ??= []).push(convo);
+    (groups[groupLabel(convo)] ??= []).push(convo);
   }
 
-  // Sort groups: most recently updated first, "General" always last
+  // Most recently updated first, then General, then Unsorted last
+  const rank = (label: string) => (label === UNSORTED ? 2 : label === 'General' ? 1 : 0);
+  const latest = (convos: ChatConversation[]) => Math.max(...convos.map((c) => c.updatedAt.getTime()));
   return Object.entries(groups)
-    .sort(([a, aConvos], [b, bConvos]) => {
-      if (a === 'General') return 1;
-      if (b === 'General') return -1;
-      const aLatest = Math.max(...aConvos.map((c) => c.updatedAt.getTime()));
-      const bLatest = Math.max(...bConvos.map((c) => c.updatedAt.getTime()));
-      return bLatest - aLatest;
-    })
+    .sort(([a, aConvos], [b, bConvos]) => rank(a) - rank(b) || latest(bConvos) - latest(aConvos))
     .map(([label, convos]) => ({ label, conversations: convos }));
 }
 
@@ -632,7 +639,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
     // Expand the selected conversation's group so its row is actually visible.
     const convo = conversationsRef.current.find((c) => c.id === conversationId);
     if (convo && !isUntitledChat(convo.title)) {
-      const label = convo.category || 'General';
+      const label = groupLabel(convo);
       setCollapsedGroups((prev) => {
         if (!prev.has(label)) return prev;
         const next = new Set(prev);
@@ -712,7 +719,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
   // Category of the active conversation — flags a collapsed section holding it.
   const activeConvo = chat.conversations.find((c) => c.id === chat.chatId);
   const activeCategoryLabel = activeConvo && !isUntitledChat(activeConvo.title)
-    ? (activeConvo.category || 'General')
+    ? groupLabel(activeConvo)
     : null;
 
   // A share freezes this conversation as it stands, so it needs one that exists,
@@ -810,7 +817,8 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
         onAccountSettings={() => setAccountSettingsOpen(true)}
       />
 
-      <div className="flex-1 flex min-h-0 relative max-w-screen-2xl mx-auto w-full gap-3 p-3 md:p-4">
+      {/* no row gap: the aside carries its own, which collapses with it */}
+      <div className="flex-1 flex min-h-0 relative max-w-screen-2xl mx-auto w-full p-3 md:p-4">
 
         {/* No API key overlay */}
         {hasApiKey === false && (
@@ -965,7 +973,9 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
             className={`${conversationPanelClass} flex-1 overflow-y-auto ${isDesktop ? 'border-r border-border' : ''}`}
             style={conversationPanelStyle}
           >
-            {chat.conversations.length === 0 ? (
+            {/* held until the saved collapsed groups land: the conversations can
+                arrive first, and every group would render open, then shut */}
+            {!prefsHydrated ? null : chat.conversations.length === 0 ? (
               <div className="p-4 text-center text-xs text-muted-foreground">
                 {chat.searchQuery ? 'no matches' : 'no conversations yet'}
               </div>
@@ -985,7 +995,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
               </div>
             ) : (
               /* New conversations pinned to top, then grouped by category */
-              <div className="py-1">
+              <div className="cascade-rows py-1">
                 {/* Unsaved "New conversation" entries always at top */}
                 {chat.conversations
                   .filter((c) => isUntitledChat(c.title))
@@ -1358,7 +1368,7 @@ function ConversationPanelShell({
           [PANEL_WIDTH_VAR]: `${width}px`,
           width: sidebarOpen ? `var(${PANEL_WIDTH_VAR})` : 0,
         } as React.CSSProperties}
-        className={`relative bg-card-sunken flex-col hidden md:flex rounded-lg border border-border ${animate ? 'transition-all duration-300 ease-in-out' : 'transition-none'} ${sidebarOpen ? '' : 'border-0'}`}
+        className={`relative bg-card-sunken flex-col hidden md:flex rounded-lg border border-border ${animate ? 'transition-all duration-300 ease-in-out' : 'transition-none'} ${sidebarOpen ? 'mr-3' : 'border-0'}`}
       >
         {/* Collapsed there is no edge to grab, and nothing to resize. */}
         {sidebarOpen && resizeHandle}
