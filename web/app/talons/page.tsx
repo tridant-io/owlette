@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, Plus, Zap } from 'lucide-react';
 
+import { PageCascade } from '@/components/PageCascade';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { CreateSiteDialog } from '@/components/CreateSiteDialog';
@@ -151,7 +152,7 @@ export default function TalonsPage() {
   const loading = sitesLoading || talonsLoading;
 
   return (
-    <div className="page-cascade relative min-h-screen pb-8">
+    <PageCascade className="relative min-h-screen pb-8">
       <PageHeader
         currentPage="Talons"
         sites={sites}
@@ -267,7 +268,7 @@ export default function TalonsPage() {
               <span aria-hidden="true" />
             </div>
 
-            <div className="divide-y divide-border">
+            <div className="cascade-rows divide-y divide-border">
               {talons.map((talon) => (
                 <TalonCard
                   key={talon.id}
@@ -320,6 +321,6 @@ export default function TalonsPage() {
           void writeTalonTemplate(talon, existing);
         }}
       />
-    </div>
+    </PageCascade>
   );
 }

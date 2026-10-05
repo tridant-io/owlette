@@ -12,6 +12,7 @@ import {
   HOOT_SIDEBAR_MAX_WIDTH,
   HOOT_SIDEBAR_MIN_WIDTH,
 } from '@/hooks/useHootSidebarPrefs';
+import { PageCascade } from '@/components/PageCascade';
 import { PageHeader } from '@/components/PageHeader';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import { Button } from '@/components/ui/button';
@@ -799,7 +800,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
   return (
     // `h-dvh`, not `h-screen`: on iOS Safari `100vh` is the URL-bar-collapsed
     // height, so the shell overflows and pushes the composer below the fold.
-    <div className="page-cascade h-dvh flex flex-col">
+    <PageCascade className="h-dvh flex flex-col">
       <PageHeader
         currentPage="hoot"
         sites={sites}
@@ -1306,7 +1307,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
         onOpenChange={(open) => { setAccountSettingsOpen(open); if (!open) setSettingsInitialSection('profile'); }}
         initialSection={settingsInitialSection}
       />
-    </div>
+    </PageCascade>
   );
 }
 

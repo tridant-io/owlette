@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
+import { PageCascade } from '@/components/PageCascade';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { useProjectDistributionPresets } from '@/hooks/useProjectDistributionPresets';
 import { useRoosts } from '@/hooks/useRoosts';
@@ -274,7 +275,7 @@ export default function RoostsPageClient() {
   }
 
   return (
-    <div className="page-cascade relative min-h-screen pb-8">
+    <PageCascade className="relative min-h-screen pb-8">
       {/* Header */}
       <PageHeader
         currentPage="roost"
@@ -414,7 +415,7 @@ export default function RoostsPageClient() {
                 onAddMachine={() => router.push('/dashboard')}
               />
             ) : (
-              <div className="divide-y divide-border">
+              <div className="cascade-rows divide-y divide-border">
                 {roosts.map((roost) => {
                   const isSelected = selectedRoostId === roost.id;
                   const versionLabel =
@@ -732,6 +733,6 @@ export default function RoostsPageClient() {
           }
         }}
       />
-    </div>
+    </PageCascade>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { LayoutGrid, List, Monitor, Cog, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
+import { PageCascade } from '@/components/PageCascade';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Table, TableBody } from '@/components/ui/table';
@@ -125,7 +126,7 @@ export default function DemoPage() {
 
   return (
     <DemoContext.Provider value={demoContextValue}>
-      <div className="page-cascade relative min-h-screen pb-24">
+      <PageCascade className="relative min-h-screen pb-24">
         {/* Header */}
         <PageHeader
           currentPage="dashboard"
@@ -355,7 +356,7 @@ export default function DemoPage() {
           </div>
          </>)}
         </main>
-      </div>
+      </PageCascade>
     </DemoContext.Provider>
   );
 }

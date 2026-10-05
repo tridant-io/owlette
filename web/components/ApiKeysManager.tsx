@@ -197,7 +197,7 @@ export function ApiKeysManager({ compact = false }: Props) {
             )}
           </Card>
         ) : (
-          <div className="space-y-2">
+          <div className="cascade-rows space-y-2">
             {activeKeys.map(renderKeyRow)}
 
             {activeKeys.length === 0 && (

@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { PageCascade } from '@/components/PageCascade';
 import { PageHeader } from '@/components/PageHeader';
 import { ApiKeysManager } from '@/components/ApiKeysManager';
 
@@ -27,11 +28,11 @@ export default function ApiKeysSettingsPage() {
   if (authLoading || !user) return null;
 
   return (
-    <div className="page-cascade min-h-screen bg-background">
+    <PageCascade className="min-h-screen bg-background">
       <PageHeader currentPage="api keys" />
       <main className="relative z-10 mx-auto max-w-4xl px-4 py-8 sm:px-6">
         <ApiKeysManager />
       </main>
-    </div>
+    </PageCascade>
   );
 }

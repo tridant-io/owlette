@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
+import { PageCascade } from '@/components/PageCascade';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -861,7 +862,7 @@ export default function LogsPage() {
   }
 
   return (
-    <div className="page-cascade relative min-h-screen pb-8">
+    <PageCascade className="relative min-h-screen pb-8">
       <PageHeader
         currentPage="logs"
         sites={sites}
@@ -1188,7 +1189,7 @@ export default function LogsPage() {
               <span>details</span>
             </div>
           )}
-          <div className="divide-y divide-border">
+          <div className="cascade-rows divide-y divide-border">
             {hasNoSites ? (
               <div className="p-8">
                 <NoSitesEmptyState action="view logs" />
@@ -1317,6 +1318,6 @@ export default function LogsPage() {
           </div>
         </div>
       </ConfirmDialog>
-    </div>
+    </PageCascade>
   );
 }

@@ -154,10 +154,11 @@ test.describe('mobile machine detail — admin on site-A', () => {
 
     // `pointer-coarse:h-10/w-10` only resolves when the primary pointer is
     // coarse. Assert the grown size, not the class.
-    // polled: mid page-rise the translate leaves the box a hair under 40px
     const trigger = card.getByTestId('machine-context-menu-trigger');
-    await expect.poll(async () => (await trigger.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
-    await expect.poll(async () => (await trigger.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
+    const box = await trigger.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
+    expect(box!.height).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
 
     await trigger.click();
     const menu = page.getByRole('menu');
