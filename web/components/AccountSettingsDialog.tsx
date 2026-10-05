@@ -93,6 +93,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
   const [showLlmKey, setShowLlmKey] = useState(false);
   const [llmModels, setLlmModels] = useState<{ id: string; name: string }[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
+  // what the server holds, so a model change alone can be saved without the key
+  const [llmSaved, setLlmSaved] = useState<{ provider: string; model: string | null } | null>(null);
 
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -154,6 +156,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
           if (data.provider) setLlmProvider(data.provider);
           if (data.model) setLlmModel(data.model);
           if (data.configured) {
+            setLlmSaved({ provider: data.provider || 'anthropic', model: data.model || null });
             fetchLlmModels(data.provider || 'anthropic');
           }
         })
@@ -183,6 +186,42 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, user?.displayName, userPreferences.temperatureUnit, userPreferences.timezone, userPreferences.timeFormat, userPreferences.timeDisplayMode, userPreferences.healthAlerts, userPreferences.processAlerts, JSON.stringify(userPreferences.alertCcEmails)]);
+
+  const llmModelList = llmModels.length > 0 ? llmModels : AVAILABLE_MODELS[llmProvider];
+  const llmChosenModel = llmModel || preselectedModel(llmProvider, llmModelList);
+  // the stored key stays where it is for a model change; a new provider needs its own key
+  const llmModelOnly =
+    !llmApiKey &&
+    llmSaved !== null &&
+    llmSaved.provider === llmProvider &&
+    llmChosenModel !== (llmSaved.model ?? preselectedModel(llmProvider, llmModelList));
+
+  const saveLlm = async () => {
+    const keyTyped = Boolean(llmApiKey);
+    setLlmSaving(true);
+    try {
+      const res = await fetch('/api/settings/llm-key', {
+        method: keyTyped ? 'POST' : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          keyTyped ? { provider: llmProvider, apiKey: llmApiKey, model: llmChosenModel } : { model: llmChosenModel },
+        ),
+      });
+      if (res.ok) {
+        setLlmConfigured(true);
+        setLlmSaved({ provider: llmProvider, model: llmChosenModel });
+        setLlmApiKey('');
+        toast.success(keyTyped ? 'API key saved' : 'Model saved');
+        if (keyTyped) fetchLlmModels(llmProvider);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error || (keyTyped ? 'Failed to save API key' : 'Failed to save model'));
+      }
+    } catch (e) {
+      toast.error(`Failed to save: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    }
+    setLlmSaving(false);
+  };
 
   const handleOpenChange = (isOpen: boolean) => {
     onOpenChange(isOpen);
@@ -815,34 +854,28 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                     <div className="space-y-2">
                       <Label htmlFor="llmModel" className="text-foreground">model</Label>
-                      {(() => {
-                        const models = llmModels.length > 0 ? llmModels : AVAILABLE_MODELS[llmProvider];
-                        const defaultModel = preselectedModel(llmProvider, models);
-                        return (
-                          <Select
-                            value={llmModel || defaultModel}
-                            onValueChange={setLlmModel}
-                            disabled={llmSaving || llmModelsLoading}
-                          >
-                            <SelectTrigger id="llmModel" className="border-border bg-background text-foreground hover:bg-secondary w-64">
-                              {llmModelsLoading ? (
-                                <span className="flex items-center gap-2 text-muted-foreground">
-                                  <Loader2 className="h-3 w-3 animate-spin" /> loading models…
-                                </span>
-                              ) : (
-                                <SelectValue />
-                              )}
-                            </SelectTrigger>
-                            <SelectContent className="border-border dark:bg-secondary text-foreground max-h-64">
-                              {models.map((m) => (
-                                <SelectItem key={m.id} value={m.id} className="cursor-pointer hover:bg-muted">
-                                  {m.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        );
-                      })()}
+                      <Select
+                        value={llmChosenModel}
+                        onValueChange={setLlmModel}
+                        disabled={llmSaving || llmModelsLoading}
+                      >
+                        <SelectTrigger id="llmModel" className="border-border bg-background text-foreground hover:bg-secondary w-64">
+                          {llmModelsLoading ? (
+                            <span className="flex items-center gap-2 text-muted-foreground">
+                              <Loader2 className="h-3 w-3 animate-spin" /> loading models…
+                            </span>
+                          ) : (
+                            <SelectValue />
+                          )}
+                        </SelectTrigger>
+                        <SelectContent className="border-border dark:bg-secondary text-foreground max-h-64">
+                          {llmModelList.map((m) => (
+                            <SelectItem key={m.id} value={m.id} className="cursor-pointer hover:bg-muted">
+                              {m.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
 
                     <div className="space-y-2">
@@ -885,37 +918,17 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                       <Button
                         type="button"
                         size="sm"
-                        onClick={async () => {
-                          if (!llmApiKey) return;
-                          setLlmSaving(true);
-                          try {
-                            const res = await fetch('/api/settings/llm-key', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                provider: llmProvider,
-                                apiKey: llmApiKey,
-                                model: llmModel || preselectedModel(llmProvider, llmModels.length > 0 ? llmModels : AVAILABLE_MODELS[llmProvider]),
-                              }),
-                            });
-                            if (res.ok) {
-                              setLlmConfigured(true);
-                              setLlmApiKey('');
-                              toast.success('API key saved');
-                              fetchLlmModels(llmProvider);
-                            } else {
-                              const err = await res.json().catch(() => ({}));
-                              toast.error(err.error || 'Failed to save API key');
-                            }
-                          } catch (e) {
-                            toast.error(`Failed to save API key: ${e instanceof Error ? e.message : 'Unknown error'}`);
-                          }
-                          setLlmSaving(false);
-                        }}
-                        disabled={!llmApiKey || llmSaving}
+                        onClick={saveLlm}
+                        disabled={llmSaving || (!llmApiKey && !llmModelOnly)}
                         className="cursor-pointer h-8"
                       >
-                        {llmSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : 'save key'}
+                        {llmSaving ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : llmApiKey || !llmConfigured ? (
+                          'save key'
+                        ) : (
+                          'save model'
+                        )}
                       </Button>
                       {llmConfigured && (
                         <Button
@@ -927,6 +940,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                             try {
                               await fetch('/api/settings/llm-key', { method: 'DELETE' });
                               setLlmConfigured(false);
+                              setLlmSaved(null);
                               setLlmApiKey('');
                               toast.success('API key removed');
                             } catch {

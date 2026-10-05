@@ -2,6 +2,7 @@
  * User-level LLM API key management.
  *
  * POST: Store/update encrypted API key
+ * PATCH: Change the model, keeping the stored key
  * GET: Check if key exists (never returns the key itself)
  * DELETE: Remove stored API key
  *
@@ -93,6 +94,57 @@ export const POST = withRateLimit(
         return apiError(error, 'settings/llm-key POST', error.status);
       }
       return apiError(error, 'settings/llm-key POST');
+    }
+  },
+  { strategy: 'auth', identifier: 'ip' }
+);
+
+/**
+ * The model alone. The stored key stays as it is: a user switching models has
+ * nothing to re-enter. A provider change is a new key, so it stays on POST.
+ */
+export const PATCH = withRateLimit(
+  async (request: NextRequest) => {
+    try {
+      const userId = await requireSession(request);
+      await assertActiveUser(userId);
+
+      const { model } = (await request.json()) as { model?: unknown };
+      if (typeof model !== 'string' || !model) {
+        return NextResponse.json({ error: 'model is required' }, { status: 400 });
+      }
+
+      const ref = getAdminDb().collection('users').doc(userId).collection('settings').doc('llm');
+      const doc = await ref.get();
+      if (!doc.exists) {
+        return NextResponse.json(
+          { error: 'no api key is stored; save a key first', code: 'no_key' },
+          { status: 400 }
+        );
+      }
+
+      await ref.set({ model, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+
+      emitMutation({
+        kind: 'user_mutated',
+        siteId: '',
+        actor: `user:${userId}`,
+        targetId: userId,
+        attributes: {
+          verb: 'llm_model_changed',
+          endpoint: '/api/settings/llm-key',
+          method: 'PATCH',
+          provider: doc.data()!.provider,
+          model,
+        },
+      });
+
+      return NextResponse.json({ success: true });
+    } catch (error: unknown) {
+      if (error instanceof ApiAuthError) {
+        return apiError(error, 'settings/llm-key PATCH', error.status);
+      }
+      return apiError(error, 'settings/llm-key PATCH');
     }
   },
   { strategy: 'auth', identifier: 'ip' }
