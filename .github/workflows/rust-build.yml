@@ -77,7 +77,7 @@ jobs:
       # rather than `stable` so a new clippy lint lands as a deliberate bump
       # and not as a surprise red on an unrelated PR. Exit condition: the
       # dependency-currency review each release cycle moves it.
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-09-12
         with:
           toolchain: '1.98.1'
           components: clippy
@@ -178,7 +178,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-09-12
         with:
           toolchain: '1.98.1'
           components: clippy
@@ -236,7 +236,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master @ 2026-09-12
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-09-12
         with:
           toolchain: '1.98.1'
           components: clippy

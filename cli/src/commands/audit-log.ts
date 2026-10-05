@@ -107,7 +107,7 @@ export function registerAuditLogCommands(program: Command): void {
 
       const collected: AuditLogRecord[] = [];
       let cursor = typeof opts.cursor === 'string' ? opts.cursor : '';
-      let nextPageToken = '';
+      let nextPageToken: string;
       let limitReached = false;
 
       for (;;) {

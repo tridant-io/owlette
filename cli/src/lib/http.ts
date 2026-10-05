@@ -41,7 +41,7 @@ export async function fetchWithTimeout(
     return response;
   } catch (err) {
     if (timeoutSignal.aborted) {
-      throw new Error(`request timed out after ${timeoutMs}ms`);
+      throw new Error(`request timed out after ${timeoutMs}ms`, { cause: err });
     }
     throw err;
   }
