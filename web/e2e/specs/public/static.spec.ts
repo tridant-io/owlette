@@ -60,6 +60,13 @@ test.describe('public routes', () => {
     await page.goto('/demo');
     await expect(page.getByRole('heading', { name: /welcome to owlette/i })).toBeVisible();
 
+    // both ways in, and "get started" is a filled button, not page-coloured text on nothing
+    const header = page.getByRole('banner');
+    await expect(header.getByRole('link', { name: 'sign in' })).toBeVisible();
+    const getStarted = header.getByRole('link', { name: /get started/i });
+    await expect(getStarted).toBeVisible();
+    expect(await getStarted.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+
     await page.getByRole('button', { name: /card view/i }).click();
     await expect(page.getByText(/machines/i).first()).toBeVisible();
     await page.getByRole('button', { name: /list view/i }).click();

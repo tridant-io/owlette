@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
+import { Button } from '@/components/ui/button';
 import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X } from 'lucide-react';
 import { getUserShortName } from '@/lib/userUtils';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
@@ -347,15 +348,18 @@ export function PageHeader({
           )}
 
           {disableNav ? (
-            /* Demo mode: show sign in + get started instead of user menu */
-            <div className="flex items-center gap-2">
-              <Link href="/login" className="text-sm text-muted-foreground hover:text-foreground transition-colors px-2 py-1">
-                sign in
-              </Link>
-              <Link href="/register" className="inline-flex items-center gap-1.5 text-sm text-background font-semibold px-4 py-1.5 rounded-md transition-colors group">
-                get started
-                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-              </Link>
+            /* Demo mode: show sign in + get started instead of user menu,
+               styled as the landing header's pair */
+            <div className="flex items-center gap-1.5">
+              <Button asChild variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground px-2">
+                <Link href="/login">sign in</Link>
+              </Button>
+              <Button asChild size="sm" className="group text-background font-medium">
+                <Link href="/register">
+                  get started
+                  <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                </Link>
+              </Button>
             </div>
           ) : (
           <DropdownMenu onOpenChange={handleMenuOpenChange}>
