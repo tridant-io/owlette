@@ -54,6 +54,8 @@ test.describe('landing — pricing', () => {
     await expect(proCard).toContainText('CLI + TypeScript SDK');
     await expect(proCard).toContainText('webhooks');
     await expect(proCard).toContainText('unlimited sites');
+    await expect(proCard).toContainText('swoop — live remote desktop in the browser');
+    await expect(coreCard).not.toContainText('swoop');
     await expect(coreCard).not.toContainText('REST API');
     await expect(coreCard).not.toContainText('CLI');
     await expect(coreCard).not.toContainText('webhooks');

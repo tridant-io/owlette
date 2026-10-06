@@ -27,6 +27,7 @@ const proFeatures: TierFeature[] = [
   { label: 'software & file deployment' },
   { label: 'hoot — AI fleet assistant', asterisk: true },
   { label: 'talons — automations with AI visual checks' },
+  { label: 'swoop — live remote desktop in the browser' },
   { label: 'roost — incremental project sync with atomic deploy and rollback' },
   { label: `${INCLUDED_STORAGE} included project storage per site` },
   { label: `${STORAGE_OVERAGE} overage` },
