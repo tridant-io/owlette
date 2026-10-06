@@ -20,7 +20,7 @@ const faqs: { q: string; a: React.ReactNode }[] = [
       PRICING_FACTS.pro.list,
     )} (${
       PRICING_FACTS.pro.minMachines
-    }-machine minimum) and adds deployment, hoot, talons, the public API, CLI, SDK, webhooks, unlimited sites, and roost — incremental project sync with ${INCLUDED_STORAGE} included storage per site. the first ${
+    }-machine minimum) and adds deployment, hoot, talons, swoop, the public API, CLI, SDK, webhooks, unlimited sites, and roost — incremental project sync with ${INCLUDED_STORAGE} included storage per site. the first ${
       PRICING_FACTS.foundersCohort
     } customers keep a founders rate of ${usd(PRICING_FACTS.core.founders)} core / ${usd(
       PRICING_FACTS.pro.founders,
