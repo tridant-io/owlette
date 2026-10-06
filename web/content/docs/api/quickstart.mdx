@@ -1,61 +1,48 @@
 ---
-title: "Owlette public API quickstart"
-description: "This developer-preview quickstart creates a scoped API key, verifies it, lists your site inventory, queues a safe screenshot command on one machine, and polls the command result. It uses only the live REST API and common shell tools; no SDK publishing or external launch packaging is required."
+title: "owlette public API quickstart"
+description: "create a scoped API key, verify it, list your sites and machines, queue a safe screenshot command on one machine, and poll the result — using only curl and jq against the live REST API."
+keywords: ["getting started", "first request", "curl", "hello world", "tutorial"]
 ---
 
-**Last updated**: 2026-04-28
+**last updated**: 2026-10-05
 
-The happy path takes about 10 minutes once you have a site with one online
-machine.
+the happy path takes about 10 minutes once you have a site with one online machine.
 
-## What you need
+## what you need
 
-- An Owlette account on `https://owlette.app` or `https://dev.owlette.app`.
-- At least one site with one paired, online machine.
-- A Bash-compatible shell, `curl`, and `jq`. On Windows, Git Bash works well
-  for the commands below.
-- `uuidgen` for idempotency keys. On Windows PowerShell, use
-  `[guid]::NewGuid().ToString()` if `uuidgen` is not available.
+- an owlette account on `https://owlette.app` or `https://dev.owlette.app`.
+- at least one site with a paired, online machine — Windows, macOS, or Linux.
+- a bash-compatible shell, `curl`, and `jq`. on Windows, Git Bash works for the commands below.
+- `uuidgen` for idempotency keys. in Windows PowerShell, `[guid]::NewGuid().ToString()` does the same.
 
-Use `dev.owlette.app` and a `test` key for local/staging checks. Use
-`owlette.app` and a `live` key only when you are intentionally acting on a real
-fleet.
+use `dev.owlette.app` for trying things out, and `owlette.app` only when you mean to act on a real fleet. keys are per environment: a key minted on one does not work on the other.
 
-## 1. Create a scoped key
+## 1. create a scoped key
 
-Open the API keys settings page, click **create key**, and create a key with:
+open **settings → api keys** (`/settings/api-keys`), choose **create key**, and set:
 
-| Field | Value |
+| field | value |
 | --- | --- |
-| Environment | `test` for dev/staging, `live` for production |
-| Expiration | 30 or 90 days |
-| Scopes | `site=<your-site-id>:read`, `machine=*:read`, `machine=*:write` |
+| name | `quickstart` |
+| expiration | 30 or 90 days |
+| scopes | `site=<your-site-id>:read`, `machine=*:read`, `machine=*:write` |
 
-`machine=*` keeps the first run simple because you may not know the machine id
-until you list inventory. After the quickstart, rotate into a narrower key such
-as `machine=<machine-id>:read` and `machine=<machine-id>:write`.
+`machine=*` keeps the first run simple, because you may not know the machine ID until you list inventory. afterwards, [edit the key](/docs/api/authentication#editing-key-scopes) down to `machine=<machine-id>:read` and `machine=<machine-id>:write`.
 
-Copy the raw key immediately. Owlette shows it once.
+copy the raw key immediately — owlette shows it once.
 
-Scripted key creation is also available through `POST /api/keys`, but that
-endpoint requires a signed-in user session or Firebase ID token. You cannot
-bootstrap a new key with an existing API key.
+scripted creation is available through `POST /api/keys`, but it needs a signed-in user session or Firebase ID token; an existing API key cannot create keys.
 
-## 2. Export your environment
+## 2. export your environment
 
 ```bash
 export OWLETTE_API_URL="https://dev.owlette.app"
-export OWLETTE_API_KEY="owk_live_..."
+export OWLETTE_API_KEY="owk_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
-For production, use:
+for production, point `OWLETTE_API_URL` at `https://owlette.app` and use a key minted there.
 
-```bash
-export OWLETTE_API_URL="https://owlette.app"
-export OWLETTE_API_KEY="owk_live_..."
-```
-
-Create a tiny helper for the rest of the guide:
+a small helper for the rest of the guide:
 
 ```bash
 api() {
@@ -69,7 +56,7 @@ api() {
 }
 ```
 
-## 3. Verify the key
+## 3. verify the key
 
 ```bash
 api GET /api/whoami | jq '{
@@ -77,18 +64,15 @@ api GET /api/whoami | jq '{
   email,
   keyId: .key.keyId,
   keyPrefix: .key.keyPrefix,
-  environment: .key.environment,
   scopes: .key.scopes,
   primarySiteId
 }'
 api GET /api/version | jq
 ```
 
-You should see the key environment and the scopes you granted. If you receive
-`401`, check that the key was copied exactly. If you receive `403` later in the
-guide, create or rotate a key with the missing scope listed in the error body.
+you should see the scopes you granted. a `401` means the key was not copied exactly, or has expired or been revoked. a `403` later in the guide means the key is missing the scope named in the error body.
 
-## 4. Select a site
+## 4. select a site
 
 ```bash
 api GET /api/sites | tee sites.json | jq -r '.sites[] | [.id, .name] | @tsv'
@@ -96,15 +80,14 @@ export OWLETTE_SITE_ID="$(jq -r '.sites[0].id' sites.json)"
 echo "$OWLETTE_SITE_ID"
 ```
 
-If `sites` is empty, the key does not have `site=<site-id>:read`, or the account
-does not have access to a site.
+an API key lists only the owner's sites that its `site` scopes name (`site=*` covers them all). if `sites` is empty, the key has no `site` scope, or the account has no access to a site.
 
-## 5. Select an online machine
+## 5. select an online machine
 
 ```bash
 api GET "/api/sites/$OWLETTE_SITE_ID/machines" \
   | tee machines.json \
-  | jq -r '.machines[] | [.id, .name, .online] | @tsv'
+  | jq -r '.machines[] | [.id, .name, .osFamily, .online] | @tsv'
 
 export OWLETTE_MACHINE_ID="$(
   jq -r '.machines[] | select(.online == true) | .id' machines.json | head -n 1
@@ -112,21 +95,14 @@ export OWLETTE_MACHINE_ID="$(
 echo "$OWLETTE_MACHINE_ID"
 ```
 
-If no machine id is printed, pair an agent or wait for a machine to come online.
-The command endpoint refuses to queue work for offline machines.
+`osFamily` is `windows`, `macos`, or `linux` (`null` on agents older than 3.4). if no machine ID is printed, pair an agent or wait for one to come online — the command endpoint refuses to queue work for an offline machine.
 
-## 6. Queue a safe screenshot command
+## 6. queue a safe screenshot command
 
-`capture_screenshot` is a useful first command because it is read-only from an
-operator perspective and exercises the same async command path as other machine
-operations.
+`capture_screenshot` is a good first command: it changes nothing on the machine, and it runs through the same async command path as every other machine operation.
 
 ```bash
-new_idempotency_key() {
-  uuidgen 2>/dev/null || powershell.exe -NoProfile -Command "[guid]::NewGuid().ToString()"
-}
-
-export IDEMPOTENCY_KEY="$(new_idempotency_key)"
+export IDEMPOTENCY_KEY="$(uuidgen)"
 
 api POST "/api/sites/$OWLETTE_SITE_ID/machines/$OWLETTE_MACHINE_ID/commands" \
   -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
@@ -140,7 +116,7 @@ export OWLETTE_COMMAND_ID="$(jq -r '.data.commandId' command.json)"
 echo "$OWLETTE_COMMAND_ID"
 ```
 
-Expected response:
+the response is `202 Accepted`:
 
 ```json
 {
@@ -152,10 +128,9 @@ Expected response:
 }
 ```
 
-Reusing the same `Idempotency-Key` with the same body returns the cached result.
-Reusing it with a different body returns `422 idempotency_key_mismatch`.
+sending the same `Idempotency-Key` with the same body replays this response instead of queueing a second screenshot. the same key with a different body is `422 idempotency_key_mismatch`.
 
-## 7. Poll the result
+## 7. poll the result
 
 ```bash
 for i in $(seq 1 20); do
@@ -173,7 +148,7 @@ done
 jq '.data' command-status.json
 ```
 
-A completed screenshot command can include a one-hour signed URL:
+`status` moves from `pending` (waiting for the agent) through `in_progress` to `completed` or `failed`. a completed screenshot includes a signed URL, freshly minted on every poll and valid for an hour:
 
 ```json
 {
@@ -181,28 +156,26 @@ A completed screenshot command can include a one-hour signed URL:
   "status": "completed",
   "result": {
     "screenshot_url": "https://...",
-    "expires_at": "2026-04-28T19:30:00Z"
-  }
+    "expires_at": "2026-10-05T19:30:00Z"
+  },
+  "createdAt": "2026-10-05T18:29:51.000Z",
+  "updatedAt": "2026-10-05T18:29:58.000Z"
 }
 ```
 
-## Troubleshooting
+## troubleshooting
 
-| Symptom | Fix |
+| symptom | fix |
 | --- | --- |
-| `401 unauthorized` | Re-copy the raw `owk_*` key, check the environment, and confirm the key has not expired or been revoked. |
-| `403 scope_insufficient` | Add the scope named in the problem response. This guide needs `site=<id>:read`, `machine=<id or *>:read`, and `machine=<id or *>:write`. |
-| `409 machine_offline` | Choose an online machine from step 5 or wait for the agent heartbeat to recover. |
-| `422 idempotency_key_mismatch` | Generate a new idempotency key when changing the command body. |
-| `jq: command not found` | Install `jq`, or run the same requests and inspect the JSON manually. |
+| `401 unauthorized` | re-copy the raw `owk_` key, check you are calling the environment it was minted on, and check it has not expired or been revoked |
+| `403 scope_insufficient` | add the scope named in the error's `required`. this guide needs `site=<id>:read`, `machine=<id or *>:read`, and `machine=<id or *>:write` |
+| `409 machine_offline` | choose an online machine from step 5, or wait for the agent to reconnect |
+| `422 idempotency_key_mismatch` | generate a new idempotency key when you change the command body |
+| `jq: command not found` | install `jq`, or read the JSON by hand |
 
-## Next steps
+## next steps
 
-- Browse the interactive reference at [`/docs/api`](/docs/api).
-- Read [`authentication.md`](/docs/api/authentication), [`pagination.md`](/docs/api/pagination),
-  [`idempotency.md`](/docs/api/idempotency), [`errors.md`](/docs/api/errors), and
-  [`rate-limits.md`](/docs/api/rate-limits) before wiring production automation.
-- Add webhooks with [`webhooks.md`](/docs/api/webhooks) once you want event callbacks.
-- Move from curl to the Node or Python SDK examples in
-  [`examples/sdk-workflows.md`](/docs/api/examples/sdk-workflows) after the REST smoke
-  workflow is green.
+- browse the interactive reference at [`/docs/api`](/docs/api).
+- read [authentication](/docs/api/authentication), [pagination](/docs/api/pagination), [idempotency](/docs/api/idempotency), [errors](/docs/api/errors), and [rate limits](/docs/api/rate-limits) before wiring production automation.
+- add [webhooks](/docs/api/webhooks) when you want event callbacks.
+- move from curl to the SDKs with the [SDK workflows](/docs/api/examples/sdk-workflows) once this flow works.

@@ -1,16 +1,16 @@
 ---
 title: "self-hosting"
-description: "owlette is available as a hosted service at owlette.app - no setup required. If you run your own instance, this section covers the Firebase, storage, web runtime, and agent pieces you need to operate the full stack."
+description: "owlette is a hosted service at owlette.app with nothing to set up. if you run your own instance instead, this section covers the Firebase project, Cloudflare R2, Cloud Functions, the web app, its scheduled jobs and the agents."
 ---
 
 ---
 
 ## why self-host?
 
-- **Data sovereignty** - Keep app data in your own Firebase project and object storage in your own Cloudflare R2 bucket
-- **Custom domain** - Run the dashboard on your own URL
-- **Full control** - Modify the codebase, add features, integrate with your infrastructure
-- **Development** - Contribute to owlette or build on top of it
+- **data sovereignty**: app data stays in your own Firebase project, and roost content in your own Cloudflare R2 buckets
+- **custom domain**: the dashboard runs on your own URL
+- **full control**: change the codebase, add features, integrate it with your infrastructure
+- **development**: contribute to owlette or build on top of it
 
 ---
 
@@ -18,11 +18,11 @@ description: "owlette is available as a hosted service at owlette.app - no setup
 
 <Callout type="info" title={"license terms"}>
 
-owlette is licensed under [FSL-1.1-Apache-2.0](https://github.com/tridant-io/owlette/blob/main/LICENSE). The license grants use, copying, modification, derivative works, public performance, public display, and redistribution for any "Permitted Purpose", which means any purpose other than a "Competing Use".
+owlette is licensed under [FSL-1.1-Apache-2.0](https://github.com/tridant-io/owlette/blob/main/LICENSE). the license grants use, copying, modification, derivative works, public performance, public display and redistribution for any "Permitted Purpose", which means any purpose other than a "Competing Use".
 
-Self-hosting owlette for your own internal use and access, including internal business operations, is a permitted purpose. The FSL does not allow "Competing Use": making owlette available to others in a commercial product or service that substitutes for owlette, substitutes for another product or service the licensor offers using owlette as of the date the release is made available, or offers the same or substantially similar functionality.
+self-hosting owlette for your own internal use and access, including internal business operations, is a permitted purpose. the FSL does not allow "Competing Use": making owlette available to others in a commercial product or service that substitutes for owlette, substitutes for another product or service the licensor offers using owlette as of the date the release is made available, or offers the same or substantially similar functionality.
 
-Each release also receives a future Apache License, Version 2.0 grant on the second anniversary of the date that release is made available. Read the linked LICENSE for the authoritative terms.
+each release also receives a future Apache License, Version 2.0 grant on the second anniversary of the date that release is made available. read the linked LICENSE for the authoritative terms.
 
 </Callout>
 
@@ -32,37 +32,56 @@ Each release also receives a future Apache License, Version 2.0 grant on the sec
 
 | requirement | purpose |
 |-------------|---------|
-| **Firebase project** | Authentication, Firestore, Admin SDK credentials, and Firebase Storage for installer/screenshot flows |
-| **Cloudflare R2 bucket** | Object storage for roost chunk uploads, signed URLs, and version assembly |
-| **Railway account** (or any Node.js 22 host) | Web dashboard hosting for the Next.js app |
-| **Node.js 22.x** | Web builds, Firebase Functions, and local development. `firebase-admin` 14 requires `node >=22`, and Node 20 left security support on 2026-04-30 |
-| **GitHub repository** | Source code and CI/CD |
-| **Upstash Redis** | API rate limiting |
-| **Email provider** | Alert and welcome email delivery |
-| **Cron scheduler** | Machine offline detection and optional public status-page pings |
-| **Windows 10+ machine** | Agent installation target |
+| **Firebase project** on the Blaze plan | Authentication, Firestore, Firebase Storage, and the Cloud Functions in `functions/`, which need Blaze to deploy |
+| **Cloudflare account** | R2 buckets for roost content, a Turnstile widget for sign-up and password reset, and optionally the swoop signalling worker, a TURN key and the failover load balancer |
+| **web host** | Railway, Vercel or any Node.js 22 host for the Next.js app in `web/` |
+| **Node.js 22.x** and npm 10 | web builds, Cloud Functions and local tooling. `firebase-admin` 14 requires `node >=22` |
+| **firebase-tools 15.x** | deploying rules, indexes and functions. 13.x cannot run the functions emulator |
+| **Upstash Redis** | distributed API rate limiting |
+| **Resend** | alert, welcome and API-key-expiry email |
+| **an HTTP scheduler** | the scheduled endpoints: offline detection, alert digests, talons, retention and more. owlette's own run on cron-job.org |
+| **machines to manage** | Windows 10 or later, macOS 15 or later on Apple silicon, or Ubuntu 24.04 |
 
 ---
 
 ## setup sequence
 
-1. [Firebase Setup](/docs/setup/firebase) - create the Firebase project, enable Authentication, Firestore, and Firebase Storage, then generate service-account credentials.
-2. [Environment Variables](/docs/setup/environment-variables) - collect Firebase client/admin values, session secrets, Upstash Redis, email, cron, and Cloudflare R2 credentials before deployment.
-3. [Firestore Rules](/docs/setup/firestore-rules) - deploy the repository's Firestore rules and indexes so users and agents can access only their scoped data.
-4. [Web Deployment](/docs/setup/web-deployment) - deploy the Next.js dashboard to Railway or another Node.js 22 host and attach the required environment variables.
-5. First admin account - register through the deployed dashboard, then promote the initial operator in Firestore.
-6. [Agent Installation](/docs/agent/installation) - install the Windows agent on target machines and pair it with your self-hosted dashboard.
+1. [Firebase setup](/docs/setup/firebase): create the project, enable Authentication, Firestore and Storage, and generate service-account credentials.
+2. **Cloudflare R2**: run `node scripts/provision-r2.mjs` to create the four roost buckets (`owlette-{prod,dev}-{content,manifests}`) and the content buckets' CORS rules. it reads `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_R2_API_TOKEN` from `.claude/.env.local`, and `--verify-only` checks without changing anything. then, in the Cloudflare dashboard under **R2 → manage R2 API tokens**, mint an S3 access key with object read and write on the four buckets.
+3. **Cloudflare Turnstile**: add a widget covering your dashboard hostnames. without its secret, production refuses every sign-up and password reset.
+4. [environment variables](/docs/setup/environment-variables): collect the Firebase client and admin values, session and encryption secrets, R2, Turnstile, Upstash, email, cron and, for swoop, its signing keys.
+5. [Firestore rules](/docs/setup/firestore-rules): deploy the repository's Firestore rules and indexes and the Storage rules.
+6. [Cloud Functions](/docs/setup/firebase#step-8-deploy-cloud-functions): deploy `functions/` with its own env file. talons, threshold alerts, deployment status and roost fan-out run there.
+7. [web deployment](/docs/setup/web-deployment): deploy the Next.js app and attach the environment variables.
+8. [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints): register every scheduled route, in every environment.
+9. [first superadmin](/docs/setup/firebase#step-10-bootstrap-the-first-superadmin): sign in once, then promote the first operator in Firestore.
+10. [swoop](/docs/setup/web-deployment#the-swoop-signalling-worker), optional: deploy the signalling worker in `infra/swoop-signal` with its secrets, and set the swoop variables on the web app. swoop stays off until a site turns it on.
+11. **agents**: build installers that point at your instance (below), then [install and pair](/docs/agent/installation) them.
+
+---
+
+## what is tied to owlette.app
+
+a few values name the hosted service in code rather than in configuration. change them in your fork before you rely on the matching feature:
+
+| what | where | effect if left alone |
+|------|-------|----------------------|
+| the agent's server | `get_api_base_url`, `get_project_id` and `get_web_host` in `agent/src/shared_utils.py`, with the host names in `agent/src/configure_site.py`, `agent/owlette_installer.iss` and `desktop/src/lib/environment.ts` | the agent only ever talks to `owlette.app` or `dev.owlette.app` and their Firebase projects, and ignores any other `api_base` in its `config.json`, so it never sends its tokens to a host it does not know. build your own installers after changing them |
+| passkeys | `getRpId` and `getExpectedOrigins` in `web/lib/webauthn.server.ts` | in production the relying party is `owlette.app`, so passkeys fail on any other domain. authenticator-app codes work everywhere |
+| R2 CORS origins | `CORS_ALLOWED_ORIGINS` in `scripts/provision-r2.mjs` | browser uploads to roost fail CORS from your domain. add it and re-run the script |
+| Cloud Functions callback URL | `API_BASE_URL` in `functions/.env.<projectId>` | unset, functions call `dev.owlette.app` when the project ID contains `dev` and `owlette.app` otherwise |
+| swoop signalling hostnames | `routes` in `infra/swoop-signal/wrangler.toml` | the worker deploys to `signal.owlette.app` and `signal-dev.owlette.app` |
 
 ---
 
 ## storage responsibilities
 
-Firebase and R2 serve different parts of the self-hosted system:
+Firebase and R2 serve different parts of the system:
 
 | storage service | used for |
 |-----------------|----------|
-| **Firestore** | Sites, users, machines, commands, settings, audit/activity data, and agent state |
-| **Firebase Storage** | Installer binaries and screenshot-backed workflows |
-| **Cloudflare R2** | roost content chunks, signed upload/download URLs, immutable versions, and rollback assembly |
+| **Firestore** | sites, members, users, machines, commands, settings, audit and activity data, and agent state |
+| **Firebase Storage** | installer binaries, screenshots, chat images and profile photos |
+| **Cloudflare R2** | roost content chunks, immutable version bodies, signed upload and download URLs |
 
-For the complete variable inventory, use [Environment Variables](/docs/setup/environment-variables). For deploy-time runtime requirements and host configuration, use [Web Deployment](/docs/setup/web-deployment).
+for the complete variable inventory, use [environment variables](/docs/setup/environment-variables). for host configuration, failover and the scheduled jobs, use [web deployment](/docs/setup/web-deployment).

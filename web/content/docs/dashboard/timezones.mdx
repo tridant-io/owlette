@@ -1,103 +1,94 @@
 ---
 title: "timezones"
-description: "Owlette tracks three independent timezone actors: each user picks which one renders absolute timestamps, and each site picks whether process launch windows follow the site's clock or each machine's own."
+description: "owlette tracks three independent timezones: each user picks which one renders absolute timestamps, and each site picks whether process launch windows follow the site's clock or each machine's own."
+keywords: ["time zone", "dst", "daylight saving", "local time", "utc", "site time", "machine time", "wrong time"]
 ---
 
----
+## three timezones
 
-## three actors
+| timezone | source | written by | decides when schedules fire |
+|----------|--------|------------|------------------------------|
+| **machine** | the machine's own local timezone, as its OS reports it — on Windows, macOS and Linux alike | the agent, as `machine_timezone_iana` on the machine's Firestore document, with every heartbeat | always for restart schedules. for process launch windows too, unless the site has opted into site time |
+| **user** | the dashboard viewer's preferred IANA timezone | you, as **your timezone** in [preferences](/docs/dashboard/account-settings#preferences) (default: detected from your browser) | never — display only |
+| **site** | the site's configured timezone | set when the site is created (detected from the creator's browser, editable there) and changeable afterwards in manage sites | process launch windows, but only once the site turns on `schedulesFollowSiteTime` (see [process schedules](#process-schedules)). talon schedules, always |
 
-| actor | source | written by | decides when schedules fire |
-|-------|--------|-----------|------------------------------|
-| **machine** | The agent's own Windows local timezone | Agent writes `machine_timezone_iana` into the machine's Firestore doc on every heartbeat | Always for scheduled reboots. For process launch windows too, unless the site has opted into site time |
-| **user** | The dashboard viewer's preferred IANA timezone | User sets `timezone` in Preferences (default: browser-detected) | Never — display only |
-| **site** | The site's configured timezone | Set when the site is created (detected from the creator's browser, editable there) and changeable afterwards in Manage Sites | Process launch windows, but only once the site turns on `schedulesFollowSiteTime` (see [process schedules](#process-schedules)) |
+all three are stored as IANA identifiers (e.g. `America/New_York`, `Europe/Berlin`). there is no offset or abbreviation field — offsets are resolved from the IANA name, so DST transitions work.
 
-All three are stored as IANA identifiers (e.g. `America/New_York`, `Europe/Berlin`). There is no "offset" or "abbreviation" field — offsets are resolved from the IANA name so that DST transitions work correctly.
-
-The last column is the part that catches people out: a display mode never moves a schedule. Only the site's opt-in does, and only for process launch windows.
+the last column is the part that catches people out: a display mode never moves a schedule. only the site's opt-in does, and only for process launch windows.
 
 ---
 
 ## display modes
 
-Each user picks one `timeDisplayMode` in preferences. That choice determines which actor's timezone is used to render absolute timestamps (heartbeats, activity logs, crash events, etc.) across the whole dashboard.
+you pick one **display times in** mode in preferences. it decides which timezone renders absolute timestamps — heartbeats, activity logs, crash events — across the whole dashboard.
 
-| mode | behavior | best for |
-|------|----------|----------|
-| **`user`** | All times render in the user's `timezone` | Single-operator setups where you always want your own local time |
-| **`machine`** _(default)_ | Each machine's times render in **that machine's own** local tz | Distributed kiosks across multiple timezones — "when did the Tokyo kiosk crash?" stays in JST |
-| **`site`** | All times render in the site's configured tz | Single-site teams where the site's local time is the shared reference |
+| mode | stored as | behavior | best for |
+|------|-----------|----------|----------|
+| **each machine's local timezone** _(default)_ | `machine` | each machine's times render in **that machine's own** timezone | kiosks across several timezones — "when did the Tokyo kiosk crash?" stays in JST |
+| **my timezone** | `user` | all times render in your timezone | one operator who always wants their own local time |
+| **site timezone** | `site` | all times render in the site's configured timezone | single-site teams where the site's local time is the shared reference |
 
-In `machine` mode, two cards on the same dashboard page may render times in two different timezones. A `<TimezoneChip>` next to each list of times tells you which actor delivered the timezone so the ambiguity is never silent.
+in the default mode, two cards on the same page can render times in two different timezones. the tooltip on a card's clock and its last-heartbeat time names the timezone, so the difference is never silent.
 
 ---
 
 ## fallback chain
 
-When the primary source for the chosen mode is missing, Owlette falls back in a fixed order (see `getDisplayTimezone()` in `web/lib/timeUtils.ts`):
+when the chosen mode's source is missing, owlette falls back in a fixed order:
 
 | mode | fallback order |
 |------|----------------|
-| `user` | user's tz → browser → `UTC` |
-| `machine` | machine tz → site tz → browser → `UTC` |
-| `site` | site tz → browser → `UTC` |
+| `user` | your timezone → browser → `UTC` |
+| `machine` | machine → site → browser → `UTC` |
+| `site` | site → browser → `UTC` |
 
-`machine` falls back to site (not user) because if the agent hasn't reported its tz yet, the site's tz is the closest "this installation lives in X" approximation. Browser detection is always the last resort before `UTC`.
+`machine` falls back to the site, not to you, because when an agent has not reported its timezone yet, the site's is the closest approximation of where the installation lives. browser detection is always the last resort before `UTC`.
 
 ---
 
-## schedule editor
+## schedule editors
 
-Schedule editors are **unaffected** by the user's display mode, but they do not all use the same timezone reference. Each scheduler uses the timezone that its feature expects:
+schedule editors are **unaffected** by your display mode, but they do not all use the same clock. each uses the one its feature needs:
 
 | feature | timezone used | notes |
 |---------|---------------|-------|
-| **process launch windows** | The site's timezone if the site has opted into site time; each machine's local timezone otherwise (the default) | Opt-in is per site — see [process schedules](#process-schedules) below. The editor labels which clock a window will be read against. Its outside-window hint is computed in the site's timezone either way: on site time that is exactly what the agents do, on machine time it is a prediction of their clocks and the machine's clock is what decides. |
-| **[scheduled restarts](/docs/dashboard/restart-schedules)** | Machine local timezone, always | The reboot dialog shows a machine timezone chip and the agent resolves each reboot entry against the machine's own Windows local timezone. A "03:00" reboot means 03:00 on that machine, even at a site that runs its process windows on site time. This is deliberate: keeping a box's maintenance window on the box's own clock is a different question from keeping a venue's opening hours on the venue's clock. |
-| **talon schedule triggers** | The site's timezone, always | Automations have always been site-scoped, so a schedule trigger fires on the site's clock (UTC when the site has no timezone set) regardless of `schedulesFollowSiteTime`. |
+| **process launch windows** | the site's timezone if the site has opted into site time; each machine's local timezone otherwise (the default) | the opt-in is per site — see [process schedules](#process-schedules) below. the editor names the clock a window is read against, with a timezone chip. its outside-window hint is computed in the site's timezone either way: on site time that is exactly what the agents do; on machine time it is a prediction of their clocks, and the machine's clock decides. |
+| **[restart schedules](/docs/dashboard/restart-schedules)** | the machine's local timezone, always | the editor shows the machine's zone abbreviation beside each time, and the agent resolves each entry against the machine's own clock. a `03:00` restart means 03:00 on that machine, even at a site that runs its process windows on site time. this is deliberate: keeping a box's maintenance window on the box's own clock is a different question from keeping a venue's opening hours on the venue's clock. |
+| **talon schedule triggers** | the site's timezone, always | talons are site-scoped, so a schedule trigger fires on the site's clock (`UTC` when the site has no timezone set) regardless of `schedulesFollowSiteTime`. |
 
-All three are wall-clock schedules, not absolute UTC instants. Changing your dashboard display mode affects timestamp rendering only; it does not reinterpret saved schedule entries.
+all three are wall-clock schedules, not absolute UTC instants. changing your display mode changes how timestamps render; it never reinterprets saved schedule entries.
 
 ---
 
 ## process schedules
 
-A process window of "09:00-17:00 Mon-Fri" means 09:00 on whichever clock its site follows. Sites created since site time shipped follow the site's own timezone — the create-site dialog detects it from your browser and you can change it there before the site exists. Sites created before it evaluate windows on each machine's own clock, so a fleet spread across five cities opens at five different absolute instants, until a site admin answers the dashboard's one-time prompt.
+a process window of "09:00-17:00 mon-fri" means 09:00 on whichever clock its site follows. sites created since site time shipped follow the site's own timezone — the create-site dialog detects it from your browser, and you can change it there before the site exists. sites created before it evaluate windows on each machine's own clock, so a fleet spread across five cities opens at five different instants, until a site admin answers the dashboard's one-time prompt.
 
-The switch is a single field on the site, `schedulesFollowSiteTime`, and it has three states rather than two:
+the switch is a single field on the site, `schedulesFollowSiteTime`, with three states rather than two:
 
 | state | what the machines do | how a site gets here |
 |-------|----------------------|----------------------|
-| **absent** | Machine-local windows — the original behavior, unchanged | Every site that predates site time (plus the rare new site whose browser reported no timezone at all). Site admins see a one-time banner on the dashboard asking which clock the site should use; it appears only when the site actually has a scheduled process |
-| **`false`** | Machine-local windows | The site was asked and kept machine clocks. Touring rigs and multi-city fleets usually want this |
-| **`true`** | Every machine evaluates its process windows in the site's timezone | The site was created after site time shipped — the create-site dialog writes this flag and the timezone together — or it was asked and chose site time, or an admin turned it on afterwards |
+| **absent** | machine-local windows — the original behavior | every site that predates site time (plus the rare new site whose browser reported no timezone). site admins see a one-time banner on the dashboard asking which clock the site should use; it appears only when the site actually has a scheduled process |
+| **`false`** | machine-local windows | the site was asked and kept machine clocks. touring rigs and multi-city fleets usually want this |
+| **`true`** | every machine evaluates its process windows in the site's timezone | the site was created after site time shipped — the create-site dialog writes this flag and the timezone together — or it was asked and chose site time |
 
-Absent and `false` behave identically on the machines. They are stored differently so the dashboard can tell whether the site has answered yet — that is the only thing the banner's presence depends on.
+absent and `false` behave identically on the machines. they are stored differently so the dashboard can tell whether the site has answered yet — that is the only thing the banner depends on.
+
+once the banner is answered, the dashboard has no control to change the choice: manage sites edits the site's name and timezone, not this flag. change it with `PATCH /api/sites/{siteId}`.
 
 <Callout type="warning" title={"a site cannot follow site time without a timezone"}>
-Turning the flag on is rejected unless the site ends the write with a non-empty `timezone`. Set the timezone and the flag together in one edit — the dashboard banner does exactly that, and so should an API caller. Turning it back off never needs a timezone.
+turning the flag on is rejected unless the site ends the write with a non-empty `timezone`. set the timezone and the flag together in one edit — the dashboard banner does exactly that, and so should an API caller. turning it back off never needs a timezone.
 </Callout>
 
 ### how the change reaches the machines
 
-Agents ask the API which clock to use (`GET /api/agent/site`) on every connect and every 15 minutes after that, so a flip takes up to about a quarter hour to reach the fleet. Nothing is pushed, and no agent or service restart is involved.
+agents ask the API which clock to use (`GET /api/agent/site`) on every connect and every 15 minutes after that, so a flip takes up to about a quarter hour to reach the fleet. nothing is pushed, and no agent or service restart is involved.
 
-The API returns a timezone only when the flag is exactly `true` and the site has one set; in every other case it returns `null` and the agent clears whatever it had cached. That is how switching site time back off drops the fleet to machine clocks on its own.
+the API returns a timezone only when the flag is exactly `true` and the site has one set; otherwise it returns `null` and the agent clears whatever it had cached. that is how switching site time back off drops the fleet to machine clocks on its own.
 
-Agents older than **3.2.3** ignore the site's timezone and keep evaluating windows on their own clock. The dashboard flags those machines with an advisory note — it never blocks the setting, since one offline machine would otherwise hold an entire site back. Update them and they pick the site's clock up at their next refresh.
+agents older than **3.2.3** ignore the site's timezone and keep evaluating windows on their own clock. the dashboard flags those machines with an advisory note — it never blocks the setting, since one offline machine would otherwise hold an entire site back. update them and they pick the site's clock up at their next refresh.
 
 ### what a flip does not do
 
-It does not rewrite saved schedule entries. The same stored "09:00" is simply read against a different clock, so a fleet that spans timezones will genuinely shift when the flag goes on — check the windows still mean what you want first. Scheduled reboots are not affected at all.
+it does not rewrite saved schedule entries. the same stored "09:00" is simply read against a different clock, so a fleet that spans timezones genuinely shifts when the flag goes on — check the windows still mean what you want first. restart schedules are not affected at all.
 
----
-
-## related files
-
-- `web/lib/timeUtils.ts` — `getDisplayTimezone()`, `getBrowserTimezone()`, `COMMON_TIMEZONES`, searchable picker helpers
-- `web/contexts/AuthContext.tsx` — `UserPreferences.timezone` / `timeDisplayMode` / `timeFormat`
-- `web/app/api/agent/site/route.ts` — the projection agents read; gates `timezone` on `schedulesFollowSiteTime === true`
-- `web/lib/actions/updateSite.server.ts` — refuses `true` for a site that would end the write without a timezone
-- `web/components/CreateSiteDialog.tsx` — surfaces the detected browser timezone and creates the site with it and `schedulesFollowSiteTime: true` in one write
-- Agent-side: `machine_timezone_iana` is written alongside other heartbeat metrics; the cached schedule timezone is published in `service_status.json` as `firebase.schedule_timezone`

@@ -1,91 +1,111 @@
 ---
 title: "audit-log"
-description: "inspect a site's tamper-evident audit log from the cli. records form a hash chain (each record carries the previous record's hash) so you can detect tampering by walking the chain — audit-log get returns the chain links plus a verification report alongside the record. both verbs are site-scoped, tier A — ready."
+description: "audit-log lists and inspects a site's tamper-evident audit log. each record carries the hash of the one before it, and audit-log get returns the server's verification of that chain. both verbs are site-scoped and read-only."
+keywords: ["history", "activity log", "who did what", "compliance"]
 ---
+
+verbs:
+
+- [`audit-log list`](#list) — list records on a site, newest first, following pagination for you
+- [`audit-log get`](#get) — print one record with its hash chain and verification report
 
 ---
 
 ## list
 
-list audit log records on a site, auto-paginating through the server's cursor pagination until exhausted or `--limit` is hit.
-
-**synopsis** — `owlette audit-log list --site <siteId> [--kind <csv>] [--actor <actor>] [--since <when>] [--until <when>] [--limit <n>] [--cursor <token>] [--page-size <n>]`
-
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id to list audit records for |
-| `--kind <csv>` | no | comma-separated event kinds (e.g. `api_key_used,signed_url_issued`) |
-| `--actor <actor>` | no | exact actor string (e.g. `apiKey:<keyId>` or `user:<uid>`) |
-| `--since <when>` | no | iso 8601 timestamp **or** relative duration (`30s`, `15m`, `24h`, `7d`) |
-| `--until <when>` | no | iso 8601 or relative duration; **always client-side** filter |
-| `--limit <n>` | no | stop after fetching this many records in total |
-| `--cursor <token>` | no | resume from a previously-returned `nextPageToken` |
-| `--page-size <n>` | no | server-side page size (default 50, max 200) |
-
-**important filter caveats**:
-
-- the server only supports **single-kind exact-match** on `kind`. when you pass exactly one kind via `--kind foo`, the cli pushes the filter to the server. when you pass a CSV (`--kind foo,bar`), the cli falls back to **client-side filtering** after each page — the server still returns every kind and the cli drops the rest.
-- `--until` is **always client-side** — there is no server `until` parameter. for very wide windows, prefer narrowing with `--since` to keep the server load reasonable.
-- `--since` accepts both iso 8601 (`2026-04-25T00:00:00Z`) and relative durations like `24h`, `7d`, `30m`, `5s`. relative durations are converted to iso client-side before being sent.
-
-**cursor field name**: the server returns canonical `next_page_token` plus deprecated `nextPageToken`. the cli prints it on the last line of human output as `next cursor: <token>` so you can resume.
+lists audit records on a site, newest first. the CLI keeps requesting pages until there are none left or `--limit` is reached.
 
 ```bash
-# all events from the last 24 hours
-owlette audit-log list --site site-1 --since 24h
-
-# api-key usage in the last week, capped at 100 records
-owlette audit-log list --site site-1 --kind api_key_used --since 7d --limit 100
-
-# calls made by one api key
-owlette audit-log list --site site-1 --actor apiKey:key_123 --since 24h
-
-# multiple kinds — falls back to client-side filtering
-owlette audit-log list --site site-1 --kind api_key_used,signed_url_issued --since 24h
-
-# resume a paginated walk from a saved token
-owlette audit-log list --site site-1 --cursor eyJsYXN0SWQiOi... --json | jq '.records | length'
+owlette audit-log list --site <siteId> [--kind <csv>] [--actor <actor>] [--since <when>] [--until <when>] [--limit <n>] [--cursor <token>] [--page-size <n>] [--json]
 ```
 
-**backing endpoint**: `GET /api/sites/{siteId}/audit-log?kind=&actor=&since=&page_size=&page_token=`
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site to read |
+| `--kind <csv>` | string | no | event kinds to keep, comma-separated (for example `api_key_used,signed_url_issued`) |
+| `--actor <actor>` | string | no | exact actor, for example `apiKey:<keyId>` or `user:<uid>` |
+| `--since <when>` | ISO 8601 or duration | no | only records at or after this time; a duration such as `30s`, `15m`, `24h` or `7d` means that long ago |
+| `--until <when>` | ISO 8601 or duration | no | drop records recorded after this time |
+| `--limit <n>` | integer | no | stop after this many records in total |
+| `--cursor <token>` | string | no | resume from a `nextPageToken` printed by an earlier run |
+| `--page-size <n>` | integer | no | records per request, clamped to 1–200 (default 50) |
+
+where each filter runs:
+
+- **one `--kind`** goes to the server. **two or more** are filtered by the CLI after each page arrives, so the server still returns every kind.
+- **`--until`** is always filtered by the CLI; the server has no `until`. pair it with `--since` so the walk stops early.
+- **`--since`** goes to the server; a duration is converted to an ISO 8601 time first. **`--actor`** goes to the server.
+
+human mode prints a table of `recordedAt`, `kind`, `actor` (cut at 32 characters) and `hash`, or `(no records)`. when more records remain it ends with `next cursor: <token>`. `--json` prints `{ "records": [...], "nextPageToken": "<token or empty>" }`, each record with `hash`, `kind`, `actor`, `siteId`, `target`, `occurredAt`, `recordedAt` (epoch ms) and `attributes`. the cursor is a record hash; pass it to `--cursor` to resume.
+
+### examples
+
+```bash
+# everything from the last 24 hours
+owlette audit-log list --site site-1 --since 24h
+```
+
+```bash
+# api-key use in the last week, at most 100 records
+owlette audit-log list --site site-1 --kind api_key_used --since 7d --limit 100
+```
+
+```bash
+# calls made by one api key
+owlette audit-log list --site site-1 --actor apiKey:key_123 --since 24h
+```
+
+```bash
+# resume a walk from a saved cursor
+owlette --json audit-log list --site site-1 --cursor 9c1f0e7a... | jq '.records | length'
+```
+
+backing: `GET /api/sites/{siteId}/audit-log?page_size=&page_token=&kind=&actor=&since=`.
 
 ---
 
 ## get
 
-fetch one audit record by its `recordHash` and print the full payload — kind, actor, occurredAt, attributes — plus the hash chain (`previousHash` + `hash`) and the server's verification report (`hashValid`, `linkageValid`, `isGenesis`, `predecessorPresent`, `reason`). use this to verify a specific record or to follow the chain backwards.
-
-**synopsis** — `owlette audit-log get <recordHash> --site <siteId> [--json]`
-
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the record |
+prints one record — kind, actor, occurredAt and attributes — with its chain links (`previousHash`, `hash`) and the server's verification report.
 
 ```bash
-owlette audit-log get a1b2c3d4e5f6... --site site-1
-owlette audit-log get a1b2c3d4e5f6... --site site-1 --json | jq '.verification'
+owlette audit-log get <recordHash> --site <siteId> [--json]
 ```
 
-a verification with `ok: true` means the record's content hashes to its claimed hash AND links correctly to its predecessor (or is the genesis record). if any field is `false`, the chain has been tampered with or the predecessor is missing.
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the record |
 
-**backing endpoint**: `GET /api/sites/{siteId}/audit-log/{recordHash}`
+`--json` prints the raw response: `siteId`, `hash`, `previousHash`, `recordedAt`, `event` (`kind`, `siteId`, `actor`, `occurredAt`, `attributes`) and `verification` (`ok`, `hashValid`, `linkageValid`, `isGenesis`, `predecessorPresent`, `reason`).
+
+`verification.ok: true` means the record's content hashes to its stored hash and it links to its predecessor, or it is the first record. `false` in any field means the record was altered or its predecessor is missing; `reason` says which. `linkageValid` is `null` (`n/a` in human mode) when there is no predecessor to check.
+
+### examples
+
+```bash
+owlette audit-log get 9c1f0e7a... --site site-1
+```
+
+```bash
+owlette --json audit-log get 9c1f0e7a... --site site-1 | jq '.verification'
+```
+
+backing: `GET /api/sites/{siteId}/audit-log/{recordHash}`.
 
 ---
 
 ## exit codes
 
 - `0` — success
-- `1` — generic error (network, api 5xx, unexpected response shape, missing `--site`, unparseable `--since` / `--until`)
-- `2` — usage error (no token configured)
-
-`audit-log` has no stub verbs and no exit-3 paths.
+- `1` — network failure, a non-2xx response, or a missing `--site`
+- `2` — `--since` or `--until` that is neither ISO 8601 nor a duration, or no token configured
 
 ---
 
 ## notes
 
-- **scope**: site-scoped read. requires an api key with `site=<id>:read` (or broader).
-- **tier**: A for both verbs.
-- **chain integrity**: the verification report is computed server-side on every `get`. the cli does not re-hash records locally; for offline verification, fetch the full chain via `--json` and pipe to a tool that recomputes hashes.
-- **cli-side vs server-side filters**: prefer single-kind `--kind` + `--since` for the cheapest queries — anything else streams more bytes than necessary. `--limit` short-circuits as soon as the cap is met regardless of where the filter ran.
-- see [overview](/docs/cli/overview) for global flags and config precedence.
+- **scope**: site-scoped, read-only; the key needs `site=<id>:read`
+- **verification is server-side**: the CLI does not re-hash records. to verify offline, fetch records with `--json` and recompute the hashes yourself
+- **cheapest queries**: a single `--kind` plus `--since` keeps the filtering on the server; client-side filters still download every record in range
+- **JSON**: raw objects with no `{ ok, data }` wrapper
+- **related**: [overview](/docs/cli/overview) for global flags, [site](/docs/cli/reference/site) to find site IDs

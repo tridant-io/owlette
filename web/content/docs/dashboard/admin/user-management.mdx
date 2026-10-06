@@ -1,13 +1,14 @@
 ---
 title: "user management"
-description: "Manage registered user accounts, global roles, and site assignments. This is an internal owlette page; customer accounts manage per-site access from members instead."
+description: "every owlette account in one list: its platform role, its sites, when it was last seen, second-factor resets and deletion. this is an internal owlette page; customers manage who reaches their sites from members instead."
+keywords: ["accounts", "all users", "superadmin", "promote user", "reset 2fa", "lost authenticator", "locked out", "delete user", "deleted accounts", "account audit"]
 ---
 
-**Location**: admin panel -> user management (`/admin/users`)
+**location**: admin panel → users (`/admin/users`), titled **user management**
 
-<Callout type="info" title={"Internal page"}>
+<Callout type="info" title={"internal page"}>
 
-`/admin/users` is operated by owlette. It acts on accounts platform-wide, so it is not part of the site-scoped admin panel. To manage who can reach one of your sites, use [member management](/docs/dashboard/admin/member-management) (`/admin/members`).
+`/admin/users` is run by owlette. it acts on accounts across the platform, so it is not part of the site-scoped admin panel, and every route behind it accepts only a platform superadmin. to manage who can reach one of your sites, use [member management](/docs/dashboard/admin/member-management) (`/admin/members`).
 
 </Callout>
 
@@ -15,97 +16,114 @@ description: "Manage registered user accounts, global roles, and site assignment
 
 ## account creation
 
-The user-management page does not invite users or create accounts directly. Users register through the normal sign-up flow, using email/password or Google sign-in, and the first sign-in creates a `users/{uid}` document with:
+this page does not invite anyone or create accounts. people sign up themselves, with email and password or with Google, and the first sign-in calls `POST /api/users/bootstrap`, which creates `users/{uid}` with:
 
 - `role: "member"`
-- `sites: []`
-- MFA setup flags and default user preferences
+- second-factor setup required, and no factors yet
+- default preferences
 
-After the account exists, this page can assign sites or change the account's role. There is no shipped SAML/OIDC SSO mapping or invite-code workflow on this page.
+it gives no site access: that comes from being added to a site. there is no SSO mapping or invite-code flow.
 
 ---
 
 ## the role model
 
-| role | platform access | site access |
-|------|-----------------|-------------|
-| **member** | none | read-only access to the sites they belong to, plus self-service preferences and self-delete |
-| **admin** (site admin) | the site-scoped admin panel pages — members, agent tokens, schedules, alerts, webhooks | write access on the sites they belong to, including machine commands/configuration, deployments, roosts, talons, site webhooks, logs, and site membership |
-| **internal** | every admin panel page, including this one | every site, regardless of assignment |
+what someone may do on a site comes from their **role on that site**, held in `sites/{siteId}/members/{uid}`: owner, admin or member. see [roles](/docs/dashboard/admin#roles). the account-level role on this page is a different thing:
 
-The third tier is reserved for owlette operators; it is never granted to a customer account, and the dashboard never names it in customer-facing copy — an internal operator appears as an `admin` on a site's member list.
+| account role | what it grants |
+|---|---|
+| **member** | its own preferences, and deleting its own account. nothing on any site by itself |
+| **admin** | exactly the same as member. it is left over from before per-site roles |
+| **superadmin** | every capability on every site, and the internal pages |
 
-Role is an account-level property: changing it here applies to every site the account belongs to. That is why site admins cannot change roles from `/admin/members` — granting `admin` there would grant it on every other site that account belongs to as well.
+so the only account-role change with an effect is to or from **superadmin**. to make someone an admin of a site, change their role on that site: [changing a role](/docs/dashboard/admin/member-management#changing-a-role), or `PATCH /api/sites/{siteId}/members/{uid}`.
 
----
-
-## user list
-
-The page listens to the `users` collection in real time and shows registered user documents ordered by newest registration first.
-
-| column | description |
-|--------|-------------|
-| **user** | Display name when present, email address, and a `You` badge for the signed-in operator |
-| **role** | Role badge for the account |
-| **sites** | For admins, the assigned site IDs are shown as pills. For members, the page shows an assigned-site count. Internal accounts show `all sites`. |
-| **joined** | Registration date from `createdAt` |
-| **actions** | Row menu for `manage sites`, `change role...`, and `delete user` |
-
-The header cards show total users, members, site admins, and internal accounts.
+the page has not caught up with this. its role cards still describe **admin** as a site-scoped elevated tier, the **site admins** chip counts accounts whose account role is admin, and the **sites** column lists site IDs only for those accounts.
 
 ---
 
-## changing a user's role
+## the user list
 
-1. Open the row menu.
-2. Select `change role...`.
-3. Pick the new role.
-4. Select `save role`.
+the page follows the `users` collection live, newest account first.
 
-Promoting calls `POST /api/users/{uid}/promote` with the selected role. Demoting to `member` calls `POST /api/users/{uid}/demote`. Both routes require the `USER_ROLE_MANAGE` capability, which no customer role holds.
+- **show deleted accounts**, on by default and remembered per device, keeps deleted accounts in the list. turned off, a note says how many are hidden
+- the header chips count active accounts: **total users**, **members**, **site admins**, **superadmins**
 
-The dialog disables `save role` when the selected role matches the current role. The signed-in operator cannot open the role-change dialog on their own row, and the server also rejects any role change that would remove the last active internal account.
+| column | what it shows |
+|---|---|
+| **user** | the display name, the email, a `you` badge on your own row. a deleted account gets a `deleted` badge, who deleted it and when |
+| **role** | the account role |
+| **sites** | for an account role of admin, its sites' IDs; for a superadmin, `all sites`; otherwise how many sites it is on |
+| **joined** | when the account was created |
+| **last seen** | the last sign-in or session refresh, from Firebase Auth, or `never` |
+| **actions** | the row menu, or `—` on a deleted account |
 
-Role changes update the user document immediately. The affected user may need to sign out and back in, or wait for session refresh, before their navigation and permissions reflect the new role everywhere.
+**joined** and **last seen** are not shown on a phone. the row menu holds `manage sites`, `change role...`, `reset 2FA...` and `delete user`; the last two are disabled on your own row.
+
+---
+
+## changing an account role
+
+1. open the row menu and select `change role...`.
+2. pick **member**, **admin** or **superadmin**.
+3. select **save role**, which stays disabled until the role differs.
+
+promoting calls `POST /api/users/{uid}/promote`, demoting to member `POST /api/users/{uid}/demote`; both need `USER_ROLE_MANAGE`. the server refuses any change that would leave no active superadmin (`last_superadmin`), and the page will not let you demote yourself (**cannot demote yourself**). the change applies at once, and an open dashboard picks it up without a reload.
 
 ---
 
 ## site assignment
 
-Use `manage sites` to add or remove site IDs from a user's `sites` array. The dialog lists assigned sites, available sites, and invalid site references that no longer resolve to visible site documents.
+`manage sites` opens **manage site access**: the sites the account is on, the sites it could be added to, and any site IDs it still lists that no longer exist, with a search box.
 
-| action | behavior |
-|--------|----------|
-| **assign** | Adds the site through `POST /api/users/{uid}/assign-sites`. The server validates that each site exists and uses an idempotent array update. |
-| **remove** | Removes the site through `POST /api/users/{uid}/remove-sites`. The membership change is immediate, and the server best-effort cancels pending commands that user issued on removed sites. |
+| action | what happens |
+|---|---|
+| **assign** | `POST /api/users/{uid}/assign-sites` checks that every site exists (all or nothing, `unknown_sites`), then adds the account to each as a **member**. an account already on a site keeps its role there. to make it an admin of a site, [change its role](/docs/dashboard/admin/member-management#changing-a-role) there |
+| **remove** | `POST /api/users/{uid}/remove-sites` refuses a site the account owns (`owns_sites`), so transfer ownership first. otherwise it takes away the membership, ends the account's [swoop](/docs/dashboard/swoop) sessions on that site, and, best effort, cancels the account's pending commands there |
 
-These endpoints require `SITE_MEMBER_MANAGE`. Site admins hold the same capability for their own sites and use it from `/admin/members`, which never lists accounts outside the selected site.
+when the account wrote talons on the site being removed, a **remove site access** confirmation offers a successor picker. **reassign and remove** moves the talons first, and leaves the access unchanged if that fails; **remove anyway** removes it with the talons left behind.
 
-For `member` users, site assignment controls which sites they can read. For `admin` users, assignment controls where their site-scoped write capabilities apply. Internal accounts reach every site without assignment.
+both routes are superadmin-only, as is everything on this page.
+
+---
+
+## resetting 2FA
+
+for someone who has lost every second factor and their backup codes. `reset 2FA...` asks **reset 2FA**, and confirming calls `POST /api/users/{uid}/mfa-reset`, which:
+
+- removes the authenticator app, every passkey and the backup codes
+- revokes their trusted devices, so no browser skips the second-factor step any more. a session they already hold stays signed in until it expires
+- has them set up 2FA again at their next sign-in
+
+you cannot reset your own (`403`); remove your own factors from account settings instead. confirm who you are talking to first: as the dialog says, a reset hands the account to whoever signs in next. see [superadmin factor reset](/docs/reference/authentication#superadmin-factor-reset).
 
 ---
 
 ## deleting a user
 
-The row menu includes `delete user` for other users. The action is disabled on the signed-in operator's own row, and clicking it opens a confirmation dialog.
+`delete user` opens **delete user**, and confirming calls `DELETE /api/users/{uid}` (`USER_DELETE`). it is a soft delete:
 
-Deletion calls `DELETE /api/users/{uid}` and is a soft-delete cascade, not a simple row removal:
+- it refuses the last active superadmin (`last_superadmin`)
+- it refuses an account that owns sites unless a successor is given (`orphan_sites`). the successor must exist, not be deleted, and have the account role admin or superadmin (`successor_invalid`). each owned site then moves to them in one transaction, and if any transfer fails the delete stops before anything is changed (`transfer_failed`)
+- it revokes the account's API keys
+- it cancels, best effort, the commands it left pending
+- it sets `users/{uid}.deletedAt` and keeps the document for the audit trail
+- it revokes the account's Firebase Auth sessions and disables the Auth record, without deleting it
 
-- sets `users/{uid}.deletedAt`
-- preserves the user document for audit and historical references
-- revokes the user's API keys in both the user subcollection and top-level lookup docs
-- best-effort cancels pending commands issued by that user on their assigned or owned sites
-- refuses to delete a user who owns sites unless the API request supplies a valid `successorUid` for ownership transfer
+deleting an account that is already deleted returns its original deletion time. the dialog and its toast say the user is "permanently" removed, but the account is only soft-deleted as above.
 
-The current dialog does not collect a successor user. If a delete request fails because the target owns sites, transfer site ownership through an API workflow that can pass `successorUid`, then retry deletion.
-
-The server preserves deleted user documents with `deletedAt` for audit; default API list calls exclude those records. Reissuing the delete request for an already-deleted user is idempotent and returns the original deletion timestamp.
+**successors.** the dialog shows a successor picker only when the account wrote talons. the person picked inherits those talons and also every site the account owns ("this admin also inherits any sites this user owns"). an account that owns sites but wrote no talons gets no picker, so its delete is refused with `orphan_sites`: move each site first with `POST /api/sites/{siteId}/transfer-ownership` or [`owlette site transfer-ownership`](/docs/cli/reference/site#transfer-ownership), then delete.
 
 ---
 
-## permission checklist
+## account deletions
 
-- Use `member` for users who only need read access to the sites they belong to, plus self-service account controls.
-- Use `admin` for operators who need write access on specific sites and the site-scoped admin panel pages.
-- Keep at least two active internal accounts so one can recover the other.
-- Review user deletion carefully: it revokes API keys and may cancel queued work issued by the deleted account.
+below the list, **account deletions** shows every account removed, newest first, from `GET /api/users/deletions`: a `self-delete` or `admin-delete` badge, who was removed, who removed them, when, and how many sites and machines the deletion cleaned up. a refused attempt is marked `blocked`, with the reason, or `failed`. an entry recorded before deleted accounts were logged by ID reads **account not recorded**.
+
+---
+
+## good practice
+
+- keep at least two active superadmins, so one can recover the other. the server's floor is one
+- give site access with a role on the site, not with the account role
+- check a deletion before confirming it: it revokes API keys and can cancel queued work the account issued

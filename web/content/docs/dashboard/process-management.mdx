@@ -1,79 +1,70 @@
 ---
 title: "process management"
-description: "Add, configure, and control processes from the web dashboard. Changes sync to the agent within ~1-2 seconds."
-keywords: ["copy a process", "clone a process", "crash loop", "stop a process"]
----
-
+description: "add, configure and control the processes owlette keeps running, from the web dashboard. changes reach the agent within a second or two."
+keywords: ["copy a process", "clone a process", "crash loop", "stop a process", "add an app", "app path", "program path", "executable path", "mac app", "linux program"]
 ---
 
 ![process management controls](/docs-screens/process-management.png)
 
+---
+
 ## adding a process
 
-1. Click on a machine in the dashboard.
-2. Click **add process**.
-3. Fill in the current dialog fields:
-    - **name**: display name, such as `TouchDesigner`.
-    - **launch mode**: `off`, `always`, or `scheduled`. `off` leaves the process unmanaged, `always` keeps it running, and `scheduled` runs it only during configured schedule blocks.
-    - **executable path**: required path to the executable, such as `C:\Program Files\App\app.exe`.
-    - **file path / command arguments**: optional file to open or command-line arguments to pass to the executable.
-    - **working directory**: optional directory to run the process from.
-    - **task priority**: `low`, `normal`, `high`, or `realtime`.
-    - **window visibility**: `normal` or `hidden`; hidden is intended for console apps only.
-    - **launch delay (sec)**: seconds to wait before launching.
-    - **init timeout (sec)**: seconds to wait before responsiveness checks begin.
-    - **relaunch attempts**: crash-restart attempts before the process is treated as failed.
-    - **schedule configuration**: always open in `scheduled` mode, and available in `off` or `always` from the **configure schedule** button at the end of the launch-mode control. Edit one or more blocks with days and start/stop ranges. The editor names the clock those times are read against — each machine's own by default, or the site's timezone if the site has opted into site time ([timezones](/docs/dashboard/timezones#process-schedules)). Blocks saved from `off` or `always` are stored with the process and do not change its launch mode.
-4. Click **create process**.
+1. click a machine in the dashboard.
+2. click **add process**.
+3. fill in the dialog. the fields are described in the [settings reference](#process-settings-reference) below; only the name and the path are required.
+4. click **create process**.
 
-The agent receives the new configuration and begins monitoring the process.
+the agent receives the new configuration and starts monitoring the process.
+
+the dialog adapts to the machine's operating system: the path field is labelled **executable path** on Windows, **app path** on macOS and **program path** on Linux, and **task priority** and **window visibility** appear only for a Windows machine. see [on macOS and Linux](#on-macos-and-linux).
 
 ---
 
 ## editing a process
 
-1. Click **edit** on a process row or card.
-2. The **edit process** dialog opens with the current settings.
-3. Edit any fields.
-4. Click **save changes**.
+1. click **edit** on a process row or card.
+2. the **edit process** dialog opens with the current settings.
+3. change any fields.
+4. click **save changes**.
 
-Changes propagate through Firestore to the agent immediately.
+changes reach the agent through Firestore straight away. the dialog's delete button (bin icon, bottom left) deletes the process after a confirm.
 
 ---
 
 ## process actions
 
-From the process row, machine card, or edit dialog, the dashboard exposes these actions:
+from the process row, the machine card or the edit dialog:
 
-| action | description | requires |
-|--------|-------------|----------|
-| **launch mode** | Set `off`, `always`, or `scheduled`. Enabling `always` or `scheduled` requires an executable path. | `MACHINE_CONFIG_WRITE` |
-| **configure schedule** | Edit schedule blocks, days, time ranges, and overnight windows. Available in every launch mode; editing from `off` or `always` saves the blocks without changing the mode. | `MACHINE_CONFIG_WRITE` |
-| **edit** | Open the process dialog and update paths, priority, visibility, timing, relaunch attempts, or schedule settings. | `MACHINE_CONFIG_WRITE` |
-| **duplicate** | Copy the process on the same machine. Every setting is carried over except the name, which gains a ` (copy)` suffix, and the launch mode, which is forced to `off` so the copy cannot start a second instance of the same executable behind your back. | `MACHINE_CONFIG_WRITE` |
-| **restart** | Queue a `restart_process` command. The dashboard enables this for `RUNNING`, `LAUNCHING`, or `STALLED` processes. | `MACHINE_EXEC_COMMAND` |
-| **kill** | Queue a `kill_process` command. The dashboard enables this for `RUNNING`, `LAUNCHING`, or `STALLED` processes. | `MACHINE_EXEC_COMMAND` |
-| **delete** | Remove the process from the machine configuration. | `MACHINE_CONFIG_WRITE` |
+| action | what it does | requires |
+|--------|--------------|----------|
+| **launch mode** | set `off`, `always on` or `scheduled`. a managed mode (`always on` or `scheduled`) needs a path. | `MACHINE_CONFIG_WRITE` |
+| **configure schedule** | edit schedule blocks, days, time ranges and overnight windows. offered in every launch mode; editing from `off` or `always on` saves the blocks without changing the mode. | `MACHINE_CONFIG_WRITE` |
+| **edit** | open the process dialog to change paths, timing, relaunch attempts, schedule and, on Windows, priority and visibility. | `MACHINE_CONFIG_WRITE` |
+| **duplicate** | copy the process on the same machine. every setting carries over except the name, which gains a ` (copy)` suffix (` (copy 2)` and so on if that is taken), and the launch mode, which is forced to `off` so the copy cannot start a second instance of the same program behind your back. | `MACHINE_CONFIG_WRITE` |
+| **restart** | queue a `restart_process` command. enabled for `RUNNING`, `LAUNCHING` or `STALLED` processes. | `MACHINE_EXEC_COMMAND` |
+| **kill** | queue a `kill_process` command. enabled for `RUNNING`, `LAUNCHING` or `STALLED` processes. | `MACHINE_EXEC_COMMAND` |
+| **delete** | remove the process from the machine configuration. a running process is not stopped. | `MACHINE_CONFIG_WRITE` |
 
-Site admins on the site and superadmins have `MACHINE_CONFIG_WRITE` and `MACHINE_EXEC_COMMAND`. Members can view process state and configuration, but they are read-only for create, edit, delete, schedule, launch-mode, restart, and kill actions.
+site admins, site owners and superadmins hold `MACHINE_CONFIG_WRITE` and `MACHINE_EXEC_COMMAND`. members can see process state and configuration but cannot create, edit, delete, schedule, change launch mode, restart or kill.
 
-Restart and kill actions send commands to the agent. Create, edit, delete, launch-mode, and schedule changes update the machine configuration that the agent watches.
+restart and kill send commands to the agent. create, edit, delete, launch-mode and schedule changes update the machine configuration the agent watches.
 
-When a process is changed from `off` to `scheduled`, the agent clears stale killed/cooldown markers immediately. If the current time is outside the schedule window, the process stays stopped until the next matching window, then launches normally.
+when a process goes from `off` to `scheduled`, the agent clears stale killed and cooldown markers at once. if the current time is outside the schedule, the process stays stopped until the next window opens, then launches normally.
 
-If the configured executable path no longer exists, the agent aborts the launch and the process shows as `STOPPED` (`INACTIVE` means launch mode is `off`, not a missing file), and the dashboard shows an error toast. When the agent finds likely sibling executable paths, the toast lists up to two suggestions and the **use path** action opens the edit dialog with that path pre-filled.
+if the configured path no longer exists, the agent aborts the launch and the process shows `STOPPED` (`INACTIVE` means the launch mode is `off`, not a missing file). the dashboard shows an error toast — *executable not found for …*, or *app* or *program* on a Mac or Linux machine. when the agent finds likely sibling paths, the toast lists up to two, and its **use path** action opens the edit dialog with the first one filled in.
 
 ---
 
 ## schedules
 
-A process in `scheduled` launch mode runs inside **blocks**: a set of days plus one or more start/stop ranges. A range whose stop time is earlier than its start is an overnight window and carries into the next day.
+a process in `scheduled` launch mode runs inside **blocks**: a set of days plus one or more start/stop ranges. a range whose stop time is earlier than its start is an overnight window and carries into the next day.
 
-The editor previews the whole week as a **seven-day bar** — one column per day, with a coloured segment for every range. Each block keeps its own colour, so a process with a morning block and an evening block reads at a glance, and a pattern that accidentally covers only four days is obvious before you save. The same bar appears on the process row and on the schedule preset list.
+the editor previews the whole week as a **seven-day bar**: one column per day, with a coloured segment for every range. each block keeps its own colour, so a process with a morning block and an evening block reads at a glance, and a pattern that accidentally covers only four days is obvious before you save. the same bar appears on the process row and in the schedule preset list.
 
-Rather than rebuild a common pattern on every machine, save it once as a [schedule preset](/docs/dashboard/admin/schedule-presets) and apply it. Four presets are built in, including `business hours` and `24/7`.
+rather than rebuild a common pattern on every machine, save it once as a [schedule preset](/docs/dashboard/admin/schedule-presets) and apply it. four presets are built in, including `business hours` and `24/7`.
 
-Windows are wall-clock rules, not absolute instants. Which clock they are read against depends on the site — see [timezones](/docs/dashboard/timezones#process-schedules).
+windows are wall-clock rules, not absolute instants. which clock they are read against depends on the site — the editor names it — see [timezones](/docs/dashboard/timezones#process-schedules).
 
 ---
 
@@ -81,34 +72,47 @@ Windows are wall-clock rules, not absolute instants. Which clock they are read a
 
 | setting | type | default | description |
 |---------|------|---------|-------------|
-| **name** | string | required | Display name for identification. |
-| **launch mode** | enum | `off` | `off`, `always`, or `scheduled`. This replaces the old separate autolaunch toggle in the dashboard UI. |
-| **executable path** | string | required | Full path to the executable, for example `C:\Program Files\App\app.exe`. |
-| **file path / command arguments** | string | `""` | File to open or arguments to pass to the executable. |
-| **working directory** | string | `""` | Directory used as the process working directory. |
-| **task priority** | enum | `normal` | `low`, `normal`, `high`, or `realtime`. |
-| **window visibility** | enum | `normal` | `normal` for a visible window, or `hidden` for console apps. |
-| **launch delay (sec)** | number | `0` | Seconds to wait before launching, useful for boot ordering. |
-| **init timeout (sec)** | number | `10` | Grace period before monitoring responsiveness. |
-| **relaunch attempts** | number | `3` | Crash-restart attempts before the process is treated as failed. |
-| **schedule configuration** | blocks | `null` | Scheduled mode uses blocks with days and start/stop ranges. When scheduled mode has no saved blocks, the editor displays a weekday 09:00-17:00 block to edit. |
+| **name** | string | required | display name. |
+| **launch mode** | enum | `off` | `off` (not managed), `always on` (kept running, relaunched after a crash), or `scheduled` (runs only inside its schedule blocks). |
+| **executable path** / **app path** / **program path** | string | required | full path to what the process runs: an `.exe` on Windows (`C:\Program Files\...\app.exe`), an `.app` bundle on macOS (`/Applications/YourApp.app`), a binary on Linux (`/usr/bin/your-program`). stored as `exe_path` on every platform. |
+| **file path / command arguments** | string | `""` | a file to open, or arguments to pass. a path that exists is passed as one argument, never split on its spaces. |
+| **working directory** | string | `""` | directory the process runs in. |
+| **task priority** | enum | `normal` | `low`, `normal`, `high` or `realtime`. **Windows only.** |
+| **window visibility** | enum | `normal` | `normal` for a visible window, or `hidden` for console apps. **Windows only.** |
+| **launch delay (sec)** | number | `0` | seconds to wait before launching, for boot ordering. |
+| **init timeout (sec)** | number | `10` | grace period before responsiveness checks begin. |
+| **relaunch attempts** | number | `3` | crash restarts before the process is treated as failed. |
+| **schedule configuration** | blocks | `null` | blocks of days and start/stop ranges. pinned open in `scheduled` mode, and opened in `off` or `always on` from the gear at the end of the launch-mode control. blocks saved from `off` or `always on` are kept with the process and do not change its launch mode. a `scheduled` process with no saved blocks starts the editor on a weekday 09:00-17:00 block. |
+
+paths must be absolute and cannot be symbolic links; on Windows they cannot be network (UNC) paths either. the agent refuses a launch that breaks either rule.
+
+---
+
+## on macOS and Linux
+
+- **the path field** asks for an **app path** on macOS and a **program path** on Linux. on a Mac, an `.app` bundle is opened the way Finder opens it, so a running instance is brought forward rather than started twice. the file path field hands the app a file to open as a document, or command-line arguments, which reach the app after `--args`.
+- **arguments** are split the way a shell splits them, so quote a value that contains spaces.
+- **priority and visibility** are not offered: only the Windows launcher applies them, and a Mac or Linux agent ignores them if they are set another way (the API, hoot, or a process copied from a Windows machine).
+- **someone must be signed in.** the agent runs as root and launches processes as the user signed in at the machine's screen, never as root. with nobody signed in at a graphical session, the agent refuses the launch and logs that nobody is signed in.
+
+[platform support](/docs/reference/platform-support) lists everything else that differs.
 
 ---
 
 ## tips
 
-<Callout type="idea" title={"Launch ordering"}>
+<Callout type="idea" title={"launch ordering"}>
 
-Use **launch delay** to control startup order. For example, set a database to 0s delay and the application that depends on it to 15s.
+use **launch delay** to control startup order. for example, give a database a 0s delay and the application that depends on it 15s.
 
 </Callout>
-<Callout type="idea" title={"Hidden processes"}>
+<Callout type="idea" title={"hidden processes"}>
 
-Use **hidden** visibility for background services like Node.js servers or Python scripts that don't need a window.
+on Windows, use **hidden** visibility for background services like Node.js servers or Python scripts that don't need a window.
 
 </Callout>
 <Callout type="warning" title={"realtime priority"}>
 
-Setting priority to **realtime** can starve other processes and make the machine unresponsive. Use with extreme caution.
+setting priority to **realtime** can starve other processes and make the machine unresponsive. use it with extreme caution.
 
 </Callout>

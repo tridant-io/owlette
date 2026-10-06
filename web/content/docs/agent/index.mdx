@@ -1,11 +1,17 @@
 ---
 title: "agent"
-description: "The owlette agent is a Python Windows service that runs in the background, monitoring your processes, collecting system metrics, and syncing everything to the cloud. It's the core of the owlette system — every machine you want to manage needs an agent installed."
+description: "the owlette agent is the background service on every machine you manage — a Windows service, a macOS launchd daemon or a Linux systemd unit — that supervises your processes, collects system metrics and syncs everything to the cloud. every machine you want to manage needs one."
+keywords: ["service", "daemon", "background service", "launchd", "systemd", "owlette-host", "where is owlette installed", "install folder"]
 ---
 
-Two pieces ship to every machine. The **service** does the supervising — it is what this section is mostly about, and it runs whether or not anyone is signed in. The **desktop app** is how you see and change what that service is doing while standing at the machine; it is the window below, and it is covered in [configuration](/docs/agent/configuration) and [the system tray](/docs/agent/system-tray).
+two pieces ship to every machine, on all three platforms:
+
+- the **service** does the supervising. it runs as `LocalSystem` on Windows and as root on macOS and Linux, starts at boot, and keeps running whether or not anyone is signed in. this section is mostly about it.
+- the **desktop app** is how you see and change what the service is doing while you stand at the machine: the window below and a tray or menu-bar icon. it runs as the signed-in user, and is covered in [configuration](/docs/agent/configuration) and [the system tray](/docs/agent/system-tray).
 
 ![the owlette desktop app — the process list on the left, the selected process's settings on the right](/docs-screens/agent.png)
+
+which features each platform has is in [platform support](/docs/reference/platform-support).
 
 ---
 
@@ -13,55 +19,88 @@ Two pieces ship to every machine. The **service** does the supervising — it is
 
 | function | frequency | description |
 |----------|-----------|-------------|
-| **Process monitoring** | Every 5s | Checks if configured processes are running, detects crashes and stalls |
-| **Auto-restart** | On crash | Restarts crashed processes by launching a helper in the interactive user session with `CreateProcessAsUser`; the helper starts visible apps with `ShellExecuteEx` and hidden processes with `subprocess.Popen`. |
-| **Heartbeat + metrics** | Adaptive: ~5s while the desktop app's window is open, 30s while processes are active, 120s idle | Marks the machine online and reports per-device CPU usage and temperature, memory, per-volume disk usage and I/O, GPU usage, VRAM and temperature, per-NIC throughput, and gateway latency and packet loss |
-| **Commands** | Event-driven | Listens for and executes commands written by the dashboard, the public API, and talons rules |
-| **Config sync** | Event-driven | Syncs configuration changes between the desktop app, the service, and the cloud |
+| **process monitoring** | every 5 s | checks that configured processes are running and detects crashes and exits; on Windows it also detects hung windows |
+| **auto-restart** | on crash | relaunches a crashed process as the signed-in user. on Windows the service starts a helper in the console session with `CreateProcessAsUser`, which opens visible apps with `ShellExecuteEx` and hidden ones with `subprocess.Popen`; on macOS and Linux the service spawns it straight into the console user's session, and opens a macOS `.app` through Launch Services |
+| **heartbeat + metrics** | adaptive: ~5 s while the desktop app's window is open, 30 s while processes are active, 120 s idle | marks the machine online and reports per-device CPU usage, memory, per-volume disk usage (and on Windows disk I/O), GPU usage and memory, temperatures where the platform has them, per-NIC throughput, and gateway latency and packet loss — see [metrics collection](/docs/agent/process-monitoring#metrics-collection) |
+| **commands** | event-driven | listens for and runs commands written by the dashboard, the public API, hoot and talons rules — see [remote commands](/docs/agent/remote-commands) |
+| **config sync** | event-driven | keeps the desktop app, the service and the cloud on one configuration — see [configuration sync](/docs/agent/configuration#configuration-sync) |
 
 ---
 
 ## how it runs
 
-The agent runs as a Windows service hosted by `owlette-host.exe`, a small Rust supervisor that ships in `tools\` and replaced NSSM in 3.0.0. It registers the service to start automatically on boot, relaunches the agent if it crashes (5 seconds, backing off to 60 seconds once five crashes land inside a five-minute window), and honours the agent's own exit codes: 42 (restart flag) and 43 (self-restart watchdog) relaunch immediately, while a clean exit 0 stops the service.
+### on Windows
+
+the service is `OwletteService`, hosted by `owlette-host.exe`, a small Rust supervisor in `C:\ProgramData\Owlette\tools\` that replaced NSSM in 3.0.0. it registers the service to start automatically at boot, relaunches the agent if it crashes (after 5 seconds, backing off to 60 seconds once five crashes land inside five minutes), and honours the agent's own exit codes: 42 (the restart flag) and 43 (the self-restart watchdog) relaunch immediately, and a clean exit 0 stops the service.
+
+the service starts the desktop app itself, in the signed-in user's session, as soon as one exists, and starts it again on its next status check if it is not running.
+
+### on macOS
+
+the service is the LaunchDaemon `app.owlette.agent`, defined in `/Library/LaunchDaemons/app.owlette.agent.plist`. launchd starts it at boot, runs `owlette_runner.py` as root on the bundled Python under `/Library/Application Support/Owlette/runtime`, and relaunches it after any exit, at most once every 5 seconds.
+
+the desktop app, `/Applications/owlette.app`, is started by launchd at every graphical login through the LaunchAgent `/Library/LaunchAgents/app.owlette.desktop.plist`. the service never launches it. launchd starts the app again if it crashes; quitting it from its menu is honoured until the next login.
+
+### on Linux
+
+the service is the systemd unit `owlette-agent.service`, in `/usr/lib/systemd/system/`. it starts at boot, runs `owlette_runner.py` as root on the bundled Python under `/opt/owlette`, and restarts 5 seconds after any exit (`Restart=always`). it is `KillMode=process`: stopping the service ends the agent and never the applications it started.
+
+the desktop app, `/usr/bin/owlette-desktop`, is started at every graphical login by the user unit `owlette-desktop.service`, which the package enables for every account and which runs only for accounts in the `owlette` group. the service never launches it. a server without a desktop never starts it, and loses only what needs a screen — see [installation](/docs/agent/installation#linux).
+
+### the desktop app's part on macOS and Linux
+
+on macOS and Linux the service runs as root with no display of its own, so anything that has to happen on screen is a job it hands the desktop app through the data folder: a notification on both, and on a Mac a screenshot and starting the [swoop](/docs/dashboard/swoop) streamer, which is what gives them the app's Screen Recording and Accessibility grants. Linux has no screen capture yet — see [platform support](/docs/reference/platform-support#screens). with the app not running, those come back refused as `desktop_not_running`.
+
+the same channel runs the other way for what the app may not do as an ordinary user: pairing, leaving a site, restarting the machine, dismissing a pending restart, filing a bug report and, on macOS, restarting the service are requests the app drops for the service to carry out. nothing on that path asks for `sudo` or an administrator password. on Linux the app restarts the service with `systemctl` directly, under a polkit rule the package installs that lets the `owlette` group start, stop and restart `owlette-agent.service` and nothing else.
+
+### the process tree
 
 ```
-tools\owlette-host.exe (Service Host)
-  └── python\python.exe agent\src\owlette_runner.py (Bridge)
-        └── owlette_service.py (Main Service Loop)
-              ├── firebase_client.py (Cloud Sync)
-              │     ├── auth_manager.py (OAuth Tokens)
+service host — Windows: tools\owlette-host.exe · macOS: launchd (app.owlette.agent) · Linux: systemd (owlette-agent.service)
+  └── bundled python: agent/src/owlette_runner.py (bridge)
+        └── owlette_service.py (main service loop)
+              ├── firebase_client.py (cloud sync)
+              │     ├── auth_manager.py (OAuth tokens)
               │     ├── firestore_rest_client.py (REST API)
-              │     └── connection_manager.py (State Machine)
-              ├── command_router.py (Command Dispatch)
+              │     └── connection_manager.py (state machine)
+              ├── command_router.py (command dispatch)
               │     ├── sync_commands.py (roost — sync_pull, cancel_sync, rollback_to_version)
               │     │     └── sync_downloader.py, sync_assembler.py, sync_state.py
-              │     ├── machine_commands.py (Public-API Commands — capture_screenshot)
-              │     └── process_commands.py (Process Control — restart_process)
-              ├── sync_scrub.py (roost Integrity Scrub + Orphan-Chunk Reap — hourly check)
-              ├── config_sync.py (Config Reconciliation — local, cloud, cached remote)
-              ├── shared_utils.py (Config, Logging, Metrics)
-              │     └── temp_sensors.py (CPU/GPU Temperature via PawnIO)
-              ├── health_probe.py (Startup Health Checks)
-              ├── installer_utils.py (Remote Deployment)
-              ├── registry_utils.py (Software Inventory)
-              └── mcp_tools.py (Remote Command Execution)
+              │     ├── machine_commands.py (public-API commands — capture_screenshot)
+              │     ├── process_commands.py (process control — restart_process)
+              │     ├── swoop_commands.py (swoop session requests, kills and refreshes)
+              │     └── site_commands.py (site setting refreshes)
+              ├── swoop_manager.py (swoop streamer lifecycle)
+              │     └── swoop_doorbell.py (the signalling room's idle socket)
+              ├── keep_awake.py (keep screens awake — the service's sleep hold)
+              ├── sync_scrub.py (roost integrity scrub + orphan-chunk reap — hourly check)
+              ├── config_sync.py (config reconciliation — local, cloud, cached remote)
+              ├── shared_utils.py (config, logging, metrics)
+              │     └── temp_sensors.py (CPU/GPU temperature via PawnIO — Windows)
+              ├── health_probe.py (startup health checks)
+              ├── installer_utils.py (remote deployment and self-update)
+              ├── registry_utils.py (software inventory — Windows)
+              ├── mcp_tools.py (hoot tool execution)
+              │     └── tools_windows.py, tools_posix.py (per-platform tool backends)
+              └── osadapter/ (per-platform operations — win.py, darwin.py, linux.py)
 
-Spawned into user session by the service:
-  ├── app\owlette-desktop.exe (Desktop App — tray icon, configuration window, reboot prompt)
-  ├── owlette_cortex.py (Local AI Agent)
-  │     ├── cortex_firestore.py (Message Polling & Response Writing)
-  │     ├── cortex_tools.py (MCP Tool Server for Agent SDK)
-  │     └── mcp_tools.py (Tool Implementations)
-  ├── process_launcher.py (Application Launcher)
-  └── session_exec.py (User Session Command Executor)
+started in the signed-in user's session:
+  ├── the desktop app (tray icon, configuration window, reboot prompt) —
+  │     launched by the service on Windows, by launchd or systemd at login elsewhere
+  ├── owlette_cortex.py (hoot's local agent)
+  │     ├── cortex_firestore.py (message polling and response writing)
+  │     ├── cortex_tools.py (MCP tool server for the agent SDK)
+  │     └── mcp_tools.py (tool implementations)
+  ├── the swoop streamer (owlette-swoop — Windows and macOS)
+  ├── process_launcher.py (application launcher — Windows)
+  └── session_exec.py (user-session command executor — Windows)
 
-Launched on demand:
-  └── configure_site.py (Device Code Pairing, and the desktop app's back end
-        for join / leave site, bug reports and reboot control)
+launched on demand:
+  └── configure_site.py (device-code pairing, and the back end for the desktop
+        app's join and leave site, bug reports and reboot control)
 ```
 
-See [hoot tools reference](/docs/reference/hoot-tools) for the current tool list.
+see the [hoot tools reference](/docs/reference/hoot-tools) for the current tool list.
 
 ---
 
@@ -69,64 +108,82 @@ See [hoot tools reference](/docs/reference/hoot-tools) for the current tool list
 
 ### startup
 
-1. Initialize logging (RotatingFileHandler, 10 MB per file, 5 backups)
-2. Upgrade config schema if needed (automatic migration)
-3. Run the startup health probe and publish it to `service_status.json`, so the tray can surface a problem before any cloud call happens
-4. Construct the Firebase client (soft-fail: cloud disabled, no site, or no refresh token each leave the machine in local-only mode)
-5. Acquire the console user token, then **launch the desktop app (tray icon)** — deliberately ahead of the cloud work, so the operator sees the service starting immediately
-6. **Classify the previous session's end** (see below), queueing a warning event that is sent once Firebase connects
-7. Start the Firebase client: sync config with Firestore, then connect
-8. Recover running processes (adopt PIDs from previous session)
-9. Enter the main loop, which launches hoot on its first pass (if enabled)
+1. initialize logging (`RotatingFileHandler`, 10 MB per file, 5 backups)
+2. upgrade the config schema if needed (automatic migration)
+3. run the startup health probe and publish it to `tmp/service_status.json`, so the tray can surface a problem before any cloud call happens
+4. construct the Firebase client (soft-fail: cloud disabled, no site, or no refresh token each leave the machine in local-only mode)
+5. on Windows, acquire the console user's token and **launch the desktop app (tray icon)** — deliberately ahead of the cloud work, so the operator sees the service starting at once. on macOS and Linux the app is already running from the login, and nothing is launched here
+6. **classify how the previous session ended** (see below), queueing a warning event that is sent once Firebase connects
+7. start the Firebase client: sync config with Firestore, then connect
+8. recover running processes (re-adopt PIDs from the previous session)
+9. enter the main loop, which launches hoot on its first pass (if enabled)
 
 ### session state classification
 
-On every startup the agent reads `C:\ProgramData\Owlette\tmp\session_state.json` (written continuously by the previous run — alongside `app_states.json` and `reboot_state.json`) and uses the "alive heartbeat" and any recorded shutdown intent to categorise how the last session ended:
+on every startup the agent reads `tmp/session_state.json` in its data root (written continuously by the previous run, alongside `app_states.json` and `reboot_state.json`) and uses the "alive heartbeat" and any recorded shutdown intent to sort how the last session ended:
 
 | classification | trigger | behavior |
 |----------------|---------|----------|
-| _(silent)_ | Previous session recorded an **Owlette-initiated** reboot/shutdown (scheduled reboot, dashboard command, deploy-triggered reboot) | Startup proceeds without alerts — the reboot was intentional |
-| `external_reboot` | Previous session ended with a **clean shutdown signal** but no Owlette intent (operator restart, Windows Update reboot, shutdown command from another tool) | Warning event emitted so the operator can audit why |
-| `unexpected_reboot` | **No alive heartbeat for long enough to be a reboot**, with no clean shutdown signal (BSOD, power loss, hard reset) | Warning event emitted; the gap is reported |
-| `unexpected_service_restart` | Service-only restart with no shutdown intent (host relaunch after crash, `taskkill`, OOM) — the OS stayed up but the service died | Warning event emitted distinguishing it from a full reboot |
-
-The classifier depends only on `shared_utils` and stdlib — no Firebase, no logging config — so it is safe to import from any agent context (main loop, metrics thread, signal handler, user-space dialogs). Source: `agent/src/session_state.py`.
+| _(silent)_ | the previous session recorded an **owlette-initiated** reboot or shutdown (scheduled reboot, dashboard command, deploy-triggered reboot) | startup proceeds without alerts — the reboot was intentional |
+| `external_reboot` | the previous session ended with a **clean shutdown signal** but no owlette intent (an operator restart, an OS update reboot, a shutdown from another tool) — or, on Windows, the agent missed the signal but the event log records an orderly shutdown (events 1074/6006) | warning event, so the operator can audit why |
+| `unexpected_reboot` | Windows only: **the machine rebooted** with no clean shutdown signal and no orderly shutdown in the event log (a crash, power loss, a hard reset). macOS and Linux keep no record that tells an orderly restart from a crash, so there a boot with no shutdown signal is not reported | warning event; the gap is reported |
+| `unexpected_service_restart` | a service-only restart with no shutdown intent (a relaunch after a crash, a killed process, out of memory) — the OS stayed up but the service died | warning event that tells it apart from a full reboot |
 
 ### main loop (every 5 seconds)
 
-1. Check all configured processes — detect crashes, stalls, exits
-2. Auto-restart crashed processes when launch mode is active
-3. Firestore commands are processed by the Firebase command listener; the 5-second service loop handles process monitoring, hoot IPC, Firebase enable/disable checks, and periodic maintenance
-4. Ensure hoot is running (if enabled)
-5. Process hoot IPC commands (Tier 2 tool calls)
-6. Check for Firebase state changes (enable/disable)
+1. check all configured processes — detect crashes, stalls and exits
+2. auto-restart crashed processes whose launch mode is active
+3. ensure hoot is running (if enabled)
+4. process hoot IPC commands (tier 2 tool calls)
+5. check for Firebase state changes (enable or disable), and run periodic maintenance
+
+Firestore commands are not run by this loop: the Firebase command listener takes them on its own threads, so a long command never stalls monitoring.
 
 ### shutdown
 
-Every operator-initiated stop — console control handler or SCM stop watcher — funnels through one shared path, and whichever trigger arrives first does the work:
+every operator-initiated stop funnels through one shared path, and whichever trigger arrives first does the work. on Windows the triggers are the console control handler and the SCM stop watcher; on macOS and Linux it is the `SIGTERM` that launchd or systemd delivers.
 
-1. Record the stop locally as a clean external stop, before anything that can touch the network — this local record is what keeps the next startup classifier from reporting `unexpected_reboot`
-2. Cap the remaining Firestore request timeouts at 3 seconds, so a stalled call cannot eat the whole shutdown window
-3. Log the `agent_stopped` event
-4. Stop the Firebase client — this is the write that marks the machine offline, and it stops the background threads afterwards (offline first, or the write has no transport left)
-5. Write the final status file saying the service is down
+1. record the stop locally as a clean external stop, before anything that can touch the network — this local record is what keeps the next startup classifier from reporting `unexpected_reboot`
+2. cap the remaining Firestore request timeouts at 3 seconds, so a stalled call cannot eat the whole shutdown window
+3. log the `agent_stopped` event
+4. stop the Firebase client — this is the write that marks the machine offline, and it stops the background threads afterwards (offline first, or the write has no transport left)
+5. write the final status file saying the service is down
 
-The desktop app is deliberately left running — its footer is where the operator finds `start service` to bring the agent back.
-
-Source: `agent/src/owlette_service.py` → `graceful_shutdown()`, reached from `agent/src/owlette_runner.py`'s signal handler or the SCM stop watcher.
+the desktop app is deliberately left running. on Windows and Linux its footer is where the operator finds `start service` to bring the agent back; on macOS launchd brings it back on its own.
 
 ---
 
 ## key directories
 
+every platform splits owlette into an install root (the code, replaced by every update) and a data root (configuration, tokens, logs and runtime state, which updates keep). on Windows they are the same folder. `OWLETTE_DATA_ROOT` moves the data root for the process whose environment carries it, and only that one: the agent and the desktop app each read it from their own environment, and the Windows service host ignores it and keeps `C:\ProgramData\Owlette`. it is meant for tests and development, not for moving an installed machine's data.
+
+| what | Windows | macOS | Linux |
+|------|---------|-------|-------|
+| data root | `C:\ProgramData\Owlette\` | `/Library/Application Support/Owlette/` | `/var/lib/owlette/` |
+| install root | `C:\ProgramData\Owlette\` | `/Library/Application Support/Owlette/runtime/` | `/opt/owlette/` |
+| desktop app | `C:\ProgramData\Owlette\app\owlette-desktop.exe` | `/Applications/owlette.app` | `/usr/bin/owlette-desktop` |
+| swoop streamer | `C:\ProgramData\Owlette\swoop\owlette-swoop.exe` | inside the app, `owlette.app/Contents/MacOS/owlette-swoop` | — |
+| service definition | `OwletteService`, registered by `tools\owlette-host.exe` | `/Library/LaunchDaemons/app.owlette.agent.plist` | `/usr/lib/systemd/system/owlette-agent.service` |
+| what starts the app at login | the service, and the `Owlette` shortcut in the user's Startup folder | `/Library/LaunchAgents/app.owlette.desktop.plist` | `/usr/lib/systemd/user/owlette-desktop.service` |
+| group the app's account needs | — | `_owlette` | `owlette` |
+
+under the data root, the same layout on every platform:
+
 | path | contents |
 |------|----------|
-| `C:\ProgramData\Owlette\` | Installation root |
-| `C:\ProgramData\Owlette\agent\src\` | Python source code |
-| `C:\ProgramData\Owlette\app\` | Desktop app — `owlette-desktop.exe` (tray icon, configuration window) |
-| `C:\ProgramData\Owlette\config\` | Agent configuration, including `config.json` |
-| `C:\ProgramData\Owlette\logs\` | Service, pairing, and installer log files. The desktop app logs per-user, elsewhere — see [agent troubleshooting](/docs/agent/troubleshooting). |
-| `C:\ProgramData\Owlette\python\` | Embedded Python interpreter |
-| `C:\ProgramData\Owlette\tmp\` | Runtime state — `session_state.json`, `app_states.json`, `service_status.json`, the desktop app's pid files, and the `restart.flag` the app writes to restart the service |
-| `C:\ProgramData\Owlette\.tokens.enc` | Encrypted OAuth tokens |
-| `C:\ProgramData\Owlette\tools\owlette-host.exe` | Service host binary — registers the service and supervises the agent |
+| `config/config.json` | agent configuration — see [config.json](/docs/agent/configuration#configjson) |
+| `.tokens.enc` | the encrypted OAuth tokens. the key is derived from the machine itself, so the file is useless anywhere else; on macOS and Linux only root can read it |
+| `logs/` | the service's logs, pairing and installer logs, and `logs/swoop/` for the streamer. the desktop app logs per-user, elsewhere — see [log locations](/docs/agent/troubleshooting#log-locations) |
+| `tmp/` | runtime state — `session_state.json`, `app_states.json`, `service_status.json` and the desktop app's PID files; on Windows also the `restart.flag` the app writes to restart the service |
+| `ipc/` | the queues between the service and the processes in the user's session — hoot, and the desktop app's jobs and requests |
+| `content/`, `sync-state.db` | roost's chunk store and sync state |
+| `cache/` | the hoot CLI, and on macOS and Linux the staged self-update package |
+
+and under the install root:
+
+| path | contents |
+|------|----------|
+| `agent/src/` | the agent's Python source |
+| `agent/VERSION` | the installed agent version |
+| `python/` | the bundled Python interpreter — no system Python is used |
+| `tools\owlette-host.exe` | Windows only: the service host |

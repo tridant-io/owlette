@@ -1,100 +1,134 @@
 ---
 title: "displays"
-description: "Store a machine's monitor arrangement, watch for drift from it, and put it back — manually or unattended. Covers the display panel, the assigned layout, auto-restore and its circuit breaker."
-keywords: ["monitors", "screen layout", "resolution changed", "monitor moved", "display drift", "multi-monitor", "screens rearranged", "mosaic"]
+description: "store a Windows machine's monitor arrangement, see when it drifts, and put it back by hand or unattended. covers the display panel's live, stored and events tabs, restore and its 30-second keep, auto-restore and its circuit breaker."
+keywords: ["monitors", "screen layout", "resolution changed", "monitor moved", "display drift", "multi-monitor", "screens rearranged", "mosaic", "nvidia mosaic", "monitor unplugged", "projector", "keep this layout", "auto revert", "display apply", "edid", "rotation", "primary monitor"]
 ---
 
-owlette records what monitors a machine has, where they sit, and how they are configured. you can store that arrangement as the machine's **assigned layout**, and from then on the dashboard tells you when reality has moved away from it — and, if you let it, the agent puts it back.
+owlette records which monitors a machine has, where they sit and how each is set. you can store that arrangement, see when the machine moves away from it, and put it back, or let the agent put it back itself.
 
-open the panel from **view displays** in a machine's context menu, or by clicking the displays row on its card.
+**displays are Windows only.** a Mac or Linux agent reports no display data: its card reads **displays: no data**, and the panel's live tab says "no display data reported yet. data appears once the agent sends a display snapshot." the panel still shows site admins **test** and **enable restore** on those machines; the test comes back with an error, and with nothing reported there is nothing to store or restore. see [platform support](/docs/reference/platform-support#screens).
+
+---
+
+## opening the panel
+
+- the monitor button at the left of a machine card's header, or on a list row (**view displays**), opens the panel
+- **view displays** in the [machine menu](/docs/dashboard/machine-monitoring#the-machine-menu) opens it too
+- the collapsed displays row at the foot of a card shows how many displays there are and their resolutions, the primary highlighted. clicking it expands an inline view, and clicking that opens the panel
+
+two dots can sit on the button and the row:
+
+- **amber**: drift. hover it for "N display changes from assigned". the count comes from the agent and is the number of monitors that differ from their stored counterpart; a monitor added or removed is not counted
+- **red**: auto-restore is paused by its [circuit breaker](#the-circuit-breaker)
 
 ---
 
 ## the panel
 
-three tabs:
-
 | tab | shows |
 |---|---|
-| **live** | what the machine reports right now — monitor positions, resolution after rotation, refresh rate, scale, which one is primary |
-| **assigned** | the stored layout, if one has been captured, and the editor for changing it |
-| **events** | this machine's display history — drift, applies, reverts, monitors coming and going |
+| **live** | what the machine reports now: each monitor's position, resolution (as rotated), refresh rate, rotation, scale, and which is primary. with a layout stored, stored monitors that differ show as dashed outlines and drifted monitors are outlined amber |
+| **stored** | the stored layout. a stored monitor that is not connected now is marked as such |
+| **events** | the machine's last 50 display events, newest first. see [events](#events) |
 
-the badge on the displays row is the **drift count**: how many live monitors differ from their assigned counterpart. a second dot appears when auto-restore has been paused by its circuit breaker.
+the **stored** tab carries its own amber dot; hover it for "N display changes from stored layout". the panel works this count out in the browser and includes monitors added or removed, so it can be higher than the card's.
+
+while the panel is open, new drift raises "display drift detected on `machine` — N changes. open stored tab to review." with **review**.
+
+everyone on the site sees the tabs. the buttons below are for site owners and admins.
 
 ---
 
-## the assigned layout
+## storing a layout
 
-**store current arrangement** captures the live layout as the assigned one. it replaces whatever was stored, including saved edits.
+- **store**, on the live tab, asks "store current arrangement?" and replaces the stored layout, saved edits included, with the live arrangement
+- an empty stored tab offers **store current**, the same thing, and **start from live**, which opens the editor on a copy of the live arrangement and saves nothing until you store it
+- **clear**, on the stored tab, asks "clear assigned layout?" and removes it. drift, restore and auto-restore go quiet until a layout is stored again
 
-you can also build a layout by hand — the **assigned** tab's editor lets you drag monitors and change their settings without touching the machine, and saves as a draft until you apply it. if the machine's hardware changes while you are editing, the panel offers to reload your draft from the new live topology.
+storing changes nothing on the machine. positions are saved with the primary monitor at 0,0, as Windows places it.
 
-**clear assigned layout** removes it. drift detection, restore, and auto-restore all go quiet until a layout is stored again — there is nothing to compare against.
+### editing
+
+**edit**, on the stored tab, opens the editor. it is disabled with nothing stored, and while NVIDIA Mosaic is active. the panel shows **editing stored — drift check paused** while you work.
+
+- drag a monitor on the canvas to move it. dragging the primary moves the others instead, since the primary stays at 0,0
+- double-click a monitor, on the canvas or in the table, to set its resolution, refresh rate, rotation, scale, position, and whether it is primary. the resolution and refresh lists come from the modes the machine reports for that monitor
+- edits are a draft in this browser tab, kept across a reload, until **store** saves them. **discard** drops them, and closing the panel with edits asks "discard unsaved edits?"
+- the panel warns "monitors overlap — usually unintentional" when two monitors overlap
+- if the machine's monitors change while you edit, "hardware changed" offers **reload from live** or **keep editing**
+
+a restore cannot change Windows' scale setting. a stored scale that differs from the machine's shows as drift that a restore does not fix.
 
 ### what counts as drift
 
-a live monitor is matched to its assigned counterpart by EDID hash, so re-plugging a monitor into a different connector is not drift. a matched monitor drifts if any of these differ:
+a live monitor is matched to its stored counterpart by its EDID identity, so plugging a monitor into another connector is not drift. a matched monitor has drifted when any of these differ:
 
 `position.x` · `position.y` · `resolution.width` · `resolution.height` · `refreshHz` · `rotation` · `scalePct` · `primary`
 
-a monitor present on only one side is not counted as drift — that is a monitor added or removed, and it gets its own event.
+a monitor on only one side is a monitor added or removed. the card's count leaves it out, the stored tab's count includes it, and it gets its own event.
 
 ---
 
-## putting a layout back
+## restoring a layout
 
-**restore** re-applies the assigned layout to the machine. monitors rearrange within a few seconds.
+restore takes three steps, the first two once per machine:
 
-- **it is gated twice.** the machine's agent has to report that it can apply layouts at all, *and* a site admin has to turn on remote apply for that machine (**enable restore**). the second gate exists so nobody rearranges a production wall by accident — turn it on once the apply test has succeeded on that machine.
-- **it auto-reverts.** if the agent does not get a confirmation within 30 seconds, it puts the previous arrangement back. a layout that blanks the screen you were going to confirm from cannot strand the machine.
-- **mosaic blocks it.** on a machine running an NVIDIA mosaic topology, apply is refused rather than attempted.
+1. **test** runs a read-only self-test on the machine: it reads the display configuration and validates it without applying anything, then reports "Self-test ok — N monitors…" or the error. it is shown until restore is enabled.
+2. **enable restore** asks "enable restore on `machine`?" and lets admins restore on that machine from then on. the panel has no way to turn it off again.
+3. **restore**, on the live or stored tab, asks "restore this layout to `machine`?" and sends the stored layout. the monitors rearrange within a few seconds. it needs a stored layout and an agent that supports it; the tooltip says "agent too old" otherwise.
+
+then the panel shows **keep this layout? auto-revert in Ns** with **keep**. press **keep** within 30 seconds or the agent puts the previous arrangement back. the confirmation has to come from a person, so a layout that blanks the screen you would confirm from cannot strand the machine. the countdown survives closing the panel, but not closing the tab: if nobody presses **keep**, the machine reverts.
+
+- **an agent restart mid-countdown** reverts at startup. with nobody signed in at the machine, the revert waits for a sign-in and logs `display_revert_deferred`
+- **with auto-restore on**, the panel shows an **auto** status in place of **restore**
+- **NVIDIA Mosaic**: while Mosaic is active the panel disables **edit** and **auto-restore**, but not **restore**. the agent is meant to refuse an apply under Mosaic, but its check does not detect an active Mosaic today, so a restore goes ahead. do not restore a machine running Mosaic
 
 ---
 
 ## auto-restore
 
-auto-restore is the unattended version: the agent notices drift and re-applies the assigned layout itself, without anyone watching. it is **off by default** and enabled per machine from the panel.
+auto-restore is the unattended version: the agent notices drift and applies the stored layout itself. it is **off** by default and set per machine with the **auto-restore** switch in the panel's header. the switch stays disabled until a layout is stored and restore is enabled, and while Mosaic is active; its tooltip says which.
 
-the agent checks displays every 30 seconds. before it will act, seven things must be true:
+the agent checks displays every 30 seconds and acts only when all of these hold:
 
-1. the displays feature is not switched off for the machine
-2. auto-restore is explicitly enabled for it
-3. the circuit breaker is not tripped
-4. no manual apply is in flight — it never races an operator
-5. every drifted monitor exists in the assigned layout (a newly plugged-in monitor cannot be "restored" to a layout that never had it; logged as `auto-restore skipped`)
-6. the drift has persisted for **two consecutive checks**, so a cable wiggle cannot fire it
-7. the apply rate-limit window has elapsed
+1. displays are not switched off in the machine's config (`displays.enabled: false`)
+2. auto-restore is on for the machine
+3. the circuit breaker has not tripped
+4. no manual restore is in flight; it never races an operator
+5. every stored monitor is connected. a stored monitor that is powered off makes it wait, silently, until it is back
+6. the same drift was seen on two checks in a row, so a cable wiggle cannot set it off
+7. at least 10 seconds have passed since the last apply
 
-an assigned monitor that is currently powered off also stops it — silently, because the monitor's absence is already recorded, and drift is re-evaluated when it comes back.
+it compares only monitors that are in the stored layout, and leaves scale out, since it cannot change it. it applies without the **keep** countdown, and it fixes a given drift once: if the same drift is still there after a successful auto-restore, it does not try again until the drift clears or changes.
 
 ### the circuit breaker
 
-three consecutive genuine apply failures trip it, and auto-restore stops for that machine until an operator resets it from the panel. skipped applies — the pre-flight refusals above — are not failures and do not count.
+three failed applies in a row trip the breaker, and auto-restore stops on that machine. the panel shows "auto-restore paused — 3 attempts failed. last error: …" with **reset**, which only admins see, and the card shows the red dot. a skipped attempt, such as a monitor being off, does not count, and a success sets the count back to zero.
 
-the point is to stop a machine whose layout cannot be applied from retrying forever and filling its history with identical failures. the breaker records the last error, so the panel can tell you *why* it gave up.
-
-reset it from the display panel once the underlying problem is fixed. the agent picks the reset up on its next config sync.
+fix the cause, then **reset**. the agent picks the reset up on its next config sync.
 
 ---
 
 ## events
 
-the events tab and [activity logs](/docs/dashboard/activity-logs) carry the same record:
+the events tab and [activity logs](/docs/dashboard/activity-logs) carry the same record. the events tab shows the machine's last 50, with relative times.
 
-| event | means |
-|---|---|
-| `display_drift` | a matched monitor no longer matches its assigned settings |
-| `display_monitor_added` / `display_monitor_removed` | the set of monitors changed |
-| `display_monitor_swapped` | a monitor was replaced by a different one |
-| `display_apply_succeeded` / `display_apply_acked` | a layout was applied, then confirmed by the machine |
-| `display_apply_failed` | the apply itself failed — the message is kept |
-| `display_auto_revert_fired` | no confirmation arrived in time; the previous arrangement was restored |
-| `display_revert_deferred` | a revert was due but held back |
-| `display_auto_restore_fired` | auto-restore corrected drift |
-| `display_auto_restore_skipped_unfixable` | drift involved a monitor the assigned layout does not contain |
-| `display_auto_restore_circuit_breaker_tripped` | three failures in a row; auto-restore paused |
-| `display_apply_refused_mosaic` / `display_mosaic_disabled` | mosaic-related refusals |
-| `display_sync_lost` | the agent stopped being able to read display state |
+| event | level | means |
+|---|---|---|
+| `display_monitor_added` | info | a monitor appeared since the last check |
+| `display_monitor_removed` | critical | a monitor disappeared since the last check |
+| `display_monitor_swapped` | warning | a different monitor is now on the same output |
+| `display_drift` | warning | a monitor's tracked settings changed since the last check. logged with or without a stored layout, and after every apply |
+| `display_mosaic_disabled` | warning | an NVIDIA Mosaic grid that was active is no longer |
+| `display_sync_lost` | warning | a sync device that was locked no longer is |
+| `display_apply_succeeded` | info | a restore applied; the 30-second countdown is running |
+| `display_apply_failed` | warning | an apply failed; the error is kept and shown in details |
+| `display_apply_refused_mosaic` | warning | meant for an apply refused under Mosaic. the current agent does not log it; see [restoring a layout](#restoring-a-layout) |
+| `display_apply_acked` | info | someone pressed **keep** |
+| `display_auto_revert_fired` | error | nobody pressed **keep** in time; the previous arrangement was put back, or the revert failed |
+| `display_revert_deferred` | warning | an unconfirmed restore survived an agent restart with nobody signed in to revert it for; it retries at the next sign-in |
+| `display_auto_restore_fired` | info | auto-restore corrected drift |
+| `display_auto_restore_skipped_unfixable` | info | meant for drift on a monitor the stored layout lacks. the current agent leaves such a monitor out of the comparison instead, so it does not log this |
+| `display_auto_restore_circuit_breaker_tripped` | error | the third failure in a row; auto-restore paused |
 
-**display events** can also be emailed — it is one of the per-user toggles in [account settings → alerts](/docs/dashboard/account-settings#alerts).
+`display_monitor_removed`, `display_apply_failed`, `display_auto_revert_fired` and `display_sync_lost` are also emailed to everyone on the site with **display events** on in [account settings](/docs/dashboard/account-settings#alerts): a removed monitor and an auto-revert at once, the other two in a digest. changes in the moments after an apply are logged but not emailed. most of these events can also start an [event talon](/docs/dashboard/talons#triggers).

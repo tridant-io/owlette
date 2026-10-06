@@ -1,121 +1,140 @@
 ---
 title: "token management"
-description: "View agent refresh tokens for a site and revoke them when an agent should no longer be able to reconnect."
+description: "list a site's live agent refresh tokens, spot machines with more than one, prune the dead records rotation leaves behind, and revoke a token when a machine should no longer reconnect."
+keywords: ["agent token", "refresh token", "revoke machine", "decommission", "re-pair", "disconnect agent", "stolen machine", "cloned machine", "duplicate hostname", "credentials"]
 ---
 
-**Location**: Admin Panel -> agent tokens (`/admin/tokens`)
+**location**: admin panel → agent tokens (`/admin/tokens`)
 
-<Callout type="info" title={"Permissions"}>
+<Callout type="info" title={"permissions"}>
 
-Site admins can open this page. Both the list and the revoke APIs require the site-scoped `AGENT_TOKEN_REVOKE` capability, so the site selector offers only the sites you belong to, and a token you cannot list is a token you cannot revoke. Members do not see the page.
+the page opens for anyone who is an owner or admin on at least one site. listing and revoking both need `AGENT_TOKEN_REVOKE` on the site, so a token you cannot list is a token you cannot revoke. issuing one, by authorizing a pairing phrase or generating an installer registration code, needs `MACHINE_ENROLL`, which the same roles hold.
 
 </Callout>
----
-
-## token list
-
-The page starts with a site selector and a refresh button. After a site is selected, it loads active token records from `/api/sites/{siteId}/agent-tokens`.
-
-| column | description |
-|--------|-------------|
-| **machine ID** | Machine hostname recorded when the agent paired or exchanged its installer registration code. |
-| **version** | Agent version that created the token, or `N/A` when unavailable. |
-| **status** | Expiry status for the refresh token. Current long-duration tokens usually show **Never expires** because new token records omit `expiresAt`. |
-| **created** | When the refresh token record was created. |
-| **last used** | When the agent last used this refresh token to request a new Firebase ID token. |
-| **actions** | Per-token revoke action. |
-
-The API also returns internal fields such as the token record ID, `createdBy`, and `agentUid`, but the current UI does not display them.
 
 ---
 
-## refresh-token records
+## the token list
 
-Agent refresh tokens are stored server-side in the `agent_refresh_tokens` collection. The document ID is the SHA-256 hash of the refresh token, so the durable refresh-token record does not store the raw token in plaintext. During device-code pairing, the raw token is held only on the short-lived pairing document until the agent's single-use poll consumes it and deletes that document.
+pick a site and the page loads its **live** tokens from `GET /api/sites/{siteId}/agent-tokens`, newest first. a live token is one an agent can still use: not rotated away from, not expired. the response also carries `prunableCount`, the dead records that are hidden.
 
-Each token record contains:
+the toolbar above the table:
 
-| field | description |
-|-------|-------------|
-| `siteId` | Site the token authorizes. |
-| `machineId` | Machine hostname. The refresh endpoint rejects requests when the submitted machine ID does not match this value. |
-| `version` | Agent version from the pairing or registration exchange. |
-| `createdBy` | User who generated or authorized the token flow. |
-| `createdAt` | Server timestamp for token creation. |
-| `lastUsed` | Server timestamp updated atomically on refresh. |
-| `agentUid` | Firebase Auth UID for the agent identity. |
-| `expiresAt` | Optional expiry. If absent, the refresh token does not expire automatically. |
+- **search machine id or agent uid** filters the rows
+- a version filter, **all versions** or one agent version (not on a phone)
+- **duplicates**, with the number of machine IDs that have more than one live token, shows only those rows
+- **prune dead (N)** appears when there are dead records; see [pruning](#pruning-dead-records)
+- the count reads `N live`, or `N of M live` while a filter is on
 
-The token list is sorted newest-first by `createdAt`.
+the header holds a refresh button and, when the site has tokens, **revoke all**.
+
+| column | what it shows |
+|---|---|
+| **machine ID** | the ID the agent paired with, normally its hostname. a `duplicate` badge marks an ID with more than one live token |
+| **version** | the agent version recorded when it paired, or `N/A`. rotation carries it forward unchanged, so it does not follow later agent updates |
+| **status** | `Never expires` for a token with no expiry, which is nearly all of them; otherwise `Expires in Nd`, `Expires <date>` or `Expired` |
+| **created** | when this token record was created. an agent that rotates gets a new record at every refresh, so for a running agent this is usually within the last hour |
+| **last used** | when the agent last refreshed with this token. for a rotating agent it is the same moment as **created** |
+| **actions** | **revoke** |
+
+**duplicates** come from repeated re-pairs, or from separate machines cloned with the same hostname. compare **last used** before revoking one: revoking disconnects whichever agent holds that token.
+
+---
+
+## rotation
+
+every refresh from agent 2.12.0 or later, which identifies itself with an `X-Owlette-Agent-Version` header, returns a **new** refresh token:
+
+- a new record is written for it, carrying the old record's site, machine ID, version, creator and agent identity, plus `predecessorHash` pointing back at the old one
+- the old record gets `supersededAt`, `supersededBy` and `retiresAt`: it keeps working for 5 more minutes, so an agent that lost the response can retry
+- the record before that is deleted once it is dead, so a machine normally holds about two records
+
+an older agent, or a request without the header, keeps its token: the refresh only updates `lastUsed`.
+
+to give a machine a new token outside rotation, revoke it and pair the machine again.
+
+---
+
+## pruning dead records
+
+a record is **dead** once it is past its 5-minute grace after rotation, or expired. **prune dead (N)** asks **prune dead tokens?**, then **prune N dead tokens** sends `{ "prune": true }` to the revoke route, which deletes only dead records. live tokens, and rotated ones still inside their grace, are never touched, so no connected agent is affected.
+
+---
+
+## revoking tokens
+
+every revoke is `POST /api/sites/{siteId}/agent-tokens/revoke` with exactly one of `tokenId`, `machineId`, `all` or `prune`. each deletes `agent_refresh_tokens` records for the selected site only.
+
+| what | how | body |
+|---|---|---|
+| one token | **revoke** on its row, then **revoke token** | `{ "tokenId": "…" }`, checked to belong to the site |
+| every token on the site | **revoke all**, then **revoke all N tokens** | `{ "all": true }`, which also deletes dead records. every agent on the site has to be paired again |
+| a machine's current token | the machine's menu → **revoke token** → **revoke current token** | `{ "machineId": "…", "latestOnly": true }`: only the most recently used live token for that ID |
+| every token for a machine ID | the machine's menu → **revoke token** → **revoke all for hostname** | `{ "machineId": "…" }`, which also disconnects any other machine sharing that hostname |
+
+the machine menu is described in [revoke token](/docs/dashboard/machine-monitoring#revoke-token). `latestOnly` is accepted only with `machineId`.
+
+---
+
+## effect on agents
+
+revoking deletes the record at once. a running agent keeps its cached one-hour access token until it expires; at its next refresh the server answers `401`, and the agent wipes its token store. it then shows as disconnected and stays that way until it is paired again with a new phrase or registration code. a `403`, which the server returns when the machine ID does not match the token, wipes the store the same way.
+
+the refresh endpoint allows 120 requests per hour per IP address, shared by every machine behind one NAT. a refused (`429`) refresh does not wipe anything; the agent retries.
 
 ---
 
 ## lifecycle
 
 ```text
-1. A pairing or installer flow creates a short-lived registration artifact:
-   - installer registration codes expire after 24 hours
-   - device-code pairing phrases expire after 10 minutes
-2. After authorization, the server creates:
-   - a Firebase ID token for immediate agent use
-   - a long-lived random refresh token
-   - a hashed refresh-token record in `agent_refresh_tokens`
-3. The agent stores the raw refresh token locally in
-   `C:\ProgramData\Owlette\.tokens.enc`.
-4. The agent caches the one-hour Firebase ID token and refreshes before expiry.
-5. Each successful refresh updates `lastUsed` and returns a new one-hour Firebase ID token.
+1. issuing a token starts with a short-lived code, which needs MACHINE_ENROLL:
+   - an installer registration code expires after 24 hours
+   - a pairing phrase expires after 10 minutes
+2. once the code is authorized, the server creates:
+   - a Firebase ID token for immediate use
+   - a random refresh token
+   - a record in agent_refresh_tokens keyed by the token's SHA-256 hash
+3. the agent stores the refresh token in its encrypted token file
+4. it caches the one-hour ID token and refreshes 5 minutes before it expires
+5. each refresh returns a new ID token, and on agent 2.12.0 and later a new refresh token
 ```
 
-The local token file is encrypted with a machine-specific key derived from the Windows MachineGuid and hostname. It stores the refresh token, cached access token, access-token expiry, and site ID.
+the raw token is never stored server-side. during pairing it sits only on the short-lived pairing document until the agent's single poll picks it up and the document is deleted.
+
+### the token file
+
+| platform | path |
+|---|---|
+| Windows | `C:\ProgramData\Owlette\.tokens.enc` |
+| macOS | `/Library/Application Support/Owlette/.tokens.enc` |
+| Linux | `/var/lib/owlette/.tokens.enc` |
+
+it holds the refresh token, the cached access token and its expiry, and the site ID, encrypted with a key derived from the machine itself: the `MachineGuid` on Windows, the hardware UUID on macOS, `/etc/machine-id` on Linux. the hostname is no longer part of the key, so renaming the machine does not lock the agent out. a store written under the older key, which mixed in the hostname, is rewritten under the new one on first read, and the original is kept beside it as `.tokens.enc.v1`. see [where things live](/docs/reference/platform-support#where-things-live).
 
 ---
 
-## rotation behavior
+## token records
 
-Refresh-token rotation is manual. The refresh endpoint does not issue a replacement refresh token during normal access-token refresh; it only returns a new one-hour Firebase ID token.
+records live in the `agent_refresh_tokens` collection, server-side only. the document ID is the SHA-256 of the refresh token.
 
-To rotate an agent refresh token, revoke the existing token and re-register the agent with a new pairing or installer registration flow. The new flow creates a new refresh-token record and a new raw token stored on the machine.
-
----
-
-## revoking tokens
-
-### revoke one token
-
-1. Select the site.
-2. Find the machine row in the token table.
-3. Click **revoke**.
-4. Confirm the dialog.
-
-The page sends the token record ID to `/api/sites/{siteId}/agent-tokens/revoke`, and the server deletes that one `agent_refresh_tokens` document after confirming it belongs to the selected site.
-
-### revoke all tokens for a site
-
-When the selected site has active tokens, the page shows **revoke all**.
-
-1. Click **revoke all**.
-2. Confirm the destructive dialog.
-3. The server deletes every refresh-token record for that site and returns the revoked count.
-
-This is a site-wide action. Every agent in the selected site must be re-registered before it can regain refresh-token access.
-
-### machine-scoped revoke
-
-The revoke API also accepts a `machineId` and can delete all token records for that machine in the selected site. The admin page does not expose a machine-scoped bulk action; it only exposes per-token revoke and site-wide revoke all. The dashboard machine context menu exposes it instead — revoke a machine's current token, or every token for its hostname, on a site you administer. Both surfaces are gated on the same `AGENT_TOKEN_REVOKE` capability.
-
----
-
-## effect on agents
-
-Revocation deletes the refresh-token record immediately. A running agent may continue using a still-valid cached Firebase ID token until that token expires. On the next refresh attempt, the server rejects the deleted refresh token, and the agent clears its encrypted local credentials.
-
-After that point the agent reports an authentication error or no refresh token, disconnects from Firestore-backed sync, and must be paired again with a new registration or device-code flow.
+| field | description |
+|---|---|
+| `siteId` | the site the token authorizes |
+| `machineId` | the machine ID. a refresh from a different machine ID is refused with `403` |
+| `version` | the agent version from pairing |
+| `createdBy` | the user who authorized the pairing or generated the registration code |
+| `createdAt` | when this record was created |
+| `lastUsed` | when it was last used to refresh |
+| `agentUid` | the agent's Firebase Auth identity |
+| `expiresAt` | optional. absent means the token never expires |
+| `supersededAt`, `supersededBy`, `retiresAt` | set when a rotation replaces the token |
+| `predecessorHash` | on a rotated token, the record it replaced |
 
 ---
 
 ## when to revoke
 
-- **Decommissioning a machine** - revoke the token before removing or repurposing the machine.
-- **Security concern** - revoke immediately if the machine or local token file may be compromised.
-- **Duplicate registrations** - revoke stale tokens after reinstalling or re-pairing an agent.
-- **Credential rotation** - revoke and re-register when a new refresh token is required.
+- **decommissioning a machine**: revoke its tokens before removing or repurposing it
+- **a suspected compromise**: revoke at once with **revoke all for hostname**, which also deletes the rotated record that stays usable for 5 minutes after each refresh
+- **duplicates**: after reinstalling or re-pairing, revoke the stale token, checking **last used** first
+- **a fresh credential**: revoke, then pair the machine again

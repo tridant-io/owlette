@@ -1,60 +1,72 @@
 ---
 title: "environment variables"
-description: "Complete reference for all environment variables used by the owlette web dashboard."
+description: "every environment variable the owlette web dashboard reads: what each one does, whether it is required, what breaks without it, and which values must be identical on every origin that serves the same site."
+keywords: ["env vars", ".env", ".env.local", "secrets", "configuration", "railway variables", "vercel environment", "turn relay", "signalling", "turnstile", "captcha", "jwt key rotation"]
 ---
 
+the canonical list of keys lives in `scripts/env-manifest.json`: names, which deployment each key belongs on, and notes, never values. `node scripts/sync-env.mjs check` compares that list with what each deployment actually holds. this page explains what the keys do.
+
+<Callout type="warning" title={"must match"}>
+
+when two origins serve the same site, as a primary and a failover origin do, seven secrets must be byte-identical on both: `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, `LLM_ENCRYPTION_KEY`, `TURNSTILE_SECRET`, `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY` and `SWOOP_SIGNAL_RING_SECRET`. a mismatch fails silently, and only on the origin that differs: people are signed out, second factors stop verifying, stored LLM keys stop decrypting, or swoop sessions break.
+
+</Callout>
+
 ---
 
-## firebase client (required)
+## Firebase client (required)
 
-These are exposed to the browser (client-side). The `NEXT_PUBLIC_` prefix is required by Next.js.
+these reach the browser. Next.js inlines every `NEXT_PUBLIC_` value into the bundle at build time, so changing one needs a rebuild.
 
 | variable | example | source |
 |----------|---------|--------|
-| `NEXT_PUBLIC_FIREBASE_API_KEY` | `AIzaSy...` | Firebase Console → Project Settings → Web App |
-| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | `my-project.firebaseapp.com` | Same |
-| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | `my-project-id` | Same |
-| `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | `my-project.appspot.com` | Same |
-| `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | `123456789012` | Same |
-| `NEXT_PUBLIC_FIREBASE_APP_ID` | `1:123:web:abc` | Same |
+| `NEXT_PUBLIC_FIREBASE_API_KEY` | `AIzaSy...` | Firebase console → project settings → web app |
+| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | `my-project.firebaseapp.com` | same |
+| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | `my-project-id` | same |
+| `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | `my-project.appspot.com` | same |
+| `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | `123456789012` | same |
+| `NEXT_PUBLIC_FIREBASE_APP_ID` | `1:123:web:abc` | same |
 
 <Callout type="info">
 
-These values are public by design — Firebase client SDKs are designed to be used in browsers. Security is enforced by Firestore security rules, not by keeping these values secret.
+these values are public by design: the Firebase client SDK runs in the browser. Firestore security rules enforce access, not the secrecy of these values.
 
 </Callout>
+
+`NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY` is optional. App Check stays off until it is set, and it is never used against the emulators.
+
+`FIREBASE_STORAGE_BUCKET` is a server-side fallback that is read only when `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` is unset. you do not need it.
+
 ---
 
-## firebase admin (required)
+## Firebase admin (required)
 
-Server-side only — used for generating agent OAuth tokens and verifying sessions. Use three separate variables (not a JSON blob).
+server-side only: verifying sessions, minting agent tokens and every server-mediated write. use the three separate variables, not a JSON blob.
 
 | variable | format | source |
 |----------|--------|--------|
-| `FIREBASE_PROJECT_ID` | `my-project-id` | Firebase Console → Project Settings → General |
-| `FIREBASE_CLIENT_EMAIL` | `firebase-adminsdk-xxx@my-project.iam.gserviceaccount.com` | Firebase Console → Service Accounts → Generate Key |
-| `FIREBASE_PRIVATE_KEY` | `"-----BEGIN PRIVATE KEY-----\n..."` | Same — keep the `\n` escape sequences |
+| `FIREBASE_PROJECT_ID` | `my-project-id` | Firebase console → project settings → general |
+| `FIREBASE_CLIENT_EMAIL` | `firebase-adminsdk-xxx@my-project.iam.gserviceaccount.com` | Firebase console → service accounts → generate key |
+| `FIREBASE_PRIVATE_KEY` | `"-----BEGIN PRIVATE KEY-----\n..."` | same; keep the `\n` escape sequences |
 
 <Callout type="warning">
 
-When setting `FIREBASE_PRIVATE_KEY` in Railway, wrap the value in double quotes and preserve the `\n` newline escapes exactly as exported from Firebase.
+when you set `FIREBASE_PRIVATE_KEY` on Railway, wrap the value in double quotes and keep the `\n` escapes exactly as Firebase exported them.
 
 </Callout>
-<Callout type="info">
 
-The web runtime reads the split variables above from `web/lib/firebase-admin.ts`. `FIREBASE_SERVICE_ACCOUNT_KEY` JSON blobs are legacy documentation only for this app and are not read by the current server code.
+`web/lib/firebase-admin.ts` reads the three variables above. nothing reads `FIREBASE_SERVICE_ACCOUNT_KEY`; leave it unset.
 
-</Callout>
 ---
 
-## session management (required)
+## sessions and second factors (required)
 
-| variable | format | description |
+| variable | format | what it does |
 |----------|--------|-------------|
-| `SESSION_SECRET` | 32+ character string | Encryption key for iron-session HTTPOnly cookies |
-| `MFA_ENCRYPTION_KEY` | 32+ character string | Encryption key for 2FA secrets stored in Firestore |
+| `SESSION_SECRET` | 32+ character string | encrypts the iron-session HTTPOnly cookie. changing it signs everyone out |
+| `MFA_ENCRYPTION_KEY` | 32+ character string | encrypts the TOTP secrets stored in Firestore. changing it locks every authenticator-app user out of their second factor |
 
-Generate a secure value:
+both are must-match. generate a value:
 
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
@@ -62,70 +74,88 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ---
 
+## bot protection (required in production)
+
+sign-up and password reset are behind a Cloudflare Turnstile check.
+
+| variable | what it does |
+|----------|-------------|
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | the widget's site key. public, and the same on every origin |
+| `TURNSTILE_SECRET` | the server-side verification secret. must-match |
+| `TURNSTILE_HOSTNAMES` | comma-separated hostnames a passing check may come from, such as `owlette.app`. never include `localhost` in production |
+
+in production, a missing `TURNSTILE_SECRET` refuses every sign-up and password reset with `403`, and an empty `TURNSTILE_HOSTNAMES` fails every check. outside production, a missing secret lets the check pass, so local development works without one.
+
+---
+
 ## email (required for alerts)
 
-| variable | description |
+| variable | what it does |
 |----------|-------------|
-| `RESEND_API_KEY` | API key from [Resend](https://resend.com) for sending emails |
-| `RESEND_FROM_EMAIL` | Verified sender address (e.g. `alerts@owlette.app`) |
-| `ADMIN_EMAIL_PROD` | Fallback admin email address (production) |
-| `ADMIN_EMAIL_DEV` | Fallback admin email address (development) |
-| `SEND_WELCOME_EMAIL` | `true` or `false` — controls welcome emails to new users |
+| `RESEND_API_KEY` | API key from [Resend](https://resend.com) for sending email |
+| `RESEND_FROM_EMAIL` | verified sender address, such as `alerts@yourdomain.com` |
+| `ADMIN_EMAIL_PROD` | fallback admin address in production |
+| `ADMIN_EMAIL_DEV` | fallback admin address in development |
+| `SEND_WELCOME_EMAIL` | optional. only the exact string `true` sends a welcome email to new users; anything else, or unset, sends none |
 
 ---
 
 ## rate limiting (required)
 
-Owlette uses [Upstash](https://upstash.com) Redis for API rate limiting. Create a free Serverless Redis database and copy the REST connection details.
+owlette rate-limits its API through [Upstash](https://upstash.com) Redis. create a serverless Redis database and copy its REST connection details.
 
-| variable | description |
+| variable | what it does |
 |----------|-------------|
-| `UPSTASH_REDIS_REST_URL` | REST API URL for your Upstash Redis instance |
-| `UPSTASH_REDIS_REST_TOKEN` | Authentication token for Upstash Redis |
+| `UPSTASH_REDIS_REST_URL` | REST URL of the Upstash database |
+| `UPSTASH_REDIS_REST_TOKEN` | its REST token |
+| `RATE_LIMIT_OBSERVE_ONLY` | optional, development only. `true` records what would have been limited without refusing anything |
 
 ---
 
-## cloudflare r2 (required for roost)
+## Cloudflare R2 (required for roost)
 
-The roost upload, chunk-check, and version-body routes use Cloudflare R2 through its S3-compatible API. The web runtime reads these variables in `web/lib/r2Client.server.ts`.
+the roost upload, chunk-check and version-body routes use Cloudflare R2 through its S3-compatible API, read in `web/lib/r2Client.server.ts`.
 
-| variable | format | description |
+| variable | format | what it does |
 |----------|--------|-------------|
-| `R2_S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | S3-compatible endpoint. This is where the Cloudflare account id is configured at runtime. |
-| `R2_S3_ACCESS_KEY_ID` | R2 access key id | S3-compatible R2 token with Object Read & Write access to the owlette buckets |
-| `R2_S3_SECRET_ACCESS_KEY` | R2 secret access key | Matching secret for `R2_S3_ACCESS_KEY_ID` |
+| `R2_S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the S3-compatible endpoint, which is also where the account ID is set |
+| `R2_S3_ACCESS_KEY_ID` | R2 access key ID | an R2 token with object read and write on the owlette buckets |
+| `R2_S3_SECRET_ACCESS_KEY` | R2 secret access key | the matching secret |
+| `ROOST_ENV` | `prod` or `dev` | picks the bucket pair. set it on every production origin |
 
-Bucket names are not environment variables in the current web code. `bucketFor()` derives them from the active roost environment:
+bucket names are not variables. `bucketFor()` derives them from the roost environment:
 
 | roost env | content bucket | manifests bucket |
 |-----------|----------------|------------------|
 | `prod` | `owlette-prod-content` | `owlette-prod-manifests` |
 | `dev` | `owlette-dev-content` | `owlette-dev-manifests` |
 
-`ROOST_ENV=prod` or `ROOST_ENV=dev` can override environment detection. Without that override, production is selected when `RAILWAY_ENVIRONMENT=production` or `RAILWAY_PUBLIC_DOMAIN=owlette.app`; otherwise the code defaults to `dev`.
+without `ROOST_ENV`, the code picks `prod` when `RAILWAY_ENVIRONMENT=production` or `RAILWAY_PUBLIC_DOMAIN=owlette.app`, and `dev` otherwise. a host that is neither, such as a Vercel failover, needs `ROOST_ENV=prod` set explicitly, or it writes to the dev buckets.
 
-There is no separate public URL prefix runtime variable. R2 buckets should remain private; upload and download access uses presigned URLs. Version metadata URLs are derived from the selected manifests bucket and `R2_S3_ENDPOINT`.
+the buckets stay private: uploads and downloads use presigned URLs, and version metadata URLs are derived from the manifests bucket and `R2_S3_ENDPOINT`.
 
-`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_R2_API_TOKEN` are provisioning inputs for `scripts/provision-r2.mjs`, not web runtime variables.
+`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_R2_API_TOKEN` are inputs to `scripts/provision-r2.mjs`, not runtime variables. never set them on a deployment.
 
 ---
 
-## url configuration (required in production)
+## URL configuration (required in production)
 
-| variable | description |
+| variable | what it does |
 |----------|-------------|
-| `NEXT_PUBLIC_BASE_URL` | Public base URL used in email links and agent callbacks (e.g. `https://owlette.app`) |
-| `RAILWAY_PUBLIC_DOMAIN` | Railway deployment domain — auto-injected by Railway, override if using a custom domain |
+| `NEXT_PUBLIC_BASE_URL` | the public origin, such as `https://owlette.app`, used in email links and agent pairing links. unset, pairing links fall back to the server's own listen address and email links to `https://owlette.app` |
+| `RAILWAY_PUBLIC_DOMAIN` | injected by Railway. read as a fallback origin and for roost environment detection |
+
+`NEXT_PUBLIC_APP_URL` is a stray alias read only as one fallback for the health-check origin. use `NEXT_PUBLIC_BASE_URL` instead.
 
 ---
 
 ## cron (required for the scheduled endpoints)
 
-| variable | description |
+| variable | what it does |
 |----------|-------------|
-| `CRON_SECRET` | Shared secret authenticating every scheduled endpoint — sent as `X-Cron-Secret` on the six `/api/cron/*` routes and as `Authorization: Bearer` on `/api/hoot/escalation`. Each environment has its own value. See [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints). |
+| `CRON_SECRET` | authenticates every scheduled endpoint: sent as `X-Cron-Secret` to the eight `/api/cron/*` routes (`api-key-expiry`, `display-alerts`, `health-check`, `process-alerts`, `retention`, `status-ping`, `swoop-retention`, `talons`) and as `Authorization: Bearer` to `/api/hoot/escalation`. give each environment its own value. see [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints) |
 
-Generate:
+`CRON_SECRET` also signs the unsubscribe links in alert emails, so changing it breaks every unsubscribe link already sent.
 
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
@@ -133,45 +163,79 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ---
 
+## swoop (required for remote desktop)
+
+[swoop](/docs/dashboard/swoop) needs a signalling worker (`infra/swoop-signal`, a Cloudflare Worker you deploy yourself), an ed25519 signing key, a session master key and, for viewers behind strict routers, a Cloudflare TURN key. readers live in `web/lib/swoop/`.
+
+| variable | required | what it does | without it |
+|----------|:--------:|-------------|------------|
+| `SWOOP_SIGNAL_URL` | yes | the signalling worker's origin, `https://` and no path, such as `https://signal.example.com`. the server turns it into the `wss://` room URL and adds it to the page's content security policy | every session start fails `503 swoop_not_configured`, and agents cannot fetch a session or a doorbell token |
+| `SWOOP_SIGNAL_RING_SECRET` | yes | the shared secret the API sends to the worker to ring a machine's doorbell and to broadcast a kill. any string; the worker holds the same value | sessions still start, but each machine learns of a session from its polled command, 2 to 5 seconds later, and a kill falls back to a queued command |
+| `SWOOP_JWT_PRIVATE_KEY` | yes | signs viewer, host and doorbell tokens (EdDSA). a PEM PKCS8 key, or the raw 32-byte ed25519 seed in base64 or base64url | every session start and lease renewal fails with `500` |
+| `SWOOP_JWT_KID` | yes | the key ID stamped on every token, and the one the worker looks the key up by | as above |
+| `SWOOP_JWT_PUBLIC_KEY` | yes | the public half of the signing key, sent to each machine's streamer. use base64url raw 32 bytes, the only form the worker accepts | agents cannot fetch a session bundle, so no session connects |
+| `SWOOP_JWT_KID_PREVIOUS`, `SWOOP_JWT_PUBLIC_KEY_PREVIOUS` | rotation only | the outgoing key during a rotation, so tokens signed before it still verify. set both to an empty string outside a rotation | one key is active, which is the normal state |
+| `SWOOP_SESSION_MASTER_KEY` | yes | the root every session's keys are derived from: the key the machine authenticates its connection details with, and each viewer's key. used as raw UTF-8 bytes, so a long random hex string works | every session start fails with `500` |
+| `CLOUDFLARE_TURN_KEY_ID` | no | a Cloudflare Realtime TURN key ID | swoop offers STUN only (`stun.cloudflare.com`): fine on one network and through most routers, but two ends behind strict routers cannot connect |
+| `CLOUDFLARE_TURN_KEY_API_TOKEN` | no | the bearer token that mints TURN credentials for that key, per session and per site | as above |
+
+swoop's must-match keys are `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY` and `SWOOP_SIGNAL_RING_SECRET`: a session's start and its machine's bundle fetch can land on different origins. `SWOOP_SIGNAL_URL`, `SWOOP_JWT_KID` and `SWOOP_JWT_PUBLIC_KEY` must agree across origins too, and with the worker.
+
+the worker holds its own copies as Wrangler secrets. it never sees the private key or the master key:
+
+| API variable | worker secret |
+|---|---|
+| `SWOOP_SIGNAL_RING_SECRET` | `SWOOP_SIGNAL_RING_SECRET` |
+| `SWOOP_JWT_KID`, `SWOOP_JWT_PUBLIC_KEY` | `SWOOP_JWT_KID`, `SWOOP_JWT_PUBLIC_KEY` |
+| `SWOOP_JWT_KID_PREVIOUS`, `SWOOP_JWT_PUBLIC_KEY_PREVIOUS` | `SWOOP_JWT_KID_PREV`, `SWOOP_JWT_PUBLIC_KEY_PREV` (note the shorter name) |
+
+generate a signing key pair, printed as base64url raw 32 bytes, on a machine you trust:
+
+```bash
+node -e "const c=require('crypto');const k=c.generateKeyPairSync('ed25519');console.log('private',k.privateKey.export({format:'der',type:'pkcs8'}).subarray(16).toString('base64url'));console.log('public ',k.publicKey.export({format:'der',type:'spki'}).subarray(12).toString('base64url'))"
+```
+
+**rotating the signing key**: give the worker the new key first, with the outgoing one in its `_PREV` slots, then the API, with the outgoing one in its `_PREVIOUS` slots. machines need nothing. after five minutes, the longest a host or doorbell token lives, clear both previous slots. the full runbook is in `infra/swoop-signal/README.md`.
+
+---
+
 ## public status page (required for external launch)
 
-These are server-side only. They wire `/api/cron/status-ping` to the hosted public status page.
+server-side only. these connect `/api/cron/status-ping` to the hosted status page.
 
-| variable | description |
+| variable | what it does |
 |----------|-------------|
-| `OWLETTE_STATUS_BASE_URL` | Optional base URL for synthetic checks; defaults to the request origin or `https://owlette.app` |
+| `OWLETTE_STATUS_BASE_URL` | optional origin the synthetic checks probe. unset, the checks use `NEXT_PUBLIC_APP_URL`, then `https://` + `RAILWAY_PUBLIC_DOMAIN`, then `https://owlette.app`. the request's own origin is never used |
 | `INSTATUS_API_KEY` | Instatus API token |
-| `INSTATUS_PAGE_ID` | Instatus hosted page id; not tied to the later `status.owlette.app` custom-domain upgrade |
-| `INSTATUS_API_BASE_URL` | Optional API override; defaults to `https://api.instatus.com` |
-| `INSTATUS_COMPONENT_STATUS_METHOD` | Optional component update method; defaults to `PUT` |
-| `INSTATUS_COMPONENT_STATUS_URL_TEMPLATE` | Optional component update URL template using `{pageId}` and `{componentId}` placeholders; default is `/v2/{pageId}/components/{componentId}` under `INSTATUS_API_BASE_URL` |
-| `INSTATUS_COMPONENT_DASHBOARD_ID` | Component id for dashboard |
-| `INSTATUS_COMPONENT_API_ID` | Component id for API |
-| `INSTATUS_COMPONENT_AGENT_REGISTRY_ID` | Component id for agent registry |
-| `INSTATUS_COMPONENT_WEBHOOK_DELIVERY_ID` | Component id for webhook delivery |
-| `INSTATUS_COMPONENT_R2_UPLOADS_ID` | Component id for R2 uploads |
-| `INSTATUS_COMPONENT_FIRESTORE_ID` | Component id for Firestore |
-| `INSTATUS_COMPONENT_CORTEX_CHAT_ID` | Component id for hoot chat |
+| `INSTATUS_PAGE_ID` | the Instatus page ID |
+| `INSTATUS_API_BASE_URL` | optional API override; defaults to `https://api.instatus.com` |
+| `INSTATUS_COMPONENT_STATUS_METHOD` | optional update method, `PUT` (the default), `PATCH` or `POST` |
+| `INSTATUS_COMPONENT_STATUS_URL_TEMPLATE` | optional update URL template with `{pageId}` and `{componentId}` placeholders; defaults to `/v2/{pageId}/components/{componentId}` under `INSTATUS_API_BASE_URL` |
+| `INSTATUS_COMPONENT_DASHBOARD_ID` | component ID for the dashboard |
+| `INSTATUS_COMPONENT_API_ID` | component ID for the API |
+| `INSTATUS_COMPONENT_AGENT_REGISTRY_ID` | component ID for the agent registry |
+| `INSTATUS_COMPONENT_WEBHOOK_DELIVERY_ID` | component ID for webhook delivery |
+| `INSTATUS_COMPONENT_R2_UPLOADS_ID` | component ID for R2 uploads |
+| `INSTATUS_COMPONENT_FIRESTORE_ID` | component ID for Firestore |
+| `INSTATUS_COMPONENT_CORTEX_CHAT_ID` | component ID for hoot chat (the name keeps hoot's old wire name) |
+| `INSTATUS_COMPONENT_ALERT_DELIVERY_ID` | optional component ID for alert delivery |
+| `INSTATUS_COMPONENT_TALON_DISPATCH_ID` | optional component ID for talon dispatch |
 
-Do not store the Instatus API key in docs or screenshots. Record only component ids and env var names in the operator reference.
-
----
-
-## public API launch state
-
-There is no environment variable that enables the public API launch. The launch state is tracked in the public API launch ticket and runbook, while API routes continue to enforce authentication, scopes, rate limits, and audit behavior.
-
-Do not add an `OWLETTE_PUBLIC_API_LAUNCHED` style flag unless the web code also enforces that flag on the relevant routes and the rollback behavior is documented.
+the page counts as configured only when the API key, the page ID and the seven non-optional component IDs are set. keep the Instatus API key out of docs and screenshots; record only component IDs and variable names.
 
 ---
 
-## encryption (required for llm keys)
+## public API
 
-| variable | description |
+no environment variable turns the public API on or off. its routes always enforce authentication, scopes, rate limits and audit.
+
+---
+
+## LLM key encryption (required for hoot)
+
+| variable | what it does |
 |----------|-------------|
-| `LLM_ENCRYPTION_KEY` | 32-byte hex key for encrypting stored LLM API keys |
-
-Generate:
+| `LLM_ENCRYPTION_KEY` | encrypts the LLM API keys people save for hoot. any string; the server stretches it with scrypt. unset, it falls back to `MFA_ENCRYPTION_KEY`. must-match: an origin with a different value cannot read keys saved through the other |
 
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
@@ -181,40 +245,64 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## autonomous hoot (optional)
 
-| variable | description |
+| variable | what it does |
 |----------|-------------|
-| `CORTEX_INTERNAL_SECRET` | Shared secret for internal auth between alert route and autonomous hoot endpoint |
-
-Generate:
+| `CORTEX_INTERNAL_SECRET` | shared secret between the alert route, the Cloud Functions and the autonomous hoot endpoint. the same value goes in `functions/.env` |
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Required only if you want autonomous hoot (AI auto-investigates process crashes). Also requires the site owner to have saved an LLM API key in their account settings — autonomous runs spend the owner's key — and autonomous mode enabled (`sites/{siteId}/settings/cortex` → `autonomousEnabled: true`).
+needed only for autonomous hoot, which investigates process crashes on its own. it also needs the site owner to have saved an LLM API key in their account settings, since autonomous runs spend the owner's key, and autonomous mode turned on (`sites/{siteId}/settings/cortex` → `autonomousEnabled: true`).
+
+---
+
+## audit log (optional)
+
+the web app sends audit records to the `recordAuditEvent` Cloud Function. its URL is composed from `FIREBASE_PROJECT_ID`, so neither override is normally set.
+
+| variable | what it does |
+|----------|-------------|
+| `AUDIT_LOG_REGION` | the function's region; defaults to `us-central1` |
+| `AUDIT_LOG_URL` | the full function URL, overriding the composed one |
 
 ---
 
 ## observability (optional)
 
-| variable | description |
+| variable | what it does |
 |----------|-------------|
-| `NEXT_PUBLIC_SENTRY_DSN` | Sentry DSN. Sentry is disabled when this is unset. |
-| `NEXT_PUBLIC_SENTRY_ENVIRONMENT` | Sentry environment name such as `development`, `staging`, or `production`. |
-| `SENTRY_AUTH_TOKEN` | Optional source-map upload token for CI/Railway builds. |
-| `SENTRY_ORG` | Optional Sentry organization slug for source-map upload. |
-| `SENTRY_PROJECT` | Optional Sentry project slug for source-map upload. |
-| `SECURITY_BOUNDARY_SENTRY_METRICS` | Optional flag for security-boundary metric emission. |
+| `NEXT_PUBLIC_SENTRY_DSN` | Sentry DSN. Sentry is off when this is unset |
+| `NEXT_PUBLIC_SENTRY_ENVIRONMENT` | Sentry environment name, such as `development` or `production` |
+| `SENTRY_AUTH_TOKEN` | build-time only: uploads source maps. read by the Sentry build plugin, not by app code |
+| `SENTRY_ORG` | build-time only: the Sentry organisation slug for the upload |
+| `SENTRY_PROJECT` | build-time only: the Sentry project slug for the upload |
+| `SECURITY_BOUNDARY_SENTRY_METRICS` | security-boundary metrics to Sentry. `true` sends all of them, `false` none; unset sends warnings and errors only |
 
 ---
 
-## environment (auto-set)
+## set by the platform
 
 | variable | value | set by |
 |----------|-------|--------|
-| `NODE_ENV` | `production` | `railway.toml` |
-| `PORT` | `3000` | Railway (auto-injected) |
-| `RAILWAY_ENVIRONMENT` | `production` or Railway environment name | Railway (auto-injected) |
+| `NODE_ENV` | `production` | `web/railway.toml` |
+| `PORT` | the listen port | Railway; `next start` reads it |
+| `RAILWAY_ENVIRONMENT` | the Railway environment's name | Railway |
+| `RAILWAY_PUBLIC_DOMAIN` | the service's public domain | Railway |
+
+never copy `RAILWAY_*` values to another host.
+
+---
+
+## never set on a deployment
+
+the code reads these, but only for local development and tests. on a deployed origin each one is dangerous: some send every server read and write to the emulators, some switch off a security check.
+
+- `FIREBASE_AUTH_EMULATOR_HOST`, `FIRESTORE_EMULATOR_HOST`, `NEXT_PUBLIC_USE_FIREBASE_EMULATOR` and the other `NEXT_PUBLIC_*_EMULATOR_HOST` variables
+- `OWLETTE_E2E`, `E2E_DISABLE_RATE_LIMIT`
+- `ALLOW_INSECURE_WEBHOOK_URLS`
+- `ENABLE_CAPABILITY_ENFORCEMENT`, `ENABLE_RATE_LIMIT_ENFORCEMENT` (outage fallbacks; unset means enforced)
+- `LEGACY_API_KEY_BYPASS_ENABLED`, `LEGACY_API_KEY_ALLOW_HASH_LIST`
 
 ---
 
@@ -223,7 +311,7 @@ Required only if you want autonomous hoot (AI auto-investigates process crashes)
 ### minimum required
 
 ```dotenv
-# Firebase Client
+# Firebase client
 NEXT_PUBLIC_FIREBASE_API_KEY=...
 NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
 NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
@@ -231,16 +319,21 @@ NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
 NEXT_PUBLIC_FIREBASE_APP_ID=...
 
-# Firebase Admin
+# Firebase admin
 FIREBASE_PROJECT_ID=my-project-id
 FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxx@my-project.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."
 
-# Session
+# sessions and second factors
 SESSION_SECRET=your-32-char-secret
 MFA_ENCRYPTION_KEY=your-32-char-mfa-key
 
-# Rate Limiting
+# bot protection
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=...
+TURNSTILE_SECRET=...
+TURNSTILE_HOSTNAMES=your-app.example.com
+
+# rate limiting
 UPSTASH_REDIS_REST_URL=https://...upstash.io
 UPSTASH_REDIS_REST_TOKEN=...
 
@@ -249,17 +342,17 @@ R2_S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
 R2_S3_ACCESS_KEY_ID=...
 R2_S3_SECRET_ACCESS_KEY=...
 
-# URL
-NEXT_PUBLIC_BASE_URL=https://your-app.railway.app
+# url
+NEXT_PUBLIC_BASE_URL=https://your-app.example.com
 
-# Cron
+# cron
 CRON_SECRET=your-64-char-hex
 ```
 
 ### full configuration
 
 ```dotenv
-# Firebase Client
+# Firebase client
 NEXT_PUBLIC_FIREBASE_API_KEY=...
 NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
 NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
@@ -267,23 +360,28 @@ NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
 NEXT_PUBLIC_FIREBASE_APP_ID=...
 
-# Firebase Admin
+# Firebase admin
 FIREBASE_PROJECT_ID=my-project-id
 FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxx@my-project.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."
 
-# Session
+# sessions and second factors
 SESSION_SECRET=your-32-char-secret
 MFA_ENCRYPTION_KEY=your-32-char-mfa-key
 
-# Email
+# bot protection
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=...
+TURNSTILE_SECRET=...
+TURNSTILE_HOSTNAMES=yourdomain.com
+
+# email
 RESEND_API_KEY=re_...
 RESEND_FROM_EMAIL=alerts@yourdomain.com
 ADMIN_EMAIL_PROD=admin@yourdomain.com
 ADMIN_EMAIL_DEV=dev@yourdomain.com
 SEND_WELCOME_EMAIL=true
 
-# Rate Limiting
+# rate limiting
 UPSTASH_REDIS_REST_URL=https://...upstash.io
 UPSTASH_REDIS_REST_TOKEN=...
 
@@ -293,15 +391,25 @@ R2_S3_ACCESS_KEY_ID=...
 R2_S3_SECRET_ACCESS_KEY=...
 ROOST_ENV=prod
 
-# URL
-NEXT_PUBLIC_BASE_URL=https://owlette.app
-RAILWAY_PUBLIC_DOMAIN=owlette.app
+# url
+NEXT_PUBLIC_BASE_URL=https://yourdomain.com
 
-# Cron
+# cron
 CRON_SECRET=your-64-char-hex
 
-# Public Status Page
-OWLETTE_STATUS_BASE_URL=https://owlette.app
+# swoop
+SWOOP_SIGNAL_URL=https://signal.yourdomain.com
+SWOOP_SIGNAL_RING_SECRET=...
+SWOOP_JWT_PRIVATE_KEY=...
+SWOOP_JWT_KID=...
+SWOOP_JWT_PUBLIC_KEY=...
+SWOOP_JWT_KID_PREVIOUS=
+SWOOP_JWT_PUBLIC_KEY_PREVIOUS=
+SWOOP_SESSION_MASTER_KEY=your-64-char-hex
+CLOUDFLARE_TURN_KEY_ID=...
+CLOUDFLARE_TURN_KEY_API_TOKEN=...
+
+# public status page
 INSTATUS_API_KEY=...
 INSTATUS_PAGE_ID=...
 INSTATUS_COMPONENT_DASHBOARD_ID=...
@@ -312,13 +420,13 @@ INSTATUS_COMPONENT_R2_UPLOADS_ID=...
 INSTATUS_COMPONENT_FIRESTORE_ID=...
 INSTATUS_COMPONENT_CORTEX_CHAT_ID=...
 
-# LLM Encryption
+# llm key encryption
 LLM_ENCRYPTION_KEY=your-64-char-hex
 
-# Autonomous hoot (optional)
+# autonomous hoot (optional)
 CORTEX_INTERNAL_SECRET=your-64-char-hex
 
-# Observability (optional)
+# observability (optional)
 NEXT_PUBLIC_SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0
 NEXT_PUBLIC_SENTRY_ENVIRONMENT=production
 SENTRY_AUTH_TOKEN=sntrys_...
@@ -330,8 +438,8 @@ SENTRY_PROJECT=owlette-web
 
 ## security notes
 
-- **Never commit** `.env.local` to git
-- **Use Railway's Variables tab** — values are encrypted at rest
-- **`NEXT_PUBLIC_*` prefix** means the value is exposed to the browser — only use for Firebase client config
-- **Rotate secrets periodically** — especially `SESSION_SECRET` and `CRON_SECRET`
-- **Separate environments** — use different Firebase projects for dev and production
+- **never commit** `.env.local` to git
+- **use your host's variable store**, such as Railway's variables tab, which encrypts values at rest
+- **`NEXT_PUBLIC_*` is public.** the prefix puts the value in every visitor's browser, so it carries only public configuration: Firebase client settings, the base URL, the Sentry DSN, the Turnstile site key and the App Check key. a secret never gets the prefix
+- **rotate secrets deliberately.** know what each one breaks first: `SESSION_SECRET` signs everyone out, `CRON_SECRET` voids the unsubscribe links already sent, and a must-match key has to change on every origin at once
+- **keep environments apart.** use a separate Firebase project, worker and set of secrets for development and production

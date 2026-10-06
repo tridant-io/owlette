@@ -1,18 +1,19 @@
 ---
 title: "quota"
-description: "quota inspects a site's storage + bandwidth usage against its limit. site-scoped: both verbs require --site . read-only — quotas are managed server-side. tier: [ready] for both verbs."
+description: "quota shows a site's roost storage against its limit and its daily storage, operation and egress usage. both verbs are site-scoped and read-only."
+keywords: ["bandwidth", "disk space"]
 ---
 
 verbs:
 
-- [`quota show`](#quota-show) — current storage snapshot for a site, with alarms
-- [`quota history`](#quota-history) — daily usage rollup over the requested window
+- [`quota show`](#show) — current storage snapshot for a site, with recent alarms
+- [`quota history`](#history) — one row of usage per UTC day over a window
 
 ---
 
-## quota show
+## show
 
-prints the current storage snapshot for a site: committed + pending bytes, the limit, the most recent reconciliation timestamp, and any active alarm firings. human mode renders an ascii progress bar; `--json` returns the full snapshot for scripting.
+prints the site's committed storage against its limit as a progress bar, the bytes held by in-flight uploads, when the usage was last reconciled, and up to the 20 most recent quota alarms.
 
 ```bash
 owlette quota show --site <siteId> [--json]
@@ -20,46 +21,44 @@ owlette quota show --site <siteId> [--json]
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--site <siteId>` | string | yes | site id to fetch quota for |
+| `--site <siteId>` | string | yes | site to read |
+
+the bar line is 20 characters wide and always has this shape:
+
+```text
+storage: <committed> / <limit> (NN%) [#####...............]
+```
+
+when the response has no limit the CLI prints `storage: <committed> used` instead. `--json` prints the raw snapshot: `siteId`, `usedBytes`, `pendingBytes`, `committedBytes`, `limitBytes`, `fractionUsed`, `lastAlarmLevel`, `lastAlarmAt`, `lastReconciledAt` and `alarms` (each `{ id, threshold, firedAt }`).
 
 ### examples
 
 ```bash
-# human-readable snapshot
 owlette quota show --site site-1
 # site       site-1
 #
 # storage: 12.4 GiB / 50.0 GiB (25%) [#####...............]
-#   pending: 240 MiB (in-flight uploads, not yet committed)
-#   reconciled at 2026-04-26T03:00:00Z
+#   pending: 240.0 MiB (in-flight uploads, not yet committed)
+#   reconciled at 2026-04-26T03:00:00.000Z
 ```
 
 ```bash
-# extract the fraction used for an alerting script
+# fraction of the limit in use, 0 to 1
 owlette --json quota show --site site-1 | jq '.fractionUsed'
 ```
 
 ```bash
-# warn if any alarm has fired in the last reconciliation window
-owlette --json quota show --site site-1 \
-  | jq -e '.alarms | length > 0' && echo "alarm active"
+# succeed only if an alarm has ever fired on this site
+owlette --json quota show --site site-1 | jq -e '.alarms | length > 0'
 ```
-
-the human-mode bar follows this exact format (20 hash-characters wide):
-
-```
-storage: <used> / <limit> (NN%) [#####...............]
-```
-
-unlimited / byo-bucket sites print `<committed> used (unlimited — byo bucket)` in place of the bar.
 
 backing: `GET /api/sites/{siteId}/quota`.
 
 ---
 
-## quota history
+## history
 
-prints a daily rollup of storage average, class-a + class-b operations, and egress bytes over the requested window. one row per UTC day in the period. defaults to `30d`.
+prints one row per UTC day over the window: average stored bytes, class A and class B storage operations, and egress bytes. days with no recorded events show `-` for storage and zeros for the rest.
 
 ```bash
 owlette quota history --site <siteId> [--period <window>] [--json]
@@ -67,20 +66,18 @@ owlette quota history --site <siteId> [--period <window>] [--json]
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--site <siteId>` | string | yes | site id to fetch usage history for |
-| `--period <window>` | enum | no | time window: `7d`, `14d`, `30d`, `60d`, or `90d` (default `30d`) |
+| `--site <siteId>` | string | yes | site to read |
+| `--period <window>` | `7d`, `14d`, `30d`, `60d` or `90d` | no | window ending today (default `30d`) |
 
-valid `--period` values are exactly `7d`, `14d`, `30d`, `60d`, `90d` — anything else exits `2` with a usage error.
+any other `--period` value fails before a request is sent. the table has `date`, `storage avg`, `class A ops`, `class B ops` and `egress`. `--json` prints the raw rollup: `siteId`, `period`, `days` and `daily` (each `{ date, storageBytesAvg, classAOps, classBOps, egressBytes }`).
 
 ### examples
 
 ```bash
-# default 30-day rollup
 owlette quota history --site site-1
 ```
 
 ```bash
-# tighter 7-day window
 owlette quota history --site site-1 --period 7d
 ```
 
@@ -96,17 +93,16 @@ backing: `GET /api/sites/{siteId}/quota/history?period=<window>`.
 
 ## exit codes
 
-- `0` — success (snapshot printed or history table emitted)
-- `1` — network failure or non-2xx api response (e.g. `403` if you lack access to the site), invalid `--period` value, or a missing `--site` (a commander usage error)
-- `2` — no token configured for the active profile
+- `0` — success
+- `1` — network failure, a non-2xx response (for example `403` without access to the site), or a missing `--site`
+- `2` — a `--period` outside the five allowed values, or no token configured
 
 ---
 
 ## notes
 
-- **scope**: site-scoped — `--site <siteId>` is required on both verbs
-- **tier**: `[ready]` — both endpoints are fully public
-- **alarms**: `quota show` surfaces the rolling list of alarm firings (each with timestamp + threshold percentage). server-managed; the cli is read-only here
-- **pending vs committed**: `pendingBytes` are in-flight uploads that haven't been finalized yet. only `committedBytes` count toward the storage limit
-- **history granularity**: one bucket per UTC day. partial days at the head of the window are included with whatever has been recorded so far
-- **related**: [overview](/docs/cli/overview) (json envelope), [site](/docs/cli/reference/site) (find your site ids), [roost](/docs/cli/reference/roost) (the main thing eating your storage)
+- **scope**: site-scoped, read-only; needs read access to the site
+- **committed vs pending**: `committedBytes` is `usedBytes` plus `pendingBytes`. pending bytes belong to uploads that have not been finalised, and they count against the limit — the bar and `fractionUsed` both use `committedBytes`
+- **days**: buckets are UTC calendar days and the window includes today, so the last row is a partial day
+- **JSON**: raw objects with no `{ ok, data }` wrapper
+- **related**: [site](/docs/cli/reference/site) to find site IDs, [roost](/docs/cli/reference/roost) — roost pushes are what fill this storage

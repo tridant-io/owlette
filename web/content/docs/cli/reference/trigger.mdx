@@ -1,48 +1,51 @@
 ---
 title: "trigger"
-description: "trigger fires a synthetic webhook event for local receiver testing. it is a shipped top-level helper, not part of the planned webhook noun group."
+description: "trigger sends one synthetic webhook event to a URL, for testing a receiver and its signature check. it posts from the CLI itself, or with --via-api asks the server to sign and send the event."
+keywords: ["test webhook", "fake event", "mock event"]
 ---
 
-- direct mode posts from the CLI straight to `--to`
-- server-probe mode, selected with `--via-api`, calls `/api/webhooks/probe?siteId=...` and lets the API send one probe delivery
+two modes:
 
-**synopsis** - `owlette trigger <event> --to <url> [--site <siteId>] [--via-api] [--signing-secret <secret>] [--payload <json> | --payload-file <path>] [--id <delivery-id>] [--json]`
+- **direct** (the default): the CLI builds the body, signs it when you give it a secret, and posts it to `--to` itself — no token needed
+- **server probe** (`--via-api`): the CLI calls `POST /api/webhooks/probe?siteId=<siteId>` and the server signs and sends one delivery to `--to`
 
-known canned events:
+neither mode creates a subscription or puts anything on the [`listen`](/docs/cli/reference/listen) stream.
 
-- `version.published`
-- `deployment.started`
-- `deployment.completed`
-- `deployment.failed`
-- `version.rolled_back`
-- `chunk.garbage_collected`
-- `chunk.verify_failed`
-- `quota.warning`
-- `quota.exceeded`
-- `api_key.used`
-- `api_key.expired`
-- `machine.online`
-- `machine.offline`
+---
 
-Unknown event names are allowed only when you provide `--payload` or `--payload-file`.
+## trigger
+
+```bash
+owlette trigger <event> --to <url> [--site <siteId>] [--via-api] [--signing-secret <secret>] [--payload <json> | --payload-file <path>] [--id <delivery-id>] [--json]
+```
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--site <siteId>` | string | required with `--via-api`; optional in direct mode | site id for the probe payload and the API probe query string. If the payload has `siteId: null`, the CLI fills it from this value |
-| `--to <url>` | string | yes | destination webhook URL. In direct mode the CLI posts to this URL itself; with `--via-api`, the API sends the probe to this URL |
-| `--via-api` | boolean | no | use `POST /api/webhooks/probe?siteId=<siteId>` instead of posting directly from the CLI |
-| `--signing-secret <secret>` | string | no | in direct mode, signs the request body as `Roost-Signature: t=<unix>,v1=<hmac_sha256_hex>`. With `--via-api`, the value is forwarded to the probe API as `signingSecret` |
-| `--payload <json>` | JSON string | no | inline payload object. Takes precedence over `--payload-file` if both are present |
-| `--payload-file <path>` | path | no | read a JSON payload object from a file |
-| `--id <delivery-id>` | string | no | direct-mode `Roost-Delivery` header value. Defaults to a random UUID. In server-probe mode the CLI logs this id locally, but the request body sent to the API does not include it |
+| `<event>` | string | yes | event kind, for example `version.published` |
+| `--to <url>` | URL | yes | where the event is sent |
+| `--site <siteId>` | string | with `--via-api` | site for the probe's query string; also fills `siteId` in a canned payload |
+| `--via-api` | boolean | no | send through the server probe instead of from the CLI |
+| `--signing-secret <secret>` | string | no | direct mode: sign the body as `Roost-Signature: t=<unix>,v1=<hmac_sha256_hex>`. probe mode: passed to the server, which needs at least 32 characters and mints a secret when you send none |
+| `--payload <json>` | JSON string | no | payload to send instead of the canned one; wins over `--payload-file` |
+| `--payload-file <path>` | path | no | read the payload from a JSON file |
+| `--id <delivery-id>` | string | no | direct mode `Roost-Delivery` value (default: a random UUID). probe mode only logs it — the server assigns its own delivery ID |
 
-inherits global `--profile`, `--api-url`, and `--json`.
+canned payloads exist for every event in the [event catalog](/docs/api/webhooks#event-catalog):
+
+- `version.published`, `version.rolled_back`
+- `deployment.started`, `deployment.completed`, `deployment.failed`
+- `machine.online`, `machine.offline`
+- `chunk.garbage_collected`, `chunk.verify_failed`
+- `quota.warning`, `quota.exceeded`
+- `api_key.used`, `api_key.expired`
+
+in direct mode another event name works only with `--payload` or `--payload-file`. the server probe accepts catalog events only, payload or not.
 
 ---
 
 ## direct mode
 
-Direct mode is the default when `--to` is present and `--via-api` is omitted. It bypasses Owlette's API, builds the event body locally, signs it when `--signing-secret` is present, and sends:
+the default whenever `--via-api` is absent. the CLI sends:
 
 ```http
 POST <url>
@@ -52,8 +55,12 @@ Roost-Delivery: <delivery-id>
 Roost-Signature: t=<unix>,v1=<hmac_sha256_hex>
 ```
 
+`Roost-Signature` is present only with `--signing-secret`; the HMAC-SHA256 covers `<t>.<body>`.
+
+### examples
+
 ```bash
-# fire a canned version-published body at a local receiver
+# a canned version.published body, signed, to a local receiver
 owlette trigger version.published \
   --site site-1 \
   --to http://localhost:3000/hooks \
@@ -61,7 +68,7 @@ owlette trigger version.published \
 ```
 
 ```bash
-# set a stable delivery id for receiver idempotency tests
+# a fixed delivery id, for testing receiver de-duplication
 owlette trigger deployment.failed \
   --to http://localhost:3000/hooks \
   --id test-delivery-001 \
@@ -69,13 +76,13 @@ owlette trigger deployment.failed \
 ```
 
 ```bash
-# send a custom event with inline JSON
+# a custom event with an inline body
 owlette trigger custom.test \
   --to http://localhost:3000/hooks \
   --payload '{"siteId":"site-1","ok":true}'
 ```
 
-In human mode, the CLI writes the request and response status to stderr. With global `--json`, stdout is:
+human mode logs the request and the response status (with up to 120 characters of the response body) to stderr. `--json` prints to stdout:
 
 ```json
 {
@@ -88,9 +95,7 @@ In human mode, the CLI writes the request and response status to stderr. With gl
     "Roost-Delivery": "test-delivery-001",
     "Roost-Signature": "t=1714000000,v1=..."
   },
-  "body": {
-    "siteId": "site-1"
-  },
+  "body": { "roostId": "rst_synthetic_01", "siteId": "site-1" },
   "responseText": "ok"
 }
 ```
@@ -99,7 +104,7 @@ In human mode, the CLI writes the request and response status to stderr. With gl
 
 ## server-probe mode
 
-Server-probe mode is selected with `--via-api`. It requires an authenticated profile or `OWLETTE_TOKEN`, `--site <siteId>`, and `--to <url>`.
+selected with `--via-api`. it needs a token, `--site` and `--to`. the server checks the URL like a real subscription — `https` only, ports 80, 443, 8080 or 8443, no private, loopback or link-local addresses — so `localhost` is refused; use direct mode for a local receiver.
 
 ```bash
 owlette trigger version.published \
@@ -116,22 +121,9 @@ owlette --profile dev trigger machine.offline \
   --payload-file ./fixtures/machine-offline.json
 ```
 
-backing: `POST /api/webhooks/probe?siteId=<siteId>` with:
+backing: `POST /api/webhooks/probe?siteId=<siteId>` with body `{ url, event, payload, signingSecret? }`. the CLI always sends a payload, canned or yours.
 
-```json
-{
-  "url": "https://example.com/hooks/owlette",
-  "event": "version.published",
-  "payload": {
-    "siteId": "site-1"
-  },
-  "signingSecret": "optional"
-}
-```
-
-The request is sent with `Authorization: Bearer <token>` and `Content-Type: application/json`. If the API returns `404`, the CLI reports that `/api/webhooks/probe` is unavailable on that host and suggests omitting `--via-api` for local direct testing.
-
-With global `--json`, stdout is:
+human mode prints the response status and body to stderr, plus `owlette: webhook probe delivery failed: …` when the receiver did not answer 2xx. a `404` from the probe route prints a hint to drop `--via-api`. `--json` prints:
 
 ```json
 {
@@ -140,40 +132,46 @@ With global `--json`, stdout is:
   "request": {
     "url": "https://example.com/hooks/owlette",
     "event": "version.published",
-    "payload": {
-      "siteId": "site-1"
-    }
+    "payload": { "roostId": "rst_synthetic_01", "siteId": "site-1" }
   },
-  "response": {}
+  "response": {
+    "status": 200,
+    "durationMs": 182,
+    "deliveryId": "5b0c…",
+    "event": "version.published",
+    "requestBody": "{\"roostId\":\"rst_synthetic_01\",…}",
+    "signature": "t=1714000000,v1=...",
+    "signingSecret": "whsec_…",
+    "responseBody": "ok"
+  }
 }
 ```
+
+`response.status` is the receiver's status, or `null` with a `networkError` when it could not be reached. `response.signingSecret` echoes your secret or the one the server minted.
 
 ---
 
 ## payloads
 
-Without `--payload` or `--payload-file`, the CLI starts from a canned payload for the known event. For canned payloads:
+without `--payload` or `--payload-file` the CLI starts from the canned payload for the event, then:
 
-- `siteId: null` is replaced with `--site` when provided
-- `machine.online` and `machine.offline` fill `lastHeartbeat` with the current timestamp when the canned value is null
-- `quota.exceeded` fills `blockedAt` with the current timestamp when the canned value is null
-- `api_key.expired` fills `expiresAt` with the current timestamp when the canned value is null
+- replaces `siteId: null` with `--site` when given
+- fills `lastHeartbeat` (`machine.online`, `machine.offline`), `blockedAt` (`quota.exceeded`) and `expiresAt` (`api_key.expired`) with the current time
 
-`--payload` must be a JSON object string. `--payload-file` must point to a readable JSON file. Invalid JSON exits with code `2`.
+a `--payload` or `--payload-file` that is not valid JSON, or a file that cannot be read, exits `2`.
 
 ---
 
 ## exit codes
 
-- `0` - request completed with a 2xx response
-- `1` - network failure, non-2xx response, or unavailable server-probe route
-- `2` - usage error: missing `--to`, missing token for `--via-api`, missing `--site` for `--via-api`, unknown event without a payload override, or invalid payload JSON
+- `0` — the request went through and, in probe mode, the receiver answered 2xx
+- `1` — network failure; a non-2xx from the receiver (direct) or from the probe API; in probe mode, a receiver that answered non-2xx or could not be reached; or a `404` probe route
+- `2` — a missing `--to`; with `--via-api`, no token or no `--site`; an event with no canned payload and no payload override; invalid payload JSON or an unreadable payload file
 
 ---
 
 ## notes
 
-- **scope**: direct mode is local-only and does not need a token. server-probe mode requires an authenticated profile; the API host enforces access for the requested site.
-- **headers**: direct mode sends `Roost-Event` and `Roost-Delivery` on every request. `Roost-Signature` is present only when `--signing-secret` is supplied.
-- **payload precedence**: `--payload` wins over `--payload-file`; otherwise the command uses a canned payload for known events.
-- **related**: [webhook](/docs/cli/reference/webhook) for the planned noun group, [overview](/docs/cli/overview) for global flags and JSON output policy.
+- **scope**: direct mode makes no owlette API call. probe mode needs `site=<id>:write`, so probe firings land in the audit log
+- **headers**: direct mode always sends `Roost-Event` and `Roost-Delivery`
+- **related**: [webhooks](/docs/api/webhooks) for the signature format and verification code, [`listen`](/docs/cli/reference/listen) to forward the event stream, [webhook](/docs/cli/reference/webhook) for subscription routes

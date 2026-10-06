@@ -8,37 +8,37 @@ const DEFAULT_SECURITY = [
   { firebaseIdToken: [] },
 ];
 
-const REFERENCE_DESCRIPTION = `The Owlette API lets you programmatically manage sites, machines, processes, installer deployments, Roost content/version workflows, Hoot conversations, quotas, audit logs, and webhooks.
+const REFERENCE_DESCRIPTION = `the owlette API manages sites, machines, processes, installer deployments, roost content and versions, hoot conversations, quotas, audit logs and webhooks.
 
-## Authentication
+## authentication
 
-New public integrations should send scoped API keys as \`Authorization: Bearer owk_live_...\` or \`Authorization: Bearer owk_test_...\`. The legacy \`x-api-key\` header and selected \`api_key\` query-parameter compatibility paths remain documented where supported. Dashboard and first-party development flows may use Firebase ID tokens.
+send a scoped API key as \`Authorization: Bearer owk_live_...\` (preferred) or in the \`x-api-key\` header. dashboard and first-party flows may use Firebase ID tokens. see [/docs/api/authentication](/docs/api/authentication).
 
-Every protected operation below includes an **Authentication and scopes** note. API-key callers must hold at least one listed scope and must also satisfy resource ownership, site membership, role, and capability checks.
+every protected operation below has an **Authentication and scopes** note. when it lists several scopes the key needs all of them, and the call must also pass site membership, role and capability checks. swoop sessions refuse API keys outright.
 
-## Versioning
+## versioning
 
-Owlette does not require a new global API-version header for the developer-preview MVP. Roost/project-distribution routes may accept the existing advisory \`Roost-Version: YYYY-MM-DD\` header; missing headers can emit \`X-Roost-Version-Missing: true\`.
+there is no global API-version header. roost routes accept the advisory \`Roost-Version: YYYY-MM-DD\` header, and a request without it may get \`X-Roost-Version-Missing: true\` back. see [/docs/api/versions](/docs/api/versions).
 
-## Errors
+## errors
 
-Public errors use \`application/problem+json\` with stable \`code\`, \`requestId\`, and \`docsUrl\` fields. Some dashboard compatibility routes may retain a temporary \`error\` alias during the preview window.
+errors use \`application/problem+json\` with a stable \`code\`, a \`requestId\` and a \`docsUrl\` that links to the code's entry in [/docs/api/errors](/docs/api/errors).
 
-## Pagination
+## pagination
 
-Collection endpoints use \`page_size\`, \`page_token\`, and \`next_page_token\` where paginated. Some compatibility routes also accept \`limit\` / \`cursor\` or return \`nextPageToken\`.
+list endpoints take \`page_size\` and \`page_token\` (\`limit\` and \`cursor\` are accepted as aliases) and return \`next_page_token\`. defaults and maximums vary by route: see [/docs/api/pagination](/docs/api/pagination).
 
-## Idempotency
+## idempotency
 
-Mutating endpoints that can trigger side effects require or accept \`Idempotency-Key\`. Replays are scoped to the same user, environment, method, path, query, and body hash.
+some mutating endpoints require \`Idempotency-Key\`, others accept it, and a replay is scoped to the same caller, method, path, query and body. [/docs/api/idempotency](/docs/api/idempotency) lists which is which.
 
-## Rate limits
+## rate limits
 
-Responses may include \`RateLimit-Limit\`, \`RateLimit-Remaining\`, \`RateLimit-Reset\`, and \`Retry-After\`. API-key traffic is bucketed by key id where available. See the docs pages for authentication, pagination, idempotency, errors, and rate limits at \`/docs/api\`.
+limited routes send \`RateLimit-Limit\`, \`RateLimit-Remaining\`, \`RateLimit-Reset\` and, on a refusal, \`Retry-After\`. API-key traffic is bucketed by key. see [/docs/api/rate-limits](/docs/api/rate-limits).
 
-## Models
+## models
 
-The **Models** section at the end of this reference documents the reusable object shapes the API is built from — \`Site\`, \`Machine\`, \`Process\`, \`HootConversation\`, and so on. These are reference definitions, not endpoints: every operation that returns a machine returns the \`Machine\` shape, every operation that returns a site returns the \`Site\` shape, and so on. Browse them to understand the fields you will send in request bodies and receive in responses.`;
+the **Models** section at the end documents the object shapes the API is built from: \`Site\`, \`Machine\`, \`Process\`, \`HootConversation\` and the rest. they are definitions, not endpoints: every operation that returns a machine returns the \`Machine\` shape.`;
 
 export interface OpenApiOperation {
   path: string;
@@ -264,7 +264,7 @@ function inferAuthScopeNotes(path: string, method: string, operation: JsonRecord
     if (method.toLowerCase() === 'get') {
       return protectedNotes(['site=*:read'], 'Scoped API keys see only sites granted by their site scopes.');
     }
-    return protectedNotes(['site=*:admin'], 'Site creation requires a superadmin caller.');
+    return protectedNotes(['site=*:admin'], 'Creating a site needs a key with `site=*:admin`.');
   }
 
   if (path === '/api/whoami') {

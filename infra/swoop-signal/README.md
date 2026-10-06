@@ -175,8 +175,9 @@ deliberate dispatch (see [deploy](#deploy)) that must wait for them.
    failure is read at a terminal rather than in a job log.
 5. **the url is decided** (owner, 2026-09-18) and is in `wrangler.toml` as a custom domain per environment:
    **`signal-dev.owlette.app`** and **`signal.owlette.app`**. set `SWOOP_SIGNAL_DEV_URL` /
-   `SWOOP_SIGNAL_PROD_URL` and the api's `SWOOP_SIGNAL_URL` to `https://` those, and add the matching
-   `wss://` origin to `connect-src` in `web/proxy.ts`.
+   `SWOOP_SIGNAL_PROD_URL` and the api's `SWOOP_SIGNAL_URL` to `https://` those. `web/proxy.ts` derives
+   the matching `https://` and `wss://` `connect-src` origins from `SWOOP_SIGNAL_URL`, so nothing else
+   changes.
 
    **one label deep, and that is not a style choice.** the zone's universal certificate is
    `*.owlette.app` + `owlette.app` — verified with `openssl s_client -connect dev.owlette.app:443` — and a

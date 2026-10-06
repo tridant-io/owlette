@@ -1,29 +1,23 @@
 ---
 title: "webhooks"
-description: "Send site events to external systems over HTTPS. Use webhooks for Slack, Discord, PagerDuty, CI/CD, or any receiver that can validate a signed JSON POST."
+description: "send a site's events to an HTTPS endpoint. roost version publishes and rollbacks go through the signed, retried dispatcher; machine-offline alerts go through the older alert sender. manage subscriptions from admin panel → webhooks or settings → webhooks."
+keywords: ["callback", "slack", "discord", "pagerduty", "integration", "notify", "http post", "signing secret", "hmac", "auto-disabled", "test webhook"]
 ---
 
-**Locations**: admin panel -> webhooks, settings -> webhooks
+**locations**: admin panel → webhooks (`/admin/webhooks`), settings → webhooks (`/settings/webhooks`)
 
 ---
 
 ## surfaces and access
 
-| surface | route | who uses it | shipped controls |
-|---------|-------|-------------|------------------|
-| admin panel -> webhooks | `/admin/webhooks` | site admins managing webhooks across the sites they belong to | site selector, add webhook, enable/disable switch, edit, test, delete |
-| settings -> webhooks | `/settings/webhooks` | anyone with access to a site; management controls appear for site admins and the site owner | create webhook, pause/resume, rotate secret, delete, delivery history, delivery retry |
+| surface | who uses it | controls |
+|---|---|---|
+| admin panel → webhooks | site owners and admins | site selector, **add webhook**, an on/off switch, **test**, edit, delete |
+| settings → webhooks | anyone on the site | everyone: the list, **recent deliveries** and retrying a delivery. owners and admins also get **create webhook**, pause and resume, rotating the secret, and delete |
 
-The admin panel is the multi-site control surface. If more than one site is
-available, choose the site first, then manage that site's webhook list. The
-selector only ever offers sites you belong to.
+creating, editing, testing, pausing, deleting and rotating a secret need `WEBHOOK_MANAGE` on the site, which owners and admins hold. a member on settings → webhooks gets no create button and no card actions, and the API refuses those calls. the admin panel page opens only for someone who is an owner or admin on at least one site.
 
-Creating, editing, testing, deleting, and rotating a secret require the
-site-scoped `WEBHOOK_MANAGE` capability — site admins on that site, and the
-site's owner. Members get read-only visibility: in settings -> webhooks they can
-list subscriptions, expand delivery history, retry a delivery, and run a probe,
-but the create button and the per-card action buttons are not rendered, and the
-API refuses those calls. The admin panel page itself is not shown to members.
+the probe, `POST /api/webhooks/probe`, has no button: call it from the API or with [`owlette trigger --via-api`](/docs/cli/reference/trigger#server-probe-mode).
 
 ![webhook subscription configuration](/docs-screens/webhooks.png)
 
@@ -31,113 +25,96 @@ API refuses those calls. The admin panel page itself is not shown to members.
 
 ## creating a webhook
 
-From the admin panel:
+from the admin panel:
 
-1. Open **admin panel -> webhooks**.
-2. Select the site, if the selector is shown.
-3. Click **add webhook**.
-4. Enter a name, an HTTPS URL, and at least one event.
-5. Click **create webhook**.
-6. Copy the signing secret from the **webhook created** dialog.
+1. open **admin panel** → **webhooks** and select the site, if the selector is shown.
+2. click **add webhook**.
+3. enter a **name** and a **URL (https required)**. a Slack or Discord URL gets a badge saying the payload will be formatted for it.
+4. tick at least one of the **events**. **machine offline** and **deployment failed** start ticked.
+5. click **create webhook**, then copy the secret from **webhook created** with **copy secret**.
 
-From site settings:
+from settings:
 
-1. Open **settings -> webhooks**.
-2. Select the site, if prompted.
-3. Click **create webhook**.
-4. Enter an endpoint URL, optional description, and one or more events.
-5. Copy the signing secret from the banner shown after creation.
+1. open **settings** → **webhooks** and pick the site, if asked.
+2. click **create webhook**.
+3. enter the **endpoint url**, an optional description, and one or more **events** (**select all** ticks every one).
+4. copy the secret from the banner, "signing secret issued — copy it now".
 
-Signing secrets are shown once when a webhook is created. They are not returned
-by the list, detail, or edit endpoints.
+either way the secret is shown once. no list, detail or edit call returns it again. the URL must be `https`, on an allowed port, and resolve to a public address (`bad_scheme`, `bad_port`, `private_ip`), and every event must come from the catalog below.
 
 ---
 
-## event catalog
+## what fires today
 
-The subscription UI accepts the current roost webhook event catalog:
+a subscription can list any event in the catalog, but only three are ever sent:
 
-| event | description |
-|-------|-------------|
-| `version.published` | A roost version is published |
-| `version.rolled_back` | A roost version is rolled back |
-| `deployment.started` | A deployment rollout starts |
-| `deployment.completed` | A deployment rollout completes |
-| `deployment.failed` | A deployment rollout fails |
-| `machine.online` | A machine reports online again |
-| `machine.offline` | A machine is reported offline |
-| `chunk.garbage_collected` | Unused chunk data is removed |
-| `chunk.verify_failed` | Chunk verification fails |
-| `quota.warning` | Site usage approaches quota |
-| `quota.exceeded` | Site usage exceeds quota |
-| `api_key.used` | An API key is used |
-| `api_key.expired` | An API key expires |
+| event | sent by | when |
+|---|---|---|
+| `version.published` | the roost dispatcher | a roost publish creates a new version |
+| `version.rolled_back` | the roost dispatcher | a roost is rolled back |
+| `machine.offline` | the alert sender | the offline health check confirms a machine stopped responding, or an agent reports a connection failure |
+| `deployment.started`, `deployment.completed`, `deployment.failed`, `machine.online`, `chunk.garbage_collected`, `chunk.verify_failed`, `quota.warning`, `quota.exceeded`, `api_key.used`, `api_key.expired` | nothing yet | accepted on a subscription, sent only by the probe |
 
-Older process and connection-failure alert names are not part of this
-subscription catalog.
+the admin dialog marks **machine online**, **deployment completed** and **deployment failed** "(future)"; the others that never fire carry no such mark.
+
+**`machine.offline` follows the offline email.** the health check sends it only for a site whose offline email has at least one recipient, so a site where everyone turned **machine offline alerts** off gets no `machine.offline` either.
+
+**older event names still arrive.** the alert sender also delivers `process.crashed`, `process.restarted` (sent when a process fails to start), `threshold.breached` (from an [alert rule](/docs/dashboard/admin/email-alerts#threshold-alert-rules)'s webhook channel) and the `display.*` events to any subscription whose events already list them. none of them is in the catalog, so a new subscription cannot select them, and an edit from the admin panel fails on a subscription that has them, because the edit sends the old names back.
+
+---
+
+## two senders, two formats
+
+| | roost dispatcher | alert sender |
+|---|---|---|
+| events | `version.published`, `version.rolled_back` | `machine.offline` and the older names above |
+| body | `{ event, siteId, occurredAt, data }`, compact JSON with sorted keys | `{ event, timestamp, site: { id, name }, data }` |
+| signature | `Roost-Signature: t=<unix>,v1=<hex>`, with `Roost-Event` and `Roost-Delivery` | `X-owlette-Signature: sha256=<hex>`, with `X-owlette-Event` |
+| retries | queued in `webhook_deliveries` and sent by a dispatcher that runs every minute, up to 10 attempts with backoff | one attempt with a 5-second timeout, no retry |
+| delivery history | 30 days, under **recent deliveries** | none; the admin card shows the last status only |
+| Slack and Discord | the signed envelope, unformatted | a formatted message, unsigned |
+| after repeated failure | the delivery gives up; the subscription is never paused | the subscription is [auto-disabled](#auto-disabled-subscriptions) after 10 failures in a row |
+
+**verifying the roost dispatcher.** compute the HMAC-SHA256 of `<t>.<raw body>` with the signing secret, compare it in constant time, and reject a `t` more than five minutes off. receiver code for Node, Python and bash is in [signature verification](/docs/api/webhooks#signature-verification).
+
+**verifying the alert sender.** `X-owlette-Signature` is `sha256=` followed by the hex HMAC-SHA256 of the raw body, keyed with the same signing secret. strip the prefix and compare in constant time. it carries no timestamp, so there is no replay window to check; deduplicate on your side if a repeat matters.
 
 ---
 
 ## delivery status
 
-Webhook cards show the endpoint URL, selected events, enabled or paused state,
-last delivery time, last delivery status, and failure count when available.
+**admin panel** cards show the switch, the name with a Slack or Discord badge, the URL, the event pills, a status badge (`never triggered`, the last HTTP status, `network error`, or `auto-disabled`), a failure count, and when it last fired. these come from the alert sender and the **test** button only: roost deliveries do not update them.
 
-In the admin panel, the **test** action sends a synthetic test payload to the
-selected webhook and writes the result back to the card. Use it to check that
-the URL is reachable; it does not prove automatic roost event dispatch is
-enabled.
+**settings** cards show `paused` or `active`, the events, and when the subscription was created. their **last delivery** time and failure count are not updated by either sender yet. expand one for **recent deliveries**: the roost dispatcher's deliveries from the last 30 days, each with its status and attempt count, and a retry button on a failed or pending one. a retry is a fresh delivery with the same `Roost-Delivery` ID, signed with the current secret.
 
-In settings -> webhooks, expand a card to view recent deliveries. Delivery
-history is retained for 30 days. Failed or pending records can be retried from
-the expanded delivery list.
+**test** on the admin panel sends one sample to the URL: a `process.crashed` payload from a machine named `MEDIA-SERVER-01` with `X-owlette-Event: test`, signed only for a generic URL, with a 10-second timeout. the result shows as a toast and on the card. it proves the URL answers; it is not the roost envelope, so use the probe to test a roost receiver. **test** is off while the webhook is switched off.
 
 ---
 
 ## managing webhooks
 
 | action | admin panel | settings page |
-|--------|-------------|---------------|
-| Enable, disable, pause, or resume | switch on each row | pause/resume button |
-| Edit URL or event selection | pencil button | recreate or use API edit flows |
-| Test endpoint reachability | **test** button | use `/api/webhooks/probe` or the CLI trigger flow |
-| Rotate signing secret | not shown | rotate-secret button; the old secret remains valid for 24 hours |
-| View delivery history | not shown | expand the webhook card |
-| Retry a delivery | not shown | retry button in recent deliveries |
-| Delete | trash button, then confirm | trash button, then confirm |
+|---|---|---|
+| pause or resume | the switch on each row | the pause/resume button |
+| edit the name, URL or events | the pencil | not offered; use `PATCH /api/webhooks/{webhookId}` |
+| test | **test** | not offered; use the probe |
+| rotate the signing secret | not offered | the rotate button. the old secret stays valid for 24 hours |
+| delivery history and retry | not shown | expand the card |
+| delete | the bin, then **confirm** | the delete button |
 
-Deleted webhooks stop receiving deliveries. Delivery history is preserved for
-the 30-day audit window.
+deleting soft-deletes the subscription and stops new deliveries; roost deliveries already queued are still sent. after a delete, its delivery history is no longer reachable.
 
 ---
 
-## receiver verification
+## auto-disabled subscriptions
 
-The current webhook API and probe flow sign requests with:
+after 10 alert-sender failures in a row, the subscription is switched off with `enabled: false` and its admin card reads `auto-disabled`. it then gets nothing from either sender.
 
-```text
-Roost-Signature: t=<unix-seconds>,v1=<hex>
-```
-
-Verify the signature against the exact raw request body and reject signatures
-outside the five-minute replay window. Use the receiver examples in
-[API webhooks](/docs/api/webhooks#signature-format) for implementation
-details.
-
-The admin panel's legacy **test** path may send generic test requests with an
-`X-owlette-Signature: sha256=<hex>` header. If you use that button while
-building a generic receiver, strip and validate the `sha256=` prefix before
-constant-time comparison.
+the dashboard cannot turn it back on. the admin switch writes `paused`, which leaves `enabled: false` in place, and settings → webhooks shows the subscription as `active`. delete it and create it again.
 
 ---
 
-## preview limits
+## notes
 
-Subscription management, one-time secret display, secret rotation, delivery
-history, manual retry, and probe testing are live. Automatic production
-dispatch for the roost lifecycle event catalog is still being wired, so use
-probe or CLI trigger flows when validating a new receiver before relying on
-automatic event delivery.
-
-Use email alerts for human notification paths and webhooks for automation that
-can tolerate at-least-once delivery and deduplicate by delivery id.
+- use [email alerts](/docs/dashboard/admin/email-alerts) for people and webhooks for automation
+- roost deliveries are at least once: deduplicate on `Roost-Delivery`. the [API reference for webhooks](/docs/api/webhooks) covers the envelope, headers, retries and subscription routes

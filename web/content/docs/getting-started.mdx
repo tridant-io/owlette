@@ -1,30 +1,33 @@
 ---
 title: "getting started"
-description: "Get your first machine monitored in under 5 minutes."
+description: "get your first machine monitored in under 5 minutes, on Windows, macOS or Linux."
+keywords: ["quick start", "first machine", "setup", "onboarding", "install"]
 ---
 
 ---
 
 ## step 1: create an account
 
-1. Go to [owlette.app](https://owlette.app)
-2. Click **Register** and create an account with email/password or Google sign-in
-3. Set up **two-factor authentication**. It's required, and either option satisfies it on its own:
+1. go to [owlette.app](https://owlette.app)
+2. click **sign up** and create an account with email and password, or **continue with Google**
+3. set up **two-factor authentication**. it's required, and either option satisfies it on its own:
    - a **passkey** (Windows Hello, Touch ID, Face ID, a security key, or a password manager like 1Password) signs you in and clears 2FA in one step, with no code to type
    - an **authenticator app** gives you 6-digit codes — these run on desktop as well as mobile, so you don't need a phone
-4. Save the **backup codes** you're shown at the end — they're how you get back in if you lose the device
+4. save the **backup codes** you're shown at the end — they're how you get back in if you lose the device
+
+more in [dashboard getting started](/docs/dashboard/getting-started#set-up-two-factor-authentication).
 
 ---
 
 ## step 2: create a site
 
-Sites organize your machines — think of them as locations, departments, or projects.
+sites organize your machines — think of them as locations, departments, or projects.
 
-1. Click **"new site"** in the dashboard (or **"Create Your First Site"** from the empty state)
-2. Enter a **site name** (e.g., "NYC Gallery", "Main Office")
-3. The **site ID** is auto-generated from the name — expand **"customize site ID"** only if you want to set a specific ID
-4. The **site timezone** is detected from your browser — expand **"change timezone"** if the site lives somewhere else. Process schedules at this site run on this clock; see [timezones](/docs/dashboard/timezones)
-5. Click **"create site"**
+1. click **new site** in the dashboard (or **create your first site** from the empty state)
+2. enter a **site name** (e.g., "NYC Gallery", "Main Office")
+3. the **site ID** is generated from the name — expand **customize site ID** only if you want to set a specific ID
+4. the **site timezone** is detected from your browser — expand **change timezone** if the site lives somewhere else. process schedules at this site run on this clock; see [timezones](/docs/dashboard/timezones)
+5. click **create site**
 
 ![create site dialog](/docs-screens/create-site-dialog.png)
 
@@ -34,85 +37,93 @@ Sites organize your machines — think of them as locations, departments, or pro
 
 ### download
 
-The dashboard header has two installer buttons side by side — pick the one that matches where you are:
+the dashboard header has two installer buttons side by side — pick the one that matches where you are:
 
-- **download** — if you're already working **on the machine you want to monitor**, click this to download the latest installer directly. It picks the file for the platform you're on; the menu beside it lists the other two.
+- **download** — if you're already working **on the machine you want to monitor**, click this to download the latest installer directly. it picks the file for the platform you're on; the menu beside it lists the other two.
 - **copy link** — if you're **remoting into** the machine, click this to copy the installer link, then paste it into a browser on that machine to download it there — no file transfer needed.
 
-One version ships one file per platform:
+one version ships one file per platform:
 
-- Windows: `Owlette-Installer-v<version>.exe`
-- macOS, Apple silicon on macOS 15 or later: `Owlette-Installer-v<version>.pkg`
-- Linux, Ubuntu 24.04: `Owlette-Installer-v<version>.deb`
+- Windows 10 or later: `Owlette-Installer-v<version>.exe`
+- macOS 15 or later on Apple silicon: `Owlette-Installer-v<version>.pkg`
+- Ubuntu 24.04: `Owlette-Installer-v<version>.deb`
 
 ![the download and copy-link buttons in the dashboard header](/docs-screens/getting-started-install-buttons.png)
 
 ### install & connect
 
-1. Run the installer on your target machine: on Windows **as Administrator**; on macOS double-click the `.pkg` (or `sudo installer -pkg <file> -target /`); on Linux `sudo apt-get install ./<file>.deb`
-2. On Windows, follow the setup wizard; on macOS and Linux, open the owlette app after installing
-3. The owlette window opens on **join a site**, showing a **pairing phrase** (3 random words), the authorization link, and which owlette server it belongs to
-4. Click **open owlette.app/add** in that window to authorize from this machine, then select a site and click **"Authorize"**
-5. Or authorize from a phone or another computer by opening the displayed URL and entering the pairing phrase
-6. The agent receives credentials and connects — done
+1. run the installer on the target machine:
+   - **Windows:** right-click the `.exe`, choose **Run as administrator**, and follow the setup wizard. the owlette window opens on **join a site** at the end.
+   - **macOS:** double-click the `.pkg` (or `sudo installer -pkg <file> -target /`). the owlette app starts in the menu bar: choose **open owlette** from its menu, then **join site** in the window's footer.
+   - **Linux:** `sudo apt-get install ./<file>.deb`. the owlette app starts in the top bar — after a first install, once you log out and back in, since the app runs only for accounts in the `owlette` group the package adds you to. choose **open owlette** from its menu, then **join site** in the window's footer.
+2. the window shows a **pairing phrase** (3 random words), the authorization link, and which owlette server it belongs to
+3. click **open owlette.app/add** in that window to authorize from this machine, then select a site and click **authorize machine**
+4. or authorize from a phone or another computer by opening the displayed URL and entering the pairing phrase
+5. the agent receives credentials and connects — done
 
-Full per-platform steps, including the macOS **Screen Recording** grant, are in [installation](/docs/agent/installation).
+full per-platform steps, including the macOS **Screen Recording** grant and the Linux `owlette` group, are in [installation](/docs/agent/installation).
 
-<Callout type="idea" title={"Bulk deployment"}>
+<Callout type="idea" title={"machines nobody is standing in front of"}>
 
-For deploying to many Windows machines, use the `/ADD=` flag with a pre-authorized phrase from the dashboard. See [Installation → Silent Install](/docs/agent/installation#method-2-silent-install-with-add). On macOS and Linux, pair from the app after installing.
+generate a pairing phrase in the dashboard (**add machine** → **generate code**) and install with it: pass it as `/ADD=` to the Windows installer, or leave it in a pairing preseed before installing on macOS or Linux. a generated phrase pairs one machine and expires after 10 minutes, so generate one per machine. see [unattended installs](/docs/agent/installation#method-2-silent-install-with-add).
 
 </Callout>
+
 ---
 
 ## step 4: verify
 
-Within 30 seconds of installation, your machine should appear in the dashboard:
+within 30 seconds of installation, your machine should appear in the dashboard:
 
 ![online machine card](/docs-screens/machine-card.png)
 
 | check | what to look for |
 |-------|-----------------|
-| **Machine visible** | Machine card appears in your site with a green "Online" indicator |
-| **Metrics flowing** | CPU, memory, disk percentages updating |
-| **System tray** | Owl icon visible in the Windows notification area |
+| **machine visible** | the machine card appears in your site with a green online indicator |
+| **metrics flowing** | CPU, memory and disk percentages updating |
+| **tray icon** | the owlette eye in the Windows notification area, the macOS menu bar or the Linux top bar |
+
+if it doesn't appear, see [post-installation verification](/docs/agent/installation#post-installation-verification).
 
 ---
 
 ## step 5: add processes to monitor
 
-Now that your machine is connected, tell owlette which applications to watch:
+now that your machine is connected, tell owlette which applications to watch:
 
-1. Click on your machine in the dashboard
-2. Click **"add process"**
-3. Give it a **name** (e.g., "TouchDesigner")
-4. Set **launch mode** to **always on** — owlette starts the process and relaunches it if it crashes. Choose **scheduled** instead to run it only inside time windows you define; the gear at the end of the control opens the schedule editor in any mode.
-5. Enter the **executable path** (e.g., `C:\Program Files\Derivative\TouchDesigner\bin\TouchDesigner.exe`)
-6. Click **"create process"**
+1. click on your machine in the dashboard
+2. click **add process**
+3. give it a **name** (e.g., "TouchDesigner")
+4. set **launch mode** to **always on** — owlette starts the process and relaunches it if it crashes. choose **scheduled** instead to run it only inside time windows you define; the gear at the end of the control opens the schedule editor in any mode.
+5. enter what to run: on Windows the **executable path** (e.g., `C:\Program Files\Derivative\TouchDesigner\bin\TouchDesigner.exe`), on macOS the **app path** (e.g., `/Applications/TouchDesigner.app`), on Linux the **program path**
+6. click **create process**
 
 ![add process dialog](/docs-screens/add-process-dialog.png)
 
-The agent immediately begins monitoring the process. If it crashes, owlette restarts it within 10 seconds.
+the agent starts monitoring the process straight away. if it crashes, owlette restarts it within seconds. you can do the same from the desktop app on the machine itself — see [configuration](/docs/agent/configuration#process-configuration).
 
 ---
 
 ## what's next?
 
-You're up and running. Here's what else you can do:
+you're up and running. here's what else you can do:
 
-- [**Configure process settings**](/docs/dashboard/process-management) — Priority, visibility, launch delay, crash limits
-- [**Deploy software remotely**](/docs/dashboard/deployments) — Push installers to machines without physical access
-- [**Sync files with roost**](/docs/dashboard/roost) — Publish versioned files and sync them to target machines
-- [**Chat with your machines**](/docs/dashboard/hoot) — Use hoot to query and control machines via natural language
-- [**Set up email alerts**](/docs/dashboard/admin/email-alerts) — Get notified when machines go offline or processes crash
-- [**Add more machines**](/docs/agent/installation) — Scale out to your full fleet
-- [**Invite team members**](/docs/dashboard/admin/user-management) — Add users with role-based site access
+- [**configure process settings**](/docs/dashboard/process-management) — priority, visibility, launch delay, crash limits
+- [**deploy software remotely**](/docs/dashboard/deployments) — push installers to machines without physical access
+- [**sync files with roost**](/docs/dashboard/roost) — publish versioned files and sync them to target machines
+- [**watch and control a screen with swoop**](/docs/dashboard/swoop) — a live, interactive view of a machine's desktop
+- [**chat with your machines**](/docs/dashboard/hoot) — use hoot to query and control machines in natural language
+- [**set up email alerts**](/docs/dashboard/admin/email-alerts) — get notified when machines go offline or processes crash
+- [**add more machines**](/docs/agent/installation) — scale out to your full fleet
+- [**invite team members**](/docs/dashboard/admin/user-management) — add users with role-based site access
+
+which features each platform has is in [platform support](/docs/reference/platform-support).
 
 ---
 
 ## need help?
 
-- Check the [Troubleshooting](/docs/troubleshooting) guide for common issues
-- Review [Agent Troubleshooting](/docs/agent/troubleshooting) for agent-specific problems
-- Open an issue on [GitHub](https://github.com/tridant-io/owlette/issues)
-- Email us at [support@tridant.io](mailto:support@tridant.io)
+- check the [troubleshooting](/docs/troubleshooting) guide for common issues
+- review [agent troubleshooting](/docs/agent/troubleshooting) for agent-specific problems
+- open an issue on [GitHub](https://github.com/tridant-io/owlette/issues)
+- email us at [support@tridant.io](mailto:support@tridant.io)

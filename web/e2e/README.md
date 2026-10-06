@@ -7,7 +7,7 @@ End-to-end tests for the Owlette web dashboard, running against Firebase emulato
 | Dependency | Version | Why |
 |---|---|---|
 | JDK 21 | exact pin | Firestore emulator requires JVM; 21 matches the CI pin |
-| Node.js | 20+ | matches CI |
+| Node.js | 22.x | matches `engines` in `web/package.json` and CI |
 | firebase-tools | 15.x | `npm i -g firebase-tools@15` — invoked bare from the repo root. 13.x CANNOT run the functions emulator against firebase-functions 7: its runtime shim calls the removed `functions.config()` and the worker is killed on every invocation |
 | Playwright | managed by `npm ci` | browsers installed separately (see below) |
 

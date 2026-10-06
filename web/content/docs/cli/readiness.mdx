@@ -1,145 +1,148 @@
 ---
-title: "cli readiness matrix"
-description: "Status as of 2026-05-02. Source of truth for registered commands is cli/src/index.ts plus cli/src/commands/**."
+title: "CLI readiness matrix"
+description: "every owlette CLI command, its status, and the API routes it calls, as of @owlette/cli 1.0.0-rc.0 (2026-10-05)."
 ---
 
-Legend:
+legend:
 
-- **ready** - command hits a public API route today.
-- **ready preview** - command is registered and calls a preview transport or preview API path.
-- **local** - command only changes local CLI state.
-- **stub** - command is registered and exits 3 with the canonical stub envelope.
-- **planned** - public routes exist, but no `owlette` noun is registered yet.
-- **reference page** - linked when a dedicated per-command page exists; `pending` means the command is registered but its dedicated page is not created yet.
+- **ready** — the command calls public API routes that are live.
+- **ready preview** — the command works, but the route behind it is still a preview (see the row).
+- **local** — the command changes only local CLI state.
+- **stub** — the command is registered and exits `3` with the stub envelope.
+- **not registered** — no CLI verb exists; the row shows where the operation lives instead.
 
 ## top-level commands
 
-| command | status | reference page | public route or reason |
+| command | status | reference page | routes |
 |---|---|---|---|
 | `owlette auth login` | ready | [auth](/docs/cli/reference/auth) | `POST /api/cli/device-code`, then `POST /api/cli/device-code/poll` |
 | `owlette auth status` | ready | [auth](/docs/cli/reference/auth) | alias of `owlette whoami`; `GET /api/whoami` |
-| `owlette auth logout` | local | [auth](/docs/cli/reference/auth) | clears the active profile's stored credential (OS keychain / `credentials.json`) and any legacy `config.toml` token; no API call |
+| `owlette auth logout` | local | [auth](/docs/cli/reference/auth) | none — clears the active profile's keychain or `credentials.json` entry and any legacy `config.toml` token |
 | `owlette whoami` | ready | [whoami](/docs/cli/reference/whoami) | `GET /api/whoami` |
-| `owlette version` | ready | [version](/docs/cli/reference/version) | `GET /api/version` |
+| `owlette version` | ready | [version](/docs/cli/reference/version) | `GET /api/version` (no auth) |
 | `owlette rollback <roostId>` | ready | [rollback](/docs/cli/reference/rollback) | `GET /api/roosts/{roostId}`, `GET /api/roosts/{roostId}/versions/{versionRef}/diff`, `POST /api/roosts/{roostId}/rollback` |
-| `owlette listen` | ready preview | pending dedicated page (Task 4.9) | `GET /api/events/stream?siteId=<siteId>`; scoped SSE liveness transport only until production fanout ships |
-| `owlette trigger <event>` | ready | pending dedicated page (Task 4.10) | direct mode posts to the caller's URL; `--via-api` uses `POST /api/webhooks/probe?siteId=<siteId>` |
+| `owlette listen` | ready preview | [listen](/docs/cli/reference/listen) | `GET /api/events/stream?siteId=<siteId>`; the stream carries liveness events only until production event fanout ships |
+| `owlette trigger <event>` | ready | [trigger](/docs/cli/reference/trigger) | direct mode posts to your URL and calls no route; `--via-api` calls `POST /api/webhooks/probe?siteId=<siteId>` |
 
 ## roost
 
-| command | status | reference page | public route or reason |
+| command | status | reference page | routes |
 |---|---|---|---|
-| `owlette roost push <dir>` | ready | [roost](/docs/cli/reference/roost) | `POST /api/chunks/check`, `POST /api/chunks/upload-urls`, signed `PUT`, `POST /api/roosts/{roostId}/versions` |
-| `owlette roost list` | ready | [roost](/docs/cli/reference/roost) | `GET /api/roosts?siteId=<siteId>` |
-| `owlette roost get <roostId>` | ready | [roost](/docs/cli/reference/roost) | `GET /api/roosts/{roostId}?siteId=<siteId>` |
-| `owlette roost diff <roostId>` | ready | [roost](/docs/cli/reference/roost) | `GET /api/roosts/{roostId}/versions/{versionRef}/diff?siteId=<siteId>&against=<versionRef>` |
-| `owlette roost versions <roostId>` | ready | [roost](/docs/cli/reference/roost) | `GET /api/roosts/{roostId}/versions?siteId=<siteId>` |
-| `owlette roost deploy <roostId>` | ready | [roost](/docs/cli/reference/roost) | `POST /api/roosts/{roostId}/deploy` |
+| `owlette roost push <dir>` | ready | [roost](/docs/cli/reference/roost#push) | `POST /api/chunks/check`, `POST /api/chunks/upload-urls`, signed `PUT`, `GET /api/roosts/{roostId}`, `POST /api/roosts/{roostId}/versions` |
+| `owlette roost list` | ready | [roost](/docs/cli/reference/roost#list) | `GET /api/roosts?siteId=<siteId>` |
+| `owlette roost get <roostId>` | ready | [roost](/docs/cli/reference/roost#get) | `GET /api/roosts/{roostId}?siteId=<siteId>` |
+| `owlette roost diff <roostId>` | ready | [roost](/docs/cli/reference/roost#diff) | `GET /api/roosts/{roostId}/versions/{versionRef}/diff?siteId=<siteId>&against=<versionRef>`; `GET /api/roosts/{roostId}` first when `--version` is omitted |
+| `owlette roost versions <roostId>` | ready | [roost](/docs/cli/reference/roost#versions) | `GET /api/roosts/{roostId}/versions?siteId=<siteId>` |
+| `owlette roost deploy <roostId>` | ready | [roost](/docs/cli/reference/roost#deploy) | `POST /api/roosts/{roostId}/deploy` |
 
-## site-scoped operator nouns
+## site, quota and audit log
 
-| command | status | reference page | public route or reason |
+| command | status | reference page | routes |
 |---|---|---|---|
-| `owlette site list` | ready | [site](/docs/cli/reference/site) | `GET /api/sites` |
-| `owlette site get <siteId>` | ready | [site](/docs/cli/reference/site) | `GET /api/sites/{siteId}` |
-| `owlette quota show` | ready | [quota](/docs/cli/reference/quota) | `GET /api/sites/{siteId}/quota` |
-| `owlette quota history` | ready | [quota](/docs/cli/reference/quota) | `GET /api/sites/{siteId}/quota/history?period=<period>` |
-| `owlette audit-log list` | ready | [audit-log](/docs/cli/reference/audit-log) | `GET /api/sites/{siteId}/audit-log` |
-| `owlette audit-log get <recordHash>` | ready | [audit-log](/docs/cli/reference/audit-log) | `GET /api/sites/{siteId}/audit-log/{recordHash}` |
+| `owlette site list` | ready | [site](/docs/cli/reference/site#list) | `GET /api/sites` |
+| `owlette site get <siteId>` | ready | [site](/docs/cli/reference/site#get) | `GET /api/sites/{siteId}` |
+| `owlette site members <siteId>` | ready | [site](/docs/cli/reference/site#members) | `GET /api/sites/{siteId}/members` |
+| `owlette site add-member <siteId>` | ready | [site](/docs/cli/reference/site#add-member) | `POST /api/sites/{siteId}/members` |
+| `owlette site set-role <siteId> <uid> <role>` | ready | [site](/docs/cli/reference/site#set-role) | `PATCH /api/sites/{siteId}/members/{uid}` |
+| `owlette site remove-member <siteId> <uid>` | ready | [site](/docs/cli/reference/site#remove-member) | `DELETE /api/sites/{siteId}/members/{uid}` |
+| `owlette site transfer-ownership <siteId> <successorUid>` | ready | [site](/docs/cli/reference/site#transfer-ownership) | `POST /api/sites/{siteId}/transfer-ownership` |
+| site create, update, delete | not registered | [site](/docs/cli/reference/site) | `POST /api/sites`, `PATCH /api/sites/{siteId}` and `DELETE /api/sites/{siteId}` exist; the CLI has no verbs for them |
+| `owlette quota show` | ready | [quota](/docs/cli/reference/quota#show) | `GET /api/sites/{siteId}/quota` |
+| `owlette quota history` | ready | [quota](/docs/cli/reference/quota#history) | `GET /api/sites/{siteId}/quota/history?period=<period>` |
+| `owlette audit-log list` | ready | [audit-log](/docs/cli/reference/audit-log#list) | `GET /api/sites/{siteId}/audit-log` |
+| `owlette audit-log get <recordHash>` | ready | [audit-log](/docs/cli/reference/audit-log#get) | `GET /api/sites/{siteId}/audit-log/{recordHash}` |
 
 ## machine
 
-| command | status | reference page | public route or reason |
+| command | status | reference page | routes |
 |---|---|---|---|
 | `owlette machine list` | ready | [machine](/docs/cli/reference/machine) | `GET /api/sites/{siteId}/machines` |
 | `owlette machine get <machineId>` | ready | [machine](/docs/cli/reference/machine) | `GET /api/sites/{siteId}/machines/{machineId}` |
 | `owlette machine deployments <machineId>` | ready | [machine](/docs/cli/reference/machine) | `GET /api/sites/{siteId}/machines/{machineId}/deployments` |
 | `owlette machine reboot <machineId>` | ready | [machine](/docs/cli/reference/machine) | `POST /api/sites/{siteId}/machines/{machineId}/commands` with `type=reboot_machine` |
 | `owlette machine shutdown <machineId>` | ready | [machine](/docs/cli/reference/machine) | `POST /api/sites/{siteId}/machines/{machineId}/commands` with `type=shutdown_machine` |
-| `owlette machine screenshot <machineId>` | ready | [machine](/docs/cli/reference/machine) | `POST /api/sites/{siteId}/machines/{machineId}/commands` with `type=capture_screenshot`, then `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}` |
-| `owlette machine live-view <machineId>` | stub | [machine](/docs/cli/reference/machine) | no public route yet; `public-api deferred: swoop` |
-| `owlette swoop <machineId>` | ready | [swoop](/docs/cli/reference/swoop) | `GET /api/sites/{siteId}/machines/{machineId}`, then the viewer url `/swoop/{siteId}/{machineId}` |
+| `owlette machine screenshot <machineId>` | ready | [machine](/docs/cli/reference/machine) | `POST /api/sites/{siteId}/machines/{machineId}/commands` with `type=capture_screenshot`, then `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}` until done, then the signed screenshot URL |
+| `owlette machine live-view <machineId>` | stub | [machine](/docs/cli/reference/machine) | no route; exits `3` with `future_plan` `public-api deferred: swoop` and points at `owlette swoop` |
+| `owlette swoop <machineId>` | ready | [swoop](/docs/cli/reference/swoop) | `GET /api/sites/{siteId}/machines/{machineId}`, then opens the viewer URL `/swoop/{siteId}/{machineId}` |
 
 ## hoot chat
 
-| command | status | reference page | public route or reason |
+| command | status | reference page | routes |
 |---|---|---|---|
-| `owlette chat new` | ready | [chat](/docs/cli/reference/chat) | `POST /api/cortex/conversations` |
-| `owlette chat list` | ready | [chat](/docs/cli/reference/chat) | `GET /api/cortex/conversations?siteId=<siteId>` |
-| `owlette chat send <conversationId> <message>` | ready | [chat](/docs/cli/reference/chat) | `POST /api/cortex/conversations/{conversationId}` |
-| `owlette chat delete <conversationId>` | ready | [chat](/docs/cli/reference/chat) | `DELETE /api/cortex/conversations/{conversationId}` |
-| `owlette chat rename <conversationId> <title>` | ready | [chat](/docs/cli/reference/chat) | `PATCH /api/cortex/conversations/{conversationId}` |
+| `owlette chat new` | ready | [chat](/docs/cli/reference/chat#new) | `POST /api/hoot/conversations` |
+| `owlette chat list` | ready | [chat](/docs/cli/reference/chat#list) | `GET /api/hoot/conversations?siteId=<siteId>` |
+| `owlette chat send <conversationId> <message>` | ready | [chat](/docs/cli/reference/chat#send) | `POST /api/hoot/conversations/{conversationId}` (streamed) |
+| `owlette chat delete <conversationId>` | ready | [chat](/docs/cli/reference/chat#delete) | `DELETE /api/hoot/conversations/{conversationId}` |
+| `owlette chat rename <conversationId> <title>` | ready | [chat](/docs/cli/reference/chat#rename) | `PATCH /api/hoot/conversations/{conversationId}` |
 
 ## classic deployments
 
-| command | status | reference page | public route or reason |
+| command | status | reference page | routes |
 |---|---|---|---|
-| `owlette deploy create` | ready | [deploy](/docs/cli/reference/deploy) | `POST /api/sites/{siteId}/deployments` |
-| `owlette deploy list` | ready | [deploy](/docs/cli/reference/deploy) | `GET /api/sites/{siteId}/deployments` |
-| `owlette deploy get <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy) | `GET /api/sites/{siteId}/deployments/{deploymentId}` |
-| `owlette deploy retry <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy) | `POST /api/sites/{siteId}/deployments/{deploymentId}/retry` |
-| `owlette deploy cancel <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy) | `POST /api/sites/{siteId}/deployments/{deploymentId}/cancel` |
-| `owlette deploy uninstall <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy) | `POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall` |
-| `owlette deploy delete <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy) | `DELETE /api/sites/{siteId}/deployments/{deploymentId}` |
+| `owlette deploy create` | ready | [deploy](/docs/cli/reference/deploy#create) | `POST /api/sites/{siteId}/deployments` |
+| `owlette deploy list` | ready | [deploy](/docs/cli/reference/deploy#list) | `GET /api/sites/{siteId}/deployments` |
+| `owlette deploy get <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy#get) | `GET /api/sites/{siteId}/deployments/{deploymentId}` |
+| `owlette deploy retry <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy#retry) | `POST /api/sites/{siteId}/deployments/{deploymentId}/retry` |
+| `owlette deploy cancel <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy#cancel) | `POST /api/sites/{siteId}/deployments/{deploymentId}/cancel` |
+| `owlette deploy uninstall <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy#uninstall) | `POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall` |
+| `owlette deploy delete <deploymentId>` | ready | [deploy](/docs/cli/reference/deploy#delete) | `DELETE /api/sites/{siteId}/deployments/{deploymentId}` |
 
 ## process
 
-| command | status | reference page | public route or reason |
+| command | status | reference page | routes |
 |---|---|---|---|
-| `owlette process list` | ready | [process](/docs/cli/reference/process) | `GET /api/sites/{siteId}/machines/{machineId}/processes` |
-| `owlette process get <processId>` | ready | [process](/docs/cli/reference/process) | `GET /api/sites/{siteId}/machines/{machineId}/processes/{processId}` |
-| `owlette process create` | ready | [process](/docs/cli/reference/process) | `POST /api/sites/{siteId}/machines/{machineId}/processes` |
-| `owlette process update <processId>` | ready | [process](/docs/cli/reference/process) | `PATCH /api/sites/{siteId}/machines/{machineId}/processes/{processId}` |
-| `owlette process delete <processId>` | ready | [process](/docs/cli/reference/process) | `DELETE /api/sites/{siteId}/machines/{machineId}/processes/{processId}` |
-| `owlette process schedule <processId>` | ready | [process](/docs/cli/reference/process) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/schedule` |
-| `owlette process start <processId>` | ready | [process](/docs/cli/reference/process) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/start` |
-| `owlette process stop <processId>` | ready | [process](/docs/cli/reference/process) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/stop` |
-| `owlette process restart <processId>` | ready | [process](/docs/cli/reference/process) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/restart` |
-| `owlette process kill <processId>` | ready | [process](/docs/cli/reference/process) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/kill` |
+| `owlette process list` | ready | [process](/docs/cli/reference/process#list) | `GET /api/sites/{siteId}/machines/{machineId}/processes` |
+| `owlette process get <processId>` | ready | [process](/docs/cli/reference/process#get) | `GET /api/sites/{siteId}/machines/{machineId}/processes/{processId}` |
+| `owlette process create` | ready | [process](/docs/cli/reference/process#create) | `POST /api/sites/{siteId}/machines/{machineId}/processes` |
+| `owlette process update <processId>` | ready | [process](/docs/cli/reference/process#update) | `PATCH /api/sites/{siteId}/machines/{machineId}/processes/{processId}` |
+| `owlette process delete <processId>` | ready | [process](/docs/cli/reference/process#delete) | `DELETE /api/sites/{siteId}/machines/{machineId}/processes/{processId}` |
+| `owlette process schedule <processId>` | ready | [process](/docs/cli/reference/process#schedule) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/schedule` |
+| `owlette process start <processId>` | ready | [process](/docs/cli/reference/process#start-stop-restart-kill) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/start` |
+| `owlette process stop <processId>` | ready | [process](/docs/cli/reference/process#start-stop-restart-kill) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/stop` |
+| `owlette process restart <processId>` | ready | [process](/docs/cli/reference/process#start-stop-restart-kill) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/restart` |
+| `owlette process kill <processId>` | ready | [process](/docs/cli/reference/process#start-stop-restart-kill) | `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/kill` |
 
-## keys, users, and installer management
+## keys, users and installers
 
-| command | status | reference page | public route or reason |
+| command | status | reference page | routes |
 |---|---|---|---|
-| `owlette key list` | ready (superadmin keys only) | [key](/docs/cli/reference/key) | `GET /api/account/api-keys` |
-| `owlette key create` | ready (superadmin keys only; scopes inherited) | [key](/docs/cli/reference/key) | `POST /api/account/api-keys` |
-| `owlette key update <keyId>` | not available | [key](/docs/cli/reference/key) | session-only — `PATCH /api/keys/{keyId}` rejects api-key auth |
-| `owlette key rotate <keyId>` | not available | [key](/docs/cli/reference/key) | session-only — `POST /api/keys/{keyId}/rotate` rejects api-key auth |
-| `owlette key revoke <keyId>` | not available | [key](/docs/cli/reference/key) | session-only — `DELETE /api/keys/{keyId}` rejects api-key auth |
-| `owlette user list` | ready | [user](/docs/cli/reference/user) | `GET /api/users` |
-| `owlette user get <uid>` | ready | [user](/docs/cli/reference/user) | `GET /api/users/{uid}` |
-| `owlette user promote <uid>` | ready | [user](/docs/cli/reference/user) | `POST /api/users/{uid}/promote` |
-| `owlette user demote <uid>` | ready | [user](/docs/cli/reference/user) | `POST /api/users/{uid}/demote` |
-| `owlette user assign-sites <uid>` | ready | [user](/docs/cli/reference/user) | `POST /api/users/{uid}/assign-sites` |
-| `owlette user remove-sites <uid>` | ready | [user](/docs/cli/reference/user) | `POST /api/users/{uid}/remove-sites` |
-| `owlette user delete <uid>` | ready | [user](/docs/cli/reference/user) | `DELETE /api/users/{uid}` |
-| `owlette installer list` | ready | [installer](/docs/cli/reference/installer) | `GET /api/installer` |
-| `owlette installer latest` | ready | [installer](/docs/cli/reference/installer) | `GET /api/installer/latest` |
-| `owlette installer upload <file>` | ready | [installer](/docs/cli/reference/installer) | `POST /api/installer/upload`, signed `PUT`, then `PUT /api/installer/upload` |
-| `owlette installer set-latest <version>` | ready | [installer](/docs/cli/reference/installer) | `POST /api/installer/{version}/set-latest` |
-| `owlette installer delete <version>` | ready | [installer](/docs/cli/reference/installer) | `DELETE /api/installer/{version}` |
+| `owlette key list` | ready (needs `user=*:admin`) | [key](/docs/cli/reference/key#list) | `GET /api/account/api-keys` |
+| `owlette key create` | ready (needs `user=*:admin`; scopes copied from the calling key) | [key](/docs/cli/reference/key#create) | `POST /api/account/api-keys` |
+| key revoke | not registered | [key](/docs/cli/reference/key) | `DELETE /api/account/api-keys/{keyId}` accepts a superadmin API key; the dashboard uses session-only `DELETE /api/keys/{keyId}` |
+| key rotate, key scope edit | not registered | [key](/docs/cli/reference/key) | session-only `POST /api/keys/{keyId}/rotate` and `PATCH /api/keys/{keyId}` reject API-key auth |
+| `owlette user list` | ready | [user](/docs/cli/reference/user#list) | `GET /api/users` |
+| `owlette user get <uid>` | ready | [user](/docs/cli/reference/user#get) | `GET /api/users/{uid}` |
+| `owlette user promote <uid>` | ready | [user](/docs/cli/reference/user#promote) | `POST /api/users/{uid}/promote` |
+| `owlette user demote <uid>` | ready | [user](/docs/cli/reference/user#demote) | `POST /api/users/{uid}/demote` |
+| `owlette user assign-sites <uid>` | ready | [user](/docs/cli/reference/user#assign-sites) | `POST /api/users/{uid}/assign-sites` |
+| `owlette user remove-sites <uid>` | ready | [user](/docs/cli/reference/user#remove-sites) | `POST /api/users/{uid}/remove-sites` |
+| `owlette user delete <uid>` | ready | [user](/docs/cli/reference/user#delete) | `DELETE /api/users/{uid}` |
+| `owlette installer list` | ready | [installer](/docs/cli/reference/installer#list) | `GET /api/installer` |
+| `owlette installer latest` | ready | [installer](/docs/cli/reference/installer#latest) | `GET /api/installer/latest` |
+| `owlette installer upload <file>` | ready | [installer](/docs/cli/reference/installer#upload) | `POST /api/installer/upload`, signed `PUT`, then `PUT /api/installer/upload` |
+| `owlette installer set-latest <version>` | ready | [installer](/docs/cli/reference/installer#set-latest) | `POST /api/installer/{version}/set-latest` |
+| `owlette installer delete <version>` | ready | [installer](/docs/cli/reference/installer#delete) | `DELETE /api/installer/{version}` |
 
 ## webhook noun
 
-`owlette webhook` is not registered in `cli/src/index.ts` yet. The public route family is live for developer preview, but CLI CRUD remains a Wave 3 follow-up so the command surface can settle with SDK examples.
+`owlette webhook` is not a command: `owlette webhook …` fails with `unknown command` and exits `1`. the subscription routes are live and are used by the dashboard and the SDKs. the CLI covers this area only through `owlette listen` and `owlette trigger`.
 
-| planned command | status | reference page | public route or reason |
+| operation | status | reference page | routes |
 |---|---|---|---|
-| `owlette webhook create` | planned | [webhook](/docs/cli/reference/webhook) | `POST /api/webhooks?siteId=<siteId>` |
-| `owlette webhook list` | planned | [webhook](/docs/cli/reference/webhook) | `GET /api/webhooks?siteId=<siteId>` |
-| `owlette webhook get <webhookId>` | planned | [webhook](/docs/cli/reference/webhook) | `GET /api/webhooks/{webhookId}?siteId=<siteId>` |
-| `owlette webhook update <webhookId>` | planned | [webhook](/docs/cli/reference/webhook) | `PATCH /api/webhooks/{webhookId}?siteId=<siteId>` |
-| `owlette webhook delete <webhookId>` | planned | [webhook](/docs/cli/reference/webhook) | `DELETE /api/webhooks/{webhookId}?siteId=<siteId>` |
-| `owlette webhook rotate-secret <webhookId>` | planned | [webhook](/docs/cli/reference/webhook) | `POST /api/webhooks/{webhookId}/rotate-secret?siteId=<siteId>` |
-| `owlette webhook deliveries <webhookId>` | planned | [webhook](/docs/cli/reference/webhook) | `GET /api/webhooks/{webhookId}/deliveries?siteId=<siteId>` |
-| `owlette webhook delivery get <webhookId> <deliveryId>` | planned | [webhook](/docs/cli/reference/webhook) | `GET /api/webhooks/{webhookId}/deliveries/{deliveryId}?siteId=<siteId>` |
-| `owlette webhook retry <webhookId> <deliveryId>` | planned | [webhook](/docs/cli/reference/webhook) | `POST /api/webhooks/{webhookId}/deliveries/{deliveryId}/retry?siteId=<siteId>` |
-| `owlette webhook probe` | planned | [webhook](/docs/cli/reference/webhook); trigger page pending (Task 4.10) | top-level `owlette trigger --via-api` already uses `POST /api/webhooks/probe?siteId=<siteId>` |
+| create a subscription | not registered | [webhook](/docs/cli/reference/webhook) | `POST /api/webhooks?siteId=<siteId>` |
+| list subscriptions | not registered | [webhook](/docs/cli/reference/webhook) | `GET /api/webhooks?siteId=<siteId>` |
+| get a subscription | not registered | [webhook](/docs/cli/reference/webhook) | `GET /api/webhooks/{webhookId}?siteId=<siteId>` |
+| update a subscription | not registered | [webhook](/docs/cli/reference/webhook) | `PATCH /api/webhooks/{webhookId}?siteId=<siteId>` |
+| delete a subscription | not registered | [webhook](/docs/cli/reference/webhook) | `DELETE /api/webhooks/{webhookId}?siteId=<siteId>` |
+| rotate the signing secret | not registered | [webhook](/docs/cli/reference/webhook) | `POST /api/webhooks/{webhookId}/rotate-secret?siteId=<siteId>` |
+| list deliveries | not registered | [webhook](/docs/cli/reference/webhook) | `GET /api/webhooks/{webhookId}/deliveries?siteId=<siteId>` |
+| get a delivery | not registered | [webhook](/docs/cli/reference/webhook) | `GET /api/webhooks/{webhookId}/deliveries/{deliveryId}?siteId=<siteId>` |
+| retry a delivery | not registered | [webhook](/docs/cli/reference/webhook) | `POST /api/webhooks/{webhookId}/deliveries/{deliveryId}/retry?siteId=<siteId>` |
+| send a probe event | ready, as `owlette trigger --via-api` | [trigger](/docs/cli/reference/trigger) | `POST /api/webhooks/probe?siteId=<siteId>` |
 
 ## invariants
 
-- No registered CLI command calls `/api/admin/*`.
-- `owlette chat` currently calls the `/api/cortex/conversations/*` compatibility aliases; `/api/hoot/conversations/*` is the canonical family, and `/api/chat/*` is a second, older alias set.
-- `machine live-view` is the only registered stub; `rg 'stubExit\(' cli/src/commands` should only match `cli/src/commands/machine.ts`.
-- `owlette listen` and `owlette trigger` are registered commands, but their dedicated reference pages are still pending Tasks 4.9 and 4.10.
-- `owlette webhook ...` is documented as a planned noun, not a registered command.
+- no registered CLI command calls `/api/admin/*`.
+- `owlette chat` calls the canonical `/api/hoot/conversations` routes. `/api/cortex/conversations` and `/api/chat` are compatibility aliases for the same handlers.
+- `machine live-view` is the only stub.
+- `installer upload`, `roost diff` and `roost deploy` have a `--version` option that the global `--version` flag intercepts unless it is written `--version=<value>`.

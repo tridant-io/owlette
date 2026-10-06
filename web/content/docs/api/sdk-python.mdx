@@ -1,10 +1,12 @@
 ---
-title: "sdk — python"
-description: "Package target: owlette-sdk 1.0.0rc0 · python ≥ 3.10 · single runtime dep on httpx"
+title: "SDK — Python"
+description: "package target: owlette-sdk 1.0.0rc0 · Python ≥ 3.10 · single runtime dependency on httpx"
+keywords: ["client library"]
 ---
 
-**Last updated**: 2026-04-29
-the official async python sdk for the [Owlette public API](/docs/api/overview). `async`-first (built on `httpx.AsyncClient`), typed with dataclasses + `py.typed` marker, and behaviour-compatible with [`@owlette/sdk`](/docs/api/sdk-node): the resource tree, progress events, error codes, and signature scheme match, with pythonic `snake_case` method names.
+**last updated**: 2026-10-05
+
+the official async Python SDK for the [owlette public API](/docs/api/overview). `async`-first (built on `httpx.AsyncClient`), typed with dataclasses + a `py.typed` marker, and modelled on [`@owlette/sdk`](/docs/api/sdk-node): the resource tree, progress events, error codes, and signature scheme match, with pythonic `snake_case` names. the import package is `roost`.
 
 ---
 
@@ -16,9 +18,13 @@ pip install --pre owlette-sdk
 # or: uv pip install --pre owlette-sdk
 ```
 
-python 3.10+ is required (async iterator + `match` + pep 604 unions). the package has one runtime dependency: `httpx>=0.27`.
+Python 3.10+ is required (`requires-python = ">=3.10"`; the SDK uses `dataclass(slots=True)` and runtime `X | Y` unions). the package has one runtime dependency: `httpx>=0.27`.
 
-Registry install is the Wave 5.3 release target. Until the PyPI pre-release is published and verified through the [distribution gate](/docs/api/distribution), use the SDK from the monorepo source checkout for developer-preview work.
+`owlette-sdk` is not on PyPI yet — the pre-release goes out with the [distribution gate](/docs/api/distribution). until then, install it from a checkout of the owlette monorepo:
+
+```bash
+pip install -e <path-to-checkout>/sdks/python
+```
 
 ---
 
@@ -41,34 +47,36 @@ async def main():
 asyncio.run(main())
 ```
 
-that's the whole flow: walk `./dist`, sha-256 chunk it, dedup-check against r2, upload what's missing, publish a version, return the new id + `version_number`.
+that's the whole flow: walk `./dist`, split every file into 4 MiB SHA-256 chunks, dedup-check against R2, upload what's missing, publish a version, and return the new ID plus `version_number`.
 
-For a complete script that verifies identity, API version, site/roost access,
-publish, and optional deploy, run `sdks/python/examples/run_roost_workflow.py`.
+for a complete script that verifies identity, API version, site/roost access, publish, and optional deploy, run `sdks/python/examples/run_roost_workflow.py` (see [SDK workflow examples](/docs/api/examples/sdk-workflows)).
 
 ---
 
 ## authentication
 
-every request needs an `owk_live_*` or `owk_test_*` key. mint one from the dashboard (`settings -> api keys -> new key`) or via the account key route. pass it to the constructor; the sdk never touches the filesystem.
+every request sends `Authorization: Bearer <token>`. use an `owk_live_*` API key — new keys are always minted `live`, and legacy `owk_test_*` keys still authenticate the same way. create one in the dashboard at **settings → api keys** (see [creating keys](/docs/api/authentication#creating-keys)). the SDK reads no environment variables and no files: `OWLETTE_TOKEN` in these examples is your own convention.
 
 ```python
 from roost import Roost, RetryPolicy
 
 async with Roost(
-    token=os.environ["OWLETTE_TOKEN"],         # required — owk_live_* or owk_test_*
+    token=os.environ["OWLETTE_TOKEN"],       # required — an owk_live_* api key
     api_url="https://owlette.app",           # default
-    environment="live",                      # optional — "live" | "test" metadata
-    roost_version="2026-04-22",              # default — sent as Roost-Version header
-    retry=RetryPolicy(max_attempts=5),       # optional
-    timeout=30.0,                            # httpx timeout seconds (default 30)
+    roost_version="2026-04-22",              # default — sent as the Roost-Version header
+    retry=RetryPolicy(max_attempts=5),       # optional — see errors and retries below
+    timeout=30.0,                            # httpx timeout in seconds (default 30)
+    transport=None,                          # optional httpx.AsyncBaseTransport
+    environment="live",                      # optional — stored on the client, never sent
 ) as client:
     ...
 ```
 
-**scope enforcement is server-side.** the sdk does not validate scopes locally — an over-broad call raises `RoostApiError` with `code="scope_insufficient"`. see [authentication.md](/docs/api/authentication) for the full scope grammar.
+every argument is keyword-only. `on_billing_warning` is still accepted for compatibility but never fires: the API stopped sending the `X-Owlette-Billing-Warning` header when billing was removed.
 
-the sdk auto-generates an `Idempotency-Key` header on mutating requests so routes that implement replay caching can use it. the header alone is not a duplicate-prevention guarantee; rely on idempotent retries only for endpoints whose reference documents idempotency support.
+**scope enforcement is server-side.** the SDK does not validate scopes locally — a call the key does not cover raises `RoostApiError` with `code="scope_insufficient"`. see [scopes](/docs/api/authentication#scopes) for the grammar; permissions are exact, so `write` does not imply `read`.
+
+the SDK adds an `Idempotency-Key` header to every mutating request (POST / PATCH / PUT / DELETE) unless you pass `idempotency_key`: `py-sdk-<uuid>`, or a call-specific prefix on a few delete, membership, and installer calls. the key is generated once per call and reused across the SDK's own retries. replay caching is route-specific — it protects version publish/patch, rollback/deploy, webhook mutations, hoot conversation create/rename/delete, and site/machine/process/member/user administration, but not roost create/update/delete, key management, chunk calls, or a hoot send. see [idempotency](/docs/api/idempotency).
 
 **always use `async with`**. the `Roost` context manager owns the underlying `httpx.AsyncClient` connection pool — exiting the block calls `close()` and releases the pool. forgetting this leaks file descriptors and slows teardown.
 
@@ -76,43 +84,49 @@ the sdk auto-generates an `Idempotency-Key` header on mutating requests so route
 
 ## resources
 
-every top-level noun is a resource class hung off the client. all methods are `async` and coroutine-returning — `await` every call.
+every top-level noun is a resource class hung off the client. every method is `async` — `await` each call, or `async for` over the paging generators.
 
 | resource             | methods                                                                                            |
 |----------------------|----------------------------------------------------------------------------------------------------|
 | `client.account`     | `whoami`, `version`, `api_keys.list`, `api_keys.create`, `api_keys.revoke`                         |
 | `client.roosts`      | `list`, `list_page`, `get`, `create`, `patch`, `remove`, `push`, `rollback`, `deploy`              |
-| `client.chunks`      | `check`, `upload_urls`, `download_urls`, `mount`, `referrers`                                      |
-| `client.versions`    | `list`, `list_page`, `get`, `patch`, `files`, `diff`                                               |
 | `client.deployments` | `list`, `list_page`, `get`                                                                         |
-| `client.keys`        | legacy session/ID-token key admin: `create`, `list`, `rotate`, `revoke`                            |
+| `client.versions`    | `list`, `list_page`, `get`, `patch`, `files`, `diff`                                               |
+| `client.chunks`      | `check`, `upload_urls`, `download_urls`, `mount`, `referrers`                                      |
+| `client.keys`        | session/ID-token key admin: `create`, `list`, `update`, `rotate`, `revoke`                         |
 | `client.webhooks`    | `subscribe`, `list`, `get`, `update`, `remove`, `rotate_secret`, `deliveries`, `delivery`, `retry_delivery`, `probe` |
 | `client.sites`       | `list`, `get`                                                                                      |
 | `client.machines`    | `list`, `get`, `deployments`, `dispatch_command`, `get_command`, `capture_screenshot`              |
-| `client.installer_deployments` | `list`, `get`, `create`, `retry`, `cancel`, `uninstall`, `delete`                         |
-| `client.installer`   | `list`, `latest`, `upload`, `set_latest`, `delete`                                                 |
-| `client.processes(site_id, machine_id)` | `list`, `get`, `create`, `update`, `delete`, `kill`, `start`, `stop`, `schedule` |
+| `client.processes(site_id, machine_id)` | `list`, `get`, `create`, `update`, `delete`, `start`, `stop`, `kill`, `schedule` |
 | `client.chat`        | `new`, `list`, `send`, `rename`, `delete`                                                          |
+| `client.members(site_id)` | `list`, `add`, `set_role`, `remove`, `transfer_ownership`                                     |
 | `client.users`       | `list`, `get`, `promote`, `demote`, `assign_sites`, `remove_sites`, `delete`                       |
-| `client.members(site_id)` | `list`, `add`, `remove`                                                                       |
+| `client.installer`   | `list`, `latest`, `upload`, `set_latest`, `delete`                                                 |
+| `client.installer_deployments` | `list`, `get`, `create`, `retry`, `cancel`, `uninstall`, `delete`                         |
 | `client.quotas`      | `current`, `history`                                                                               |
-| `client.http`        | raw low-level `RoostClient` — escape hatch for unmapped endpoints                                  |
+| `client.http`        | the raw `RoostClient` — escape hatch for unmapped endpoints                                        |
 
-**paging idiom.** `client.roosts.list()`, `client.versions.list()`, `client.deployments.list()`, `client.versions.files()`, and `client.chunks.referrers()` are async generators that transparently follow `nextPageToken` / `next_page_token`. use `list_page()` on roosts, versions, and deployments when you need explicit control. other resources return a list or a page envelope matching their route.
+**paging idiom.** `client.roosts.list()`, `client.versions.list()`, `client.deployments.list()`, `client.versions.files()`, and `client.chunks.referrers()` are async generators that follow `nextPageToken` for you. `list_page()` on roosts, versions, and deployments returns one page as `(rows, next_page_token)` when you need explicit control. the admin lists (`chat.list`, `users.list`, `installer.list`, `installer_deployments.list`, `webhooks.deliveries`) return a single page envelope with a `next_page_token` key.
+
+the core workflow resources return dataclasses; admin and debug calls return the response dict as the route sends it, with the `{ ok, data }` envelope unwrapped.
 
 ### account
 
 ```python
 identity = await client.account.whoami()
-print(identity.email or identity.user_id, identity.key.key_prefix if identity.key else None)
+print(identity.email or identity.user_id, identity.key.key_prefix if identity.key else None, identity.primary_site_id)
 
 api_version = await client.account.version()
 print(api_version.current, api_version.supported)
+```
 
-# API-key-compatible key management. New keys inherit the caller's allowed
-# scopes, so an API-key caller cannot widen its own privileges.
+`account.api_keys` wraps `/api/account/api-keys`, a superadmin-only platform surface that acts on the caller's own keys. a key minted by an API-key caller copies that key's scopes, so it cannot widen them; a key minted from a session gets every permission on every resource. either way it expires after 90 days.
+
+```python
+# superadmin only
 created = await client.account.api_keys.create(name="preview publisher")
-keys = await client.account.api_keys.list()
+print(created["key"])                         # owk_live_...  <-- shown once
+keys = await client.account.api_keys.list()   # list[ApiKeyRecord]
 await client.account.api_keys.revoke(created["keyId"])
 ```
 
@@ -126,25 +140,26 @@ async for r in client.roosts.list(site_id="site-1"):
 # single page explicitly (for resumable batch jobs)
 rows, cursor = await client.roosts.list_page(site_id="site-1", page_size=20)
 if cursor:
-    rows2, _ = await client.roosts.list_page(site_id="site-1", cursor=cursor)
+    rows2, _ = await client.roosts.list_page(site_id="site-1", page_token=cursor)
 
 # fetch one — returns RoostDetail with current_version (object, not id)
 r = await client.roosts.get("rst_abc", site_id="site-1")
 print(r.current_version.version_id if r.current_version else None)
 
-# create
+# create — returns RoostSummary
 created = await client.roosts.create(
     site_id="site-1",
     name="lobby touchdesigner",
     targets=["machine-a7f3"],                # machine ids
     extract_path=r"C:\Projects\lobby",       # optional
-    roost_id="rst_lobby_td",                 # optional — server generates if omitted
+    roost_id="rst_lobby_td",                 # optional — 8-64 chars; server generates rst_<hex> if omitted
 )
 
-# patch (rename, retarget)
+# patch (rename, retarget) — returns {roostId, siteId, updated}
 await client.roosts.patch("rst_lobby_td", site_id="site-1", name="lobby (v2)")
 
-# soft-delete (undo by re-creating with same id within 30 days)
+# soft-delete — returns {softDeleted, tombstoneExpiresAt};
+# creating the same id again within 30 days restores it
 await client.roosts.remove("rst_lobby_td", site_id="site-1")
 
 # publish from a directory — the flagship call
@@ -159,8 +174,8 @@ result = await client.roosts.push(
 )
 
 # rollback — `target_version` accepts str | int:
-#   int / "#3" / "v3"        → the third publish for this roost
-#   "vrs_..."                → a stable version id
+#   3 / "3" / "#3" / "v3"            → the third publish for this roost
+#   a 64-char version id             → that exact version (legacy "vrs_<hex>" still resolves)
 #   "current" / "previous" / "first" → aliases resolved server-side
 # omit it entirely to revert one step (equivalent to "previous").
 from roost import RollbackOptions
@@ -169,69 +184,33 @@ await client.roosts.rollback(
     RollbackOptions(site_id="site-1", target_version=3),
 )
 
-# trigger a deployment (targeted / scheduled / dry-run)
+# trigger a deployment (targeted / scheduled / dry-run) — returns DeployResult
 from roost import DeployOptions
 deploy = await client.roosts.deploy(
     "rst_abc",
     DeployOptions(
         site_id="site-1",
+        version_id=result.version_id,        # optional — defaults to the roost's current version
         machines=["machine-a7f3"],           # subset of targets — or None for the full target list
-        schedule_at="2026-04-25T03:00:00Z",  # optional — iso-8601 utc
+        schedule_at="2026-04-25T03:00:00Z",  # optional — iso-8601 utc string
         dry_run=False,
     ),
 )
+if deploy.stage == "scheduled":
+    print(deploy.scheduled)                  # {"at": ..., "warning": ...}
 ```
 
-### hoot
+`RollbackOptions` and `DeployOptions` also take `idempotency_key`. a `schedule_at` more than 60 seconds out parks the rollout at stage `scheduled`; see [scheduled rollouts](/docs/api/versions#scheduled-rollouts).
+
+### deployments
+
+rollout history for one roost. the rollout ID is the deployed version ID.
 
 ```python
-conversation = await client.chat.new(
-    site_id="site-1",
-    machine_id="machine-a7f3",
-    title="diagnostics",
-)
+async for rollout in client.deployments.list("rst_abc", site_id="site-1"):
+    print(rollout["rolloutId"], rollout["stage"])
 
-page = await client.chat.list(site_id="site-1", page_size=10)
-
-async for delta in client.chat.send(
-    conversation["conversationId"],
-    "summarize machine health",
-):
-    print(delta, end="", flush=True)
-```
-
-The SDK currently calls the `/api/cortex/conversations` compatibility aliases; `/api/hoot/conversations` is the canonical family. Both reach the same handlers. API-key callers are capped to read-only hoot tools during streamed replies.
-
-### chunks — low-level data plane
-
-most users never touch these; `roosts.push()` is the high-level wrapper. when you need raw control (network shares, custom uploaders, reuse across roosts):
-
-```python
-# chunk hashes are bare lowercase sha-256 hex, with no scheme prefix.
-first_hash = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-second_hash = "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
-
-# dedup-check — returns the list of hashes that r2 is missing
-missing = await client.chunks.check(site_id="site-1", hashes=[first_hash, second_hash])
-
-# mint signed r2 put urls (60 min ttl)
-payload = await client.chunks.upload_urls(site_id="site-1", hashes=missing)
-# payload is {"urls": {hash: put_url}, "expiresAt": "..."}.
-async with httpx.AsyncClient() as http:
-    for chunk_hash, url in payload.get("urls", {}).items():
-        await http.put(url, content=await chunk_bytes(chunk_hash))
-
-# mint signed r2 get urls (15 min ttl)
-downloads = await client.chunks.download_urls(site_id="site-1", hashes=[first_hash])
-
-# mount an existing chunk into a different roost (no re-upload)
-await client.chunks.mount(
-    first_hash, site_id="site-1", from_roost="rst_a", to_roost="rst_b",
-)
-
-# which roosts reference this chunk?
-async for ref in client.chunks.referrers(first_hash, site_id="site-1"):
-    print(ref["roostId"], ref["versionId"])
+rollout = await client.deployments.get("rst_abc", deploy.rollout_id, site_id="site-1")
 ```
 
 ### versions
@@ -241,8 +220,8 @@ async for ref in client.chunks.referrers(first_hash, site_id="site-1"):
 async for v in client.versions.list("rst_abc", site_id="site-1"):
     print(f'v{v["versionNumber"]}', v["versionId"], v.get("description"), v["createdAt"])
 
-# full version doc — `version_ref` accepts the same forms as rollback's target_version:
-#   an int (3), "#3" / "v3", a "vrs_*" id, or "current" / "previous" / "first"
+# full version doc — `version_ref` accepts an int (3), "v3", a 64-char version id,
+# or "current" / "previous" / "first"
 v = await client.versions.get("rst_abc", "current", site_id="site-1")
 
 # edit the description only (everything else on a published version is immutable)
@@ -251,11 +230,11 @@ await client.versions.patch(
     site_id="site-1", description="updated release notes",
 )
 
-# file listing (async gen)
+# file listing (async gen; prefix= filters by path prefix)
 async for f in client.versions.files("rst_abc", 3, site_id="site-1"):
     print(f["path"], f["size"], [c["hash"] for c in f["chunks"]])
 
-# diff two versions — `against` is the baseline; both sides accept any versionRef form
+# diff two versions — `against` is the baseline; both sides accept any version ref
 diff = await client.versions.diff(
     "rst_abc",
     "current",
@@ -264,39 +243,104 @@ diff = await client.versions.diff(
 )
 ```
 
-### keys
+the SDK puts `version_ref` into the URL path without encoding it, so use `3` or `"v3"` rather than `"#3"` there — a raw `#` starts a URL fragment. `target_version` and `against` are sent in the body and query string, where `"#3"` is safe. see [version IDs and refs](/docs/api/versions#version-ids-and-refs).
+
+### chunks — low-level data plane
+
+most users never touch these; `roosts.push()` is the high-level wrapper. when you need raw control (network shares, custom uploaders, reuse across roosts) the methods are here. hashes are bare lowercase SHA-256 hex, up to 1000 per call.
 
 ```python
-from roost import ApiKeyScope
+first_hash = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+second_hash = "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
 
-# legacy scoped key creation requires a session or Firebase ID token.
-# API-key callers should prefer client.account.api_keys.
-created = await client.keys.create(
-    name="ci publisher",
-    environment="live",
-    scopes=[
-        ApiKeyScope(resource="site",  id="site-1", permissions=["read"]),
-        ApiKeyScope(resource="roost", id="*",      permissions=["read", "write", "deploy"]),
-    ],
-    ttl_days=90,
-)
-print(created["key"])                         # owk_live_...  <-- once
+# dedup-check — returns the list of hashes that r2 is missing
+missing = await client.chunks.check(site_id="site-1", hashes=[first_hash, second_hash])
 
-# list returns typed ApiKeyRecord values
-for k in await client.keys.list():
-    print(k.id, k.key_prefix, k.environment)
+# mint signed r2 put urls (60 min ttl) — {"urls": {hash: put_url}, "expiresAt": "..."}
+payload = await client.chunks.upload_urls(site_id="site-1", hashes=missing)
+async with httpx.AsyncClient() as http:
+    for chunk_hash, url in payload.get("urls", {}).items():
+        await http.put(url, content=await chunk_bytes(chunk_hash))
 
-# edit scopes in place — the secret is untouched, and `scopes` replaces
-# the key's list outright rather than merging into it
-await client.keys.update(
-    created["id"],
-    scopes=[ApiKeyScope(resource="roost", id="*", permissions=["read", "write", "deploy"])],
+# mint signed r2 get urls (15 min ttl) — same shape
+downloads = await client.chunks.download_urls(site_id="site-1", hashes=[first_hash])
+
+# mount an existing chunk into a different roost (no re-upload)
+await client.chunks.mount(
+    first_hash, site_id="site-1", from_roost="rst_a", to_roost="rst_b",
 )
 
-# rotate (24h grace) + revoke
-await client.keys.rotate(created["id"], ttl_days=90)
-await client.keys.revoke(created["id"])
+# which roosts reference this chunk? (async gen)
+async for ref in client.chunks.referrers(first_hash, site_id="site-1"):
+    print(ref["roostId"], ref["versionId"])
 ```
+
+### hoot
+
+```python
+conversation = await client.chat.new(
+    site_id="site-1",
+    machine_id="machine-a7f3",               # omit for a site-wide conversation
+    title="diagnostics",
+)
+
+page = await client.chat.list(site_id="site-1", page_size=10)
+for c in page["conversations"]:              # list[ConversationSummary]
+    print(c.conversation_id, c.title)
+
+async for delta in client.chat.send(
+    conversation["conversationId"],
+    "summarize machine health",
+):
+    print(delta, end="", flush=True)
+
+await client.chat.rename(conversation["conversationId"], "lobby diagnostics")
+await client.chat.delete(conversation["conversationId"])
+```
+
+the SDK calls the canonical `/api/hoot/conversations` routes. a send carries only `role` and `content`; leave `role` at its default `"user"` — the server refuses anything else. a non-2xx send raises `RoostApiError`, and a `3:` error frame raises `RuntimeError` mid-iteration. API-key callers are capped to read-only hoot tools during streamed replies.
+
+<Callout type="warning" title={"chat.send() reads the older frame format"}>
+
+the 1.0.0rc0 stream parser understands only line-prefixed `0:"…"` / `3:"…"` frames. replies that run server-side — every API-key caller — arrive as AI SDK UI-message lines (`data: {"type":"text-delta",…}`), which it skips, so the iterator ends without yielding anything. a `3:` error before the model starts is still raised. until the parser is updated, read the response yourself as shown in [stream format](/docs/api/hoot#stream-format), or use [`owlette chat send`](/docs/cli/reference/chat#send).
+
+</Callout>
+
+### keys
+
+`client.keys` wraps `/api/keys`, which takes a signed-in session or a Firebase ID token as the bearer token — an API key cannot create, list, edit, rotate, or revoke keys. open a separate `Roost` with that token for these calls.
+
+```python
+from roost import ApiKeyScope, Roost
+
+async with Roost(token=firebase_id_token) as admin:
+    created = await admin.keys.create(
+        name="ci publisher",
+        scopes=[
+            ApiKeyScope(resource="site",  id="site-1", permissions=["write"]),
+            ApiKeyScope(resource="roost", id="*",      permissions=["read", "write", "deploy"]),
+        ],
+        ttl_days=90,                              # 1-365, default 90
+    )
+    print(created["key"])                         # owk_live_...  <-- once
+
+    # list returns typed ApiKeyRecord values
+    for k in await admin.keys.list():
+        print(k.id, k.key_prefix, k.expires_at)
+
+    # edit scopes in place — the secret is untouched, and `scopes` replaces
+    # the key's list outright rather than merging into it
+    await admin.keys.update(
+        created["keyId"],
+        scopes=[ApiKeyScope(resource="roost", id="*", permissions=["read", "write", "deploy", "rollback"])],
+    )
+
+    # rotate: a new secret now, the old one keeps working for 24h
+    rotated = await admin.keys.rotate(created["keyId"], ttl_days=90)
+    await admin.keys.revoke(rotated["keyId"])
+```
+
+`create()` still sends `environment` (default `"live"`) because older builds did; the server ignores it and mints a `live` key.
 
 ### sites / machines / quotas
 
@@ -316,8 +360,54 @@ deploys = await client.machines.deployments("site-1", "machine-a7f3")
 quota = await client.quotas.current("site-1")
 print(quota.used_bytes, "/", quota.limit_bytes)
 
-history = await client.quotas.history("site-1", period="30d")
+history = await client.quotas.history("site-1", period="30d")   # dict: {siteId, period, days, daily}
 ```
+
+### machine commands
+
+```python
+# queue a command — returns {"commandId": ..., "status": ...}
+queued = await client.machines.dispatch_command(
+    "site-1", "machine-a7f3", "reboot_machine", {"delay_seconds": 60},
+)
+status = await client.machines.get_command("site-1", "machine-a7f3", queued["commandId"])
+
+# dispatch + poll + download in one call — returns the PNG bytes
+png = await client.machines.capture_screenshot(
+    "site-1", "machine-a7f3",
+    monitor="primary",                       # "all" | "primary" | 0-based index
+    timeout_seconds=60.0,                    # default — polls every 1.5s, at most 40 times
+    download_to="lobby.png",                 # optional — also writes the file
+)
+```
+
+`dispatch_command()` is typed to `reboot_machine`, `shutdown_machine`, and `capture_screenshot`. `capture_screenshot()` raises `TimeoutError` when the agent never reports back and `RuntimeError` when it reports a failure. a completed screenshot's `screenshot_url` is a fresh signed URL on every `get_command()` read — don't cache it.
+
+### processes
+
+```python
+procs = client.processes("site-1", "machine-a7f3")
+
+for p in await procs.list():                 # list[ProcessRecord]
+    print(p.process_id, p.name, p.status)
+
+created = await procs.create(
+    name="lobby td",
+    exe_path=r"C:\Program Files\Derivative\TouchDesigner\bin\TouchDesigner.exe",
+    launch_mode="always",                    # "off" | "always" | "scheduled"
+)
+process_id = created["processId"]
+
+await procs.schedule(
+    process_id,
+    mode="scheduled",
+    blocks=[{"days": ["mon", "tue", "wed", "thu", "fri"], "ranges": [{"start": "09:00", "stop": "17:00"}]}],
+)
+await procs.start(process_id)                # returns {"commandId": ..., "status": "pending"}
+await procs.delete(process_id)
+```
+
+`create()` and `update()` take `name`, `exe_path`, `cwd`, `priority`, `visibility`, and `launch_mode`; `priority` and `visibility` only apply on Windows machines. the Python SDK has no `restart()` yet — call `stop()` then `start()`, or POST `.../processes/{process_id}/restart` through `client.http.request(...)`.
 
 ### webhooks
 
@@ -330,7 +420,7 @@ hook = await client.webhooks.subscribe(
 )
 print(hook["signingSecret"])
 
-# list returns typed WebhookSubscription values
+# list returns typed WebhookSubscription values (first page)
 for h in await client.webhooks.list(site_id="site-1"):
     print(h.id, h.url, h.events)
 
@@ -343,20 +433,67 @@ if deliveries["deliveries"]:
     await client.webhooks.retry_delivery(hook["id"], first["id"], "site-1")
 await client.webhooks.remove(hook["id"], site_id="site-1")
 
-# probe fires a signed test delivery
+# probe fires a signed test delivery at any url without creating a subscription
 await client.webhooks.probe(
     "site-1",
     "version.published",
     url="https://example.com/hooks/roost",
-    payload={"roostId": "rst_abc", "versionId": "vrs_xyz", "versionNumber": 7},
+    payload={"roostId": "rst_abc", "versionNumber": 7},
 )
 ```
+
+### members and users
+
+```python
+# per-site membership — roles are per site and leave the global role alone
+members = client.members("site-1")
+await members.list()                                       # list[Member]
+await members.add(email="ops@example.com", role="member")  # exactly one of uid / email
+await members.set_role("uid_123", "admin")
+await members.remove("uid_123")
+await members.transfer_ownership("uid_456")                # owner or superadmin only
+
+# platform users — superadmin only
+page = await client.users.list(role="admin", page_size=50)  # {"users": [...], "next_page_token": ...}
+await client.users.promote("uid_123", role="admin")
+await client.users.assign_sites("uid_123", ["site-1"])
+await client.users.delete("uid_123", successor_uid="uid_456")  # successor takes over owned sites
+```
+
+switch on `RoostApiError.code` for the stable failures: `cannot_change_owner_role`, `not_owner`, `last_superadmin`, `orphan_sites`, `successor_invalid`, `unknown_site`.
+
+### installer and installer deployments
+
+```python
+# installer versions — superadmin only
+latest = await client.installer.latest()     # InstallerVersion
+await client.installer.upload(
+    "./Owlette-Installer-v4.1.5.exe",        # .exe, .pkg or .deb
+    version="4.1.5",
+    set_as_latest=False,                     # default True
+)
+await client.installer.set_latest("4.1.5")
+
+# push a third-party installer to machines on a site
+created = await client.installer_deployments.create(
+    "site-1",
+    name="vlc 3.0.21",
+    installer_name="vlc-3.0.21-win64.exe",
+    installer_url="https://example.com/vlc-3.0.21-win64.exe",
+    silent_flags="/S",
+    machines=["machine-a7f3"],
+)
+detail = await client.installer_deployments.get("site-1", created["deploymentId"])
+await client.installer_deployments.retry("site-1", created["deploymentId"])
+```
+
+`upload()` reads the whole file, computes its SHA-256, requests a signed URL, PUTs the bytes, and finalizes; the platform comes from the file extension unless you pass `platform` (`windows_x64`, `macos_arm64`, `linux_x64`).
 
 ---
 
 ## push progress
 
-`client.roosts.push()` accepts an `on_progress` callback (sync or async). progress includes discovery/hash events, one check-missing event, upload events every 4 chunks or on completion, and publish events only on retry attempts.
+`client.roosts.push()` accepts an `on_progress` callback (sync or async). it fires `discover` once, `hash` before each file (plus a final one with an empty `file`), `check-missing` once, `upload` every 4 chunks and on the last one, and `publish` only when the publish is retried.
 
 ```python
 from roost import PushOptions
@@ -372,7 +509,7 @@ async def handle(evt: PushProgressEvent) -> None:
     elif evt.phase == "upload":
         print(f"{evt.uploaded}/{evt.total} chunks uploaded")
     elif evt.phase == "publish":
-        print(f"publishing version (attempt {evt.attempt})")
+        print(f"retrying publish (attempt {evt.attempt})")
 
 await client.roosts.push(
     "./dist", "rst_abc",
@@ -380,7 +517,7 @@ await client.roosts.push(
 )
 ```
 
-both plain `def` and `async def` callbacks work — the sdk auto-detects and awaits the latter. keep handlers cheap; they run inside the upload tight-loop.
+both plain `def` and `async def` callbacks work. an async callback is awaited for `check-missing` and `upload` events, and scheduled as a task for `discover`, `hash`, and `publish` events, so exceptions it raises there do not stop the push. keep handlers cheap; they run inside the upload loop.
 
 ### push options
 
@@ -392,35 +529,39 @@ class PushOptions:
     targets: list[str] | None = None         # optional — machine ids to retarget to on publish
     extract_path: str | None = None          # optional — on-disk extract root for the roost
     description: str | None = None           # optional — plaintext ≤500 chars, stored on the version doc
-    on_progress: Callable[[PushProgressEvent], None] | Callable[[...], Awaitable[None]] | None = None
-    ignore: Sequence[str] = ()               # extra glob patterns to skip during the file walk
+    on_progress: Callable[[PushProgressEvent], None] | Callable[[PushProgressEvent], Awaitable[None]] | None = None
+    ignore: Sequence[str] = ()               # extra file or directory names to skip (exact match)
 ```
 
-pass either a sync or async `on_progress`; the sdk auto-detects and awaits the latter.
+the walk always skips `.git` and `node_modules`, skips zero-byte files, and follows symlinks only when they resolve inside the directory. a directory with no non-empty files raises `ValueError` before any request.
 
-**retry on concurrent publish (412).** if another writer publishes between your `push()` starting and the version post, the sdk retries the final publish with the server-reported current version before raising `RoostApiError`. chunk uploads never re-run; they're content-addressed.
+**push is last-writer-wins.** the publish does not send `expectedCurrentVersionId`, so a version someone else published while you were uploading simply becomes your `previous_version_id`. on a `412` the SDK retries the publish up to 5 times before raising `RoostApiError`; chunk uploads never re-run — they're content-addressed. a push also always mints a new version, even when no file changed, because the version body records when and where it was built.
 
 ---
 
 ## webhook signature verification
 
-roost signs every webhook with `Roost-Signature: t=<unix_seconds>,v1=<hmac_sha256_hex>`. the sdk ships a verifier that enforces a 5-minute replay window and uses `hmac.compare_digest`:
+roost signs every webhook with `Roost-Signature: t=<unix_seconds>,v1=<hmac_sha256_hex>` (see [signature format](/docs/api/webhooks#signature-format)). the SDK ships a verifier that enforces a 5-minute replay window and compares with `hmac.compare_digest`:
 
 ```python
 import json
+import os
 
-from fastapi import Request, HTTPException
-from roost import verify_signature, is_signature_valid
+from fastapi import FastAPI, HTTPException, Request
+from roost import is_signature_valid, verify_signature
+
+app = FastAPI()
+secret = os.environ["WEBHOOK_SECRET"]
 
 @app.post("/hooks/roost")
 async def webhook(request: Request):
     raw = await request.body()               # MUST be raw bytes, not parsed json
     sig = request.headers.get("roost-signature")
-    result = verify_signature(sig, raw, secret=os.environ["WEBHOOK_SECRET"])
+    result = verify_signature(sig, raw, secret)
     if not result.ok:
         # result.reason:
-        # "missing_header" | "malformed_header" | "missing_timestamp" |
-        # "missing_v1" | "timestamp_out_of_tolerance" | "bad_signature"
+        # "missing_header" | "missing_timestamp" | "missing_v1" |
+        # "timestamp_out_of_tolerance" | "bad_signature"
         raise HTTPException(status_code=401, detail=result.reason)
     event = json.loads(raw)
     return await handle_event(event)
@@ -430,7 +571,9 @@ if not is_signature_valid(sig, raw, secret):
     raise HTTPException(401)
 ```
 
-**tolerance window** defaults to 300 seconds; override via `verify_signature(..., tolerance_seconds=600)`. more than 15 minutes is almost always a bug — either your clock is wrong or you're replaying.
+`VerifyReason` also lists `"malformed_header"`, but the parser never returns it: unparseable pairs are skipped and surface as `missing_timestamp` or `missing_v1`.
+
+**tolerance window** defaults to 300 seconds; override via `verify_signature(..., tolerance_seconds=600)` (`float("inf")` skips the check). more than 15 minutes is almost always a bug — either your clock is wrong or you're replaying.
 
 ### signing outbound (for tests)
 
@@ -438,7 +581,7 @@ if not is_signature_valid(sig, raw, secret):
 from roost import sign_body
 
 sig = sign_body(b'{"event":"version.published"}', secret="whsec_...")
-# → 't=1735689600,v1=ab12...'
+# → 't=1735689600,v1=ab12...'   (timestamp_seconds= pins the timestamp)
 ```
 
 ### frameworks
@@ -446,18 +589,18 @@ sig = sign_body(b'{"event":"version.published"}', secret="whsec_...")
 | framework    | raw-body access                                                              |
 |--------------|------------------------------------------------------------------------------|
 | fastapi      | `await request.body()` (shown above)                                         |
-| flask        | `request.get_data()` — set `app.config['REQUEST_BODY_PRESERVE'] = True`      |
+| flask        | `request.get_data()` — call it before reading `request.form`                 |
 | django       | `request.body` (bytes, already raw)                                          |
 | aiohttp      | `await request.read()`                                                       |
 | starlette    | `await request.body()`                                                       |
 
-never pass parsed json — json stringification is not byte-stable across libraries, and the hmac will not match.
+never pass parsed JSON — JSON stringification is not byte-stable across libraries, and the HMAC will not match.
 
 ---
 
 ## errors
 
-every 4xx/5xx response raises `RoostApiError` with structured fields pulled from the rfc 7807 problem+json body:
+every 4xx/5xx response from a wrapped call raises `RoostApiError` with structured fields pulled from the RFC 7807 problem+json body:
 
 ```python
 from roost import RoostApiError
@@ -469,42 +612,46 @@ except RoostApiError as err:
     print(err.code)                 # "not_found" — stable, machine-readable
     print(err.request_id)           # for support tickets
     print(err.problem)              # full problem+json dict
-    print(err.problem.get("docsUrl"))  # link to errors.md#<code>
+    print(err.problem.get("docsUrl"))  # https://owlette.app/docs/api/errors#<code>
     raise
 ```
 
-the sdk auto-retries `429` and `5xx` with exponential backoff + jitter, honoring the problem body's `retryAfter` seconds field when present. `401`, `403`, `404`, `412`, `422`, and other 4xxs bubble immediately — retrying them will never succeed.
+`capture_screenshot()`, `installer.upload()`, and the chunk uploads inside `push()` raise `RuntimeError` (or `TimeoutError`) for failures outside the API itself; client-side argument checks raise `ValueError`.
 
-**common codes** you'll hit early (full list: [errors.md](/docs/api/errors)):
+the SDK retries `429`, `5xx`, and `httpx.TransportError` (timeouts, connection resets) — 5 attempts, exponential backoff from 0.25s capped at 8s, ±25% jitter. on a `429` it waits the problem body's `retryAfter` seconds instead, capped at twice the max delay. `401`, `403`, `404`, `412`, `422`, and other 4xxs raise immediately — retrying them will never succeed. tune it with `RetryPolicy(max_attempts=..., base_delay_s=..., max_delay_s=..., jitter=...)`.
+
+**common codes** you'll hit early (full list: [errors](/docs/api/errors)):
 
 | code                       | status | when it fires                                                          |
 |----------------------------|--------|------------------------------------------------------------------------|
-| `scope_insufficient`       | 403    | api key doesn't carry the resource+permission for this call            |
+| `scope_insufficient`       | 403    | API key doesn't carry the resource+permission for this call            |
 | `token_expired`            | 401    | key hit its `expires_at` — rotate or mint a new one                    |
 | `idempotency_key_mismatch` | 422    | same key replayed with a different body                                |
-| `version_stale`            | 412    | someone else published between your read and write — re-push           |
+| `version_stale`            | 412    | a raw publish's `expectedCurrentVersionId` no longer matches the head  |
 | `version_not_found`        | 404    | `target_version` / `version_ref` didn't resolve against the roost      |
-| `rate_limited`             | 429    | see `retryAfter` — the sdk already honors it                           |
-| `unsupported_version`      | 400    | `roost_version` older than the minimum — update this package           |
+| `rate_limited`             | 429    | see `retryAfter` — the SDK already honors it                           |
+| `unsupported_version`      | 400    | `roost_version` isn't one the server accepts — update this package     |
 
 ---
 
 ## cancellation
 
-wrap any call in `asyncio.timeout()` or `asyncio.wait_for()` — the underlying `httpx.AsyncClient` respects python's cancellation protocol and raises `CancelledError` through the await chain:
+wrap any call in `asyncio.wait_for()` (or `asyncio.timeout()` on Python 3.11+) — the underlying `httpx.AsyncClient` respects Python's cancellation protocol and raises `CancelledError` through the await chain:
 
 ```python
-async with asyncio.timeout(30):
-    rows = [r async for r in client.roosts.list(site_id="site-1")]
+async def all_roosts():
+    return [r async for r in client.roosts.list(site_id="site-1")]
+
+rows = await asyncio.wait_for(all_roosts(), timeout=30)
 ```
 
-for `push()`, exceptions from awaited `on_progress` callbacks can propagate from `push()`.
+for `push()`, exceptions from awaited `on_progress` callbacks propagate from `push()`.
 
 ---
 
 ## typing
 
-the package ships a `py.typed` marker; mypy strict mode + pyright both resolve every public export. core workflow request/response shapes are typed dataclasses, while a few admin/debug endpoints intentionally return raw response envelopes.
+the package ships a `py.typed` marker and is checked with mypy in strict mode. core workflow request/response shapes are typed dataclasses, while admin and debug endpoints intentionally return raw response dicts.
 
 ```python
 from roost import (
@@ -519,15 +666,17 @@ from roost.resources.roosts import PushProgressEvent
 
 ## custom transport (proxy / mtls / tracing)
 
-pass an `httpx.AsyncBaseTransport` for proxies, client-cert auth, distributed tracing, or deterministic test mocks:
+pass an `httpx.AsyncBaseTransport` for proxies, client-cert auth, distributed tracing, or deterministic test mocks. it carries every API call and the R2 chunk uploads in `push()`; the screenshot download and the installer upload use their own one-shot clients.
 
 ```python
+import ssl
+
 import httpx
 from roost import Roost
 
 transport = httpx.AsyncHTTPTransport(
     proxy="http://corp-proxy.example.com:3128",
-    verify="/path/to/ca-bundle.pem",
+    verify=ssl.create_default_context(cafile="/path/to/ca-bundle.pem"),
 )
 async with Roost(token=..., transport=transport) as client:
     ...
@@ -541,7 +690,7 @@ def handler(request: httpx.Request) -> httpx.Response:
     assert request.headers["authorization"].startswith("Bearer owk_")
     return httpx.Response(200, json={"sites": []})
 
-async with Roost(token="owk_live_...", transport=httpx.MockTransport(handler)) as client:
+async with Roost(token="owk_live_xxxxxxxxxxxx", transport=httpx.MockTransport(handler)) as client:
     assert (await client.sites.list()) == []
 ```
 
@@ -549,11 +698,11 @@ async with Roost(token="owk_live_...", transport=httpx.MockTransport(handler)) a
 
 ## next steps
 
-- **[quickstart](/docs/api/quickstart)** - REST auth and machine-command smoke flow, useful before wiring SDK automation.
+- **[quickstart](/docs/api/quickstart)** — REST auth and machine-command smoke flow, useful before wiring SDK automation.
 - **[authentication](/docs/api/authentication)** — scope grammar, presets, rotation, revocation.
 - **[webhooks](/docs/api/webhooks)** — event catalog, retry model, signing secret lifecycle.
-- **[sdk workflow examples](/docs/api/examples/sdk-workflows)** — executable Node/Python samples and dev fixture env.
-- **[examples/nightly-sync.md](/docs/api/examples/nightly-sync)** — a realistic async batch job.
-- **[node sdk](/docs/api/sdk-node)** — typescript, same resource tree, same error codes.
+- **[SDK workflow examples](/docs/api/examples/sdk-workflows)** — runnable node/python samples and the dev fixture env.
+- **[nightly directory sync](/docs/api/examples/nightly-sync)** — a realistic scheduled batch job.
+- **[Node SDK](/docs/api/sdk-node)** — TypeScript, same resource tree, same error codes.
 
-the reference openapi spec is at [`web/openapi.yaml`](../../web/openapi.yaml). for endpoints not yet wrapped by a high-level helper, use `client.http.request(...)`.
+the [API reference](/docs/api) is rendered from the OpenAPI contract (raw JSON at `GET /api/openapi`). for endpoints not yet wrapped by a high-level helper, use `client.http.request(...)`.

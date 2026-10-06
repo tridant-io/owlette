@@ -1,10 +1,8 @@
 ---
 title: "roost"
-description: "roost is the dashboard surface for shipping project folders to Windows machines. It lives at /roosts and replaces the old project-distribution page with a content-addressed, versioned sync model."
-keywords: ["file sync", "touchdesigner", "push files", "sync a folder"]
+description: "roost ships project folders to Windows, macOS and Linux machines. it lives at /roosts, and every upload becomes an immutable, content-addressed version you can re-sync or roll back."
+keywords: ["file sync", "touchdesigner", "push files", "sync a folder", "project distribution", "copy files to machines", "extract path", "allowed_extract_roots"]
 ---
-
-roost is currently shown in the dashboard as a developer preview. The upload, storage, version history, target sync, re-sync, and rollback paths are present; automatic webhook events, in-flight agent cancellation, and post-reboot resume are still being hardened.
 
 ![roost list and detail](/docs-screens/roost.png)
 
@@ -22,81 +20,107 @@ browser
   -> agents download chunks, assemble files, and commit atomically
 ```
 
-The browser builds the version before anything is published. Each file entry records its relative path, size, and ordered chunk list. Re-uploading a folder with one changed file reuses existing chunk hashes and uploads only the missing chunks.
+the browser builds the version before anything is published. each file entry records its relative path, size and ordered chunk list. re-uploading a folder with one changed file reuses the existing chunks and uploads only what is missing.
 
-Version bodies are immutable. Publishing writes the version JSON to R2, derives a stable `versionId` from the canonical version content, and updates `sites/{siteId}/roosts/{roostId}` in a Firestore transaction. The roost doc stores the current pointer, previous pointer, version number, description, targets, extract path, and denormalized file/size totals.
+versions are immutable. publishing writes the version JSON to R2, derives a stable `versionId` from the canonical version content, and updates `sites/{siteId}/roosts/{roostId}` in a Firestore transaction. the roost document holds the current and previous version pointers, the version number, description, targets, extract path, and file and size totals.
 
-Targets receive `sync_pull` commands. The agent fetches a fresh signed URL for the version body, downloads any missing chunks, writes local crash-safe state to `C:\ProgramData\Owlette\sync-state.db`, assembles files under the extract path, and commits the result atomically.
+targets receive `sync_pull` commands. the agent fetches a fresh signed URL for the version body, downloads any missing chunks, keeps crash-safe local state in `sync-state.db` in its data directory, assembles the files under the extract path, and commits the result atomically.
+
+roost syncs on every platform the agent runs on; [on macOS and Linux](#on-macos-and-linux) covers where files may land there.
 
 ---
 
 ## creating a roost
 
-1. Open `roost` from the dashboard header.
-2. Click `new roost`.
-3. Enter a roost name and optional description.
-4. Leave source set to `upload files`.
-5. Drop a folder or browse for a folder/files.
-6. Choose an optional extract path.
-7. Select target machines.
-8. Click `upload and distribute`.
+1. open **roost** from the dashboard header.
+2. click **new roost**.
+3. enter a roost name and an optional description.
+4. drop a folder, or browse for a folder or files.
+5. choose an optional extract path.
+6. select target machines.
+7. click **upload and distribute to N machines**.
 
-The secondary `upload` action publishes a version without target machines. Use it when you want to store the version first, then add targets or re-sync later.
+**upload** publishes a version without sending it anywhere. use it to store the version first, then add targets or re-sync later.
 
-Before the upload starts, the dialog shows a size and target check. It estimates total bytes, warns when target disk capacity is unknown or insufficient, and blocks only hard failures. During upload, the dialog can be minimized; the floating upload card keeps showing hash, duplicate-check, upload, and finalize progress.
+before the upload starts, the dialog checks size and targets: it estimates the total bytes, warns when a target's free disk is unknown or too small, and blocks only hard failures. during the upload the dialog can be minimized; the floating upload card keeps showing hashing, duplicate-check, upload and finalize progress.
+
+a name that is already taken creates a separate roost under a new ID, and the dialog says so. to add a version to an existing roost, use **+ new version** on it instead.
 
 ### source and paths
 
-The primary source mode is `upload files`. Files are chunked and hashed locally in the browser. Empty files are skipped because the version schema requires at least one positive-size chunk per file.
+files are chunked and hashed in the browser. empty files are skipped, because a version needs at least one chunk per file.
 
-The extract path defaults to `~/Documents/Owlette/`. Absolute paths are allowed only when the agent's `agent_config.allowed_extract_roots` allowlist includes that destination. If the path looks outside the default root, the dialog shows the exact config block to add on the target machine.
+the extract path defaults to `~/Documents/Owlette/`. a relative path lands under `~/Documents/` (`projects/show1` becomes `~/Documents/projects/show1/`), and an absolute path is used as typed. the dialog shows what the path resolves to.
+
+the agent writes only inside its allowlist, `agent_config.allowed_extract_roots` in the machine's config. without one, each platform accepts its own default root:
+
+| platform | default root |
+|---|---|
+| Windows | the signed-in user's `Documents` folder |
+| macOS | `/Users/Shared/Owlette` |
+| Linux | `/var/lib/owlette/projects` |
+
+a path outside the root needs an allowlist entry on the target machine. when a path looks outside the Windows root, the dialog shows the exact config block to add and reminds you to restart the agent.
+
+---
+
+## on macOS and Linux
+
+- **the default path is mapped.** a Mac or Linux target receives the default `~/Documents/Owlette/` as its own platform's root, so a roost left on the default lands in `/Users/Shared/Owlette` or `/var/lib/owlette/projects`.
+- **other relative paths are not.** `~` resolves to the signed-in user's home, and anything under it is outside the default root, so a relative path needs an allowlist entry — or use an absolute path inside the platform's root, such as `/var/lib/owlette/projects/show1`. with nobody signed in, a `~` path is refused outright.
+- **the dialog's path check assumes Windows.** it warns about any path that is not allowed on Windows — a POSIX path such as `/opt/exhibit` reads as *not a path a Windows machine can use* — whatever the targets run. for a Mac or Linux target, check the path against that platform's root above instead.
+- **files belong to the signed-in user.** synced files are owned by the user at the machine's screen, and a script or program is made executable.
+
+see [platform support](/docs/reference/platform-support#roost).
 
 ---
 
 ## publishing new versions
 
-Open an existing roost and click `new version` from version history. The dialog title changes to `publish new version of "<name>"`; the name, extract path, and target machines stay locked to the current roost. Drop the replacement folder/files, add a description, then publish.
+open an existing roost and click **+ new version** from its version history. the dialog title becomes `publish new version of "<name>"`; the name, extract path and target machines stay locked to the roost. drop the replacement folder or files, add a description, then publish.
 
-Each publish creates a new immutable version and increments the roost-local version number (`v1`, `v2`, `v3`, ...). The version list shows the current marker, description, relative publish time, file count, size, and actions to copy the version id, view files, diff against current, edit description, or rollback.
+each publish creates a new immutable version and increments the roost's version number (`v1`, `v2`, `v3`, ...). the version list shows the current marker, description, relative publish time, file count and size, with actions to copy the version ID, view files, diff against current, edit the description, or roll back.
 
-Descriptions are mutable metadata. Version content is not. If the files or chunks need to change, publish another version.
+descriptions can be edited; version content cannot. to change files, publish another version.
 
 ---
 
 ## targets and status
 
-Targets are stored on the roost doc and shown in the detail panel. Adding a target from the panel updates the target list and automatically dispatches the current version to the newly added machines. Removing a target stops future roost dispatches to that machine, but it does not delete already written files from disk.
+targets are stored on the roost and shown in its detail panel. adding a target from the panel updates the list and sends the current version to the new machines at once. removing a target stops future dispatches to that machine; it does not delete files already written.
 
-Use `re-sync targets` after fixing a failed machine or when you want every target to pull the current version again. Re-sync clears stale `target_state` records for the roost, removes the previous rollout record for the current version, and queues fresh `sync_pull` commands for all current targets.
+use **re-sync targets** after fixing a failed machine, or whenever every target should pull the current version again. re-sync clears stale `target_state` records for the roost, removes the previous rollout record for the current version, and queues fresh `sync_pull` commands for all current targets.
 
 | target state | dashboard label | meaning |
 | --- | --- | --- |
-| `pending` | queued | Command accepted or target has not reported progress yet |
-| `downloading` | downloading | Agent is fetching missing chunks; chunk counts may be shown |
-| `assembling` | assembling | Agent is rebuilding files under the extract path |
-| `committed` | synced | Files were assembled and atomically committed |
-| `failed` | failed | Agent reported an error; the message is shown in the target row tooltip |
-| `cancelled` | cancelled | Sync was cancelled before commit |
+| `pending` | queued | command accepted, or the target has not reported progress yet |
+| `downloading` | downloading | the agent is fetching missing chunks; chunk counts may show |
+| `assembling` | assembling | the agent is rebuilding files under the extract path |
+| `committed` | synced | files were assembled and committed atomically |
+| `failed` | failed | the agent reported an error; the message is in the target row's tooltip |
+| `cancelled` | cancelled | the sync was cancelled before commit |
 
-Collapsed rows roll those states up as `synced`, `syncing`, `partial`, `queued`, `failed`, or `no targets`. A report for an older version is treated as awaiting the current version so the row does not show stale success.
+collapsed rows roll these up as `synced`, `syncing`, `partial`, `queued`, `failed` or `no targets`. a report for an older version counts as awaiting the current one, so a row never shows stale success.
 
 ---
 
 ## rollback
 
-Rollback flips the roost's current pointer back to an existing version; it does not create a new version. The rollback API accepts version aliases such as `previous`, `current`, `first`, numeric versions such as `3` or `v3`, and stable version ids.
+rollback moves the roost's current pointer back to an existing version; it does not create a new one. the rollback API accepts aliases such as `previous`, `current` and `first`, numbers such as `3` or `v3`, and version IDs.
 
-After rollback, the roost doc changes `currentVersionId`, `currentVersionNumber`, `previousVersionId`, totals, and version URL. The same target fan-out path handles machines pulling the older version. If a target does not move after rollback, use `re-sync targets`.
+after a rollback the roost document's `currentVersionId`, `currentVersionNumber`, `previousVersionId`, totals and version URL change, and the route queues `sync_pull` commands so every target pulls the older version. if a target does not move, use **re-sync targets**.
 
-Rollback is rejected when the selected version is already current. If the version metadata exists but the version body has been reclaimed from storage, file view, diff, or rollback cannot use that body.
+rollback is refused when the selected version is already current. if a version's metadata exists but its body has been reclaimed from storage, file view, diff and rollback cannot use it.
+
+publishing and rolling back send the `version.published` and `version.rolled_back` [webhook](/docs/api/webhooks) events to subscribed endpoints.
 
 ---
 
 ## presets
 
-The `presets` row in `new roost` stores reusable source/path settings. Built-in presets can be applied but are not edited in place. Custom presets can be created, renamed, deleted, and replaced.
+the **presets** row in **new roost** stores reusable path settings. built-in presets can be applied but not edited. custom presets can be created, renamed, deleted and replaced.
 
-When a custom preset is active, edits to the saved URL and extract path autosave after a short debounce. The inline status changes from `autosaves` to `saving...` to `saved`. Presets do not save dropped files, version descriptions, selected targets, or published versions.
+while a custom preset is active, edits to its extract path save on their own after a short pause; the status reads **autosaves**, then **saving...**, then **saved**. presets do not save dropped files, descriptions, selected targets or versions.
 
 ---
 
@@ -104,49 +128,49 @@ When a custom preset is active, edits to the saved URL and extract path autosave
 
 ### chunk upload failures
 
-- If upload stalls during `checking for duplicates`, the browser could not complete the chunk-presence check. Refresh and retry after confirming the site is selected and the session is still authenticated.
-- If upload stalls during `uploading`, one or more signed R2 PUTs failed. The upload queue retries with backoff; after the retry cap, the upload fails with the failed chunk count.
-- Reopen the same roost and drop the same folder/files to resume. The IndexedDB queue is keyed by site and roost, so already succeeded chunks are skipped and in-flight chunks replay.
-- Clearing browser site data removes the IndexedDB queue. The next attempt still dedupes against R2, but the browser no longer knows which local queue tasks had already succeeded.
+- an upload stuck on **checking for duplicates** means the browser could not finish the chunk-presence check. refresh and retry after confirming the site is selected and you are still signed in.
+- an upload stuck on **uploading** means one or more signed R2 PUTs failed. the queue retries with backoff; past the retry cap, the upload fails with the failed chunk count.
+- reopen the same roost and drop the same folder or files to resume. the browser keeps an IndexedDB queue per site and roost, so chunks that already succeeded are skipped and in-flight ones replay.
+- clearing the browser's site data removes that queue. the next attempt still skips chunks R2 already holds, but the browser no longer knows which of its own tasks finished.
 
 ### R2 or signed URL issues
 
-- Server-side R2 access requires `R2_S3_ENDPOINT`, `R2_S3_ACCESS_KEY_ID`, and `R2_S3_SECRET_ACCESS_KEY`.
-- A finalize error that says chunks are missing means the version references hashes that are not present in R2. Retry the upload so `/api/chunks/upload-urls` can mint fresh PUT URLs for the missing hashes.
-- Agent download errors can come from expired or rejected signed URLs. The agent asks the web API for fresh version and chunk URLs during `sync_pull`; check API auth and R2 credentials if those requests fail.
-- A `version body gone` response means version metadata still exists but the R2 version body cannot be read.
+- the server needs `R2_S3_ENDPOINT`, `R2_S3_ACCESS_KEY_ID` and `R2_S3_SECRET_ACCESS_KEY` to reach R2.
+- a finalize error saying chunks are missing means the version references hashes R2 does not hold. retry the upload so `/api/chunks/upload-urls` can mint fresh PUT URLs for them.
+- agent download errors can come from expired or rejected signed URLs. the agent asks the API for fresh version and chunk URLs during `sync_pull`; check API auth and R2 credentials if those requests fail.
+- `version body gone` means the version's metadata exists but its body in R2 cannot be read.
 
 ### IndexedDB queue recovery
 
-During upload, tasks are persisted in browser IndexedDB. On restart, any `in_flight` task is demoted back to `pending` and retried. Recovery requires the same browser profile, same site, same roost id, and the same local files so chunk hashes match.
+during an upload, tasks are kept in the browser's IndexedDB. on restart, any in-flight task goes back to pending and is retried. recovery needs the same browser profile, site, roost and local files, so the chunk hashes match.
 
-If recovery keeps failing, cancel the upload, clear the selected files, reselect the folder, and start again. Because chunks are content-addressed, chunks already present in R2 should still be skipped by the check phase.
+if recovery keeps failing, cancel the upload, clear the selected files, reselect the folder and start again. chunks already in R2 are still skipped.
 
-### manifest creation and publish failures
+### publish failures
 
-- roost cannot publish an empty version. If every selected file is zero bytes or rejected by path sanitization, add at least one non-empty file.
-- Chunk hashes must be lowercase 64-character SHA-256 hex strings. Hashes with prefixes or uppercase characters are invalid.
-- Publish verifies every referenced chunk exists before the Firestore pointer changes. Missing chunks return a precondition failure.
-- Concurrent publishes can conflict when the expected current version no longer matches the roost head. Reopen the roost, confirm the new current version, and publish again.
+- roost cannot publish an empty version. if every selected file is zero bytes or rejected by path sanitization, add at least one non-empty file.
+- chunk hashes must be lowercase 64-character SHA-256 hex. prefixes or uppercase characters are invalid.
+- publishing checks that every referenced chunk exists before the pointer changes; missing chunks return a precondition failure.
+- two publishes at once can conflict when the expected current version no longer matches. reopen the roost, check the new current version, and publish again.
 
 ### agent assembly or commit failures
 
-- Check the target row's error tooltip first; full detail remains in the agent log and local sync state.
-- Confirm the machine is online and running an agent build with `sync_pull` support.
-- Confirm the extract path is inside the agent allowlist.
-- Check available disk space on the destination volume.
-- If downloads succeed but assembly fails, fix the path, permission, or disk issue, then use `re-sync targets`.
-- If a newly published version is bad, rollback to the previous version and let targets pull the older content.
+- check the target row's error tooltip first; the full detail is in the agent log and its local sync state.
+- confirm the machine is online and running an agent with `sync_pull` support.
+- confirm the extract path is inside the machine's allowlist — on a Mac or Linux machine, against that platform's root (see [on macOS and Linux](#on-macos-and-linux)).
+- check free space on the destination volume.
+- if downloads succeed but assembly fails, fix the path, permission or disk issue, then **re-sync targets**.
+- if a new version is bad, roll back to the previous one and let targets pull it.
 
 ### rollback does not move targets
 
-- Confirm the selected rollback target is not already current.
-- Confirm the older version body still exists in R2.
-- Check whether the row shows an old target report. A target report for a prior current version is treated as awaiting agent work for the new pointer.
-- Use `re-sync targets` to queue fresh `sync_pull` commands after correcting the storage, auth, or agent issue.
+- confirm the selected version is not already current.
+- confirm the older version's body still exists in R2.
+- check whether the row shows an old target report: a report for the previous current version counts as awaiting work.
+- **re-sync targets** queues fresh `sync_pull` commands after you fix the storage, auth or agent issue.
 
 ---
 
 ## legacy URL distribution
 
-Removed. The legacy by-URL distribution path — the dialog's `by url` source, the `/api/sites/{siteId}/project-distributions` routes, and the agent's `distribute_project` command — no longer exists. roost is the only distribution system: upload a folder on `/roosts`.
+removed. the old by-URL distribution path — the dialog's `by url` source, the `/api/sites/{siteId}/project-distributions` routes and the agent's `distribute_project` command — no longer exists. roost is the only distribution system: upload a folder on `/roosts`.

@@ -1,96 +1,177 @@
 ---
 title: "chat"
-description: "owlette chat drives hoot ai conversations from the terminal. site-scoped (every verb requires --site), with optional machine narrowing on new. tier: ready — all five verbs currently call the /api/cortex/conversations/* compatibility aliases; /api/hoot/conversations/* is the canonical family and /api/chat/* is an older alias set."
+description: "chat starts, lists, sends to, renames and deletes hoot conversations from the terminal. new and list take --site; send, rename and delete take a conversation ID, and the server finds the site from it."
+keywords: ["AI assistant", "LLM", "prompt"]
 ---
 
-mutations carry an auto-generated `Idempotency-Key` so a network retry never double-creates, double-deletes, or double-renames. `send` streams the assistant reply to stdout as deltas arrive (ai-sdk v3 line-prefixed protocol).
+verbs:
+
+- [`chat new`](#new) — start a conversation on a site, optionally pinned to one machine
+- [`chat list`](#list) — list conversations on a site
+- [`chat send`](#send) — send a message and stream the reply to stdout
+- [`chat delete`](#delete) — soft-delete a conversation
+- [`chat rename`](#rename) — set a conversation's title
+
+every mutation sends an `Idempotency-Key` (default `cli-chat-<verb>-<uuid>`). if a mutation fails before a response arrives, the CLI prints the key and the exact `--idempotency-key` to re-run with, so the retry cannot create, delete or rename twice.
 
 ---
 
-## verbs
+## new
 
-### new
-
-start a new conversation.
+starts a conversation. without `--machine` it is site-wide — hoot's tools fan out across every online machine on the site; with `--machine`, every turn is pinned to that machine.
 
 ```bash
 owlette chat new --site <siteId> [--machine <machineId>] [--title <title>] [--idempotency-key <key>]
 ```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site to scope the conversation to |
-| `--machine <machineId>` | no | narrow to a single machine (omit for site-wide) |
-| `--title <title>` | no | human-readable title (hoot auto-titles otherwise) |
-| `--idempotency-key <key>` | no | override the auto-generated `cli-chat-new-<uuid>` |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site the conversation belongs to |
+| `--machine <machineId>` | string | no | pin the conversation to one machine |
+| `--title <title>` | string | no | title for the conversation |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header (default `cli-chat-new-<uuid>`) |
 
-backing endpoint: `POST /api/cortex/conversations`. emits `{ conversationId, siteId, machineId, title }` on success.
+human mode prints `conversationId`, `siteId`, `machineId` (`(site-wide)` when unset) and `title`. `--json` prints the conversation: `conversationId`, `title`, `siteId`, `machineId` (only when set), `ownerUid`, `createdAt`, `updatedAt`, `messageCount` and `messages`.
 
-### list
-
-cursor-paged conversation list for a site.
+### examples
 
 ```bash
-owlette chat list --site <siteId> [--limit <n>] [--cursor <token>]
+owlette chat new --site site-1 --title "lobby wall audit"
 ```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site to list conversations for |
-| `--limit <n>` | no | page size, integer 1–100 (default 25) |
-| `--cursor <token>` | no | opaque `page_token` from a prior response |
+```bash
+# capture the id for the next command
+id=$(owlette --json chat new --site site-1 --machine m_lobby_01 | jq -r '.conversationId')
+```
 
-backing endpoint: `GET /api/cortex/conversations?siteId=&page_size=&page_token=`. tabular output renders `conversationId | title | machine | messages | updatedAt`; `--json` emits `{ conversations, nextPageToken }`.
+backing: `POST /api/hoot/conversations` with body `{ siteId, machineId?, title? }`.
 
-### send
+---
 
-append a message and stream the assistant reply to stdout.
+## list
+
+lists conversations on a site, one page per run.
+
+```bash
+owlette chat list --site <siteId> [--limit <n>] [--cursor <token>] [--json]
+```
+
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site to list |
+| `--limit <n>` | integer 1–100 | no | page size; the server default is 25 |
+| `--cursor <token>` | string | no | `nextPageToken` from an earlier page |
+
+the table has `conversationId`, `title`, `machine`, `messages` and `updatedAt`, or prints `(no conversations)`. when more pages remain it ends with `next page: --cursor <token>`. `--json` prints `{ "conversations": [...], "nextPageToken": "<token or empty>" }`.
+
+### examples
+
+```bash
+owlette chat list --site site-1
+```
+
+```bash
+owlette chat list --site site-1 --limit 50 --cursor "$token"
+```
+
+backing: `GET /api/hoot/conversations?siteId=&page_size=&page_token=`.
+
+---
+
+## send
+
+appends your message and streams hoot's reply to stdout as it arrives, then prints a newline.
 
 ```bash
 owlette chat send <conversationId> <message> [--idempotency-key <key>]
 ```
 
-text deltas (ai-sdk frame `0:"…"`) are flushed to stdout as they arrive so users see the model think rather than wait for the full reply. error frames (`3:"…"`) are surfaced on stderr and set exit 1. with `--json` the cli buffers the full reply and emits `{ conversationId, content }` once at the end.
+| flag | type | required | description |
+|---|---|---|---|
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header (default `cli-chat-send-<uuid>`); sent for tracing only — the server does not cache streamed replies |
 
-backing endpoint: `POST /api/cortex/conversations/{conversationId}` (AI-SDK text stream). idempotency-key is sent for replay safety even though the server skips its cache for streamed responses.
+the server streams AI SDK UI-message server-sent events; the CLI prints each `text-delta` and ignores tool and end frames. it also reads the older line protocol (`0:"<text>"`, `3:"<error>"`). an error frame prints `owlette: hoot error — <detail>` on stderr and sets exit `1`. with `--json` the CLI collects the whole reply and prints `{ "conversationId": "...", "content": "..." }` once at the end.
 
-### delete
+because the reply is not cached, a send that fails before a response arrives may or may not have been appended. the CLI says so and does not suggest a retry key — check the conversation before sending again.
 
-soft-delete a conversation (recoverable for 30 days).
+### examples
+
+```bash
+owlette chat send "$id" "which machines restarted touchdesigner in the last hour?"
+```
+
+```bash
+owlette --json chat send "$id" "summarise today's errors" | jq -r '.content'
+```
+
+backing: `POST /api/hoot/conversations/{conversationId}` with body `{ role: "user", content }`. see [stream format](/docs/api/hoot#stream-format) for the frames.
+
+---
+
+## delete
+
+soft-deletes a conversation: it is marked deleted and leaves `chat list`. there is no restore verb.
 
 ```bash
 owlette chat delete <conversationId> [--yes] [--idempotency-key <key>]
 ```
 
-interactive `[y/N]` prompt by default. `--yes` skips it. when stdin is not a tty and `--yes` was not supplied, the cli refuses rather than delete silently.
+| flag | type | required | description |
+|---|---|---|---|
+| `--yes` | boolean | no | skip the `[y/N]` prompt; required when stdin is not a tty |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header (default `cli-chat-delete-<uuid>`) |
 
-backing endpoint: `DELETE /api/cortex/conversations/{conversationId}`. responses include `alreadyDeleted: true` when the conversation was already tombstoned (still exit 0).
+answering anything but `y` prints `delete cancelled` and exits `0`. deleting an already-deleted conversation succeeds and prints `was already deleted`. `--json` prints `{ "conversationId": "...", "alreadyDeleted": false }`.
 
-### rename
+### examples
 
-set a new title on a conversation.
+```bash
+owlette chat delete "$id"
+```
+
+```bash
+owlette chat delete "$id" --yes
+```
+
+backing: `DELETE /api/hoot/conversations/{conversationId}`.
+
+---
+
+## rename
+
+sets a conversation's title.
 
 ```bash
 owlette chat rename <conversationId> <title> [--idempotency-key <key>]
 ```
 
-backing endpoint: `PATCH /api/cortex/conversations/{conversationId}` with body `{ title }`.
+| flag | type | required | description |
+|---|---|---|---|
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header (default `cli-chat-rename-<uuid>`) |
+
+`--json` prints `{ "conversationId": "...", "title": "..." }`.
+
+### examples
+
+```bash
+owlette chat rename "$id" "lobby wall audit, october"
+```
+
+backing: `PATCH /api/hoot/conversations/{conversationId}` with body `{ title }`.
 
 ---
 
 ## exit codes
 
-- `0` — success
-- `1` — generic error (network, 5xx, malformed stream, upstream hoot error, bad `--limit`, missing required flag, non-tty without `--yes`)
-- `2` — usage error (no token)
+- `0` — success, including a declined delete prompt and an already-deleted conversation
+- `1` — network failure, a non-2xx response, an empty stream body, a hoot error frame during `send`, or a missing `--site`
+- `2` — `--limit` outside 1–100, `delete` without `--yes` when stdin is not a tty, or no token configured
 
 ---
 
 ## notes
 
-- **scope**: site-scoped on every verb; `new` accepts an optional `--machine` for single-machine hoot sessions.
-- **tier**: ready (public-api Wave 2.9).
-- **streaming**: only `send` streams. `new`/`list`/`delete`/`rename` are simple json round-trips.
-- **idempotency**: every mutation auto-generates a unique key; pass `--idempotency-key` to deduplicate across script-level retries.
-- **soft-delete**: `delete` is reversible for 30 days via the dashboard. there is no hard-delete verb on the cli.
-- **see also**: hoot API docs at [docs/api/hoot.md](/docs/api/hoot); per-machine context is fetched server-side from the machine's last heartbeat and process snapshot.
+- **scope**: `new` needs `chat=<siteId>:write` and `list` needs `chat=<siteId>:read`; `send`, `rename` and `delete` need `chat=<siteId>:write` on the conversation's site and work only for the conversation's owner or a superadmin — anyone else gets `404`
+- **routes**: the CLI calls the canonical `/api/hoot/conversations` family. `/api/cortex/conversations` and `/api/chat` are compatibility aliases for the same handlers
+- **JSON**: the server wraps responses in `{ ok, data }`; the CLI prints only `data`
+- **related**: [hoot API](/docs/api/hoot) for the conversation routes and stream format

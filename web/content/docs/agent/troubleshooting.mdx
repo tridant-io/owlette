@@ -1,43 +1,64 @@
 ---
 title: "agent troubleshooting"
-description: "Common issues and how to resolve them."
+description: "where the agent's logs are on Windows, macOS and Linux, how to run it in the foreground, how to start and stop the service, and fixes for the common problems."
+keywords: ["logs", "log file", "service.log", "journalctl", "launchctl", "systemctl", "service not running", "not connecting", "offline", "debug", "re-pair", "screen recording", "accessibility", "selfcheck"]
 ---
 
 ---
 
 ## log locations
 
-Logs live in two trees. The service and everything it launches write machine-wide under `%PROGRAMDATA%\Owlette\logs\`; the desktop app writes per-user.
+logs live in two trees. the service and everything it launches write machine-wide under `logs/` in the data root; the desktop app writes per-user.
 
-### machine-wide — `C:\ProgramData\Owlette\logs\`
+| platform | machine-wide logs |
+|----------|-------------------|
+| Windows | `C:\ProgramData\Owlette\logs\` |
+| macOS | `/Library/Application Support/Owlette/logs/` |
+| Linux | `/var/lib/owlette/logs/` |
 
-| log | file | contents |
-|-----|------|----------|
-| **Service** | `service.log` | Main service operations, Firebase sync, command execution |
-| **Service stdout** | `service_stdout.log` | The service runner's stdout, captured verbatim by owlette-host |
-| **Service stderr** | `service_stderr.log` | The service runner's stderr, captured verbatim by owlette-host — interpreter-level tracebacks that never reach the logger land here |
-| **Service host** | `service_host.log` | owlette-host's own narration — service registration, agent spawns, exit codes, restart backoff, stop escalations |
-| **hoot** | `cortex.log` | hoot runtime and CLI fetch. Only written when hoot is enabled. |
-| **Pairing** | `pairing_debug.log` | Device-code pairing and token setup |
-| **Token exchange** | `oauth_debug.log` | Every registration-code → token exchange: the URL called, and the response status and headers. Response bodies are never written — they carry tokens. |
-| **Self-update installer** | `installer_update.log` | Inno Setup log written during remote agent updates |
-| **Defender setup** | `defender_setup.log` | The installer's Defender-exclusion retraction step (removes the exclusions pre-PawnIO versions added) — one entry per install |
-| **roost scrub reports** | `roost_scrub_reports\` | One JSON report per roost integrity scrub |
-| **Interactive installer** | Path passed with `/LOG=...` | Inno Setup log for manual installs; no fixed ProgramData installer log is written by default |
+the app menu's **logs** item opens this folder on every platform, and on Windows so does the Start menu's **View Logs** shortcut.
 
-Main shared-logger files use rotating file handlers: 10 MB per file, 5 backups. owlette-host rotates the three files it writes by size, keeping exactly one `.1` sibling each: 10 MB for `service_stdout.log` and `service_stderr.log`, 2 MB for `service_host.log`. `tmp/status_writer.log` rotates at 100 KB with 2 backups, and `pairing_debug.log` uses plain writes — truncated at the start of each pairing run, while `oauth_debug.log` appends across runs rather than rotating. Old main logs are auto-deleted after 90 days by default.
+### machine-wide
 
-### per-user — `%LOCALAPPDATA%\app.owlette.desktop\logs\`
+| log | file | platforms | contents |
+|-----|------|-----------|----------|
+| **service** | `service.log` | all | main service operations, Firebase sync, command execution |
+| **service host** | `service_host.log` | Windows | owlette-host's own narration — service registration, agent spawns, exit codes, restart backoff, stop escalations |
+| **service stdout / stderr** | `service_stdout.log`, `service_stderr.log` | Windows | the service runner's raw output, captured verbatim by owlette-host — interpreter-level tracebacks that never reach the logger land in stderr |
+| **daemon output** | `launchd-agent.log` | macOS | the same raw output on a Mac: the daemon's stdout and stderr, as launchd writes them |
+| **daemon output** | `journalctl -u owlette-agent` | Linux | not a file: systemd keeps the service's raw output in the journal |
+| **hoot** | `cortex.log` | all | hoot runtime and CLI fetch. only written when hoot is enabled |
+| **pairing** | `pairing_debug.log` | all | device-code pairing and token setup |
+| **preseed pairing** | `pairing.log` | macOS, Linux | the background pairing a [pairing preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux) starts at install |
+| **token exchange (legacy)** | `oauth_debug.log` | all | written only by the old registration-code exchange, which phrase pairing does not use, so a current agent leaves it absent or stale. response bodies were never written — they carry tokens |
+| **app requests** | `privileged_requests.log` | macOS, Linux | an audit row for every request the desktop app made of the service — pair, leave, restart, reboot, bug report — and whether it ran |
+| **self-update installer** | `installer_update.log` | Windows | the Inno Setup log written during a remote agent update |
+| **self-update installer** | `update_installer.log` | macOS | what `installer` printed while it applied an update |
+| **self-update installer** | `journalctl -u owlette-update` | Linux | not a file: the transient unit apt-get runs in during an update |
+| **defender setup** | `defender_setup.log` | Windows | the installer's Defender-exclusion retraction step (removes the exclusions pre-PawnIO versions added) — one entry per install |
+| **roost scrub reports** | `roost_scrub_reports/` | all | one JSON report per roost integrity scrub |
+| **swoop streamer** | `swoop/swoop.log` | Windows, macOS | the [swoop](/docs/dashboard/swoop) streamer's own log, with its raw stderr beside it — see below |
+| **interactive installer** | `Setup Log <date> #NNN.txt` in the installing user's `%TEMP%` | Windows | the Inno Setup log of a manual install, written on every run and not in the data root; `/LOG="<path>"` writes it to a path you choose instead |
 
-| log | file | contents |
-|-----|------|----------|
-| **Desktop app** | `owlette-desktop.log` | The window and the tray icon — startup, status polling, service control, and pairing dialogs |
+main shared-logger files use rotating file handlers: 10 MB per file, 5 backups. owlette-host rotates the three files it writes by size, keeping exactly one `.1` sibling each: 10 MB for `service_stdout.log` and `service_stderr.log`, 2 MB for `service_host.log`. `tmp/status_writer.log` rotates at 100 KB with 2 backups, and `pairing_debug.log` uses plain writes — truncated at the start of each pairing run, while `oauth_debug.log` appends across runs rather than rotating. old main logs are deleted after 90 days by default (`logging.max_age_days`).
 
-This one is **per-user**: it belongs to whoever the app runs as, typically the machine's auto-login account, not the `LocalSystem` account the service runs as. It rotates at 4 MB and keeps 4 files (`owlette-desktop_<date>.log`), and its timestamps are local time, so they line up with `service.log` — a field report usually wants both.
+### the swoop streamer log
+
+the streamer writes `logs/swoop/swoop.log` itself, on the platforms that host swoop: 4 MB per file, 3 files, so the folder never passes 12 MB. it logs at info by default. set `logging.level` to `DEBUG` in `config.json` and the next session's streamer also logs its per-frame counters — the streamer reads the agent's own setting and has no switch of its own. nothing that touches a bundle, token, key or viewer token is ever written to it.
+
+### per-user — the desktop app
+
+| platform | file |
+|----------|------|
+| Windows | `%LOCALAPPDATA%\app.owlette.desktop\logs\owlette-desktop.log` |
+| macOS | `~/Library/Logs/app.owlette.desktop/owlette-desktop.log` |
+| Linux | `~/.local/share/app.owlette.desktop/logs/owlette-desktop.log` (under `$XDG_DATA_HOME` when that is set) |
+
+the app's log covers the window and the tray icon — startup, status polling, service control, pairing dialogs, and on macOS and Linux the jobs it runs for the service. it belongs to whoever the app runs as, typically the machine's auto-login account, not the account the service runs as. it rotates at 4 MB and keeps 4 files (`owlette-desktop_<date>.log`), and its timestamps are local time, so they line up with `service.log` — a field report usually wants both.
 
 <Callout type="info" title={"logs removed in 3.0.0"}>
 
-`gui.log`, `tray.log`, and `report_issue.log` no longer exist — the Python programs that wrote them were replaced by the desktop app. Upgrading prunes any left behind.
+`gui.log`, `tray.log`, and `report_issue.log` no longer exist — the Python programs that wrote them were replaced by the desktop app. upgrading prunes any left behind.
 
 </Callout>
 
@@ -45,21 +66,39 @@ This one is **per-user**: it belongs to whoever the app runs as, typically the m
 
 ## debug mode
 
-Run the agent in the console to watch it live. Stop the service first, so two agents never run at once:
+run the agent in a terminal to watch it live. stop the service first, so two agents never run at once, and always pass `--debug`: it logs at debug level to the terminal as well as to `service.log`, and on Windows it is also what keeps the agent from reading the stopped service as a stop request and shutting itself down on its first tick.
+
+**Windows**, from an elevated command prompt — the service normally runs as `LocalSystem`:
 
 ```cmd
 net stop OwletteService
-cd C:\ProgramData\Owlette\agent\src
-C:\ProgramData\Owlette\python\python.exe owlette_runner.py
+cd /d C:\ProgramData\Owlette\agent\src
+C:\ProgramData\Owlette\python\python.exe owlette_runner.py --debug
 ```
 
-`owlette_runner.py` is the exact process owlette-host supervises — same bundled interpreter, same working directory — so this is the code path the service runs. Log lines still go to `service.log`; an interpreter-level traceback prints to the console. Ctrl+C shuts it down cleanly, and `net start OwletteService` hands the machine back to the host.
+ctrl+c shuts it down cleanly, and `net start OwletteService` hands the machine back to owlette-host.
 
-<Callout type="warning" title={"requires administrator"}>
+**macOS:**
 
-The agent must be run from an elevated command prompt — the service normally runs as `LocalSystem`.
+```bash
+sudo launchctl bootout system/app.owlette.agent
+cd "/Library/Application Support/Owlette/runtime/agent/src"
+sudo "/Library/Application Support/Owlette/runtime/python/bin/python3" owlette_runner.py --debug
+```
 
-</Callout>
+ctrl+c shuts it down cleanly; `sudo launchctl bootstrap system /Library/LaunchDaemons/app.owlette.agent.plist` hands the machine back to launchd.
+
+**Linux:**
+
+```bash
+sudo systemctl stop owlette-agent
+cd /opt/owlette/agent/src
+sudo /opt/owlette/python/bin/python3 owlette_runner.py --debug
+```
+
+ctrl+c shuts it down cleanly; `sudo systemctl start owlette-agent` hands the machine back to systemd.
+
+`owlette_runner.py` is the process the service host supervises on every platform — same bundled interpreter, same working directory — so this is the code path the service runs.
 
 ---
 
@@ -67,148 +106,159 @@ The agent must be run from an elevated command prompt — the service normally r
 
 ### agent won't start
 
-**Symptoms**: Service fails to start, or starts and immediately stops.
+**symptoms**: the service fails to start, or starts and immediately stops.
 
-**Check**:
+**check**:
 
-1. Stop the service and run the agent in the console, so a startup crash lands in front of you instead of in a log:
-    ```cmd
-    net stop OwletteService
-    C:\ProgramData\Owlette\python\python.exe C:\ProgramData\Owlette\agent\src\owlette_runner.py
-    ```
-    This is the exact command owlette-host runs. Press Ctrl+C to stop, then `net start OwletteService`.
-2. Check `service.log` for startup errors, and `service_host.log` for what owlette-host saw — the spawn, the exit code the agent returned, and any crash-loop backoff. A traceback that never reached the logger lands in `service_stderr.log`.
-3. Verify Python is installed: `C:\ProgramData\Owlette\python\python.exe --version`.
-4. Verify `C:\ProgramData\Owlette\config\config.json` is valid JSON.
+1. run the agent in the foreground, as in [debug mode](#debug-mode), so a startup crash lands in front of you instead of in a log.
+2. check `service.log` for startup errors. then check what the service host saw: on Windows `service_host.log` (the spawn, the exit code the agent returned, any crash-loop backoff) and `service_stderr.log`; on macOS `launchd-agent.log` and `launchctl print system/app.owlette.agent`; on Linux `systemctl status owlette-agent` and `journalctl -u owlette-agent`.
+3. check that the bundled Python runs: `C:\ProgramData\Owlette\python\python.exe --version`, `"/Library/Application Support/Owlette/runtime/python/bin/python3" --version`, or `/opt/owlette/python/bin/python3 --version`.
+4. check that `config/config.json` in the data root is valid JSON.
 
-**Common causes**:
+**common causes**:
 
-- Corrupt `config.json`: repair it, or move it aside and re-run pairing so the agent can create a fresh config.
-- Missing packaged files or Python dependencies: repair or reinstall the agent.
-- Broken service registration after a failed upgrade: rerun the packaged repair flow or reinstall the service.
+- corrupt `config.json`: repair it, or move it aside and re-run pairing so the agent can create a fresh config.
+- missing packaged files or Python dependencies: repair or reinstall the agent — see [method 4](/docs/agent/installation#method-4-manual-packaged-repair-or-source-development).
+- broken service registration after a failed upgrade: on Windows rerun the packaged repair flow; on macOS and Linux install the package again.
 
 ---
 
 ### agent shows offline in dashboard
 
-**Symptoms**: Machine shows offline (red/grey) despite the service running.
+**symptoms**: the machine shows offline (red or grey) despite the service running.
 
-**Check**:
+**check**:
 
-1. Verify service is running: `sc query OwletteService`.
-2. Check `service.log` for Firebase connection errors.
-3. Verify internet connectivity.
-4. Check firewall rules for outbound HTTPS (port 443) to the configured API host (`owlette.app` or `dev.owlette.app`) and Firebase services.
-5. Verify `firebase.site_id` in `C:\ProgramData\Owlette\config\config.json`.
+1. that the service is running — see [service management commands](#service-management-commands).
+2. `service.log` for Firebase connection errors.
+3. internet connectivity.
+4. firewall rules for outbound HTTPS (port 443) to the configured API host (`owlette.app` or `dev.owlette.app`) and Firebase services.
+5. `firebase.site_id` in `config/config.json`.
 
-**Common causes**:
+**common causes**:
 
-- **No internet**: The agent keeps running locally but cannot update Firestore.
-- **OAuth token expired**: Check for token refresh errors in `service.log`; the agent should auto-refresh when the stored refresh token is valid.
-- **Wrong site_id**: The config is paired to a different dashboard site.
-- **Firebase disabled**: Check `firebase.enabled` is `true` in `config.json`.
-- **Heartbeat has not refreshed yet**: Presence and metrics use an adaptive interval: about 5 seconds while the desktop app's window is open, 30 seconds when monitored processes are active, and 120 seconds when idle.
+- **no internet**: the agent keeps running locally but cannot update Firestore.
+- **OAuth token expired**: look for token refresh errors in `service.log`; the agent refreshes on its own while the stored refresh token is valid.
+- **wrong site_id**: the config is paired to a different dashboard site.
+- **Firebase disabled**: check that `firebase.enabled` is `true` in `config.json`.
+- **the heartbeat has not refreshed yet**: presence and metrics use an adaptive interval — about 5 seconds while the desktop app's window is open, 30 seconds when monitored processes are active, and 120 seconds when idle.
 
 ---
 
 ### "agent not authenticated" error
 
-**Symptoms**: Log shows "Agent not authenticated - no refresh token found".
+**symptoms**: the log shows "Agent not authenticated - no refresh token found", or the app's footer reads `authentication required`.
 
-**Cause**: The agent's stored OAuth tokens are missing or corrupt.
+**cause**: the agent's stored OAuth tokens are missing or corrupt.
 
-**Fix**:
+**fix**: delete the token file, run the pairing flow from a terminal, then restart the service so it connects with the new credentials straight away.
 
-1. Delete the token file and re-pair:
-    ```cmd
-    del C:\ProgramData\Owlette\.tokens.enc
-    ```
-2. Run the pairing flow:
-    ```cmd
-    C:\ProgramData\Owlette\python\python.exe C:\ProgramData\Owlette\agent\src\configure_site.py
-    ```
-3. The console prints a 3-word pairing phrase and the authorization link for the server this machine is bound to, then starts polling. Open that link from any device — this machine, a phone, another computer — and enter the phrase. Nothing opens a browser here on its own.
-4. Wait for authorization to complete, then restart the service.
+deleting the tokens leaves `config.json` as it was, still naming the site, so the script first asks `reconfigure? (y/N)`: answer `y`. the default, `N`, cancels without pairing. `--add <phrase>`, with a phrase generated in the dashboard, skips the question.
 
-If pairing fails before authorization completes, check `C:\ProgramData\Owlette\logs\pairing_debug.log`. If the phrase was authorized but the token exchange failed, check `oauth_debug.log` beside it.
+**Windows**, from an elevated command prompt:
+
+```cmd
+del C:\ProgramData\Owlette\.tokens.enc
+C:\ProgramData\Owlette\python\python.exe C:\ProgramData\Owlette\agent\src\configure_site.py
+net stop OwletteService && net start OwletteService
+```
+
+**macOS:**
+
+```bash
+sudo rm "/Library/Application Support/Owlette/.tokens.enc"
+cd "/Library/Application Support/Owlette/runtime/agent/src"
+sudo "/Library/Application Support/Owlette/runtime/python/bin/python3" configure_site.py
+sudo launchctl kickstart -k system/app.owlette.agent
+```
+
+**Linux:**
+
+```bash
+sudo rm /var/lib/owlette/.tokens.enc
+cd /opt/owlette/agent/src
+sudo /opt/owlette/python/bin/python3 configure_site.py
+sudo systemctl restart owlette-agent
+```
+
+the script prints a 3-word pairing phrase and the authorization link for the server this machine is bound to, then polls. open that link from any device — this machine, a phone, another computer — and enter the phrase; nothing opens a browser here on its own. run the restart line once the script reports that pairing succeeded.
+
+if pairing fails, check `pairing_debug.log` in the data root's `logs/` folder: it records how the script was run and any error it hit. on macOS and Linux, a pairing started by a [preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux) writes to `pairing.log` instead. if the phrase was authorized but the machine still does not connect, `service.log` shows what the service made of the new tokens.
 
 ---
 
 ### processes not auto-restarting
 
-**Symptoms**: Configured processes crash but are not restarted.
+**symptoms**: configured processes crash but are not restarted.
 
-**Check**:
+**check**:
 
-1. Verify `launch_mode` is `always`, or `scheduled` with the current time inside a configured schedule window.
-2. Check if the `relaunch_attempts` limit has been reached. The counter resets on manual restart.
-3. Verify the `exe_path` exists and is correct.
-4. Check `service.log` for launch errors.
-5. Check `time_delay` and `time_to_init` if restarts are delayed after a failure.
+1. `launch_mode` is `always`, or `scheduled` with the current time inside a configured schedule window.
+2. whether the `relaunch_attempts` limit has been reached. the counter resets on a manual restart.
+3. the `exe_path` exists and is correct.
+4. `service.log` for launch errors.
+5. `time_delay` and `time_to_init`, if restarts are delayed after a failure.
 
-**Common causes**:
+**common causes**:
 
-- **Executable not found**: Launch fails, `process_launch_failed` is logged, and an `exe_missing` alert may be sent.
-- **Relaunch limit reached**: The reboot prompt should have appeared.
-- **Permission error**: Service may not have access to the executable path.
-- **User-session launch issues**: Managed launches use `CreateProcessAsUser` and `process_launcher.py`; check service/session token errors in `service.log`.
+- **executable not found**: the launch fails, `process_launch_failed` is logged, and an `exe_missing` alert may be sent.
+- **relaunch limit reached**: on Windows the reboot prompt should have appeared. on macOS and Linux there is no on-screen prompt: the dashboard shows the restart pending, and the process stays down until an admin approves or dismisses it — see [relaunch limits](/docs/agent/process-monitoring#relaunch-limits).
+- **nobody signed in**: a managed process is launched into the signed-in user's session on every platform. on macOS and Linux, `service.log` says `nobody is signed in at a graphical session`.
+- **permission error**: the service, or on macOS and Linux the signed-in user, may not have access to the executable path.
+- **user-session launch issues (Windows)**: managed launches use `CreateProcessAsUser` and `process_launcher.py`; check `service.log` for service or session token errors.
 
-When the executable is missing, the service logs `process_launch_failed` and sends an `exe_missing` alert with suggested sibling paths when it can find likely replacements. The dashboard toast can open the process edit dialog with a suggested path pre-filled.
+when the executable is missing, the service logs `process_launch_failed` and sends an `exe_missing` alert with suggested sibling paths when it can find likely replacements. the dashboard toast can open the process edit dialog with a suggested path pre-filled.
 
 ---
 
 ### connectionmanager states
 
-The agent's connection to Firestore follows a state machine. Check `service.log` for the current state:
+the agent's connection to Firestore follows a state machine. check `service.log` for the current state:
 
 | state | meaning | action |
 |-------|---------|--------|
-| `DISCONNECTED` | No connection, not trying | Will attempt on next cycle |
-| `CONNECTING` | Actively establishing connection | Wait |
-| `CONNECTED` | Online and syncing | Normal operation |
-| `RECONNECTING` | Lost connection, retrying | Automatic retry |
-| `BACKOFF` | Too many failures, waiting | Exponential backoff, up to 1 hour |
-| `FATAL_ERROR` | Fatal-ish auth or site-access error with long-backoff retry | Restore site access or re-pair if credentials/site membership are invalid |
+| `DISCONNECTED` | no connection, not trying | will attempt on the next cycle |
+| `CONNECTING` | actively establishing a connection | wait |
+| `CONNECTED` | online and syncing | normal operation |
+| `RECONNECTING` | lost connection, retrying | automatic retry |
+| `BACKOFF` | too many failures, waiting | exponential backoff, up to 1 hour |
+| `FATAL_ERROR` | an auth or site-access error, retried with a long backoff | restore site access, or re-pair if the credentials or site membership are invalid |
 
-Fatal-ish errors are not a permanent terminal state; the connection manager keeps retrying with long backoff while you restore access or re-pair.
+`FATAL_ERROR` is not a permanent terminal state; the connection manager keeps retrying with long backoff while you restore access or re-pair.
 
-If stuck in `BACKOFF`:
+if it is stuck in `BACKOFF`:
 
-1. Check internet connectivity.
-2. Verify Firebase project is accessible.
-3. Wait for the automatic retry. Circuit-breaker recovery probes run after about 5 minutes, and repeated failures can stretch retry backoff up to 1 hour.
+1. check internet connectivity.
+2. verify the Firebase project is accessible.
+3. wait for the automatic retry. circuit-breaker recovery probes run after about 5 minutes, and repeated failures can stretch the retry backoff to 1 hour.
 
 ---
 
-### high cpu/memory usage
+### high CPU/memory usage
 
-**Symptoms**: The owlette service itself uses excessive resources.
+**symptoms**: the owlette service itself uses excessive resources.
 
-**Normal usage**: ~20-50 MB RAM, &lt;1% CPU.
+**normal usage**: ~20-50 MB RAM, &lt;1% CPU.
 
-**If excessive**:
+**if excessive**:
 
-1. Check if debug logging is enabled.
-2. Look for rapid reconnection loops in `service.log`.
-3. Verify no circular config updates; hash tracking should prevent feedback loops.
-4. Check whether the desktop app's window is open. Metrics and heartbeat uploads run about every 5 seconds while it is on screen, 30 seconds while processes are active, and 120 seconds when idle. Closing the window back to the tray drops the machine to the slower cadence.
+1. check whether debug logging is enabled.
+2. look for rapid reconnection loops in `service.log`.
+3. verify there are no circular config updates; hash tracking should prevent feedback loops.
+4. check whether the desktop app's window is open. metrics and heartbeat uploads run about every 5 seconds while it is on screen, 30 seconds while processes are active, and 120 seconds when idle. closing the window back to the tray drops the machine to the slower cadence.
 
 ---
 
 ### desktop app won't open
 
-**Symptoms**: Clicking `open owlette` from the tray does nothing, or the window closes immediately after opening.
+**symptoms**: **open owlette** in the tray menu does nothing, the window closes immediately after opening, or the icon never appears.
 
-**Check**:
+**Windows**:
 
-1. Look at `service.log` for the launch attempt — the service reports both the launch and a missing executable.
-2. Look at `%LOCALAPPDATA%\app.owlette.desktop\logs\owlette-desktop.log` — the app records its own startup there in release builds, so a crash after launch shows up here rather than in `service.log`.
-3. Verify the desktop app exists: `C:\ProgramData\Owlette\app\owlette-desktop.exe`.
-4. Try launching manually:
-    ```bash
-    "C:\ProgramData\Owlette\app\owlette-desktop.exe"
-    ```
-5. Confirm the WebView2 runtime is installed — the app renders in it and cannot open a window without it. The installer adds it when missing, but a blocked or offline install can leave it absent:
+1. look at `service.log` for the launch attempt — the service reports both the launch and a missing executable.
+2. look at the app's own log (see [per-user](#per-user--the-desktop-app) above) — it records its startup there in release builds, so a crash after launch shows up there rather than in `service.log`.
+3. verify the desktop app exists: `C:\ProgramData\Owlette\app\owlette-desktop.exe`, and try launching it by hand.
+4. confirm the WebView2 runtime is installed — the app renders in it and cannot open a window without it. the installer adds it when missing, but a blocked or offline install can leave it absent:
     ```powershell
     $guid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients',
@@ -217,87 +267,163 @@ If stuck in `BACKOFF`:
       ForEach-Object { (Get-ItemProperty "$_\$guid" -ErrorAction SilentlyContinue).pv } |
       Where-Object { $_ -and $_ -ne '0.0.0.0' }
     ```
-    A printed version means the runtime is present; no output means it is missing. A `pv` of `0.0.0.0` counts as missing — it is the "not installed" value Microsoft documents, and the filter above drops it, exactly as the installer's own detection does. WebView2 installs machine-wide or per-user, so all three keys are checked.
+    a printed version means the runtime is present; no output means it is missing. a `pv` of `0.0.0.0` counts as missing — it is the "not installed" value Microsoft documents, and the filter above drops it, exactly as the installer's own detection does. WebView2 installs machine-wide or per-user, so all three keys are checked.
+
+**macOS**:
+
+1. the app is a menu-bar app: with its window closed it shows no Dock icon. look for the owlette eye in the menu bar, and choose **open owlette** from its menu.
+2. if the icon is gone, the app was quit — **exit** is honoured until the next login. open **owlette** from Applications, or run `open -a owlette`.
+3. `launchctl print gui/$(id -u)/app.owlette.desktop` shows whether the login item is loaded for this account.
+4. read the app's log (see [per-user](#per-user--the-desktop-app) above).
+
+**Linux**:
+
+1. `systemctl --user status owlette-desktop`, as the signed-in user. a skipped `ConditionGroup=owlette` means the account is not in the `owlette` group: add it with `sudo usermod -aG owlette <account>` and log in again.
+2. the icon lives in the top bar through Ubuntu's AppIndicator support; a desktop without a tray host shows none, though the app still runs. run `owlette-desktop` from a terminal to open the window.
+3. read the app's log (see [per-user](#per-user--the-desktop-app) above).
+
+---
+
+### the Mac shows a Screen Recording or Accessibility notice
+
+**symptoms**: the owlette window on a Mac shows a Screen Recording or Accessibility notice, screenshots are refused, or [swoop](/docs/dashboard/swoop#on-macos) is missing from the machine's menu or drops your keyboard and mouse.
+
+macOS ties both grants to the owlette app, and only someone at the Mac can give them, in **System Settings** → **Privacy & Security**:
+
+- **Screen Recording** takes effect when the app is quit and reopened. until then the app keeps reporting it missing, and screenshots and the swoop picture are refused.
+- **Accessibility** takes effect for the next swoop session, with no restart; the notice clears within seconds of the grant.
+
+the app reports what it holds to the service every minute, in `ipc/tcc.json` in the data root — `screen_recording`, `accessibility` (`null` when it could not tell) and `checked_at`. the service treats a report older than five minutes as no report.
+
+to read the grants directly, run the streamer's `selfcheck` verb. it never raises a dialog:
+
+```bash
+/Applications/owlette.app/Contents/MacOS/owlette-swoop selfcheck
+```
+
+it prints one JSON line — `screenCapturePreflight`, `shareableContent` (`ok`, `denied`, `skipped` or `error:<code>`), `displays`, `postEventPreflight`, `axTrusted`, `localNetworkSend` and `pid`. `selfcheck --grants` prints only the grant answers and the Paste from Other Apps setting (`pasteboardAccess`), and touches neither ScreenCaptureKit nor the network. macOS credits a process with the grants of the app responsible for it: the owlette app runs this check itself and reads owlette's grants, but run from Terminal or over SSH it answers for Terminal or SSH. trust the app's notices and `ipc/tcc.json` for owlette's own state.
 
 ---
 
 ### tray status looks stale
 
-**Symptoms**: The tray status does not match the service or Firebase state.
+**symptoms**: the tray status does not match the service or Firebase state.
 
-**Check**:
+**check**:
 
-1. Confirm `OwletteService` is running.
-2. Inspect `C:\ProgramData\Owlette\tmp\service_status.json`.
-3. Check `C:\ProgramData\Owlette\tmp\status_writer.log` for status-file write decisions.
+1. that the service is running — see [service management commands](#service-management-commands).
+2. `tmp/service_status.json` in the data root.
+3. `tmp/status_writer.log` for status-file write decisions.
 
-The service writes `service_status.json` immediately when important state changes and otherwise uses a 30-second refresh floor with content-change throttling. The status file has nested `service`, `firebase`, and `health` sections.
+the service writes `service_status.json` immediately when important state changes and otherwise uses a 30-second refresh floor with content-change throttling. the status file has nested `service`, `firebase`, `health`, `swoop` and `keep_awake` sections — see [the status file](/docs/agent/system-tray#status-file-contents).
 
 ---
 
 ### remote install or update fails
 
-**Symptoms**: A dashboard deployment fails before the installer runs, or an agent self-update does not complete.
+**symptoms**: a dashboard deployment fails before the installer runs, or an agent self-update does not complete.
 
-**Check**:
+**check**:
 
-1. Check `service.log` for the command result.
-2. For self-updates, check `C:\ProgramData\Owlette\logs\installer_update.log`.
-3. Check whether `C:\ProgramData\Owlette\logs\update_in_progress.json` exists after a failed self-update.
-4. Verify the installer URL is reachable from the target machine.
+1. `service.log` for the command result.
+2. the self-update's own log: `installer_update.log` on Windows, `update_installer.log` on macOS, `journalctl -u owlette-update` on Linux.
+3. whether `logs/update_in_progress.json` still exists after a failed self-update.
+4. that the installer URL is reachable from the target machine.
 
-**Common causes**:
+**common causes**:
 
-- **Missing `sha256_checksum`**: `install_software` refuses to run remote installers without this 64-character SHA-256 checksum.
-- **Missing `checksum_sha256`**: `update_owlette` refuses to self-update without this checksum field.
-- **Missing `target_version`**: The agent can infer a version from the installer filename, but the command should send `target_version` explicitly.
-- **No interactive user session**: Third-party installers run in the user's desktop session; a user must be logged in.
-- **Wrong silent flags or verify path**: The installer may complete but fail post-install verification.
+- **missing `sha256_checksum`**: `install_software` refuses to run remote installers without this 64-character SHA-256 checksum.
+- **missing `checksum_sha256`**: `update_owlette` refuses to self-update without this checksum field.
+- **missing `target_version`**: the agent can infer a version from the installer filename, but the command should send `target_version` explicitly.
+- **the wrong file for the platform**: a self-update refuses a file that is not this machine's own installer kind, whatever its checksum.
+- **Linux package refusals**: `update_deferred` while another package operation holds the dpkg lock — try again later; `update_unsatisfiable` when apt cannot resolve the package's dependencies.
+- **no interactive user session**: third-party installers run in the user's desktop session; a user must be logged in.
+- **wrong silent flags or verify path**: the installer may complete but fail post-install verification.
+
+more in [self-update](/docs/agent/self-update#troubleshooting-updates).
 
 ---
 
 ### temperature monitoring driver (pawnio)
 
-The agent reads CPU temperatures through [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor), which uses the [PawnIO](https://pawnio.eu/) kernel driver — a signed, sandboxed driver that runs vetted modules instead of exposing raw hardware access. The installer deploys PawnIO 2.2.0 automatically and it is Microsoft-signed, HVCI-compatible, and not on any vulnerable-driver blocklist, so no Defender exclusions are needed. (Versions up to 3.1.0 used the WinRing0 driver instead, extracted at runtime as `python.sys` — upgrading removes that driver, its `R0python` service, and the Defender exclusions it required.)
+Windows only. the agent reads CPU temperatures through [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor), which uses the [PawnIO](https://pawnio.eu/) kernel driver — a signed, sandboxed driver that runs vetted modules instead of exposing raw hardware access. the installer deploys PawnIO 2.2.0 automatically and it is Microsoft-signed, HVCI-compatible, and not on any vulnerable-driver blocklist, so no Defender exclusions are needed. (versions up to 3.1.0 used the WinRing0 driver instead, extracted at runtime as `python.sys` — upgrading removes that driver, its `R0python` service, and the Defender exclusions it required.) macOS and Linux report no CPU temperature; on Linux an NVIDIA GPU's temperature comes through NVML, and a Mac reports none.
 
-**Verify the driver**: `Get-Service PawnIO` should show `Running` (it is demand-start, so `Stopped` is also normal when nothing is reading sensors). If it is missing, CPU temperatures read as blank while GPU temperatures keep working through vendor APIs — reinstall it with `winget install namazso.PawnIO` or by re-running the agent installer.
+**verify the driver**: `Get-Service PawnIO` should show `Running` (it is demand-start, so `Stopped` is also normal when nothing is reading sensors). if it is missing, CPU temperatures read as blank while GPU temperatures keep working through vendor APIs — reinstall it with `winget install namazso.PawnIO` or by re-running the agent installer.
 
-**Opt out of temperature monitoring**: set `"temperature": { "enabled": false }` in `C:\ProgramData\Owlette\config\config.json` — it takes effect within one metrics tick, no restart needed. All sensor reads stop; temperature fields simply disappear from the dashboard. A missing `temperature` section means enabled.
+**opt out of temperature monitoring**: set `"temperature": { "enabled": false }` in `config.json` — it takes effect within one metrics tick, no restart needed. all sensor reads stop; temperature fields simply disappear from the dashboard. a missing `temperature` section means enabled.
 
-**Note**: PawnIO is a shared component (other tools such as FanControl use it too), so uninstalling the agent leaves it installed — remove it separately from installed apps if it is no longer needed.
+**note**: PawnIO is a shared component (other tools such as FanControl use it too), so uninstalling the agent leaves it installed — remove it separately from installed apps if it is no longer needed.
 
 ---
 
 ## service management commands
 
-```bash
-# Check service status
+### Windows
+
+```cmd
+:: check service status
 sc query OwletteService
 
-# Start service
+:: start, stop, restart
 net start OwletteService
-
-# Stop service
 net stop OwletteService
-
-# Restart service
 net stop OwletteService && net start OwletteService
 
-# View service configuration
+:: view service configuration
 sc qc OwletteService
 ```
 
-All commands require **Administrator** privileges.
+all of these need an elevated prompt except the two `sc` queries.
 
-The desktop app restarts the service without one. `restart service` in the app's menu writes `tmp/restart.flag`; the service picks it up on its next loop and exits 42, and owlette-host relaunches it immediately — no UAC prompt. The tray icon's right-click menu carries the same item, with one difference: a service that is already stopped has no loop to read the flag, so the tray starts it through the SCM instead, which is the one path that can prompt for elevation.
+### macOS
+
+```bash
+# check service status
+launchctl print system/app.owlette.agent
+
+# restart
+sudo launchctl kickstart -k system/app.owlette.agent
+
+# stop, and start again
+sudo launchctl bootout system/app.owlette.agent
+sudo launchctl bootstrap system /Library/LaunchDaemons/app.owlette.agent.plist
+```
+
+`bootout` is the stop: the job is `KeepAlive`, so killing the agent's process only has launchd start it again.
+
+### Linux
+
+```bash
+# check service status
+systemctl status owlette-agent
+
+# start, stop, restart
+sudo systemctl start owlette-agent
+sudo systemctl stop owlette-agent
+sudo systemctl restart owlette-agent
+
+# the service's raw output, and its unit file
+journalctl -u owlette-agent
+systemctl cat owlette-agent
+```
+
+members of the `owlette` group can start, stop and restart the service without `sudo`, through the polkit rule the package installs.
+
+### from the desktop app
+
+the app restarts the service without an administrator prompt on every platform. `restart service` in the app's menu and in the tray's menu:
+
+- **Windows:** writes `tmp/restart.flag`; the service picks it up on its next loop and exits 42, and owlette-host relaunches it immediately — no UAC prompt. a service that is already stopped has no loop to read the flag, so the tray starts it through the SCM instead, which is the one path that can prompt for elevation.
+- **macOS:** asks the service to restart itself, at most once per five minutes. a stopped service cannot hear the request; launchd starts it again on its own.
+- **Linux:** runs `systemctl restart owlette-agent` under the polkit rule, which also starts a stopped service.
 
 ---
 
 ## getting help
 
-- Use `submit bug report` in the desktop app's menu — it also takes feature requests and general feedback. The agent attaches the machine's system metrics and the last 100 lines of `service.log` automatically, along with the hostname and site id, so the report arrives diagnosable.
+- use `submit bug report` in the desktop app's menu — it also takes feature requests and general feedback. the agent attaches the machine's system metrics and the last 100 lines of `service.log` automatically, along with the hostname and site ID, so the report arrives diagnosable.
 
   ![the submit bug report dialog, with a category and a description field](/docs-screens/agent-report-issue.png)
 
-- Email us at [support@tridant.io](mailto:support@tridant.io)
-- File a bug or feature request on [GitHub](https://github.com/tridant-io/owlette/issues)
+- email us at [support@tridant.io](mailto:support@tridant.io)
+- file a bug or feature request on [GitHub](https://github.com/tridant-io/owlette/issues)

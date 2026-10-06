@@ -6,7 +6,7 @@ This is the canonical first-time path for an engineer cloning Owlette to develop
 
 | tool | version | required for | doc reference |
 |------|---------|--------------|---------------|
-| Windows 10/11 64-bit | — | agent dev/build, installer | not portable to Mac/Linux yet |
+| Windows 10/11 64-bit | — | the Windows agent build and installer | the macOS `.pkg` and Linux `.deb` build on their own OS: see [agent/README.md](../agent/README.md) |
 | Node.js | 22.x (see [/.nvmrc](../.nvmrc)) | web, desktop, functions, cli, sdks | [package.json engines field](../package.json) |
 | npm | >=10.0.0 | all js packages | [package.json](../package.json) |
 | Python | 3.11 | agent venv + tests, SDK dev (SDK requires >=3.10). The installer build downloads its own embedded 3.11.8 | [scripts/bootstrap-windows.ps1](../scripts/bootstrap-windows.ps1), [sdks/python/pyproject.toml](../sdks/python/pyproject.toml) |

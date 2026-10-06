@@ -1,116 +1,134 @@
 ---
 title: "installer management"
-description: "Upload, manage, and distribute agent installer versions. This is an internal owlette page; the installer it publishes is what everyone else downloads."
+description: "upload the agent installers for Windows, macOS and Linux, choose which version is latest, and clean up old ones. this is an internal owlette page; the latest version it sets is what every download button, the download link and fleet updates hand out."
+keywords: ["agent installer", "release", "upload installer", "publish agent", "exe", "pkg", "deb", "latest version", "roll back agent", "download link", "checksum"]
 ---
 
-**Location**: admin panel -> installers (`/admin/installers`)
+**location**: admin panel → installers (`/admin/installers`)
 
-<Callout type="info" title={"Internal page"}>
+<Callout type="info" title={"internal page"}>
 
-Publishing an agent installer is a platform-wide action, so `/admin/installers` is operated by owlette and is not part of the site-scoped admin panel. Every account can still download the current release — see [public download button](#public-download-button).
+publishing an agent installer is a platform-wide action, so `/admin/installers` is run by owlette and is not part of the site-scoped admin panel. every route behind it checks for a platform superadmin; an API key also needs an `installer` scope (`installer=*:write` to upload, `installer=*:admin` to set latest or delete). every account can still download the current release; see [public download button](#public-download-button).
 
 </Callout>
 
-The dashboard uses the same canonical `/api/installer/*` public management API as the CLI and SDKs. Every action on this page requires the `INSTALLER_MANAGE` capability, which no customer role holds.
+the page uses the same `/api/installer/*` API as the CLI and the SDKs; see [`owlette installer`](/docs/cli/reference/installer).
 
 ---
 
-## uploading a new version
+## the page
 
-1. Click **upload new version**.
-2. Select or drag in one installer file. The dialog accepts `.exe`, `.pkg` and `.deb`; the platform is derived from the extension and shown as a badge, and `X.Y.Z` is auto-detected from filenames such as:
-   - Windows (`windows_x64`): `Owlette-Installer-v2.11.0.exe`
-   - macOS, Apple silicon (`macos_arm64`): `Owlette-Installer-v2.11.0.pkg`
-   - Linux (`linux_x64`): `Owlette-Installer-v2.11.0.deb`
-3. Confirm the `X.Y.Z` version number, add optional release notes, leave **set as latest (all platforms)** checked unless this is a staged upload, then click **upload installer**.
+- **current latest version** shows the latest version with its `Latest` badge, the date it was first uploaded, and one tile per platform
+- the version table has the columns `version`, `uploaded` (the date, with "by" and the uploader's user ID under it), `release notes` (or `no notes`) and `actions`
+- under each version row, from tablet width up, the three platforms sit side by side as tiles. a phone shows the version rows only
 
-One upload is one file. Upload each platform's file under the same version and they merge into one version record; the release notes are version-level.
+a platform tile shows the platform (`windows`, `macOS (apple silicon)`, `linux (.deb)`), the file's size and `sha256` with the first 12 characters of its checksum, and two icon buttons: download, and copy link. a platform the version has no file for reads `not uploaded`.
 
-The dashboard uses a three-step upload flow:
-
-1. **request URL**: `POST /api/installer/upload` with `version`, `fileName`, `contentType`, optional `platform`, optional `releaseNotes`, and `setAsLatest` (defaults to `true`). The route requires an `Idempotency-Key`, validates the version and the filename's extension (`platform`, when sent, must match it), creates an `installer_uploads/{uploadId}` record, and returns a signed `uploadUrl`, `uploadId`, `platform`, `storagePath`, and `expiresAt`. The signed URL expires after 15 minutes.
-2. **upload binary**: the browser `PUT`s the installer binary directly to the signed Storage URL and shows upload progress.
-3. **finalize**: `PUT /api/installer/upload` with the `uploadId` and dashboard-computed `checksum_sha256`. The route requires an `Idempotency-Key`, verifies the pending upload record has not expired, confirms the object exists, recomputes SHA-256 from the stored binary, rejects mismatches with `checksum_mismatch`, merges the file into the version's `files` map (a `.exe` also refreshes the flat `download_url`, `checksum_sha256` and `file_size` alias), and updates latest if requested.
+the `actions` cell holds `set as latest` and a delete icon, and only on rows that are not the latest version. soft-deleted versions are not listed.
 
 ---
 
-## version table
+## uploading a version
 
-Each active version is a row group: the version row, then one row per platform (`windows`, `macOS (apple silicon)`, `linux (.deb)`) showing that file's size, the start of its SHA-256, and a download link — or `—` for a platform the version has no file for.
+1. click **upload new version**.
+2. drop one file on the dialog, or **choose file**. it takes `.exe`, `.pkg` or `.deb`; the platform comes from the extension and shows as a badge, and the first `X.Y.Z` in the file name fills **version number**:
+   - Windows (`windows_x64`): `Owlette-Installer-v4.1.6.exe`
+   - macOS, Apple silicon (`macos_arm64`): `Owlette-Installer-v4.1.6.pkg`
+   - Linux (`linux_x64`): `Owlette-Installer-v4.1.6.deb`
+3. check the version, add **release notes (optional)**, decide on **set as latest (all platforms)** (ticked by default), then click **upload installer**.
 
-| column | description |
-|--------|-------------|
-| **version** | Version number |
-| **file size** | Installer file size |
-| **uploaded** | Upload date |
-| **uploaded by** | User who uploaded it |
-| **release notes** | Change description, or `no notes` |
-| **actions** | set as latest, download, copy link, or delete |
+one upload is one file. upload each platform's file under the same version number and they join one version record. uploading a platform again under the same version replaces that platform's file.
 
-Soft-deleted versions are hidden from the dashboard list.
+**write the release notes on the first file.** a version's release notes, uploader and date come from its first upload, and later uploads keep them: notes typed on the second or third file are dropped.
 
-Each finalized version stores this metadata under `installer_metadata/data/versions/{version}`:
+**upload every platform before promoting.** each upload with **set as latest (all platforms)** ticked makes that version latest with the files it has so far. promote after the Windows file alone and `/download?os=macos` answers `404` "no macos build in v4.1.6" until the Mac file lands and the version is promoted again. the simplest order is to upload every file with the box cleared, then use `set as latest` on the version's row. once a version is latest its row has no `set as latest`, so a file added to it later needs the box ticked on that upload.
 
-| field | source |
-|-------|--------|
-| `version` | Confirmed `X.Y.Z` version from the upload dialog |
-| `files` | One entry per platform, keyed `windows_x64`, `macos_arm64` or `linux_x64`, each with `download_url`, `checksum_sha256`, `file_size`, `file_name` and `uploaded_at` |
-| `download_url` | The Windows file's long-lived signed read URL — an alias of `files.windows_x64.download_url` |
-| `checksum_sha256` | Server-computed checksum for the stored Windows binary (alias of `files.windows_x64`) |
-| `release_notes` | Optional notes from the upload dialog |
-| `file_size` | Windows Storage object size in bytes (alias of `files.windows_x64`) |
-| `uploaded_at` / `release_date` | Finalize timestamp |
-| `uploaded_by` | User or API key actor that finalized the upload |
-| `deletedAt` | `null` for active versions; set when soft-deleted |
+uploading a version number that was soft-deleted starts a fresh record: new notes and date, and only the files uploaded from then on.
 
-A version uploaded before per-platform files carries its Windows installer under `files.windows_x64`, read from the flat fields.
+### the upload flow
+
+the dashboard computes the file's SHA-256 in the browser, then makes three calls:
+
+1. **request a URL**: `POST /api/installer/upload` with `version`, `fileName`, `contentType`, an optional `platform`, optional `releaseNotes`, and `setAsLatest` (default `true`). the route needs an `Idempotency-Key`, checks the version format and that the extension matches `platform` when one is sent, records `installer_uploads/{uploadId}`, and returns a signed `uploadUrl` with `uploadId`, `platform`, `storagePath` and `expiresAt`. the URL works for 15 minutes.
+2. **upload the binary**: the browser `PUT`s the file straight to that URL and shows progress.
+3. **finalize**: `PUT /api/installer/upload` with `uploadId` and `checksum_sha256`, again with an `Idempotency-Key`. the route hashes the stored file itself, adds it to the version's `files` map, and moves the latest pointer if the upload asked for it.
+
+finalize can refuse:
+
+| code | status | when |
+|---|---|---|
+| `checksum_mismatch` | 412 | the checksum sent does not match the stored file. upload it again |
+| `upload_expired` | 410 | the 15-minute window passed. request a new URL |
+| `binary_missing` | 404 | nothing was uploaded to the signed URL |
+| `upload_not_pending` | 409 | that upload was already finalized or expired |
 
 ---
 
-## actions
+## set as latest
 
-### set as latest
+`set as latest` on a row asks **set as latest version**, "Set version X as the latest version for all platforms?", and **OK** calls `POST /api/installer/{version}/set-latest`. that rewrites `installer_metadata/latest` with every file the version has. it is also how you roll back when a newer installer has a problem. a soft-deleted version is refused (`version_deleted`).
 
-Uploads set the latest pointer by default. Clearing **set as latest (all platforms)** keeps the version available in the table without changing the public latest installer.
+the latest version is what everyone gets:
 
-Promote any uploaded, active non-latest version later with **set as latest (all platforms)**, which calls `POST /api/installer/{version}/set-latest` and rewrites `installer_metadata/latest` with every file the version carries. Use this for rollback if a newer installer has issues.
+- the dashboard's download button and the `/download` link; see below
+- the fleet update, which sends each machine the file for its own platform and skips, by name, any machine whose platform the version has no file for. see [self-update](/docs/agent/self-update#from-the-dashboard)
 
-### download
+---
 
-Each platform row downloads through the signed `download_url` returned by the installer API for that file.
+## deleting a version
 
-### delete
+the delete icon asks **delete version**, and **delete** calls `DELETE /api/installer/{version}`. it is a soft delete: the version gets `deletedAt` and `deletedBy`, and its files stay in Storage. there is no restore; uploading the same number again starts a fresh record.
 
-Delete soft-deletes the version through `DELETE /api/installer/{version}`. It does not remove the Storage object during the interactive action.
-
-You cannot delete:
+a delete is refused for:
 
 - the current latest version (`latest_version_protected`)
-- a version when doing so would leave fewer than two active versions (`min_versions_violated`)
+- any version when only two active versions are left (`min_versions_violated`)
 
 ---
 
-## cleanup
+## cleaning up
 
-The **clean up** action identifies superseded patch versions:
+**clean up** (off while there are fewer than two versions) opens **clean up old installers**. set **Keep uploads from last** N **days** (default 30, from 0 to 365), and the dialog lists every version that is:
 
-- not the newest patch in its `major.minor` series
-- older than the retention window
+- not the highest patch in its `major.minor` series
 - not the current latest version
+- uploaded before the retention window
 
-Each candidate is soft-deleted via the public API.
+the footer's `delete N versions` deletes them one at a time through the same delete call, and stops at the first refusal, typically `min_versions_violated` once two active versions remain. the dialog says the versions "will be permanently deleted", but each one is soft-deleted like any other delete, and the size it quotes counts the Windows files only.
 
 ---
 
 ## public download button
 
-All users see a dashboard download button that points to the current latest installer for the platform they are browsing from, with the other two in a menu; a platform the latest version has no file for is disabled there, with the reason. The unauthenticated permalink remains `GET /download`, which picks the file from the User-Agent and takes `?os=windows|macos|linux` as an override; management metadata comes from `GET /api/installer/latest`.
+every signed-in account has a download button in the dashboard header. it offers the latest installer for the platform the browser runs on, and its menu (**choose installer platform**) lists all three with a download and a copy-link icon each. a platform the latest version has no file for is greyed out with "no installer in this version"; an Intel Mac is told "intel macs are not supported". the button reads `installer_metadata/latest` directly.
+
+`GET /download` is the permalink, with no sign-in. it picks the file from the browser's user agent, or from `?os=windows|macos|linux`, and redirects to that file's signed URL. a platform the latest version lacks gets a plain-text `404`, "no `<os>` build in v`<version>`". with no latest version set it redirects to the sign-in page.
+
+`GET /api/installer/latest` returns the same record as JSON, for superadmins and `installer=*:read` keys only.
+
+---
+
+## stored metadata
+
+each version is `installer_metadata/data/versions/{version}`:
+
+| field | what it holds |
+|---|---|
+| `version` | the `X.Y.Z` version |
+| `files` | one entry per platform, keyed `windows_x64`, `macos_arm64` or `linux_x64`, each with `download_url`, `checksum_sha256`, `file_size`, `file_name` (the name you uploaded) and `uploaded_at` |
+| `download_url`, `checksum_sha256`, `file_size` | the Windows file's values again, for older readers. a version with no Windows file has none |
+| `release_notes` | the notes from the version's first upload, or `null` |
+| `uploaded_at` / `release_date` | when the version's first upload was finalized |
+| `uploaded_by` | the user ID of whoever requested the version's first upload; for an API key, the key's owner |
+| `deletedAt`, `deletedBy` | `null` while active; set by a delete |
+
+`installer_metadata/latest` is a copy of the promoted version, plus `promoted_at` and `promoted_by`. a version uploaded before per-platform files carries its Windows installer in the flat fields, and is read as `files.windows_x64`.
 
 ---
 
 ## storage
 
-Installers are stored under `agent-installers/versions/{version}/`, one object per platform:
+files live under `agent-installers/versions/{version}/`, one per platform, always under these names whatever the uploaded file was called:
 
 ```text
 Owlette-Installer-v{version}.exe
@@ -118,10 +136,10 @@ Owlette-Installer-v{version}.pkg
 Owlette-Installer-v{version}.deb
 ```
 
-Metadata is stored in Firestore under:
+Firestore holds:
 
 ```text
 installer_metadata/latest
-installer_metadata/data/versions/
+installer_metadata/data/versions/{version}
 installer_uploads/{uploadId}
 ```

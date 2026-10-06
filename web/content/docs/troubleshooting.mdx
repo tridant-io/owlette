@@ -1,165 +1,168 @@
 ---
 title: "troubleshooting"
-description: "Cross-cutting troubleshooting guide for common issues across the entire owlette system."
+description: "cross-cutting troubleshooting for common issues across the whole owlette system — the agent on Windows, macOS and Linux, the dashboard, and Firestore."
+keywords: ["not working", "offline", "error", "help", "fix", "broken", "logs"]
 ---
+
+for the agent itself — every log file on every platform, running it in the foreground, and starting and stopping the service — see [agent troubleshooting](/docs/agent/troubleshooting).
 
 ---
 
 ## agent won't connect to cloud
 
-**Symptoms**: Machine shows offline in dashboard, agent logs show connection errors.
+**symptoms**: the machine shows offline in the dashboard, and the agent's logs show connection errors.
 
-**Check**:
+**check**:
 
-1. Verify internet connectivity on the agent machine
-2. Check firewall rules — outbound HTTPS (port 443) must be allowed to `owlette.app`, `dev.owlette.app`, `*.googleapis.com`, `*.firebaseio.com`, and the Cloudflare R2 endpoint used for roost chunks (usually `*.r2.cloudflarestorage.com`)
-3. Check `C:\ProgramData\Owlette\logs\service.log` for specific errors
-4. Verify `firebase.enabled` is `true` in config.json
-5. Verify `firebase.site_id` matches a site that exists in Firestore
+1. internet connectivity on the agent machine
+2. firewall rules — outbound HTTPS (port 443) must be allowed to `owlette.app`, `dev.owlette.app`, `*.googleapis.com`, `*.firebaseio.com`, and the Cloudflare R2 endpoint used for roost chunks (usually `*.r2.cloudflarestorage.com`)
+3. `service.log` for specific errors — `C:\ProgramData\Owlette\logs\` on Windows, `/Library/Application Support/Owlette/logs/` on macOS, `/var/lib/owlette/logs/` on Linux
+4. that `firebase.enabled` is `true` in `config.json`
+5. that `firebase.site_id` matches a site that exists in Firestore
 
-**Common errors**:
+**common errors**:
 
 | log message | cause | fix |
 |-------------|-------|-----|
-| "Agent not authenticated" | Missing or corrupt tokens | Re-register with a new code |
-| "HTTP error 403" | Firestore rules blocking access | Verify security rules are deployed |
-| "Token expired" | Refresh failed | Check refresh token in logs, re-register if needed |
-| "Connection refused" | Firewall or proxy | Allow outbound HTTPS |
+| "Agent not authenticated" | missing or corrupt tokens | re-pair with a new phrase — see [agent troubleshooting](/docs/agent/troubleshooting#agent-not-authenticated-error) |
+| "HTTP error 403" | Firestore rules blocking access | verify the security rules are deployed |
+| "Token expired" | the refresh failed | check the refresh errors in the log, and re-pair if needed |
+| "Connection refused" | a firewall or proxy | allow outbound HTTPS |
 
 ---
 
 ## dashboard shows machine offline
 
-**Symptoms**: Agent is running but dashboard shows offline.
+**symptoms**: the agent is running but the dashboard shows it offline.
 
-1. **Check heartbeat age** — If last seen was recently, the machine may be experiencing intermittent connectivity
-2. **Check agent service**: `sc query OwletteService` (should show RUNNING)
-3. **Check ConnectionManager state** in logs — look for BACKOFF or DISCONNECTED
-4. **Verify site_id** — Agent and dashboard must be looking at the same site
-5. **Check Firestore directly** — Go to Firebase Console → Firestore → `sites/{siteId}/machines/{machineId}` → check the machine document fields `online`, `lastHeartbeat`, `agent_version`, and `metrics`
+1. **check the heartbeat age** — if the machine was last seen recently, it may have intermittent connectivity
+2. **check the service** — `sc query OwletteService` on Windows (should show `RUNNING`), `launchctl print system/app.owlette.agent` on macOS, `systemctl status owlette-agent` on Linux
+3. **check the ConnectionManager state** in the logs — look for `BACKOFF` or `DISCONNECTED`
+4. **verify the site_id** — the agent and the dashboard must be looking at the same site
+5. **check Firestore directly** — Firebase Console → Firestore → `sites/{siteId}/machines/{machineId}` → check the machine document's `online`, `lastHeartbeat`, `agent_version`, and `metrics` fields
 
 ---
 
 ## processes not auto-restarting
 
-1. Verify `launch_mode` is `always`, or `scheduled` with the current time inside a configured schedule window
-2. Check if `relaunch_attempts` limit was reached (reboot prompt should appear)
-3. Verify `exe_path` exists on the machine — a missing executable leaves the process `STOPPED` on the dashboard, not `INACTIVE`, and the agent logs the failed launch and raises an `exe_missing` alert. `INACTIVE` means launch mode is `off`
-4. Check agent logs for launch errors
-5. Verify the service is running and the main loop is executing (look for periodic log entries)
+1. verify `launch_mode` is `always`, or `scheduled` with the current time inside a configured schedule window
+2. check whether the `relaunch_attempts` limit was reached. on Windows the reboot prompt should appear; on macOS and Linux the dashboard shows the restart pending and nothing relaunches until an admin approves or dismisses it
+3. verify `exe_path` exists on the machine — a missing executable shows as **failed** (`LAUNCH_FAILED`) once the entry has launched before, or `STOPPED` if it never has, and the agent logs the failed launch and raises an `exe_missing` alert. `INACTIVE` means the launch mode is `off`
+4. on macOS and Linux, check that someone is signed in at the machine's screen — managed processes launch into the signed-in user's session, and with nobody signed in the agent waits
+5. check the agent's logs for launch errors, and that the service is running and its main loop is executing (look for periodic log entries)
+
+more in [process monitoring](/docs/agent/process-monitoring).
 
 ---
 
 ## process won't launch after an app upgrade
 
-**Symptoms**: A managed process stays `STOPPED` on the dashboard (the desktop app shows `INACTIVE` once the last run is swept from local state), or the dashboard shows an executable-missing toast after software was upgraded or installed side-by-side.
+**symptoms**: a managed process shows **failed** on the dashboard and in the desktop app, or the dashboard shows an executable-missing toast after software was upgraded or installed side-by-side.
 
-1. Open the dashboard toast or activity log entry with action `exe_missing`.
-2. Review the suggested paths. The agent scans nearby sibling directories for executables with the same filename.
-3. Use the toast's **use path** action, or open the process edit dialog manually and update **executable path**.
-4. Save the process. If launch mode is `always`, the agent should launch it on the next monitoring pass. If launch mode is `scheduled`, it launches when the next matching schedule window opens.
-5. If no suggestion appears, browse the machine for the new executable path and update the process manually.
+1. open the dashboard toast or the activity log entry with action `exe_missing`.
+2. review the suggested paths. the agent scans nearby sibling directories for executables with the same filename.
+3. use the toast's **use path** action, or open the process edit dialog manually and update the path.
+4. save the process. if the launch mode is `always`, the agent launches it on the next monitoring pass. if it is `scheduled`, it launches when the next matching schedule window opens.
+5. if no suggestion appears, browse the machine for the new executable path and update the process manually.
 
 ---
 
-## oauth token issues
+## OAuth token issues
 
 ### "agent not authenticated - no refresh token found"
 
-The encrypted token file is missing or unreadable.
-
-**Fix**: Re-pair the agent:
-
-1. Delete the token file: `del C:\ProgramData\Owlette\.tokens.enc`
-2. Run the pairing flow: `C:\ProgramData\Owlette\python\python.exe C:\ProgramData\Owlette\agent\src\configure_site.py`
-3. The console prints a 3-word pairing phrase and the authorization link for the server this machine is bound to, then starts polling. Open that link from any device and enter the phrase — nothing opens a browser here on its own. The running service picks the new credentials up on its own; no restart is needed.
+the encrypted token file is missing or unreadable. re-pair the agent: delete `.tokens.enc` from the data root and run `configure_site.py` with the bundled Python. the config still names the site, so the script asks `reconfigure? (y/N)` first — answer `y`, since the default cancels, or pass `--add <phrase>` with a phrase generated in the dashboard, which skips the question and needs no authorizing. otherwise authorize the phrase the script prints, from any device. either way, restart the service once pairing succeeds. the exact commands for Windows, macOS and Linux are in [agent troubleshooting](/docs/agent/troubleshooting#agent-not-authenticated-error).
 
 ### token refresh failing
 
-Check `service.log` for refresh errors. Common causes:
+check `service.log` for refresh errors. common causes:
 
-- **Machine ID mismatch** — The machine was renamed since registration
-- **Token revoked** — An admin revoked the token from the dashboard
-- **Network issue** — Can't reach the refresh endpoint
+- **machine ID mismatch** — the machine was renamed since registration
+- **token revoked** — an admin revoked the token from the dashboard
+- **network issue** — the agent can't reach the refresh endpoint
 
 ---
 
 ## deployment stuck
 
-**Symptoms**: Deployment shows "downloading" or "installing" indefinitely.
+**symptoms**: a deployment shows "downloading" or "installing" indefinitely.
 
-1. Check agent logs for download/install progress
-2. Verify the installer URL is accessible from the agent machine (test in browser)
-3. Check if the installation timed out (default: 40 minutes)
-4. For large installers on slow connections, the download may simply be slow
-5. Try cancelling and re-deploying
+1. check the agent's logs for download and install progress
+2. verify the installer URL is reachable from the agent machine (test it in a browser)
+3. check whether the installation timed out (default: 40 minutes)
+4. for large installers on slow connections, the download may simply be slow
+5. try cancelling and re-deploying
+
+see [deployments](/docs/dashboard/deployments#troubleshooting).
 
 ---
 
 ## roost sync failed
 
-1. **R2 configuration failed** — Check web runtime logs for missing `R2_S3_ENDPOINT`, `R2_S3_ACCESS_KEY_ID`, or `R2_S3_SECRET_ACCESS_KEY`. The endpoint should be reachable from the web app and agents over HTTPS.
-2. **Chunk upload or verification failed** — Retry the upload from the roost page and confirm the agent machine can reach signed R2 URLs. A publish can fail if the version references chunks that were not uploaded or were rejected after hash verification.
-3. **Target fanout stalled** — Check `sites/{siteId}/roosts/{roostId}/target_state/{machineId}`. Current target states include `pending`, `downloading`, `assembling`, `committed`, `failed`, and `cancelled`.
-4. **`sync_pull` stuck or failed** — Check `service.log` on the target machine for `sync_pull` errors. If no target-state document appears, confirm the machine is online and has a pending command in `sites/{siteId}/machines/{machineId}/commands/pending`.
-5. **Permission denied** — The configured extract root may not be writable or may be outside the agent's allowed extract roots.
+1. **R2 configuration failed** — check the web runtime logs for a missing `R2_S3_ENDPOINT`, `R2_S3_ACCESS_KEY_ID`, or `R2_S3_SECRET_ACCESS_KEY`. the endpoint should be reachable from the web app and the agents over HTTPS.
+2. **chunk upload or verification failed** — retry the upload from the roost page and confirm the agent machine can reach signed R2 URLs. a publish can fail if the version references chunks that were not uploaded or were rejected after hash verification.
+3. **target fanout stalled** — check `sites/{siteId}/roosts/{roostId}/target_state/{machineId}`. current target states include `pending`, `downloading`, `assembling`, `committed`, `failed`, and `cancelled`.
+4. **`sync_pull` stuck or failed** — check `service.log` on the target machine for `sync_pull` errors. if no target-state document appears, confirm the machine is online and has a pending command in `sites/{siteId}/machines/{machineId}/commands/pending`.
+5. **permission denied** — the configured extract root may not be writable, or may be outside the agent's allowed extract roots.
 
 ---
 
-## 2fa issues
+## 2FA issues
 
 ### lost authenticator
 
-If you also have a passkey on the account, sign in with it — a passkey clears 2FA on its own, no code needed.
+if you also have a passkey on the account, sign in with it — a passkey clears 2FA on its own, no code needed.
 
-Otherwise use one of your **backup codes** at the 2FA prompt. Each code can only be used once.
+otherwise use one of your **backup codes** at the 2FA prompt. each code can only be used once.
 
 ### no backup codes
 
-Ask a superadmin to run **reset 2FA** on your account from the admin users page (`POST /api/users/{uid}/mfa-reset`). It removes every second factor — authenticator app, passkeys, and the backup codes — re-arms mandatory 2FA setup, and revokes the account's trusted devices, so the next sign-in starts enrollment from scratch.
+ask a superadmin to run **reset 2FA** on your account from the admin users page (`POST /api/users/{uid}/mfa-reset`). it removes every second factor — authenticator app, passkeys, and the backup codes — re-arms mandatory 2FA setup, and revokes the account's trusted devices, so the next sign-in starts enrollment from scratch.
 
-Two things it deliberately does **not** do: it does not revoke Firebase refresh tokens, so a session the user already holds elsewhere stays signed in until it expires on its own; and superadmins cannot reset themselves, so a locked-out superadmin needs a different superadmin to do it.
+two things it deliberately does **not** do: it does not revoke Firebase refresh tokens, so a session the user already holds elsewhere stays signed in until it expires on its own; and superadmins cannot reset themselves, so a locked-out superadmin needs a different superadmin to do it.
 
-Because a reset hands the account to whoever signs in next, confirm who you're talking to before running one.
+because a reset hands the account to whoever signs in next, confirm who you're talking to before running one.
 
 ### code not working
 
-- Ensure your device's clock is synchronized (TOTP is time-based)
-- Codes expire every 30 seconds — enter the current one
-- Verify you're using the correct account in your authenticator app
+- ensure your device's clock is synchronized (TOTP is time-based)
+- codes expire every 30 seconds — enter the current one
+- verify you're using the correct account in your authenticator app
 
 ### "verify a factor you already have" when adding one
 
-Adding a second factor to an account that already holds one requires the current session to have cleared a 2FA challenge — the route answers `403` with `mfa_challenge_required` otherwise. Verify with your existing passkey, or take the **use a code instead** link to `/verify-2fa`, then add the new factor.
+adding a second factor to an account that already holds one requires the current session to have cleared a 2FA challenge — the route answers `403` with `mfa_challenge_required` otherwise. verify with your existing passkey, or take the **use a code instead** link to `/verify-2fa`, then add the new factor.
 
 ### can't regenerate backup codes
 
-Regeneration needs live proof in the same request: a current 6-digit code, an unused backup code, or your passkey. Being signed in is not enough — a fresh sheet of recovery codes could otherwise be used to turn 2FA off entirely. If you have none of the three, that's the superadmin reset above.
+regeneration needs live proof in the same request: a current 6-digit code, an unused backup code, or your passkey. being signed in is not enough — a fresh sheet of recovery codes could otherwise be used to turn 2FA off entirely. if you have none of the three, that's the superadmin reset above.
 
-### asked to set up 2fa again
+### asked to set up 2FA again
 
-You removed your last second factor. That's allowed, but the account immediately re-arms 2FA setup, so the dashboard sends you to `/setup-2fa` to enroll a new factor — a passkey or an authenticator app — before you can use it again. Trusted devices are revoked at the same time.
+you removed your last second factor. that's allowed, but the account immediately re-arms 2FA setup, so the dashboard sends you to `/setup-2fa` to enroll a new factor — a passkey or an authenticator app — before you can use it again. trusted devices are revoked at the same time.
 
 ---
 
 ## hoot not responding
 
-1. **No LLM key configured** — Check hoot settings for API key
-2. **Invalid API key** — Verify the key is correct and has credits
-3. **Machine offline** — hoot checks machine status before executing tools
-4. **A tool is stuck** — A turn keeps running even if you reload the page (the chat reattaches to it), so you rarely lose work. If a tool call is taking too long, use the **cancel** control on its tool card to kill it, or **stop** the whole turn from the chat.
-5. **Rate limited** — The API may be rate-limiting requests
+1. **no LLM key configured** — check hoot settings for an API key
+2. **invalid API key** — verify the key is correct and has credits
+3. **machine offline** — hoot checks machine status before executing tools
+4. **a tool is stuck** — a turn keeps running even if you reload the page (the chat reattaches to it), so you rarely lose work. if a tool call is taking too long, use the **cancel** control on its tool card to kill it, or **stop** the whole turn from the chat.
+5. **rate limited** — the API may be rate-limiting requests
+
+some hoot tools are Windows only; on a Mac or Linux machine they refuse rather than run. see the [hoot tools reference](/docs/reference/hoot-tools).
 
 ---
 
 ## email alerts not working
 
-1. Verify `RESEND_API_KEY` environment variable is set in Railway
-2. Check that the Resend API key is valid
-3. Verify `CRON_SECRET` is configured for health check cron
-4. Check the cron-job.org schedule is set: `*/5 * * * *`
-5. Send a test email from Admin Panel → Email Test
-6. Check spam/junk folders
+1. verify the `RESEND_API_KEY` environment variable is set in Railway
+2. check that the Resend API key is valid
+3. verify `CRON_SECRET` is configured for the health check cron
+4. check that the cron-job.org schedule is set: `*/5 * * * *`
+5. send a test email from admin panel → email test
+6. check spam and junk folders
 
 ---
 
@@ -167,16 +170,16 @@ You removed your last second factor. That's allowed, but the account immediately
 
 ### slow loading
 
-- **Cold starts** (Railway Hobby plan) — Upgrade to Pro for no cold starts
-- **Large dataset** — Many machines/processes increase Firestore reads
-- **Bundle size** — Check `.next/static` output during build
+- **cold starts** (Railway Hobby plan) — upgrade to Pro for no cold starts
+- **large dataset** — many machines and processes increase Firestore reads
+- **bundle size** — check the `.next/static` output during a build
 
 ### real-time updates not working
 
-- Check browser console for Firestore listener errors
-- Verify Firebase config is correct
-- Try hard refresh (Ctrl+Shift+R)
-- Check if the Firestore quota has been exceeded
+- check the browser console for Firestore listener errors
+- verify the Firebase config is correct
+- try a hard refresh (ctrl+shift+r)
+- check whether the Firestore quota has been exceeded
 
 ---
 
@@ -184,52 +187,54 @@ You removed your last second factor. That's allowed, but the account immediately
 
 ### agent logs
 
-| log | path |
-|-----|------|
-| Service | `C:\ProgramData\Owlette\logs\service.log` |
-| Desktop app | `%LOCALAPPDATA%\app.owlette.desktop\logs\owlette-desktop.log` (per-user, not under ProgramData) |
-| hoot | `C:\ProgramData\Owlette\logs\cortex.log` |
-| Pairing | `C:\ProgramData\Owlette\logs\pairing_debug.log` |
-| Self-update installer | `C:\ProgramData\Owlette\logs\installer_update.log` |
-| Interactive installer | Only where Inno Setup is launched with `/LOG=<path>`; use `/LOG="C:\ProgramData\Owlette\logs\setup.log"` to write a setup log there |
+| log | Windows | macOS | Linux |
+|-----|---------|-------|-------|
+| service | `C:\ProgramData\Owlette\logs\service.log` | `/Library/Application Support/Owlette/logs/service.log` | `/var/lib/owlette/logs/service.log` |
+| desktop app (per-user) | `%LOCALAPPDATA%\app.owlette.desktop\logs\owlette-desktop.log` | `~/Library/Logs/app.owlette.desktop/owlette-desktop.log` | `~/.local/share/app.owlette.desktop/logs/owlette-desktop.log` |
+| hoot | `logs\cortex.log` | `logs/cortex.log` | `logs/cortex.log` |
+| pairing | `logs\pairing_debug.log` | `logs/pairing_debug.log`, and `logs/pairing.log` for a preseed | `logs/pairing_debug.log`, and `logs/pairing.log` for a preseed |
+| self-update | `logs\installer_update.log` | `logs/update_installer.log` | `journalctl -u owlette-update` |
+| swoop streamer | `logs\swoop\swoop.log` | `logs/swoop/swoop.log` | — |
+| interactive installer | `Setup Log <date> #NNN.txt` in the installing user's `%TEMP%`, written on every run; `/LOG="<path>"` writes it to a path you choose instead | — | — |
 
-The full inventory, including what each file is good for, is in [agent troubleshooting](/docs/agent/troubleshooting).
+the `logs` paths are under the data root. the full inventory, including what each file is good for, is in [agent troubleshooting](/docs/agent/troubleshooting#log-locations).
 
 ### dashboard logs
 
 | log | location |
 |-----|----------|
-| Build logs | Railway → Deployments → [deployment] → Logs |
-| Runtime logs | Railway → Deployments → [latest] → Logs |
-| Client errors | Browser → F12 → Console |
+| build logs | Railway → Deployments → [deployment] → Logs |
+| runtime logs | Railway → Deployments → [latest] → Logs |
+| client errors | browser → F12 → Console |
 
-### firestore logs
+### Firestore logs
 
 | log | location |
 |-----|----------|
-| Rule evaluations | Firebase Console → Firestore → Rules → Monitoring |
-| Usage metrics | Firebase Console → Firestore → Usage |
-| Auth events | Firebase Console → Authentication → Users |
+| rule evaluations | Firebase Console → Firestore → Rules → Monitoring |
+| usage metrics | Firebase Console → Firestore → Usage |
+| auth events | Firebase Console → Authentication → Users |
 
 ---
 
 ## debug mode
 
-Run the agent in debug mode for detailed console output:
+run the agent in the foreground for detailed console output: stop the service, then run `owlette_runner.py --debug` with the bundled Python as an administrator or root. on Windows:
 
-```bash
-cd C:\ProgramData\Owlette\agent\src
-python owlette_runner.py --debug
+```cmd
+net stop OwletteService
+cd /d C:\ProgramData\Owlette\agent\src
+C:\ProgramData\Owlette\python\python.exe owlette_runner.py --debug
 ```
 
-Requires an elevated (Administrator) command prompt. Shows real-time logging of all service operations.
+the macOS and Linux commands, and how to hand the machine back to the service afterwards, are in [debug mode](/docs/agent/troubleshooting#debug-mode).
 
 ---
 
 ## getting help
 
-1. Check the relevant section of this documentation
-2. Review agent logs and browser console for specific error messages
-3. Check the [Firestore Data Model](/docs/reference/firestore-data-model) to verify data structure
-4. Open an issue on [GitHub](https://github.com/tridant-io/owlette/issues)
-5. Email us at [support@tridant.io](mailto:support@tridant.io)
+1. check the relevant section of this documentation
+2. review the agent's logs and the browser console for specific error messages
+3. check the [Firestore data model](/docs/reference/firestore-data-model) to verify the data structure
+4. open an issue on [GitHub](https://github.com/tridant-io/owlette/issues)
+5. email us at [support@tridant.io](mailto:support@tridant.io)
