@@ -1,7 +1,7 @@
 ---
 title: "swoop"
-description: "swoop is the dashboard's remote desktop: a live, interactive view of a machine's screen, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "nat", "relay", "turn"]
+description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
+keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "bandwidth", "passkey", "2fa", "linux", "macos", "agent version"]
 ---
 
 swoop puts a machine's screen in your browser, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -15,32 +15,48 @@ a machine with someone in a session shows the count on its menu button and on th
 
 ---
 
+## which machines can host it
+
+you can watch and control from any computer with a current browser. the machine on the other end has to run the swoop streamer, and that depends on its platform:
+
+| platform | hosts swoop | what it needs |
+|---|---|---|
+| Windows | yes | agent 4.0.0 or later and an NVIDIA GPU. some features need a later agent; see [agent versions](#agent-versions) |
+| macOS | yes | Apple silicon, macOS 15 or later, agent 4.1.0 or later, someone logged in, and the owlette app running. see [on macOS](#on-macos) |
+| Linux | no | the Linux package ships no streamer, so the agent reports `capabilities.swoop: 0`. the menu keeps live view and screenshot, but both fail on Linux for now |
+
+a machine whose agent cannot stream never offers swoop: its menu keeps the live-view entry instead. on Linux that entry, and **screenshot** beside it, still fail for now — a Linux machine cannot capture its screen yet (see [platform support](/docs/reference/platform-support#screens)).
+
+the Windows streamer encodes on the GPU's NVENC encoder, the only one it ships with. a Windows machine without an NVIDIA GPU still offers swoop, but no session starts there: the streamer finds no encoder and exits, and the viewer reports that the machine did not answer.
+
+---
+
 ## turning it on
 
-swoop is **off** until a site turns it on — that is the default, and it is per site.
+swoop is **off** until a site turns it on: that is the default, and it is per site.
 
-a site admin flips it in **manage sites** → the site's pencil (**edit site**) → the **swoop** switch, beside [keep screens awake](/docs/dashboard/getting-started#site-settings). the switch takes effect the moment it moves; it is not part of the panel's save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
+a site owner or admin flips it in **manage sites** → the site's pencil (**edit site**) → the **swoop** switch, beside [keep screens awake](/docs/dashboard/getting-started#site-settings). the switch takes effect the moment it moves; it is not part of the panel's save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
 
-once a site is on, the rest of the policy is available over the API (`PATCH /api/sites/{siteId}/swoop-settings`) rather than the dashboard:
+the rest of the policy has no dashboard control yet. it is set with `PATCH /api/sites/{siteId}/swoop-settings` from a signed-in session as a site owner or admin; an API key is refused here too.
 
 | setting | default | what it does |
 |---|---|---|
 | `enabled` | `false` | the site-wide switch, the one the dashboard exposes |
 | `membersMayWatch` | `true` | whether a plain site member may watch. control always needs more than membership |
-| `excludedMachineIds` | `[]` | machines swoop may never reach, whatever the rest of the policy says |
-| `indicator` | `banner` | what the machine shows while a session is live: `banner`, `tray`, or `none` |
+| `excludedMachineIds` | `[]` | up to 1,000 machines swoop may never reach, whatever the rest of the policy says |
+| `indicator` | `banner` | how the machine signals a live session: `banner`, `tray` or `none`. today the owlette app's menu shows a swoop row with the viewer count during every session, and `tray` also raises a notification when one starts |
 
 ---
 
 ## starting a session
 
-the **swoop** entry appears in a machine's context menu once that machine's agent reports it can stream. on a machine that cannot, the old live-view entry stays instead — exactly one of the two is ever offered.
+the **swoop** entry appears in a machine's context menu once that machine's agent reports it can stream. on a machine that cannot, the old live-view entry stays instead: exactly one of the two is ever offered.
 
-the viewer opens at `/swoop/<siteId>/<machineId>`. you can also get there from a terminal with [`owlette swoop`](/docs/cli/reference/swoop), which only opens the page — the session still starts in the browser.
+the viewer opens at `/swoop/<siteId>/<machineId>`. you can also get there from a terminal with [`owlette swoop`](/docs/cli/reference/swoop), which only opens the page; the session still starts in the browser.
 
-a session needs the machine to be online. swoop cannot reach a machine that has not dialled in, and the request is refused with `machine_offline` rather than queued.
+a session needs the machine to be online. swoop cannot reach a machine that has not dialled in: the request is refused with `machine_offline`, and the viewer keeps retrying until the machine is back.
 
-swoop does not open the machine you are sitting at. a browser cannot tell which computer it runs on, so the first try reaches the machine, which sees the session coming from itself and ends it with "you're on this machine". from then on that browser shows swoop greyed out for that machine, labelled **you're on this machine**. the record lives in that browser only, and a session that does connect to the machine clears it.
+swoop does not open the machine you are sitting at. a browser cannot tell which computer it runs on, so the first try reaches the machine, which sees the session coming from itself and ends it with "you're on this machine". from then on that browser shows swoop greyed out for that machine, labelled **you're on this machine**. the record lives in that browser only and covers one machine at a time, and a session that does connect to the machine clears it. this needs agent 4.1.6; an older agent shows you a picture of your own screen instead.
 
 ---
 
@@ -48,12 +64,24 @@ swoop does not open the machine you are sitting at. a browser cannot tell which 
 
 | | who | what it takes |
 |---|---|---|
-| watch | any site member, when `membersMayWatch` is on | site membership |
-| control | site admins and owners | the machine remote-control capability **and** a live second factor |
+| watch | site members, owners and admins | site membership. a member also needs `membersMayWatch` on |
+| control | site owners and admins | the machine remote-control capability **and** a live second factor |
 
-control is gated on a **step-up**: a fresh second-factor check, prompted in the viewer, which opens a 12-hour window for that machine. a remembered device or an old sign-in does not count — the window is bound to the login session it was opened from, so there is a real ceremony behind every controlled session. a tab that holds control keeps it across reconnects for as long as it stays open; a new tab asks again once the window has lapsed.
+the viewer always asks for control when your role allows it, and falls back to watching only when it does not.
 
 a viewer that started watch-only stays watch-only. renewing its lease cannot promote it.
+
+### the second factor
+
+control is gated on a **step-up**: a fresh second-factor check, prompted in the viewer, that covers that machine for 12 hours, reconnects included. any of your factors answers it:
+
+- a **passkey** (**use a passkey**), with user verification
+- an **authenticator code**, the 6 digits from your authenticator app
+- a **backup code** (**use a backup code instead**). each one works once
+
+the 12 hours run from the check itself, and using the window does not extend it. the window belongs to you and that machine, so a new tab or a reload inside it does not ask again, but only from a sign-in that itself passed a second-factor check: a browser that skipped it because it was remembered asks once more. a tab that holds control also keeps it across its own reconnects for as long as it stays open. a [kill](#ending-and-killing) on the machine closes every window on it.
+
+an account with no passkey and no authenticator app cannot take control, and backup codes alone do not count. signing in with Google or a password is not a second factor. the viewer says so, offers only **cancel**, and links to two-factor setup; add a factor there or under [account settings](/docs/dashboard/account-settings#security) → security, then start the session again. because the viewer asks for control first, an owner or admin in that state cannot open the viewer to watch either.
 
 ---
 
@@ -61,26 +89,48 @@ a viewer that started watch-only stays watch-only. renewing its lease cannot pro
 
 the toolbar carries the session state, an **end** button, and:
 
-- **fullscreen with keyboard and mouse capture** — takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so
-- **latency stats** — an overlay, off by default because it covers the picture
-- **display picker** — which of the machine's monitors you are looking at
-- **quality ceiling** — bandwidth (auto, or 5 to 100 mbps), resolution (native, 1440p, 1080p, 720p) and frame rate (60 or 30)
-- **audio** — off unless you ask for it
-- **special keys** — the combinations the browser will not let through
-- **bar position** — the bar along the top, down the left or right edge, or **auto**, the default, which puts it wherever the picture comes out bigger in your window and moves it when you resize. a 16:9 picture in a 16:9 window has empty space at its sides, so a side bar gives the picture the height a top bar takes. on a side the machine's name runs vertically and the buttons stack at the bottom; a phone keeps the bar on top. the choice is kept in your browser
-- **presence** — who else is in the session
+- **fullscreen with keyboard and mouse capture**: takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so
+- **latency stats**: an overlay, off by default because it covers the picture. its codec row shows what the picture is arriving in
+- **display picker**: which of the machine's monitors you are looking at
+- **quality**: see [quality](#quality) below
+- **audio**: off unless you ask for it
+- **special keys**: the combinations the browser will not let through
+- **bar position**: the bar along the top, down the left or right edge, or **auto**, the default, which puts it wherever the picture comes out bigger in your window and moves it when you resize. a 16:9 picture in a 16:9 window has empty space at its sides, so a side bar gives the picture the height a top bar takes. on a side the machine's name runs vertically and the buttons stack at the bottom; a phone keeps the bar on top. the choice is kept in your browser
+- **presence**: who else is in the session
 
-every button in the bar says what it does when you hover it, a greyed-out one included.
+every button in the bar says what it does when you hover it, a greyed-out one included. a watch-only session is labelled **view only**.
 
 over the dark bars around the picture your own pointer shows and nothing reaches the machine, so a click there never lands on the edge of its screen. a drag that runs off the picture keeps going, held at its edge.
 
-a watch-only session is labelled **view only**.
+### quality
+
+the quality menu has one row per setting. it opens once the session has connected, and it sets your view only; other viewers keep their own.
+
+| setting | options | when it applies |
+|---|---|---|
+| bandwidth | **auto**, or 5, 10, 20, 30, 50, 80 or 100 Mbps | at once |
+| resolution | native, 1440p, 1080p, 720p | at once |
+| frame rate | 60 or 30 fps | at once |
+| codec | **auto**, or h264 and, where your browser can decode it in hardware, HEVC | the menu says on reconnect; see below |
+
+bandwidth, resolution and frame rate are upper limits: the machine lowers them when the connection needs it. **auto** bandwidth starts a source above 2.5 megapixels, such as a 1440p or 4K-class display, at 80 Mbps, and anything smaller at 20 Mbps. a new session starts back at the defaults: auto, native, 60 fps.
+
+the machine settles the codec once, when a session starts: HEVC when your browser offers it and the machine can encode it, otherwise h264. today it keeps that order whatever the codec row says, so the row does not change what you get; the latency stats show the codec in use.
+
+### clipboard
 
 the clipboard is shared both ways: copy on the machine and paste on your computer, or the reverse, with text up to 256 KB and images up to 15 MB. pasting into the machine needs control: ctrl+v (cmd+v on a Mac) in the viewer sends what you copied to the machine and pastes it there, with nothing for the browser to ask.
 
 a copy made on the machine reaches your clipboard at once when you have just clicked or pressed a key in the viewer. at any other time, such as a copy made at the machine itself, the browser first asks whether the site may use the clipboard (Chrome and Brave word it as "see text and images copied to the clipboard"): choose **allow**. if you close that question, the copy waits, the session bar says so, and your next click or key press in the picture takes it. if you chose **block**, change it in the site's settings, from the icon at the left of the address bar. the browser also takes a copy only while the viewer's tab is the one in front.
 
-on a Windows machine, UAC prompts, the lock screen and the sign-in screen come through like the rest of the desktop: you see the prompt and answer it with your mouse and keyboard, including typing an administrator's name and password. type the password rather than pasting it: Windows keeps the clipboard away from its security screens, so swoop does too. **ctrl + alt + del** in the special keys menu brings up the Windows security screen, for a machine whose sign-in or UAC prompts ask for it, and **win + l** there locks the machine. Pressing win+l yourself locks your own computer, fullscreen or not, so use the menu.
+### UAC prompts, lock and sign-in screens (Windows)
+
+on a Windows machine, UAC prompts, the lock screen and the sign-in screen come through like the rest of the desktop: you see the prompt and answer it with your mouse and keyboard, including typing an administrator's name and password. type the password rather than pasting it: Windows keeps the clipboard away from its security screens, so swoop does too.
+
+- **ctrl + alt + del** in the special keys menu brings up the Windows security screen, for a machine whose sign-in or UAC prompts ask for it. the machine raises it at most once every two seconds
+- **win + l** in the same menu locks the machine. pressing win+l yourself locks your own computer, fullscreen or not, so use the menu
+
+UAC prompts and ctrl + alt + del need agent 4.1.4, and win + l needs 4.1.5.
 
 ---
 
@@ -96,62 +146,60 @@ on a Windows machine, UAC prompts, the lock screen and the sign-in screen come t
 
 ## from another network
 
-swoop connects the browser to the machine directly. on the same network that always works. across the internet,
-both ends ask a public STUN server for the address their router shows the world, and each offers it to the other:
-that gets through most home and office routers.
+swoop connects the browser to the machine directly. on the same network that always works. across the internet, both ends ask a public STUN server for the address their router shows the world, and each offers it to the other: that gets through most home and office routers. the machine's half of this needs agent 4.1.3.
 
-- when both ends sit behind strict routers (many mobile networks, some corporate firewalls), a direct path is not
-  possible and swoop needs a **relay**. a relay is set up per deployment, not per site, by whoever runs owlette
-- after 20 seconds without a path the viewer stops saying **connecting** and says **can't reach this machine from
-  your network**, and whether a relay was there to try. it keeps trying underneath, and the picture appears if a
-  path comes up later
-- a machine's own firewall must let the owlette agent receive on UDP. on Windows the agent adds that rule itself
-  when swoop is turned on for the site
+- when both ends sit behind strict routers (many mobile networks, some corporate firewalls), a direct path is not possible and swoop needs a **relay**. a relay is set up per deployment, not per site, by whoever runs owlette: it is a Cloudflare TURN key, set in the [swoop environment variables](/docs/setup/environment-variables#swoop-required-for-remote-desktop)
+- after 20 seconds without a path the viewer stops saying **connecting** and says **can't reach this machine from your network**, and whether a relay was there to try. it keeps trying underneath, and the picture appears if a path comes up later
+- a machine's own firewall must let the owlette agent receive on UDP. on Windows the agent adds that rule itself when swoop is turned on for the site
 
 ---
 
 ## ending and killing
 
-ending your own session is the **end** button in the toolbar — anyone who may be in the room may leave it.
+ending your own session is the **end** button in the toolbar. anyone who may be in the room may leave it.
 
-a site admin can also stop **whatever anyone is running** on a machine (`POST …/swoop/kill`). that one is deliberately not gated on the site's swoop settings: stopping a stream has to work after the feature has been switched off, which is exactly when an operator wants it most. a kill also closes every second-factor window on that machine, so anyone it cut off — a tab that was reconnecting at the time included — confirms again before taking control.
+a site owner or admin can also stop **whatever anyone is running** on a machine, from **admin** → **swoop** (below) or with `POST …/swoop/kill`. a kill is deliberately not gated on the site's swoop settings: stopping a stream has to work after the feature has been switched off, which is exactly when an operator wants it most. a kill also closes every second-factor window on that machine, so anyone it cut off, a tab that was reconnecting at the time included, confirms again before taking control.
 
 ---
 
 ## what is recorded
 
-every session start, every refusal and every end is written to the session's own audit trail, with the actor, the machine and whether control was held. a session whose audit row cannot be written is not started.
+every session start, every refusal and every end is written to the session's own audit trail, with the actor, the machine and whether control was held. a session whose audit row cannot be written is not started (`audit_unavailable`).
 
 ---
 
 ## on macOS
 
-a Mac hosts swoop on Apple silicon with macOS 15 or later. a session there works as it does on Windows, apart from what follows.
+a Mac hosts swoop on Apple silicon with macOS 15 or later, from agent 4.1.0. a session there works as it does on Windows, apart from what follows.
 
 **someone must be logged in.** swoop shows and controls the logged-in user's desktop, and macOS does not let it reach the login window. logging out or switching users ends the session.
 
-**four grants**, each switched on at the Mac in **system settings** → **privacy & security**:
+**the owlette app must be running.** the agent runs as root with no display of its own, so it asks the owlette app to start the streamer, and the streamer runs under the app's grants. with the app not running, the agent refuses to start one (it logs `desktop_not_running`), and the viewer reports that the machine did not answer and keeps retrying. quitting the app ends a live session; the viewer starts its next one once the app is back. the app starts at every login, and if someone quits it from its menu it stays closed until they reopen it or log in again.
+
+**a Mac paired before 4.0.6 may need pairing again.** macOS names a machine `Name.local`, which the API's machine ID rule does not allow, so a Mac paired under that name has every swoop token refused. a Mac pairing for the first time now takes its ID without `.local`; one already paired as `Name.local` keeps that ID until you pair it again.
+
+**four grants**, each switched on at the Mac in **System Settings** → **Privacy & Security**:
 
 | grant | what it is for | where it is asked |
 |---|---|---|
-| **screen recording** (the **screen & system audio recording** list) | the picture and the audio. without it the Mac offers no swoop | the owlette app asks when it starts, and shows a notice while it is off. the grant takes effect once owlette is quit and reopened; the swoop entry appears within a couple of minutes of that |
-| **accessibility** | your keyboard and mouse | only from the owlette app's notice, whose **open system settings** button asks macOS and opens the pane. the notice clears within seconds of the grant, with no restart, and control works from the next session |
-| **local network** | a viewer on the same network reaching the Mac directly | macOS asks, in owlette's name, at the first session. until someone at the Mac allows it, a viewer on the same network cannot reach the Mac directly |
-| **paste from other apps** | the clipboard from the Mac to you | never asked: set owlette to always allow. see the clipboard below |
+| **Screen Recording** (the **Screen & System Audio Recording** list) | the picture and the audio. without it the Mac offers no swoop | the owlette app asks when it starts, and shows a notice while it is off. the grant takes effect once owlette is quit and reopened; the swoop entry appears within a couple of minutes of that |
+| **Accessibility** | your keyboard and mouse | only from the owlette app's notice, whose **open system settings** button asks macOS and opens the pane. the notice clears within seconds of the grant, with no restart, and control works from the next session |
+| **Local Network** | a viewer on the same network reaching the Mac directly | macOS asks, in owlette's name, at the first session. until someone at the Mac allows it, a viewer on the same network cannot reach the Mac directly |
+| **Paste from Other Apps** | the clipboard from the Mac to you | never asked: set owlette to always allow. see the clipboard below |
 
-without accessibility you can still watch: the picture, the cursor, the audio and the clipboard from the Mac all work, but your keyboard and mouse are dropped, so a paste reaches the Mac's clipboard without being pasted.
+without Accessibility you can still watch: the picture, the cursor, the audio and the clipboard from the Mac all work, but your keyboard and mouse are dropped, so a paste reaches the Mac's clipboard without being pasted.
 
 - **the screen stays lit.** a session wakes the Mac's display and keeps it from sleeping while it captures
 - **the menu bar shows the capture.** while a session captures, macOS shows its own screen recording indicator in the menu bar, and owlette cannot hide it. stopping the capture from that indicator ends the session for everyone, as an admin's kill does, rather than restarting it over the person at the Mac
 - **macOS asks again after about thirty days** without a capture whether owlette may keep recording the screen. someone at the Mac has to answer it; owlette can neither answer it nor turn it off
 - **the keyboard follows the Mac.** from a PC, ctrl acts as cmd, so ctrl+c copies on the Mac. the keyboard menu has two settings: **shortcuts match** (the default), where ctrl and the Windows key both send cmd, and **keys match**, where ctrl is the Mac's own control key and the Windows key is cmd. the menu shows what each of your modifier keys does under the setting you chose. outside fullscreen your own Windows keeps the Windows key for itself, so the menu's **hold cmd for the next key** sends cmd with your next key press. a Mac viewing a Windows machine does the reverse: cmd acts as ctrl. the keyboard menu lists the Mac's own shortcuts (cmd+tab, cmd+space, cmd+q, and cmd+ctrl+q to lock) in place of ctrl+alt+del, print screen and pause are dropped because a Mac has no key for them, and the Mac's keyboard layout decides what a key types
-- **the clipboard** carries text and images both ways, within the limits above. an image the Mac copied as a TIFF reaches you as a PNG, and copied files are never carried. what you paste into the Mac arrives whatever macOS is set to. what the Mac copies reaches you only while owlette is set to always allow under **paste from other apps**, because any other answer has macOS raise a paste alert at the Mac, and swoop never raises one; each session reads the setting once, when it starts. macOS lists an app there only after the app has raised that alert once, which owlette never does, so on a Mac that does not list owlette the clipboard from the Mac stays off. macOS before 15.4 has no such setting, and there the clipboard travels both ways
+- **the clipboard** carries text and images both ways, within the limits above. an image the Mac copied as a TIFF reaches you as a PNG, and copied files are never carried. what you paste into the Mac arrives whatever macOS is set to. what the Mac copies reaches you only while owlette is set to always allow under **Paste from Other Apps**, because any other answer has macOS raise a paste alert at the Mac, and a session never raises one; each session reads the setting once, when it starts. macOS lists an app there only after the app has raised that alert once: while clipboard sharing is off, the owlette app shows a notice whose button reads the clipboard once, which raises the alert, and opens the setting. allow the alert, then set owlette to always allow. macOS before 15.4 has no such setting, and there the clipboard travels both ways
 
 ---
 
 ## admin → swoop
 
-**admin** → **swoop** lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site admins and owners see the sessions on their own sites, and a superadmin sees every site. a plain member does not get the page.
+**admin** → **swoop** (`/admin/swoop`) lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site owners and admins see the sessions on their own sites, and a superadmin sees every site. a plain member does not get the page. see the [admin panel](/docs/dashboard/admin).
 
 **kill** ends one session after a confirm. the viewer is disconnected at once, and, like every kill above, it also closes every open second-factor window on that machine, so anyone it cut off confirms again before taking control.
 
@@ -159,9 +207,49 @@ you do not need the page to spot a busy machine: the dashboard's machine menu sh
 
 ---
 
+## agent versions
+
+in a mixed fleet, what a session can do depends on the agent of the machine you open. the dashboard needs nothing extra.
+
+| feature | agent |
+|---|---|
+| host a session on Windows | 4.0.0 |
+| a session survives an agent update or restart, and a dropped network | 4.0.4 |
+| images up to 15 MB on the clipboard | 4.0.5 |
+| a Mac pairs with an ID swoop accepts (older Macs: pair again) | 4.0.6 |
+| host a session on a Mac | 4.1.0 |
+| connect from another network through most routers | 4.1.3 |
+| answer UAC prompts; ctrl + alt + del | 4.1.4 |
+| win + l locks the machine | 4.1.5 |
+| "you're on this machine" instead of a picture of your own screen | 4.1.6 |
+
+---
+
+## refusal codes
+
+a refused session arrives as a [problem](/docs/api/errors) with a `code`. the viewer shows its sentence, and the last column says whether it tries again by itself.
+
+| code | status | when | the viewer |
+|---|---|---|---|
+| `api_key_not_permitted` | 403 | the caller used an API key | stops |
+| `swoop_disabled` | 403 | the site has swoop off | stops |
+| `machine_excluded` | 403 | the machine is in `excludedMachineIds` | stops |
+| `forbidden` | 403 | your role on the site does not include the capability, as when a member asks for control. the detail reads "capability not granted" | asks to watch instead |
+| `capability_missing` | 403 | the same, caught at a lease renewal: you lost control or access during the session | stops |
+| `members_may_not_watch` | 403 | you are a member and `membersMayWatch` is off | stops |
+| `step_up_required` | 401 | control needs a second factor and no window is open, or your account has none enrolled | opens the second-factor prompt |
+| `machine_offline` | 409 | the machine is not connected | retries until it is |
+| `swoop_not_configured` | 503 | the deployment has no signalling server (`SWOOP_SIGNAL_URL` unset) | retries |
+| `audit_unavailable` | 503 | the session's audit row could not be written | retries |
+| `validation_failed` | 400 | the request was malformed | stops |
+| `not_found` | 404 | the machine or the session does not exist | stops |
+
+a second factor that does not check out comes back with its own code, such as `invalid_totp_code`, and the prompt stays open.
+
+---
+
 ## notes
 
-- **refusal codes** you may see, in the viewer or from the API: `api_key_not_permitted`, `swoop_disabled`, `machine_excluded`, `capability_missing`, `members_may_not_watch`, `step_up_required`, `machine_offline` (the viewer keeps retrying this one until the machine is back)
-- **nothing secret travels in a URL.** the viewer url names a site and a machine; the signalling url names a room. tokens and keys are only ever in a response body
-- **agent version**: the machine must be running an agent that ships the swoop streamer. older agents keep live view
+- **nothing secret travels in a URL.** the viewer URL names a site and a machine; the signalling URL names a room. tokens and keys are only ever in a response body
+- **running owlette yourself**: swoop needs a signalling worker and its keys, and a relay for strict routers; see the [swoop environment variables](/docs/setup/environment-variables#swoop-required-for-remote-desktop) and the [architecture](/docs/architecture#swoop-remote-desktop)
 - **related**: [`owlette swoop`](/docs/cli/reference/swoop) (open the viewer from a terminal), [machine monitoring](/docs/dashboard/machine-monitoring) (the machine cards the entry lives on), [errors](/docs/api/errors) (the problem envelope the codes above arrive in)

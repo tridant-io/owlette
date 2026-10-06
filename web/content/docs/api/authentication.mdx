@@ -1,39 +1,43 @@
 ---
 title: "authentication"
-description: "Owlette public API calls authenticate with scoped API keys. Dashboard and setup flows may also use first-party sessions or Firebase ID tokens, but external integrations should use owk_live_* or owk_test_* keys."
+description: "owlette public API calls authenticate with scoped, expiring owk_live_* API keys sent as a bearer token. the dashboard and setup flows use sessions or Firebase ID tokens, and a few surfaces — key management, swoop, display settings — refuse API keys outright."
+keywords: ["api key", "api token", "bearer token", "credentials", "scopes", "permissions", "x-api-key", "401", "403"]
 ---
 
-**Last updated**: 2026-08-17
+**last updated**: 2026-10-05
 
 ---
 
-## bearer header
+## sending a key
 
-Send API keys in the standard bearer header:
+send the key as a bearer token:
 
 ```http
 Authorization: Bearer owk_live_...
 ```
 
-Compatibility paths remain available on selected routes during developer preview:
+the same key also works in an `x-api-key` header, and is checked identically:
 
-- `x-api-key: owk_live_...`
-- `?api_key=owk_live_...`
+```http
+x-api-key: owk_live_...
+```
 
-New clients should use `Authorization: Bearer`. Query-string keys are easy to leak through logs and should be avoided outside compatibility cases such as EventSource/SSE clients that cannot set headers.
+a third form, `?api_key=owk_live_...` in the query string, still works but is deprecated: query strings end up in logs, proxies, and browser history. use it only where a client cannot set headers, such as a browser `EventSource` reading `GET /api/events/stream`.
+
+the CLI and both SDKs send `Authorization: Bearer`.
 
 ---
 
 ## key format
 
-| prefix | environment | use |
+| prefix | environment | notes |
 |---|---|---|
-| `owk_live_` | live | production fleets, production audit records, billable usage |
-| `owk_test_` | test | legacy — no longer issued. Existing keys remain valid and authenticate identically to `owk_live_` keys; `test` never provided isolation. |
+| `owk_live_` | `live` | every key minted today |
+| `owk_test_` | `test` | legacy, no longer issued. existing keys authenticate exactly like `owk_live_` keys — `test` never provided a sandbox — and rotating one keeps its `owk_test_` prefix |
 
-The raw key suffix is a 32-byte random value encoded as base64url, currently 43 characters. Treat the full key as opaque. The API only returns the raw key once, at creation.
+the part after the prefix is 32 random bytes encoded as base64url (43 characters). treat the whole key as opaque. the API returns the raw key once, at creation or rotation, and stores only its SHA-256 hash.
 
-Stored and list responses expose a `keyPrefix` for display and audit correlation; they never return the full raw key again.
+list responses expose a `keyPrefix` (the first 15 characters, e.g. `owk_live_kB8n3p`) for display and audit correlation; they never return the raw key again.
 
 ---
 
@@ -41,37 +45,34 @@ Stored and list responses expose a `keyPrefix` for display and audit correlation
 
 ### dashboard
 
-Use **Settings -> API Keys** in the dashboard for normal key creation. Choose:
+create keys in the dashboard at **settings → api keys** (`/settings/api-keys`). choose:
 
-- name
-- scopes
-- expiration
+- a name (up to 100 characters)
+- scopes, from a preset or custom
+- an expiry, from 1 to 365 days (default 90)
 
-Every key is minted `live`. The API still accepts an `environment` field so
-older clients keep working, but it is ignored.
+copy the raw key immediately into a secrets manager. it is shown once.
 
-Copy the raw key immediately into a secrets manager.
+### scripted
 
-### API creation split
+`POST /api/keys` creates a key and takes the same fields: `name`, `scopes`, and an optional `ttlDays` (1–365, default 90). it requires a signed-in user session or a Firebase ID token — an API key cannot create, list, edit, rotate, or revoke keys, so a leaked key cannot mint a broader replacement for itself. an agent's machine token is refused too.
 
-`POST /api/keys` creates scoped user API keys and requires a signed-in user session or Firebase ID token. You cannot bootstrap a new key with an API key.
+the body may still carry `environment`, because older CLI and SDK builds send it; it is ignored, and every new key is `live`.
 
-`/api/account/api-keys` is a superadmin/platform convenience surface. It is not the normal self-service key bootstrap path for public integrations.
+`owlette auth login` mints its key through a device-code flow instead: the CLI shows a three-word pairing phrase, you approve it in the browser while signed in and pick the scopes and lifetime, and the CLI receives the key. see [`auth`](/docs/cli/reference/auth).
 
-This split is intentional: a leaked API key should not be able to mint a broader replacement for itself.
+`/api/account/api-keys` is a superadmin platform surface, not the self-service path.
 
 ---
 
 ## verifying identity
 
-`GET /api/whoami` returns the resolved caller, active key context, scope list, rate-limit summary, quota summary, and primary site when available. The `rateLimit` block is a metadata hint, not the active enforcement counter. Use `RateLimit-*` response headers on actual API calls for enforced limits and live counters.
+`GET /api/whoami` accepts any credential and returns who it resolved to: the user, the key's metadata and scopes, a rate-limit hint, a storage-quota summary, and a primary site.
 
 ```bash
 curl -fsS "https://owlette.app/api/whoami" \
   -H "Authorization: Bearer $OWLETTE_API_KEY" | jq
 ```
-
-Representative API-key response:
 
 ```json
 {
@@ -94,11 +95,10 @@ Representative API-key response:
   "rateLimit": {
     "tier": "api",
     "limitPerMinute": 600,
-    "note": "metadata hint only; use RateLimit-* response headers on actual API calls for enforced limits and live counters"
+    "note": "use RateLimit-* response headers on actual API calls for live counters"
   },
   "quota": {
     "siteId": "kiosk-fleet-01",
-    "tier": "pro",
     "usedBytes": 23456789012,
     "pendingBytes": 104857600,
     "limitBytes": 107374182400
@@ -107,13 +107,15 @@ Representative API-key response:
 }
 ```
 
-When the request is authenticated by a session or Firebase ID token instead of an API key, `key` is `null`.
+- `key` is `null` when a session or Firebase ID token made the request.
+- `primarySiteId` is the first concrete `site` scope on the key, falling back to the user's first assigned site. `quota` describes that site, and is `null` when there is none.
+- `rateLimit` is a fixed hint, not a live counter. the limits that actually apply, and their counters, arrive as `RateLimit-*` headers on each response — see [rate limits](/docs/api/rate-limits).
 
 ---
 
 ## scopes
 
-Each key has a `scopes[]` array. A request is allowed only when the key has a matching resource, id, and permission, and the owning user still has access to the resource.
+each key carries a `scopes` array. a request is allowed only when one entry matches the operation's resource, ID, and permission, **and** the key's owner could make the same request themselves — a key never grants more than its user holds.
 
 ```json
 [
@@ -123,85 +125,87 @@ Each key has a `scopes[]` array. A request is allowed only when the key has a ma
 ]
 ```
 
-Scope fields:
-
 | field | meaning |
 |---|---|
-| `resource` | One of `roost`, `site`, `machine`, `chat`, `deploy`, `process`, `user`, or `installer`. |
-| `id` | Specific resource id, or `*` for every resource of that type the owning user can access. |
-| `permissions` | Non-empty list of exact permissions. |
+| `resource` | one of `roost`, `site`, `machine`, `chat`, `deploy`, `process`, `user`, or `installer` |
+| `id` | a specific resource ID (up to 128 characters), or `*` for every resource of that type the owner can access |
+| `permissions` | a non-empty list of `read`, `write`, `deploy`, `rollback`, `admin` |
 
-Permissions are exact. `write` does not imply `read`, `deploy` does not imply `write`, and `admin` does not imply every other permission. Include every permission the integration needs.
+a key holds at most 50 scope entries. creation and edits check that each concrete `site`, `chat`, or `deploy` ID is a site you can access, so a typo fails at creation instead of at first use.
 
-Supported permissions:
+permissions are exact, not a ladder: `write` does not imply `read`, `deploy` does not imply `write`, and `admin` does not imply anything else. a few operations need two permissions on the same scope (for example `write` and `admin`); the [interactive reference](/docs/api) names the scope on every operation.
 
-| permission | common use |
+| permission | typical use |
 |---|---|
-| `read` | list and detail reads |
-| `write` | create, update, publish, or queue writable operations |
-| `deploy` | rollout or deployment actions where separately modeled |
-| `rollback` | rollback actions |
-| `admin` | administrative operations such as webhook management, log clearing, or platform resources |
+| `read` | lists and detail reads |
+| `write` | creating, updating, publishing, queueing machine commands |
+| `deploy` | roost deploys and resyncs |
+| `rollback` | roost rollbacks |
+| `admin` | site creation, editing, and deletion; membership and ownership changes (together with `read` or `write`); clearing logs; deployment uninstalls (with `write`); superadmin platform, user, and installer routes |
 
-`user` and `installer` scopes are superadmin-only at key creation time.
+`user` and `installer` scopes are superadmin-only and must use `id: "*"`.
 
----
+### presets
 
-## presets
+the dashboard offers four presets as starting points. each grants its permissions on `roost`, `site`, `machine`, and `chat`, all with `id: "*"`:
 
-The dashboard exposes presets as a starting point:
-
-| preset | grants |
+| preset | permissions |
 |---|---|
-| `readonly` | `read` on common resources |
-| `publisher` | `read` and `write` on common resources |
-| `operator` | `read`, `write`, `deploy`, and `rollback` on common resources |
-| `admin` | `read`, `write`, `deploy`, `rollback`, and `admin` on common resources |
+| read only | `read` |
+| publisher | `read`, `write` |
+| operator | `read`, `write`, `deploy`, `rollback` |
+| admin | `read`, `write`, `deploy`, `rollback`, `admin` |
 
-Narrow presets before use when possible. Prefer one key per integration and one environment per key.
+narrow a preset to the sites and machines an integration actually touches before you save it.
+
+### what an API key cannot do
+
+some surfaces need a person, not a key:
+
+- **key management.** `/api/keys/*` takes a session or Firebase ID token only.
+- **swoop.** every swoop session route, the site swoop list, and `swoop-settings` refuse a key with `403 api_key_not_permitted` — swoop is a human-in-the-loop surface and a key has no second factor. see [swoop](/docs/dashboard/swoop).
+- **display settings.** `GET`/`PATCH /api/sites/{siteId}/display-settings` refuse a key the same way.
+- **hoot tools.** a key can hold conversations, but every reply is capped at read-only tools. see [hoot](/docs/api/hoot#access).
 
 ---
 
 ## editing key scopes
 
-A key that turns out to be scoped too narrowly does not have to be replaced. `PATCH /api/keys/{keyId}` edits `scopes` and/or `name` in place and leaves the secret alone — whatever already holds the key keeps working and picks up the new scopes on its next request.
+a key scoped too narrowly does not have to be replaced. `PATCH /api/keys/{keyId}` edits `scopes` and/or `name` in place and leaves the secret alone — whatever already holds the key keeps working and picks up the new scopes on its next request.
 
 ```bash
-curl -X PATCH https://owlette.app/api/keys/KEY_ID \
+curl -X PATCH "https://owlette.app/api/keys/$KEY_ID" \
   -H "Authorization: Bearer $FIREBASE_ID_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"scopes":[{"resource":"installer","id":"*","permissions":["read","write"]}]}'
+  -d '{"scopes":[{"resource":"site","id":"kiosk-fleet-01","permissions":["read","write"]}]}'
 ```
 
-Notes:
+- `scopes` replaces the whole list; it is not merged. send the complete list you want the key to end up with.
+- the creation rules apply: `user` and `installer` stay superadmin-only, so a key cannot be edited into permissions its owner could not have been issued.
+- `environment` and `ttlDays` are rejected with `400`. rotate to change the expiry.
+- a revoked key, or one that has been rotated, returns `409`. edit the successor instead.
 
-- `scopes` is a full replacement, not a merge. Send the complete list you want the key to end up with.
-- The same grant rules as creation apply — `user` and `installer` scopes stay superadmin-only, so a key cannot be edited into permissions its owner could not have been issued.
-- `environment` and `ttlDays` are rejected. Rotate to extend expiry.
-- A revoked key, or one inside a rotation grace window, returns `409`. Edit the successor instead.
-- Like the other self-service lifecycle routes, this requires a user session or Firebase ID token; an API key cannot edit itself or any other key.
-
-The dashboard exposes the same operation as the sliders control on each key in **settings → api keys**.
+the dashboard exposes the same edit as the sliders control on each key.
 
 ---
 
 ## expiration, rotation, and revocation
 
-Every scoped key expires. Current defaults are:
+every key expires:
 
-- default TTL: 90 days
-- maximum TTL: 365 days
-- rotation grace: 24 hours for the old key value
+- default lifetime: 90 days
+- maximum lifetime: 365 days
+- rotation grace: the old key keeps working for 24 hours after a rotation
 
-Rotate a key when the secret might have leaked or when your normal rotation schedule requires it. Rotation returns a new raw key once and leaves the key's scope policy intact.
+a key within 14 days of expiry shows as expiring soon in the dashboard, and its owner is emailed ahead of the date.
 
-Revoke a key when the integration is retired or when rotation is not enough. Revocation is permanent; create a new key if access is needed again.
+the lifecycle routes take a session or Firebase ID token:
 
-Self-service lifecycle endpoints require a signed-in user session or Firebase ID token:
+- `POST /api/keys/{keyId}/rotate` issues a replacement with the same name, scopes, and environment, and returns the new raw key once. an optional body `{ "ttlDays": 1–365 }` sets the new key's lifetime (default 90). the response's `previousKey.retiresAt` is when the old key stops working. a key that is revoked or already rotated returns `409`.
+- `PATCH /api/keys/{keyId}` edits scopes and name. see [editing key scopes](#editing-key-scopes).
+- `DELETE /api/keys/{keyId}` revokes the key immediately and permanently. the record is kept and stamped `revokedAt`, so the key still appears in `GET /api/keys` with `revoked: true`. repeating the call is a no-op.
 
-- `PATCH /api/keys/{keyId}` edits scopes and/or name without reissuing the secret. See [editing key scopes](#editing-key-scopes).
-- `POST /api/keys/{keyId}/rotate` issues a replacement key with the same scopes and environment, returns the new raw key once, and leaves the previous key valid only for the rotation grace window.
-- `DELETE /api/keys/{keyId}` revokes the key immediately. It is not a delete: the key's record and lookup entry are kept and stamped `revokedAt`, so the key still appears in `GET /api/keys` with `revoked: true` and a request replayed with it stays attributable. Repeating the call is a no-op.
+rotate when a secret may have leaked or your rotation schedule says so; revoke when the integration is retired.
 
 ---
 
@@ -209,30 +213,31 @@ Self-service lifecycle endpoints require a signed-in user session or Firebase ID
 
 | status | code | meaning |
 |---|---|---|
-| 401 | `unauthorized` | Missing, malformed, unknown, or unsupported credential. |
-| 401 | `token_expired` | The API key's `expiresAt` has passed. A rotated old key after its grace window is treated as `401 unauthorized` / invalid API key. |
-| 403 | `scope_insufficient` | Credential is valid but lacks the exact resource/id/permission needed. |
-| 403 | `forbidden` | Caller lacks the required role, site membership, or platform capability. |
-| 404 | `not_found` | Resource is absent or intentionally hidden from this caller. |
+| 401 | `unauthorized` | the credential is missing, malformed, unknown, revoked, or a rotated key past its grace window |
+| 401 | `token_expired` | the key's `expiresAt` has passed. the body carries `expiredAt` |
+| 403 | `scope_insufficient` | the credential is valid but lacks the resource, ID, and permission the operation needs. the body's `required` names it |
+| 403 | `api_key_not_permitted` | the operation refuses API keys whatever their scopes. use a session |
+| 403 | `forbidden` | the caller lacks the role, site membership, or capability, or their account is deactivated |
+| 404 | `not_found` | the resource is absent, or hidden from this caller so its existence does not leak |
 
-All public errors use the [problem envelope](/docs/api/errors). Do not branch on error prose; branch on `code`.
+all of them use the [problem envelope](/docs/api/errors). branch on `code`, not on the prose in `detail`.
 
 ---
 
 ## key handling
 
-- Store keys in a secrets manager, not source code.
-- Never log raw keys.
-- Use separate keys for CI, local development, monitoring, and each external integration.
-- Keep scopes narrow and add missing permissions intentionally after a `403 scope_insufficient` — [edit the key's scopes](#editing-key-scopes) rather than replacing it with a broader one.
-- Revoke unused keys promptly.
+- keep keys in a secrets manager, never in source code.
+- never log raw keys.
+- use a separate key for each integration — CI, monitoring, local development — so rate limits and audit rows are attributable.
+- keep scopes narrow; after a `403 scope_insufficient`, [edit the key's scopes](#editing-key-scopes) rather than replacing it with a broader one.
+- revoke keys you no longer use.
 
 ---
 
 ## see also
 
-- [quickstart.md](/docs/api/quickstart) for a first authenticated workflow.
-- [idempotency.md](/docs/api/idempotency) for mutating request retries.
-- [errors.md](/docs/api/errors) for auth-related error bodies.
-- [rate-limits.md](/docs/api/rate-limits) for per-key throttling behavior.
-- The rendered reference at [`/docs/api`](/docs/api) for operation-level scope notes.
+- [quickstart](/docs/api/quickstart) for a first authenticated workflow.
+- [idempotency](/docs/api/idempotency) for retrying mutations safely.
+- [errors](/docs/api/errors) for the error envelope.
+- [rate limits](/docs/api/rate-limits) for per-key throttling.
+- the rendered reference at [`/docs/api`](/docs/api) for each operation's scope.

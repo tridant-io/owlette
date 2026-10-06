@@ -1,300 +1,281 @@
 ---
 title: "agent commands reference"
-description: "Operational reference for command records the web app writes and the agent executes through Firestore."
+description: "every command the agent takes from its Firestore queue: what queues it, its fields, what the agent does on Windows, macOS and Linux, and how the result is recorded."
+keywords: ["command queue", "remote command", "machine command", "command history", "command stuck pending", "command never ran", "job queue", "remote reboot", "remote restart", "api command", "mac commands", "linux commands", "error prefix"]
 ---
 
+the agent takes its work from two Firestore documents per machine. this page lists every command type it accepts, what queues it, what it does on each platform, and how its result is recorded. for the operator's view, see [remote commands](/docs/agent/remote-commands); for everything else that differs by platform, see [platform support](/docs/reference/platform-support).
+
 ---
 
-## command lifecycle
+## the queue
 
-Command queues are single Firestore documents whose fields are command IDs.
-They are not per-command subcollections.
+each machine has two documents, `sites/{siteId}/machines/{machineId}/commands/pending` and `.../commands/completed`. both hold commands as top-level map fields keyed by command ID, not as subcollections. every member of the site can read both; only the server and the machine's own agent write them (see the [data model](/docs/reference/firestore-data-model)).
 
 ```
-1. Web/API writes one map entry to:
-   sites/{siteId}/machines/{machineId}/commands/pending
-
-   {
-     "{commandId}": {
-       "type": "command_type",
-       "status": "pending",
-       ...command-specific fields
-     }
-   }
-
-2. The agent listener reads the pending document and dispatches each unseen
-   command ID.
-
-3. Long-running commands can write partial records to:
-   sites/{siteId}/machines/{machineId}/commands/completed
-
-4. The agent writes the final record under the same command ID in the
-   completed document, then deletes the command ID field from pending.
+1. a writer merges one entry into commands/pending under a new command id
+2. the agent's listener sees an id it has not handled and puts it on a lane
+3. the agent writes a running marker under that id in commands/completed
+4. the handler runs; long commands merge progress records under the same id
+5. the agent writes the terminal record to commands/completed, then deletes
+   the id from commands/pending
 ```
 
-Server helpers that use `stampCommand` add `createdAt`, `expiresAt`, and
-optional `auditCorrelationId`. The public machine-command endpoint also stamps
-`siteId`, `machineId`, `timestamp`, `status`, and `queuedBy`.
+besides `type`, `status: "pending"` and the command's own fields, an entry carries some of these, depending on who wrote it:
+
+| field | written by | notes |
+|-------|------------|-------|
+| `timestamp` | most writers | a server timestamp, or epoch milliseconds from hoot. the only field the agent ages pending entries by |
+| `createdAt`, `expiresAt` | writers that go through `stampCommand` | a server timestamp and a time 24 hours later. the agent reads neither, and nothing deletes an entry when `expiresAt` passes |
+| `auditCorrelationId` | `stampCommand`, when the caller has one | ties the agent's write-back to the request's audit row |
+| `siteId`, `machineId`, `queuedBy` | the public endpoint and the swoop writer | `queuedBy` is `user:<uid>`, `apiKey:<keyId>` or `system:<name>` |
+| `timeout_seconds` | the public endpoint, on every command | see [queuing through the API](#queuing-through-the-api) |
+| `queued_at` | roost writers, in place of `timestamp` | |
 
 ---
 
-## command document schema
+## how the agent runs a command
 
-### pending entry
+### lanes
+
+the **fast lane** runs each command on a thread of its own, at once: `mcp_tool_call`, `capture_screenshot`, `cancel_sync`, `cancel_mcp_tool`, `swoop_session_requested`, `swoop_kill`, `swoop_refresh` and `site_settings_refresh`.
+
+everything else goes through **one worker**, one command at a time, so installs, updates and roost syncs never overlap. that includes process control and reboots: a `restart_process` queued behind an install waits for it. the worker's queue holds 50 commands; one that arrives to a full queue is failed with `Command queue full — too many pending installs`.
+
+### rate limit
+
+the agent refuses a second command of the same type for the same process within 5 seconds. the key is the type plus `process_id`, `processId` or `process_name`, so commands that name no process share one key per type. the refusal, `Error: rate limited - <type> executed too recently, try again in a few seconds`, is recorded as failed.
+
+exempt: `mcp_tool_call`, `ack_display_topology`, the three swoop types and `site_settings_refresh`. `cancel_mcp_tool` never reaches the check.
+
+### completed, failed or cancelled
+
+a result is recorded as `failed`, in `error`, only when it is a string starting with `Error:`. anything else is `completed`, with the value in `result`: usually a string, a JSON string for `mcp_tool_call`, an object for `capture_screenshot`. two exceptions: `cancel_installation` is always recorded as `cancelled`, even when there was nothing to cancel, and `cancel_mcp_tool` writes its target `cancelled` itself.
+
+these come back `completed` although the command did not do its job, so check `result` as well as `status`:
+
+- `Unknown command type: <type>`. this is also what a router-handled type returns when its handler module failed to load at service start (see [where the handlers live](#where-the-handlers-live))
+- `Process <name> not found in configuration`, from every process command
+- `Reboot failed: …`, `Shutdown failed: …`, and `Cancel timed out (the OS cancel hung)` from `cancel_reboot`
+- `Error starting live view: …`, `Failed to dismiss reboot pending: …`, `Failed to refresh software inventory: …`
+- `Cancellation failed: …` from `cancel_uninstall`
+- `Update already in progress (started …)` from `update_owlette`
+- `sync_pull skipped: roost kill-switch engaged for site …`, and a `sync_pull` that was cancelled: its target state says `cancelled`, its command entry `completed`
+
+an `mcp_tool_call` whose tool failed is `completed` too: the tool's own error, `unsupported_on_platform` included, is inside the JSON result.
+
+### restart safety and cleanup
+
+- a `running` marker that survives a service restart is turned into `failed` with `interrupted by service restart`. the ID is already handled, so the command never runs twice
+- periodically the agent deletes pending entries whose `timestamp` is more than an hour old, and completed entries more than 24 hours old, by `completedAt`, `startedAt` or `timestamp`. an entry with no `timestamp`, such as every `sync_pull`, is never aged out of pending
+
+### progress
+
+while it works, a command merges partial records under its ID: `running` (with `startedAt` and `type`, before every command), then `closing_processes`, `downloading`, `installing` or `uninstalling` where they apply. a change of status always writes; repeats of one status are throttled. the record has room for a `progress` percentage, but no handler sets one today.
+
+a roost sync reports its progress to `sites/{siteId}/roosts/{roostId}/target_state/{machineId}` instead: `pending`, `downloading`, `assembling`, then `committed`, `failed` or `cancelled`.
+
+---
+
+## record shapes
+
+a pending entry queued through the public endpoint:
 
 ```json
 {
-  "{commandId}": {
-    "type": "command_type",
-    "status": "pending",
-    "createdAt": "<server timestamp>",
-    "expiresAt": "<timestamp>",
+  "cmd_m1a2b3c4_x9y8z7w6": {
+    "type": "restart_process",
+    "process_id": "proc-1",
+    "timeout_seconds": 60,
+    "siteId": "nyc-office",
+    "machineId": "DESKTOP-ABC123",
     "timestamp": "<server timestamp>",
-    "queuedBy": "user:uid-or-apiKey:keyId",
-    "...": "command-specific fields"
+    "status": "pending",
+    "queuedBy": "apiKey:key_123",
+    "createdAt": "<server timestamp>",
+    "expiresAt": "<timestamp, 24 hours later>"
   }
 }
 ```
 
-Legacy writers may use millisecond `timestamp` without `createdAt` or
-`expiresAt`; the agent accepts both shapes.
-
-### progress entry
-
-Long-running commands update the completed document before final completion.
+in `completed`, one command ID moves from the running marker through progress records to a single terminal record. for an `install_software`, the marker, a progress record, then either outcome:
 
 ```json
-{
-  "{commandId}": {
-    "status": "downloading",
-    "updatedAt": "<server timestamp>",
-    "deployment_id": "deployment_123",
-    "progress": 45
-  }
-}
+{ "status": "running", "startedAt": "<server timestamp>", "type": "install_software", "deployment_id": "dep_123" }
+{ "status": "downloading", "updatedAt": "<server timestamp>", "deployment_id": "dep_123" }
+{ "status": "completed", "result": "Installation completed successfully (exit code 0)", "completedAt": "<server timestamp>", "type": "install_software", "deployment_id": "dep_123" }
+{ "status": "failed", "error": "Error: Checksum verification failed for app.exe. Installation aborted for security.", "completedAt": "<server timestamp>", "type": "install_software", "deployment_id": "dep_123" }
 ```
 
-Progress writes are partial status records. They are throttled by the agent and
-can use command-specific statuses such as `downloading`, `installing`,
-`uninstalling`, or `extracting` before the final `completed`, `failed`, or
-`cancelled` record is written.
-
-### completed entry
+a `cancel_installation` records itself as cancelled:
 
 ```json
-{
-  "{commandId}": {
-    "type": "command_type",
-    "result": "Human-readable result message",
-    "status": "completed",
-    "completedAt": "<server timestamp>",
-    "deployment_id": "deployment_123"
-  }
-}
-```
-
-### failed entry
-
-Failed commands use `error`, not `result`.
-
-```json
-{
-  "{commandId}": {
-    "type": "command_type",
-    "error": "Error: description of what went wrong",
-    "status": "failed",
-    "completedAt": "<server timestamp>",
-    "deployment_id": "deployment_123"
-  }
-}
-```
-
-### cancelled entry
-
-```json
-{
-  "{commandId}": {
-    "type": "command_type",
-    "result": "Cancellation message",
-    "status": "cancelled",
-    "completedAt": "<server timestamp>",
-    "deployment_id": "deployment_123"
-  }
-}
+{ "status": "cancelled", "result": "Installation cancelled: app.exe", "completedAt": "<server timestamp>", "type": "cancel_installation" }
 ```
 
 ---
 
-## public API command types
+## process control
 
-These are the command types accepted by the public machine-command action in
-`web/lib/actions/executeMachineCommand.server.ts`.
+every process command finds the configured process by ID or by name.
 
-### process control
-
-| type | fields | behavior |
-|------|--------|----------|
-| `restart_process` | `process_name` or `process_id`/`processId`, optional `timeout_seconds` | Kill and relaunch a configured process, or launch it if it is not already running. `timeout_seconds` is the graceful-terminate window before a force kill, default 5 and capped at 30. If the process is scheduled and outside its window, the agent records a manual override. |
-| `start_process` | `process_name` or `process_id`/`processId` | Start a configured process. If it is scheduled and outside its window, the agent records a manual override. |
-| `stop_process` | `process_name` or `process_id`/`processId` | Gracefully terminate a running process and mark it `STOPPED`. |
-| `kill_process` | `process_name` or `process_id`/`processId` | Gracefully terminate a running process and mark it `KILLED`. |
-| `set_launch_mode` | `process_name` or `process_id`/`processId`, `mode`, optional `schedules` | Set `mode` to `off`, `always`, or `scheduled`. The agent matches process id first, falls back to name, and derives legacy `autolaunch` from the launch mode. |
-
-The public route shim still requires `process_name` for `set_launch_mode`; direct Firestore command writers and the agent handler accept `process_id` / `processId` as the preferred identifier.
-
-The endpoint stamps a body-level `timeout_seconds` (default 60, max 600) into
-every command payload, so an API-queued `restart_process` is clamped to the
-agent's 30-second graceful-terminate cap unless the request body sends a value
-of 30 or less.
-
-### machine power and reboot state
-
-| type | fields | behavior |
-|------|--------|----------|
-| `reboot_machine` | none used | Schedule a Windows reboot in 30 seconds and set reboot visibility fields on the machine document. |
-| `shutdown_machine` | none used | Schedule a Windows shutdown in 30 seconds and set shutdown visibility fields on the machine document. |
-| `cancel_reboot` | none | Abort a pending reboot/shutdown with `shutdown /a` and clear local and Firestore reboot state. |
-| `dismiss_reboot_pending` | optional `process_name` | Clear a reboot-pending prompt and reset relaunch counters for the named process when present. |
-
-### screenshots and live view
-
-| type | fields | behavior |
-|------|--------|----------|
-| `capture_screenshot` | optional `monitor` | Capture from the active user session. `0` means all monitors; positive values select a monitor index. |
-| `start_live_view` | optional `interval`, optional `duration` | Start repeated screenshot capture. `interval` is clamped to 5-60 seconds; `duration` is clamped to 60-1800 seconds. |
-| `stop_live_view` | none | Stop the live-view screenshot loop and clear the machine `liveView` flag. |
-
-### display topology
-
-| type | fields | behavior |
-|------|--------|----------|
-| `apply_display_topology` | `layout`, optional `applyId`/`apply_id` | Validate and apply a display layout, arm the revert watchdog, and require a matching acknowledgement before the deadline. |
-| `enumerate_display_modes` | none | Build and upload the supported display-mode catalogue when hardware changed. |
-| `ack_display_topology` | optional `applyId`/`apply_id` | Acknowledge the in-flight display apply and cancel auto-revert when the ID matches. |
-| `test_display_apply` | none | Run a read-only display helper smoke test without applying a topology change. |
-
-### hoot and agent update
-
-| type | fields | behavior |
-|------|--------|----------|
-| `mcp_tool_call` | `tool_name`, `tool_params`, optional `chat_id`, optional `timeout_seconds` | Execute an agent-side MCP tool. `tool_params` is the payload object. |
-| `cancel_mcp_tool` | `target_command_id` | Kill the process tree of an in-flight `mcp_tool_call` identified by its command id and mark it `cancelled`. Unknown or already-finished targets return a safe error (cancelling is idempotent). |
-| `update_owlette` | `installer_url`, `checksum_sha256`, optional `target_version`, optional `deployment_id` | Download a verified agent installer and run it through Task Scheduler. `checksum_sha256` is required. |
-
-`mcp_tool_call` returns JSON-encoded tool output in the final `result` field
-when the command completes successfully.
+| type | fields | what the agent does | macOS and Linux |
+|------|--------|---------------------|-----------------|
+| `restart_process` | `process_id`, `processId` or `process_name`; `timeout_seconds` (default 5, capped at 30) | stops the tracked instance, after checking the PID is still the process it launched, waits up to `timeout_seconds` for it to exit before forcing it, and relaunches. a process that is not running is launched. a `scheduled` process outside its window gets a manual override | launched as the user at the graphical session; with nobody signed in there the launch fails. `priority` and `visibility` are ignored |
+| `start_process` | `process_id`, `processId` or `process_name` | launches the process unless it is already running or a running instance can be adopted. manual override as above | same as `restart_process` |
+| `stop_process`, `kill_process` | `process_id`, `processId` or `process_name` | ends the process after the same identity check and marks it `STOPPED` or `KILLED`. both are graceful: on Windows a close message to its windows, then a forced end after 5 seconds | `SIGTERM`, then `SIGKILL` after 3 seconds |
+| `set_launch_mode` | `process_id`, `processId` or `process_name`; `mode`; `schedules` | saves `launch_mode` and any `schedules` to the machine's config and derives the legacy `autolaunch`. a change from `off` to `always` launches the process now; a change to `off` stops supervising it and leaves it running. the agent does not check `mode` against `off`, `always` and `scheduled` | same |
+| `toggle_autolaunch` | ID or name; `autolaunch` | legacy: sets `launch_mode` to `always` or `off`. nothing queues it any more | same |
+| `update_config` | `config` | overwrites `config.json` with `config`, keeping the local `firebase` section. nothing queues it any more | same |
 
 ---
 
-## legacy dashboard and internal command types
+## power
 
-These commands are still registered in `agent/src/owlette_service.py` but are
-not all accepted by the public machine-command allowlist. They exist for
-dashboard flows, deployment workers, older configuration flows, or internal
-admin actions.
+| type | fields | what the agent does | macOS and Linux |
+|------|--------|---------------------|-----------------|
+| `reboot_machine` | none read. the public endpoint forwards `delay_seconds`, which the agent ignores | sets `rebooting`, `rebootScheduledAt`, `rebootSource: "manual"` and `rebootCancellable` on the machine document, then asks the OS to reboot in 60 seconds: `shutdown /r /t 60` | `shutdown -r +1` (`/sbin/shutdown` on macOS). the OS counts in whole minutes, rounded up and never below one, so the countdown is a minute here too |
+| `shutdown_machine` | none read | the same, powering off: `shutdown /s /t 60`, with `shuttingDown` and `shutdownScheduledAt` | `shutdown -h +1` |
+| `cancel_reboot` | none | aborts the countdown with `shutdown /a`, clears the local reboot state and the machine document's flags, and stops a scheduled reboot that was under way from firing again that day | Linux: `shutdown -c`, reported as cancelled only when a shutdown was scheduled. macOS: the agent ends the pending `shutdown` process, since BSD `shutdown` has no cancel flag |
+| `dismiss_reboot_pending` | `process_name` | clears `rebootPending` and resets the named process's relaunch counter | same |
 
-### configuration and process compatibility
-
-| type | fields | behavior |
-|------|--------|----------|
-| `update_config` | `config` | Replace local config while preserving the local Firebase auth section. |
-| `toggle_autolaunch` | `process_name` or `process_id`/`processId`, `autolaunch` | Legacy compatibility path. Matches process id first, falls back to name, then sets launch mode to `always` or `off` and updates derived `autolaunch`. |
-| `provision_cortex_key` | `api_key`, optional `provider` | Encrypt and store a local hoot provider key in config. Defaults provider to `anthropic`. |
-
-### software deployment
-
-| type | fields | behavior |
-|------|--------|----------|
-| `install_software` | `installer_url`, optional `installer_name`, optional `silent_flags`, required `sha256_checksum`, optional `verify_path`, optional `timeout_seconds`, optional `deployment_id`, optional `parallel_install`, optional `close_processes`, optional `suppress_projects` | Download, checksum-verify, and run an installer in the interactive user session. Default timeout is 2400 seconds. |
-| `cancel_installation` | `installer_name` | Cancel an active installer process tree and mark the command `cancelled`. |
-| `uninstall_software` | `software_name`, `uninstall_command`, optional `silent_flags`, optional `installer_type`, optional `verify_paths`, optional `timeout_seconds`, optional `deployment_id` | Run an uninstall command, auto-detect silent flags when omitted, and verify registry/file cleanup. Default timeout is 1200 seconds. |
-| `cancel_uninstall` | `software_name` | Cancel an active uninstall tracked as `uninstall_<software_name>`. |
-| `refresh_software_inventory` | none | Force an immediate installed-software inventory sync. |
+the dashboard's confirm dialogs and hoot's tool descriptions still say 30 seconds; the agent's countdown is 60 on every platform.
 
 ---
 
-## roost v2 command types
+## screens
 
-These commands are registered in `agent/src/sync_commands.py` through
-`CommandRouter` and dispatch before the legacy if/elif chain. The same router
-also carries `capture_screenshot` (`agent/src/machine_commands.py`) and
-`restart_process` (`agent/src/process_commands.py`), documented in their own
-sections above.
-
-### sync_pull
-
-Pull an immutable roost version, download missing chunks, and assemble files at
-the target path.
-
-| field | type | description |
-|-------|------|-------------|
-| `type` | `"sync_pull"` | |
-| `site_id` | string | Site that owns the roost and target machine. |
-| `roost_id` | string | roost to sync. |
-| `version_id` | string | Immutable version to materialize. |
-| `version_url` | string | Version manifest URL. The agent attempts to mint a fresh signed URL before fetching. |
-| `extract_root` | string | Destination directory for assembled files. |
-
-The handler reports target states `pending`, `downloading`, `assembling`,
-`committed`, `failed`, and `cancelled`.
-
-### cancel_sync
-
-Cancel an in-flight `sync_pull` for the same site, roost, and version.
-
-| field | type | description |
-|-------|------|-------------|
-| `type` | `"cancel_sync"` | |
-| `site_id` | string | Site that owns the sync. |
-| `roost_id` | string | roost being synced. |
-| `version_id` | string | Version being synced. |
-
-Cancellation is cooperative. The active download or file operation finishes its
-current step, then the handler records `cancelled`.
-
-### rollback_to_version
-
-Materialize an older roost version after the server-side rollback has already
-changed the current-version pointer. The payload matches `sync_pull`.
-
-| field | type | description |
-|-------|------|-------------|
-| `type` | `"rollback_to_version"` | |
-| `site_id` | string | Site that owns the roost and target machine. |
-| `roost_id` | string | roost to sync. |
-| `version_id` | string | Older immutable version to materialize. |
-| `version_url` | string | Version manifest URL. |
-| `extract_root` | string | Destination directory for assembled files. |
+| type | fields | what the agent does | macOS and Linux |
+|------|--------|---------------------|-----------------|
+| `capture_screenshot` | `monitor` | captures, asks the server for a signed upload URL, uploads and finalizes, which writes the machine's `lastScreenshot`. the result is an object: `storage_path`, `url`, `size_kb`, `monitor`, `monitor_count`. Windows captures in the console user's session: `0` is every monitor combined, `n` the nth, and an index past the last falls back to `0`. anything but a number reads as `0`, so the API's `"primary"` captures every monitor too | macOS: the owlette app captures and needs Screen Recording; refused with `screen_recording_not_granted` when the app reported the grant missing, `desktop_not_running` when it is not running. there `0` captures the main display only and `1` the second display, one off from the Windows numbering. Linux: not available yet, though the dashboard menu still offers it. a Wayland session is refused with `unsupported_on_platform`, and on X11 the app answers `unsupported_job` |
+| `start_live_view` | `interval` (5-60, default 10), `duration` (60-1800, default 600) | sets the machine's `liveView` flag and uploads a frame, at most 1920 px wide, every `interval` seconds until `duration` runs out or `stop_live_view` arrives. answers `Live view already active` when one is running | the same capture rules. on Linux the loop starts and every frame fails |
+| `stop_live_view` | none | stops the loop and clears `liveView` | same |
 
 ---
 
-## coverage checklist
+## displays
 
-Router entries, checked before the legacy if/elif chain:
+| type | fields | what the agent does | macOS and Linux |
+|------|--------|---------------------|-----------------|
+| `apply_display_topology` | `layout`, `applyId` or `apply_id` | validates and applies the layout, then arms a revert watchdog: without a matching `ack_display_topology` before the deadline, the previous layout comes back | Windows only; fails off Windows |
+| `ack_display_topology` | `applyId` or `apply_id` | cancels the revert when the ID matches the apply in flight | Windows only |
+| `enumerate_display_modes` | none | uploads the supported-mode catalogue to `.../hardware/displayModes`, skipping the upload when the hardware signature is unchanged | Windows only |
+| `test_display_apply` | none | a read-only self-test of the display helper: query and validate, never apply | Windows only |
 
-- `agent/src/sync_commands.py`: `sync_pull`, `cancel_sync`, `rollback_to_version`.
-- `agent/src/machine_commands.py`: `capture_screenshot`.
-- `agent/src/process_commands.py`: `restart_process`.
+every agent reports `capabilities.displayRemoteApply: 1`, whatever its platform, so that field does not tell you whether a machine can apply a layout. see [displays](/docs/dashboard/displays).
 
-Legacy if/elif entries in `agent/src/owlette_service.py`:
+---
 
-`restart_process`, `start_process`, `kill_process`, `stop_process`,
-`toggle_autolaunch`, `set_launch_mode`, `update_config`, `install_software`,
-`update_owlette`, `cancel_installation`, `uninstall_software`,
-`cancel_uninstall`, `refresh_software_inventory`,
-`mcp_tool_call`, `capture_screenshot`,
-`reboot_machine`, `shutdown_machine`, `cancel_reboot`,
-`dismiss_reboot_pending`, `provision_cortex_key`, `start_live_view`,
-`stop_live_view`, `apply_display_topology`, `enumerate_display_modes`,
-`ack_display_topology`, and `test_display_apply`.
+## software
 
-`restart_process` and `capture_screenshot` still have branches here, but the
-router handles them first, so these fire only if the matching handler module
-fails to import at service startup. The `restart_process` branch is shared with
-`start_process`, which is still dispatched here normally.
+| type | fields | what the agent does | macOS and Linux |
+|------|--------|---------------------|-----------------|
+| `install_software` | `installer_url`; `sha256_checksum` (required); `installer_name` (default `installer.exe`); `silent_flags`; `verify_path` (taken from `/DIR=` in the flags when absent); `timeout_seconds` (default 2400); `deployment_id`; `parallel_install`; `close_processes`; `suppress_projects` | closes `close_processes` and locks `suppress_projects`, downloads, refuses the file without a checksum or on a mismatch, runs the installer elevated on the console user's desktop (a copy of the service's SYSTEM token placed in that session), then checks `verify_path`. `parallel_install` hides the product's registry keys during the install so the installer cannot remove older builds. fails when there is no console session | not supported: the agent closes the named processes, downloads and verifies, then fails with `No interactive user session available for installation…` |
+| `cancel_installation` | `installer_name`, `deployment_id` | kills the installer's process tree and deletes the download | nothing to cancel |
+| `uninstall_software` | `software_name`, `uninstall_command`, `silent_flags`, `installer_type`, `verify_paths`, `timeout_seconds` (default 1200), `deployment_id` | runs the uninstaller with silent flags, detected from `installer_type` when absent, then checks `verify_paths` and the registry. writers also send `close_processes`, which the agent does not read | macOS: only an application bundle (`installer_type: "app"`) that the software inventory lists at that moment; the agent quits what runs from it, then removes the bundle. Linux: fails |
+| `cancel_uninstall` | `software_name` | kills the uninstaller tracked as `uninstall_<software_name>` | macOS has nothing long-running to cancel; Linux never starts one |
+| `refresh_software_inventory` | none | forces an inventory sync. nothing queues it any more | macOS lists application bundles, Linux `dpkg` packages |
 
-Handled in `agent/src/firebase_client.py` rather than the service:
+see [deployments](/docs/dashboard/deployments) and [platform support](/docs/reference/platform-support#software).
 
-`cancel_mcp_tool`. The client answers it and writes the terminal record before
-the service command callback runs, so it reaches neither the router nor the
-legacy chain.
+---
+
+## the agent itself
+
+| type | fields | what the agent does | macOS and Linux |
+|------|--------|---------------------|-----------------|
+| `update_owlette` | `installer_url`, `checksum_sha256` (both required); `target_version` (read from the URL when absent); `deployment_id` | refuses a second update within 10 minutes of one in progress, downloads into a staging folder only the service can write, checks the file is at least 1 MB and is this platform's installer, verifies the checksum, then hands it to the OS: a one-time scheduled task running as SYSTEM, with a recovery task that restarts the service if it does not come back. the command completes with `Self-update initiated via Task Scheduler` | the download and handoff run on a thread of their own, which writes the result. macOS: a run-once launchd job, `app.owlette.update`, runs `/usr/sbin/installer -pkg … -target /`. Linux: `apt-get install --simulate` first, then a transient `owlette-update` unit runs `apt-get install -y --allow-downgrades`. a refusal is `Error: update_unsatisfiable`, `update_deferred` (another package operation holds the lock, or an earlier update is still installing) or `update_handoff_failed` |
+| `provision_cortex_key` | `api_key`, `provider` (default `anthropic`) | encrypts the key with the token store's machine-bound key into `config.cortex.apiKeyEncrypted`, and sets `provider` and `enabled: true` | same |
+
+see [self-update](/docs/agent/self-update).
+
+---
+
+## hoot
+
+| type | fields | what the agent does | macOS and Linux |
+|------|--------|---------------------|-----------------|
+| `mcp_tool_call` | `tool_name`, `tool_params` | runs one hoot tool and returns its output as a JSON string. writers also send `chat_id` and `timeout_seconds`, which the agent does not read | 13 tools are Windows only and answer `unsupported_on_platform`; see [hoot tools](/docs/reference/hoot-tools#platforms) |
+| `cancel_mcp_tool` | `target_command_id`, or `params.target_command_id` | kills the target's process tree and writes the target `cancelled`. an unknown or finished target answers `{"error": "command not running"}`. handled in the agent's Firestore client, never rate-limited | same |
+
+---
+
+## roost
+
+| type | fields | what the agent does | macOS and Linux |
+|------|--------|---------------------|-----------------|
+| `sync_pull` | `site_id`, `roost_id`, `version_id`, `version_url`, `extract_root`, all required | checks the site's roost kill switch and checks `extract_root` against the destination allowlist, mints a fresh version URL, fetches the manifest, diffs it against the last committed version, downloads the missing chunks and assembles the files atomically, reporting each stage to `target_state` | `~/Documents/Owlette`, the default the server sends, becomes `/Users/Shared/Owlette` on macOS and `/var/lib/owlette/projects` on Linux. any other root must sit under the machine's allowed roots |
+| `cancel_sync` | `site_id`, `roost_id`, `version_id` | signals the matching sync, which stops between chunks or between files. nothing queues it today | same |
+| `rollback_to_version` | as `sync_pull` | an alias of `sync_pull`. nothing writes it: a rollback queues ordinary `sync_pull` commands | same |
+
+the roost fan-out queues `sync_pull` under `roost_sync_{roostId}_{versionId}`. a rollback (`POST /api/roosts/{roostId}/rollback`) flips the version pointer, then queues `sync_pull` under `roost_rollback_{roostId}_{versionId}_{nonce}` with `rollback: true`, `rollback_requested_by` and `queued_at`, deleting the deterministic entry and the machine's `target_state`. allowed roots come from `agent_config.allowed_extract_roots` in the machine's config, or the platform default ([roost on each platform](/docs/reference/platform-support#roost)).
+
+---
+
+## swoop and site settings
+
+| type | fields | what the agent does | macOS and Linux |
+|------|--------|---------------------|-----------------|
+| `swoop_session_requested` | `sid`, required | starts the swoop streamer for the session, or attaches it to the one running | macOS: the agent asks the owlette app to start the streamer. Linux: never queued, since the machine reports `capabilities.swoop: 0` |
+| `swoop_kill` | `sid`, optional | stops the streamer serving `sid`, or whatever is running when there is none. queued even to an offline machine, so a streamer left over from before a drop stops when it reconnects | same |
+| `swoop_refresh` | none | the site turned swoop on or off; the agent refreshes its standing connection to the signalling room | same |
+| `site_settings_refresh` | none | re-reads `GET /api/agent/site` on a thread of its own, one fetch at a time; requests that land during a fetch buy one more pass. queued on a site's online machines when [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) changes | same |
+
+a swoop command carries the envelope and, where its type takes one, a `sid`. any other field is refused with `Error:`. only `requestSwoopSession` writes them, for the session, kill and session-end routes, viewer revocation and the swoop settings route; `swoop_session_requested` and `swoop_refresh` to an offline machine are refused with `409 machine_offline`. the agent reports `capabilities.swoop: 1` only when the streamer is installed and the machine can stream: every Windows machine, a Mac whose owlette app reported Screen Recording granted within the last 5 minutes, and no Linux machine. see [swoop](/docs/dashboard/swoop).
+
+---
+
+## who queues what
+
+| writer | types |
+|--------|-------|
+| the public endpoint, used by the dashboard, the CLI and the SDKs | the 19 types in [queuing through the API](#queuing-through-the-api) |
+| the process routes, `POST .../processes/{processId}/start`, `stop`, `kill`, `restart` | `start_process`, `stop_process`, `kill_process`, `restart_process` |
+| hoot. a chat writes straight to the queue; unattended hoot goes through the action behind the public endpoint, as a `system:` actor | `mcp_tool_call`, and the process and power types its tier-2 and tier-3 tools map to |
+| talons | `restart_process`, `start_process`, `stop_process` |
+| deployments, and uninstall from a machine's software list | `install_software`, `cancel_installation`, `uninstall_software`, `cancel_uninstall` |
+| `POST /api/hoot/provision-key` | `provision_cortex_key` |
+| the roost fan-out and rollout functions, and the rollback route | `sync_pull` |
+| `requestSwoopSession` | `swoop_session_requested`, `swoop_kill`, `swoop_refresh` |
+| `PATCH /api/sites/{siteId}/display-settings` | `site_settings_refresh` |
+| nothing | `update_config`, `toggle_autolaunch`, `refresh_software_inventory`, `cancel_sync`, `rollback_to_version`. the agent still accepts them |
+
+---
+
+## queuing through the API
+
+`POST /api/sites/{siteId}/machines/{machineId}/commands` takes `type`, an optional `params` object and an optional `timeout_seconds`, and answers `202` with `commandId` and `status: "pending"`.
+
+- **an `Idempotency-Key` header is required**: without one the request is refused with `400`. the same key and body within 24 hours replays the first response; the same key with another body is `422`. see [idempotency](/docs/api/idempotency)
+- **capability**: `capture_screenshot`, `start_live_view` and `stop_live_view` need `MACHINE_VIEW`, which site members hold. every other type needs `MACHINE_EXEC_COMMAND`: site owners and admins. an API key needs the machine's `write` scope either way
+- **refusals**: a machine whose `online` is `false` gets `409 machine_offline`, an unknown machine `404`, a type outside the list `400 unsupported_command_type`
+- **`timeout_seconds`** (default 60, max 600) is stamped into every payload. only `restart_process` reads it at the agent, capped at 30, so an API restart waits the full 30 seconds for a graceful exit unless the body sends less. a `timeout_seconds` inside `params` is dropped
+
+the route copies only these `params` into the command:
+
+| type | params copied |
+|------|---------------|
+| `reboot_machine`, `shutdown_machine` | `delay_seconds`, a non-negative integer. the agent ignores it |
+| `capture_screenshot` | `monitor`: `"all"`, `"primary"` or a non-negative integer |
+| `start_live_view` | `interval`, `duration`, integers of at least 1 |
+| `stop_live_view`, `cancel_reboot`, `enumerate_display_modes`, `test_display_apply` | none |
+| `dismiss_reboot_pending` | `process_name` |
+| `restart_process`, `start_process`, `stop_process`, `kill_process` | `process_name` and `process_id`, one of them required. `processId` is dropped |
+| `set_launch_mode` | `process_name` and `mode`, both required; `schedules`, an array; `schedulePresetId`, which the agent does not read |
+| `apply_display_topology` | `layout`, an object, and `applyId`, both required |
+| `ack_display_topology` | `applyId`, required |
+| `mcp_tool_call` | `tool_name`, required; `tool_params`, an object; `chat_id` |
+| `cancel_mcp_tool` | `target_command_id`, required |
+| `update_owlette` | `installer_url`, `checksum_sha256`, `target_version`, `deployment_id`. the route requires none of them; the agent refuses without the first two |
+
+poll `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}`, with the machine's `read` scope or site membership. it answers `pending`, `in_progress` (a running marker or a progress record), `completed` or `failed`; a `cancelled` command reads as `failed`. `error` appears only on a failed command, and `result` only when the agent's result was an object, which today means `capture_screenshot`; there the route adds a fresh one-hour `screenshot_url`.
+
+the process routes, `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/start` (and `stop`, `kill`, `restart`), check the process exists (`404 process_not_found` otherwise) and queue the command with `process_id`, `processId` and `process_name`. they need `MACHINE_EXEC_COMMAND`, take an `Idempotency-Key` without requiring one, and send no `timeout_seconds`, so a restart there uses the agent's 5-second default.
+
+---
+
+## where the handlers live
+
+the agent checks a command router first. its handlers are registered from `sync_commands.py` (`sync_pull`, `cancel_sync`, `rollback_to_version`), `machine_commands.py` (`capture_screenshot`), `process_commands.py` (`restart_process`), `swoop_commands.py` (the three swoop types) and `site_commands.py` (`site_settings_refresh`). a type the router does not hold falls through to the if/elif chain in `owlette_service.py`'s `handle_firebase_command`, which carries every other type. `cancel_mcp_tool` is answered inside `firebase_client.py` before either is reached.
+
+a handler module that fails to import at service start leaves its types unregistered. `restart_process` then falls back to the chain's branch, shared with `start_process`; every other router type answers `Unknown command type`, recorded as completed.

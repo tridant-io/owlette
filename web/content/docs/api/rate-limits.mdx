@@ -1,110 +1,130 @@
 ---
 title: "rate limits and quotas"
-description: "owlette enforces request rate limits and quota limits for public API callers."
+description: "owlette limits API callers in two ways: request rate limits that answer 429 with Retry-After, and per-site quotas — roost storage, and the number of machines one installer deployment may target. a correct client handles both."
+keywords: ["429", "throttling", "too many requests", "Retry-After", "quota", "storage limit", "over_quota"]
 ---
 
-**Last updated**: 2026-05-01
+**last updated**: 2026-10-05
 
-- **Quota**: slower plan limits such as storage, bandwidth, daily publishes, webhook deliveries, active keys, or deployment targets.
-- **Rate limits**: faster request or concurrency limits that protect the API and fleet control plane.
+- **rate limits** are request ceilings measured in minutes or hours. they protect the API and the fleet control plane, and answer `429 rate_limited`.
+- **quotas** are per-site limits that do not reset on a clock: a site's roost storage, and how many machines one installer deployment may target.
 
-A correct client handles both. Being below storage quota does not guarantee a bursty script can ignore `429`, and being below request rate does not guarantee a publish can exceed the site's plan quota.
+being under quota does not let a bursty script ignore `429`, and being under the rate limit does not let a deployment exceed the site's target quota.
 
 ---
 
 ## quota vs rate limit
 
-| dimension | quota | rate limit |
+| | quota | rate limit |
 |---|---|---|
-| common status | `402 quota_exceeded` | `429 rate_limited` |
-| time scale | monthly, daily, or resource lifecycle | seconds, minutes, or active concurrency |
-| fix | reduce usage, wait for reset, or upgrade tier | back off, reduce concurrency, or shard independent traffic |
-| stable signal | problem `code` and quota fields | `RateLimit-*`, `Retry-After`, and reason headers when available |
+| refusal | `413 over_quota` on `POST /api/sites/{siteId}/deployments` | `429 rate_limited` |
+| time scale | the site's settings, or the resource's lifetime | a 60-second or one-hour window |
+| fix | target fewer machines, free storage, or raise the site's limit | back off, reduce concurrency |
+| signal | problem `code`, and the quota fields | `RateLimit-*`, `Retry-After`, `Roost-Rate-Limited-Reason` |
 
-Quota refusals do not change state. Rate-limit refusals do not mean the key is banned; they mean the caller should slow down for the bucket that tripped.
+neither kind of refusal changes state, and a `429` does not mean the key is banned — only that the bucket it tripped needs time to refill.
+
+### deployment targets
+
+a site's installer deployments may target 100 machines each by default (the site's `deployQuota`). a create over it is refused before anything is queued:
+
+```json
+{
+  "type": "https://owlette.app/problems/payload-too-large",
+  "title": "over quota",
+  "status": 413,
+  "code": "over_quota",
+  "quota": { "max_targets": 100, "requested": 140 }
+}
+```
+
+split the targets across several deployments.
+
+### roost storage
+
+each site has a roost storage limit (1 TiB unless the site's limit was raised). `GET /api/sites/{siteId}/quota` reports usage against it — see [quota checks](#quota-checks). the public chunk and version routes do not refuse a publish over the limit today; the dashboard checks the quota before it uploads, and an integration that publishes large folders should do the same. the `quota_exceeded` code (`402`) is reserved for storage refusals.
 
 ---
 
-## rate-limit headers
+## headers
 
-Responses that pass through a public rate limiter include these headers when the active limiter can report counters:
-
-| header | meaning |
-|---|---|
-| `RateLimit-Limit` | Window limit for the active bucket. |
-| `RateLimit-Remaining` | Requests remaining in the current window. |
-| `RateLimit-Reset` | Seconds until the window resets. |
-
-For compatibility, some routes also emit `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`.
-
-On `429`, responses include:
+a response that passed through a limiter carries its counters:
 
 | header | meaning |
 |---|---|
-| `Retry-After` | Seconds to wait before retrying. Prefer this over client-side guesses. |
-| `Roost-Rate-Limited-Reason` | Bucket class that tripped. |
+| `RateLimit-Limit` | the bucket's limit per window |
+| `RateLimit-Remaining` | requests left in the current window |
+| `RateLimit-Reset` | seconds until the window resets |
+| `X-RateLimit-Limit`, `X-RateLimit-Remaining` | the same values under the older names |
+| `X-RateLimit-Reset` | the reset time as an epoch-millisecond timestamp — not seconds, unlike `RateLimit-Reset` |
 
-Valid `Roost-Rate-Limited-Reason` values:
+a `429` adds:
 
-| value | meaning | response |
-|---|---|---|
-| `global-rate` | Shared global or tenant-level burst protection. | Back off globally. |
-| `endpoint-rate` | Endpoint, route family, or IP bucket exhausted. | Reduce concurrency for that route family. |
-| `key-rate` | API-key bucket exhausted. | Slow this integration or split independent workloads across separate scoped keys. |
-| `site-concurrency` | Site-level concurrent work limit reached. | Wait for in-flight rollout, command, or deployment work to finish. |
+| header | meaning |
+|---|---|
+| `Retry-After` | seconds to wait before retrying. prefer it to your own guess |
+| `Roost-Rate-Limited-Reason` | which kind of bucket tripped |
 
-Some streaming, compatibility, and internal routes may omit rate-limit headers. Treat them as useful signals when present, not as fields guaranteed on every response.
+| reason | sent when |
+|---|---|
+| `key-rate` | the bucket is keyed to your API key (or, on a few routes, your user) |
+| `endpoint-rate` | the bucket is keyed to the route and your IP address, or to your session |
+| `global-rate`, `site-concurrency` | reserved; not sent today |
+
+routes with no limiter send none of these headers — see [buckets](#buckets) for which those are. treat the headers as signals when present, not as fields every response carries.
 
 ---
 
-## shipped buckets
+## buckets
 
-Owlette has two rate-limit layers. Routes wrapped with `withRateLimit()` use the public wrapper buckets below. Authenticated dashboard/API actions that go through the capability boundary also consume a per-capability bucket.
+there are two layers. a route can sit behind one, both, or neither, and a request must pass every bucket that applies.
 
-### public wrapper buckets
+### hourly wrapper buckets
 
-These limits come from `web/lib/rateLimit.ts` and `web/lib/withRateLimit.ts`.
+routes wrapped in the rate-limit wrapper count against one of these buckets:
 
-| strategy | shipped limit | subject |
+| strategy | limit | keyed by | used by, for example |
+|---|---:|---|---|
+| `api` | 300/hour | the API key ID when an `owk_` key resolves, otherwise the client IP | `/api/keys`, `POST /api/sites`, process config and control, display layout, reboot schedules |
+| `user` | 60/hour | the signed-in user, otherwise the client IP | dashboard-side hoot routes, CLI device-code approval |
+| `auth` | 10/minute | client IP | sign-in, MFA, passkey, and LLM-key settings steps |
+| `signup` | 10/hour (100 in development) | client IP | account creation |
+| `tokenExchange` | 60/hour (200 in development) | client IP | agent and CLI pairing |
+| `tokenRefresh` | 120/hour | client IP | agent token refresh |
+
+machine screenshot upload URLs have their own ceiling of 1,000 an hour per machine, keyed to the machine rather than an IP, because every machine behind a site's NAT shares one address.
+
+if the shared limiter store is unreachable, these buckets fall back to a per-process limit of 15 requests a minute per identifier. that fallback is a guardrail local to one server, not a distributed quota.
+
+### per-minute capability buckets
+
+every route behind the capability check also counts the action against a 60-second bucket for that capability, per actor and per site. a session counts as its user and an API key counts on its own, so two keys belonging to one person do not share a bucket. scheduled and autonomous work uses a separate system bucket at five times the limit, so it cannot crowd people out.
+
+| capability | per minute | covers |
 |---|---:|---|
-| `auth` | 10/minute | client IP |
-| `tokenExchange` | 60/hour in prod, 200/hour in dev | client IP |
-| `tokenRefresh` | 120/hour | client IP |
-| `user` | 60/hour | user id when available, otherwise client IP |
-| `agentAlert` | 5/hour | client IP |
-| `upload` | 5/hour in prod, 30/hour in dev | client IP |
-| `api` | 300/hour | API key id when an `owk_...` credential resolves, otherwise client IP |
+| `MACHINE_EXEC_COMMAND` | 60 | machine commands that change state |
+| `MACHINE_VIEW` | 60 | `capture_screenshot`, `start_live_view`, and `stop_live_view` commands |
+| `MACHINE_REMOTE_VIEW` | 20 | starting a watch-only swoop session, renewing a lease, reading or ending a session |
+| `MACHINE_REMOTE_CONTROL` | 10 | starting a swoop control session, swoop kills, the site's session list |
+| `SWOOP_SETTINGS_MANAGE` | 30 | site swoop settings |
+| `MACHINE_CONFIG_WRITE` | 30 | process, schedule, display, reboot, and hoot config; screenshot deletes |
+| `MACHINE_REMOVE` | 5 | removing a machine |
+| `DEPLOYMENT_MANAGE` | 30 | installer deployments |
+| `UNINSTALL_TRIGGER` | 30 | uninstalls |
+| `PRESET_MANAGE` | 60 | site presets |
+| `SITE_MEMBER_MANAGE` | 30 | site membership |
+| `SITE_DELETE` | 5 | deleting a site |
+| `SITE_LOGS_MANAGE` | 30 | clearing logs |
+| `TALON_MANAGE` | 30 | talons |
+| `ALERT_RULES_MANAGE` | 60 | alert rules |
+| `AGENT_TOKEN_REVOKE` | 5 | revoking agent tokens |
+| `USER_ROLE_MANAGE` | 10 | promoting, demoting, and assigning users |
+| `USER_DELETE` | 5 | deleting users |
+| `SYSTEM_PRESET_MANAGE` | 30 | platform system presets |
+| `GLOBAL_SETTINGS_WRITE` | 10 | platform settings |
+| `USER_SELF_DELETE` | 1 | deleting your own account |
 
-If Redis is not configured or errors, these wrapper buckets fall back to a per-process in-memory limiter of 15 requests per minute per identifier. That fallback is local to one server process; it is a guardrail, not a distributed quota.
-
-### capability buckets
-
-Capability-protected actions use 60-second windows keyed by actor bucket, subject, site, and capability. User sessions and API keys share the user bucket; system actors use the separate system bucket.
-
-| capability | user bucket | system bucket |
-|---|---:|---:|
-| `MACHINE_EXEC_COMMAND` | 60/minute | 300/minute |
-| `MACHINE_CONFIG_WRITE` | 30/minute | 150/minute |
-| `MACHINE_REMOVE` | 5/minute | 25/minute |
-| `DEPLOYMENT_MANAGE` | 30/minute | 150/minute |
-| `DISTRIBUTION_MANAGE` | 30/minute | 150/minute |
-| `UNINSTALL_TRIGGER` | 30/minute | 150/minute |
-| `PRESET_MANAGE` | 60/minute | 300/minute |
-| `SITE_MEMBER_MANAGE` | 30/minute | 150/minute |
-| `WEBHOOK_MANAGE` | 30/minute | 150/minute |
-| `SITE_LOGS_MANAGE` | 30/minute | 150/minute |
-| `TALON_MANAGE` | 30/minute | 150/minute |
-| `ALERT_RULES_MANAGE` | 60/minute | 300/minute |
-| `AGENT_TOKEN_REVOKE` | 5/minute | 25/minute |
-| `USER_ROLE_MANAGE` | 10/minute | 50/minute |
-| `USER_DELETE` | 5/minute | 25/minute |
-| `SYSTEM_PRESET_MANAGE` | 30/minute | 150/minute |
-| `INSTALLER_MANAGE` | 10/minute | 50/minute |
-| `GLOBAL_SETTINGS_WRITE` | 10/minute | 50/minute |
-| `USER_SELF_PREFS` | 120/minute | 600/minute |
-| `USER_SELF_DELETE` | 1/minute | 5/minute |
-
-The capability limiter first applies a per-process token bucket, then checks the authoritative Firestore sharded counter. A single response reports the active bucket that rejected the request.
+site, machine, and command-status reads, the roost, chunk, webhook, and installer routes, and the hoot conversation routes have no per-minute bucket — and no hourly one either, so they send no rate-limit headers. key management uses only the hourly `api` bucket. when a route sits behind both layers, the counters on a successful response describe the hourly bucket; a `429` describes whichever bucket refused it.
 
 ---
 
@@ -112,96 +132,102 @@ The capability limiter first applies a per-process token bucket, then checks the
 
 ```http
 HTTP/1.1 429 Too Many Requests
-Content-Type: application/problem+json
+Content-Type: application/problem+json; charset=utf-8
 RateLimit-Limit: 300
 RateLimit-Remaining: 0
 RateLimit-Reset: 47
 Retry-After: 47
 Roost-Rate-Limited-Reason: key-rate
+X-Request-Id: 5d7f7c5b-2ed6-4a56-9b2c-47dd7c84f957
+```
 
+```json
 {
   "type": "https://owlette.app/problems/rate-limited",
   "title": "rate limited",
+  "status": 429,
   "detail": "Too many requests. Please try again in 47 seconds.",
   "code": "rate_limited",
-  "retryAfter": 47
+  "retryAfter": 47,
+  "docsUrl": "https://owlette.app/docs/api/errors#rate_limited",
+  "requestId": "5d7f7c5b-2ed6-4a56-9b2c-47dd7c84f957"
 }
 ```
 
-Clients should read `Retry-After` from the header first. For rate-limit handling, rely on `code`/`type`, the `Retry-After` header, and body `retryAfter`; treat `detail` as display text. Some `withRateLimit()` responses may include extra legacy body fields for compatibility; treat them as non-contractual.
+read `Retry-After` from the header first, falling back to the body's `retryAfter`. branch on `code`, and treat `detail` as display text. a `429` from an hourly bucket also carries `error` and `message` fields for older dashboard callers; ignore them.
 
 ---
 
 ## retry guidance
 
-Retry:
+retry:
 
-- `429 rate_limited`, honoring `Retry-After`.
-- `500`, `502`, `503`, and `504` with exponential backoff and jitter.
-- Network failures and client timeouts when the original request included an `Idempotency-Key`.
+- `429 rate_limited`, after `Retry-After`.
+- `500`, `502`, `503`, and `504`, with exponential backoff and jitter.
+- network failures and client timeouts, when the original request carried an `Idempotency-Key`.
 
-Do not blindly retry:
+do not retry unchanged:
 
 - `400`, `401`, `403`, `404`, `409`, `412`, or `422`.
-- `402 quota_exceeded` unless usage changed or the plan was upgraded.
-- `422 idempotency_key_mismatch`; fix the key/body mismatch first.
+- `413 over_quota`, until you target fewer machines or the limit rises.
 
-Recommended fallback when `Retry-After` is absent:
+when `Retry-After` is absent:
 
 ```text
 delay_ms = min(60000, 500 * 2 ** attempt) * random(0.5, 1.0)
 ```
 
-Use at most 6 attempts for interactive requests. Background jobs can retry longer, but should log `requestId`, status, `code`, and the rate-limit headers for each attempt.
+cap interactive requests at about 6 attempts. background jobs can retry longer, but should log `requestId`, the status, the `code`, and the rate-limit headers on each attempt.
 
 ---
 
 ## idempotency and retries
 
-Every retried mutation should include an `Idempotency-Key`. Many public mutating endpoints require it. Reusing the same key for an identical retry lets Owlette return the original successful response instead of executing the side effect again.
-
-See [idempotency.md](/docs/api/idempotency) for the 24-hour replay window, mismatch behavior, and `Idempotent-Replayed` header.
+retry mutations with an `Idempotency-Key`. on routes that honor it, reusing the key for an identical retry returns the original success instead of repeating the side effect. see [idempotency](/docs/api/idempotency) for which routes honor it, the 24-hour window, and mismatch behavior.
 
 ---
 
 ## quota checks
 
-Use quota endpoints before large writes when you can:
+check a site's roost storage before a large publish:
 
-```http
-GET /api/sites/{siteId}/quota HTTP/1.1
-Authorization: Bearer owk_live_...
+```bash
+curl -fsS "$OWLETTE_API_URL/api/sites/$SITE_ID/quota" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
-
-Typical quota snapshots include:
 
 ```json
 {
   "siteId": "kiosk-fleet-01",
-  "tier": "pro",
   "usedBytes": 23456789012,
   "pendingBytes": 104857600,
-  "limitBytes": 107374182400
+  "committedBytes": 23561646612,
+  "limitBytes": 107374182400,
+  "fractionUsed": 0.2194,
+  "lastAlarmLevel": 0,
+  "lastAlarmAt": null,
+  "lastReconciledAt": "2026-10-04T03:00:00.000Z",
+  "alarms": []
 }
 ```
 
-The API compares committed and pending usage against the active plan limit. In-flight upload reservations may count as pending usage until they are finalized or expire.
+`committedBytes` is `usedBytes` plus `pendingBytes`: uploads that have reserved space but not yet finalized count against the limit until they finalize or expire. `fractionUsed` is `null` when the limit is zero. the route needs `site=<siteId>:read`.
 
 ---
 
 ## client rules
 
-- Use one scoped key per integration so rate-limit and audit signals are attributable.
-- Pace bulk writes with a small concurrency limit before raising it.
-- Prefer fewer, larger batch requests where endpoints support batching.
-- Keep `page_size` at or below the documented maximum when exporting collections.
-- Log `X-Request-Id` and problem `requestId` for failed requests.
+- use one key per integration, so rate limits and audit rows are attributable.
+- start bulk writes at low concurrency and raise it gradually.
+- prefer batch endpoints where they exist.
+- keep `page_size` within each route's maximum — see [pagination](/docs/api/pagination#paginated-routes).
+- log `X-Request-Id` (the body's `requestId`) for failed requests.
 
 ---
 
 ## see also
 
-- [errors.md](/docs/api/errors) for `rate_limited` and `quota_exceeded`.
-- [idempotency.md](/docs/api/idempotency) for safe mutation retries.
-- [pagination.md](/docs/api/pagination) for collection traversal.
-- The rendered reference at [`/docs/api`](/docs/api) for operation-level response headers.
+- [errors](/docs/api/errors) for `rate_limited` and `over_quota`.
+- [idempotency](/docs/api/idempotency) for safe mutation retries.
+- [pagination](/docs/api/pagination) for collection traversal.
+- the rendered reference at [`/docs/api`](/docs/api) for each operation's responses.

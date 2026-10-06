@@ -1,19 +1,34 @@
 ---
-title: "sdk workflow examples"
-description: "small executable SDK examples live in the node and python SDK example folders and run against a dev or staging tenant with explicit env vars."
+title: "SDK workflow examples"
+description: "small runnable SDK examples live in the Node and Python SDK example folders and run against a dev or staging tenant with explicit env vars."
 ---
 
 - `sdks/node/examples/*.ts`
 - `sdks/python/examples/*.py`
 
-They are designed to run against a dev or staging tenant with explicit env vars.
-They do not read local credential files.
+they are designed to run against a dev or staging tenant with explicit env vars.
+they do not read local credential files.
 
-For CI/CD examples, see [ci/cd with GitHub Actions](/docs/api/examples/ci-cd-github-actions).
+for CI/CD examples, see [CI/CD with GitHub Actions](/docs/api/examples/ci-cd-github-actions).
+
+## setup
+
+neither SDK is on a registry yet (see [distribution](/docs/api/distribution)), so run the examples from a checkout of the owlette monorepo:
+
+```bash
+# node — the workspace links @owlette/sdk to sdks/node, which must be built first
+npm install
+npm run build:sdk
+
+# python — the examples import the `roost` package
+pip install -e sdks/python
+```
+
+`npx tsx` fetches `tsx` on first use. the Python `auto_rollback.py` example also needs `pip install aiohttp`.
 
 ## dev fixture env
 
-Use the same values for Node and Python examples:
+use the same values for the Node and Python examples:
 
 ```bash
 export OWLETTE_API_URL=https://dev.owlette.app
@@ -25,18 +40,18 @@ export BUILD_DIR=./dist
 export OWLETTE_WEBHOOK_SECRET=whsec_...
 ```
 
-Optional write gates:
+optional write gates:
 
 ```bash
 export OWLETTE_DEPLOY=1
 export OWLETTE_DISPATCH_COMMAND=1
 ```
 
-Leave those unset for read-only inspection and existing-command polling.
+leave those unset for read-only inspection and existing-command polling.
 
 ## auth and inventory
 
-Lists the caller identity, API version, visible sites, and machines for the
+lists the caller identity, API version, visible sites, and machines for the
 selected site.
 
 ```bash
@@ -46,7 +61,7 @@ python sdks/python/examples/auth_inventory.py
 
 ## roost push and deploy
 
-Publishes `BUILD_DIR` to `OWLETTE_ROOST_ID`. Deployment is skipped unless
+publishes `BUILD_DIR` to `OWLETTE_ROOST_ID`. deployment is skipped unless
 `OWLETTE_DEPLOY=1`.
 
 ```bash
@@ -56,7 +71,7 @@ python sdks/python/examples/run_roost_workflow.py
 
 ## command polling
 
-Poll an existing command:
+poll an existing command:
 
 ```bash
 export OWLETTE_COMMAND_ID=cmd_...
@@ -64,7 +79,7 @@ npx tsx sdks/node/examples/command-poll.ts
 python sdks/python/examples/command_poll.py
 ```
 
-Dispatch and poll a new safe screenshot command:
+dispatch and poll a new safe screenshot command:
 
 ```bash
 export OWLETTE_DISPATCH_COMMAND=1
@@ -73,22 +88,39 @@ npx tsx sdks/node/examples/command-poll.ts
 python sdks/python/examples/command_poll.py
 ```
 
+`OWLETTE_COMMAND_TYPE` defaults to `capture_screenshot` and also accepts `reboot_machine` or `shutdown_machine`. `OWLETTE_MONITOR` (default `primary`), `OWLETTE_POLL_SECONDS` (default `1.5`), and `OWLETTE_TIMEOUT_SECONDS` (default `60`) tune the poll.
+
 ## webhook verification
 
-Verify a real delivery by piping the raw body and signature:
+verify a real delivery by piping the raw body and signature:
 
 ```bash
 cat body.json | OWLETTE_SIGNATURE='t=...,v1=...' npx tsx sdks/node/examples/webhook-verify.ts
 cat body.json | OWLETTE_SIGNATURE='t=...,v1=...' python sdks/python/examples/webhook_verify.py
 ```
 
-With no signature env var, both scripts sign the body with
-`OWLETTE_WEBHOOK_SECRET` first and verify the generated fixture. That mode is
-useful for CI syntax/import checks without a live webhook delivery.
+with no signature env var, both scripts sign the body with
+`OWLETTE_WEBHOOK_SECRET` first and verify the generated fixture. that mode is
+useful for CI syntax/import checks without a live webhook delivery. with no
+body on stdin they sign a built-in sample body, and `OWLETTE_TOLERANCE_SECONDS`
+overrides the 300-second replay window.
+
+## recipe ports
+
+the SDK folders also carry SDK versions of the raw REST recipes. they read their own env vars, listed at the top of each file:
+
+| recipe | Node | Python | env |
+|---|---|---|---|
+| [nightly directory sync](/docs/api/examples/nightly-sync) | `nightly-sync.ts` | `nightly_sync.py` | `OWLETTE_TOKEN`, `ROOST_SITE_ID`, `ROOST_ID`, `WATCH_DIR`, optional `ALERT_WEBHOOK` |
+| [bulk roost creation](/docs/api/examples/bulk-create) | `bulk-create.ts <csv>` | `bulk_create.py <csv>` | `OWLETTE_TOKEN` |
+| [CI/CD publish](/docs/api/examples/ci-cd-github-actions) | `ci-cd.ts` | `ci_cd.py` | `OWLETTE_TOKEN`, `ROOST_SITE_ID`, `ROOST_ID`, optional `BUILD_DIR` (default `./build`) |
+| [auto-rollback](/docs/api/examples/auto-rollback) | `auto-rollback.ts` | `auto_rollback.py` | `OWLETTE_TOKEN`, `WEBHOOK_SIGNING_SECRET`, `SLACK_WEBHOOK_URL`, `AUTO_ROLLBACK_SITE_IDS`, optional `PORT` |
+
+each also honors `OWLETTE_API_URL` (default `https://owlette.app`). the SDK nightly-sync ports call `roosts.push()` unconditionally, and a push always mints a new version, so they publish every run; the raw REST recipe diffs first and only publishes on a real change.
 
 ## CI note
 
-These examples are intentionally gated by env instead of running against a
-shared live tenant by default. A CI job can validate the offline webhook fixture
+these examples are intentionally gated by env instead of running against a
+shared live tenant by default. a CI job can validate the offline webhook fixture
 without network access, and a dev/staging smoke job can run the full set by
 providing the fixture env above.

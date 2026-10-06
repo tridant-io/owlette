@@ -1,51 +1,65 @@
 ---
 title: "dashboard"
-description: "The owlette web dashboard is a Next.js application that provides real-time monitoring and remote control of all your machines. Access it from any browser — desktop, tablet, or mobile."
+description: "the owlette web dashboard: live monitoring and remote control of every machine in your sites, from any browser on desktop, tablet or phone."
+keywords: ["web app", "pages", "routes", "urls", "admin panel", "navigation"]
 ---
+
+the dashboard watches and controls machines on Windows, macOS and Linux. a few features depend on the machine's platform; [platform support](/docs/reference/platform-support) lists which.
 
 ---
 
 ## pages
 
-| page | url | description |
-|------|-----|-------------|
-| **Landing** | `/` | Marketing page with features overview |
-| **Demo** | `/demo` | Interactive dashboard demo (no login required) |
-| **Login** | `/login` | Email/password, Google OAuth, or passkey sign-in |
-| **Register** | `/register` | Create a new account |
-| **2FA Setup** | `/setup-2fa` | Configure TOTP two-factor authentication |
-| **2FA Verify** | `/verify-2fa` | TOTP verification step during login |
-| **Add Machine** | `/add` | Pairing phrase entry for authorizing an agent to a site |
-| **dashboard** | `/dashboard` | Main machine and process monitoring view |
-| **hoot** | `/hoot` | AI chat interface for natural language machine management |
-| **deploy** | `/deployments` | Remote software deployment management |
-| **roost** | `/roosts` | Content-addressed file sync, immutable versions, target sync, and rollback |
-| **logs** | `/logs` | Activity log viewer with filtering |
-| **talons** | `/talons` | Site automations — trigger, condition, and outputs |
-| **swoop** | `/swoop/{siteId}/{machineId}` | Live remote desktop for one machine |
-| **shared chat** | `/share/{token}` | Read-only view of a shared hoot conversation |
-| **settings: webhooks** | `/settings/webhooks` | Site webhook subscriptions, delivery history, retries, and secret rotation |
-| **settings: api keys** | `/settings/api-keys` | Scoped API key management for automation |
-| **settings: alerts** | `/settings/alerts` | Per-user alert email preferences; the destination of "manage alerts" in every alert email |
-| **Admin: Members** | `/admin/members` | Site membership management (site admins, scoped to their sites) |
-| **Admin: Tokens** | `/admin/tokens` | Agent token management (site admins, scoped to their sites) |
-| **Admin: Schedules** | `/admin/schedules` | [Schedule preset](/docs/dashboard/admin/schedule-presets) management (site admins, scoped to their sites) |
-| **Admin: Alerts** | `/admin/alerts` | Threshold-based alert rule management (site admins, scoped to their sites) |
-| **Admin: Webhooks** | `/admin/webhooks` | Outbound webhook configuration (site admins, scoped to their sites) |
-| **Admin: Users** | `/admin/users` | Account, global role, and site assignment management (internal) |
-| **Admin: Installers** | `/admin/installers` | Agent installer version management (internal) |
-| **Admin: Presets** | `/admin/presets` | Deployment template library management (internal) |
-| **Admin: Email** | `/admin/email` | Email notification settings (internal) |
+| page | URL | what it is |
+|------|-----|------------|
+| **landing** | `/` | product overview |
+| **demo** | `/demo` | an interactive dashboard demo, no sign-in needed |
+| **sign in** | `/login` | email and password, Google, or passkey |
+| **register** | `/register` | create an account |
+| **forgot / reset password** | `/forgot-password`, `/reset-password` | password reset by email |
+| **two-factor setup** | `/setup-2fa` | add a passkey or authenticator app |
+| **two-factor verify** | `/verify-2fa` | the second-factor step at sign-in |
+| **add machine** | `/add` | enter a pairing phrase to authorize an agent to a site (`/setup` redirects here) |
+| **dashboard** | `/dashboard` | machines, metrics and processes — see [machine monitoring](/docs/dashboard/machine-monitoring) |
+| **hoot** | `/hoot`, `/hoot/{chatId}` | AI chat for managing machines — see [hoot](/docs/dashboard/hoot) |
+| **deploy** | `/deployments` | software deployments — see [deployments](/docs/dashboard/deployments) |
+| **roost** | `/roosts` | project file sync with versions and rollback — see [roost](/docs/dashboard/roost) |
+| **logs** | `/logs` | the site's activity log — see [activity logs](/docs/dashboard/activity-logs) |
+| **talons** | `/talons` | site automations — see [talons](/docs/dashboard/talons) |
+| **swoop** | `/swoop/{siteId}/{machineId}` | live remote desktop for one machine — see [swoop](/docs/dashboard/swoop) |
+| **shared chat** | `/share/{token}` | read-only view of a shared hoot conversation |
+| **CLI sign-in** | `/cli/authorize` | approve a sign-in from the [owlette CLI](/docs/cli/overview) |
+| **settings: webhooks** | `/settings/webhooks` | site webhook subscriptions, delivery history, retries and secret rotation |
+| **settings: api keys** | `/settings/api-keys` | scoped API keys for automation |
+| **settings: alerts** | `/settings/alerts` | your alert email switches; where every alert email's **manage alerts** link lands |
+| **unsubscribe** | `/unsubscribe` | the one-click unsubscribe target in alert emails |
+
+### admin
+
+the admin panel's sidebar shows what your role allows. anyone who owns or administers a site sees the site-scoped pages, limited to their sites; superadmins see everything.
+
+| page | URL | who | what it is |
+|------|-----|-----|------------|
+| **members** | `/admin/members` | site admins | [site membership](/docs/dashboard/admin/member-management) |
+| **agent tokens** | `/admin/tokens` | site admins | [agent token management](/docs/dashboard/admin/token-management) |
+| **swoop** | `/admin/swoop` | site admins | live swoop sessions, and ending them — see [admin → swoop](/docs/dashboard/swoop#admin--swoop) |
+| **schedules** | `/admin/schedules` | site admins | [schedule presets](/docs/dashboard/admin/schedule-presets) |
+| **alerts** | `/admin/alerts` | site admins | [threshold alert rules](/docs/dashboard/admin/email-alerts#threshold-alert-rules) |
+| **webhooks** | `/admin/webhooks` | site admins | [outbound webhooks](/docs/dashboard/admin/webhooks) |
+| **users** | `/admin/users` | superadmins | [accounts, global roles and site assignment](/docs/dashboard/admin/user-management) |
+| **installers** | `/admin/installers` | superadmins | [agent installer versions](/docs/dashboard/admin/installer-management) |
+| **template library** | `/admin/presets` | superadmins | [the deployment template library](/docs/dashboard/admin/system-presets) |
+| **email** | `/admin/email` | superadmins | email configuration and testing |
 
 ---
 
 ## technology
 
-- **Framework**: Next.js 16 with App Router
+- **framework**: Next.js 16 with the App Router
 - **UI**: React 19, TypeScript, Tailwind CSS 4, shadcn/ui (Radix primitives)
-- **Charts**: Recharts for metrics visualization
-- **Icons**: Lucide React
-- **Auth**: Firebase Authentication + iron-session (HTTPOnly cookies)
-- **Data**: Firebase Client SDK with real-time `onSnapshot` listeners
-- **Hosting**: Railway (auto-deploy from GitHub)
-- **AI**: Vercel AI SDK with Anthropic Claude / OpenAI
+- **charts**: Recharts
+- **icons**: Lucide React
+- **auth**: Firebase Authentication plus iron-session (HTTP-only cookies)
+- **data**: the Firebase client SDK with real-time `onSnapshot` listeners
+- **hosting**: Railway, deployed automatically from GitHub, with a Vercel failover behind Cloudflare load balancing
+- **AI**: the Vercel AI SDK with Anthropic Claude or OpenAI

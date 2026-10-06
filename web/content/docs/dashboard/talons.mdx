@@ -1,12 +1,12 @@
 ---
 title: "talons"
 description: "talons are site-scoped automations: a trigger, an optional condition, and one or more outputs. hoot can create them conversationally, and every run is recorded."
-keywords: ["workflow", "notification", "automation rule", "if this then that"]
+keywords: ["workflow", "notification", "automation rule", "if this then that", "scheduled check", "run now", "template"]
 ---
 
 talons are owlette's automations — the owl's instrument of action. each talon is a small pipeline: **when** something happens (the trigger), **optionally check** something (the condition), **then do** something (the outputs). talons live at `/talons` in the dashboard, are scoped to a site, and can target every machine in the site or a chosen subset.
 
-you can build a talon in the visual editor, start from a preset, or simply ask hoot — "every morning at 8, screenshot the wall and email me if the loop isn't playing" becomes a talon you can inspect and edit like any other.
+you can build a talon in the visual editor, **start from a template**, or simply ask hoot — "every morning at 8, screenshot the wall and email me if the loop isn't playing" becomes a talon you can inspect and edit like any other. creating, editing, enabling, disabling and deleting talons takes a site admin or owner.
 
 ---
 
@@ -14,42 +14,58 @@ you can build a talon in the visual editor, start from a preset, or simply ask h
 
 | trigger | fires when | notes |
 |---|---|---|
-| schedule | fixed times on chosen weekdays, or every n minutes | evaluated in the site timezone; minimum interval 5 minutes (15 with a visual check) |
+| schedule | fixed times on chosen weekdays (up to 50), or every n minutes | evaluated in the site timezone. an interval is 5 to 1440 minutes, and at least 15 with a visual check |
 | threshold | a metric alert rule fires and its breach matches the talon's own predicate | rides the existing alert pipeline — a threshold talon does nothing until a matching alert rule exists |
-| event | one of the subscribed machine events lands | process crash / start failure / restart, exe missing, machine offline, and the display events; an optional delay (1–1440 minutes) lets a slow-starting app settle before the talon looks |
+| event | one of the subscribed machine events lands | process crash, start failure or restart, exe missing, machine offline, and the display events. an optional delay of up to 1440 minutes lets a slow-starting app settle before the talon looks; a delayed event writes a `pending` run that later becomes `fired` or `missed` |
 
 ## the condition
 
-a talon can run its outputs unconditionally (`none`), or first perform a **visual check**: capture a screenshot of the machine and have hoot judge it against a plain-language expectation you write — "the screen should be showing the content loop, not the desktop, an error dialog, or a black screen." the verdict, confidence, reasoning, and the screenshot itself are recorded on the run. outputs only fire when the check fails.
+a talon can run its outputs unconditionally (`none`), or first perform a **visual check**: capture a screenshot of the machine (all monitors, or one) and have hoot judge it against a plain-language expectation you write, up to 500 characters — "the screen should be showing the content loop, not the desktop, an error dialog, or a black screen." the verdict, confidence, reasoning and the screenshot itself are recorded on the run. outputs only fire when the check fails.
 
-visual checks spend an LLM key — see [which key an unattended run spends](/docs/dashboard/hoot#which-key-an-unattended-run-spends) — and are capped at one run per 15 minutes per talon.
+visual checks spend an LLM key — see [which key an unattended run spends](/docs/dashboard/hoot#which-key-an-unattended-run-spends). the 15-minute floor applies to interval schedules; an event or threshold talon with a visual check is held back only by its cooldown.
+
+a visual check needs a machine that can take a screenshot. a Mac needs Screen Recording granted to the owlette app, and a Linux machine cannot capture yet. a check that cannot capture **fails** the run — it is not skipped — and counts toward the [automatic switch-off](#runs-failures-and-audit). see [platform support](/docs/reference/platform-support#screens).
 
 ## outputs
 
-a talon can have several outputs; each is attempted and recorded independently on the run.
+a talon has one to five outputs; each is attempted and recorded independently on the run.
 
-- **email** — notifies the site's alert recipients, with per-recipient unsubscribe links.
+- **email** — emails the site's users who have **talon alerts** switched on in [account settings](/docs/dashboard/account-settings#alerts), skipping anyone who muted the machine, with per-recipient unsubscribe links.
 - **webhook** — a signed POST to your endpoint. the signing secret is generated server-side and is never readable from the dashboard.
-- **hoot** — hands hoot a directive to carry out against the machine, in a chat you can open and read afterwards. by default the turn is **read-only** (tier 1 tools): it can look at the machine and report, not change it. a site admin can arm **let hoot act** on the output, which raises it to tier 2 — process control, screenshots, service management, windows update policy. tier 3 (raw shell, file writes) is never available to an unattended run, whatever the flag says. these two levels are the whole range — there is no per-directive tool list.
-- **command** — queues a process command (restart / start / stop) against the machines in scope. authoring a command output requires a site admin, since it is the same power class as an armed hoot output.
+- **hoot** — hands hoot a directive (up to 1000 characters) to carry out against the machine, in a chat you can open and read afterwards. by default the turn is **read-only** (tier-1 tools): it can look at the machine and report, not change it. arming **let hoot act** on the output raises it to tier 2 — process control, screenshots, service management, Windows Update policy. tier 3 (raw shell, file writes) is never available to an unattended run, whatever the flag says. these two levels are the whole range — there is no per-directive tool list. on a Mac or Linux machine, hoot's Windows-only tools refuse (see [hoot tools](/docs/reference/hoot-tools#platforms)).
+- **command** — queues a process command (restart, start or stop) against the machines in scope. it is the same power class as an armed hoot output.
 
 a hoot output aimed at one machine is **skipped**, not failed, when that machine is offline (`machine_offline`) or hoot is switched off on it from the hoot header (`hoot_disabled`): the reason is recorded on the run, nothing is dispatched, and the talon keeps its clean record. a site-wide directive runs against the machines that are online **with hoot enabled** at the time, and the ones the switch held back are listed on the run — it is skipped the same way when none are online (`no_machines_online`) or when every online machine has hoot switched off (`no_hoot_enabled_machines`).
 
-the identity that pays and acts is the talon's **creator**, re-checked on every run — a creator who has left the site stops the talon rather than lending it stale privileges.
+the identity that pays and acts is the talon's **creator**, re-checked on every run. a creator who is no longer a user, was deleted, lost access to the site, or removed their LLM key switches the talon off on the first run that finds out, and the card reads **switched off — …** with the reason. removing a member who wrote talons — from [members](/docs/dashboard/admin/member-management), or a user's site access or account from [users](/docs/dashboard/admin/user-management) — offers to hand their talons to a successor first, and handing them over re-arms the ones that were switched off for their creator.
 
-## presets
+## the talon card
 
-six built-ins ship with every site: **morning wall check**, **crash triage**, **weekly health report**, **exe went missing**, **wall check after restart**, and **update guard** — the last one re-asserts the windows update install window and the suppression of the full-screen setup screens (privacy experience, welcome experience, "let's finish setting up your device", edge first run) every sunday morning, so an update never hijacks the exhibit. presets ship **un-armed**: the ones that need to change machine state tell you to turn on *let hoot act* after you add them.
+each talon's card shows its trigger, outputs and last run; expand it for **recent runs**. its buttons:
+
+- **run now** — runs it once, ignoring the cooldown. a disabled talon never runs.
+- **enable** / **disable**.
+- **edit**, **save as template** and **delete**.
+
+## templates
+
+six built-in templates ship with every site: **morning wall check**, **crash triage**, **weekly health report**, **exe went missing**, **wall check after restart**, and **update guard**. update guard re-asserts the Windows Update install window and the suppression of the full-screen setup screens (privacy experience, welcome experience, "let's finish setting up your device", Edge first run) every Sunday morning, so an update never hijacks the exhibit — it is Windows only, since both tools it uses refuse on a Mac or Linux machine.
+
+**save as template** keeps a talon's trigger, condition, outputs and cooldown as a custom template for the site. templates ship **un-armed**: the ones that need to change machine state tell you to turn on *let hoot act* after you add them.
 
 ## runs, failures, and audit
 
-every firing writes a run record — trigger summary, per-machine target, condition verdict, each output's result, and timing — visible in the talon's run history and in the site activity log. cooldowns (default 60 minutes for threshold and event talons) stop a flapping machine from firing the same talon in a loop. a talon that fails 10 runs in a row is switched off automatically with the reason recorded on it; re-enabling it resets the counter.
+every firing writes a run record — trigger summary, per-machine target, condition verdict, each output's result, and timing — visible in the talon's recent runs and in the site's [activity log](/docs/dashboard/activity-logs) as `talon_triggered`, `talon_succeeded`, `talon_failed` or `talon_skipped` (a site-wide run is logged against the machine ID `site`). a firing held back by the cooldown writes no run.
 
-structural changes — create, edit, enable, disable, delete — are written to the site audit log as `talon_mutated` entries, attributed to the human who made them (including talons created through hoot).
+cooldowns (default 60 minutes, up to 1440) stop a flapping machine from firing the same talon in a loop. a talon that fails 10 runs in a row is switched off automatically with the reason recorded on it. re-enabling it does **not** reset that count — only a successful run does — so a talon re-enabled before its cause is fixed switches off again on its next failure.
+
+structural changes — create, edit, enable, disable, delete — are written to the site audit log as `talon_mutated` entries, attributed to the person who made them (including talons created through hoot). an automatic switch-off is attributed to `system:talon_runner`.
 
 ## limits
 
 - 20 talons per site.
-- schedule intervals: 5 minutes minimum, 15 with a visual check.
+- one to five outputs per talon.
+- name up to 80 characters, description up to 500.
+- schedule intervals: 5 to 1440 minutes, 15 minimum with a visual check; up to 50 fixed times.
 - one run in flight per talon; a run stuck past 10 minutes is marked failed.
 - run history follows the standard 400-day retention window.

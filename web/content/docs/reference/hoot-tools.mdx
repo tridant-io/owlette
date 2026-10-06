@@ -1,7 +1,10 @@
 ---
 title: "hoot tools reference"
-description: "Complete reference for all 52 public web hoot tools from web/lib/mcp-tools.ts, organized by tier."
+description: "every tool hoot can call — all 52 in web/lib/mcp-tools.ts — with its tier, parameters, how it executes, and which ones are Windows only."
+keywords: ["mcp tools", "ai tools", "tool list", "tool permissions", "approval tiers", "windows only tools", "unsupported_on_platform", "mac tools", "linux tools"]
 ---
+
+hoot offers the model the same 52 tools on every machine. the tier decides whether a call needs your approval; the machine's agent decides whether it can run there. for how chats use these tools, see [hoot](/docs/dashboard/hoot).
 
 ---
 
@@ -9,74 +12,113 @@ description: "Complete reference for all 52 public web hoot tools from web/lib/m
 
 | tier | type | approval | count |
 |------|------|----------|-------|
-| **1** | Read-only | Auto-approved | 16 |
-| **2** | Process & machine management | Auto-approved | 25 |
-| **3** | Privileged | Requires user confirmation | 11 |
+| **1** | read-only | auto-approved | 16 |
+| **2** | process and machine management | auto-approved | 25 |
+| **3** | privileged | in-chat approval while the site's approval gate is on (the default) | 11 |
 
-> **Server-side tools** (`get_site_logs`, `get_system_presets`, `deploy_software`, `update_process`, `add_process`, `delete_process`, `create_talon`, `list_talons`, `set_talon_enabled`, `schedule_followup`, `cancel_followup`) execute in the Next.js server process. They do not route through the agent command queue. Talons are site-level records and follow-ups are chat records, so neither is ever relayed to a machine.
+members and chat-scoped API keys are capped at tier 1. see [approving privileged (tier-3) actions](/docs/dashboard/hoot#approving-privileged-tier-3-actions).
+
+> **server-side tools** (`get_site_logs`, `get_system_presets`, `deploy_software`, `update_process`, `add_process`, `delete_process`, `create_talon`, `list_talons`, `set_talon_enabled`, `schedule_followup`, `cancel_followup`) run in the Next.js server process and never go through the agent's command queue. talons are site-level records and follow-ups are chat records, so neither is ever relayed to a machine.
+
+---
+
+## platforms
+
+the tool list is not filtered by operating system. a call to a tool the machine's platform does not implement comes back as a structured refusal rather than a failure:
+
+```json
+{
+  "error": "unsupported_on_platform",
+  "tool": "registry_operation",
+  "platform": "darwin",
+  "message": "registry_operation is implemented on windows only"
+}
+```
+
+**Windows only.** these 13 tools answer `unsupported_on_platform` on macOS and Linux (`WINDOWS_ONLY_TOOLS` in `agent/src/mcp_tools.py`):
+
+`configure_gpu_tdr`, `manage_windows_update`, `suppress_setup_screens`, `manage_notifications`, `configure_power_plan`, `manage_scheduled_task`, `network_reset`, `registry_operation`, `clean_disk_space`, `get_event_logs_filtered`, `manage_windows_feature`, `run_powershell`, `execute_script`
+
+two more paths need the Windows user-session runner and are refused off Windows with an error that starts `unsupported_on_platform: user-session execution`: `run_python`, and `run_command` or `run_powershell` with `user_session: true`.
+
+**on macOS and Linux, differently.** these run on all three platforms, with a macOS or Linux backend that behaves differently from Windows:
+
+| tool | macOS | Linux |
+|------|-------|-------|
+| `get_event_logs` | the unified log through `log show`, over the last 1 to 10 minutes | the systemd journal through `journalctl` |
+| `get_service_status` | a launchd label, through `launchctl list` | a systemd unit, through `systemctl show` |
+| `manage_windows_service` | `launchctl`. `startup_type` takes `auto` or `disabled` only | `systemctl`. `startup_type` takes `auto`, `manual` (disable) or `disabled` (mask) |
+| `check_pending_reboot` | an OS update prepared or a security response staged; reports when the last update installed | `/run/reboot-required`, written by a package upgrade |
+| `get_gpu_processes` | per-process VRAM through `nvidia-smi` (compute processes only); without it the list is empty, with a note saying why | same as macOS |
+| `show_notification` | shown by the owlette app; `style` and `duration_seconds` are ignored | same as macOS |
+| `capture_screenshot` | taken by the owlette app, which needs the Screen Recording grant | not available yet: a Wayland session is refused, and on X11 the owlette app does not capture |
+| `run_command` | its own allow-list, see [`run_command`](#run_command) | same as macOS |
+| `manage_process` | its own never-kill list, see [tier 2 blocklists](#tier-2-blocklists) | same as macOS |
+
+on macOS and Linux the agent runs as root with no display of its own, so `show_notification` and, on macOS, `capture_screenshot` are jobs for the owlette app running in the signed-in session. when the app is not running they return `desktop_not_running`. the [platform support](/docs/reference/platform-support) page covers the rest of the agent.
 
 ---
 
 ## execution-mode matrix
 
-Web hoot chooses an execution path by tool name in `web/lib/hoot-utils.server.ts`. Server-side tools run in the Next.js server process. Legacy command tools write existing machine command types. Firestore tools create `mcp_tool_call` entries for the agent to execute. Local Agent SDK MCP is separate: `agent/src/cortex_tools.py` exposes only the tools returned by `_make_tier1_tools`, `_make_tier2_tools`, and `_make_tier3_tools`.
+web hoot chooses an execution path by tool name in `web/lib/hoot-utils.server.ts`. server-side tools run in the Next.js server process. legacy command tools write existing machine command types. Firestore tools create `mcp_tool_call` entries for the agent to execute. local Agent SDK MCP is separate: `agent/src/cortex_tools.py` exposes only the tools returned by `_make_tier1_tools`, `_make_tier2_tools` and `_make_tier3_tools`.
 
-| tool | tier | web hoot execution | local Agent SDK MCP |
-|------|------|----------------------|---------------------|
-| `get_site_logs` | 1 | Server-side | Not exposed |
-| `get_system_info` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_process_list` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_running_processes` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_gpu_processes` | 1 | Firestore `mcp_tool_call` | Defined, but not returned |
-| `get_network_info` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_disk_usage` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_event_logs` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_service_status` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_agent_config` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_agent_logs` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_agent_health` | 1 | Firestore `mcp_tool_call` | Yes, direct |
-| `get_system_presets` | 1 | Server-side | Not exposed |
-| `check_pending_reboot` | 1 | Firestore `mcp_tool_call` | Not exposed |
-| `schedule_followup` | 1 | Server-side | Not exposed |
-| `cancel_followup` | 1 | Server-side | Not exposed |
-| `restart_process` | 2 | Legacy command-mapped | Yes, IPC |
-| `kill_process` | 2 | Legacy command-mapped | Yes, IPC |
-| `start_process` | 2 | Legacy command-mapped | Yes, IPC |
-| `set_launch_mode` | 2 | Legacy command-mapped | Yes, IPC |
-| `update_process` | 2 | Server-side | Not exposed |
-| `add_process` | 2 | Server-side | Not exposed |
-| `delete_process` | 2 | Server-side | Not exposed |
-| `capture_screenshot` | 2 | Firestore `mcp_tool_call` | Yes, IPC |
-| `manage_process` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `manage_windows_service` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `configure_gpu_tdr` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `manage_windows_update` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `suppress_setup_screens` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `manage_notifications` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `configure_power_plan` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `manage_scheduled_task` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `network_reset` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `registry_operation` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `clean_disk_space` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `get_event_logs_filtered` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `manage_windows_feature` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `show_notification` | 2 | Firestore `mcp_tool_call` | Not exposed |
-| `create_talon` | 2 | Server-side | Not exposed |
-| `list_talons` | 2 | Server-side | Not exposed |
-| `set_talon_enabled` | 2 | Server-side | Not exposed |
-| `run_command` | 3 | Firestore `mcp_tool_call` | Yes, direct |
-| `run_powershell` | 3 | Firestore `mcp_tool_call` | Yes, direct |
-| `run_python` | 3 | Firestore `mcp_tool_call` | Not exposed |
-| `read_file` | 3 | Firestore `mcp_tool_call` | Yes, direct |
-| `write_file` | 3 | Firestore `mcp_tool_call` | Yes, direct |
-| `list_directory` | 3 | Firestore `mcp_tool_call` | Yes, direct |
-| `execute_script` | 3 | Firestore `mcp_tool_call` | Yes, direct |
-| `deploy_software` | 3 | Server-side | Not exposed |
-| `reboot_machine` | 3 | Legacy command-mapped | Not exposed |
-| `shutdown_machine` | 3 | Legacy command-mapped | Not exposed |
-| `cancel_reboot` | 3 | Legacy command-mapped | Not exposed |
+| tool | tier | web hoot execution | local Agent SDK MCP | macOS and Linux |
+|------|------|--------------------|---------------------|-----------------|
+| `get_site_logs` | 1 | server-side | not exposed | n/a (server) |
+| `get_system_info` | 1 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `get_process_list` | 1 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `get_running_processes` | 1 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `get_gpu_processes` | 1 | Firestore `mcp_tool_call` | defined, but not returned | differs |
+| `get_network_info` | 1 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `get_disk_usage` | 1 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `get_event_logs` | 1 | Firestore `mcp_tool_call` | yes, direct | differs |
+| `get_service_status` | 1 | Firestore `mcp_tool_call` | yes, direct | differs |
+| `get_agent_config` | 1 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `get_agent_logs` | 1 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `get_agent_health` | 1 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `get_system_presets` | 1 | server-side | not exposed | n/a (server) |
+| `check_pending_reboot` | 1 | Firestore `mcp_tool_call` | not exposed | differs |
+| `schedule_followup` | 1 | server-side | not exposed | n/a (server) |
+| `cancel_followup` | 1 | server-side | not exposed | n/a (server) |
+| `restart_process` | 2 | legacy command-mapped | yes, IPC | yes |
+| `kill_process` | 2 | legacy command-mapped | yes, IPC | yes |
+| `start_process` | 2 | legacy command-mapped | yes, IPC | yes |
+| `set_launch_mode` | 2 | legacy command-mapped | yes, IPC | yes |
+| `update_process` | 2 | server-side | not exposed | n/a (server) |
+| `add_process` | 2 | server-side | not exposed | n/a (server) |
+| `delete_process` | 2 | server-side | not exposed | n/a (server) |
+| `capture_screenshot` | 2 | Firestore `mcp_tool_call` | yes, IPC | differs |
+| `manage_process` | 2 | Firestore `mcp_tool_call` | not exposed | differs |
+| `manage_windows_service` | 2 | Firestore `mcp_tool_call` | not exposed | differs |
+| `configure_gpu_tdr` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `manage_windows_update` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `suppress_setup_screens` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `manage_notifications` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `configure_power_plan` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `manage_scheduled_task` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `network_reset` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `registry_operation` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `clean_disk_space` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `get_event_logs_filtered` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `manage_windows_feature` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `show_notification` | 2 | Firestore `mcp_tool_call` | not exposed | differs |
+| `create_talon` | 2 | server-side | not exposed | n/a (server) |
+| `list_talons` | 2 | server-side | not exposed | n/a (server) |
+| `set_talon_enabled` | 2 | server-side | not exposed | n/a (server) |
+| `run_command` | 3 | Firestore `mcp_tool_call` | yes, direct | differs; `user_session` Windows only |
+| `run_powershell` | 3 | Firestore `mcp_tool_call` | yes, direct | Windows only |
+| `run_python` | 3 | Firestore `mcp_tool_call` | not exposed | Windows only |
+| `read_file` | 3 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `write_file` | 3 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `list_directory` | 3 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `execute_script` | 3 | Firestore `mcp_tool_call` | yes, direct | Windows only |
+| `deploy_software` | 3 | server-side | not exposed | Windows only in practice, see [`deploy_software`](#deploy_software) |
+| `reboot_machine` | 3 | legacy command-mapped | not exposed | yes |
+| `shutdown_machine` | 3 | legacy command-mapped | not exposed | yes |
+| `cancel_reboot` | 3 | legacy command-mapped | not exposed | yes |
 
-Local Agent SDK coverage is intentionally smaller than the web registry: at maximum tier it returns 21 tools, and at the default `max_tier=2` it returns 15. `agent/src/cortex_tools.py` defines a `get_gpu_processes` wrapper, but the function is omitted from the returned tier-1 list, so local Agent SDK hoot does not expose it today. `agent/src/mcp_tools.py` also contains internal handlers that are not public web hoot tools, including `get_display_layout` and `apply_display_topology`.
+local hoot offers fewer tools than the web registry: 21 at its highest tier, and 15 at the default `max_tier=2`. local hoot does not offer `get_gpu_processes`.
 
 ---
 
@@ -84,20 +126,20 @@ Local Agent SDK coverage is intentionally smaller than the web registry: at maxi
 
 ### get_site_logs
 
-Get activity logs across all machines in the site. Useful for finding errors, crashes, and events across the fleet. **Server-side** — queries Firestore directly.
+activity logs across every machine in the site, for finding errors, crashes and events across the fleet. **server-side**: queries Firestore directly.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `level` | string | No | Filter: `error`, `warning`, `info` |
-| `hours` | number | No | Look back this many hours (default: 24) |
-| `limit` | number | No | Max logs to return (default: 50) |
-| `action` | string | No | Filter by action type, e.g. `process_crash`, `agent_started` |
+| `level` | string | no | filter: `error`, `warning`, `info` |
+| `hours` | number | no | look back this many hours (default: 24) |
+| `limit` | number | no | max logs to return (default: 50) |
+| `action` | string | no | filter by action type, e.g. `process_crash`, `agent_started` |
 
 ---
 
 ### get_system_info
 
-Get comprehensive system information including hostname, OS (with correct Windows 10/11 detection), CPU model and usage, memory (used/total GB), disk (used/total GB), GPU model, driver version, VRAM (used/total GB), GPU load %, uptime, and agent version.
+system information: hostname, OS (with correct Windows 10/11 detection), OS version, architecture, CPU model, cores, threads and usage, memory (used/total GB), disk (used/total GB), GPU model, NVIDIA driver version, VRAM (used/total GB), GPU load %, uptime, agent version and Python version.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -107,7 +149,7 @@ Get comprehensive system information including hostname, OS (with correct Window
 
 ### get_process_list
 
-Get all owlette-configured processes with their current status, PID, launch mode, executable path, file path / command arguments, working directory, and whether they are running.
+every owlette-configured process with its current status, PID, launch mode, executable path, file path / command arguments, working directory, and whether it is running.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -117,20 +159,22 @@ Get all owlette-configured processes with their current status, PID, launch mode
 
 ### get_running_processes
 
-Get all running OS processes with CPU and memory usage. Can filter by name.
+every running OS process with CPU and memory usage. can filter by name.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `name_filter` | string | No | Filter by process name (case-insensitive) |
-| `limit` | number | No | Max results (default: 50, max: 200) |
+| `name_filter` | string | no | filter by process name (case-insensitive) |
+| `limit` | number | no | max results (default: 50, max: 200) |
 
-**Returns**: Processes sorted by memory usage with name, PID, CPU%, memory%.
+**returns**: processes sorted by memory usage, with name, PID, CPU % and memory %.
 
 ---
 
 ### get_gpu_processes
 
-Get per-process GPU memory (VRAM) usage via Windows Performance Counters — same data source as Task Manager. Shows dedicated and shared GPU memory per process, sorted by usage. Works cross-vendor (NVIDIA, AMD, Intel) and for all GPU APIs (DirectX, OpenGL, CUDA, Vulkan).
+per-process GPU memory (VRAM). on Windows it reads the Windows performance counters — the same source as Task Manager — so it shows dedicated and shared GPU memory per process for every vendor (NVIDIA, AMD, Intel) and every GPU API (DirectX, OpenGL, CUDA, Vulkan).
+
+on macOS and Linux it asks `nvidia-smi`, which reports only NVIDIA GPUs and only compute processes; a machine without it gets an empty list, the NVML totals, and a note saying why.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -140,7 +184,7 @@ Get per-process GPU memory (VRAM) usage via Windows Performance Counters — sam
 
 ### get_network_info
 
-Get network interfaces with IP addresses, netmasks, and link status.
+network interfaces with IP addresses, netmasks and link status.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -150,7 +194,7 @@ Get network interfaces with IP addresses, netmasks, and link status.
 
 ### get_disk_usage
 
-Get disk usage for all drives including total, used, free space and percentage.
+disk usage for every drive: total, used and free space, and percentage.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -160,29 +204,29 @@ Get disk usage for all drives including total, used, free space and percentage.
 
 ### get_event_logs
 
-Get Windows event log entries from Application, System, or Security logs.
+recent system log entries. on Windows it reads the Application, System or Security event log. on macOS it reads the unified log with `log show`, over a window of one to ten minutes that grows with `max_events`; on Linux it reads the systemd journal with `journalctl`. off Windows, `log_name` is echoed back rather than applied, the result's `source` names the journal that answered, and levels come back in the Windows vocabulary.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `log_name` | string | No | `Application`, `System`, or `Security` (default: Application) |
-| `max_events` | number | No | Max entries (default: 20, max: 100) |
-| `level` | string | No | Filter: `Error`, `Warning`, `Information` |
+| `log_name` | string | no | `Application`, `System`, or `Security` (default: Application). Windows only |
+| `max_events` | number | no | max entries (default: 20, max: 100) |
+| `level` | string | no | filter: `Error`, `Warning`, `Information` |
 
 ---
 
 ### get_service_status
 
-Get the status and start type of a Windows service. Returned `start_type` disambiguates "stopped" states: `automatic` (should be running), `demand_start` (stopped-is-normal idle state, e.g. wuauserv/BITS), `disabled` (intentionally off).
+the status and start type of a service: a Windows service, a launchd label on macOS, or a systemd unit on Linux. the returned `start_type` tells "stopped" states apart: `automatic` (should be running), `demand_start` (stopped is the normal idle state, e.g. wuauserv or BITS), `disabled` (intentionally off).
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `service_name` | string | **Yes** | Windows service name to query |
+| `service_name` | string | **yes** | service name to query (not the display name) |
 
 ---
 
 ### get_agent_config
 
-Get the current owlette agent configuration (sensitive fields stripped).
+the current owlette agent configuration, with sensitive fields such as tokens stripped.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -192,18 +236,18 @@ Get the current owlette agent configuration (sensitive fields stripped).
 
 ### get_agent_logs
 
-Get recent owlette agent log entries.
+recent owlette agent log entries.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `max_lines` | number | No | Max lines (default: 100, max: 500) |
-| `level` | string | No | Filter: `ERROR`, `WARNING`, `INFO`, `DEBUG` |
+| `max_lines` | number | no | max lines (default: 100, max: 500) |
+| `level` | string | no | filter: `ERROR`, `WARNING`, `INFO`, `DEBUG` |
 
 ---
 
 ### get_agent_health
 
-Get agent health status including connection state and health probe results.
+agent health, including connection state and health probe results.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -213,113 +257,115 @@ Get agent health status including connection state and health probe results.
 
 ### get_system_presets
 
-Get available software deployment presets managed by the site admin. Returns installer URLs, silent install flags, verification paths, and other deployment parameters for software like TouchDesigner, Unreal Engine, media players, etc. Use this before `deploy_software` to find the correct preset and parameters. **Server-side** — queries Firestore directly.
+the software deployment presets a site admin manages: installer URLs, silent install flags, verification paths and other deployment parameters for software like TouchDesigner, Unreal Engine or media players. hoot calls this before `deploy_software` to find the right preset and parameters. **server-side**: queries Firestore directly.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `software_name` | string | No | Filter by name (case-insensitive partial match), e.g. `TouchDesigner` |
-| `category` | string | No | Filter by category, e.g. `Creative Software`, `Media Server` |
+| `software_name` | string | no | filter by name (case-insensitive partial match), e.g. `TouchDesigner` |
+| `category` | string | no | filter by category, e.g. `Creative Software`, `Media Server` |
 
 ---
 
 ### check_pending_reboot
 
-Detect whether a system reboot is currently pending (from Windows Update, Component Based Servicing, pending file rename operations, or SCCM client). Read-only diagnostic — use during incident investigations, after a suspected update, or when the machine is behaving unusually. The agent also emits a site-level auto-alert the first time it detects a pending reboot (idempotent via a flag file).
+whether the machine is waiting on a reboot, and what is asking for it. on Windows the reasons come from Windows Update, Component Based Servicing, pending file rename operations and the SCCM client; on macOS from an OS update prepared or a security response staged; on Linux from `/run/reboot-required`, which a package upgrade writes. only something already installed or prepared counts — an update that is merely available is not a pending reboot.
+
+read-only, for incident investigations, after a suspected update, or when a machine is behaving unusually. the agent also raises a site-level alert the first time it detects a pending reboot (once, tracked with a flag file).
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
 | _(none)_ | | | |
 
-**Returns**: `pending` (bool), `reasons` (array), last update install time, next scheduled update run time (if available).
+**returns**: `pending` (bool), `reasons` (array), `last_update_installed`, `next_scheduled_update`. off Windows, `next_scheduled_update` is always null, and on Linux so is `last_update_installed`.
 
 ---
 
 ### schedule_followup
 
-Schedule a follow-up turn on this conversation. At the scheduled time hoot is re-opened in the same chat with `note` injected as the instruction, acts on it, and reports back — the way a promise to "check back in ten minutes" actually happens, since a turn ends when the assistant stops typing. **Server-side** — the follow-up is a chat record (`cortex-followups/{id}`, a data-at-rest name), acted on by the cron sweep and never relayed to a machine.
+schedule a follow-up turn on this conversation. at the scheduled time hoot is re-opened in the same chat with `note` as the instruction, acts on it, and reports back — the way a promise to "check back in ten minutes" actually happens, since a turn ends when the assistant stops typing. **server-side**: the follow-up is a chat record (`cortex-followups/{id}`, a data-at-rest name), acted on by the cron sweep and never relayed to a machine.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `note` | string | **Yes** | What the follow-up turn should do, written as a self-contained instruction to hoot's future self — the conversation is not in view when it fires. Max 1000 characters |
-| `delay_minutes` | number | Exactly one of `delay_minutes` / `at` | Fire this many minutes from now: 1 to 10080 (one minute to seven days) |
-| `at` | string | Exactly one of `delay_minutes` / `at` | Fire at this absolute ISO 8601 timestamp with a timezone offset (e.g. `2026-01-31T14:00:00Z`). Must be in the future and within seven days |
-| `watch_command_id` | string | No | Id of a machine command already dispatched in this conversation. The follow-up then fires as soon as that command finishes, or at its scheduled time, whichever comes first |
+| `note` | string | **yes** | what the follow-up turn should do, written as a self-contained instruction to hoot's future self — the conversation is not in view when it fires. max 1000 characters |
+| `delay_minutes` | number | exactly one of `delay_minutes` / `at` | fire this many minutes from now: 1 to 10080 (one minute to seven days) |
+| `at` | string | exactly one of `delay_minutes` / `at` | fire at this absolute ISO 8601 timestamp with a timezone offset (e.g. `2026-01-31T14:00:00Z`). must be in the future and within seven days |
+| `watch_command_id` | string | no | ID of a machine command already dispatched in this conversation. the follow-up then fires as soon as that command finishes, or at its scheduled time, whichever comes first |
 
-**Returns**: `followup_id`, `fires_at` (ISO), and `watch_command_id` when one was passed. Keep `followup_id` — `cancel_followup` needs it.
+**returns**: `followup_id`, `fires_at` (ISO), and `watch_command_id` when one was passed. keep `followup_id` — `cancel_followup` needs it.
 
-Pass **exactly one** of `delay_minutes` and `at` — both, or neither, is rejected with `invalid_schedule` rather than silently picking a winner. Out-of-range values return `invalid_delay_minutes`, `at_in_the_past`, or `at_too_far_out`.
+pass **exactly one** of `delay_minutes` and `at`. both, or neither, is rejected with `invalid_schedule` rather than silently picking a winner. out-of-range values return `invalid_delay_minutes`, `at_in_the_past`, or `at_too_far_out`.
 
-**Early fire.** `watch_command_id` is a shortcut, not a replacement for the schedule — the scheduled time stays the backstop. The sweep resolves the watched command from the machine's `commands/completed` document and treats only the terminal statuses (`completed`, `failed`, `error`, `cancelled`) as finished; the agent's non-terminal `running` marker does not fire it. A follow-up scheduled against more than one machine — a subset of a site, or a site-wide chat — has no single command whose finish means the work is done, so the id is ignored there and the follow-up waits for its scheduled time.
+**early fire.** `watch_command_id` is a shortcut, not a replacement for the schedule: the scheduled time stays the backstop. the sweep resolves the watched command from the machine's `commands/completed` document and treats only the terminal statuses (`completed`, `failed`, `error`, `cancelled`) as finished; the agent's non-terminal `running` marker does not fire it. a follow-up scheduled against more than one machine — a subset of a site, or a site-wide chat — has no single command whose finish means the work is done, so the ID is ignored there and the follow-up waits for its scheduled time.
 
-**Firing.** The follow-up pass rides the once-a-minute talons cron sweep (`/api/cron/talons`). Each sweep scans the 25 soonest `scheduled` follow-ups and starts at most 10 turns; a backlog drains over the following minutes. An early fire is therefore only found while the follow-up sits inside that scan window — past it, the follow-up still fires at its own scheduled time.
+**firing.** the follow-up pass rides the once-a-minute talons cron sweep (`/api/cron/talons`). each sweep scans the 25 soonest `scheduled` follow-ups and starts at most 10 turns; a backlog drains over the following minutes. an early fire is therefore only found while the follow-up sits inside that scan window — past it, the follow-up still fires at its own scheduled time.
 
-**Tier 3 always waits for a person inside a fired follow-up.** The turn runs with `forceTier3Approval`, which overrides the site's `requireTier3Approval` setting: a site that lets an operator auto-run tier 3 while they watch has not agreed to it running while nobody does. The model may still reach for a tier-3 tool — the turn simply parks at approval-requested until the owner comes back to the chat.
+**tier 3 always waits for a person inside a fired follow-up.** the turn runs with `forceTier3Approval`, which overrides the site's `requireTier3Approval` setting: a site that lets an operator auto-run tier 3 while they watch has not agreed to it running while nobody does. the model may still reach for a tier-3 tool; the turn simply parks at approval-requested until the owner comes back to the chat.
 
-**Where it fires.** A follow-up fires on the machines the scheduling turn was targeting, not on whatever the chat is pointed at when it comes due — the selection may have moved since the promise was made. A site-wide follow-up stays dynamic: a machine added in the meantime is included. The target is re-validated at fire time, so machines that have left the site, gone offline, or had hoot switched off are dropped from it; if nothing is left the follow-up is marked `failed` with the reason on the record rather than dispatched.
+**where it fires.** a follow-up fires on the machines the scheduling turn was targeting, not on whatever the chat is pointed at when it comes due — the selection may have moved since the promise was made. a site-wide follow-up stays dynamic: a machine added in the meantime is included. the target is re-validated at fire time, so machines that have left the site, gone offline or had hoot switched off are dropped; if nothing is left, the follow-up is marked `failed` with the reason on the record rather than dispatched.
 
-**Other fire-time guarantees.** Site access is re-resolved on every fire and never trusted from scheduling time, so a user removed or demoted in the meantime cannot keep driving tools through a promise they left behind; the chat must still exist and still belong to the same user (`chat_deleted` / `chat_owner_mismatch`). A follow-up never supersedes a live turn — if someone is mid-conversation the doc goes back to `scheduled` and the next sweep retries.
+**other fire-time guarantees.** site access is re-resolved on every fire and never trusted from scheduling time, so a user removed or demoted in the meantime cannot keep driving tools through a promise they left behind. the chat must still exist and still belong to the same user (`chat_deleted` / `chat_owner_mismatch`). a follow-up never supersedes a live turn: if someone is mid-conversation the document goes back to `scheduled` and the next sweep retries.
 
-**Where it is not available.** The tool requires a user chat: unattended hoot (autonomous dispatch, talon directives) runs as a system actor with no chat to re-open and no user whose access could be re-resolved, and gets `followup_unavailable`. Both follow-up tools are also **withheld from the public conversations API** — that surface's `chatId` is a `chat_conversations` id while the sweep resolves `chats/{chatId}`, so a follow-up scheduled there could never fire (it would fail closed as `chat_deleted`). Withholding the tools is deliberate: better no promise than one the sweep silently breaks.
+**where it is not available.** the tool needs a user chat. unattended hoot (autonomous dispatch, talon directives) runs as a system actor with no chat to re-open and no user whose access could be re-resolved, and gets `followup_unavailable`. both follow-up tools are also **withheld from the public conversations API**: that surface's `chatId` is a `chat_conversations` ID while the sweep resolves `chats/{chatId}`, so a follow-up scheduled there could never fire (it would fail closed as `chat_deleted`). withholding the tools is deliberate — better no promise than one the sweep silently breaks.
 
 ---
 
 ### cancel_followup
 
-Cancel a scheduled follow-up before it fires. Use it when the thing the follow-up was going to check has already been settled in the conversation, or when the operator asks for it to be dropped. **Server-side** — reaches the same store helper as `DELETE /api/hoot/followups/{followupId}`, which is what the chip above the composer calls.
+cancel a scheduled follow-up before it fires, when the thing it was going to check has already been settled in the conversation, or when the operator asks for it to be dropped. **server-side**: reaches the same store helper as `DELETE /api/hoot/followups/{followupId}`, which is what the chip above the composer calls.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `followup_id` | string | **Yes** | The id returned by `schedule_followup`. Never guess one |
+| `followup_id` | string | **yes** | the ID returned by `schedule_followup`. never guessed |
 
-Ownership is enforced inside the store transaction (the Admin SDK bypasses `firestore.rules`, so that is the only gate every caller passes through): only the user who scheduled a follow-up can cancel it, and only while it is still `scheduled`. Failure results are `followup_not_found` (404), `followup_forbidden` (403, it belongs to another user), and `followup_not_scheduled` (409, it already fired or was cancelled — a cancel that loses the race with the sweep's claim lands here). Like `schedule_followup`, it is unavailable to unattended hoot and withheld from the public conversations API.
+ownership is enforced inside the store transaction (the Admin SDK bypasses `firestore.rules`, so that is the only gate every caller passes through): only the user who scheduled a follow-up can cancel it, and only while it is still `scheduled`. failures are `followup_not_found` (404), `followup_forbidden` (403, it belongs to another user), and `followup_not_scheduled` (409, it already fired or was cancelled — a cancel that loses the race with the sweep's claim lands here). like `schedule_followup`, it is unavailable to unattended hoot and withheld from the public conversations API.
 
 ---
 
-## tier 2: process & machine management tools
+## tier 2: process and machine management tools
 
-These execute immediately without user confirmation. Owlette-configured process control tools (`restart_process`, `kill_process`, `start_process`, `set_launch_mode`) wrap existing commands. Process config tools (`update_process`, `add_process`, `delete_process`) run server-side through the same validated action functions as the dashboard, and the talon tools (`create_talon`, `list_talons`, `set_talon_enabled`) run server-side through the same talon store as the talon editor. The rest are purpose-built with validated parameters and narrower blast radius than raw shell scripts.
+these run immediately, without confirmation. the owlette process controls (`restart_process`, `kill_process`, `start_process`, `set_launch_mode`) wrap existing commands. the process config tools (`update_process`, `add_process`, `delete_process`) run server-side through the same validated actions as the dashboard, and the talon tools (`create_talon`, `list_talons`, `set_talon_enabled`) run server-side through the same store as the talon editor. the rest are purpose-built, with validated parameters and a narrower blast radius than a raw shell script.
 
 ### restart_process
 
-Restart an owlette-configured process by name.
+restart an owlette-configured process by name.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `process_name` | string | **Yes** | Must match a configured process name |
+| `process_name` | string | **yes** | must match a configured process name |
 
 ---
 
 ### kill_process
 
-Kill/stop a running owlette-configured process.
+kill (stop) a running owlette-configured process.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `process_name` | string | **Yes** | Must match a configured process name |
+| `process_name` | string | **yes** | must match a configured process name |
 
 ---
 
 ### start_process
 
-Start a stopped owlette-configured process.
+start a stopped owlette-configured process. it is sent as a `restart_process` command.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `process_name` | string | **Yes** | Must match a configured process name |
+| `process_name` | string | **yes** | must match a configured process name |
 
 ---
 
 ### set_launch_mode
 
-Set the launch mode for a process.
+set the launch mode for a process.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `process_name` | string | **Yes** | Must match a configured process name |
-| `mode` | string | **Yes** | `off` (not managed), `always` (24/7 with crash recovery), or `scheduled` |
-| `schedules` | array | When `mode=scheduled` | Schedule blocks with `days` and time `ranges` |
+| `process_name` | string | **yes** | must match a configured process name |
+| `mode` | string | **yes** | `off` (not managed), `always` (24/7 with crash recovery), or `scheduled` |
+| `schedules` | array | when `mode=scheduled` | schedule blocks with `days` and time `ranges` |
 
-**Schedule block format:**
+**schedule block format:**
 
 ```json
 {
@@ -334,276 +380,284 @@ Set the launch mode for a process.
 
 ### update_process
 
-Update an owlette-configured process by name. Only fields provided in the tool call are changed. Runs server-side through `updateProcess`; the agent picks up the config change through the existing config listener and launch-mode diff.
+update an owlette-configured process by name. only the fields in the call change. runs server-side through `updateProcess`; the agent picks the change up through its config listener and launch-mode diff.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `process_name` | string | **Yes** | Current configured process name |
-| `name` | string | No | New display name |
-| `exe_path` | string | No | Full path to the executable |
-| `file_path` | string | No | Project file path or command arguments |
-| `cwd` | string | No | Working directory |
-| `priority` | string | No | `Low`, `Normal`, `High`, or `Realtime` |
-| `visibility` | string | No | `Normal` or `Hidden` |
-| `time_delay` | string | No | Launch delay in seconds, stored as a string |
-| `time_to_init` | string | No | Initialization timeout in seconds, stored as a string |
-| `relaunch_attempts` | string | No | Crash relaunch attempt count, stored as a string |
-| `launch_mode` | string | No | `off`, `always`, or `scheduled` |
-| `schedules` | array | When setting `launch_mode=scheduled` | Schedule blocks with `days` and time `ranges` |
-| `schedulePresetId` | string or null | No | Named schedule preset id, or null to clear |
+| `process_name` | string | **yes** | current configured process name |
+| `name` | string | no | new display name |
+| `exe_path` | string | no | full path to the executable: an `.exe` on Windows, an `.app` bundle or binary on macOS, a binary on Linux |
+| `file_path` | string | no | project file path or command arguments |
+| `cwd` | string | no | working directory |
+| `priority` | string | no | `Low`, `Normal`, `High`, or `Realtime`. applied on Windows only |
+| `visibility` | string | no | `Normal` or `Hidden`. applied on Windows only |
+| `time_delay` | string | no | launch delay in seconds, stored as a string |
+| `time_to_init` | string | no | initialization timeout in seconds, stored as a string |
+| `relaunch_attempts` | string | no | crash relaunch attempt count, stored as a string |
+| `launch_mode` | string | no | `off`, `always`, or `scheduled` |
+| `schedules` | array | when setting `launch_mode=scheduled` | schedule blocks with `days` and time `ranges` |
+| `schedulePresetId` | string or null | no | named schedule preset ID, or null to clear |
 
 ---
 
 ### add_process
 
-Create a new owlette-managed process on the target machine. Runs server-side through `createProcess`; the new process defaults to `launch_mode: "off"` unless a launch mode is supplied.
+create a new owlette-managed process on the target machine. runs server-side through `createProcess`; the new process defaults to `launch_mode: "off"` unless a launch mode is supplied.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `name` | string | **Yes** | Display name for the process |
-| `exe_path` | string | **Yes** | Full path to the executable |
-| `file_path` | string | No | Project file path or command arguments |
-| `cwd` | string | No | Working directory |
-| `priority` | string | No | `Low`, `Normal`, `High`, or `Realtime` |
-| `visibility` | string | No | `Normal` or `Hidden` |
-| `time_delay` | string | No | Launch delay in seconds, stored as a string |
-| `time_to_init` | string | No | Initialization timeout in seconds, stored as a string |
-| `relaunch_attempts` | string | No | Crash relaunch attempt count, stored as a string |
-| `launch_mode` | string | No | `off`, `always`, or `scheduled` |
-| `schedules` | array | When setting `launch_mode=scheduled` | Schedule blocks with `days` and time `ranges` |
-| `schedulePresetId` | string or null | No | Named schedule preset id, or null to clear |
+| `name` | string | **yes** | display name for the process |
+| `exe_path` | string | **yes** | full path to the executable: an `.exe` on Windows, an `.app` bundle or binary on macOS, a binary on Linux |
+| `file_path` | string | no | project file path or command arguments |
+| `cwd` | string | no | working directory |
+| `priority` | string | no | `Low`, `Normal`, `High`, or `Realtime`. applied on Windows only |
+| `visibility` | string | no | `Normal` or `Hidden`. applied on Windows only |
+| `time_delay` | string | no | launch delay in seconds, stored as a string |
+| `time_to_init` | string | no | initialization timeout in seconds, stored as a string |
+| `relaunch_attempts` | string | no | crash relaunch attempt count, stored as a string |
+| `launch_mode` | string | no | `off`, `always`, or `scheduled` |
+| `schedules` | array | when setting `launch_mode=scheduled` | schedule blocks with `days` and time `ranges` |
+| `schedulePresetId` | string or null | no | named schedule preset ID, or null to clear |
 
 ---
 
 ### delete_process
 
-Delete an owlette-configured process by name. Runs server-side through `deleteProcess`. Deleting a process removes it from the machine config; it does not terminate an already-running OS process. Use `kill_process` first when the running process should also be stopped.
+delete an owlette-configured process by name. runs server-side through `deleteProcess`. deleting a process removes it from the machine config; it does not end an OS process that is already running. call `kill_process` first when the running process should stop too.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `process_name` | string | **Yes** | Configured process name to delete |
+| `process_name` | string | **yes** | configured process name to delete |
 
 ---
 
 ### capture_screenshot
 
-Capture a screenshot of the remote machine's desktop. Returns the image for visual analysis — use to diagnose display issues, verify process state, or see what's currently on screen.
+capture a screenshot of the machine's desktop and return the image for visual analysis — to diagnose display issues, verify process state, or see what is on screen.
+
+on macOS the owlette app takes it and needs the Screen Recording grant; a Mac whose app has reported the grant missing returns `screen_recording_not_granted`, and an app that is not running returns `desktop_not_running`. on a Mac, `monitor` is off by one from Windows: `0` captures only the main display rather than all of them, and `1` captures the second display.
+
+on Linux, screen capture is not available yet. the agent refuses a Wayland session, Ubuntu's default, with `unsupported_on_platform` rather than return a black frame, and on an X11 session the owlette app answers `unsupported_job`.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `monitor` | number | No | `0` = all monitors combined (default), `1` = primary, `2` = second, etc. |
+| `monitor` | number | no | `0` = all monitors combined (default), `1` = primary, `2` = second, etc. |
 
 ---
 
 ### manage_process
 
-Kill, suspend, or resume OS processes by name pattern. Works on **any** process, not just Owlette-managed ones. Safer than `run_command` + `taskkill`: validated params, no shell, refuses to touch critical system processes (lsass, winlogon, csrss, etc.) via an internal blocklist.
+kill, suspend or resume OS processes by name pattern. works on **any** process, not only owlette-managed ones. safer than `run_command` plus `taskkill`: validated parameters, no shell, and a built-in list of critical processes it refuses to touch (see [tier 2 blocklists](#tier-2-blocklists)).
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `name_pattern` | string | **Yes** | Process name with `.exe` or glob (e.g. `chrome.exe`, `FreeFileSync*`) |
-| `action` | string | **Yes** | `kill`, `suspend`, or `resume` |
-| `match_exact` | boolean | No | Exact match (default `true`) vs glob via fnmatch |
-| `force` | boolean | No | For `kill`: force immediately (default `true`), else graceful first |
+| `name_pattern` | string | **yes** | process name (with `.exe` on Windows) or glob (e.g. `chrome.exe`, `FreeFileSync*`) |
+| `action` | string | **yes** | `kill`, `suspend`, or `resume` |
+| `match_exact` | boolean | no | exact match (default `true`) vs glob via fnmatch |
+| `force` | boolean | no | for `kill`: force immediately (default `true`), else graceful first |
 
 ---
 
 ### manage_windows_service
 
-Full `services.msc` parity — start, stop, restart, pause/continue, set startup type, configure failure recovery, or get full service details in one call. Use `set_recovery` to configure auto-restart on crash (critical for unattended media installations). Use `get_details` to query status, startup type, binary path, dependencies, and recovery config at once.
+service control in one call. on Windows it has `services.msc` parity: start, stop, restart, pause/continue, set the startup type, configure failure recovery, or get full details. `set_recovery` configures auto-restart on crash (critical for unattended media installations); `get_details` returns status, startup type, binary path, dependencies and recovery config at once.
+
+on macOS (`launchctl`) and Linux (`systemctl`) the name stays the same and the tool gains those backends, with `start`, `stop`, `restart`, `set_startup` and `get_details` only; `pause`, `continue` and `set_recovery` are refused. macOS knows only `auto` and `disabled` startup types. on Linux `manual` disables the unit and `disabled` masks it.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `service_name` | string | **Yes** | Service name (not display name) |
-| `action` | string | **Yes** | `start`, `stop`, `restart`, `pause`, `continue`, `set_startup`, `set_recovery`, `get_details` |
-| `startup_type` | string | For `set_startup` | `auto`, `auto_delayed`, `manual`, `disabled` |
-| `first_failure` | string | For `set_recovery` | `restart`, `run_program`, `reboot`, `none` |
-| `second_failure` | string | For `set_recovery` | Same options as `first_failure` |
-| `subsequent_failures` | string | For `set_recovery` | Action on third and later failures |
-| `restart_delay_ms` | number | No | Delay before recovery action (default: 60000) |
-| `reset_counter_days` | number | No | Days with no failures before counter resets (default: 1) |
-| `reboot_message` | string | No | Broadcast message if action is `reboot` |
-| `run_program_path` | string | If any action is `run_program` | Program to run on failure |
+| `service_name` | string | **yes** | service name (not display name): a Windows service, a launchd label, or a systemd unit |
+| `action` | string | **yes** | `start`, `stop`, `restart`, `pause`, `continue`, `set_startup`, `set_recovery`, `get_details` |
+| `startup_type` | string | for `set_startup` | `auto`, `auto_delayed`, `manual`, `disabled` |
+| `first_failure` | string | for `set_recovery` | `restart`, `run_program`, `reboot`, `none` |
+| `second_failure` | string | for `set_recovery` | same options as `first_failure` |
+| `subsequent_failures` | string | for `set_recovery` | action on third and later failures |
+| `restart_delay_ms` | number | no | delay before the recovery action (default: 60000) |
+| `reset_counter_days` | number | no | days with no failures before the counter resets (default: 1) |
+| `reboot_message` | string | no | broadcast message if the action is `reboot` |
+| `run_program_path` | string | if any action is `run_program` | program to run on failure |
 
 ---
 
 ### configure_gpu_tdr
 
-Configure Windows GPU Timeout Detection and Recovery. Writes `TdrDelay` (and optionally `TdrDdiDelay`) to the registry. Critical for TouchDesigner / Unreal / Unity installations with heavy shader work — the default 2-second timeout causes silent crashes on complex GPU operations. A reboot is required for changes to take effect.
+**Windows only.** configure Windows GPU Timeout Detection and Recovery: writes `TdrDelay` (and optionally `TdrDdiDelay`) to the registry. critical for TouchDesigner, Unreal and Unity installations with heavy shader work — the default 2-second timeout causes silent crashes on complex GPU operations. a reboot is required for the change to take effect.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `timeout_seconds` | number | **Yes** | `TdrDelay` in seconds (2-300). Default Windows value is 2; heavy creative workloads usually need 10-60 |
-| `ddi_timeout_seconds` | number | No | Optional `TdrDdiDelay` in seconds (2-300). Max time GPU can spend in Present/Draw calls |
+| `timeout_seconds` | number | **yes** | `TdrDelay` in seconds (2-300). the Windows default is 2; heavy creative workloads usually need 10-60 |
+| `ddi_timeout_seconds` | number | no | optional `TdrDdiDelay` in seconds (2-300): the longest the GPU can spend in Present/Draw calls |
 
 ---
 
 ### manage_windows_update
 
-Pause, resume, or schedule Windows Update. Pause before live events; use `set_active_hours` to block auto-reboot during quiet hours; `set_scheduled_install` for exact install timing; `set_feature_deferral` / `set_quality_deferral` to delay rollouts. Windows Update is the #1 threat to unattended 24/7 installations.
+**Windows only.** pause, resume or schedule Windows Update. pause before live events; `set_active_hours` blocks auto-reboot during quiet hours; `set_scheduled_install` sets exact install timing; `set_feature_deferral` / `set_quality_deferral` delay rollouts. Windows Update is the biggest threat to unattended 24/7 installations.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `action` | string | **Yes** | `get_status`, `pause`, `resume`, `set_active_hours`, `set_scheduled_install`, `set_restart_deadline`, `set_feature_deferral`, `set_quality_deferral` |
-| `pause_days` | number | For `pause` | Days to pause (1-35) |
-| `start_hour` / `end_hour` | number | For `set_active_hours` | Hours (0-23) |
-| `day_of_week` | number | For `set_scheduled_install` | `0` = every day, `1`-`7` = Sun–Sat |
-| `hour` | number | For `set_scheduled_install` | Hour of day (0-23) |
-| `deadline_days` | number | For `set_restart_deadline` | Days before force reboot (2-14) |
-| `days` | number | For deferral actions | Feature (0-365) or quality (0-30) deferral days |
+| `action` | string | **yes** | `get_status`, `pause`, `resume`, `set_active_hours`, `set_scheduled_install`, `set_restart_deadline`, `set_feature_deferral`, `set_quality_deferral` |
+| `pause_days` | number | for `pause` | days to pause (1-35) |
+| `start_hour` / `end_hour` | number | for `set_active_hours` | hours (0-23) |
+| `day_of_week` | number | for `set_scheduled_install` | `0` = every day, `1`-`7` = Sun–Sat |
+| `hour` | number | for `set_scheduled_install` | hour of day (0-23) |
+| `deadline_days` | number | for `set_restart_deadline` | days before a forced reboot (2-14) |
+| `days` | number | for deferral actions | feature (0-365) or quality (0-30) deferral days |
 
 ---
 
 ### suppress_setup_screens
 
-Suppress the full-screen Windows setup screens that hijack the display at sign-in after updates: the "Choose privacy settings" experience, the Windows Welcome Experience, "Let's finish setting up your device" (SCOOBE), and the Edge first-run tour. Writes the machine-wide policies plus the per-user keys for every existing profile (mounting signed-out profiles' hives) and the Default profile, so future accounts inherit the suppression. `apply` is idempotent — feature updates are known to reset these keys, so re-assert on a schedule (the `update guard` talon preset does exactly this).
+**Windows only.** suppress the full-screen Windows setup screens that take over the display at sign-in after updates: the "Choose privacy settings" experience, the Windows Welcome Experience, "Let's finish setting up your device" (SCOOBE), and the Edge first-run tour. writes the machine-wide policies plus the per-user keys for every existing profile (mounting signed-out profiles' hives) and the Default profile, so future accounts inherit the suppression. `apply` is idempotent — feature updates are known to reset these keys, so re-assert on a schedule (the `update guard` talon preset does exactly this).
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `action` | string | **Yes** | `get_status` (read-only per-profile drift report) or `apply` (write all suppression keys) |
+| `action` | string | **yes** | `get_status` (read-only per-profile drift report) or `apply` (write every suppression key) |
 
 ---
 
 ### manage_notifications
 
-Control Windows toast notifications and Focus Assist. Essential for kiosks and video walls where a surprise "Updates are ready" toast would interrupt an exhibit. Use `disable_all_toasts` to fully silence the system, `enable_focus_assist` with `alarms_only` for total silence, or `disable_for_app` to silence a specific app.
+**Windows only.** control Windows toast notifications and Focus Assist — essential for kiosks and video walls, where a surprise "updates are ready" toast would interrupt an exhibit. `disable_all_toasts` silences the system, `enable_focus_assist` with `alarms_only` gives total silence, and `disable_for_app` silences one app.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `action` | string | **Yes** | `get_status`, `disable_all_toasts`, `enable_focus_assist`, `disable_focus_assist`, `disable_for_app` |
-| `app_name` | string | For `disable_for_app` | App identifier (e.g. `Microsoft.WindowsStore`, `MSTeams`) |
-| `focus_mode` | string | For `enable_focus_assist` | `priority_only` or `alarms_only` |
+| `action` | string | **yes** | `get_status`, `disable_all_toasts`, `enable_focus_assist`, `disable_focus_assist`, `disable_for_app` |
+| `app_name` | string | for `disable_for_app` | app identifier (e.g. `Microsoft.WindowsStore`, `MSTeams`) |
+| `focus_mode` | string | for `enable_focus_assist` | `priority_only` or `alarms_only` |
 
 ---
 
 ### configure_power_plan
 
-Set Windows power plan and disable sleep/hibernate/screen blanking. Required for any 24/7 unattended installation — default power settings will sleep the machine, blank the screen, or hibernate, all of which break live deployments.
+**Windows only.** set the Windows power plan and disable sleep, hibernate and screen blanking. default power settings sleep the machine, blank the screen or hibernate, all of which break a live installation. the site-wide [keep screens awake](/docs/dashboard/getting-started#site-settings) switch covers display and system sleep on every platform without changing the power plan.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `plan` | string | No | `high_performance`, `balanced`, or `ultimate_performance` (omit to keep current) |
-| `disable_sleep` | boolean | No | Set standby timeout to Never on both AC and battery |
-| `disable_hibernate` | boolean | No | Disable hibernation (removes `hiberfil.sys`) |
-| `disable_screen_blanking` | boolean | No | Disable monitor timeout |
+| `plan` | string | no | `high_performance`, `balanced`, or `ultimate_performance` (omit to keep the current plan) |
+| `disable_sleep` | boolean | no | set the standby timeout to never, on AC and battery |
+| `disable_hibernate` | boolean | no | disable hibernation (removes `hiberfil.sys`) |
+| `disable_screen_blanking` | boolean | no | disable the monitor timeout |
 
 ---
 
 ### manage_scheduled_task
 
-Full Task Scheduler parity — list, enable, disable, delete, `run_now`, stop, create new tasks, get details, and get run history. Use `create` for weekly memory-flush reboots, boot-time media app launches, or event-triggered restarts.
+**Windows only.** Task Scheduler parity: list, enable, disable, delete, `run_now`, stop, create new tasks, get details, and get run history. use `create` for weekly memory-flush reboots, boot-time media app launches, or event-triggered restarts.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `action` | string | **Yes** | `list`, `enable`, `disable`, `delete`, `run_now`, `stop`, `create`, `get_details`, `get_history` |
-| `task_name` | string | For non-list actions | Task name; can include folder path (e.g. `\Folder\TaskName`) |
-| `name_filter` | string | For `list` | Substring filter |
-| `description` | string | No | For `create`: human-readable description |
-| `trigger` | object | For `create` | `{type: "boot"\|"logon"\|"once"\|"daily"\|"weekly"\|"on_event"\|"on_idle", ...}`. Additional fields depend on type |
-| `task_action` | object | For `create` | `{type: "run_program", program, arguments?, working_directory?}` |
-| `principal` | object | For `create` | `{run_as: SYSTEM\|LOCAL_SERVICE\|NETWORK_SERVICE\|current_user, run_level: highest\|limited}` |
-| `settings` | object | No | `{start_when_available, execution_time_limit_minutes, restart_count, restart_interval_minutes, run_only_if_network_available, allow_start_on_batteries, hidden, multiple_instances, delete_expired_task_after_days}` |
+| `action` | string | **yes** | `list`, `enable`, `disable`, `delete`, `run_now`, `stop`, `create`, `get_details`, `get_history` |
+| `task_name` | string | for non-list actions | task name; can include a folder path (e.g. `\Folder\TaskName`) |
+| `name_filter` | string | for `list` | substring filter |
+| `description` | string | no | for `create`: a human-readable description |
+| `trigger` | object | for `create` | `{type: "boot"\|"logon"\|"once"\|"daily"\|"weekly"\|"on_event"\|"on_idle", ...}`. additional fields depend on the type |
+| `task_action` | object | for `create` | `{type: "run_program", program, arguments?, working_directory?}` |
+| `principal` | object | for `create` | `{run_as: SYSTEM\|LOCAL_SERVICE\|NETWORK_SERVICE\|current_user, run_level: highest\|limited}` |
+| `settings` | object | no | `{start_when_available, execution_time_limit_minutes, restart_count, restart_interval_minutes, run_only_if_network_available, allow_start_on_batteries, hidden, multiple_instances, delete_expired_task_after_days}` |
 
 ---
 
 ### network_reset
 
-Flush DNS, renew IP lease, restart a network adapter, or reset the winsock stack. Common fix for NDI dropouts, Firebase connectivity loss, DNS resolution issues at venue networks. `reset_winsock` requires a reboot to fully take effect.
+**Windows only.** flush DNS, renew the IP lease, restart a network adapter, or reset the winsock stack. a common fix for NDI dropouts, lost connectivity, and DNS resolution trouble on venue networks. `reset_winsock` needs a reboot to take full effect.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `action` | string | **Yes** | `flush_dns`, `renew_ip`, `restart_adapter`, `reset_winsock` |
-| `adapter_name` | string | For `restart_adapter` | Adapter name (e.g. `Ethernet`, `Wi-Fi`) |
+| `action` | string | **yes** | `flush_dns`, `renew_ip`, `restart_adapter`, `reset_winsock` |
+| `adapter_name` | string | for `restart_adapter` | adapter name (e.g. `Ethernet`, `Wi-Fi`) |
 
 ---
 
 ### registry_operation
 
-Read, write, or delete Windows registry values. Restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services, etc.) — system hives like SAM, SECURITY, and Cryptography are blocked.
+**Windows only.** read, write or delete Windows registry values. restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services and others); the SAM, SECURITY and Cryptography hives are blocked.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `action` | string | **Yes** | `read`, `write`, `delete` |
-| `hive` | string | **Yes** | `HKLM` (machine) or `HKCU` (current user) |
-| `key_path` | string | **Yes** | Key path under hive (must match an allowed prefix) |
-| `value_name` | string | For `write`/`delete` | Omit for `read` to enumerate all values in the key |
-| `value_data` | string | For `write` | Data to write (dword as `"8"`, binary as hex string, etc.) |
-| `value_type` | string | For `write` | `string`, `dword`, `binary`, `expand_string`, `multi_string` |
+| `action` | string | **yes** | `read`, `write`, `delete` |
+| `hive` | string | **yes** | `HKLM` (machine) or `HKCU` (current user) |
+| `key_path` | string | **yes** | key path under the hive (must match an allowed prefix) |
+| `value_name` | string | for `write`/`delete` | omit for `read` to enumerate every value in the key |
+| `value_data` | string | for `write` | data to write (dword as `"8"`, binary as a hex string, and so on) |
+| `value_type` | string | for `write` | `string`, `dword`, `binary`, `expand_string`, `multi_string` |
 
 ---
 
 ### clean_disk_space
 
-Clean temp files, Windows temp, prefetch cache, recycle bin, or Owlette logs with an age filter. Use `dry_run=true` to preview what would be deleted.
+**Windows only.** clean temp files, Windows temp, the prefetch cache, the recycle bin, or owlette logs, with an age filter. `dry_run=true` previews what would be deleted.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `target` | string | **Yes** | `temp`, `windows_temp`, `prefetch`, `recycle_bin`, `owlette_logs` |
-| `older_than_days` | number | No | Only delete files older than N days (default: 7). Ignored for `recycle_bin` |
-| `dry_run` | boolean | No | Return counts/sizes without deleting (default: false) |
+| `target` | string | **yes** | `temp`, `windows_temp`, `prefetch`, `recycle_bin`, `owlette_logs` |
+| `older_than_days` | number | no | only delete files older than N days (default: 7). ignored for `recycle_bin` |
+| `dry_run` | boolean | no | return counts and sizes without deleting (default: false) |
 
 ---
 
 ### get_event_logs_filtered
 
-Fast filtered event log query via `Get-WinEvent -FilterHashtable`. Orders of magnitude faster than `get_event_logs` when searching for specific crashes, process sources, or event IDs.
+**Windows only.** a fast filtered event log query through `Get-WinEvent -FilterHashtable`, orders of magnitude faster than `get_event_logs` when searching for specific crashes, sources or event IDs. on macOS and Linux, use `get_event_logs`.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `log_name` | string | **Yes** | `Application`, `System`, `Security`, `Setup` |
-| `process_name` | string | No | Filter by provider/source name |
-| `event_id` | number | No | Specific event ID (e.g. 41 for unexpected shutdown, 1000 for app crash) |
-| `hours_back` | number | No | Look back this many hours (1-168, default: 24) |
-| `level` | string | No | `Critical`, `Error`, `Warning`, `Information`, `Verbose` |
-| `max_events` | number | No | Max events (1-200, default: 50) |
+| `log_name` | string | **yes** | `Application`, `System`, `Security`, `Setup` |
+| `process_name` | string | no | filter by provider or source name |
+| `event_id` | number | no | a specific event ID (e.g. 41 for unexpected shutdown, 1000 for an app crash) |
+| `hours_back` | number | no | look back this many hours (1-168, default: 24) |
+| `level` | string | no | `Critical`, `Error`, `Warning`, `Information`, `Verbose` |
+| `max_events` | number | no | max events (1-200, default: 50) |
 
 ---
 
 ### manage_windows_feature
 
-Add, remove, or list Windows Optional Features (DISM, e.g. `NetFx3`, `OpenSSH-Server`), Windows Capabilities (FoD, e.g. `OpenSSH.Client`), or AppX Packages (Store apps like OneDrive, Xbox Game Bar, Cortana, Teams). Critical features for Owlette itself are blocklisted and cannot be disabled. AppX install is not supported.
+**Windows only.** add, remove or list Windows Optional Features (DISM, e.g. `NetFx3`, `OpenSSH-Server`), Windows Capabilities (features on demand, e.g. `OpenSSH.Client`), or AppX packages (Store apps like OneDrive, Xbox Game Bar, Cortana and Teams). features owlette itself depends on are blocklisted and cannot be removed. installing an AppX package is not supported.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `type` | string | **Yes** | `optional_feature`, `capability`, `appx_package` |
-| `action` | string | **Yes** | `list`, `install`, `remove` |
-| `name` | string | For `install`/`remove` | Feature/capability/package name |
-| `all_users` | boolean | No | For `appx_package` remove: also remove provisioning package (default: false) |
-| `name_filter` | string | For `list` | Substring filter |
+| `type` | string | **yes** | `optional_feature`, `capability`, `appx_package` |
+| `action` | string | **yes** | `list`, `install`, `remove` |
+| `name` | string | for `install`/`remove` | feature, capability or package name |
+| `all_users` | boolean | no | for `appx_package` remove: also remove the provisioning package (default: false) |
+| `name_filter` | string | for `list` | substring filter |
 
 ---
 
 ### show_notification
 
-Display an on-screen message on the remote machine — useful when a technician is physically nearby. Toast style is a subtle corner notification; modal style uses `msg.exe` to block the screen briefly. Opposite of `manage_notifications`, which suppresses notifications.
+show a message on the machine's screen — useful when a technician is standing at it. the opposite of `manage_notifications`, which suppresses notifications.
+
+on Windows, `toast` is a subtle corner notification and `modal` uses `msg.exe` to put a message box up briefly. on macOS and Linux the owlette app shows one kind of notification, so `style` and `duration_seconds` are ignored, and an app that is not running returns `desktop_not_running` rather than a message nobody sees.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `message` | string | **Yes** | Notification body |
-| `title` | string | No | Notification title |
-| `style` | string | No | `toast` (default, subtle corner) or `modal` (blocking `msg.exe` box) |
-| `duration_seconds` | number | No | For `modal`: how long the box stays up (default: 5) |
+| `message` | string | **yes** | notification body |
+| `title` | string | no | notification title |
+| `style` | string | no | `toast` (default, subtle corner) or `modal` (blocking `msg.exe` box). Windows only |
+| `duration_seconds` | number | no | for `modal`: how long the box stays up (default: 5). Windows only |
 
 ---
 
 ### create_talon
 
-Create a talon on this site — a saved automation of trigger → optional condition → outputs. See [talons](/docs/dashboard/talons) for the product-level picture. **Server-side** — talons are site-level records written through the same store as the dashboard editor, never relayed to a machine.
+create a talon on this site — a saved automation of trigger, optional condition and outputs. see [talons](/docs/dashboard/talons) for the product-level picture. **server-side**: talons are site-level records written through the same store as the dashboard editor, never relayed to a machine.
 
-**Confirm before calling.** A talon runs unattended against real machines, so hoot is instructed never to call this from a vague request: it states back the exact talon it intends to create — trigger, condition, every output, the machines in scope, the cooldown — and waits for the operator to confirm.
+**confirm before calling.** a talon runs unattended against real machines, so hoot is told never to call this from a vague request: it states back the exact talon it intends to create — trigger, condition, every output, the machines in scope, the cooldown — and waits for the operator to confirm.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `name` | string | **Yes** | Short lowercase name shown in the dashboard, 80 characters or fewer |
-| `trigger` | object | **Yes** | What makes the talon fire — one of the four shapes below |
-| `outputs` | array | **Yes** | 1 to 5 output entries, executed in order |
-| `description` | string | No | Lowercase note about what the talon is for, 500 characters or fewer |
-| `condition` | object | No | Gate evaluated after the trigger fires. Defaults to `{"type":"none"}` |
-| `scope` | object | No | `{"machineIds":["..."]}`. Omit for every machine in the site |
-| `cooldownMinutes` | number | No | Minimum minutes between runs, 0-1440 (default: 60) |
-| `enabled` | boolean | No | Whether the talon is armed as soon as it is created (default: true) |
+| `name` | string | **yes** | short lowercase name shown in the dashboard, 80 characters or fewer |
+| `trigger` | object | **yes** | what makes the talon fire — one of the four shapes below |
+| `outputs` | array | **yes** | 1 to 5 output entries, run in order |
+| `description` | string | no | lowercase note about what the talon is for, 500 characters or fewer |
+| `condition` | object | no | gate evaluated after the trigger fires. defaults to `{"type":"none"}` |
+| `scope` | object | no | `{"machineIds":["..."]}`. omit for every machine in the site |
+| `cooldownMinutes` | number | no | minimum minutes between runs, 0-1440 (default: 60) |
+| `enabled` | boolean | no | whether the talon is armed as soon as it is created (default: true) |
 
-**Trigger shapes** (exactly one form):
+**trigger shapes** (exactly one form):
 
 ```json
 {"type": "schedule", "entries": [{"id": "e1", "days": ["mon", "wed"], "time": "09:00"}]}
@@ -612,189 +666,194 @@ Create a talon on this site — a saved automation of trigger → optional condi
 {"type": "event", "eventTypes": ["process_crash", "machine_offline"], "delayMinutes": 2}
 ```
 
-- **schedule / entries** — 24-hour `HH:MM` in the site's timezone, up to 50 entries. `entries` and `intervalMinutes` are mutually exclusive.
-- **schedule / intervalMinutes** — 5 to 1440 minutes, but 15 minutes minimum when the condition is a `visual_check`.
-- **threshold** — metrics `cpu_percent`, `memory_percent`, `disk_percent`, `gpu_percent`, `cpu_temp`, `gpu_temp`, `network_latency`, `network_packet_loss`; operators `>`, `<`, `>=`, `<=`. Threshold talons ride the existing alert pipeline: one fires when an alert rule fires and the breach matches the talon's own metric, operator, and bound — so a threshold talon does nothing until a matching alert rule exists.
-- **event** — `process_crash`, `machine_offline`, `process_start_failed`, `process_restarted`, `exe_missing`, and the `display_*` events. Event triggers only: `delayMinutes` (0-1440) waits that long after the event before running, e.g. letting a restarted app finish booting before a `visual_check` looks at it.
+- **schedule / entries**: 24-hour `HH:MM` in the site's timezone, up to 50 entries. `entries` and `intervalMinutes` are mutually exclusive.
+- **schedule / intervalMinutes**: 5 to 1440 minutes, but 15 minutes minimum when the condition is a `visual_check`.
+- **threshold**: metrics `cpu_percent`, `memory_percent`, `disk_percent`, `gpu_percent`, `cpu_temp`, `gpu_temp`, `network_latency`, `network_packet_loss`; operators `>`, `<`, `>=`, `<=`. threshold talons ride the existing alert pipeline: one fires when an alert rule fires and the breach matches the talon's own metric, operator and bound — so a threshold talon does nothing until a matching alert rule exists.
+- **event**: `process_crash`, `machine_offline`, `process_start_failed`, `process_restarted`, `exe_missing`, and the `display_*` events. event triggers only: `delayMinutes` (0-1440) waits that long after the event before running, e.g. letting a restarted app finish booting before a `visual_check` looks at it.
 
-**Condition** — `{"type":"none"}` (default), or `{"type":"visual_check","expectation":"the lobby wall is playing the loop, not showing a desktop","monitor":0}`, which captures a fresh screenshot and asks a vision model whether the expectation holds. `expectation` is 500 characters or fewer; `monitor` is `0` for all displays combined, `1` for primary.
+**condition**: `{"type":"none"}` (default), or `{"type":"visual_check","expectation":"the lobby wall is playing the loop, not showing a desktop","monitor":0}`, which captures a fresh screenshot and asks a vision model whether the expectation holds. `expectation` is 500 characters or fewer; `monitor` is `0` for all displays combined, `1` for primary. a visual check needs a machine that can take a screenshot, which a Linux machine cannot yet (see [`capture_screenshot`](#capture_screenshot)).
 
-**Output entries** — each entry is an object keyed by `type`:
+**output entries**: each entry is an object keyed by `type`:
 
 | field | applies to | description |
 |-------|------------|-------------|
 | `type` | all | `email`, `webhook`, `cortex`, or `command` |
-| `url` | `webhook` | An https URL. Private, loopback, and link-local addresses are rejected (DNS-resolving SSRF check at authoring time, re-validated at send time) |
-| `directive` | `cortex` | What hoot should do when the talon fires, 1000 characters or fewer |
+| `url` | `webhook` | an HTTPS URL. private, loopback and link-local addresses are rejected (DNS-resolving SSRF check at authoring time, re-validated at send time) |
+| `directive` | `cortex` | what hoot should do when the talon fires, 1000 characters or fewer |
 | `commandType` | `command` | `restart_process`, `start_process`, or `stop_process` |
-| `processName` | `command` | The configured process name to act on |
-| `processId` | `command` | The configured process id, when hoot already holds it |
+| `processName` | `command` | the configured process name to act on |
+| `processId` | `command` | the configured process ID, when hoot already holds it |
 
-`type: "cortex"` **is** the hoot output — the wire literal is a deliberate survivor of the cortex → hoot rename (it is persisted on every talon and every talon-run summary, and the MCP tool schema is itself a published contract). Every label a human reads says `hoot`. See `web/lib/hoot/WIRE_NAMES.md` class B.
+`type: "cortex"` **is** the hoot output. the wire literal is a deliberate survivor of the cortex → hoot rename: it is persisted on every talon and every talon-run summary, and the MCP tool schema is itself a published contract. every label a person reads says `hoot`. see `web/lib/hoot/WIRE_NAMES.md` class B.
 
-**Refusals.** A `command` output takes the same privilege as issuing the command by hand — site admins only, refused with `command_output_forbidden` (403) both in the tool and again in the store. A `visual_check` condition or a `cortex` output spends the talon author's own LLM key, so authoring one without a saved key returns `llm_key_required` (400). Exceeding 20 talons on the site returns `talon_limit_reached` (409). Validation rejects unknown top-level fields outright, so the model can never stamp a server-owned field onto the document; field-level failures come back as `invalid_talon` with `field_errors` rather than throwing and taking the turn down.
+**refusals.** a `command` output takes the same privilege as issuing the command by hand — site admins only, refused with `command_output_forbidden` (403) in the tool and again in the store. a `visual_check` condition or a `cortex` output spends the talon author's own LLM key, so authoring one without a saved key returns `llm_key_required` (400). more than 20 talons on the site returns `talon_limit_reached` (409). validation rejects unknown top-level fields outright, so the model can never stamp a server-owned field onto the document; field-level failures come back as `invalid_talon` with `field_errors` rather than throwing and taking the turn down.
 
-**Returns**: `talon_id`, `name`, `enabled`, `next_run_at`.
+**returns**: `talon_id`, `name`, `enabled`, `next_run_at`.
 
-Unattended hoot cannot call this tool: authoring a talon is standing fleet policy that outlives the incident, so `create_talon` is excluded from the autonomous investigator's tool list regardless of tier.
+unattended hoot cannot call this tool. authoring a talon is standing fleet policy that outlives the incident, so `create_talon` is left out of the autonomous investigator's tool list regardless of tier.
 
 ---
 
 ### list_talons
 
-List the talons on this site, ordered by name. Call it before `set_talon_enabled` to get a talon id, and before `create_talon` so an existing talon is not duplicated.
+the talons on this site, ordered by name. hoot calls it before `set_talon_enabled` to get a talon ID, and before `create_talon` so an existing talon is not duplicated.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
 | _(none)_ | | | |
 
-**Returns**: `count`, plus per talon `talon_id`, `name`, `enabled`, `trigger` (the normalized object, not a prose summary, so the exact metric / interval / event values are available for follow-up calls), `outputs` (types only), `last_run_status`, `last_run_at`, `next_run_at`.
+**returns**: `count`, plus per talon `talon_id`, `name`, `enabled`, `trigger` (the normalized object, not a prose summary, so the exact metric, interval or event values are available for follow-up calls), `outputs` (types only), `last_run_status`, `last_run_at`, `next_run_at`.
 
-Read-only, so unlike the two writing talon tools this one stays available to unattended hoot.
+read-only, so unlike the two writing talon tools this one stays available to unattended hoot.
 
 ---
 
 ### set_talon_enabled
 
-Arm or disarm an existing talon. Disabling leaves the talon in place — it does not delete it.
+arm or disarm an existing talon. disabling leaves the talon in place; it does not delete it.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `talon_id` | string | **Yes** | As returned by `list_talons` or `create_talon`. Never guessed |
-| `enabled` | boolean | **Yes** | `true` to arm, `false` to disarm |
+| `talon_id` | string | **yes** | as returned by `list_talons` or `create_talon`. never guessed |
+| `enabled` | boolean | **yes** | `true` to arm, `false` to disarm |
 
-Enabling recomputes `nextRunAt` from now in the site's timezone, so a talon that sat disabled for a while does not fire the moment it comes back, and re-checks the author's LLM key when the talon has a `visual_check` condition or a hoot output (`llm_key_required` if it is gone). Either edge clears a system-set disable reason, so a re-armed talon does not still claim it was switched off. Like `create_talon`, this tool is excluded from unattended hoot.
+enabling recomputes `nextRunAt` from now in the site's timezone, so a talon that sat disabled for a while does not fire the moment it comes back, and re-checks the author's LLM key when the talon has a `visual_check` condition or a hoot output (`llm_key_required` if it is gone). either edge clears a system-set disable reason, so a re-armed talon does not still claim it was switched off. like `create_talon`, this tool is left out of unattended hoot.
 
-**Returns**: `talon_id`, `name`, `enabled`, `next_run_at`.
+**returns**: `talon_id`, `name`, `enabled`, `next_run_at`.
 
 ---
 
 ## tier 3: privileged tools
 
-These require explicit user confirmation before execution.
+these wait for an explicit approve or deny in the chat while the site's approval gate is on, which is the default.
 
 ### run_command
 
-Execute a shell command on the remote machine.
+run a command on the machine, without a shell.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `command` | string | **Yes** | Must start with an allowed command |
-| `user_session` | boolean | No | Run in the logged-in user's desktop session (needed for GUI/display access) |
+| `command` | string | **yes** | must start with an allowed command |
+| `user_session` | boolean | no | run in the signed-in user's desktop session (needed for GUI or display access). Windows only |
 
-**Returns**: stdout, stderr, exit code.
+**returns**: stdout, stderr, exit code.
 
-**Allowed commands** (first word must be one of):
+the command is split into arguments and run directly, so shell operators (`&&`, `|`, `;`) are passed as plain arguments rather than interpreted. **allowed commands** — the first word must be one of the platform's list:
 
-`ipconfig`, `systeminfo`, `hostname`, `whoami`, `tasklist`, `netstat`, `ping`, `tracert`, `nslookup`, `dir`, `type`, `echo`, `set`, `ver`, `wmic`, `sc`, `net`, `reg`, `nvidia-smi`, `dxdiag`
+- **Windows**: `ipconfig`, `systeminfo`, `hostname`, `whoami`, `tasklist`, `netstat`, `ping`, `tracert`, `nslookup`, `dir`, `type`, `echo`, `set`, `ver`, `wmic`, `sc`, `net`, `reg`, `nvidia-smi`, `dxdiag`
+- **macOS and Linux**: `hostname`, `whoami`, `id`, `uname`, `uptime`, `date`, `sw_vers`, `ls`, `cat`, `echo`, `env`, `df`, `du`, `free`, `ps`, `lsof`, `ip`, `ifconfig`, `netstat`, `ss`, `ping`, `traceroute`, `dig`, `nslookup`, `host`, `systemctl`, `journalctl`, `launchctl`, `system_profiler`, `lsb_release`, `lspci`, `lscpu`, `lsblk`, `dmesg`, `nvidia-smi`
 
-This is the default set (`DEFAULT_ALLOWED_COMMANDS`); it is overridable via `config.mcp.allowed_commands`. A running command can be **cancelled** from its tool card, which kills the process tree on the machine.
+`config.mcp.allowed_commands` on the machine replaces the platform's list. a running command can be **cancelled** from its tool card, which kills the process tree on the machine.
 
 ---
 
 ### run_powershell
 
-Execute a PowerShell command on the remote machine.
+**Windows only.** run a PowerShell command on the machine.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `script` | string | **Yes** | PowerShell script to execute |
-| `user_session` | boolean | No | Run in the logged-in user's desktop session |
+| `script` | string | **yes** | PowerShell script to run |
+| `user_session` | boolean | no | run in the signed-in user's desktop session |
 
-**Returns**: stdout, stderr, exit code.
+**returns**: stdout, stderr, exit code.
 
-No command restrictions — every invocation is audit-logged to the site events feed and the local `[MCP-AUDIT]` log. Fixed 25-second timeout; for long-running work use `execute_script`. A running command can be **cancelled** from its tool card, which kills the process tree on the machine.
+no command restrictions: every call is audit-logged to the site events feed and the local `[MCP-AUDIT]` log. fixed 25-second timeout; for long-running work use `execute_script`. a running command can be **cancelled** from its tool card, which kills the process tree on the machine.
 
 ---
 
 ### run_python
 
-Execute Python code on the remote machine in the user's desktop session.
+**Windows only.** run Python code on the machine in the signed-in user's desktop session.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `code` | string | **Yes** | Python code to execute |
+| `code` | string | **yes** | Python code to run |
 
-**Sandboxed execution** (since v2.6.5). When invoked via this tool, code runs with:
+**sandboxed execution** (since v2.6.5). code from this tool runs with:
 
-- **Restricted `__builtins__`** — `eval`, `exec`, `compile`, `globals`, `locals`, `breakpoint`, `input`, `exit`, `quit` are all removed. `open`, `print`, `getattr`/`setattr`, and common types/exceptions remain available.
-- **Gated imports** — only a curated subset of the standard library is importable: `math`, `json`, `re`, `datetime`, `time`, `random`, `collections`, `itertools`, `functools`, `operator`, `string`, `textwrap`, `decimal`, `fractions`, `statistics`, `copy`, `pprint`, `base64`, `hashlib`, `hmac`, `struct`, `io`, `csv`, `pathlib`, `typing`, `dataclasses`, `enum`, `abc`. Dangerous modules — `os`, `subprocess`, `shutil`, `ctypes`, `socket`, and third-party packages like `psutil` or `mss` — raise `ImportError` with guidance to use `execute_script` or `run_command` instead.
-- **No filesystem access beyond `output_dir`** — the code can `open()` files it writes into the provided `output_dir` variable, but cannot reach the rest of the filesystem without going through a gated import.
+- **restricted `__builtins__`**: `eval`, `exec`, `compile`, `globals`, `locals`, `breakpoint`, `input`, `exit` and `quit` are removed. `open`, `print`, `getattr`/`setattr`, and common types and exceptions remain.
+- **gated imports**: only a curated subset of the standard library can be imported: `math`, `json`, `re`, `datetime`, `time`, `random`, `collections`, `itertools`, `functools`, `operator`, `string`, `textwrap`, `decimal`, `fractions`, `statistics`, `copy`, `pprint`, `base64`, `hashlib`, `hmac`, `struct`, `io`, `csv`, `pathlib`, `typing`, `dataclasses`, `enum`, `abc`. dangerous modules — `os`, `subprocess`, `shutil`, `ctypes`, `socket`, and third-party packages like `psutil` or `mss` — raise `ImportError` with guidance to use `execute_script` or `run_command` instead.
+- **no filesystem access beyond `output_dir`**: the code can `open()` files it writes into the provided `output_dir` variable, but cannot reach the rest of the filesystem without a gated import.
 
-The LLM **cannot** escape this sandbox. Internal first-party callers (e.g. the agent's own screenshot capture path in `agent/src/session_exec.py`) pass `trusted=True`, which restores full builtins and unrestricted imports; that flag is not reachable from the LLM-exposed tool schema.
+the model **cannot** escape this sandbox. internal first-party callers (e.g. the agent's own screenshot capture in `agent/src/session_exec.py`) pass `trusted=True`, which restores full builtins and unrestricted imports; that flag is not reachable from the tool schema the model sees.
 
-**Returns**: stdout from `print()`, plus any files written to `output_dir`.
+**returns**: stdout from `print()`, plus any files written to `output_dir`.
 
 ---
 
 ### read_file
 
-Read the contents of a file on the remote machine.
+read a text file on the machine.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `path` | string | **Yes** | Absolute file path (max 100KB) |
+| `path` | string | **yes** | absolute file path (max 100 KB) |
+
+`read_file` and `write_file` reach only paths under the agent's data directory, the service's temp directory and the service account's home directory; anything else is refused as outside the allowed directories, after symlinks are resolved.
 
 ---
 
 ### write_file
 
-Write content to a file on the remote machine.
+write a text file on the machine, creating it and any missing folders.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `path` | string | **Yes** | Absolute file path |
-| `content` | string | **Yes** | Content to write |
+| `path` | string | **yes** | absolute file path, inside the same directories as `read_file` |
+| `content` | string | **yes** | content to write |
 
 ---
 
 ### list_directory
 
-List the contents of a directory with file sizes and modification dates.
+list a directory with file sizes and modification dates, folders first. returns the first 200 entries and the total count.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `path` | string | **Yes** | Absolute directory path |
+| `path` | string | **yes** | absolute directory path |
 
 ---
 
 ### execute_script
 
-Execute a PowerShell script on the remote machine with **no command restrictions**. Use for software installs, diagnostics, stress tests, service management, registry edits, or any other admin task. For most routine sysadmin scenarios, prefer a purpose-built Tier 2 tool (e.g. `manage_windows_service`, `registry_operation`, `clean_disk_space`) — `execute_script` is the escape hatch when no purpose-built tool fits.
+**Windows only.** run a PowerShell script on the machine with **no command restrictions**: software installs, diagnostics, stress tests, service management, registry edits, or any other admin task. for routine work, prefer a purpose-built tier-2 tool (e.g. `manage_windows_service`, `registry_operation`, `clean_disk_space`); `execute_script` is the escape hatch when none fits.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `script` | string | **Yes** | PowerShell script to execute (can be multi-line) |
-| `timeout_seconds` | number | No | Timeout in seconds (default: 120, capped at 3300 / 55 min) — set higher for long operations like installs |
-| `working_directory` | string | No | Optional working directory for script execution |
+| `script` | string | **yes** | PowerShell script to run (can be multi-line) |
+| `timeout_seconds` | number | no | timeout in seconds (default: 120, capped at 3300 / 55 min) — set higher for long operations like installs |
+| `working_directory` | string | no | working directory for the script |
 
-**Returns**: stdout, stderr, exit code.
+**returns**: stdout, stderr, exit code.
 
-Timeouts are capped at **3300 seconds (55 minutes)** so a result stays retrievable; for jobs that run longer than that, launch the work detached (e.g. a background job or scheduled task) and check back in a follow-up turn rather than blocking the tool call. A running `execute_script` can be **cancelled** from its tool card — the process tree is killed within a few seconds and the card resolves to "cancelled by user".
+timeouts are capped at **3300 seconds (55 minutes)** so a result stays retrievable. for a job that runs longer, launch the work detached (e.g. a background job or scheduled task) and check back in a follow-up turn rather than blocking the tool call. a running `execute_script` can be **cancelled** from its tool card: the process tree is killed within a few seconds and the card resolves to "cancelled by user".
 
 ---
 
 ### deploy_software
 
-Deploy and install software on the remote machine using the full deployment pipeline: download installer, run silent install, verify installation, and track progress. Creates a tracked deployment visible on the Deployments page. **Server-side** — orchestrated by the server, not the agent directly.
+deploy and install software on the machine through the full deployment pipeline: download the installer, run a silent install, verify it, and track progress. creates a tracked deployment on the [deployments](/docs/dashboard/deployments) page. **server-side**: orchestrated by the server, not the agent directly.
 
-**Requires user confirmation before execution.** hoot will summarize the deployment plan (software, version, install path, parallel install status, processes to close) and wait for explicit approval before proceeding.
+**Windows only in practice.** the deployment is created for any machine, but a macOS or Linux agent cannot run an installer: it first closes any processes the deployment names, then downloads and checks the file, and fails the install with *no interactive user session available for installation*. see [platform support](/docs/reference/platform-support#software).
+
+**requires confirmation before it runs.** hoot summarizes the deployment plan (software, version, install path, parallel install, processes to close) and waits for explicit approval.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `software_name` | string | **Yes** | Software name, e.g. `TouchDesigner`, `Unreal Engine` |
-| `version` | string | No | Version string, e.g. `2025.32280`. Required for version-specific software |
-| `preset_id` | string | No | System preset ID from `get_system_presets` |
-| `installer_url` | string | No | Direct HTTPS installer URL (overrides preset URL) |
-| `installer_name` | string | No | Installer filename (auto-derived from URL if omitted) |
-| `silent_flags` | string | No | Silent install flags (overrides preset value) |
-| `close_processes` | array | No | Process names to terminate before install, e.g. `["TouchDesigner.exe"]` |
-| `parallel_install` | boolean | No | Install alongside existing versions (auto-enabled for TouchDesigner) |
-| `timeout_minutes` | number | No | Max installation time in minutes (default: 40) |
+| `software_name` | string | **yes** | software name, e.g. `TouchDesigner`, `Unreal Engine` |
+| `version` | string | no | version string, e.g. `2025.32280`. required for version-specific software |
+| `preset_id` | string | no | system preset ID from `get_system_presets` |
+| `installer_url` | string | no | direct HTTPS installer URL (overrides the preset URL) |
+| `installer_name` | string | no | installer filename (derived from the URL if omitted) |
+| `silent_flags` | string | no | silent install flags (override the preset value) |
+| `close_processes` | array | no | process names to end before installing, e.g. `["TouchDesigner.exe"]` |
+| `parallel_install` | boolean | no | install alongside existing versions (on by default for TouchDesigner) |
+| `timeout_minutes` | number | no | max installation time in minutes (default: 40) |
 
-**TouchDesigner specifics:** Download URL is auto-constructed from version number. `parallel_install` is automatically enabled to prevent the installer from removing existing builds. Use the full installer, not the WebInstaller.
+**TouchDesigner specifics:** the download URL is built from the version number. `parallel_install` is switched on automatically so the installer cannot remove existing builds. use the full installer, not the WebInstaller.
 
-**Silent flag formats by installer type:**
+**silent flag formats by installer type** (Windows installers):
 - Inno Setup: `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="path"`
 - NSIS: `/S /D=path`
 - MSI: `/quiet /norestart INSTALLDIR="path"`
@@ -803,7 +862,7 @@ Deploy and install software on the remote machine using the full deployment pipe
 
 ### reboot_machine
 
-Reboot the remote machine with a 30-second countdown delay. Can be cancelled from the dashboard or via `cancel_reboot` within the countdown window.
+reboot the machine after a one-minute countdown, cancellable from the dashboard or with `cancel_reboot` until it fires. the countdown is a minute on every platform, because macOS and Linux schedule a shutdown in whole minutes; the tool's own description still tells the model 30 seconds.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -813,7 +872,7 @@ Reboot the remote machine with a 30-second countdown delay. Can be cancelled fro
 
 ### shutdown_machine
 
-Shut down the remote machine with a 30-second countdown delay. The machine will NOT automatically restart.
+shut the machine down after a one-minute countdown. the machine does **not** restart on its own.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -823,7 +882,7 @@ Shut down the remote machine with a 30-second countdown delay. The machine will 
 
 ### cancel_reboot
 
-Cancel a pending reboot or shutdown. Must be called within the 30-second countdown window.
+cancel a pending reboot or shutdown. it has to arrive before the countdown runs out.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -838,11 +897,11 @@ Cancel a pending reboot or shutdown. Must be called within the 30-second countdo
 ```
 LLM decides to call a tool
   |
-  +-- Tier 3: pause for in-chat approval (when the per-site approval gate is on)
-  |     +-- User approves: continue to the tool-name execution path
-  |     +-- User denies: return "denied by user"
+  +-- tier 3: pause for in-chat approval (when the per-site approval gate is on)
+  |     +-- user approves: continue to the tool-name execution path
+  |     +-- user denies: return "denied by user"
   |
-  +-- Server-side tools
+  +-- server-side tools
   |     +-- get_site_logs / get_system_presets query Firestore on the web server
   |     +-- deploy_software creates deployment records and install commands server-side
   |     +-- update_process / add_process / delete_process call process action functions server-side
@@ -851,36 +910,37 @@ LLM decides to call a tool
   |         the once-a-minute cron sweep fires them, with tier 3 forced to wait
   |         for approval and site access re-resolved at fire time
   |
-  +-- Legacy command-mapped tools
-  |     +-- Write existing command types such as restart_process or reboot_machine
-  |     +-- Agent handles the legacy command and writes completion state
+  +-- legacy command-mapped tools
+  |     +-- write existing command types such as restart_process or reboot_machine
+  |     +-- the agent handles the command and writes completion state
   |
   +-- Firestore mcp_tool_call tools
-        +-- Create an mcp_tool_call command in Firestore
-        +-- Agent receives and executes the MCP tool
-        +-- Agent writes result to completed queue
-        +-- Turn runner polls for the result (bounded by the tool's own timeout)
+        +-- create an mcp_tool_call command in Firestore
+        +-- the agent receives and runs the tool, or refuses it with
+        |   unsupported_on_platform on a platform without that tool
+        +-- the agent writes the result to the completed queue
+        +-- the turn runner polls for the result (bounded by the tool's own timeout)
 ```
 
-The turn runs server-side, **detached from the browser connection** — it keeps executing and its results still land in the chat even if the connection drops or the page reloads, and the client reattaches to stream it. Long-running shell tools (`run_command`, `run_powershell`, `execute_script`) can be **cancelled** from their tool card mid-flight: the agent kills the process tree and the card resolves to "cancelled by user". The whole turn can be **stopped** server-side from the chat.
+the turn runs server-side, **detached from the browser connection**: it keeps running and its results still land in the chat if the connection drops or the page reloads, and the client reattaches to stream it. long-running shell tools (`run_command`, `run_powershell`, `execute_script`) can be **cancelled** from their tool card mid-flight: the agent kills the process tree and the card resolves to "cancelled by user". the whole turn can be **stopped** server-side from the chat.
 
 ### command allowlists
 
-`run_command` enforces an allowlist on the **agent side**. Even if a command is sent via Firestore, the agent rejects it if the first command isn't in the allowlist. `run_powershell` has **no** allow-list — it accepts arbitrary PowerShell, with accountability provided by mandatory audit logging (site events feed + local `[MCP-AUDIT]` log). `run_python` enforces its sandbox on the agent side — the LLM cannot override the import gate or restore blocked builtins.
+`run_command` enforces its allow-list on the **agent side**: even if a command reaches the machine through Firestore, the agent rejects it unless the first word is on the list. `run_powershell` has **no** allow-list — it accepts arbitrary PowerShell, with accountability from mandatory audit logging (site events feed and local `[MCP-AUDIT]` log). `run_python` enforces its sandbox on the agent side; the model cannot lift the import gate or restore blocked builtins.
 
 ### tier 2 blocklists
 
-Tier 2 tools enforce per-tool blocklists to prevent self-inflicted outages:
+tier-2 tools carry per-tool blocklists so hoot cannot cause its own outage:
 
-- `manage_process` — critical system processes (lsass, winlogon, csrss, etc.) cannot be killed
-- `registry_operation` — SAM, SECURITY, and Cryptography hives are unreachable; only an allowlist of safe key prefixes is permitted
-- `manage_windows_feature` — core Windows features Owlette depends on (NetFx4, WMI-\*, PowerShell\*) cannot be removed
-- `create_talon` — `command` outputs are site-admin only, and webhook URLs that resolve to private, loopback, or link-local addresses are rejected
+- `manage_process`: critical processes cannot be killed. on Windows that is lsass, winlogon, csrss, services, dwm, svchost and the other session processes, plus owlette's own service, host and Python processes. on macOS and Linux it is `init`, `systemd`, `systemd-logind`, `systemd-journald`, `dbus-daemon`, `sshd`, `launchd`, `loginwindow`, `WindowServer`, `SystemUIServer`, and owlette's own `owlette-desktop`, `owlette-host`, `python` and `python3`
+- `registry_operation`: the SAM, SECURITY and Cryptography hives are unreachable; only an allowlist of safe key prefixes is permitted
+- `manage_windows_feature`: core Windows features owlette depends on (NetFx4, WMI-\*, PowerShell\*) cannot be removed
+- `create_talon`: `command` outputs are site-admin only, and webhook URLs that resolve to private, loopback or link-local addresses are rejected
 
-Agent-executed Tier 2 tools emit structured `[MCP-AUDIT]` log entries for each invocation. Server-side process config tools use the process mutation audit path with actor `cortex:user_<userId>`. Talon tools emit `talon_mutated` rows with the same actor, `via: "cortex"`, and the originating chat id. The follow-up tools emit no mutation row of their own — the follow-up document is the record, and the `DELETE /api/hoot/followups/{followupId}` route behind the composer chip audits its own cancels as `chat_mutated` / verb `cancel_followup`.
+agent-run tier-2 tools write a structured `[MCP-AUDIT]` log entry for each call. server-side process config tools use the process mutation audit path with actor `cortex:user_<userId>`. talon tools write `talon_mutated` rows with the same actor, `via: "cortex"`, and the originating chat ID. the follow-up tools write no mutation row of their own — the follow-up document is the record, and the `DELETE /api/hoot/followups/{followupId}` route behind the composer chip audits its own cancels as `chat_mutated` / verb `cancel_followup`.
 
 ### agent-side limits
 
-- **Subprocess timeout**: 25 seconds (default; overridable per-tool where applicable)
-- **Max output size**: 50KB
-- **Screenshot max size**: 10MB
+- **subprocess timeout**: 25 seconds (the default; `execute_script` takes its own, up to 3300)
+- **max output size**: 50,000 characters each for stdout and stderr
+- **screenshot max size**: 10 MB

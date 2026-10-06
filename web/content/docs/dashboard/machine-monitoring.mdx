@@ -1,70 +1,69 @@
 ---
 title: "machine monitoring"
-description: "The dashboard provides real-time visibility into all your machines' health, performance, and process status."
-keywords: ["machine menu", "three dots", "delete a machine", "decommission", "stop alerts for one machine"]
----
-
+description: "the dashboard's live view of every machine: online state, metrics and history, processes, the machine menu, restarts, and what each machine reports about itself."
+keywords: ["machine menu", "three dots", "delete a machine", "decommission", "stop alerts for one machine", "os version", "operating system", "heartbeat", "offline", "cpu temperature", "metrics history"]
 ---
 
 ## machine status
 
-### online/offline detection
+### online and offline
 
-The agent sends a **heartbeat** to Firestore at an adaptive interval - every 5 seconds when the desktop app's window is open on the machine, 30 seconds when processes are running, or 120 seconds when idle.
+the agent sends a **heartbeat** to Firestore on an adaptive interval: every 5 seconds while the owlette app's window is open on the machine, every 30 seconds while a managed process is running or launching, and every 120 seconds when idle.
 
-The machine card status pill is binary:
+the status indicator is binary:
 
 | status | condition | indicator |
 |--------|-----------|-----------|
-| **online** | Agent reports the machine as online | Green pill |
-| **offline** | Agent reports offline, or the dashboard's local timeout fallback marks an old heartbeat offline | Red pill |
+| **online** | the agent reports the machine online | green dot (hover for *online*) |
+| **offline** | the agent reports offline, or the dashboard's own timeout marks an old heartbeat offline | red **offline** pill |
 
-The adjacent heartbeat timestamp uses a separate stale-display rule. Heartbeats newer than 5 minutes render as a clock time in the selected dashboard timezone. Heartbeats older than 5 minutes render as a relative age, such as `14m ago`, in red.
+while a restart or shutdown is counting down, the indicator becomes the [countdown](#reboot-countdown--cancel) instead.
 
 ### last seen
 
-Each machine shows a last-heartbeat timestamp. For offline or stale machines, this tells you when the machine last communicated. The timestamp tooltip always shows the full date, time, and timezone.
+beside it, the last-heartbeat time follows its own rule: a heartbeat newer than 5 minutes shows as a clock time in your [display timezone](/docs/dashboard/account-settings#preferences); an older one shows its age, such as `14m ago`, in red. the tooltip always carries the full date, time and timezone.
 
 ---
 
 ## system metrics
 
-Metrics are reported by the agent alongside each heartbeat (see adaptive interval above):
+the agent reports metrics with each heartbeat:
 
 ![machine detail view](/docs-screens/machine-detail.png)
 
 | metric area | values shown |
 |-------------|--------------|
-| **CPU** | Per-CPU usage percentage, model, and temperature when reported |
-| **memory** | RAM usage percentage plus used/derived total GB |
-| **disk/storage** | Per-volume storage percentage, used/total GB, and read/write disk I/O throughput |
-| **GPU** | Per-GPU usage percentage, VRAM usage, and temperature when reported |
-| **network** | Per-NIC transmit/receive throughput and utilization, plus gateway ping latency and packet-loss percentage when available |
-| **displays** | Live monitor topology, monitor count, effective resolution after rotation, primary-display marker, mosaic data, display-drift indicator, and auto-restore circuit-breaker indicator. See [displays](/docs/dashboard/displays) |
-| **local time** | Machine local clock and IANA timezone when multiple machine timezones are visible |
-| **screen access** | Machine-menu entry points for screenshot capture/history and live view on online machines |
+| **CPU** | per-CPU usage, model, and temperature when reported |
+| **memory** | RAM usage percentage plus used and total GB |
+| **disk** | per-volume usage, used/total GB, and read/write throughput when reported |
+| **GPU** | per-GPU usage, VRAM, and temperature when reported |
+| **network** | per-NIC transmit/receive throughput and utilization, plus gateway latency and packet loss |
+| **displays** | live monitor topology, monitor count, resolution after rotation, primary display, mosaic, drift and auto-restore indicators. see [displays](/docs/dashboard/displays) |
+| **local time** | the machine's clock and IANA timezone, when machines in more than one timezone are visible |
+
+not every platform reports every value. disk read/write throughput and CPU temperature are Windows only; a Mac reports its Apple GPU's load and memory but no temperatures; Windows and Linux report NVIDIA GPUs. the [platform support](/docs/reference/platform-support#metrics) page has the full list. a value a machine does not report is simply absent from its rows.
 
 ### color coding
 
-Usage metrics use the same threshold bands as the dashboard accent bars and hover rings:
+usage values share five bands, used by the accent bars and hover rings:
 
-| color | threshold | meaning |
-|-------|-----------|---------|
-| Emerald | 0-29% | Low usage |
-| Violet | 30-49% | Medium-low usage |
-| Sky | 50-69% | Medium usage |
-| Amber | 70-84% | High usage |
-| Red | 85-100% | Critical usage |
+| color | range | meaning |
+|-------|-------|---------|
+| emerald | 0-29% | low |
+| violet | 30-49% | medium-low |
+| sky | 50-69% | medium |
+| amber | 70-84% | high |
+| red | 85-100% | critical |
 
-Temperature values use separate hardware thresholds: normal below 70 C, warning from 70 C to below 85 C, and critical at 85 C or higher. Temperatures can display in Celsius or Fahrenheit according to the user's preferences.
+temperatures use hardware thresholds instead: normal below 70 °C, warning from 70 °C, critical from 85 °C. they show in Celsius or Fahrenheit, as set in your [preferences](/docs/dashboard/account-settings#preferences).
 
 ### picking which device a row shows
 
-A machine with more than one CPU, disk, GPU, or network interface gets a small dropdown on that metric row. The dropdown is hidden when there is only one device to choose from.
+a machine with more than one CPU, disk, GPU or network interface gets a small dropdown on that metric row; with one device there is no dropdown.
 
-**auto (most active)** is the default: the row follows whichever device the agent reports as primary. Pick a specific device and the row pins to it.
+**auto (most active)** is the default: the row follows whichever device the agent reports as primary. pick a specific device and the row pins to it.
 
-The choice is yours alone and is remembered per machine in card view, and once for the whole table in list view. If a pinned device disappears from a machine — a disk unmounted, a NIC removed — the row falls back to the primary device rather than going blank.
+the choice is yours alone. it is remembered per machine in card view, and once for the whole table in list view (in the column header). if a pinned device disappears from a machine — a disk unmounted, a NIC removed — the row falls back to the primary device rather than going blank.
 
 ---
 
@@ -72,177 +71,156 @@ The choice is yours alone and is remembered per machine in card view, and once f
 
 ### card view
 
-The default view displays each machine as a card:
+the default view shows each machine as a card:
 
-- Machine name and status indicator
-- Last-heartbeat timestamp and optional local machine clock/timezone
-- CPU, memory, disk/storage, GPU, and network metrics
-- Disk read/write throughput and network transmit/receive throughput
-- Display topology summary with drift and auto-restore indicators
-- Sparkline mini-charts showing recent trends
-- Process list with status badges
-- Agent version
-- The machine menu (**⋮**) — every action it offers is listed under [the machine menu](#the-machine-menu) below
+- a header with the display button, the machine name, the OS line (or the local clock, for an agent that reports no OS), the status indicator, the last heartbeat and the machine menu (**⋮**)
+- a **metrics** section: collapsed, a one-line summary of CPU, memory, disk, GPU and network; expanded, a row per metric with a sparkline of recent values
+- a **displays** section with the topology summary and the drift and auto-restore indicators
+- a **processes** section listing each configured process with its status badge and controls
 
-Click a machine card to expand details.
+each section collapses on its own. click a metric row to open its history in the [detail panel](#historical-metrics).
 
 ### list view
 
-A compact table view with sortable columns:
+a compact table, one row per machine:
 
-- Machine name
-- Status (online/offline)
-- CPU, memory, disk/storage, GPU, and network values
-- Display entry point with drift and auto-restore indicators
-- Process count
-- Last heartbeat
-- Agent version
+- the display button and hostname, with the OS line under it, shortened to fit the column (`Win 11 Pro`, `Ubuntu 24`)
+- status
+- CPU, RAM, disk, GPU and network
+- last heartbeat
+- the machine menu
 
-Useful when managing many machines.
-
----
-
-## sparkline charts
-
-Each metric in card view shows a tiny sparkline chart representing recent values. These give you an at-a-glance trend without clicking into the machine.
+on narrower screens the metric columns drop out, network first. expand a row to see its processes. useful when watching many machines.
 
 ---
 
 ## historical metrics
 
-Click on a machine to view detailed historical metrics:
+click a metric to open the detail panel with its history.
 
 ### time ranges
 
-| range |
-|-------|
-| **hour** |
-| **day** |
-| **week** |
-| **month** |
-| **year** |
-| **all** |
+**hour**, **day**, **week**, **month**, **year** and **all**.
 
 ### charts
 
-The metrics detail panel shows interactive Recharts line graphs for:
+the panel draws interactive line charts for:
 
-- CPU usage and temperature over time
-- Memory usage over time
-- Per-disk storage usage over time
-- Per-volume disk I/O read/write activity
-- GPU usage, VRAM usage, and temperature over time (if available)
-- Per-NIC network transmit/receive utilization or throughput
-- Display topology detail through the display panel
+- CPU usage and temperature
+- memory usage
+- per-disk storage usage
+- per-volume disk read/write activity
+- GPU usage, VRAM and temperature
+- per-NIC transmit/receive utilization or throughput
 
-Hover over data points for exact values and timestamps.
+hover a point for its exact value and time. the display button opens the [displays](/docs/dashboard/displays) panel in the same place.
 
 ---
 
 ## process status
 
-Each machine card shows its configured processes with status badges:
+each machine lists its configured processes with a status badge:
 
 | badge | state | meaning |
 |-------|-------|---------|
-| Green | RUNNING | Process is alive and responding |
-| Yellow | LAUNCHING | Launch is in progress |
-| Yellow | QUEUED | Launch is queued or waiting on a start delay |
-| Yellow | RESTARTING | Operator-initiated restart is in flight |
-| Yellow | STALLED | Process exists but not responding |
-| Red | LAUNCH_FAILED | Launch was attempted and failed - the badge reads `failed` |
-| Red | KILLED | Process was terminated |
-| Red | STOPPED | Launch mode is not `off` but nothing is running - crashed, outside its schedule window, not yet launched, or the executable is missing |
-| Grey | INACTIVE | Launch mode is `off` - owlette is not supervising this process |
+| green | `running` | the process is alive and responding |
+| amber | `launching` | a launch is in progress |
+| amber | `queued` | a launch is queued or waiting out its launch delay |
+| amber | `restarting` | an operator restart is in flight |
+| amber | `stalled` | the process exists but its window is not responding. Windows only — macOS and Linux do not detect hangs |
+| red | `failed` | a launch was attempted and failed (`LAUNCH_FAILED`) |
+| red | `killed` | the process was terminated |
+| red | `stopped` | the launch mode is not `off` but nothing is running: crashed, outside its schedule, not yet launched, or the path is missing |
+| grey | `inactive` | the launch mode is `off`; owlette is not supervising it |
 
-When a machine is offline the dashboard cannot know the current state, so every process badge reads `unknown` instead of its last status.
+when a machine is offline the dashboard cannot know the current state, so every badge reads `unknown` instead of its last status.
 
-Click a process to open the [Process Dialog](/docs/dashboard/process-management) for management and configuration.
+click a process to open the [process dialog](/docs/dashboard/process-management) to manage and configure it.
 
 ---
 
 ## restart pending
 
-When a managed process exhausts its relaunch attempts, the agent stops trying and asks for a restart instead of deciding on its own. It raises a **restart pending** flag on the machine, and the card shows an amber banner naming the process — `restart pending: ndi_recording crashed 3 times`.
+when a managed process uses up its relaunch attempts, the agent stops trying and asks for a restart instead of deciding on its own. it raises a **restart pending** flag on the machine, and the card shows an amber banner naming the process — `restart pending: ndi_recording crashed 3 times`.
 
-The machine itself also opens a restart prompt on its own screen, as a local fallback for a machine nobody is watching from the dashboard. **That prompt has a two-minute countdown and restarts the machine on its own if nobody touches it** — so the banner is usually a record of a restart that is about to happen anyway, not a decision waiting on you. See [relaunch limits](/docs/agent/process-monitoring#relaunch-limits).
+what happens next depends on the platform:
 
-Site admins get two actions on the banner:
+- **Windows**: the machine also opens a restart prompt on its own screen, as a fallback for a machine nobody is watching from the dashboard. **that prompt counts down two minutes and restarts the machine if nobody touches it**, so the banner is usually a record of a restart about to happen anyway, not a decision waiting on you. see [relaunch limits](/docs/agent/process-monitoring#relaunch-limits).
+- **macOS and Linux**: there is no prompt, and the machine does not restart on its own. the process stays down and the banner waits for you.
+
+site admins get two actions on the banner:
 
 | action | what it does |
 |--------|--------------|
-| **approve** | Sends the restart command, exactly as **restart machine** would. Only offered while the machine is online — the command would be refused otherwise. |
-| **dismiss** | Clears the flag and resets that process's relaunch counter, so it gets a fresh set of attempts. |
+| **approve** | sends the restart command, exactly as **restart machine** would. offered only while the machine is online, since the command would be refused otherwise. |
+| **dismiss** | clears the flag and resets that process's relaunch counter, so it gets a fresh set of attempts. |
 
-**The banner outlives an unreachable machine.** The flag is agent-written and only the agent's next service start clears it locally, so a machine that crashed and never came back keeps showing it. The banner renders greyed rather than amber in that case and adds *machine offline, cannot restart* — it is a record of something that happened, not a live alarm.
+**the banner outlives an unreachable machine.** the flag is written by the agent and only the agent's next service start clears it locally, so a machine that crashed and never came back keeps showing it. the banner renders grey instead of amber then, and adds *machine offline, cannot restart* — a record of something that happened, not a live alarm.
 
-Dismiss still works on an offline machine. It clears cloud state through the API rather than asking the agent, which is exactly the case that most needs clearing.
-
-Dismissing requires `MACHINE_EXEC_COMMAND` — the same bar as sending the restart itself.
+dismiss still works on an offline machine: it clears cloud state through the API rather than asking the agent, which is exactly the case that most needs clearing. dismissing requires `MACHINE_EXEC_COMMAND`, the same bar as sending the restart itself.
 
 ---
 
 ## reboot countdown & cancel
 
-When a reboot or shutdown is scheduled (from the dashboard, from hoot, from a [restart schedule](/docs/dashboard/restart-schedules), or via the Tier 3 `reboot_machine` / `shutdown_machine` tools), the machine card displays a red pulsing **MM:SS** countdown timer in place of its normal status indicator. This gives the operator a visible, unambiguous window in which to abort.
+when a restart or shutdown is scheduled — from the dashboard, from hoot, from a [restart schedule](/docs/dashboard/restart-schedules), or by the tier-3 `reboot_machine` / `shutdown_machine` tools — the status indicator becomes a red pulsing pill with a restart or power icon and an **MM:SS** countdown, so there is a visible window in which to stop it.
 
-### timing
-
-- Reboot and shutdown commands use a **30-second delay** so running processes can flush state.
-- The **Cancel** button on the machine card is the full-dashboard equivalent of the `cancel_reboot` tool. The agent runs `shutdown /a` and clears the reboot or shutdown flags.
-- Hovering the countdown swaps the `MM:SS` text to **cancel**; clicking it sends the cancel command.
-- Cancel is available while more than **5 seconds** remain in the countdown. The final **5 seconds** are locked because Windows `shutdown /a` is unreliable once the shutdown is already committing.
-- If the current user is not a site admin, no cancel handler is available, or the countdown has entered the final 5 seconds, the card shows a text-only `rebooting...` or `shutting down...` pill instead of a clickable countdown.
-- Once the countdown expires the machine card flips to a rebooting or shutting-down state and the cancel path closes.
-
-This behavior was introduced in v2.6.2 (commit `52e1ed8`) and replaces the older fire-and-forget reboot UX.
+- the countdown is **one minute** on every platform, counted to the time the agent reported. (the confirm dialogs still say 30 seconds.)
+- for a site admin, the pill is the cancel button: hovering it swaps the countdown for **cancel**, and on a touch screen an × stands in for the icon. the machine menu also offers **cancel restart** or **cancel shutdown** while it runs. either sends `cancel_reboot`.
+- cancel closes for the final **5 seconds**, when the shutdown may already be committing. from then on, and for anyone who is not a site admin, the pill shows the countdown without an action.
+- once the countdown runs out, a restarting machine keeps its restart pill until it is back online; a machine that shut down shows offline.
 
 ---
 
 ## the machine menu
 
-The **⋮** button on a card or row opens the machine menu. What it offers depends on whether the machine is online and whether you are a site admin:
+the **⋮** button on a card or row opens the machine menu. when someone is in a [swoop](/docs/dashboard/swoop) session on the machine, the button carries the viewer count. what the menu offers depends on whether the machine is online and whether you are a site admin:
 
 | action | needs | what it does |
 |--------|-------|--------------|
-| **restart machine** | online, site admin | Reboots the machine after a 30-second delay. See [reboot countdown & cancel](#reboot-countdown--cancel) |
-| **schedule restarts** | site admin | Opens the [restart schedule](/docs/dashboard/restart-schedules) editor. On an online machine it is the small sliders icon beside **restart machine**; on an offline one it is a menu item of its own |
-| **shutdown machine** | online, site admin | Powers the machine off, same 30-second delay |
-| **cancel restart** / **cancel shutdown** | online, site admin, countdown running | Replaces the two entries above while a countdown is in flight |
-| **screenshot** | online | Captures the machine's screen and opens the [screenshot](/docs/agent/remote-commands) history |
-| **swoop** | online, agent reports it can stream | Opens the live remote-desktop session — see [swoop](/docs/dashboard/swoop), which covers the site policy that decides whether the session itself is allowed |
-| **live view** | online, agent cannot stream | The older screenshot slideshow. Exactly one of swoop and live view is ever offered, so the menu never loses its screen entry |
-| **view displays** | any signed-in user | Opens the [displays](/docs/dashboard/displays) panel |
-| **mute alerts** / **unmute alerts** | any signed-in user | Silences every alert email for this machine, **for you only**. Listed under [account settings → alerts](/docs/dashboard/account-settings#muted-machines) |
-| **revoke token** | site admin | Invalidates the agent's refresh token for this hostname. See below |
-| **remove machine** | site admin | Removes the machine from the site. See below |
+| **restart machine** | online, site admin | restarts the machine after a one-minute countdown. see [reboot countdown & cancel](#reboot-countdown--cancel) |
+| **schedule restarts** | site admin | opens the [restart schedule](/docs/dashboard/restart-schedules) editor. on an online machine it is the small sliders icon beside **restart machine**; on an offline one it is a menu item of its own |
+| **shutdown machine** | online, site admin | powers the machine off after the same countdown |
+| **cancel restart** / **cancel shutdown** | online, site admin, countdown running | replaces the entries above while a countdown runs |
+| **swoop** | online, the machine can host swoop | opens the live remote-desktop session, with the viewer count when anyone is in it. greyed out with *you're on this machine* when that is the machine you are using. see [swoop](/docs/dashboard/swoop), which covers the site policy that decides whether a session is allowed |
+| **live view** | online, the machine cannot host swoop | the older screenshot slideshow. exactly one of swoop and live view is offered, so the menu never loses its screen entry |
+| **screenshot** | online | captures the machine's screen and opens the screenshot history |
+| **view displays** | any signed-in user | opens the [displays](/docs/dashboard/displays) panel |
+| **mute alerts** / **unmute alerts** | any signed-in user | silences every alert email for this machine, **for you only**. listed under [account settings → alerts](/docs/dashboard/account-settings#muted-machines) |
+| **revoke token** | site admin | invalidates the agent's refresh token for this hostname. see below |
+| **remove machine** | site admin | removes the machine from the site. see below |
 
-An offline machine keeps **schedule restarts**, **view displays**, **mute alerts**, **revoke token** and **remove machine** — everything else needs an agent on the other end.
+which machines can host swoop, take screenshots or show live view depends on the platform. a Mac needs the owlette app running with Screen Recording granted. a Linux machine cannot host swoop, and although its menu still shows **live view** and **screenshot**, both fail on Linux for now. see [platform support](/docs/reference/platform-support#screens).
+
+an offline machine keeps **schedule restarts**, **view displays**, **mute alerts**, **revoke token** and **remove machine** — everything else needs an agent on the other end.
 
 ### revoke token
 
-Revoking invalidates the agent's stored refresh token, so that agent can no longer reconnect until it is paired again. Two scopes are offered: the most recently used token for the hostname, or every token for it.
+revoking invalidates the agent's stored refresh token, so that agent cannot reconnect until it is paired again. two scopes are offered: **revoke current token**, the most recently used token for the hostname, or **revoke all for hostname**, every token for it — which also disconnects any other machine sharing that hostname.
 
-This is the per-machine version of the [token management](/docs/dashboard/admin/token-management) page, which does the same thing across a whole site.
+this is the per-machine version of the [token management](/docs/dashboard/admin/token-management) page, which does the same across a whole site.
 
 ### remove machine
 
-Removal is permanent and deletes the machine's data, process configuration, and command history, and deregisters the agent.
+removal is permanent: it deletes the machine's data, process configuration and command history, and deregisters the agent.
 
-- **A machine with deployments in progress cannot be removed.** The dialog blocks confirmation until they finish.
-- **An online machine can be removed.** Its agent notices and stops syncing.
-- Getting it back means re-running the installer and pairing it again with a fresh 3-word phrase.
+- **a machine with deployments in progress cannot be removed.** the dialog blocks confirmation until they finish.
+- **an online machine can be removed.** its agent notices and stops syncing.
+- getting it back means running the installer and pairing it again with a fresh three-word phrase.
 
 ---
 
 ## machine information
 
-Each machine reports additional details:
+each machine reports these about itself:
 
-| field | description |
-|-------|-------------|
-| **Hostname** | Windows computer name (used as machine ID) |
-| **OS** | Windows version (e.g., "Windows 11 Pro 10.0.22631") |
-| **CPU model** | Processor name (e.g., "Intel Core i9-9900X") |
-| **Agent version** | Installed owlette version (e.g., "2.1.8") |
-| **Uptime** | Time since last agent start |
+| field | where you see it | what it is |
+|-------|------------------|------------|
+| **machine name** | the card and row title | the machine's ID: its hostname when it was first paired. it is kept from then on, so renaming the computer later does not create a second machine |
+| **OS** (`osVersion`) | under the name on the card and the row | the operating system as people name it: `Windows 11 Pro 24H2`, `macOS 15.6`, `Ubuntu 24.04.5 LTS`. the list view shortens it to fit; the full string is in its tooltip |
+| **platform** (`osFamily`) | not shown on its own | `windows`, `macos` or `linux`. it decides what the dashboard offers for the machine — the process dialog's path label and Windows-only fields, the installer an update sends, swoop's keyboard mapping. an agent that reports none is treated as Windows |
+| **architecture** (`arch`) | not shown on its own | `x64` or `arm64`. with the platform, it picks the installer file a fleet update sends |
+| **CPU model** | the CPU row | the processor name |
+| **agent version** | the update dialog | the owlette version installed |
+
+agents before 4.0.0 report no OS, platform or architecture, so their cards show the local clock under the name instead. the same fields are in `GET /api/sites/{siteId}/machines` (`osFamily`, `arch`, `osVersion`, `null` for an older agent) and in [`owlette machine`](/docs/cli/reference/machine).

@@ -1,9 +1,10 @@
 ---
 title: "platform authentication internals"
-description: "This reference covers Owlette platform authentication internals: Firebase-backed user sessions, agent device-code pairing, passkey authentication (WebAuthn), mandatory two-factor authentication (a passkey or an authenticator app), and role-based access control. For HTTP API integrations, use API authentication, which documents scoped owk_* API keys, bearer headers, scopes, and public API error behavior."
+description: "how people and machines prove who they are to owlette: browser sessions, device-code pairing and agent tokens on Windows, macOS and Linux, passkeys, mandatory two-factor, and per-site roles. scoped API keys are covered in API authentication."
+keywords: ["login", "sign in", "cookie", "session secret", "pairing phrase", "device code", "machine token", "refresh token", "tokens.enc", "fido2", "totp", "2fa", "mfa", "remember this device", "rbac", "permissions", "superadmin", "owner"]
 ---
 
-Owlette uses four authentication mechanisms: user auth (Firebase Auth), agent auth (device code pairing), passkey authentication (WebAuthn), and two-factor authentication, which every account must enroll in and which a passkey or an authenticator app can satisfy.
+owlette has four ways in: a browser session for people, device-code pairing and refresh tokens for agents, passkeys, and the two-factor check every account must pass. scoped `owk_*` API keys, bearer headers and API error behaviour are in [API authentication](/docs/api/authentication).
 
 ---
 
@@ -13,115 +14,118 @@ Owlette uses four authentication mechanisms: user auth (Firebase Auth), agent au
 
 ```mermaid
 sequenceDiagram
-    participant B as Browser
+    participant B as browser
     participant F as Firebase Auth
-    participant D as Dashboard API
-    B->>F: signInWithEmail / signInWithGoogle
-    F-->>B: Firebase ID Token
-    B->>D: POST /api/auth/session {idToken}
-    D->>D: Verify ID token
-    D->>D: Create iron-session
-    D-->>B: Set-Cookie: __session=... (HTTPOnly, encrypted)
-    B->>D: Subsequent requests use cookie
+    participant D as dashboard API
+    B->>F: sign in with email and password, or Google
+    F-->>B: Firebase ID token
+    B->>D: POST /api/auth/session with the ID token
+    D->>D: verify the ID token, refuse a deleted user
+    D->>D: read users/{uid} for the 2FA state
+    D-->>B: Set-Cookie __session (HttpOnly, sealed)
+    B->>D: later requests carry the cookie
 ```
 
-### session management
+### the session cookie
 
-Sessions use [iron-session](https://github.com/vvo/iron-session) — encrypted, signed, HTTPOnly cookies.
+sessions are [iron-session](https://github.com/vvo/iron-session) cookies: sealed and signed on the server, unreadable from JavaScript.
 
 | property | value |
 |----------|-------|
-| **Cookie name** | `__session` |
-| **HTTPOnly** | Yes (not accessible from JavaScript) |
-| **Secure** | Yes (HTTPS only in production) |
-| **Encryption** | AES-256-GCM via `SESSION_SECRET` |
+| **name** | `__session` |
+| **holds** | the user ID, the session's expiry and its 2FA state (`mfaRequired`, `mfaVerified`, `mfaCompletedAt`, `mfaSatisfiedBy`, `requiresMfaSetup`). no role |
+| **sealing** | iron-session v8's defaults: AES-256-CBC with an HMAC-SHA256 integrity check, keyed by `SESSION_SECRET`. the secret must be at least 32 characters; the server throws on load without it |
+| **flags** | `HttpOnly`, `SameSite=Lax`, path `/`, and `Secure` in production |
+| **lifetime** | `POST /api/auth/session` takes `durationDays`, 1 to 30 (default 7), for the session's own expiry, but the cookie's max age is fixed at 7 days, so a longer session still ends with the cookie |
 
-### sign-out
+`POST /api/auth/session` is limited to 10 requests a minute per IP. `GET` reports the session's state and `DELETE` signs out.
 
-`DELETE /api/auth/session` clears the session cookie.
+### remembering a device
 
----
-
-## agent authentication (device code pairing)
-
-Agents authenticate using a device code flow with a two-token system. No Firebase service account keys are stored on client machines.
-
-### pairing flow
-
-```
-1. Agent requests pairing phrase (POST /api/agent/auth/device-code)
-   └── Server generates 3-word phrase (e.g., "silver-compass-drift")
-       stored in device_codes/{phrase} with 10-minute expiry
-
-2. User authorizes (POST /api/agent/auth/device-code/authorize)
-   ├── Via browser opened by the operator on the machine (owlette.app/add)
-   ├── Via dashboard "+" button → "Enter Code" tab
-   ├── Via /ADD=phrase installer flag (pre-authorized, no interaction)
-   ├── Server creates Firebase custom token with claims:
-   │     {role: "agent", site_id: "...", machine_id: "..."}
-   ├── Server exchanges custom token for ID token (Firebase Auth REST)
-   ├── Server generates refresh token (random, hashed in Firestore)
-   └── Stores the prepared credential bundle in the device_codes doc
-       (encrypted blob for interactive pairing, plaintext for pre-authorized)
-
-3. Agent polls for authorization (POST /api/agent/auth/device-code/poll)
-   ├── Server reads the stored credential bundle from the device_codes doc
-   ├── Returns it (encrypted blob for interactive pairing, plaintext
-   │     accessToken + refreshToken + siteId for pre-authorized codes)
-   └── Deletes the device-code doc
-
-4. Agent stores tokens
-   ├── Access token: used for Firestore REST API calls (1-hour expiry)
-   └── Refresh token: encrypted locally with Fernet AES (machine-bound key)
-```
-
-### add machine modal (dashboard)
-
-Operators can pair machines without using the installer's browser handoff by clicking the **"+"** button on the dashboard header. The `AddMachineButton` modal (see `web/app/dashboard/components/AddMachineButton.tsx`) exposes two tabs:
-
-**Enter Code** — for operators who already have a pairing phrase (e.g. the installer, or the desktop app's **join a site** dialog, is showing `silver-compass-drift` on the target machine):
-
-1. Type the three-word phrase into the input
-2. Click **Authorize**
-3. The modal `POST`s to `/api/agent/auth/device-code/authorize` with the current `siteId` — the agent's pending poll sees the authorization and completes pairing
-
-**Generate Code** — for bulk or silent deployments where no one will be at the machine:
-
-1. Click **Generate Pairing Phrase** — the modal calls `POST /api/agent/auth/device-code` then immediately authorizes the returned phrase for the current site (`POST /api/agent/auth/device-code/authorize`)
-2. Copy the pre-authorized phrase, or copy the silent install command, which the modal formats as:
-
-   `Owlette-Installer-v{version}.exe /ADD={phrase} /SILENT`
-
-3. The phrase expires **10 minutes** after generation. Run the command on each target machine within that window and the agent will pair on first launch — nothing to click on the machine, no browser.
-
-Both tabs work only while the viewer has write access to the currently-selected site.
+clearing a code at `/verify-2fa` with **trust this device** (`trustDevice: true`) sets a second cookie, `owlette_device_trust`, for 30 days. it holds a random 256-bit token; the server keeps only its SHA-256 hash, in `users/{uid}/trustedDevices/{hash}`. a later sign-in from that browser starts MFA-verified, recorded as `mfaSatisfiedBy: "device-trust"`, so [swoop's](/docs/dashboard/swoop#the-second-factor) step-up, which wants a live ceremony, still asks. dropping to zero factors, and a superadmin reset, revoke every trust record.
 
 ---
 
-### token refresh flow
+## agent authentication
 
-```mermaid
-sequenceDiagram
-    participant A as Agent
-    participant S as Refresh API
-    Note over A: Token nearing expiry (~5 min before)
-    A->>S: POST /api/agent/auth/refresh {refreshToken, machineId}
-    S->>S: Validate token hash exists in Firestore
-    S->>S: Validate machineId matches token record
-    S->>S: Generate new custom token + ID token
-    S->>S: Update lastUsed timestamp
-    S-->>A: new idToken (accessToken) + optional rotated refreshToken
+an agent holds a one-hour Firebase ID token for its Firestore and API calls, and a long-lived refresh token to get the next one. no service-account key is ever on a machine.
+
+### pairing
+
+```
+1. the agent asks for a phrase: POST /api/agent/auth/device-code
+   └── body: machineId, version
+       the server stores device_codes/{phrase} for 10 minutes: the 3-word
+       phrase, sha256(deviceCode), and the device code itself
+       returns pairPhrase, deviceCode (64 random bytes), pairingUrl,
+       expiresIn 600, interval 5
+
+2. someone authorizes the phrase: POST /api/agent/auth/device-code/authorize
+   ├── body: pairPhrase, siteId. needs a dashboard session holding
+   │     MACHINE_ENROLL on that site: a site owner or admin, or a superadmin
+   ├── mints the agent's Firebase custom token and ID token
+   ├── creates a random refresh token, kept only as its SHA-256 hash in
+   │     agent_refresh_tokens/{hash}
+   └── encrypts accessToken, refreshToken, expiresIn and siteId with
+         AES-256-GCM under HKDF-SHA256(deviceCode, salt = the phrase,
+         info = "owlette-device-code-v1"), then deletes the stored device code
+
+3. the agent polls every 5 seconds: POST /api/agent/auth/device-code/poll
+   ├── body: deviceCode
+   ├── 202 pending · 410 expired · 404 unknown
+   └── 200 with the encrypted bundle; the document is deleted in the same
+         transaction, so a bundle is handed out once
+
+4. the agent decrypts the bundle with its device code and writes the tokens
+   to .tokens.enc
 ```
 
-### token security
+the phrase alone cannot fetch those credentials: once an interactive phrase is authorized, a poll by phrase is refused with `403`.
 
-| aspect | implementation |
-|--------|---------------|
-| **Refresh token storage** | Encrypted with Fernet AES, key derived from Windows `MachineGuid` |
-| **Refresh token in Firestore** | Stored as SHA-256 hash (not plaintext) |
-| **ID token lifetime** | 1 hour (Firebase custom token) |
-| **Machine binding** | Refresh validates `machineId` matches — prevents token theft |
-| **Token collections** | `device_codes`, `agent_tokens`, and `agent_refresh_tokens` are server-side only (no client access) |
+the agent no longer opens a browser on the machine. the owlette app, the installer console or `configure_site.py` shows the phrase and its link, and you authorize from any device: **join a site** in the app, `owlette.app/add`, or the dashboard. `--no-browser` and `OWLETTE_NO_BROWSER=1` are still accepted and change nothing. the agent's machine ID, which the tokens are bound to, is kept in `config/machine_id`, seeded from the hostname the first time it is read.
+
+### pre-authorized phrases
+
+for a machine nobody is standing at, an admin makes the phrase first:
+
+- **generate code** in the dashboard calls the device-code route from a signed-in session, which marks the document `preauthorizedIntent` and stores no device code, then authorizes it at once. that authorization only records the site and who approved it, with `deferTokenMint: true`; no token exists yet
+- the machine polls with the phrase, its `machineId` and `version`. the first poll after authorization claims the phrase for that machine ID for 60 seconds, mints tokens bound to it, deletes the document and returns `accessToken`, `refreshToken`, `expiresIn: 3600` and `siteId` over TLS. another machine polling the same phrase meanwhile gets `202`, and `404` once it is spent: one phrase pairs one machine
+- a document from an older server that still holds plaintext tokens is redeemed by phrase too; nothing writes one now
+
+how the phrase reaches the machine depends on its platform:
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| **how** | `Owlette-Installer-v<version>.exe /ADD=<phrase> /SILENT`. on dev.owlette.app the dashboard's command carries `/SERVER=dev` too | `config/pairing.json` in the data root before the package installs, with `phrase` and optionally `server` and `kiosk_user` | the same |
+| **what runs it** | the installer runs `configure_site.py --add` | the package's postinstall runs `configure_site.py --preseed` in the background | the package's postinst does the same |
+
+the **generate code** dialog still says silent install is Windows only; the preseed is the macOS and Linux equivalent, and [installation](/docs/agent/installation#the-pairing-preseed-macos-and-linux) has the recipe. `kiosk_user` is only reported in the pairing log: it does not add that account to the `owlette` or `_owlette` group, which you still do by hand. a machine that already has a site is never re-paired by the file; `OWLETTE_ADD=<phrase>` in the environment of `configure_site.py --preseed` takes the file's place and does re-pair it.
+
+### the add machine dialog
+
+the **+** (**add machine**) button on the dashboard opens two tabs, both for the site you have selected:
+
+- **enter code**: type the phrase a machine is showing and **authorize**. the dialog posts it to the authorize route with the site ID, and the machine's next poll completes the pairing
+- **generate code**: makes a pre-authorized phrase, as above, and shows it with the silent install command. it expires 10 minutes after it was made
+
+every site member sees the button, but authorizing needs `MACHINE_ENROLL`, so a plain member's attempt is refused. generating a phrase spends two requests from the budget below.
+
+### tokens after pairing
+
+| token | lifetime | notes |
+|-------|----------|-------|
+| **access token** | 1 hour | a Firebase ID token carrying the custom claims below. the agent refreshes it when less than 5 minutes remain |
+| **refresh token** | no expiry | random, stored on the server only as its SHA-256 hash, bound to one machine ID. revocable by a site admin |
+
+`POST /api/agent/auth/refresh` takes `refreshToken` and `machineId`. the server checks the hash exists, has not passed an `expiresAt` (current tokens have none), has not been superseded beyond its grace, and was issued to that machine ID: another machine ID gets `403`. it re-sets the agent's claims and returns a new access token.
+
+**rotation.** an agent that sends `X-Owlette-Agent-Version` 2.12.0 or later gets a new refresh token on every refresh. the old one keeps working for 5 minutes, so a lost response can be retried, and the one before it is deleted once it can no longer be presented, which keeps about two records per machine. an older agent, or a missing header, keeps its token and only bumps `lastUsed`.
+
+**revocation.** site admins list a site's tokens with `GET /api/sites/{siteId}/agent-tokens` and revoke with `POST /api/sites/{siteId}/agent-tokens/revoke`, naming exactly one of `tokenId`, `machineId` (optionally with `latestOnly`), `all: true` or `prune: true`. both need `AGENT_TOKEN_REVOKE`. see [token management](/docs/dashboard/admin/token-management).
+
+**losing the token.** a `401` or `403` answer to a refresh makes the agent wipe its token store, and the machine has to pair again. a revocation therefore lands at the machine's next refresh: the access token it already holds keeps working until then, for up to an hour.
+
+**rate limits**, per IP, with the shared Redis limiter configured: device-code, authorize and the legacy exchange share 60 requests an hour (200 on dev), polling counts against the general 300 an hour, and refresh allows 120 an hour. without Redis every endpoint falls back to 15 a minute per process.
 
 ### custom token claims
 
@@ -129,94 +133,107 @@ sequenceDiagram
 {
   "role": "agent",
   "site_id": "nyc-office",
-  "machine_id": "DESKTOP-ABC123"
+  "machine_id": "DESKTOP-ABC123",
+  "version": "4.1.5"
 }
 ```
 
-Firestore security rules use these claims to scope agent access to a single site and machine.
+the security rules read these to limit an agent to its own site and machine (`agentCanAccessMachine`).
+
+### the token file
+
+the refresh token, the cached access token and its expiry, and the site ID are kept together in one encrypted file, `.tokens.enc`, in the agent's data root.
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| **path** | `C:\ProgramData\Owlette\.tokens.enc` | `/Library/Application Support/Owlette/.tokens.enc` | `/var/lib/owlette/.tokens.enc` |
+| **key material** | the machine's `MachineGuid` | the hardware `IOPlatformUUID`, with no fallback: when it cannot be read, the store is left untouched | `/etc/machine-id`, else `/var/lib/dbus/machine-id`, else an ID derived from a network interface |
+| **file protection** | hidden, with a protected DACL: SYSTEM and Administrators, plus modify for the account that wrote it or the console user | mode `0600`, owned by root and opened without following links, inside a `0750` data root owned by group `_owlette` | the same, group `owlette` |
+
+the file is Fernet-encrypted (AES-128-CBC with HMAC-SHA256) under `base64url(SHA-256(key material + ":owlette-agent"))`, so it is useless on any other machine. an earlier derivation also mixed in the hostname, which a rename moved out from under the store; the agent re-encrypts such a file the first time it reads it and keeps the old copy as `.tokens.enc.v1`. setting `OWLETTE_DATA_ROOT` moves the whole data root, the token file included, for the Python agent; the owlette app reads it only from its own environment, and `owlette-host` ignores it.
+
+### legacy registration codes
+
+`POST /api/agent/auth/exchange` still trades a one-time registration code, from `agent_tokens/{code}`, for the same pair of tokens. the codes last 24 hours and are written by `/api/setup/generate-token` and `/api/agent/generate-installer`. no current agent calls the exchange.
 
 ---
 
-## passkey authentication (webauthn)
+## passkey authentication (WebAuthn)
 
-Passkeys use the Web Authentication API (FIDO2) for passwordless login. A passkey replaces both the password and the 2FA code — it's a single biometric/PIN step.
+passkeys use the Web Authentication API (FIDO2) for passwordless sign-in. one passkey ceremony replaces both the password and the 2FA code.
 
-"Passkey" is one standard, not a list of integrations. Windows Hello, Touch ID, Face ID, a hardware security key (YubiKey and friends), and password managers that store passkeys (1Password, Bitwarden, iCloud Keychain) are all WebAuthn authenticators, and Owlette treats them identically — there is nothing per-vendor to enable.
+"passkey" is one standard, not a list of integrations. Windows Hello, Touch ID, Face ID, a hardware security key, and password managers that store passkeys (1Password, Bitwarden, iCloud Keychain) are all WebAuthn authenticators, and owlette treats them the same: there is nothing per vendor to turn on.
 
 ### registration flow
 
 ```
-1. User is logged in, navigates to passkey management
+1. a signed-in user opens passkey management
    └── POST /api/passkeys/register/options
-       ├── Generate WebAuthn registration challenge
-       ├── Store in webauthn_challenges/{userId} (10-min expiry)
-       └── Return PublicKeyCredentialCreationOptions
+       ├── generates a registration challenge
+       ├── stores it in webauthn_challenges/{userId} (10 minutes)
+       └── returns PublicKeyCredentialCreationOptions
 
-2. Browser prompts for authenticator (Touch ID, Windows Hello, phone)
+2. the browser asks the authenticator, and the user unlocks it
 
-3. User completes biometric/PIN
-   └── POST /api/passkeys/register/verify
-       ├── Verify attestation response
-       ├── Store credential in users/{userId}/passkeys/{credentialId}
-       ├── Recount users/{userId}.mfaFactors.passkeys (transactional)
-       ├── If this is the account's FIRST factor, re-mint the session as
-       │     MFA-verified (markSessionMfaVerified) — the ceremony just
-       │     completed IS the proof, so there is no second prompt
-       └── Delete challenge
+3. POST /api/passkeys/register/verify
+   ├── verifies the attestation, with user verification required
+   ├── stores the credential in users/{userId}/passkeys/{credentialId}
+   ├── recounts users/{userId}.mfaFactors.passkeys (in a transaction)
+   ├── for the account's FIRST factor, re-mints the session as MFA-verified:
+   │     the ceremony just completed is the proof, so there is no second prompt
+   └── deletes the challenge
 ```
 
-### login with passkey
+### sign-in with a passkey
 
 ```
-1. User clicks "passkey" on login page
+1. the user chooses passkey on the login page
    └── POST /api/passkeys/authenticate/options
-       ├── Generate authentication challenge (discoverable)
-       ├── Store in webauthn_challenges/{randomId} (10-min expiry)
-       └── Return options + challengeId
+       ├── generates a discoverable-credential challenge
+       ├── stores it in webauthn_challenges/{randomId} (10 minutes)
+       └── returns the options and a challengeId
 
-2. Browser shows available passkeys for this site
-   └── User selects and authenticates (biometric/PIN)
+2. the browser offers this site's passkeys; the user picks one and unlocks it
 
 3. POST /api/passkeys/authenticate/verify
-   ├── Verify assertion response against stored public key
-   ├── Validate counter (clone detection)
-   ├── Create iron-session (HTTPOnly cookie)
-   ├── Create Firebase custom token
-   ├── Client calls signInWithCustomToken()
-   └── Session is minted MFA-verified (createSession(..., 'passkey-uv'))
-         — a user-verified assertion is the second factor, so the user is
-         never asked for a code on top of it
+   ├── verifies the assertion against the stored public key
+   ├── checks the signature counter (clone detection)
+   ├── creates the session cookie, MFA-verified as "passkey-uv": a
+   │     user-verified assertion is the second factor, so no code follows
+   ├── creates a Firebase custom token
+   └── the client calls signInWithCustomToken()
 ```
 
-### passkey management
+### managing passkeys
 
-- Users can register multiple passkeys (e.g., laptop + phone)
-- Each passkey has a friendly name, device type, creation date, last used date
-- Rename: `PATCH /api/passkeys/{credentialId}`
-- Delete: `DELETE /api/passkeys/{credentialId}`
-- List: `GET /api/passkeys/list?userId=...`
+- an account can hold several passkeys, each with a name, device type, creation date and last-used date
+- list: `GET /api/passkeys/list?userId=...`
+- rename: `PATCH /api/passkeys/{credentialId}` with `userId` and `friendlyName` (50 characters at most)
+- delete: `DELETE /api/passkeys/{credentialId}?userId=...`
+
+each needs the signed-in session of that `userId`.
 
 ### security
 
 | aspect | implementation |
-|--------|---------------|
-| **RP ID** | `owlette.app` (prod), `localhost` (dev) |
-| **Challenge lifetime** | 10 minutes, single-use, deleted after verification |
-| **Clone detection** | Counter validation — rejects if response counter ≤ stored counter |
-| **Credential storage** | Public key in `users/{userId}/passkeys/` subcollection |
-| **User verification** | `required` (PIN or biometric mandatory) |
-| **Discoverable credentials** | `residentKey: preferred` (no email needed to start login) |
+|--------|----------------|
+| **RP ID** | `owlette.app` in production, accepted from both `https://owlette.app` and `https://dev.owlette.app`; `localhost` in development |
+| **challenges** | 10 minutes, single use, deleted after verification |
+| **clone detection** | the presented counter must be higher than the stored one, except when both are 0, which many synced passkeys always report; then there is no counter check |
+| **credential storage** | the public key, in the `users/{userId}/passkeys/` subcollection |
+| **user verification** | `required`: a PIN or biometric every time |
+| **discoverable credentials** | `residentKey: preferred`, so sign-in can start without an email address |
 
 ---
 
-## two-factor authentication (2fa)
+## two-factor authentication (2FA)
 
-Two-factor authentication is mandatory, and **either** factor type satisfies it — a user picks one at `/setup-2fa` and can add the other later.
+two-factor authentication is mandatory, and **either** kind of factor satisfies it: a user picks one at `/setup-2fa` and can add the other later.
 
-| factor | what it actually is | at sign-in |
-|--------|--------------------|------------|
-| **passkey** (recommended) | Windows Hello, Touch ID, Face ID, a hardware security key, or a password manager that stores passkeys (1Password, Bitwarden, iCloud Keychain). All WebAuthn — one standard, no per-vendor setup. | One ceremony. The device unlock is the login *and* the second factor, so no code is ever requested on top of it. |
-| **authenticator app** | A 6-digit TOTP code. Authenticator apps run on **desktop as well as mobile** — 1Password, Bitwarden, and Authy all ship desktop apps, so a phone is not required to enroll. | Password or Google sign-in first, then the code at `/verify-2fa`. |
+| factor | what it is | at sign-in |
+|--------|------------|------------|
+| **passkey** (recommended) | Windows Hello, Touch ID, Face ID, a hardware security key, or a password manager that stores passkeys. all WebAuthn, with no per-vendor setup | one ceremony. unlocking the device is the sign-in *and* the second factor, so no code is asked for on top |
+| **authenticator app** | a 6-digit TOTP code. authenticator apps run on desktops as well as phones (1Password, Bitwarden and Authy all ship desktop apps), so a phone is not required | password or Google sign-in first, then the code at `/verify-2fa` |
 
 ### the factor inventory
 
@@ -228,114 +245,122 @@ users/{userId}.mfaEnrolled      = mfaFactors.totp || mfaFactors.passkeys > 0
 users/{userId}.requiresMfaSetup = !mfaEnrolled
 ```
 
-`mfaFactors` is a denormalized tally, so the session hot path can answer "does this account hold a second factor?" with one document read instead of counting the `passkeys` subcollection. Documents written before the field existed are recounted from the subcollection and healed on the next write.
+`mfaFactors` is a running tally, so the session path answers "does this account hold a second factor?" with one document read instead of counting the `passkeys` subcollection. documents written before the field existed are recounted from the subcollection and healed on their next write.
 
-An account with zero factors carries `requiresMfaSetup: true`, and `proxy.ts` redirects that session to `/setup-2fa` from any protected path.
+an account with no factors carries `requiresMfaSetup: true`, and `proxy.ts` sends that session to `/setup-2fa` from any protected path. `GET /api/mfa/factors` returns the signed-in account's inventory for the security panel, `totp`, `passkeys`, `totalFactors` and `mfaVerified`, with no secrets in it.
 
 ### setup flow
 
 ```
-1. User lands on /setup-2fa and chooses a method
+1. the user lands on /setup-2fa and chooses a method
 
-2a. passkey branch
-   ├── POST /api/passkeys/register/options then /verify
-   ├── Credential stored, mfaFactors.passkeys recounted
-   └── First factor: the session is re-minted MFA-verified in place
+2a. passkey
+   ├── POST /api/passkeys/register/options, then /verify
+   ├── the credential is stored and mfaFactors.passkeys recounted
+   └── as the first factor, the session is re-minted MFA-verified in place
 
-2b. authenticator branch
+2b. authenticator app
    ├── POST /api/mfa/setup
-   │     ├── Generate TOTP secret
-   │     ├── Store in mfa_pending/{userId} (10-min expiry)
-   │     └── Return secret + QR code URL
+   │     ├── generates a TOTP secret
+   │     ├── stores it in mfa_pending/{userId} (10 minutes)
+   │     └── returns the secret and a QR code URL
    └── POST /api/mfa/verify-setup with the 6-digit code
-         ├── Verify code against secret
-         ├── Encrypt secret, store on users/{userId}
-         ├── Issue and hash the first sheet of backup codes
-         └── Delete the mfa_pending document
+         ├── checks the code against the secret
+         ├── encrypts the secret and stores it on users/{userId}
+         ├── issues the first sheet of backup codes, stored hashed
+         └── deletes the mfa_pending document
 
-3. Both branches end at the backup-codes screen
+3. both end at the backup-codes screen
 ```
 
 ### the enrollment gate
 
-`lib/mfaEnrollmentGate.server.ts` guards `/api/mfa/setup`, `/api/mfa/verify-setup`, and the two `/api/passkeys/register/` routes:
+`lib/mfaEnrollmentGate.server.ts` guards `/api/mfa/setup`, `/api/mfa/verify-setup` and the two `/api/passkeys/register/` routes:
 
-- **zero factors** — enrollment is open. This is the mandatory-setup path; a user who has never enrolled cannot hold `mfaVerified`, so gating it would deadlock.
-- **one or more factors** — the session must already be MFA-verified, otherwise the route returns `403` with `code: "mfa_challenge_required"` and the client sends the user to `/verify-2fa`. Without this, a stolen session cookie could attach an attacker-controlled factor and clear the gate with it.
+- **no factors**: enrollment is open. this is the mandatory-setup path; a user who has never enrolled cannot hold `mfaVerified`, so gating it would deadlock
+- **one or more factors**: the session must already be MFA-verified, or the route answers `403` with `code: "mfa_challenge_required"` and the client sends the user to `/verify-2fa`. without this, a stolen session cookie could attach an attacker's factor and clear the gate with it
 
-Removal routes are deliberately outside the gate — see [removing a factor](#removing-a-factor).
+removal is deliberately outside the gate; see [removing a factor](#removing-a-factor).
 
-### login with 2fa
+### sign-in with 2FA
 
 ```
-1. User signs in (email/password, Google, or passkey)
-2. Passkey sign-in: the session is minted MFA-verified, so there is no prompt
-3. Otherwise the dashboard reads mfaEnrolled: true and prompts at /verify-2fa
-4. POST /api/mfa/verify-login {code}
-   ├── Decrypt secret from user document
-   ├── Verify TOTP code (or check backup codes)
-   ├── If backup code used: remove from list
-   └── Return success
+1. the user signs in with email and password, Google, or a passkey
+2. a passkey sign-in is minted MFA-verified, so there is no prompt
+3. otherwise a session for an enrolled account is sent to /verify-2fa
+   (a browser with a valid device-trust cookie starts verified instead)
+4. POST /api/mfa/verify-login with userId, code, isBackupCode?, trustDevice?
+   ├── needs the session of that userId
+   ├── decrypts the TOTP secret on the server
+   ├── checks the code, or the backup code, which is then removed
+   ├── marks the session MFA-verified
+   └── with trustDevice, sets the 30-day owlette_device_trust cookie
 ```
 
-A user who holds a passkey can clear that prompt with the passkey instead of typing a code, via the `/api/passkeys/step-up/` routes.
+a user who holds a passkey can answer that prompt with it instead of a code, through the `/api/passkeys/step-up/` routes.
 
 ### backup codes
 
-- 10 single-use codes, stored as hashes — the plaintext is shown exactly once
-- Available to **any** enrolled account, not just TOTP ones. A passkey-only account gets its sheet from `POST /api/mfa/backup-codes`
-- Regenerating invalidates every previously issued code
-- Regeneration requires **live proof of possession** in the same request — a current TOTP code, an unused backup code, or a passkey assertion. A warm session is deliberately not enough: a sheet of recovery codes also satisfies `/api/mfa/disable`, so minting one from a cookie alone would be a way to shed 2FA entirely
+- 10 single-use codes, stored as hashes; the plaintext is shown exactly once
+- available to **any** enrolled account, not only TOTP ones. a passkey-only account gets its sheet from `POST /api/mfa/backup-codes`
+- regenerating invalidates every code issued before
+- regenerating needs **live proof of possession** in the same request: a current TOTP code, an unused backup code, or a passkey assertion. a warm session is deliberately not enough, because a sheet of recovery codes also satisfies `/api/mfa/disable`, so minting one from a cookie alone would be a way to shed 2FA entirely
 
 ### removing a factor
 
-Removing your last factor is **allowed**. On a drop to zero factors the inventory module re-arms `requiresMfaSetup`, so the account goes straight back into mandatory setup and the user is asked to enroll a new factor before they can use the dashboard again. Dropping to zero also revokes every trusted-device record — 30-day device trust must not outlive the factor it was granted against.
+removing your last factor is **allowed**. on a drop to zero factors the inventory module re-arms `requiresMfaSetup`, so the account goes straight back into mandatory setup and must enroll a new factor before it can use the dashboard again. dropping to zero also revokes every trusted-device record: 30-day device trust must not outlive the factor it was granted against.
 
-The two removal routes are gated differently, and both deliberately so:
+the two removal routes are gated differently, both on purpose:
 
-- `POST /api/mfa/disable` (authenticator app) demands live proof of possession every time — a current TOTP code or an unused backup code.
-- `DELETE /api/passkeys/{credentialId}` requires only the session that owns the credential. It is **not** behind the enrollment gate: that gate exists to stop an unchallenged session from *adding* a factor it could then step up with, and refusing a removal would hold an account hostage to a credential its owner no longer has.
+- `POST /api/mfa/disable` (authenticator app) demands live proof of possession every time: a current TOTP code or an unused backup code
+- `DELETE /api/passkeys/{credentialId}?userId=...` needs only the session that owns the credential. it is **not** behind the enrollment gate: that gate stops an unchallenged session from *adding* a factor it could then step up with, and refusing a removal would hold an account hostage to a credential its owner no longer has
 
 ### superadmin factor reset
 
-`POST /api/users/{uid}/mfa-reset` — surfaced as **reset 2FA** on the row menu of `/admin/users` — is the supported recovery path for a user who has lost their last factor *and* their backup codes. It deletes every passkey credential, clears the TOTP secret and backup codes, re-arms mandatory setup, and revokes the target's trusted-device records.
+`POST /api/users/{uid}/mfa-reset`, the **reset 2FA** item on a row's menu at `/admin/users`, is the recovery path for a user who has lost their last factor *and* their backup codes. it deletes every passkey credential, clears the TOTP secret and backup codes, re-arms mandatory setup, and revokes the target's trusted-device records.
 
-It does **not** revoke Firebase refresh tokens: a session the target already holds stays signed in until it expires on its own. Self-reset is refused — a superadmin uses account settings for their own factors, or asks another superadmin.
+it does **not** revoke Firebase refresh tokens: a session the target already holds stays signed in until it expires on its own. self-reset is refused: a superadmin uses account settings for their own factors, or asks another superadmin.
 
 ---
 
-## role-based access control
+## roles and access
 
-Owlette uses a three-tier model for human users (plus a separate agent tier for service accounts):
+a person has a **global** role and, on each site they belong to, a **site** role. only one global role carries authority: `superadmin`, which holds every capability on every site without any member rows. every other global value (`member` or `admin`, being narrowed to `user`) grants self-service only: your own preferences and deleting your own account. a global `admin` gives nothing on a site.
 
-### roles
+what you can do on a site comes from your row in `sites/{siteId}/members/{uid}`:
 
-| role | platform | site access | typical usage |
-|------|----------|-------------|---------------|
-| **member** | none | read-only on assigned sites | viewers, read-only ops |
-| **admin** | none | write on assigned sites (reboot, delete machines, edit display layouts, site settings) | site operators delegated by platform admins |
-| **superadmin** | full Admin Panel (user management, installer uploads, etc.) | implicit access to every site | platform administrators |
-| **agent** | — | single site + single machine (custom token claims) | Owlette agent service accounts |
+| site role | capabilities |
+|-----------|--------------|
+| **member** | `MACHINE_VIEW` (screenshots and live view) and `MACHINE_REMOTE_VIEW` (watching swoop, where the site lets members watch). read-only otherwise |
+| **admin** | a member's, plus `MACHINE_EXEC_COMMAND`, `MACHINE_REMOTE_CONTROL`, `SWOOP_SETTINGS_MANAGE`, `MACHINE_CONFIG_WRITE`, `MACHINE_REMOVE`, `MACHINE_ENROLL`, `AGENT_TOKEN_REVOKE`, `DEPLOYMENT_MANAGE`, `DISTRIBUTION_MANAGE`, `UNINSTALL_TRIGGER`, `PRESET_MANAGE`, `WEBHOOK_MANAGE`, `SITE_LOGS_MANAGE`, `SITE_MEMBER_MANAGE`, `TALON_MANAGE` and `ALERT_RULES_MANAGE` |
+| **owner** | an admin's, plus `SITE_DELETE` |
 
-New users default to `member`. Superadmins promote members to `admin` or `superadmin` from `/admin/users`.
+the platform capabilities, `USER_ROLE_MANAGE`, `USER_DELETE`, `INSTALLER_MANAGE`, `SYSTEM_PRESET_MANAGE` and `GLOBAL_SETTINGS_WRITE`, belong to superadmins alone. an **agent** reaches only its own site and machine, from its token's claims. server jobs act as system actors with fixed grants: unattended hoot (`cortex_autonomous`) may run commands and write machine config, the talon runner may run commands, and scheduled cleanup may remove machines and manage deployments.
+
+superadmins set global roles at `/admin/users` ([user management](/docs/dashboard/admin/user-management#the-role-model)); site owners and admins set site roles with `PATCH /api/sites/{siteId}/members/{uid}` — the members page shows its role control to superadmins only ([member management](/docs/dashboard/admin/member-management#what-the-roles-mean)).
 
 ### enforcement layers
 
-1. **Firestore Security Rules** — Database-level enforcement (cannot be bypassed). Helpers: `isSuperadmin()`, `isSiteAdmin(siteId)`, `canAccessSite(siteId)`. See [firestore-rules.md](/docs/setup/firestore-rules#key-functions).
-2. **API Route Middleware** — Server-side helpers resolve sessions, Firebase ID tokens, and `owk_*` API keys. Public API routes use resource-scoped helpers such as `requireSiteAuthAndScope`, `requireMachineAuthAndScope`, `requireChatAuthAndScope`, and lower-level `resolveAuth`/`requireScope`; roost-specific routes use the same scoped-auth pattern. `requireAdminOrIdToken` is reserved for legacy or superadmin-gated platform routes.
-3. **React Components** — `RequireAdminAccess` gates the admin panel, with `minRole` naming the tier (`superadmin` for platform-scoped routes, `admin` for site-scoped ones); `useAuth().isSiteAdmin(siteId)` for site-scoped UI gates.
+1. **Firestore security rules**, for what a browser or an agent reads and writes directly. helpers include `isSuperadmin()`, `isActiveMember(siteId)`, `canAccessSite(siteId)`, `isSiteAdmin(siteId)` and `agentCanAccessMachine(siteId, machineId)`; see [the key functions](/docs/setup/firestore-rules#key-functions). the server's Admin SDK bypasses the rules, so every route checks for itself
+2. **API routes.** most run through `authorizedSiteHandler` or `authorizedPlatformHandler` (`lib/authorizedHandler.server.ts`): resolve the caller from a session, a Firebase ID token or an `owk_*` key, resolve their standing on the site, check the API key's scope, check the capability, apply the rate limit, write a blocking audit row, then run the handler. other routes use the `require*AuthAndScope` helpers in `app/api/_shared.ts` (site, machine, roost, chat, platform), and session-only routes, such as 2FA, passkeys and pairing authorization, use `requireSession` with an explicit capability check
+3. **the dashboard**, for what it shows: `RequireAdminAccess` gates the admin panel, where `minRole: "admin"` admits anyone who administers at least one site and `minRole: "superadmin"` only superadmins, and `useAuth().isSiteAdmin(siteId)` gates per-site controls. these only hide things; the server decides
 
-### how role is determined
+the `capability_enforcement` kill switch in `global/security_config` can turn capability checks off so a misfire cannot lock operators out of their fleet. it never turns off `MACHINE_REMOTE_CONTROL`, `MACHINE_REMOTE_VIEW` or `SWOOP_SETTINGS_MANAGE`, nor API-key scope checks, and every bypass is written to the audit row.
+
+### how the dashboard learns your standing
 
 ```
-User logs in → Firebase Auth ID token
+sign-in → Firebase ID token
   │
-  POST /api/auth/session → Server creates the iron-session cookie
-  │     (userId + MFA state only — the cookie does NOT carry role)
+  POST /api/auth/session → the session cookie
+  │     (user id and 2FA state only: the cookie carries no role)
   │
-  └── AuthContext separately subscribes to users/{uid} in Firestore
-        via onSnapshot → reads the live role field there
+  ├── AuthContext listens to users/{uid}: the global role
+  └── useSiteMemberships listens to one collection-group query over
+        members, filtered on uid: your role on every site
 ```
+
+the server never trusts either: each request resolves the caller's role on the site it names.
 
 ---
 
@@ -344,11 +369,13 @@ User logs in → Firebase Auth ID token
 ```mermaid
 flowchart TD
     FA[Firebase Auth]
-    FA --> UA["User Auth<br/>Email/Google → ID Token → Session"]
-    FA --> AA["Agent Auth<br/>Custom Token + Refresh → ID Token"]
-    FA --> MFA["MFA<br/>TOTP + Backup Codes"]
-    FA --> PK["Passkeys<br/>WebAuthn → Custom Token → Session"]
-    UA --> FS["Firestore Security Rules<br/>(site-scoped, role-based)"]
-    AA --> FS
+    FA --> UA["user auth<br/>email or Google → ID token → session cookie"]
+    FA --> AA["agent auth<br/>device code → custom token + refresh token → ID token"]
+    FA --> PK["passkeys<br/>WebAuthn → custom token → session cookie"]
+    UA --> MFA["2FA<br/>passkey or TOTP, backup codes, device trust"]
+    UA --> API["API routes<br/>per-site roles → capabilities"]
+    PK --> API
+    AA --> FS["Firestore security rules<br/>site-scoped, role-based"]
+    UA --> FS
     PK --> FS
 ```

@@ -1,28 +1,49 @@
 ---
 title: "self-update"
-description: "The owlette agent can update itself remotely without physical access to the machine."
+description: "the owlette agent updates itself remotely, on Windows, macOS and Linux, without anyone at the machine: the dashboard sends each machine the installer for its own platform, and the agent verifies it and hands it to the OS."
+keywords: ["upgrade", "update agent", "update owlette", "new version", "fleet update", "rollback", "downgrade"]
 ---
 
 ---
 
 ## how it works
 
-The self-update is handled by the service command handler in `owlette_service.py`:
+the service handles the self-update itself. on every platform it:
 
-1. Receives an `update_owlette` command from Firestore.
-2. Requires `installer_url` and `checksum_sha256`; reads `target_version` when provided and otherwise tries to infer `vX.Y.Z` from the installer URL.
-3. Rejects the command if another update marker is less than 10 minutes old.
-4. Checks for at least 500 MB of free disk space.
-5. Downloads the installer to `%ProgramData%\owlette\tmp\owlette-Update.exe` with retry/backoff.
-6. Verifies the file looks like a Windows executable and matches the supplied SHA-256 checksum.
-7. Writes `%ProgramData%\owlette\logs\update_in_progress.json` so the next service start can report the update result.
-8. Creates and runs an `OwletteUpdate_*` scheduled task as `SYSTEM` with highest privileges. The task launches the installer with `/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /ALLUSERS /LOG="<path>"`.
-9. Creates an `OwletteRecovery_*` scheduled task that waits about five minutes, checks whether `OwletteService` is running, and starts it if needed.
-10. On the next service start, checks the update marker, compares `agent/VERSION` with the target version, reports success or failure to Firestore, and removes stale update/recovery tasks.
+1. receives an `update_owlette` command from Firestore.
+2. requires `installer_url` and `checksum_sha256`; reads `target_version` when provided and otherwise tries to infer `vX.Y.Z` from the installer URL.
+3. refuses the command if another update marker is less than 10 minutes old.
+4. writes `logs/update_in_progress.json` in the data root, before the download, so a second command cannot start alongside and the next service start can report the result.
+5. checks for at least 500 MB of free disk space.
+6. downloads the installer with 3 retries and backoff into a staging folder only the service can write: `update-staging\owlette-Update.exe` on Windows, `cache/update/owlette-update.pkg` or `cache/update/owlette-update.deb` on macOS and Linux.
+7. checks that the file is this platform's own kind of installer — an `.exe`, a `.pkg` or a `.deb`, above a minimum size — and that it matches the supplied SHA-256 checksum. a file for another platform is refused whatever its checksum.
+8. hands the installer to the OS, outside its own process, so the install outlives the service it replaces.
 
-The service does not stop itself and run the installer inline. Task Scheduler owns the installer process so it can continue after the service stops.
+the service never runs the installer inline: the installer stops the service, so something else has to own it.
 
-On macOS and Linux the same command carries that platform's file instead: the agent downloads it as `owlette-update.pkg` or `owlette-update.deb`, checks that it is that kind of package before verifying the checksum, and hands it to the OS outside its own process — `installer -pkg … -target /` as a run-once launchd job, or `apt-get install` as a transient systemd unit after an `apt-get install --simulate` check passes.
+### Windows
+
+- creates and runs an `OwletteUpdate_*` scheduled task as `SYSTEM` with highest privileges. the task runs the installer with `/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /ALLUSERS /LOG="<path>"`, logging to `logs\installer_update.log`.
+- creates an `OwletteRecovery_*` scheduled task that waits about five minutes, checks whether `OwletteService` is running, and starts it if needed.
+- holds the verified file open, shared for reading only, until the service exits, so it cannot be changed between the checksum and the install.
+
+### macOS
+
+- loads a run-once launchd job, `app.owlette.update`, that runs `/usr/sbin/installer -pkg <file> -target /` and writes its output to `logs/update_installer.log`.
+- an earlier update job that is still installing defers this one (`update_deferred`) rather than being killed mid-install.
+- the package's own scripts stop the service and the app, replace them, and load both again.
+
+### Linux
+
+- first runs `apt-get install --simulate` against the package, which resolves the whole dependency graph without touching the system. a package whose dependencies cannot be met is refused (`update_unsatisfiable`) with the installed version still running. if another package operation holds the dpkg lock — unattended upgrades do, several times a day — the update is refused as `update_deferred`; send it again later. an earlier package operation left interrupted is repaired once with `dpkg --configure -a`.
+- then runs `apt-get install -y --allow-downgrades <file>` in a transient systemd unit, `owlette-update.service`, whose output is in the journal (`journalctl -u owlette-update`).
+- the package stops the service before its files are replaced, then restarts it and every running copy of the app on the new version.
+
+on macOS and Linux the download and the checks run on a worker of their own, so a slow download or a held dpkg lock never holds up the machine's other commands; the command's result is written once the handoff succeeds or fails.
+
+### after the restart
+
+on the next service start, the agent reads the update marker, compares the installed version (`agent/VERSION`) with the target, reports success or failure to Firestore, and removes the marker — and on Windows any leftover `OwletteUpdate_*` and `OwletteRecovery_*` tasks. see [version verification](#version-verification).
 
 ---
 
@@ -30,27 +51,32 @@ On macOS and Linux the same command carries that platform's file instead: the ag
 
 ### from the dashboard
 
-1. Open the **deploy** page in the dashboard.
-2. Click **update owlette** in the page header. The button is only shown while at least one machine on the current site is behind the latest installer.
-3. Select the machines to update. Only outdated machines are listed, and an offline machine cannot be selected — the agent has to be online to receive the command.
-4. Confirm the update.
+1. open the **deploy** page in the dashboard.
+2. click **update owlette** in the page header. the button is only shown while at least one machine on the current site is behind the latest installer.
+3. select the machines to update. only outdated machines are listed, and an offline machine cannot be selected — the agent has to be online to receive the command.
+4. confirm the update.
 
-The dashboard uses the current latest installer metadata automatically and sends an `update_owlette` command with the installer URL, expected SHA-256 checksum, and target version. It picks the file by the machine's platform — the `osFamily_arch` key it reports: `windows_x64`, `macos_arm64` or `linux_x64` (an agent that reports neither is treated as Windows x64). A machine whose platform the latest version has no file for is skipped and named in the result with the reason.
+the dashboard uses the current latest installer metadata automatically and sends an `update_owlette` command with the installer URL, expected SHA-256 checksum, and target version. it picks the file by the machine's platform — the `osFamily_arch` key it reports: `windows_x64`, `macos_arm64` or `linux_x64` (an agent that reports neither is treated as Windows x64). a machine whose platform the latest version has no file for is skipped and named in the result with the reason. see [deployments](/docs/dashboard/deployments).
 
 ### on the machine itself
 
-The installer runs with `/VERYSILENT`, so nothing appears on screen. Setup closes the owlette desktop app before it copies files, so the window and the tray icon both disappear for the length of the update — that is expected, not a crash. The installer does not bring them back: the service relaunches the desktop app in tray mode as soon as it starts again.
+nothing asks anything of the person at the machine, on any platform, but the app does disappear for a moment:
+
+- **Windows:** the installer runs with `/VERYSILENT`, so nothing appears on screen. setup closes the owlette desktop app before it copies files, so the window and the tray icon both disappear for the length of the update — that is expected, not a crash. the installer does not bring them back: the service relaunches the desktop app in tray mode as soon as it starts again.
+- **macOS:** the package stops the app in every signed-in account before it installs, then loads it again for the account at the Mac, so the menu-bar icon goes and comes back. other signed-in accounts get it back at their next login.
+- **Linux:** the service is stopped for the length of the install, about a minute, and the app is restarted on the new version in every session.
+
+on every platform the app raises no *service stopped* notification while the update marker is fresh, though the icon still shows the service down.
 
 ### what gets preserved
 
-| preserved | replaced |
-|-----------|----------|
-| ProgramData configuration | Agent application files |
-| Encrypted OAuth tokens | Bundled Python packages |
-| Log files | The service host (`owlette-host.exe`) and the desktop app |
-| Cache and temporary data directories | Installer executable used for the update |
+| platform | preserved | replaced |
+|----------|-----------|----------|
+| Windows | everything under `C:\ProgramData\Owlette` that is not the agent's own: `config\`, `.tokens.enc`, `logs\`, `cache\`, `tmp\` | the agent's files, the bundled Python, the service host (`owlette-host.exe`), the desktop app and the swoop streamer |
+| macOS | everything in the data root, `/Library/Application Support/Owlette`, apart from `runtime/` | `runtime/` inside the data root (the bundled Python and the agent), and `/Applications/owlette.app` with the streamer inside it |
+| Linux | the data root, `/var/lib/owlette` — the package never carries it | `/opt/owlette` (the bundled Python and the agent), the desktop app, the units and the polkit rule |
 
-The installer upgrades in place and avoids deleting the ProgramData configuration, token, log, cache, and temp directories. It does not perform a separate config backup/restore step.
+the installer upgrades in place. it does not run a separate config backup and restore step.
 
 ---
 
@@ -58,40 +84,38 @@ The installer upgrades in place and avoids deleting the ProgramData configuratio
 
 `installer_url` is the latest version's file for the machine's platform:
 
-- Windows (`windows_x64`): `Owlette-Installer-v2.1.8.exe`
-- macOS (`macos_arm64`): `Owlette-Installer-v2.1.8.pkg`
-- Linux (`linux_x64`): `Owlette-Installer-v2.1.8.deb`
+- Windows (`windows_x64`): `Owlette-Installer-v4.1.6.exe`
+- macOS (`macos_arm64`): `Owlette-Installer-v4.1.6.pkg`
+- Linux (`linux_x64`): `Owlette-Installer-v4.1.6.deb`
 
 ```json
 {
   "type": "update_owlette",
   "installer_url": "https://firebasestorage.googleapis.com/.../<the file for this machine's platform>",
-  "target_version": "2.1.8",
+  "target_version": "4.1.6",
   "checksum_sha256": "2f4c2f0e6d8f0c2f2a4f6f7a8b9c0d1e2f3a4b5c6d7e8f90123456789abcdef0",
   "deployment_id": "deploy_abc123"
 }
 ```
 
-Required fields:
-
 | field | required | notes |
 |-------|----------|-------|
-| `installer_url` | yes | Download URL for the installer file for this machine's platform (`.exe`, `.pkg` or `.deb`). |
-| `checksum_sha256` | yes | The command is refused without a checksum. |
-| `target_version` | recommended | Used for post-restart verification. If omitted, the agent tries to infer it from `vX.Y.Z` in the URL or records `unknown`. |
-| `deployment_id` | no | Passed through when updating command progress and completion. |
+| `installer_url` | yes | download URL for the installer file for this machine's platform (`.exe`, `.pkg` or `.deb`). |
+| `checksum_sha256` | yes | the command is refused without a checksum. |
+| `target_version` | recommended | used for post-restart verification. if omitted, the agent tries to infer it from `vX.Y.Z` in the URL or records `unknown`. |
+| `deployment_id` | no | passed through when updating command progress and completion. |
 
 ---
 
 ## version verification
 
-After the update completes:
+after the update completes:
 
-1. The service starts and reads the installed version from `agent/VERSION`.
-2. The startup check reads `%ProgramData%\owlette\logs\update_in_progress.json`.
-3. The agent compares the installed version with `target_version`.
-4. The command is marked completed or failed in Firestore.
-5. The next heartbeat reports `agent_version`.
+1. the service starts and reads the installed version from `agent/VERSION` under the install root.
+2. the startup check reads `logs/update_in_progress.json`.
+3. the agent compares the installed version with `target_version`: the same is success, the old version is a failure, and anything else is reported as an unexpected version.
+4. the command is marked completed or failed in Firestore.
+5. the next heartbeat reports `agent_version`.
 
 ---
 
@@ -99,26 +123,40 @@ After the update completes:
 
 ### update stuck
 
-If the machine goes offline and does not come back:
+if the machine goes offline and does not come back, check it in person if no other access is available, then:
 
-1. Check the machine physically if remote access is unavailable.
-2. Open the desktop app from the start menu (**Owlette**). The service is what relaunches it, so it will not be in the tray while the service is down. The app does not start the service by itself while the update is still in flight: its automatic start stands down for 10 minutes after `update_in_progress.json` was written, so it cannot race the installer's own stop and restart. That automatic start never elevates in any case, and it says nothing when it is refused — the status footer simply keeps offering the button. Starting the service yourself is the consent path: **start service** in the status footer, or **restart service** on the tray menu of a stopped service. Both may raise a UAC prompt, and neither waits for the marker to expire.
-3. Read the logs. The app menu (☰) → **logs** opens `%ProgramData%\owlette\logs`, and the start menu's **View Logs** shortcut opens the same folder without the app:
+**Windows**
+
+1. open the desktop app from the Start menu (**Owlette**). the service is what relaunches it, so it will not be in the tray while the service is down. the app does not start the service by itself while the update is still in flight: its automatic start stands down for 10 minutes after `update_in_progress.json` was written, so it cannot race the installer's own stop and restart. that automatic start never elevates in any case, and it says nothing when it is refused — the status footer simply keeps offering the button. starting the service yourself is the consent path: **start service** in the status footer, or **restart service** on the tray menu of a stopped service. both may raise a UAC prompt, and neither waits for the marker to expire.
+2. read the logs. the app menu (☰) → **logs** opens `C:\ProgramData\Owlette\logs`, and the Start menu's **View Logs** shortcut opens the same folder without the app:
    - `service.log` — the agent's own account of the update.
    - `installer_update.log` — what the installer did.
-   - `update_in_progress.json` — old version, target version, command ID, and deployment ID. The service deletes this file on its next start, so finding it still present means the service has not come back.
-4. Check for leftover `OwletteUpdate_*` or `OwletteRecovery_*` scheduled tasks. `OwletteRecovery_*` should already have tried to start the service about five minutes after the update began.
-5. Start the service manually with `net start OwletteService` from an elevated prompt if the desktop app is unavailable.
+   - `update_in_progress.json` — old version, target version, command ID, and deployment ID. the service deletes this file on its next start, so finding it still present means the service has not come back.
+3. check for leftover `OwletteUpdate_*` or `OwletteRecovery_*` scheduled tasks. `OwletteRecovery_*` should already have tried to start the service about five minutes after the update began.
+4. start the service with `net start OwletteService` from an elevated prompt if the desktop app is unavailable.
+
+**macOS**
+
+1. `launchctl print system/app.owlette.update` shows whether the install job is still loaded, and `logs/update_installer.log` what `installer` printed.
+2. `launchctl print system/app.owlette.agent` shows whether the service came back. if the package stopped it and never loaded it again, load it: `sudo launchctl bootstrap system /Library/LaunchDaemons/app.owlette.agent.plist` — or install the package again by hand.
+3. `service.log` and `update_in_progress.json` tell the same story as on Windows.
+
+**Linux**
+
+1. `journalctl -u owlette-update` shows what apt-get did. the update runs as a transient unit that is removed once it exits, so `systemctl status owlette-update` answers only while the install is still running.
+2. `systemctl status owlette-agent` shows whether the service came back; `sudo systemctl start owlette-agent` starts it.
+3. if apt reports an interrupted package operation, `sudo dpkg --configure -a` finishes it.
+4. `service.log` and `update_in_progress.json` tell the same story as on Windows.
 
 ### version did not change
 
-If the agent reports the same version after update:
+if the agent reports the same version after the update:
 
-1. Review `%ProgramData%\owlette\logs\installer_update.log` for installer failures.
-2. Confirm the installer URL was reachable from the target machine.
-3. Confirm the `checksum_sha256` value matches the exact installer binary.
-4. Confirm `target_version` matches the version embedded in the installer.
+1. review the installer's log — `installer_update.log` on Windows, `update_installer.log` on macOS, `journalctl -u owlette-update` on Linux — and `service.log` for a refusal such as `update_deferred` or `update_unsatisfiable`.
+2. confirm the installer URL was reachable from the target machine.
+3. confirm the `checksum_sha256` value matches the exact installer file.
+4. confirm `target_version` matches the version embedded in the installer.
 
 ### rollback
 
-To roll back to a previous version, trigger another `update_owlette` command that points to the older installer and includes that installer's SHA-256 checksum.
+to roll back to a previous version, send another `update_owlette` command that points to the older installer for the machine's platform and includes that installer's SHA-256 checksum. on Linux the agent installs with `--allow-downgrades`, so an older package goes on like a newer one.

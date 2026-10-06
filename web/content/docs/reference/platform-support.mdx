@@ -1,0 +1,167 @@
+---
+title: "platform support"
+description: "what owlette does on Windows, macOS and Linux: one table of every capability, then what each difference means for a machine on that platform."
+keywords: ["mac support", "macos support", "linux support", "ubuntu", "apple silicon", "what works on mac", "what works on linux", "feature matrix", "compatibility", "supported platforms", "wayland", "x11", "unsupported_on_platform"]
+---
+
+the owlette agent runs on three platforms. most of owlette works the same on all of them; this page is the list of what does not.
+
+| platform | what is supported | installer |
+|---|---|---|
+| **Windows** | 64-bit Windows on x64. Windows on Arm is refused by the installer | `Owlette-Installer-v<version>.exe` |
+| **macOS** | macOS 15 or later on Apple silicon. Intel Macs are refused by the package | `Owlette-Installer-v<version>.pkg` |
+| **Linux** | Ubuntu 24.04 on x64 | `Owlette-Installer-v<version>.deb` |
+
+how to install each one is in [installation](/docs/agent/installation). the dashboard knows which platform a machine runs from its `osFamily`, and shows the OS under the machine's name (see [machine information](/docs/dashboard/machine-monitoring#machine-information)). an agent that reports no platform is treated as Windows.
+
+---
+
+## at a glance
+
+| capability | Windows | macOS | Linux |
+|---|---|---|---|
+| **pairing** with a phrase | yes | yes | yes |
+| **silent install** with `/ADD=` | yes | no — use the [pairing preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux) | no — use the preseed |
+| **service** | Windows service | launchd daemon `app.owlette.agent` | systemd unit `owlette-agent.service` |
+| **owlette app** | tray icon | menu bar | tray icon |
+| **self-update** from the dashboard | yes (`.exe`) | yes (`.pkg`) | yes (`.deb`) |
+| **launch and supervise processes** | yes | yes, as the signed-in user | yes, as the user signed in at a graphical session |
+| **crash detection and relaunch** | yes | yes | yes |
+| **hang detection** (`STALLED`) | yes | no | no |
+| **task priority, window visibility** | yes | no | no |
+| **when relaunch attempts run out** | restart prompt on the machine, then a reboot | [restart pending](/docs/dashboard/machine-monitoring#restart-pending) on the dashboard, no automatic reboot | same as macOS |
+| **CPU, memory, disk, network metrics** | yes | yes | yes |
+| **disk read/write throughput** | yes | no | no |
+| **GPU metrics** | NVIDIA | the Apple GPU: load and memory | NVIDIA |
+| **CPU temperature** | yes | no | no |
+| **GPU temperature** | yes | no | NVIDIA |
+| **network latency and packet loss** | yes | yes | yes |
+| **screenshots, crash screenshots, live view** | yes | yes, with Screen Recording granted to the owlette app | no — the menu shows them, but every capture fails |
+| **[swoop](/docs/dashboard/swoop)** (host a session) | yes, with an NVIDIA GPU | yes, see [swoop on macOS](/docs/dashboard/swoop#on-macos) | no |
+| **keep screens awake** | yes | yes | yes |
+| **restart, shutdown, cancel** | yes | yes | yes |
+| **[restart schedules](/docs/dashboard/restart-schedules)** | yes | yes | yes |
+| **[displays](/docs/dashboard/displays)**: layout, drift, apply | yes | no | no |
+| **[roost](/docs/dashboard/roost)** project sync | yes | yes | yes |
+| **[software deployments](/docs/dashboard/deployments)** | yes | no | no |
+| **installed software list** | yes | yes (application bundles) | yes (`dpkg` packages) |
+| **uninstall** | yes | yes (removes the application bundle) | no |
+| **[hoot](/docs/dashboard/hoot) tools** | all 52 | 13 refused, plus `run_python` | same as macOS |
+| **on-screen notifications** | yes | through the owlette app | through the owlette app |
+
+the rest of this page explains each difference.
+
+---
+
+## installing and pairing
+
+every platform pairs with a three-word phrase: run the installer, then authorize the phrase the owlette app shows, from the dashboard or from `owlette.app/add`. the Windows installer also takes `/ADD=<phrase>` for a silent install. macOS and Linux have no silent flag; instead, a phrase written to `config/pairing.json` before installing pairs the machine in the background — see [the pairing preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux).
+
+on macOS and Linux the agent runs as root and the owlette app runs as the person signed in. the app reaches the agent through a data directory owned by a dedicated group, `_owlette` on macOS and `owlette` on Linux, and the installer adds the account that installed it: the user at the screen on macOS, the `sudo` user on Linux. on Linux the app starts only for accounts in that group, so a kiosk account other than the one that installed needs adding by hand:
+
+```bash
+# linux
+sudo usermod -aG owlette <user>
+
+# macos
+sudo dseditgroup -o edit -a <user> -t user _owlette
+```
+
+the account has to sign out and in again for the membership to apply.
+
+**self-update.** the dashboard's update sends each machine the installer for its own platform and architecture, and skips a machine whose platform the version has no file for, naming it in the result. Windows runs the `.exe`; macOS runs the `.pkg` through `installer`; Linux checks the `.deb` with a dry run first, and while another package install holds the lock the update is refused with `update_deferred` and the old version keeps running — send it again later. see [self-update](/docs/agent/self-update).
+
+---
+
+## processes
+
+process supervision works on every platform: launch, crash detection, relaunch, schedules, restart and kill. the differences are in how a process is started:
+
+- **who it runs as.** on macOS and Linux the agent launches every managed process as the user signed in at the machine's screen, never as root. with nobody signed in at a graphical session — the login screen, or a server with no desktop — nothing is launched, windowed or not.
+- **the path.** the dashboard asks for an **executable path** on Windows, an **app path** on macOS (an `.app` bundle, which is opened the way Finder opens it), and a **program path** on Linux.
+- **priority and visibility** are Windows settings. the process dialog hides them for a Mac or Linux machine, and the agent ignores them there.
+- **hang detection** is Windows only. Windows checks whether a process's window still responds and marks it `STALLED`, then restarts it; on macOS and Linux a process that hangs without exiting is not detected.
+- **when relaunch attempts run out**, a Windows machine opens a restart prompt on its own screen that reboots the machine after two minutes. macOS and Linux have no prompt and do not reboot on their own: the machine shows **restart pending** on the dashboard until someone approves or dismisses it.
+
+see [process management](/docs/dashboard/process-management#on-macos-and-linux).
+
+---
+
+## metrics
+
+CPU, memory, disk usage, network throughput, latency and packet loss are reported everywhere. what is missing off Windows:
+
+- **disk read/write throughput** is Windows only; the rows show usage alone.
+- **GPU**: Windows and Linux report NVIDIA GPUs through NVML. a Mac reports its Apple GPU's load and memory.
+- **temperatures**: CPU temperature is Windows only. GPU temperature is reported on Windows, and for NVIDIA GPUs on Linux; a Mac reports none.
+
+a threshold [alert rule](/docs/dashboard/admin/email-alerts#threshold-alert-rules) on a metric a machine does not report never fires for that machine.
+
+---
+
+## screens
+
+**screenshots and live view.** Windows captures in the signed-in user's session. on a Mac the owlette app takes the screenshot, so it has to be running and needs **Screen Recording** granted in **System Settings → Privacy & Security**; without the grant, a capture is refused with `screen_recording_not_granted` rather than returning a picture missing other apps' windows. Linux cannot capture yet: the machine's menu still shows **live view** and **screenshot**, but both fail for now — the agent refuses a Wayland session, Ubuntu's default, and on an X11 session the owlette app does not capture either. crash screenshots, live view, hoot's `capture_screenshot` and a talon's visual check all depend on this.
+
+**swoop.** a Windows machine with an NVIDIA GPU can host swoop as soon as the site turns it on: the streamer encodes with NVENC and ships no other encoder, so a machine without one still offers swoop, but no session starts there. a Mac hosts it through the owlette app, which carries the streamer: the app must be running with Screen Recording granted, and control needs Accessibility too — [swoop on macOS](/docs/dashboard/swoop#on-macos) lists the grants. Linux cannot host swoop: the package carries no streamer, so the machine reports `capabilities.swoop: 0`, and its menu offers live view and screenshot instead — both of which fail on Linux for now.
+
+**keep screens awake** works on all three. the agent's service holds off sleep — system sleep through a power request on Windows, display and system idle sleep through power assertions on macOS, sleep and idle through a systemd inhibitor on Linux — and the owlette app holds the signed-in session's half: the display and the screensaver on Windows, a display assertion on macOS, the GNOME session's idle inhibit on Linux. the session half needs the app running.
+
+**displays.** the display panel's layout, drift detection, auto-restore and remote apply are Windows only. a Mac or Linux machine reports no layout, and an apply sent to one fails.
+
+---
+
+## restarts
+
+restart, shutdown and cancel work on all three, from the dashboard, from hoot and from [restart schedules](/docs/dashboard/restart-schedules). the countdown is one minute on every platform. Windows cancels with `shutdown /a`, Linux with `shutdown -c`, and macOS by ending the scheduled `shutdown`.
+
+**pending reboot** detection, which raises a site alert and answers hoot's `check_pending_reboot`, reads Windows Update and servicing state on Windows, a prepared OS update or staged security response on macOS, and `/run/reboot-required` on Linux.
+
+an **unexpected reboot** — one the agent did not see coming — is reported on Windows only, where the event log can tell an orderly restart from a crash. on macOS and Linux a boot with no shutdown signal before it is not reported.
+
+---
+
+## software
+
+**deployments** are Windows only. a deployment can be created for a Mac or Linux machine, but its agent cannot run the installer: it first closes the processes you chose, then downloads and checks the file, and fails the install with *no interactive user session available for installation*.
+
+**the installed software list** comes from the registry on Windows, from the application bundles in `/Applications` and each user's Applications folder on macOS (which carry no publisher), and from `dpkg` on Linux.
+
+**uninstall** runs the program's uninstaller on Windows. on macOS it quits the application and removes its bundle, and only for a bundle the software list currently shows. on Linux an uninstall fails.
+
+---
+
+## roost
+
+[roost](/docs/dashboard/roost) syncs on every platform. what differs is where files may land: without an `allowed_extract_roots` list in the agent's config, a machine accepts extract paths under its platform's default root.
+
+| platform | default root |
+|---|---|
+| Windows | the signed-in user's `Documents` folder |
+| macOS | `/Users/Shared/Owlette` |
+| Linux | `/var/lib/owlette/projects` |
+
+a roost's default extract path, `~/Documents/Owlette/`, is mapped to the platform's root on a Mac or Linux machine. on macOS and Linux, synced files are owned by the signed-in user, and a file is made executable when it is a script or a program.
+
+---
+
+## hoot
+
+the model is offered every tool on every machine, and the agent refuses what its platform cannot do with `unsupported_on_platform`. on macOS and Linux that is 13 tools:
+
+`configure_gpu_tdr`, `manage_windows_update`, `suppress_setup_screens`, `manage_notifications`, `configure_power_plan`, `manage_scheduled_task`, `network_reset`, `registry_operation`, `clean_disk_space`, `get_event_logs_filtered`, `manage_windows_feature`, `run_powershell`, `execute_script`
+
+`run_python`, and `run_command` with `user_session: true`, are refused too. the read tools, process control, files, `run_command` with its own allow-list, service control through `systemctl` and `launchctl`, and the system log through `journalctl` and `log show` all work. with nobody signed in, hoot still works, because its tools run in the service; only the tools the owlette app carries out — `show_notification`, and `capture_screenshot` on a Mac — need someone's session. the [hoot tools reference](/docs/reference/hoot-tools#platforms) has the per-tool detail.
+
+---
+
+## where things live
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| data directory | `C:\ProgramData\Owlette` | `/Library/Application Support/Owlette` | `/var/lib/owlette` |
+| agent log | `logs\service.log` | `logs/service.log` | `logs/service.log`, plus the unit's output in the journal |
+| owlette app | `C:\ProgramData\Owlette\app\owlette-desktop.exe` | `/Applications/owlette.app` | `/usr/bin/owlette-desktop` |
+| token key | the machine's `MachineGuid` | the Mac's hardware UUID | `/etc/machine-id` |
+
+the stored tokens, `.tokens.enc` in the data directory, are encrypted with a key derived from the machine itself, so the file is useless on another machine. see [authentication](/docs/reference/authentication).

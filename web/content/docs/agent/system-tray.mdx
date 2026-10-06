@@ -1,88 +1,136 @@
 ---
 title: "system tray"
-description: "The owlette system tray icon provides at-a-glance status and quick access to common actions. It is part of the owlette desktop app, which runs as a separate process from the service."
+description: "the owlette icon in the Windows notification area, the macOS menu bar or the Linux top bar: the agent's health at a glance, a menu of common actions, and notifications. it is part of the owlette desktop app, which runs as a separate process from the service."
+keywords: ["tray icon", "menu bar", "menubar", "notification area", "top bar", "appindicator", "toast", "notification", "start on login", "login item", "autostart", "dock icon", "exit owlette"]
 ---
 
 ---
 
-## tray icon
+## where the icon lives
 
-The tray icon appears in the Windows notification area (system tray). It's a HAL 9000-inspired owl eye — a warm radial glow whose color reflects the agent's health at a glance:
+| platform | where | clicking it |
+|----------|-------|-------------|
+| Windows | the notification area (system tray) | a left click opens the owlette window; a right click opens the menu |
+| macOS | the menu bar. on first run it sits at the menu bar's right end, clear of the notch | a click opens the menu; **open owlette** in it opens the window |
+| Linux | the top bar, through Ubuntu's AppIndicator support | a click opens the menu; **open owlette** in it opens the window |
+
+on macOS owlette is a menu-bar app: it shows a Dock icon only while its window is open, and the Dock icon goes when you close the window.
+
+---
+
+## the icon
+
+the icon is a HAL 9000-inspired owl eye whose state reflects the agent's health at a glance:
 
 ![the owlette icon in the Windows system tray](/tray-icon.png)
 
-| state | how it looks | what it means |
-|-------|--------------|---------------|
-| **connected** | the eye lit warm amber | service running and connected to the cloud — everything healthy |
-| **connection issues** | the same eye dimmed almost to black | service running but not reaching the cloud (offline, or still starting up) |
-| **error** | red, alternating with the amber eye about every 0.8 seconds | service stopped or crashed, a health probe reports a failure while the cloud is unreachable, the service is running but has stopped publishing its status (*not responding*), or no cloud/site is configured so nothing is being monitored (*disabled*) |
+| state | Windows and Linux | macOS | what it means |
+|-------|-------------------|-------|---------------|
+| **connected** | the eye lit warm amber | the owl's eye, as a template glyph macOS tints to match the menu bar | service running and connected to the cloud — everything healthy |
+| **connection issues** | the same eye dimmed almost to black | a closed eye, tinted the same way | service running but not reaching the cloud (offline, or still starting up) |
+| **error** | red, alternating with the amber eye about every 0.8 seconds | a red eye, the one state that keeps its colour, alternating with the open eye | service stopped or crashed, a health probe reports a failure while the cloud is unreachable, the service is running but has stopped publishing its status (*not responding*), or no cloud or site is configured so nothing is being monitored (*disabled*) |
 
-A live cloud connection outranks a failed health probe: a `network_error` recorded at boot — before Windows finished bringing the network up — does not hold the icon red once the agent connects.
+a live cloud connection outranks a failed health probe: a `network_error` recorded at boot — before the OS finished bringing the network up — does not hold the icon red once the agent connects.
 
-The warm center and dark rim keep the icon legible on both light and dark taskbars.
+on Windows and Linux the warm center and dark rim keep the icon legible on light and dark bars alike; on macOS the template glyph follows the menu bar's own appearance.
 
-Left-clicking the icon opens the owlette window. The menu below is the right-click surface.
+hovering the icon on Windows shows a tooltip with the same lines as the top of the menu below.
 
 ---
 
-## right-click menu
+## the menu
 
-Right-clicking the tray icon shows:
+![the owlette tray menu, showing the version, hostname, service and cloud status above the actions](/docs-screens/agent-right-click.png)
 
-![the owlette tray right-click menu, showing the version, hostname, service and cloud status above the actions](/docs-screens/agent-right-click.png)
-
-The four rows at the top are read-only status; the four below the separator are actions.
+the rows above the separator are read-only status; the four below it are actions.
 
 | menu item | description |
 |-----------|-------------|
-| **owlette v&lt;version&gt;** | Version of the *agent* installed on this machine (read-only) |
-| **hostname: &lt;host&gt;** | This machine's `COMPUTERNAME` (read-only) |
-| **service: &lt;state&gt;** | Whether `OwletteService` is running (read-only) |
-| **status: &lt;cloud status&gt;** | Whether the service is reaching owlette (read-only). A fifth row appears under it when a health probe has something to report. |
-| **open owlette** | Open the desktop app's window |
-| **restart service** | Restart `OwletteService`. A running service is asked to restart itself through `tmp\restart.flag`, so no elevation prompt appears; only starting a *stopped* service can raise one. |
-| **start on login** | Toggle whether the owlette desktop app starts with this user's session. It writes the `Owlette` shortcut in the user's Startup folder, so it needs no elevation — and switching it off leaves `OwletteService` running: the machine stays supervised, you just stop seeing the tray icon at login. |
-| **exit** | Stop `OwletteService` (triggers a UAC prompt), then quit the app — which closes the window and removes the tray icon. Declining the prompt leaves the service running, and it re-launches the tray within 30 seconds. |
+| **owlette v&lt;version&gt;** | version of the *agent* installed on this machine |
+| **hostname: &lt;host&gt;** | the machine's name as the dashboard shows it: `COMPUTERNAME` on Windows, the kernel's hostname on macOS and Linux, without a Mac's `.local` suffix |
+| **service: &lt;state&gt;** | whether the service is `running`, `stopped`, or in `error` |
+| **status: &lt;cloud status&gt;** | whether the service is reaching owlette — `connected to <site>`, `disconnected from <site>`, `disabled`, `starting`, `not responding`, or a health probe's error code. a further row appears under it when a health probe has something to report |
+| **swoop: &lt;who&gt;** | only while a [swoop](/docs/dashboard/swoop) session is capturing this screen: `swoop: 2 viewers watching, 1 in control`, or `swoop: 1 viewer watching` with nobody in control. it disappears when the capture stops, and the tooltip carries the same line |
+| **open owlette** | open the desktop app's window |
+| **restart service** | restart the service without an administrator prompt — see [restart service](#restart-service) |
+| **start on login** | whether the desktop app starts with this account's session — see [start on login](#start-on-login) |
+| **exit** | quit the app, and on Windows and Linux stop the service first — see [exit](#exit) |
+
+### restart service
+
+- **Windows:** a running service is asked to restart itself through `tmp\restart.flag`, so no elevation prompt appears; only starting a *stopped* service can raise one.
+- **macOS:** the app asks the service to restart itself, at most once every five minutes. a stopped service cannot hear the request, and launchd starts it again on its own.
+- **Linux:** the app runs `systemctl restart owlette-agent` under the polkit rule the package installs, which also starts a stopped service, with no prompt.
+
+### start on login
+
+on every platform the toggle needs no administrator rights and never touches the service: switching it off leaves the machine supervised, you just stop seeing the app at login.
+
+| platform | what it switches |
+|----------|------------------|
+| Windows | the `Owlette` shortcut in this user's Startup folder, which the installer writes for the installing user |
+| macOS | the installer's LaunchAgent starts the app at every login, so off is this account's own override, `launchctl disable gui/<uid>/app.owlette.desktop`, and on is `launchctl enable`. it takes effect at the next login and leaves the running app alone |
+| Linux | the package enables the app's user unit for every login, so off masks it for this account (`systemctl --user mask owlette-desktop.service`) and on unmasks it. it leaves the running app alone |
+
+on a Mac or Linux machine without the installer's login item, the toggle writes a login item of the account's own instead: `~/Library/LaunchAgents/app.owlette.desktop.plist` or `~/.config/autostart/owlette-desktop.desktop`.
+
+the tick is re-read every 30 seconds, so a change made outside owlette shows within half a minute. the app menu's **start on login** is the same setting.
+
+### exit
+
+| platform | what exit does |
+|----------|----------------|
+| Windows | stops `OwletteService`, which raises a UAC prompt, then quits the app — closing the window and removing the icon. declining the prompt leaves the service running, and it relaunches the tray within 30 seconds |
+| macOS | quits the app only. the service belongs to launchd and keeps running, and launchd leaves the app closed until the next login. open **owlette** from Applications to bring it back sooner |
+| Linux | stops `owlette-agent` — no prompt, under the polkit rule — then quits the app. nothing is supervised until someone starts the service again or the machine reboots, and the app stays closed until the next login |
 
 ---
 
 ## notifications
 
-The app raises a Windows toast when the machine's state changes in a way an operator standing at it would want to know about. Three rules keep them rare:
+the app raises a notification when the machine's state changes in a way someone standing at it would want to know about — a toast on Windows, Notification Center on macOS, a desktop notification on Linux. three rules keep them rare:
 
-- Only the **error** tier notifies. The dim *connection issues* state — which every routine service restart passes through — shows in the icon and the tooltip, but never raises a toast.
-- An error must **hold for 5 seconds** before it is worth a toast, and each episode raises **one** — a flapping service does not produce a stream of them.
-- Nothing is raised in the **first 10 seconds** after launch, so a service that is still starting is not reported as an incident.
+- only the **error** tier notifies. the dim *connection issues* state — which every routine service restart passes through — shows in the icon and the tooltip, but never raises a notification.
+- an error must **hold for 5 seconds** before it is worth a notification, and each episode raises **one** — a flapping service does not produce a stream of them.
+- nothing is raised in the **first 10 seconds** after launch, so a service that is still starting is not reported as an incident.
 
-When the error clears — all the way back to connected, not merely back to *connection issues* — a single **owlette — back online** toast confirms it.
+a self-update stops the service for as long as the installer runs — about a minute for the Linux package — so while the update marker is fresh, a stopped service raises nothing; the icon still shows it.
 
-| state | toast | what to do |
-|-------|-------|------------|
-| service stopped, not responding, or disabled | **owlette — service stopped** | Use `restart service` from the menu; if the machine is unpaired, pair it again. |
-| `config_error` | **owlette — config error** | `config.json` is missing or corrupt — reinstall. |
-| `auth_error` | **owlette — not registered** | No token stored — pair the machine again. |
-| `network_error` | **owlette — network unreachable** | Check the machine's internet connection. |
-| `connection_failure` / `fatal_error` | **owlette — connection failed** / **owlette — fatal error** | Check `service.log`. |
+when the error clears — all the way back to connected, not merely back to *connection issues* — a single **owlette — back online** notification confirms it.
 
-`restart service` confirms itself with a toast either way — **restarting** or **starting**, and the reason when it fails. `start on login` is silent unless the shortcut cannot be written.
+| state | notification | what to do |
+|-------|--------------|------------|
+| service stopped, not responding, or disabled | **owlette — service stopped** | use `restart service` from the menu; if the machine is unpaired, pair it again. on macOS the notification says the system starts the service again on its own, and to reinstall if it stays down |
+| `config_error` | **owlette — config error** | `config.json` is missing or corrupt — reinstall |
+| `auth_error` | **owlette — not registered** | no token stored — pair the machine again |
+| `network_error` | **owlette — network unreachable** | check the machine's internet connection |
+| `connection_failure` / `fatal_error` | **owlette — connection failed** / **owlette — fatal error** | check `service.log` |
 
-<Callout type="warning" title={"Toasts need the Start menu shortcut"}>
+`restart service` confirms itself either way — **owlette — restarting**, on Windows **owlette — starting** for a stopped service, and **restart failed** with the reason when it fails. `start on login` is silent unless the change cannot be made.
 
-Windows silently discards every toast from an app whose `AppUserModelID` is not registered by a Start menu shortcut — the app is told the notification succeeded and nothing appears. The installer ships the `Owlette` Start menu entry that carries that id. If toasts stop arriving, check that the entry still exists before looking anywhere else.
+### swoop sessions
+
+when a swoop session starts capturing this screen, the app raises **owlette — swoop session started** (*someone is viewing this screen.*) once per session — but only when the site's swoop `indicator` setting is `tray`. under `banner`, the default, the streamer shows its own badge on the screen instead, and under `none` the machine shows neither. the menu's swoop row appears whatever the setting. a session already running when the app starts is not announced. the setting is described in [swoop](/docs/dashboard/swoop#turning-it-on).
+
+<Callout type="warning" title={"on Windows, toasts need the Start menu shortcut"}>
+
+Windows silently discards every toast from an app whose `AppUserModelID` is not registered by a Start menu shortcut — the app is told the notification succeeded and nothing appears. the installer ships the `Owlette` Start menu entry that carries that ID. if toasts stop arriving, check that the entry still exists before looking anywhere else.
 
 </Callout>
 
 ---
 
-## ipc communication
+## the status file
 
-The tray icon communicates with the service through an **IPC status file**:
+the tray reads the service's state from a status file in the data root:
 
-```
-C:\ProgramData\Owlette\tmp\service_status.json
-```
+| platform | path |
+|----------|------|
+| Windows | `C:\ProgramData\Owlette\tmp\service_status.json` |
+| macOS | `/Library/Application Support/Owlette/tmp/service_status.json` |
+| Linux | `/var/lib/owlette/tmp/service_status.json` |
 
-The service attempts status updates from its main loop, but writes are throttled. It updates the file when service, Firebase, or health state changes, when the service is shutting down, or when unchanged content has reached the 30-second refresh floor. Unchanged content inside that floor is skipped.
+the service attempts status updates from its main loop, but writes are throttled. it updates the file when service, Firebase, health, swoop or keep-awake state changes, when the service is shutting down, or when unchanged content has reached the 30-second refresh floor. unchanged content inside that floor is skipped. a file older than 120 seconds means nothing is publishing, and the tray reads the service as *not responding*. whether the service is running at all comes from the OS — the SCM, launchd or systemd — and outranks the file.
 
 ### status file contents
 
@@ -91,7 +139,7 @@ The service attempts status updates from its main loop, but writes are throttled
   "service": {
     "running": true,
     "last_update": 1777053600,
-    "version": "3.2.3"
+    "version": "4.1.6"
   },
   "firebase": {
     "enabled": true,
@@ -112,21 +160,36 @@ The service attempts status updates from its main loop, but writes are throttled
       "token_store_accessible": true,
       "network_reachable": true
     }
+  },
+  "swoop": {
+    "active": true,
+    "viewers": 2,
+    "controllers": 1,
+    "since": 1777053500,
+    "indicator": "tray"
+  },
+  "keep_awake": {
+    "wanted": true
   }
 }
 ```
 
-`firebase.site_name` is the site's display name, published once the service can resolve it. It is what the tooltip and the `status:` row name in `connected to <site>` — when it is empty, the tray falls back to `site_id`.
+`firebase.site_name` is the site's display name, published once the service can resolve it. it is what the tooltip and the `status:` row name in `connected to <site>` — when it is empty, the tray falls back to `site_id`.
 
 `firebase.schedule_timezone` is the site's schedule timezone when the site has opted in to site time, and an empty string when process windows follow each machine's own clock.
 
+`swoop` drives the menu's swoop row and its notification: `active` is whether a session is capturing, `viewers` and `controllers` the counts the row shows, `since` when the capture started (one notification per value), and `indicator` the site's setting.
+
+`keep_awake.wanted` is the site's [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) switch, which the app follows to hold the session's screen and lock.
+
 ---
 
-## launching the tray
+## how the app starts
 
-The service launches the tray icon automatically during startup using the logged-in user's session:
+| platform | started by | after a crash |
+|----------|-----------|---------------|
+| Windows | the service, which finds the signed-in session with `WTSQueryUserToken` and launches `C:\ProgramData\Owlette\app\owlette-desktop.exe --tray` under that user's account | the service starts it again on its next status check |
+| macOS | launchd, at every graphical login, through the LaunchAgent `app.owlette.desktop` | launchd starts it again |
+| Linux | systemd, at every graphical login of an account in the `owlette` group, through the user unit `owlette-desktop.service` | systemd starts it again |
 
-1. Service detects the active user session via `WTSQueryUserToken`
-2. Launches `C:\ProgramData\Owlette\app\owlette-desktop.exe --tray` under the user's account (so the icon appears in their tray)
-
-The desktop app is independent — if it crashes, the service continues running. The service re-launches it on its next status check if it's not running. It is single-instance: launching it again while the tray is present forwards the arguments to the running app rather than starting a second one.
+`--tray` starts the app with no window, as an icon. the app is independent of the service — if it crashes, the service keeps running. it is single-instance: launching it again while it is running forwards the arguments to the running app rather than starting a second one, which is how opening owlette from the Start menu, Applications or the app grid reaches an app that is already in the tray.

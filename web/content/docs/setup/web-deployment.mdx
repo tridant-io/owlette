@@ -1,42 +1,44 @@
 ---
 title: "web deployment"
-description: "The owlette dashboard is a Next.js application in web/. This guide covers Railway, Vercel, and generic Node.js hosting."
+description: "the owlette dashboard and API are one Next.js application in web/. this guide covers Railway, Vercel and generic Node.js hosting, the failover load balancer in front of them, the /api/health probe, the swoop signalling worker, and the scheduled endpoints every deployment needs."
 ---
 
 ---
 
 ## runtime baseline
 
-Use Node.js 22.x and npm 10 for the web app build. The `web/package.json` `engines` pin is the binding constraint for `npm run build`.
+use Node.js 22.x and npm 10. every pin in the repository agrees:
 
 | source | baseline |
 |--------|----------|
 | `web/package.json` `engines` | `node 22.x` |
-| Repository root `package.json` | `node >=20.9.0`, `npm >=10.0.0` |
-| Repository `.nvmrc` | `20.18.0` |
-| `web/nixpacks.toml` | `nodejs_20`, `npm-10_x` |
-| Firebase Functions | Node 22 |
+| repository root `package.json` | `node >=22`, `npm >=10.0.0` |
+| repository `.nvmrc` | `22.20.0` |
+| `web/nixpacks.toml` | `nodejs_22`, `npm-10_x` |
+| `functions/package.json` | Node 22 |
 
-For a fresh host, select Node 22.x. The root `package.json`, `.nvmrc`, `web/nixpacks.toml`, and Firebase Functions all pin Node 22 — Node 20 reached end-of-security-support on 2026-04-30, and `firebase-admin` 14 declares `engines: node >=22`, so it is a hard floor rather than a preference. Node 20 also reproduces a `next build` failure (`MODULE_NOT_FOUND` from fumadocs-mdx).
+Node 22 is a floor, not a preference: `firebase-admin` 14 declares `engines: node >=22`, and Node 20 left security support on 2026-04-30.
 
 ---
 
-## railway deployment (recommended)
+## Railway deployment (recommended)
 
-### step 1: create railway project
+owlette runs on Railway: one service per environment, the dev service deploying the `dev` branch and the production service the `main` branch.
 
-1. Go to [railway.app](https://railway.app) and sign up with GitHub.
-2. Click **New Project** -> **Deploy from GitHub repo**.
-3. Select the owlette repository.
+### step 1: create the Railway project
 
-### step 2: configure service
+1. go to [railway.app](https://railway.app) and sign in with GitHub.
+2. click **new project** → **deploy from GitHub repo**.
+3. select your owlette repository.
 
-1. Click your service -> **Settings**.
-2. Set **Root Directory** to `web`.
-3. Set **Branch** to `main` for production or `dev` for development.
-4. Enable **Auto-deploy on push**.
+### step 2: configure the service
 
-The repository includes the deployment configuration Railway should use:
+1. open the service → **settings**.
+2. set **root directory** to `web`.
+3. connect the branch: `main` for production, `dev` for development.
+4. leave automatic deploys on, so every push to that branch deploys.
+
+the repository carries the configuration Railway uses:
 
 ```toml
 # web/railway.toml
@@ -53,177 +55,263 @@ restartPolicyMaxRetries = 10
 NODE_ENV = "production"
 ```
 
-Install is handled by Nixpacks, not by `railway.toml`:
+Nixpacks handles the install, not `railway.toml`:
 
 ```toml
 # web/nixpacks.toml
 [phases.setup]
-nixPkgs = ["nodejs_20", "npm-10_x"]
+nixPkgs = ["nodejs_22", "npm-10_x"]
 
 [phases.install]
 cmds = ["npm ci --legacy-peer-deps"]
 ```
 
+`npm run build` runs `fumadocs-mdx` and then `next build`, so the docs under `web/content/docs` ship with every web deploy.
+
 ### step 3: add environment variables
 
-In Railway -> your service -> **Variables**, add the production values from [Environment Variables](/docs/setup/environment-variables). A working web deployment needs these runtime groups:
+in Railway → the service → **variables**, add the values from [environment variables](/docs/setup/environment-variables). the canonical list of keys, with which ones each deployment carries, is `scripts/env-manifest.json`; it holds names only, never values. a working production deployment needs these groups:
 
-- Firebase client: `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`, `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`
-- Firebase Admin: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
-- Session and encryption: `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, `LLM_ENCRYPTION_KEY`
-- R2 for roost uploads and version bodies: `R2_S3_ENDPOINT`, `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`
-- Rate limiting: `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`
-- Public URL: `NEXT_PUBLIC_BASE_URL`
-- Cron: `CRON_SECRET`
-- Email alerts: `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `ADMIN_EMAIL_PROD`, `ADMIN_EMAIL_DEV`
-- Public status page: `INSTATUS_API_KEY`, `INSTATUS_PAGE_ID`, and the `INSTATUS_COMPONENT_*_ID` values when `/api/cron/status-ping` should publish to Instatus
-- Autonomous hoot: `CORTEX_INTERNAL_SECRET` when autonomous alert investigation is enabled
+- **Firebase client**: `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`, `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`
+- **Firebase Admin**: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
+- **session and encryption**: `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, `LLM_ENCRYPTION_KEY`
+- **public URL**: `NEXT_PUBLIC_BASE_URL`, the HTTPS origin users reach. pairing and email links are built from it; unset, pairing links fall back to the server's own listen address and email links to `owlette.app`
+- **Turnstile**: `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET`, `TURNSTILE_HOSTNAMES`. without the secret, production refuses every password sign-up and password reset with 403
+- **R2** for roost: `R2_S3_ENDPOINT`, `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`, and `ROOST_ENV` (`prod` or `dev`)
+- **rate limiting**: `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`. without them every endpoint falls back to a loose per-process limiter, and the server logs a warning at boot
+- **cron**: `CRON_SECRET`
+- **internal calls**: `CORTEX_INTERNAL_SECRET`, the same value as in `functions/.env.<project-id>`. Cloud Functions present it to fire talons, threshold alerts and audit entries, and autonomous hoot uses it too
+- **email**: `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `ADMIN_EMAIL_PROD`, `ADMIN_EMAIL_DEV`
+- **swoop**, when you run it: `SWOOP_SIGNAL_URL`, `SWOOP_SIGNAL_RING_SECRET`, `SWOOP_JWT_KID`, `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_JWT_PUBLIC_KEY`, `SWOOP_SESSION_MASTER_KEY`, and `CLOUDFLARE_TURN_KEY_ID` with `CLOUDFLARE_TURN_KEY_API_TOKEN` for the relay
+- **error reporting**, optional: `NEXT_PUBLIC_SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_ENVIRONMENT`, and `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` for source maps at build time
+- **public status page**, optional: `INSTATUS_API_KEY`, `INSTATUS_PAGE_ID` and the `INSTATUS_COMPONENT_*_ID` values, when `/api/cron/status-ping` should publish to Instatus
 
-`RAILWAY_PUBLIC_DOMAIN`, `RAILWAY_ENVIRONMENT`, `PORT`, and `NODE_ENV` are injected by Railway or by `web/railway.toml`. Set `ROOST_ENV=prod` or `ROOST_ENV=dev` only when the automatic roost bucket selection does not match the service.
+set `ROOST_ENV` explicitly on every deployment. without it the app picks the prod buckets only when Railway reports its `production` environment or the public domain is `owlette.app`, and the dev buckets otherwise, so a production deployment anywhere else writes roost content to the dev buckets with no error.
 
-`NEXT_PUBLIC_*` variables are read during the Next.js build and by the browser. After changing them, redeploy so the built client bundle receives the new values.
+Railway injects `RAILWAY_PUBLIC_DOMAIN`, `RAILWAY_ENVIRONMENT` and `PORT`, and `web/railway.toml` sets `NODE_ENV`.
+
+`NEXT_PUBLIC_*` variables are compiled into the build. after changing one, redeploy so the client bundle picks it up.
 
 ### step 4: deploy
 
-Railway deploys automatically after variables are configured. Monitor the build in the **Deployments** tab.
+Railway deploys once the variables are in place. follow the build in the **deployments** tab; it takes a few minutes.
 
-Expected build time is 2-5 minutes.
+### step 5: authorize the domain in Firebase
 
-### step 5: configure firebase auth domain
+1. copy the deployment's URL.
+2. open the Firebase Console → **Authentication** → **settings** → **authorized domains**.
+3. add it, for example `owlette-web.up.railway.app`.
 
-1. Copy your Railway deployment URL.
-2. Go to Firebase Console -> Authentication -> Settings -> **Authorized Domains**.
-3. Add your Railway URL, for example `owlette-web.up.railway.app`.
+<Callout type="warning" title={"required"}>
 
-<Callout type="warning" title={"Required"}>
-
-Without this step, users cannot log in because Firebase rejects auth requests from unauthorized domains.
+without this, nobody can sign in: Firebase rejects auth requests from domains it has not authorized.
 
 </Callout>
+
 ### step 6: custom domain (optional)
 
-1. Railway -> Settings -> Networking -> **Add Custom Domain**.
-2. Add the CNAME or A record as instructed.
-3. Railway provisions SSL automatically.
-4. Add the custom domain to Firebase Authorized Domains.
-5. Update `NEXT_PUBLIC_BASE_URL` to the custom HTTPS origin and redeploy.
+1. Railway → **settings** → **networking** → **add custom domain**.
+2. add the CNAME or A record it gives you. Railway provisions the certificate.
+3. add the domain to Firebase's authorized domains.
+4. set `NEXT_PUBLIC_BASE_URL` to the new HTTPS origin and redeploy.
+5. add the hostname to `TURNSTILE_HOSTNAMES` and to the Turnstile widget.
+6. add the origin to `CORS_ALLOWED_ORIGINS` in `scripts/provision-r2.mjs` and re-run it, or browser uploads to roost fail CORS.
+
+passkeys stay tied to `owlette.app` in production whatever the domain; see [what is tied to owlette.app](/docs/setup).
 
 ---
 
-## vercel deployment
+## Vercel deployment
 
-Vercel can run the web app as a standard Next.js project.
+Vercel runs the same app as a standard Next.js project. owlette uses it as the standby origin behind the load balancer below, building only `main`.
 
-### step 1: import project
+### step 1: import the project
 
-1. In Vercel, click **Add New** -> **Project**.
-2. Import the owlette repository.
-3. Set **Root Directory** to `web`.
-4. Set the framework preset to **Next.js**.
+1. in Vercel, click **add new** → **project**.
+2. import your owlette repository.
+3. set **root directory** to `web`.
+4. set the framework preset to **Next.js**.
 
-### step 2: configure build settings
+### step 2: build settings
 
-Use the same commands as the checked-in Railway/Nixpacks deployment:
+use the same commands as the Railway deployment:
 
 | setting | value |
 |---------|-------|
-| Install Command | `npm ci --legacy-peer-deps` |
-| Build Command | `npm run build` |
-| Output Directory | Next.js default; leave unset unless Vercel asks for an explicit value |
+| install command | `npm ci --legacy-peer-deps` |
+| build command | `npm run build` |
+| output directory | the Next.js default; leave it unset |
 
-Set the Node.js version to 22.x in the Vercel project settings.
+set the Node.js version to 22.x in the project settings. for a standby that should follow production only, set the project's ignored build step so it skips every branch but your production one.
 
-### step 3: add environment variables
+### step 3: environment variables
 
-Add the same variables listed in the Railway section under **Settings** -> **Environment Variables**. Apply them to Production and Preview as needed.
+add the same variables as the Railway section under **settings** → **environment variables**. `NEXT_PUBLIC_*` values are compiled in, so redeploy after changing one.
 
-`NEXT_PUBLIC_*` values are bundled at build time, so redeploy after changing Firebase client settings or `NEXT_PUBLIC_BASE_URL`.
+### step 4: authorize the domain in Firebase
 
-### step 4: configure firebase auth domain
+add the Vercel domain, and any custom domain, to Firebase **Authentication** → **settings** → **authorized domains**.
 
-Add the Vercel deployment domain and any custom domain to Firebase Authentication -> Settings -> **Authorized Domains**.
+### step 5: scheduled endpoints
 
-### step 5: cron
+Vercel Cron sends no custom headers, and eight of the nine scheduled routes check `X-Cron-Secret`. register them on an external scheduler instead; see [scheduled endpoints](#scheduled-endpoints). on a standby origin, register nothing: the jobs belong to the public hostname, which the load balancer routes.
 
-Most cron routes require `X-Cron-Secret: <CRON_SECRET>`. `/api/hoot/escalation` is the exception: it reads `Authorization: Bearer <CRON_SECRET>`. See [scheduled endpoints](#scheduled-endpoints) below for the full list and the header each route expects. owlette's own schedules run on cron-job.org rather than on the web host, registered once per environment. Use a scheduler that can send those headers; if the hosting plan cannot send custom headers or cannot call all required schedules, use an external scheduler.
+---
+
+## failover behind a Cloudflare load balancer
+
+`owlette.app` is served by a Cloudflare load balancer with Railway as the primary origin and Vercel as the standby, so an outage at one provider does not take the dashboard down. the configuration is Terraform in `infra/cloudflare/`. you need it only if you want the same; a single origin works without it.
+
+### how it works
+
+- **one health monitor** calls `GET /api/health` on each origin every 60 seconds and expects `200`.
+- **two pools**, one origin each: `owlette-railway-primary` and `owlette-vercel-standby`. the load balancer's `steering_policy = "off"` sends every request to the first healthy pool in order, so Vercel takes traffic only while Railway's check fails. adaptive routing retries a request against the standby at once when the primary drops it mid-flight, rather than waiting for the next check.
+- **host headers.** the Railway pool sends `Host: owlette.app`. the Vercel pool sends the standby's own hostname, `vercel-origin.owlette.app`: a DNS-only record that Vercel holds a certificate for, because Vercel renews certificates over HTTP-01 and challenges for `owlette.app` itself would land on Railway. the app builds every outbound link from `NEXT_PUBLIC_BASE_URL`, never from the `Host` header, so users never see the alias.
+
+### the health probe
+
+`/api/health` needs no authentication and is never cached. it answers `200` only when the origin can read Firestore within 2.5 seconds, and `503` otherwise, so an origin that is up but cut off from its backend leaves the pool:
+
+```json
+{"ok":true,"origin":"railway","commit":"<git sha or null>","checked_at":"2026-10-05T12:00:00.000Z","latency_ms":87}
+```
+
+`origin` says which provider answered (`railway`, `vercel`, or `vercel:<region>`), which is how you confirm where traffic is going.
+
+### apply
+
+prerequisites: Terraform 1.5 or later, the Load Balancing add-on enabled on the Cloudflare account, and the zone already on Cloudflare.
+
+```bash
+cd infra/cloudflare
+cp terraform.tfvars.example terraform.tfvars   # fill in; the file is gitignored
+export CLOUDFLARE_API_TOKEN=...                # never in a file
+terraform init
+terraform plan
+terraform apply
+```
+
+the token needs **Account › Load Balancing: Monitors and Pools › Edit** and **Zone › Load Balancers › Edit** on your zone. in `terraform.tfvars`, `railway_origin` is the hostname Railway issued for your service (the one your domain's DNS points at), never the public domain itself, or the load balancer loops back on itself.
+
+`terraform apply` moves the domain behind the load balancer immediately. to rehearse, set `lb_host` to a throwaway hostname first, and delete that load balancer afterwards.
+
+<Callout type="warning" title={"keep health checks to one region"}>
+
+every pool sets `check_regions = ["ENAM"]`. left unset, every Cloudflare data center probes `/api/health`, many requests a second per origin, each one a Firestore read and each one billed per request on Vercel. before any change to the load balancer, multiply the probe rate by each origin's per-request price.
+
+</Callout>
+
+### keep the two origins identical
+
+both origins serve the same users, so their environment variables must hold the same values. seven of them fail silently, and only on failover, when they differ: `SESSION_SECRET` logs everyone out, `MFA_ENCRYPTION_KEY` locks out every second-factor user, `LLM_ENCRYPTION_KEY` breaks stored hoot keys, `TURNSTILE_SECRET` breaks sign-up and password reset, and the three swoop secrets (`SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY`, `SWOOP_SIGNAL_RING_SECRET`) break every swoop session.
+
+owlette checks and copies them with `node scripts/sync-env.mjs` (`check`, `diff`, and `sync <target> --apply`), driven by the targets in `scripts/env-manifest.json`. Vercel stores sensitive values write-only, so a green `check` proves a key exists, not that its value matches: re-run the sync after rotating any production secret.
+
+also add the standby's hostname to Firebase's authorized domains, or sign-in breaks on failover.
+
+---
+
+## the swoop signalling worker
+
+[swoop](/docs/dashboard/swoop) needs a signalling worker beside the web app: a Cloudflare Worker with one Durable Object per machine, in `infra/swoop-signal`. it relays connection offers between a browser and a machine and rings a machine's doorbell when the API asks; every authorization decision is made by the API before it mints a token. a deployment that never turns swoop on can skip it.
+
+### environments
+
+`infra/swoop-signal/wrangler.toml` declares two environments, each its own worker script on a custom domain:
+
+| environment | script | custom domain in `wrangler.toml` |
+|---|---|---|
+| `dev` | `swoop-signal-dev` | `signal-dev.owlette.app` |
+| `prod` | `swoop-signal-prod` | `signal.owlette.app` |
+
+always deploy with `-e dev` or `-e prod`: a bare `wrangler deploy` publishes a third, unconfigured script. self-hosting, change both `routes` patterns to hostnames in your own Cloudflare zone, one label deep (`signal.example.com`, not `signal.dev.example.com`): the zone's universal certificate covers a single wildcard label, and the agent refuses anything but `wss://`.
+
+### secrets
+
+the worker holds three secrets, set with `wrangler secret put` and never written to `wrangler.toml` or the repository:
+
+| worker secret | the API's matching variable |
+|---|---|
+| `SWOOP_SIGNAL_RING_SECRET` | `SWOOP_SIGNAL_RING_SECRET`, byte-identical |
+| `SWOOP_JWT_KID`, `SWOOP_JWT_PUBLIC_KEY` | `SWOOP_JWT_KID`, `SWOOP_JWT_PUBLIC_KEY` |
+| `SWOOP_JWT_KID_PREV`, `SWOOP_JWT_PUBLIC_KEY_PREV`, during a key rotation only | `SWOOP_JWT_KID_PREVIOUS`, `SWOOP_JWT_PUBLIC_KEY_PREVIOUS`: the worker's names are the shorter `_PREV` |
+
+the worker never sees the private key or the session master key. what each API variable does, and how to generate the key pair, is in [environment variables](/docs/setup/environment-variables#swoop-required-for-remote-desktop). to rotate the key, give the worker the new key first, with the outgoing one in its `_PREV` slots, and only then the API.
+
+### first deploy
+
+```bash
+cd infra/swoop-signal
+npm ci
+npx wrangler secret put SWOOP_JWT_KID            -e dev
+npx wrangler secret put SWOOP_JWT_PUBLIC_KEY     -e dev
+npx wrangler secret put SWOOP_SIGNAL_RING_SECRET -e dev
+npx wrangler deploy -e dev
+curl -sS https://<signal host>/health
+```
+
+each `secret put` prompts for its value; never pass a key as an argument. set the secrets **before** the first deploy of an environment: a worker without `SWOOP_SIGNAL_RING_SECRET` refuses every ring with `500 ring_secret_unconfigured` while `/health` still answers `200`. a healthy worker answers `{"ok":true,"service":"swoop-signal","protocolVersion":1}`. then set the API's `SWOOP_SIGNAL_URL` to `https://<signal host>`; the content security policy picks the origin up from it.
+
+### deploying changes
+
+`.github/workflows/swoop-signal-deploy.yml` runs the worker's test suite on every pull request that touches `infra/swoop-signal`, deploys `-e dev` on a push to `dev`, and checks `/health` afterwards. a push to `main` deploys nothing: production is a deliberate dispatch, `gh workflow run swoop-signal-deploy.yml --ref main -f environment=prod`. the workflow needs the repository secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts edit on the account, Workers Routes edit on the zone) and `CLOUDFLARE_ACCOUNT_ID`, and the repository variables `SWOOP_SIGNAL_DEV_URL` and `SWOOP_SIGNAL_PROD_URL` for the health check. it never reads or writes the worker's own secrets, and a redeploy keeps them.
+
+`infra/swoop-signal/README.md` covers the routes, limits, the full rotation runbook and rollback.
 
 ---
 
 ## scheduled endpoints
 
-Every scheduled route in the app, in one place. All are `GET`, all authenticate with
-a header, and all must be registered **per environment** — dev and prod use
-different `CRON_SECRET` values, so a prod secret against a dev host correctly
-returns 401.
+every route that an external scheduler must call, in one place. all are `GET` and authenticate with a header, and every one must be registered **per environment**: dev and prod use different `CRON_SECRET` values, so a prod secret sent to a dev host correctly returns 401. owlette's canonical registry is `infra/cron-jobs.json`, and a unit test fails when a route under `web/app/api/cron/` is missing from it. owlette's own jobs run on cron-job.org; any scheduler that can send a custom header works.
 
 | endpoint | schedule | auth header | purpose |
 |--|--|--|--|
-| `/api/cron/health-check` | `*/5 * * * *` | `X-Cron-Secret` | flags machines with stale heartbeats |
-| `/api/cron/process-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_process_alerts` into email |
-| `/api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_display_alerts` into email |
-| `/api/cron/status-ping` | every 60s | `X-Cron-Secret` | writes status pings, publishes to Instatus |
-| `/api/cron/retention` | daily | `X-Cron-Secret` | deletes metrics, logs + talon run history past 400 days |
-| `/api/cron/api-key-expiry` | `0 8 * * *` | `X-Cron-Secret` | emails api key owners 14 / 3 / 0 days before a key expires |
-| `/api/cron/talons` | every 60s | `X-Cron-Secret` | claims due talons (schedule triggers), missed-fire grace, stale-run recovery, fires due hoot follow-ups |
-| `/api/hoot/escalation` | every 5 min | `Authorization: Bearer` | hoot autonomous-mode backstop poller |
+| `/api/cron/health-check` | `*/5 * * * *` | `X-Cron-Secret` | flags machines with stale heartbeats, emails and fires webhooks and talons for machines that went offline |
+| `/api/cron/process-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_process_alerts` into digest email |
+| `/api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_display_alerts` into digest email |
+| `/api/cron/status-ping` | `* * * * *` | `X-Cron-Secret` | writes status pings and publishes them to Instatus |
+| `/api/cron/talons` | `* * * * *` | `X-Cron-Secret` | fires schedule-triggered and delayed talons, recovers stale runs, and fires due hoot follow-ups |
+| `/api/cron/retention` | `0 4 * * *` | `X-Cron-Secret` | deletes metrics, logs and talon run history past 400 days |
+| `/api/cron/swoop-retention` | `30 4 * * *` | `X-Cron-Secret` | closes abandoned swoop session records and deletes those older than 30 days |
+| `/api/cron/api-key-expiry` | `0 8 * * *` | `X-Cron-Secret` | emails API key owners 14, 3 and 0 days before a key expires |
+| `/api/hoot/escalation` | `*/5 * * * *` | `Authorization: Bearer` | the autonomous hoot escalation backstop |
 
-<Callout type="warning" title={"Two failure modes that are silent"}>
+<Callout type="warning" title={"almost every failure here is silent"}>
 
-Most of these fail **quietly** if unscheduled — nothing errors, the work simply
-never happens. The alert digests just let the queue grow. `/api/cron/retention`
-leaves data past its stated retention window, which contradicts the privacy
-policy rather than merely degrading a feature.
+an unscheduled job does not error: the work simply never happens. alert digests let their queue grow, talons on a schedule never fire, offline machines are never reported, and `/api/cron/retention` keeps data past the window the privacy policy states.
 
-`/api/hoot/escalation` is the odd one out: it takes
-`Authorization: Bearer <CRON_SECRET>`, **not** `X-Cron-Secret`.
-
-Existing schedules pointing at `/api/cortex/escalation` keep working — it is a
-thin alias onto the same handler — so there is nothing to migrate urgently.
-Use the `/api/hoot/` path for anything you set up from now on.
+`/api/hoot/escalation` is the odd one out: it takes `Authorization: Bearer <CRON_SECRET>`, **not** `X-Cron-Secret`. schedules still pointing at `/api/cortex/escalation` keep working, since it is an alias for the same handler; use the `/api/hoot/` path for anything new.
 
 </Callout>
 
-A healthy response is `200`. `401` means the header or its value is wrong for that
-environment. `500` means the handler threw — check the host logs for the route's
-own prefix, e.g. `[retention] failed:`.
+a healthy response is `200`. `401` means the header or its value is wrong for that environment. `500` means the handler threw: search the host logs for the route's own prefix, for example `[retention] failed:`.
 
----
-
-## cron health checks
-
-Set up the machine offline detection cron:
-
-### step 1: add cron_secret
+### generate the cron secret
 
 ```bash
-python -c "import secrets; print(secrets.token_hex(32))"
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Add the generated value as `CRON_SECRET` in the host environment variables.
+add the value as `CRON_SECRET` in the host's environment, a different one per environment.
 
-### step 2: configure cron schedule
-
-Call the health-check route every 5 minutes:
+### offline detection
 
 ```text
 GET https://<your-app>/api/cron/health-check
 X-Cron-Secret: <CRON_SECRET value>
 ```
 
-Use cron expression `*/5 * * * *` when the host accepts cron syntax.
+every 5 minutes, `*/5 * * * *`. it is the only thing that notices a machine going offline, since an offline machine cannot report its own absence. it can run long on a large fleet, so give the job a timeout of at least 60 seconds.
 
-<Callout type="warning" title={"Format"}>
+<Callout type="warning" title={"format"}>
 
-Use spaces between fields: `*/5 * * * *`. No spaces (`*/5****`) will fail.
+separate the cron fields with spaces: `*/5 * * * *`. without them (`*/5****`) the expression is invalid.
 
 </Callout>
 
-### alert digest crons
+### alert digests
 
-Two routes batch-and-send the agent's queued alerts. **If they are not scheduled, those
-emails never go out** — the agent only *queues* alerts (into `pending_process_alerts` /
-`pending_display_alerts`); these crons are what actually email them. Schedule **both, in
-every environment**, every 3 minutes:
+the agent only *queues* process and display alerts; these two routes are what email them. schedule **both, in every environment**, every 3 minutes (`*/3 * * * *`):
 
 ```text
 GET https://<your-app>/api/cron/process-alerts
@@ -231,116 +319,113 @@ GET https://<your-app>/api/cron/display-alerts
 X-Cron-Secret: <CRON_SECRET value>
 ```
 
-Use cron expression `*/3 * * * *`. A missing schedule here fails **silently** — the queue
-just grows and nobody is notified — so confirm it per environment (dev *and* prod).
+### talons
+
+```text
+GET https://<your-app>/api/cron/talons
+X-Cron-Secret: <CRON_SECRET value>
+```
+
+every minute. a talon with a schedule trigger fires from nowhere else. claims are transactional, so an overlapping run, or both origins being called, never fires a talon twice.
 
 ### hoot escalation backstop
 
-Only needed when autonomous hoot is enabled for a site. It is a backstop poller,
-so a missed run delays escalations rather than losing them. Every 5 minutes:
+only needed when autonomous hoot is on for a site. it is a backstop poller, so a missed run delays escalations rather than losing them. every 5 minutes:
 
 ```text
 GET https://<your-app>/api/hoot/escalation
 Authorization: Bearer <CRON_SECRET value>
 ```
 
-Note the header: this route reads `Authorization: Bearer`, unlike the seven
-`X-Cron-Secret` routes. Sending the wrong header shape returns 401 with no other
-symptom, so verify a run returns 200 after scheduling it.
+the wrong header shape returns 401 with no other symptom, so confirm a run returns 200 after you schedule it.
 
 ### data retention sweep
 
-Deletes machine metrics, event logs and talon run history older than 400 days
-(talon *configuration* is never swept — only run history). This is what backs the
-retention commitment in the privacy policy — without it, that statement is not
-true. Schedule daily, in every environment:
+deletes machine metrics, event logs and talon run history older than 400 days. talon *configuration* is never swept, only run history. this job is what makes the retention statement in the privacy policy true. schedule it daily in every environment, `0 4 * * *` or any quiet hour:
 
 ```text
 GET https://<your-app>/api/cron/retention
 X-Cron-Secret: <CRON_SECRET value>
 ```
 
-Use cron expression `0 4 * * *` (or any quiet hour). A successful run returns:
+a successful run returns:
 
 ```json
 {"ok":true,"deleted":{"metrics":107,"logs":496,"talonRuns":12},
+ "cutoffs":{"metricsBucket":"2025-08-31","logs":"2025-08-31T04:00:00.000Z","talonRuns":"2025-08-31T04:00:00.000Z"},
  "retentionDays":{"metrics":400,"logs":400,"talonRuns":400},"truncated":false}
 ```
 
-`truncated: true` means the run hit its 2000-document ceiling and older data
-still remains — the next run continues from the same oldest-first position.
-Against a large first-time backlog, schedule it hourly until a run reports
-`truncated: false`, then drop back to daily.
+`truncated: true` means the run hit its 2000-document ceiling and older data remains; the next run continues oldest-first. against a large first backlog, schedule it hourly until a run reports `truncated: false`, then go back to daily.
 
-Changing the window means changing **all three** — `METRICS_RETENTION_DAYS`,
-`LOGS_RETENTION_DAYS` and `TALON_RUNS_RETENTION_DAYS` in the route — and the
-stated periods in the privacy policy. They are a set; changing one alone makes
-the policy inaccurate.
+the three windows are `METRICS_RETENTION_DAYS`, `LOGS_RETENTION_DAYS` and `TALON_RUNS_RETENTION_DAYS` in the route. they are a set with the periods stated in the privacy policy: change one and the policy is no longer accurate.
 
-### api key expiry notices
+### swoop session sweep
 
-Emails each api key's owner once at 14 days, once at 3 days and once at expiry.
-Without it, keys expire with no warning and the first symptom is a 401 in
-production. Schedule daily, in every environment:
+closes swoop session records whose lease lapsed without anyone closing them, then deletes session records older than 30 days. the audit trail of every session stays in the site's audit log; these records are only operational state. schedule it daily, `30 4 * * *`, half an hour after the retention sweep:
+
+```text
+GET https://<your-app>/api/cron/swoop-retention
+X-Cron-Secret: <CRON_SECRET value>
+```
+
+```json
+{"ok":true,"closed":0,"deleted":{"swoopSessions":14},"cutoffs":{"startedBefore":"2026-09-05T04:30:00.000Z"},"retentionDays":{"swoopSessions":30},"truncated":false}
+```
+
+`truncated: true` means work remains for the next run. a `closed` count that stays above zero day after day means sessions are ending without being closed, which is a bug to report rather than a healthy sweep.
+
+### API key expiry notices
+
+emails each API key's owner once at 14 days, once at 3 days and once at expiry. without it, keys expire with no warning and the first symptom is a 401 in production. schedule it daily, `0 8 * * *`; the hour does not matter, because the ladder counts whole days:
 
 ```text
 GET https://<your-app>/api/cron/api-key-expiry
 X-Cron-Secret: <CRON_SECRET value>
 ```
 
-Use cron expression `0 8 * * *` (any hour; the ladder is measured in whole days,
-not clock time). A successful run returns:
-
 ```json
 {"ok":true,"keysScanned":36,"usersNotified":2,"emailsSent":2}
 ```
 
-`usersNotified` counts owners with at least one key due a notice; `emailsSent` is
-how many of those Resend accepted. Recipients who turned off **api key expiry**
-in account settings account for the gap. Each rung is stamped on the key document
-*before* the email goes out, so a duplicate schedule or a scheduler retry cannot
-send the same notice twice.
+`usersNotified` counts owners with at least one key due a notice; `emailsSent` is how many of those Resend accepted. recipients who turned off **api key expiry** in account settings account for any gap. each rung is stamped on the key *before* the email goes out, so a duplicate schedule or a scheduler retry never sends the same notice twice.
 
 ### public status-page ping
-
-External public launch also needs a 60-second HTTP cron that calls:
 
 ```text
 GET https://<your-app>/api/cron/status-ping
 X-Cron-Secret: <CRON_SECRET value>
 ```
 
-The route writes an internal status-ping record and posts component status changes to Instatus when the `INSTATUS_*` variables are configured. It waits for two consecutive failures before degrading a component, then marks it operational on recovery. Publish failures are logged and summarized in the cron response without returning vendor error bodies or failing the local ping write.
+every minute. the route writes an internal status ping and posts component changes to Instatus when the `INSTATUS_*` variables are set. it waits for two consecutive failures before degrading a component and marks it operational again on recovery. publish failures are logged and summarized in the response without vendor error bodies, and never fail the local ping. keep the route internal; it is not part of the public API.
 
-Use a separate cron job or service if the hosting provider only supports one schedule per service. Keep `/api/cron/status-ping` internal; it is not part of the public API reference.
+after adding the status-page variables, run the readiness check from a shell with the same values loaded:
 
-After adding the status-page variables, run the readiness check from an operator shell with the same env values loaded:
-
-```powershell
+```bash
 node scripts/check-status-page-ready.mjs --env-only
 node scripts/check-status-page-ready.mjs --base-url https://<your-app>
 ```
 
-The check validates required env names, component ids, and the live status-ping response without printing secrets.
+it validates the variable names, the component IDs and a live status-ping response without printing secrets.
 
 ---
 
 ## two-branch deployment
 
-owlette uses two branches with separate deployments:
+owlette deploys from two branches:
 
-| branch | deployment | url |
+| branch | deployment | URL |
 |--------|------------|-----|
-| `dev` | Development | `dev.owlette.app` |
-| `main` | Production | `owlette.app` |
+| `dev` | development: Railway service `owlette-dev` | `dev.owlette.app` |
+| `main` | production: Railway service `owlette-prod`, with the Vercel standby behind the load balancer | `owlette.app` |
 
-Each branch should have its own service or project, environment variables, and optionally its own Firebase project.
+give each environment its own service, its own environment variables, its own scheduled jobs and its own Firebase project. a push to either branch deploys the web app and the docs, and a push to `dev` that touches `infra/swoop-signal` also deploys the dev signalling worker. nothing else deploys on a push: Firestore rules and indexes, Storage rules, Cloud Functions, the production signalling worker and the scheduler's jobs are each a separate step, covered in [Firebase setup](/docs/setup/firebase), [Firestore rules](/docs/setup/firestore-rules), above, and `infra/swoop-signal/README.md`.
 
 ---
 
 ## general node.js hosting
 
-For non-Railway and non-Vercel deployments:
+for any other host:
 
 ```bash
 cd web
@@ -349,46 +434,43 @@ npm run build
 npm start
 ```
 
-Requirements:
+requirements:
 
-- Node.js 22.x, npm 10.x
-- All required environment variables from [Environment Variables](/docs/setup/environment-variables)
-- A writable port supplied as `PORT` or the default Next.js port 3000
-- HTTPS for Firebase Auth in production
+- Node.js 22.x and npm 10
+- every required variable from [environment variables](/docs/setup/environment-variables), including `ROOST_ENV`
+- a port, from `PORT` or the Next.js default of 3000
+- HTTPS in production, for Firebase Auth
 
 ---
 
 ## deployment checklist
 
-### pre-deployment
+### before deploying
 
-- [ ] Host is configured for Node.js 22.x and npm 10.x
-- [ ] `npm ci --legacy-peer-deps` succeeds
-- [ ] `npm run build` succeeds
-- [ ] Required environment variables are set for the target environment
+- [ ] the host runs Node.js 22.x and npm 10
+- [ ] `npm ci --legacy-peer-deps` and `npm run build` succeed locally
+- [ ] the required environment variables are set for the target environment
 - [ ] `NEXT_PUBLIC_BASE_URL` matches the public HTTPS origin
+- [ ] `ROOST_ENV` is set explicitly
+- [ ] Firestore rules and indexes are deployed, and the indexes show **enabled**
+- [ ] Cloud Functions are deployed with `functions/.env.<project-id>` in place
 
 ### host setup
 
-- [ ] Repository linked
-- [ ] Root directory set to `web`
-- [ ] Branch configured
-- [ ] Install command is `npm ci --legacy-peer-deps`
-- [ ] Build command is `npm run build`
-- [ ] Start command is `npm start` where the host requires one
+- [ ] repository linked, root directory `web`, branch set
+- [ ] install command `npm ci --legacy-peer-deps`, build command `npm run build`, start command `npm start` where the host asks for one
 - [ ] `CRON_SECRET` configured
-- [ ] Cron calls configured for **every route in the scheduled-endpoints table above**, in **each** environment — health-check (every 5 min), process-alerts + display-alerts (every 3 min), status-ping (every 60 s), talons (every 60 s), retention (daily), and hoot/escalation (every 5 min)
-- [ ] The `/api/hoot/escalation` job sends `Authorization: Bearer <CRON_SECRET>` — the other six routes take `X-Cron-Secret`, and the wrong header shape returns 401 with no other symptom
+- [ ] every route in [scheduled endpoints](#scheduled-endpoints) registered, in **each** environment
+- [ ] the `/api/hoot/escalation` job sends `Authorization: Bearer <CRON_SECRET>`; the other eight take `X-Cron-Secret`
 
-### post-deployment
+### after deploying
 
-- [ ] Deployment domain added to Firebase Authorized Domains
-- [ ] Registration works
-- [ ] Login works
-- [ ] Dashboard loads and shows data
-- [ ] R2-backed roost upload/version routes work
-- [ ] Real-time updates work
-- [ ] Custom domain configured and added to Firebase Authorized Domains, if applicable
+- [ ] `curl https://<your-app>/api/health` returns `200` with `"ok":true`
+- [ ] the deployment's domain is in Firebase's authorized domains
+- [ ] registration, login and second-factor setup work
+- [ ] the dashboard loads and updates in real time
+- [ ] a roost upload completes and a version can be fetched
+- [ ] a custom domain, if any, is configured, authorized in Firebase, and in `TURNSTILE_HOSTNAMES`
 
 ---
 
@@ -396,50 +478,45 @@ Requirements:
 
 ### build fails
 
-- **Wrong Node version**: Select Node.js 22.x. The web build's `engines` pin (`web/package.json`) and `firebase-admin` 14 both require Node 22; Node 20 reproduces a `next build` failure.
-- **Install fails**: Use `npm ci --legacy-peer-deps`, matching `web/nixpacks.toml`.
-- **Missing client env var**: Verify every required `NEXT_PUBLIC_FIREBASE_*` variable is set for the build environment.
-- **TypeScript errors**: Run `npm run build` locally with the same Node and environment values.
-- **Dependency issues**: Ensure `web/package-lock.json` is committed.
+- **wrong Node version**: select Node.js 22.x. both `web/package.json` and `firebase-admin` 14 require it.
+- **install fails**: use `npm ci --legacy-peer-deps`, as `web/nixpacks.toml` does.
+- **missing client variable**: confirm every `NEXT_PUBLIC_FIREBASE_*` variable is set for the build environment, not only at runtime.
+- **TypeScript errors**: run `npm run build` locally with the same Node version and variables.
+- **dependency issues**: make sure `web/package-lock.json` is committed.
 
 ### app crashes after deploy
 
-- Check runtime logs in the host deployment logs.
-- Look for env var validation errors such as `Firebase Admin SDK: Missing required environment variables`.
-- Verify Firebase Admin variables: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`.
-- Verify session and encryption variables: `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, `LLM_ENCRYPTION_KEY`.
-- Verify R2 variables: `R2_S3_ENDPOINT`, `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`.
-- Verify `CRON_SECRET`, email, rate-limit, and Instatus variables when those routes or integrations are enabled.
+- read the host's runtime logs.
+- look for variable validation errors such as `Firebase Admin SDK: Missing required environment variables`.
+- check the Firebase Admin variables: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`.
+- check the session and encryption variables: `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, `LLM_ENCRYPTION_KEY`.
+- check the R2 variables: `R2_S3_ENDPOINT`, `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`.
+- check `CRON_SECRET`, email, rate-limit and Instatus variables where those routes are in use.
+
+### sign-up or password reset returns 403
+
+`TURNSTILE_SECRET` is missing, or the hostname is not in `TURNSTILE_HOSTNAMES`. production fails closed without it, and logs `PRODUCTION BOOT WITHOUT TURNSTILE_SECRET` at boot.
 
 ### auth not working
 
-- Add the deployment domain to Firebase Authorized Domains.
-- Verify `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` and `NEXT_PUBLIC_BASE_URL` match the target environment.
-- Clear browser cache and cookies.
-- Check browser console for Firebase error details.
+- add the deployment's domain to Firebase's authorized domains.
+- confirm `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` and `NEXT_PUBLIC_BASE_URL` match the environment.
+- clear the browser's cache and cookies.
+- read the Firebase error in the browser console.
 
 ### roost uploads or version fetches fail
 
-- Verify the R2 credentials have object read and write access to the owlette buckets.
-- Verify `R2_S3_ENDPOINT` uses `https://<account-id>.r2.cloudflarestorage.com`.
-- Check `ROOST_ENV`, `RAILWAY_ENVIRONMENT`, and `RAILWAY_PUBLIC_DOMAIN` if writes are landing in the wrong dev/prod bucket.
+- confirm the R2 key has object read and write on the owlette buckets.
+- confirm `R2_S3_ENDPOINT` is `https://<account-id>.r2.cloudflarestorage.com`.
+- a CORS error in the browser means your origin is missing from `CORS_ALLOWED_ORIGINS` in `scripts/provision-r2.mjs`; add it and re-run the script.
+- if content lands in the wrong environment's buckets, check `ROOST_ENV`.
+
+### the load balancer sends traffic to the standby
+
+call `/api/health` on the primary origin directly. a `503` means it cannot reach Firestore; check its Firebase Admin variables and the provider's status. the `origin` field of `https://<your-app>/api/health` shows which origin is answering.
 
 ### slow performance
 
-- **Cold starts**: Use a plan that keeps the app warm for production.
-- **Bundle size**: Run `npm run build` and check `.next/static` output.
-- **Firestore queries**: Add indexes for frequently queried fields.
-
----
-
-## cost
-
-### railway pricing
-
-Check the provider pricing page before provisioning. Keep development and production in separate projects or services so their usage, secrets, and billing limits can be managed independently.
-
-### optimization
-
-- Use separate plans or projects for development and production.
-- Optimize bundle size for faster cold starts.
-- Add a CDN such as Cloudflare for static assets and custom-domain traffic.
+- **cold starts**: use a plan that keeps the app warm in production.
+- **bundle size**: run `npm run build` and look at the `.next/static` output.
+- **Firestore queries**: a query without its composite index fails rather than slowing down; deploy `firestore.indexes.json`.

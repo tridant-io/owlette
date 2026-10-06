@@ -1,9 +1,10 @@
 ---
 title: "errors"
-description: "Public API errors use application/problem+json. Clients should branch on the stable code field, not on human-readable detail text."
+description: "API errors use application/problem+json with a stable code, a docsUrl, and a requestId. branch on code, never on the human-readable detail. this page lists every code the public API returns, grouped by area."
+keywords: ["error codes", "problem+json", "rfc 7807", "status codes", "requestId", "troubleshooting"]
 ---
 
-**Last updated**: 2026-08-01
+**last updated**: 2026-10-05
 
 ---
 
@@ -26,190 +27,70 @@ description: "Public API errors use application/problem+json. Clients should bra
 
 | field | meaning |
 |---|---|
-| `type` | Stable URI for the problem class. |
-| `title` | Short human-readable category. |
-| `status` | HTTP status code, matching the response status. |
-| `detail` | Occurrence-specific explanation. Safe to show, but not stable for parsing. |
-| `code` | Stable machine-readable error code. Use this for client branching. |
-| `docsUrl` | Documentation anchor for the code. |
-| `requestId` | Correlation id on canonical public API helper responses. Also emitted as `X-Request-Id` by those responses. |
-| `param` | Optional offending header, query parameter, path parameter, or body field. Many validation responses omit it. |
-| `errors` | Optional field-level validation map keyed by dotted path. This is the common validation shape. |
+| `type` | a stable URI for the problem class, such as `https://owlette.app/problems/not-found` |
+| `title` | a short category, the same on every occurrence |
+| `status` | the HTTP status, matching the response |
+| `detail` | what went wrong this time. safe to show; not stable enough to parse |
+| `code` | the stable machine-readable code. branch on this |
+| `docsUrl` | this page, anchored at the code — every code below has an anchor |
+| `requestId` | a correlation ID, also sent as the `X-Request-Id` header. quote it when you report a problem |
+| `errors` | for validation failures, a map of dotted field path to messages, e.g. `body.siteId` or `query.page_size` |
+| `param` | sometimes, the one header or field at fault |
+| `instance` | on some errors, the internal operation name. diagnostic only |
+| `error` | on some routes, a copy of `detail` kept for older dashboard callers. ignore it |
 
-Unknown fields are forward-compatible extensions. Ignore fields you do not recognize.
+some codes carry extra fields — `required` on `scope_insufficient`, `expiredAt` on `token_expired`, `retryAfter` on `rate_limited`, `sent` and `supported` on `unsupported_version`, `missingChunks` on a publish `precondition_failed`, `quota` on `over_quota`. ignore fields you do not recognise; new ones may appear.
+
+### routes with a different body
+
+a few routes do not use the full envelope yet:
+
+- the machine config and process control routes — `hoot-enabled`, `launch-mode`, `reboot-pending`, `reboot-schedule`, process create, update, delete, `start`, `stop`, `restart`, `kill`, and `schedule` — answer `{ "type": "about:blank", "title", "status", "code", "detail" }` without `requestId` or `docsUrl`. `code` is still the field to branch on.
+- `POST /api/sites/{siteId}/agent-tokens/revoke` validation errors, `POST /api/cli/device-code/poll`, and upstream failures on `GET /api/platform/touchdesigner/builds` answer a bare `{ "error": "..." }`.
+- a rejected `mfaProof` on a swoop session start answers `{ "error", "code" }`.
 
 ---
 
-## codes
+## general codes
 
-| code | status | meaning | client action |
+these can come from almost any route.
+
+| code | status | meaning | what to do |
 |---|---:|---|---|
-| `unauthorized` | 401 | Missing, malformed, unknown, or unsupported credential. | Send a supported credential and retry. |
-| `token_expired` | 401 | API key expired or rotated value is past its grace window. | Rotate or create a new key. |
-| `forbidden` | 403 | Authenticated caller lacks role, site membership, or platform capability. | Use a different caller or change access in the dashboard. |
-| `scope_insufficient` | 403 | API key lacks the exact resource/id/permission required. | Create or use a key with the required scope. |
-| `not_found` | 404 | Resource is absent or hidden from this caller. | Check the id and caller scope. |
-| `version_not_found` | 404 | A version id, version ref, or version alias did not resolve in the roost history. | Check the roost id, site id, and version ref before retrying. |
-| `validation_failed` | 400 | Body, query, path, or header validation failed. | Fix the request using `detail` and `errors`. |
-| `unsupported_version` | 400 | `Roost-Version` was present but is not one of the supported API dates. | Use a date from the response `supported` list or from `GET /api/version`. |
-| `forbidden_field` | 400 | The request body included fields this operation does not allow. | Remove the listed fields and retry. |
-| `version_ref_malformed` | 400 | A `versionRef` or `targetVersion` value did not match an accepted ref form. | Use an alias, positive version number, `vN`/`#N`, or a version id. |
-| `version_content_immutable` | 400 | PATCH attempted to change published version content. | Send only mutable fields or publish a new version. |
-| `idempotency_key_required` | 400 | Required `Idempotency-Key` header missing or blank. | Retry with a generated key. |
-| `idempotency_key_invalid` | 400 | `Idempotency-Key` exceeds 255 characters. | Generate a shorter key. |
-| `idempotency_key_mismatch` | 422 | Same key reused on the same route with a different body. | Reuse the original body or generate a new key. |
-| `conflict` | 409 | Request conflicts with current resource state. | Read current state and submit a corrected request. |
-| `rollback_no_op` | 400 | Rollback target already resolves to the current version. | Choose a different target or treat the request as already applied. |
-| `precondition_failed` | 412 | A required server-side precondition failed, such as missing referenced chunks. | Satisfy the precondition and retry. |
-| `version_stale` | 412 | `expectedCurrentVersionId` did not match the roost current pointer during publish. | Re-read the roost and retry if the publish is still intended. |
-| `payload_too_large` | 413 | Request exceeded an endpoint size limit. | Split the request or reduce payload size. |
-| `quota_exceeded` | 402 | Site storage quota would be exceeded. | Free usage or delete old roost versions. |
-| `rate_limited` | 429 | Request or concurrency bucket exhausted. | Honor `Retry-After`; reduce concurrency. |
-| `machine_offline` | 409 | Machine command cannot be queued or completed because the target is offline. | Wait for the machine to reconnect or target another machine. |
-| `cortex_unavailable` | 400/423/503 | hoot could not stream because the target was missing, disabled, or offline. | Fix the target/enablement issue or retry after the machine reconnects. |
-| `service_unavailable` | 503 | Required dependency is temporarily unavailable. | Retry with backoff. |
-| `internal_error` | 500 | Unexpected server error. | Retry with backoff; quote `requestId` if it persists. |
-
----
-
-## code details
+| `unauthorized` | 401 | missing, malformed, unknown, or revoked credential | send a valid credential |
+| `token_expired` | 401 | the API key is past its `expiresAt` | rotate or create a key |
+| `forbidden` | 403 | the caller lacks the role or capability, or their account is deactivated | use a different caller, or change access in the dashboard |
+| `scope_insufficient` | 403 | the API key lacks the resource, ID, and permission needed | add the scope named in `required` |
+| `api_key_not_permitted` | 403 | the operation refuses API keys whatever their scopes | use a dashboard session |
+| `not_found` | 404 | absent, or hidden from this caller | check the ID and the caller's access |
+| `validation_failed` | 400 | body, query, path, or header validation failed | fix the request using `detail` and `errors` |
+| `forbidden_field` | 400 | the body has a field this operation does not accept | remove it |
+| `unsupported_version` | 400 | `Roost-Version` names a date the server does not support | send a date from `supported`, or omit the header |
+| `idempotency_key_required` | 400 | the route requires `Idempotency-Key` and it is missing | retry with a generated key |
+| `idempotency_key_invalid` | 400 | `Idempotency-Key` is longer than 255 characters | use a shorter key |
+| `idempotency_key_mismatch` | 422 | the key was used on this route with a different body | resend the original body, or use a new key |
+| `conflict` | 409 | the request conflicts with the resource's current state | read the current state and decide again |
+| `precondition_failed` | 412 | a route-specific precondition failed | satisfy it and retry |
+| `payload_too_large` | 413 | the request exceeds a size limit | split or shrink it |
+| `rate_limited` | 429 | a rate-limit bucket is exhausted | wait for `Retry-After` |
+| `service_unavailable` | 503 | a dependency is unavailable — for example roost is switched off, or the audit log could not be written | retry with backoff |
+| `internal_error` | 500 | an unexpected server error | retry with backoff; quote `requestId` if it persists |
 
 ### unauthorized
 
-The request did not carry a usable credential. Send a supported API key, session, or Firebase ID token for the route.
+the request carried no usable credential: missing, malformed, unknown, revoked, or a rotated key past its 24-hour grace window. send a valid API key, session, or Firebase ID token.
 
 ### token_expired
 
-The API key expired, or a rotated key value is past its grace window. Rotate or create a replacement key.
+the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the key or create a new one.
 
 ### forbidden
 
-The caller is authenticated but lacks the required role, site membership, ownership, or platform capability.
+the caller is authenticated, but lacks the site role or capability the operation needs, or their account has been deactivated. a site the caller cannot access at all answers `404`, not `403`.
 
 ### scope_insufficient
 
-The API key is valid but lacks the exact resource, id, and permission required by the operation.
-
-### not_found
-
-The resource does not exist or is intentionally hidden from this caller to avoid leaking resource existence.
-
-### version_not_found
-
-A version id, numeric ref, alias, or version path parameter did not resolve within the requested roost history.
-
-### validation_failed
-
-The request body, query, path, or headers failed validation. Use `detail` and `errors` to fix the request. Some routes also include `param`.
-
-### unsupported_version
-
-The `Roost-Version` header was present but is not supported by the server. The response includes `sent` and `supported` fields.
-
-### forbidden_field
-
-The request body included fields that are not accepted by that operation, such as extra fields on public hoot send or rename requests.
-
-### version_ref_malformed
-
-A version reference did not match the accepted resolver grammar: aliases such as `current`, positive version numbers, `vN` or `#N`, or a version id.
-
-### version_content_immutable
-
-Published version content is immutable. Patch only the fields that the endpoint allows, or publish a new version.
-
-### idempotency_key_required
-
-The operation requires `Idempotency-Key`; retry the same mutation with a generated key.
-
-### idempotency_key_invalid
-
-The `Idempotency-Key` header is syntactically invalid, currently because it exceeds 255 characters.
-
-### idempotency_key_mismatch
-
-The same `Idempotency-Key` was reused on the same route with a different request body. Reuse the original body or generate a new key.
-
-### conflict
-
-The request conflicts with current resource state and will not succeed until the payload or target state changes.
-
-### rollback_no_op
-
-The rollback target resolves to the version that is already current, so the request would not change the roost pointer.
-
-### precondition_failed
-
-A route-specific precondition failed. Current examples include publishing a version that references chunks missing from R2.
-
-### version_stale
-
-A publish request included `expectedCurrentVersionId`, but the roost current pointer changed before the transaction committed.
-
-### payload_too_large
-
-The request body exceeded an endpoint size limit. Split or reduce the payload.
-
-### quota_exceeded
-
-The request would exceed the site's roost storage quota.
-
-### rate_limited
-
-The caller exceeded an active request or concurrency bucket. Honor `Retry-After`.
-
-### machine_offline
-
-The requested machine command cannot proceed because the target machine is offline.
-
-### cortex_unavailable
-
-hoot could not stream for the requested conversation because the target was invalid, disabled, or offline.
-
-### service_unavailable
-
-A required dependency is temporarily unavailable. Retry with backoff.
-
-### internal_error
-
-An unexpected server error occurred. Retry with backoff and quote `requestId` if the problem persists.
-
-Route-specific validation codes may appear for narrow input failures, for example `invalid_body`, `invalid_enabled`, or resource-specific constraints. They use the same envelope and are documented on the operation when part of the public contract.
-
----
-
-## retry rules
-
-Retry with backoff:
-
-- `429 rate_limited`
-- `500 internal_error`
-- `502`, `503`, or `504` platform/upstream failures
-- network failures or client timeouts when the original mutation included an `Idempotency-Key`
-
-Do not blindly retry:
-
-- auth failures (`401`, `403`)
-- missing resources (`404`)
-- validation/idempotency mismatch failures (`400`, `422`)
-- quota failures (`402 quota_exceeded`) unless usage changed
-- precondition failures (`409`, `412`) until you have refreshed state
-
-For mutating retries, reuse the same `Idempotency-Key` only when the request method, path, query, and body are identical. See [idempotency.md](/docs/api/idempotency).
-
----
-
-## request ids
-
-Canonical public API helper responses include `requestId` in the body and `X-Request-Id` in the response headers. Some machine/process compatibility routes currently omit them until migrated. Log both the status/code and request id when present.
-
-Each retry attempt can have a different request id. If an idempotent retry replays a cached success, the response also includes `Idempotent-Replayed: true`.
-
----
-
-## examples
-
-### scope failure
+the API key is valid but has no scope entry matching the operation. `required` names what is missing:
 
 ```json
 {
@@ -218,57 +99,268 @@ Each retry attempt can have a different request id. If an idempotent retry repla
   "status": 403,
   "detail": "insufficient scope: requires write on machine:machine_123",
   "code": "scope_insufficient",
-  "required": {
-    "resource": "machine",
-    "id": "machine_123",
-    "permission": "write"
-  },
+  "required": { "resource": "machine", "id": "machine_123", "permission": "write" },
   "docsUrl": "https://owlette.app/docs/api/errors#scope_insufficient",
   "requestId": "5d7f7c5b-2ed6-4a56-9b2c-47dd7c84f957"
 }
 ```
 
-### idempotency mismatch
+[edit the key's scopes](/docs/api/authentication#editing-key-scopes) to add it.
 
-```json
-{
-  "type": "https://owlette.app/problems/validation-failed",
-  "title": "idempotency key mismatch",
-  "status": 422,
-  "detail": "Idempotency-Key '7c55c5de-7ec6-4c63-a1c8-94e13c56f962' was previously used with a different request body; reuse requires the identical body",
-  "code": "idempotency_key_mismatch",
-  "docsUrl": "https://owlette.app/docs/api/errors#idempotency_key_mismatch",
-  "requestId": "5d7f7c5b-2ed6-4a56-9b2c-47dd7c84f957"
-}
-```
+### api_key_not_permitted
 
-### rate limited
+the operation never accepts an API key, whatever its scopes: every swoop session route, swoop settings, and display settings. use a dashboard session. see [what an API key cannot do](/docs/api/authentication#what-an-api-key-cannot-do).
 
-```http
-HTTP/1.1 429 Too Many Requests
-Retry-After: 17
-Roost-Rate-Limited-Reason: key-rate
-Content-Type: application/problem+json
-```
+### not_found
 
-```json
-{
-  "type": "https://owlette.app/problems/rate-limited",
-  "title": "rate limited",
-  "status": 429,
-  "detail": "Too many requests. Please try again in 17 seconds.",
-  "code": "rate_limited",
-  "retryAfter": 17,
-  "docsUrl": "https://owlette.app/docs/api/errors#rate_limited",
-  "requestId": "5d7f7c5b-2ed6-4a56-9b2c-47dd7c84f957"
-}
-```
+the resource does not exist, or exists and is hidden from this caller so its existence does not leak — a site you cannot access, or another user's hoot conversation.
+
+### validation_failed
+
+the body, query, path, or headers failed validation. `detail` says what, and `errors` maps each failing field. most route-specific input checks report this code with a field-level `errors` map rather than a code of their own.
+
+### forbidden_field
+
+the body includes a field the operation does not accept, such as anything but `role` and `content` on a hoot send, or anything but `title` on a hoot rename.
+
+### unsupported_version
+
+the `Roost-Version` header names a date the server does not support. the body lists the date you `sent` and the `supported` ones; `GET /api/version` lists them too.
+
+### idempotency_key_required
+
+the route requires an `Idempotency-Key` header. retry the same request with a generated key. see [idempotency](/docs/api/idempotency).
+
+### idempotency_key_invalid
+
+the `Idempotency-Key` header is longer than 255 characters.
+
+### idempotency_key_mismatch
+
+the same key was used on this route, within 24 hours, with a different body. resend the original body, or use a new key for the changed request.
+
+### conflict
+
+the request conflicts with the resource's current state — for example rotating or editing a key that was already rotated or revoked. read the current state before retrying.
+
+### precondition_failed
+
+a route-specific precondition failed. on a roost publish it means some chunks the version lists are not stored for the site; `missingChunks` holds up to 20 of them.
+
+### payload_too_large
+
+the request is over a size limit.
+
+### rate_limited
+
+a rate-limit bucket is exhausted. wait for `Retry-After` (also in the body as `retryAfter`). see [rate limits](/docs/api/rate-limits).
+
+### service_unavailable
+
+something the request needs is unavailable: roost is switched off for the site, or the caller's user record or the audit log could not be read or written — a privileged action that cannot be audited is refused rather than run. retry with backoff.
+
+### internal_error
+
+an unexpected server error. retry with backoff, and quote `requestId` if it keeps happening.
+
+### quota_exceeded
+
+reserved for storage refusals (`402`). no public route returns it today; see [roost storage](/docs/api/rate-limits#roost-storage).
+
+---
+
+## roost codes
+
+| code | status | meaning |
+|---|---:|---|
+| `version_not_found` | 404 | a well-formed version ref matched nothing in this roost |
+| `version_ref_malformed` | 400 | a `{versionRef}`, `targetVersion`, or `against` value is not an accepted form |
+| `version_content_immutable` | 400 | a version `PATCH` included a field other than `siteId` or `description` |
+| `version_stale` | 412 | `expectedCurrentVersionId` did not match the current pointer when the publish committed |
+| `rollback_no_op` | 400 | the rollback target is already the current version |
+| `version_url_missing` | 409 | the rollback target has no stored body location |
+| <span id="roost_name_required" />`roost_name_required` | 400 | creating a roost without a `name` |
+
+### version_not_found
+
+the ref is well-formed but resolves to no version in this roost's history. check the roost ID and the ref.
+
+### version_ref_malformed
+
+accepted refs are an alias (`current`, `previous`, `first`), a version number (`3`, `#3`, `v3`), or a version ID (64-character SHA-256 hex, or a legacy `vrs_` ID). anything else is refused.
+
+### version_content_immutable
+
+a published version's content never changes; only its `description` can be edited. publish a new version instead.
+
+### version_stale
+
+the publish sent `expectedCurrentVersionId`, and another publish moved the roost's pointer first. re-read the roost and publish again if it is still what you want.
+
+### rollback_no_op
+
+the rollback target is already current, so nothing would change. treat it as already applied.
+
+### version_url_missing
+
+the target version's stored body location is missing, so machines could not fetch it. publish the content again.
+
+see [versions](/docs/api/versions#errors) and [chunks](/docs/api/chunks#errors) for the full roost error tables.
+
+---
+
+## hoot codes
+
+### cortex_unavailable
+
+hoot could not start a reply: `503` when the pinned machine is offline or no machine in the site is online, `423` when hoot is switched off on the pinned machine or on every online one. the code keeps the pre-rename `cortex` spelling. see [hoot](/docs/api/hoot#errors-before-the-stream).
+
+---
+
+## machine codes
+
+### machine_offline
+
+`409`: the machine does not read as online, so the command or session was not queued. wait for it to reconnect.
+
+| code | status | meaning |
+|---|---:|---|
+| <span id="unsupported_command_type" />`unsupported_command_type` | 400 | the command `type` is not in the public allowlist; `detail` lists the allowed types |
+| <span id="machine_not_found" />`machine_not_found` | 404 | the machine does not exist in this site |
+| <span id="process_not_found" />`process_not_found` | 404 | no process with that ID on the machine |
+| <span id="duplicate_process_name" />`duplicate_process_name` | 409 | another process on the machine already has that name |
+| <span id="missing_schedules" />`missing_schedules` | 400 | `launch_mode: scheduled` without a non-empty `schedules` array |
+| <span id="software_not_found" />`software_not_found` | 404 | the program to uninstall is not in the machine's software inventory |
+| <span id="software_record_invalid" />`software_record_invalid` | 409 | the inventory entry has no uninstall command |
+
+---
+
+## swoop codes
+
+| code | status | meaning |
+|---|---:|---|
+| <span id="step_up_required" />`step_up_required` | 401 | control needs a live second factor: send `mfaProof`, or this tab's `continuity` token |
+| <span id="swoop_disabled" />`swoop_disabled` | 403 | swoop is off for this site |
+| <span id="machine_excluded" />`machine_excluded` | 403 | the site's swoop policy excludes this machine |
+| <span id="members_may_not_watch" />`members_may_not_watch` | 403 | the site does not let plain members watch |
+| <span id="capability_missing" />`capability_missing` | 403 | a lease renewal for a control viewer who has lost the remote-control capability |
+| <span id="swoop_not_configured" />`swoop_not_configured` | 503 | this deployment has no swoop signalling worker |
+| <span id="audit_unavailable" />`audit_unavailable` | 503 | the session's audit row could not be written, so the session was not started |
+
+see [swoop](/docs/dashboard/swoop).
+
+---
+
+## installer deployment codes
+
+| code | status | meaning |
+|---|---:|---|
+| <span id="over_quota" />`over_quota` | 413 | more target machines than the site's `deployQuota` (default 100); `quota` holds `max_targets` and `requested` |
+| <span id="deployment_in_flight" />`deployment_in_flight` | 409 | deleting a deployment that is not terminal, or has a target still running |
+| <span id="no_failed_targets" />`no_failed_targets` | 409 | a retry found no failed target to retry |
+| <span id="no_cancellable_targets" />`no_cancellable_targets` | 409 | a cancel found no target that can still be cancelled |
+| <span id="no_targets" />`no_targets` | 409 | an uninstall of a deployment with no targets |
+| <span id="too_large" />`too_large` | 413 | the installer to checksum is larger than 10 GiB |
+| <span id="fetch_failed" />`fetch_failed` | 422 | the installer download for a checksum failed |
+| <span id="too_many_redirects" />`too_many_redirects` | 422 | the installer URL redirected more than 5 times |
+| <span id="timeout" />`timeout` | 422 | the checksum download did not finish in about 270 seconds |
+| <span id="cancelled" />`cancelled` | 422 | the client closed the request during a checksum download |
+
+---
+
+## site and member codes
+
+| code | status | meaning |
+|---|---:|---|
+| <span id="site_already_exists" />`site_already_exists` | 409 | a live site already has that ID |
+| <span id="site_id_retired" />`site_id_retired` | 409 | the ID belonged to a deleted site; site IDs are never reused |
+| <span id="not_owner" />`not_owner` | 403 | only the site's owner, or a superadmin, may transfer ownership |
+| <span id="site_has_no_owner" />`site_has_no_owner` | 409 | the site records no owner to transfer from |
+| <span id="successor_already_owner" />`successor_already_owner` | 409 | the successor already owns the site |
+| <span id="target_is_owner" />`target_is_owner` | 409 | adding the site's owner as a member |
+| <span id="cannot_remove_owner" />`cannot_remove_owner` | 409 | removing the site's owner; transfer ownership first |
+| <span id="cannot_change_owner_role" />`cannot_change_owner_role` | 409 | changing the owner's role |
+| <span id="cannot_modify_own_membership" />`cannot_modify_own_membership` | 403 | changing or removing your own membership; ask another admin |
+| <span id="site_member_manage_required" />`site_member_manage_required` | 403 | the caller may not manage this site's members |
+| <span id="talon_manage_required" />`talon_manage_required` | 403 | moving a departing member's talons needs the talon-manage capability |
+
+---
+
+## talon codes
+
+| code | status | meaning |
+|---|---:|---|
+| <span id="invalid_talon" />`invalid_talon` | 400 | the talon failed validation; `errors` and `fieldErrors` say where |
+| <span id="command_output_forbidden" />`command_output_forbidden` | 403 | only a site admin may author a `command` output |
+| <span id="hoot_actions_forbidden" />`hoot_actions_forbidden` | 403 | only a site admin may author a `cortex` output with `allowActions` |
+| <span id="invalid_webhook_url" />`invalid_webhook_url` | 400 | a `webhook` output's URL resolves to a private, loopback, or link-local address |
+| <span id="llm_key_required" />`llm_key_required` | 400 | the talon uses AI and its author has no LLM key saved |
+| <span id="talon_limit_reached" />`talon_limit_reached` | 409 | the site already holds 20 talons |
+| <span id="talon_not_found" />`talon_not_found` | 404 | a talon ID in the request does not exist |
+| <span id="invalid_reassign" />`invalid_reassign` | 400 | a reassign named both or neither of `fromUid` and `talonIds`, or a malformed list |
+| <span id="successor_invalid" />`successor_invalid` | 400 | the successor cannot take over: not an active member with the right capabilities, or no LLM key for AI talons |
+
+---
+
+## superadmin codes
+
+| code | status | meaning |
+|---|---:|---|
+| <span id="last_superadmin" />`last_superadmin` | 409 | the change would leave no active superadmin |
+| <span id="orphan_sites" />`orphan_sites` | 409 | deleting a user who owns sites without `successorUid` |
+| <span id="transfer_failed" />`transfer_failed` | 409 | a site could not be handed to the successor; the account was left untouched |
+| <span id="needs_successor" />`needs_successor` | 409 | self-deleting an account that owns a site with other members |
+| <span id="unknown_site" />`unknown_site` | 400 | assigning a site ID that does not exist |
+| <span id="assign_failed" />`assign_failed` | 409 | a membership write was refused partway through an assign |
+| <span id="remove_failed" />`remove_failed` | 409 | a membership write was refused partway through a remove |
+| <span id="binary_missing" />`binary_missing` | 404 | finalizing an installer upload when nothing was uploaded to the signed URL |
+| <span id="checksum_mismatch" />`checksum_mismatch` | 412 | the uploaded installer's SHA-256 does not match `checksum_sha256` |
+| <span id="upload_expired" />`upload_expired` | 410 | the 15-minute upload window closed |
+| <span id="upload_not_pending" />`upload_not_pending` | 409 | the upload was already finalized or expired |
+| <span id="latest_installer_not_found" />`latest_installer_not_found` | 404 | no active latest installer |
+| <span id="latest_version_protected" />`latest_version_protected` | 409 | deleting the version that is currently latest |
+| <span id="min_versions_violated" />`min_versions_violated` | 409 | deleting would leave fewer than 2 active installer versions |
+| <span id="version_deleted" />`version_deleted` | 409 | promoting a soft-deleted installer version |
+
+---
+
+## CLI pairing codes
+
+| code | status | meaning |
+|---|---:|---|
+| <span id="pairing_phrase_expired" />`pairing_phrase_expired` | 410 | the pairing phrase is older than 10 minutes; run `owlette auth login` again |
+| <span id="pairing_phrase_already_authorized" />`pairing_phrase_already_authorized` | 409 | the phrase was already approved |
+
+---
+
+## retry rules
+
+retry with backoff:
+
+- `429 rate_limited`, after `Retry-After`
+- `500`, `502`, `503`, and `504`
+- network failures and client timeouts, when the original mutation carried an `Idempotency-Key`
+
+do not retry unchanged:
+
+- `401` and `403`
+- `404`
+- `400` and `422`
+- `409` and `412`, until you have re-read the current state
+
+for mutating retries, reuse the `Idempotency-Key` only when the method, path, query, and body are identical. see [idempotency](/docs/api/idempotency).
+
+---
+
+## request IDs
+
+every problem response carries `requestId` in the body and the same value in `X-Request-Id`, except the routes listed under [routes with a different body](#routes-with-a-different-body). log the status, the `code`, and the request ID for every failure; each retry gets its own. a retry that replays a cached success carries `Idempotent-Replayed: true` instead of running again.
 
 ---
 
 ## see also
 
-- [authentication.md](/docs/api/authentication) for auth and scope errors.
-- [pagination.md](/docs/api/pagination) for pagination validation.
-- [idempotency.md](/docs/api/idempotency) for replay and mismatch behavior.
-- [rate-limits.md](/docs/api/rate-limits) for `Retry-After` and rate-limit headers.
+- [authentication](/docs/api/authentication) for auth and scope errors.
+- [pagination](/docs/api/pagination) for paging validation.
+- [idempotency](/docs/api/idempotency) for replay and mismatch behavior.
+- [rate limits](/docs/api/rate-limits) for `Retry-After` and the rate-limit headers.

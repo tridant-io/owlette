@@ -1,18 +1,48 @@
-# Owlette Desktop
+# owlette desktop
 
-Tauri 2 desktop shell for Owlette. Vite + React 19 + TypeScript on the frontend,
-Rust on the host side, wearing the same design system as the web portal.
+The owlette desktop app: the local window and the tray icon (a menu bar item on
+macOS) on every machine that runs the agent, on Windows, macOS and Linux. It
+shows the machine's processes, their launch modes and schedules, and the
+service's status, and it joins or leaves a site. Tauri 2: Vite + React 19 +
+TypeScript on the frontend, Rust on the host side, wearing the same design
+system as the web dashboard.
 
-This package is **not** an npm workspace of the monorepo root — install and run
+This package is **not** an npm workspace of the monorepo root: install and run
 its commands from inside `desktop/`.
 
 ## Prerequisites
 
+Every platform:
+
 - Node.js 22 (`.nvmrc` at the repo root)
 - Rust stable + Cargo (`rustup` installs both; on Windows Cargo lands in
   `%USERPROFILE%\.cargo\bin`, which must be on `PATH`)
-- Visual Studio 2022 C++ build tools (MSVC toolchain + Windows SDK)
-- WebView2 runtime — preinstalled on Windows 11
+
+Then, per platform:
+
+- **Windows**: Visual Studio 2022 C++ build tools (MSVC toolchain + Windows
+  SDK), and the WebView2 runtime (preinstalled on Windows 11; the agent
+  installer bundles the bootstrapper for images without it).
+- **macOS**: the Xcode Command Line Tools. The app targets macOS 15 or later,
+  and releases ship for Apple silicon only. `tauri.macos.conf.json` declares
+  the swoop streamer as a sidecar, and tauri-build refuses to compile until the
+  file exists, so stage it once before the first build (CMake is needed for its
+  audio codec):
+
+  ```bash
+  cd agent/swoop
+  CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo build --release --locked \
+    --no-default-features --features encode-videotoolbox,audio-opus
+  cp target/release/owlette-swoop \
+    ../../desktop/src-tauri/binaries/owlette-swoop-$(rustc -vV | sed -n 's/^host: //p')
+  ```
+
+- **Linux** (Ubuntu 24.04): the WebKitGTK and tray libraries Tauri builds
+  against:
+
+  ```bash
+  sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+  ```
 
 ## Commands
 
@@ -21,7 +51,7 @@ cd desktop
 npm install
 
 npm run tauri dev                  # compile the Rust host + start vite, open the app window
-npx tauri build --no-bundle        # release exe at src-tauri/target/release/owlette-desktop.exe
+npx tauri build --no-bundle        # Windows release exe at src-tauri/target/release/owlette-desktop.exe
 
 npm run dev            # frontend only, in a browser at :1420 (no Tauri IPC)
 npm run build          # typecheck + production frontend bundle into dist/
@@ -31,13 +61,30 @@ npm run test:watch     # vitest
 npm run lint           # oxlint
 ```
 
-The first `tauri dev` compiles ~435 crates and takes several minutes; later runs
-are incremental and start in seconds.
+The first `tauri dev` compiles several hundred crates and takes several
+minutes; later runs are incremental and start in seconds.
 
-Always pass `--no-bundle` to `tauri build`. The agent installer (Inno Setup, in
-`agent/`) is what ships this app; the Tauri bundler would demand NSIS/WiX and
-produce a second, competing installer. The full installer build runs the same
-command, and the quick build re-copies the exe from `target/release/`.
+The app reads and writes the agent's real data tree, so run it on a machine
+with the agent installed, or set `OWLETTE_DATA_ROOT` to a scratch tree; the
+agent honours the same override.
+
+To try a Windows build against an installed agent, close the running app, copy
+the new `owlette-desktop.exe` into `C:\ProgramData\Owlette\app\`, and start it
+with `--tray` (or let the service start it on its next status check).
+
+## How the app ships
+
+The app never ships on its own; each platform's agent installer carries it.
+
+| platform | build | installed as | started by |
+| --- | --- | --- | --- |
+| Windows | `npx tauri build --no-bundle`, run by `agent/build_installer_full.bat`; the quick build re-copies the exe from `target/release/` | `C:\ProgramData\Owlette\app\owlette-desktop.exe`, by the Inno Setup installer | the service, as soon as a user session exists, and the installer's startup shortcut |
+| macOS | `npx tauri build --bundles app`, run by `agent/build/macos/build.sh`, which signs the app and its swoop sidecar | `/Applications/owlette.app`, inside `Owlette-Installer-v<version>.pkg` | the `app.owlette.desktop` LaunchAgent, at every login |
+| Linux | `npx tauri build --bundles deb`, run by `agent/build/linux/build.sh`, which merges the app's deb into the agent package | `/usr/bin/owlette-desktop`, inside `Owlette-Installer-v<version>.deb` | the `owlette-desktop.service` user unit, for every graphical login by a member of the `owlette` group |
+
+On Windows always pass `--no-bundle`: the Tauri bundler would build its own
+NSIS installer, a second one competing with the agent's. The `nsis` entry in
+`tauri.conf.json`'s bundle targets is never built.
 
 ## Layout
 
@@ -48,12 +95,13 @@ desktop/
 ├─ vite.config.ts        # @ alias, tailwind 4 plugin, tauri dev server, vitest
 ├─ public/               # icon.svg, owlette-eye.svg
 ├─ src/
+│  ├─ App.tsx
 │  ├─ globals.css        # design tokens + unlayered interaction rules
 │  ├─ assets/fonts/      # self-hosted Geist / Geist Mono (variable woff2)
+│  ├─ components/        # the process list and detail, schedule editor, join/leave site, drop confirm,
+│  │                     #   restart countdown, permission banner (macOS), report issue, status footer
 │  ├─ components/ui/     # 22 shadcn primitives, verbatim from web/
-│  ├─ components/landing/OwletteEye.tsx
-│  ├─ lib/utils.ts       # cn()
-│  ├─ lib/surfaces.ts    # MENU_SURFACE recipe
+│  ├─ hooks/             # config, app states, file watch, service health, file drop, launch flags
 │  ├─ lib/ipc.ts         # typed wrappers for every host command + event
 │  ├─ lib/owletteConfig.ts   # config.json schema + the transforms behind every write
 │  ├─ lib/processStatus.ts   # app_states.json + the KILLED / RESTARTING markers
@@ -61,21 +109,32 @@ desktop/
 │  ├─ lib/dropClassifier.ts  # dropped path -> process entry (pure, injected fs)
 │  ├─ lib/fsProbe.ts     # the real disk behind it + per-machine search paths
 │  ├─ lib/dropQueue.ts   # the confirm-card queue between a drop and a write
-│  ├─ lib/sidebarWidth.ts    # the sidebar clamp + drag/keyboard geometry
+│  ├─ lib/launchCopy.ts  # platform-specific wording for the launch target
+│  ├─ lib/platform.ts    # which OS the app is on
 │  ├─ lib/theme.ts       # the appearance choices (system / dark / light)
 │  └─ test/              # vitest setup + design-system smoke test
 └─ src-tauri/
-   ├─ src/paths.rs       # %PROGRAMDATA%\Owlette layout + path scoping
-   ├─ src/json_io.rs     # named-mutex + atomic JSON read/write
+   ├─ tauri.conf.json    # window, bundle targets; tauri.macos.conf.json adds the overlay title bar + swoop sidecar
+   ├─ binaries/          # the staged swoop sidecar (macOS; gitignored)
+   ├─ src/paths.rs       # the data root (%PROGRAMDATA%\Owlette, /Library/Application Support/Owlette,
+   │                     #   /var/lib/owlette, or OWLETTE_DATA_ROOT) + path scoping
+   ├─ src/json_io.rs     # locked + atomic JSON read/write (named mutex on Windows, flock off it)
    ├─ src/watchers.rs    # directory watchers for the three seam files
-   ├─ src/service_ctl.rs # OwletteService SCM state / start / stop
-   ├─ src/seam.rs        # macos / linux: requests to the root daemon (pair, leave, restart, reboot)
+   ├─ src/service_ctl.rs # service state / start / stop: the SCM, launchd or systemd
+   ├─ src/seam.rs        # macOS / Linux: requests to the root daemon (pair, leave, restart, reboot)
+   ├─ src/jobrunner.rs   # macOS / Linux: GUI jobs the daemon asks of the app (captures, notifications)
+   ├─ src/agent_cli.rs   # runs the agent's python CLI (pairing, leaving, bug reports) and streams progress
+   ├─ src/tcc.rs         # macOS: reports the Screen Recording grant to the daemon
+   ├─ src/awake.rs       # keep screens awake: the session's half (idle lock, screensaver)
    ├─ src/process_ctl.rs # WM_CLOSE-then-terminate with an identity check
    ├─ src/pid_file.rs    # tmp/tray.pid + tmp/gui.pid
-   ├─ src/tray.rs        # notification-area icon, menu, status monitor
-   ├─ src/startup_link.rs # "start on login": {userstartup}\Owlette.lnk; on macos / linux this user's
+   ├─ src/tray.rs        # tray / menu bar icon, menu, status monitor
+   ├─ src/startup_link.rs # "start on login": {userstartup}\Owlette.lnk; on macOS / Linux this user's
    │                      #   override of the installer's login item (launchctl disable / systemctl --user mask)
    ├─ src/window_state.rs # per-user layout memory (window size, sidebar width, appearance)
+   ├─ src/mac_window.rs  # macOS 26 window shape
+   ├─ src/menu_bar_position.rs # macOS: where the menu bar item goes on a first run
+   ├─ src/shell_open.rs  # hand a path or URL to the OS opener
    ├─ src/commands.rs    # #[tauri::command] adapters (no logic)
    └─ src/lib.rs         # builder, plugins, watcher wiring, exit cleanup
 ```
@@ -83,34 +142,35 @@ desktop/
 ## Tray, window lifetime and launch arguments
 
 This is a tray app: `src-tauri/tauri.conf.json` starts the window hidden and
-closing it hides it again, so the notification-area icon — not a window — is what
-keeps the process alive. `src/tray.rs` replaces `agent/src/owlette_tray.py` and
+closing it hides it again, so the tray icon (the menu bar item on macOS, where
+there is no Dock icon until the window opens), not a window, is what keeps the
+process alive. `src/tray.rs` replaced the old `agent/src/owlette_tray.py` and
 carries the porting notes for the status, icon and toast semantics.
 
 | Argument | Meaning |
 | --- | --- |
-| `--tray` | supply the tray icon, no window. What the service passes from `_try_launch_tray`, and what the startup shortcut passes. |
-| `--restart-prompt` | a process exceeded its relaunch budget; show the reboot countdown. The window for it is not built yet — the argv is only surfaced to the frontend. |
+| `--tray` | supply the tray icon, no window. What the service passes when it starts the app (`_try_launch_tray` on Windows), and what the startup shortcut, the macOS LaunchAgent and the Linux user unit pass. |
+| `--restart-prompt` | a process exceeded its relaunch budget (`OwletteService.reached_max_relaunch_attempts`): show the reboot countdown (`RestartCountdown`, armed by `useRestartPrompt`). |
 
 A second launch never becomes a second process: the single-instance plugin
 forwards its argv on `owlette://second-instance`, and a forwarded launch without
 `--tray` shows the window. `launchArgs()` covers the *first* launch only, so a UI
-that reacts to either flag has to handle both.
+that reacts to either flag handles both; `useLaunchFlag` watches both routes.
 
 Two pid markers tell the service what is open (`src/pid_file.rs`):
 `tmp/tray.pid` for the life of the process, `tmp/gui.pid` only while the window
-is on screen — the second is what raises the service's metrics cadence to 5 s.
+is on screen. The second is what raises the service's metrics cadence to 5 s.
 
-**Toasts need an app identity.** Windows silently drops a toast from a
+**Windows toasts need an app identity.** Windows silently drops a toast from a
 non-packaged app whose `AppUserModelID` is not registered by some shortcut under
-the Start menu — `notification().show()` still returns `Ok`, and nothing appears.
+the Start menu: `notification().show()` still returns `Ok`, and nothing appears.
 `startup_link::enable()` stamps `app.owlette.desktop` onto the shortcut it
 writes, but a machine that never turns on "start on login" has no such shortcut,
-so the installer must ship a Start menu shortcut carrying the same id.
+so the installer ships a Start menu shortcut carrying the same id.
 
 ## Logs
 
-`src/lib.rs` registers `tauri_plugin_log` in **both** profiles — it used to be
+`src/lib.rs` registers `tauri_plugin_log` in **both** profiles. It used to be
 behind `cfg!(debug_assertions)`, which meant a release build wrote nothing and a
 field failure of the tray, a toast or the pairing dialog was undiagnosable. Every
 log call in this crate lands here; none exist to record a token or a config
@@ -119,30 +179,32 @@ value, and none should be added that do.
 | Profile | Level | Where |
 | --- | --- | --- |
 | debug | Info | stdout (the `tauri dev` terminal) **and** the file below |
-| release | Info | the file below only — there is no console (`windows_subsystem = "windows"`) |
+| release | Info | the file below only; there is no console (`windows_subsystem = "windows"`) |
 
-```
-%LOCALAPPDATA%\app.owlette.desktop\logs\owlette-desktop.log
-```
+The file is `owlette-desktop.log` in Tauri's per-user log directory:
 
-That is the plugin's `TargetKind::LogDir`, which resolves to
-`{FOLDERID_LocalAppData}\{identifier}\logs` — **per-user**, so it belongs to
-whoever the app is running as (the kiosk's auto-login account), not to the
-`LocalSystem` service. It is a different tree from
-`C:\ProgramData\Owlette\logs\service.log`; a field report wants both, and their
-timestamps line up directly because this sink is configured for local time
-rather than the plugin's UTC default.
+| Platform | Path |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\app.owlette.desktop\logs\owlette-desktop.log` |
+| macOS | `~/Library/Logs/app.owlette.desktop/owlette-desktop.log` |
+| Linux | `~/.local/share/app.owlette.desktop/logs/owlette-desktop.log` |
+
+It belongs to whoever the app runs as (the kiosk's auto-login account), not to
+the service, and it is a different tree from the agent's `logs/service.log`
+under the data root. A field report wants both, and their timestamps line up
+directly because this sink is configured for local time rather than the
+plugin's UTC default.
 
 The file rotates at 4 MB and three rotated copies are kept
-(`owlette-desktop_<date>.log`), so the ceiling is 16 MB — the plugin's own
+(`owlette-desktop_<date>.log`), so the ceiling is 16 MB. The plugin's own
 default is 40 KB with one file kept, which on a machine that runs for months is
 a window of minutes.
 
 ## The service seam
 
-The python service and this app share three files under
-`%PROGRAMDATA%\Owlette`, and the host reimplements that contract exactly rather
-than inventing a new one — both are in the field at once.
+The python service and this app share three files under the data root, and the
+host reimplements that contract exactly rather than inventing a new one: both
+are in the field at once.
 
 | File | Written by | Read for |
 | --- | --- | --- |
@@ -152,24 +214,26 @@ than inventing a new one — both are in the field at once.
 
 Rules the host enforces, all sourced from `agent/src/shared_utils.py`:
 
-- Every read and write takes the named mutex `Global\OwletteJsonFileMutex` with
-  a 2 000 ms budget and always releases it, matching `_CrossProcessLock`. On
-  timeout it proceeds unlocked and says so in the returned `lock` field.
-- **`CreateMutexW` fails here and that is expected — the `OpenMutexW` fallback
-  is the real path.** The service creates the object with an explicit security
-  descriptor (`shared_utils._JSON_MUTEX_SDDL`) granting Authenticated Users
-  exactly `SYNCHRONIZE | MUTEX_MODIFY_STATE`; `CreateMutexW` asks for
-  `MUTEX_ALL_ACCESS`, which that descriptor deliberately withholds, so a
+- Every read and write takes the cross-process lock with a 2 000 ms budget and
+  always releases it, matching `_CrossProcessLock`. On Windows that is the named
+  mutex `Global\OwletteJsonFileMutex`; on macOS and Linux it is `flock(2)` on
+  `tmp/json.lock`. On timeout it proceeds unlocked and says so in the returned
+  `lock` field.
+- **On Windows, `CreateMutexW` fails here and that is expected: the
+  `OpenMutexW` fallback is the real path.** The service creates the object with
+  an explicit security descriptor (`shared_utils._JSON_MUTEX_SDDL`) granting
+  Authenticated Users exactly `SYNCHRONIZE | MUTEX_MODIFY_STATE`; `CreateMutexW`
+  asks for `MUTEX_ALL_ACCESS`, which that descriptor deliberately withholds, so a
   non-elevated process must open it with the two rights it actually needs. The
   python side has the same fallback. Against an agent older than that fix the
   object still carries LocalSystem's default DACL and both calls fail, so the
-  guard reports `lock: "unavailable"` and proceeds — atomicity, not the lock, is
+  guard reports `lock: "unavailable"` and proceeds; atomicity, not the lock, is
   what makes that safe.
 - The descriptor is fixed at creation time, so an in-place agent upgrade only
   takes effect once every handle to the old object is closed (stop the service
   *and* the desktop app, or reboot).
 - Writes go to a scratch file in the destination directory and are renamed over
-  the target, with `indent=4` formatting and **key order preserved** — the
+  the target, with `indent=4` formatting and **key order preserved**: the
   `firebase` block must survive a desktop write byte-identical.
 - Reads retry three times (100/200 ms) on a locked or half-written file and then
   fail. Python returns `{}` there; we do not, because a UI that writes back an
@@ -177,40 +241,49 @@ Rules the host enforces, all sourced from `agent/src/shared_utils.py`:
 - Frontend paths are resolved inside the data root; `..` and outside paths are
   rejected.
 - Because the files are replaced atomically, the watchers are registered on
-  `config\` and `tmp\`, not on the files, and coalesce each replace burst into
+  `config/` and `tmp/`, not on the files, and coalesce each replace burst into
   one `owlette://file-changed` event.
 - `service_status.json` older than 120 s means the service is not writing, no
-  matter what the SCM reports (`owlette_tray.read_service_status`); the service
-  refreshes it on a 30 s throttle, so anything under two minutes is normal.
+  matter what the service manager reports (`owlette_tray.read_service_status`);
+  the service refreshes it on a 30 s throttle, so anything under two minutes is
+  normal.
 
-`src/lib/ipc.ts` is the only place allowed to call `invoke` — one typed function
+`src/lib/ipc.ts` is the only place allowed to call `invoke`: one typed function
 per command, plus the event subscriptions.
 
 ### The request seam (macOS and Linux)
 
 Off Windows this app runs as the console user, who can neither use the token
 store nor control the root daemon. Joining a site, leaving it, restarting the
-machine and dismissing a pending reboot — and, on macOS, restarting the service
-— are requests the daemon carries out (`src-tauri/src/seam.rs`; the daemon half
+machine and dismissing a pending reboot (and, on macOS, restarting the service)
+are requests the daemon carries out (`src-tauri/src/seam.rs`; the daemon half
 is "The privileged-request seam" in `agent/src/configure_site.py`). The app
 writes `{"verb", "nonce"}` 0600 to `ipc/requests/<id>.json.tmp`, renames it into
 place, and reads the daemon's JSON-line answer from `<id>.result` until a
-terminal event — the same stream the Windows helper prints, forwarded as the
+terminal event: the same stream the Windows helper prints, forwarded as the
 same `owlette://agent-cli` events. No sudo, no prompt; every request is audited
 by the daemon in `logs/privileged_requests.log`. Linux restarts the service with
 `systemctl restart` under the packaged polkit rule instead, which also works
 when the daemon is down.
 
+The seam runs the other way too. A root daemon has no display, so a screen
+capture or a notification is a job it drops into `ipc/jobs/<id>.json` for this
+app to carry out in the user's session, answering in
+`ipc/results/<id>/result.json` (`src-tauri/src/jobrunner.rs`; the daemon half is
+`agent/src/osadapter/posix.py`). On macOS the app also reports its own Screen
+Recording grant in `ipc/tcc.json` (`src-tauri/src/tcc.rs`), which is how the
+daemon knows whether this Mac can be captured or swooped.
+
 ### The two markers this app writes
 
 `tmp/app_states.json` is the service's to write, with two exceptions. Both are
 statuses stamped on a pid to describe an exit the service is about to notice
-(`owlette_service.py:2598-2630`):
+(read in `OwletteService.handle_process`):
 
 | Marker | Written | Meaning to the service |
 | --- | --- | --- |
-| `KILLED` | *after* the kill | intended exit — no crash alert, no record |
-| `RESTARTING` | *before and after* the kill | intended exit, operator-initiated — no crash alert, plus a `process_restarted` audit event |
+| `KILLED` | *after* the kill | intended exit: no crash alert, no record |
+| `RESTARTING` | *before and after* the kill | intended exit, operator-initiated: no crash alert, plus a `process_restarted` audit event |
 
 The order is not incidental, and both halves of the restart write were paid for
 in live testing:
@@ -218,8 +291,8 @@ in live testing:
 - `KILLED` asserts the process is gone, so writing it before the kill would be a
   lie whenever the kill fails.
 - `RESTARTING` asserts only an intent, so it goes in *before*: the service
-  polls, and an exit it sees before the marker lands is reported as a crash —
-  alert, screenshot and Cortex event — for a restart the operator asked for.
+  polls, and an exit it sees before the marker lands is reported as a crash
+  (alert, screenshot and hoot event) for a restart the operator asked for.
 - It goes in *again after*, because closing a process is not instant (WM_CLOSE,
   a grace period, then a terminate) and every service tick in that window writes
   `RUNNING` over the marker. With only the first write, a live agent overwrote
@@ -238,27 +311,27 @@ Dropping a file, an app or a Unity build folder anywhere on the window
 configures it as a process. The flow is four modules deep and each one is
 testable on its own:
 
-1. `hooks/useFileDrop.ts` — Tauri's `onDragDropEvent`. Not the html5 events:
+1. `hooks/useFileDrop.ts`: Tauri's `onDragDropEvent`. Not the html5 events:
    with `dragDropEnabled` the webview hands drops to the host, so `ondrop` never
    fires, and the host event carries absolute paths rather than a `File`. Row
    reordering is a *pointer* drag in the same window, so this ignores everything
    while `lib/rowDrag.ts` says one is in progress.
-2. `lib/dropClassifier.ts` — the rule matrix. `.toe` opens in the newest
+2. `lib/dropClassifier.ts`: the rule matrix. `.toe` opens in the newest
    installed TouchDesigner, a folder is a process only if it is a Unity player
    build (`<name>.exe` beside `<name>_Data`), `.py` / `.ps1` get an interpreter,
    `.bat` / `.cmd` go in as the executable themselves. Pure, with the disk
    injected as an `FsProbe`.
-3. `lib/dropQueue.ts` + `components/DropConfirm.tsx` — one confirm card per
+3. `lib/dropQueue.ts` + `components/DropConfirm.tsx`: one confirm card per
    classified path, worked from the front of the queue. Nothing is written until
    a card is confirmed, and each confirm is its own write.
-4. `lib/owletteConfig.ts` — `addProcess` on a document re-read from disk, so the
+4. `lib/owletteConfig.ts`: `addProcess` on a document re-read from disk, so the
    `firebase` block and every key this app has never heard of survive.
 
 Two rules the classifier will not bend:
 
 - **`file_path` only ever holds a real file**, never a command-line argument
   string. The service runs that field through `os.path.abspath()`
-  (`owlette_service.py:1902-1910`), which turns `-File C:\x.ps1` into a path
+  (`OwletteService._validate_path`), which turns `-File C:\x.ps1` into a path
   under the service's working directory. That is a known agent-side bug, not a
   classifier limitation, and it is why a `.ps1` travels as a bare quoted path
   and why `.bat` files are launched directly.
@@ -268,7 +341,7 @@ Two rules the classifier will not bend:
   button are the same entry.
 
 `lib/fsProbe.ts` is the only file that touches `@tauri-apps/plugin-fs`, which is
-capability-scoped to `exists`, `readDir` and `stat` — **metadata only**.
+capability-scoped to `exists`, `readDir` and `stat`: **metadata only**.
 Classification never needs a file's contents; keep it that way and a dropped
 file can be misread but never read.
 
@@ -280,17 +353,17 @@ the files in `web/components/ui/` and `web/lib/utils.ts`; the `@` alias in
 `vite.config.ts` and `tsconfig.app.json` exists specifically so those files
 compile here with their `@/lib/utils` imports untouched. When a primitive changes
 in `web/`, re-copy it rather than editing this copy. (`.oxlintrc.json` turns
-`react/only-export-components` off for that directory for the same reason — the
+`react/only-export-components` off for that directory for the same reason: the
 `buttonVariants`/`badgeVariants` co-exports are shadcn's shape, not ours to fix.)
 
 Three of the primitives are hand-customised in `web/` and easy to clobber by
 re-running `npx shadcn add`:
 
-- `button.tsx` — `.btn-sweep` in the cva base, **no** `hover:bg-*` on any variant
+- `button.tsx`: `.btn-sweep` in the cva base, **no** `hover:bg-*` on any variant
   (the sweep supplies hover), `link` variant uses `.hl-link`, plus the extra
   `icon-sm` / `icon-lg` sizes.
-- `input.tsx` — `aria-invalid:ring-[3px]` unconditionally, not only when focused.
-- `sonner.tsx` — Owlette toast palette and lucide icon set.
+- `input.tsx`: `aria-invalid:ring-[3px]` unconditionally, not only when focused.
+- `sonner.tsx`: owlette toast palette and lucide icon set.
 
 ### globals.css
 
@@ -298,8 +371,8 @@ Ported from `web/app/globals.css`. Tailwind 4 is configured **CSS-first**: there
 is no `tailwind.config.*` anywhere in this package, the theme lives in the
 `@theme inline` block, and `components.json` carries `"config": ""` to say so.
 
-The rules below `@layer components` — `.hl-link`, `.btn-sweep`, `.form-reveal`,
-and the native temporal-input `color-scheme` rules — are **deliberately
+The rules below `@layer components` (`.hl-link`, `.btn-sweep`, `.form-reveal`,
+and the native temporal-input `color-scheme` rules) are **deliberately
 unlayered**, so they outrank Tailwind's utilities layer and a stray
 `hover:bg-*`/`hover:underline` can't fight them. Their order matters. Don't wrap
 them in a layer and don't reorder them.
@@ -313,14 +386,14 @@ the `.hero-*` entrance keyframes (plus their now-orphaned
 
 The web app gets Geist through `next/font/google`, which generates the
 `--font-geist` / `--font-geist-mono` variables. Those variable names are
-load-bearing — `@theme inline` maps them to `--font-sans`, `--font-heading` and
+load-bearing: `@theme inline` maps them to `--font-sans`, `--font-heading` and
 `--font-mono`, and ported rules reference `var(--font-geist)` directly.
 
 There is no `next/font` here and a desktop app must not fetch fonts at runtime,
 so the two variable-weight woff2 files are vendored in `src/assets/fonts/` and
 bound to the same variable names via `@font-face` in `globals.css`. They came
 from `geist@1.7.2` (`dist/fonts/geist-sans/Geist-Variable.woff2` and
-`dist/fonts/geist-mono/GeistMono-Variable.woff2`), SIL Open Font License 1.1 —
+`dist/fonts/geist-mono/GeistMono-Variable.woff2`), SIL Open Font License 1.1;
 see `src/assets/fonts/LICENSE.txt`. To update, install `geist`, copy the two
 files across, and delete the dependency again.
 
@@ -330,27 +403,31 @@ files across, and delete the dependency again.
 alias, `cn()` + `cva()` + `tailwind-merge`, the `button.tsx` customisations, and
 the integrity of `globals.css` (unlayered rules present, font variables bound,
 stripped blocks still stripped). CI runs `npm run lint`, `npm test` and
-`npm run typecheck` on every change under `desktop/` (`.github/workflows/desktop.yml`);
-the Rust crate is `rust-build.yml`'s.
+`npm run typecheck` on every change under `desktop/` (`.github/workflows/desktop.yml`).
+The Rust crate is `rust-build.yml`'s: clippy and `cargo test` on Windows, macOS
+and Linux.
 
-`src/globals.css` is opted into `test.css` in `vite.config.ts` — vitest stubs
+`src/globals.css` is opted into `test.css` in `vite.config.ts`: vitest stubs
 CSS imports to an empty string by default, which would silently empty the
 `?raw` import those assertions read.
 
 ## Window
 
 `src-tauri/tauri.conf.json` sets the window to 1060×640 with a 780×540 minimum,
-centred, and `backgroundColor: "#020B16"` — the sRGB value of the dark
+centred, and `backgroundColor: "#020B16"`, the sRGB value of the dark
 `--background` token (`oklch(0.145 0.03 250)`), so the native window paints the
 app's background instead of white before setup runs. `dragDropEnabled` is on.
-Neither config pins a `theme`.
+On Windows and Linux the window draws its own title bar (`decorations: false`,
+`components/WindowControls.tsx`); `tauri.macos.conf.json` keeps the native
+traffic lights over an overlay title bar. Neither config pins a `theme`.
 
 ### Appearance
 
 The operator picks system, dark or light from `appearance` in the app menu. It is
-stored in `layout.json` as `{"appearance": {"theme": "system"}}` (`system` when
-absent) and it is the **window** theme, set from Rust; the webview never picks a
-theme itself.
+stored in `layout.json` in the per-user app data directory
+(`%APPDATA%\app.owlette.desktop` on Windows) as `{"appearance": {"theme": "system"}}`
+(`system` when absent), and it is the **window** theme, set from Rust; the
+webview never picks a theme itself.
 
 - Before the window first shows, `window_state::restore` pins the window theme
   for dark or light (`system` leaves it unpinned) and paints the window and

@@ -1,41 +1,44 @@
 ---
 title: "account settings"
-description: "Your own preferences, not the site's: how timestamps render, which alert emails you get, which machines you have muted, your hoot key, password and second factors, and your API keys."
-keywords: ["preferences", "my settings", "profile", "change password", "celsius fahrenheit", "24 hour clock", "unsubscribe", "stop emails", "delete my account"]
+description: "your own preferences, not the site's: appearance, how timestamps render, which alert emails you get, which machines you have muted, your hoot key and model, password and second factors, and your API keys."
+keywords: ["preferences", "my settings", "profile", "change password", "celsius fahrenheit", "24 hour clock", "unsubscribe", "stop emails", "delete my account", "dark mode", "light mode", "theme", "change model", "llm key", "api key for hoot"]
 ---
 
 account settings is per **user**, not per site. changing it affects what you see and what lands in your inbox — nobody else's dashboard moves.
 
 open it from your avatar in the top right. seven sections:
 
-| section | holds |
-|---|---|
-| **profile** | first and last name, and the email you signed in with |
-| **preferences** | how timestamps and temperatures render |
-| **alerts** | which alert emails you get, where, and which machines are silenced |
-| **hoot** | your LLM provider, model, and api key |
-| **security** | password, second factors, passkeys |
-| **api** | your scoped api keys |
-| **danger zone** | delete your account |
+| section | holds | how it saves |
+|---|---|---|
+| **profile** | first and last name, and the email you signed in with (which cannot be changed) | **save changes** |
+| **preferences** | appearance, and how timestamps and temperatures render | appearance at once; the rest with **save changes** |
+| **alerts** | which alert emails you get, extra recipients, and which machines are muted | with **save changes**, see [alerts](#alerts) |
+| **hoot** | your LLM provider, model and API key | its own buttons |
+| **security** | second factors and passkeys, and your password | factors at once; the password with **save changes** |
+| **api** | your scoped API keys | at once |
+| **danger zone** | delete your account | its own confirm |
+
+**save changes** sits at the foot of the profile, preferences and security sections and saves everything the dialog holds, alert switches included.
 
 ---
 
 ## preferences
 
+**appearance** is **system**, **dark** or **light**. system, the default, follows your computer's setting and switches when it does. the choice is saved to your account, so every browser you sign in on follows it, and it applies as soon as you pick it, with no save. the owlette desktop app has its own appearance setting in its menu.
+
 **display times in** decides the clock every absolute timestamp on the dashboard is rendered against — heartbeats, activity logs, event history:
 
 | mode | what you see |
 |---|---|
+| **each machine's local timezone** (the default) | every machine renders its own heartbeats and timestamps in its own local clock. best when you watch kiosks across several timezones |
 | **my timezone** | every machine rendered in the timezone you pick below. one shared reference frame, wherever the machines are |
 | **site timezone** | every machine rendered in the site's configured timezone, set in manage sites |
 
-the **timezone** field below it is only consulted in *my timezone* mode.
+the **your timezone** field below it is only used in *my timezone* mode.
 
 this preference does **not** move schedules. a process window or a restart entry is a wall-clock rule evaluated against its own clock — see [timezones](/docs/dashboard/timezones) for which clock that is in each case. changing this setting changes how times are *displayed*, never when anything fires.
 
-the other two are straightforward: **temperature unit** is Celsius or Fahrenheit, and **time format** is 12-hour or 24-hour. the restart schedule editor's "next scheduled restart" preview follows your time format.
-
-**appearance** is light, dark, or system. system, the default, follows your computer's setting and switches when it does. the choice is saved to your account, so every browser you sign in on follows it, and it applies as soon as you pick it. the owlette desktop app has its own appearance setting in its menu.
+**temperature unit** is Celsius or Fahrenheit, and **time format** is 12-hour or 24-hour. the restart schedule editor's "next scheduled restart" preview follows your time format.
 
 ---
 
@@ -43,41 +46,56 @@ the other two are straightforward: **temperature unit** is Celsius or Fahrenheit
 
 seven categories, each on by default and individually switchable:
 
-| toggle | emails you about |
+| switch | emails you about |
 |---|---|
 | **machine offline alerts** | a machine stops reporting |
-| **process crash alerts** | a managed process crashes |
+| **process crash alerts** | a managed process crashes or fails to start |
 | **threshold alerts** | a metric crosses a rule on [`/admin/alerts`](/docs/dashboard/admin/email-alerts#threshold-alert-rules) |
-| **hoot escalation alerts** | hoot escalates something to a human |
-| **display events** | monitors removed, layouts drifting, or an apply failing — see [displays](/docs/dashboard/displays) |
-| **talon alerts** | a [talon](/docs/dashboard/talons) run needs your attention |
-| **api key expiry** | one of *your* keys is about to expire |
+| **hoot escalation alerts** | hoot escalates something it could not resolve |
+| **display events** | a monitor removed, a display sync lost, a layout apply failing, or an apply reverting itself (Windows machines) — see [displays](/docs/dashboard/displays). drift is not emailed, though the switch's own description says it is |
+| **talon alerts** | a [talon](/docs/dashboard/talons) fires or fails |
+| **api key expiry** | one of *your* API keys is about to expire |
 
-**alert email** is where they go. **additional CC recipients** copies up to five more addresses onto your alert emails.
+**alert email** shows where they go: the email you signed in with. **additional CC recipients** copies up to five more addresses onto every alert email.
+
+in this dialog the switches and the CC list are saved by **save changes**, which is on the profile, preferences and security sections, not on this one. to change one switch and be done, use [the deep link](#the-deep-link) below, where each switch saves as you flip it.
 
 ### muted machines
 
-muting silences every alert category for one machine, for you. mute and unmute from that machine's context menu on the dashboard; this section lists what you have muted and lets you lift a mute without going back to the card.
+muting silences every alert category for one machine, for you. mute and unmute from that machine's [menu](/docs/dashboard/machine-monitoring#the-machine-menu) on the dashboard. once you have muted something, this section lists it, and the × beside a machine lifts the mute at once.
 
-muting is per user. a machine you have muted still pages everyone else on the site.
+muting is per user. a machine you have muted still emails everyone else on the site.
 
 ### the deep link
 
-every alert email ends with **manage alerts**, which opens `/settings/alerts` — the same toggles as this section, on their own page, so you can turn something off from your phone without going through the dashboard. each toggle saves as you flip it.
+every alert email ends with **manage alerts**, which opens `/settings/alerts`: the same seven switches on a page of their own, so you can turn one off from your phone without going through the dashboard. each switch saves as you flip it. CC recipients are only in this dialog.
 
 ---
 
 ## hoot
 
-your provider, model, and api key for [hoot](/docs/dashboard/hoot). the key is yours and stored encrypted; full setup is in the [hoot guide](/docs/dashboard/hoot#setup).
+your provider, model and API key for [hoot](/docs/dashboard/hoot). the key is yours, and every hoot feature that runs as you spends it — see [your key](/docs/dashboard/hoot#your-key).
+
+| field | what it takes |
+|---|---|
+| **provider** | **Anthropic (Claude)** or **OpenAI** |
+| **model** | the provider's current models, read live with your saved key; before a key is saved, a built-in list. the default is Claude Sonnet 5 on Anthropic and GPT-4.1 on OpenAI |
+| **api key** | the provider's API key. it is encrypted with AES-256 and never returned to the browser; once one is saved the field shows dots |
+
+the section heading shows **connected** once a key is saved. the buttons:
+
+- **save key** stores the key you typed, with the model chosen.
+- **save model** appears instead when a key is already saved, the key field is empty and you picked a different model. it changes the model and keeps the stored key, so you do not type the key again.
+- **remove key** deletes the stored key. hoot, and anything it does on your behalf, stops until you save another.
+
+changing the **provider** needs that provider's key: pick it, paste its key, then **save key**.
 
 ---
 
 ## security
 
-- **second factors** — add, name, and remove TOTP authenticators; see [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication)
-- **passkeys** — register and remove WebAuthn credentials
-- **change password** — current password, then the new one twice
+- **two-factor authentication** lists every second factor on the account in one place: the **authenticator app** (six-digit codes from an app like 1Password or Authy — **set up**, or **remove**, which asks for a current code or a backup code) and your **passkeys**, which you add and remove here. when a factor already exists, adding another first asks you to verify one you have, so someone at your signed-in browser cannot quietly attach their own. see [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication).
+- **change password** — **update password** opens the fields: current password, then the new one twice. **save changes** applies it.
 
 backup codes are issued during [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication), not here.
 
@@ -85,12 +103,12 @@ backup codes are issued during [two-factor setup](/docs/dashboard/getting-starte
 
 ## api
 
-your personal scoped api keys, the same ones managed at `/settings/api-keys`. scopes, rotation, and expiry are covered in [api authentication](/docs/api/authentication).
+your personal scoped API keys — the same manager as `/settings/api-keys`, with expiry, custom scopes and rotation. a key goes in the `x-api-key` header. scopes, rotation and expiry are covered in [API authentication](/docs/api/authentication).
 
 ---
 
 ## danger zone
 
-**delete account** removes your account after you re-enter your password.
+**delete account** removes your account after you re-enter your password: your sites and machines, their deployments and logs, and your account data, and you are signed out. it cannot be undone.
 
 if you **own a site that has other members**, the deletion is refused with `needs_successor` — transfer ownership to another admin first. this is a hard stop, not a warning: an owned shared site cannot be left without an owner.

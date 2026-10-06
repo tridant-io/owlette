@@ -1,49 +1,223 @@
 ---
 title: docs
-description: start here for owlette setup, api, cli, sdks, and release notes.
+description: owlette keeps the software on your Windows, macOS and Linux machines running and lets you monitor, fix and update them from a browser. start here for setup, the dashboard, the API, the CLI and reference.
 ---
 
-import { BookOpen, Braces, FileClock, Package, Terminal } from "lucide-react";
+import {
+  Activity,
+  BookMarked,
+  BookOpen,
+  Bot,
+  Braces,
+  CalendarClock,
+  Download,
+  FileClock,
+  FolderSync,
+  Laptop,
+  Layers,
+  LayoutDashboard,
+  LifeBuoy,
+  Monitor,
+  MonitorCog,
+  Network,
+  Package,
+  Rocket,
+  ScreenShare,
+  Server,
+  Terminal,
+  Webhook,
+  Workflow,
+} from "lucide-react";
 
-use this hub to jump into the part of owlette you need next. start with the
-guide if you are setting up a machine, or go straight to the reference surfaces
-when you are scripting against owlette.
+owlette is a cloud-connected process manager and remote deployment system for
+the machines behind installations: TouchDesigner shows, digital signage, kiosks
+and media servers. a small agent runs as a system service on each machine,
+keeps your applications running, and reports to a web dashboard. from the
+dashboard you monitor the fleet, change what runs where, push project files,
+take over a screen, and ask an AI assistant to investigate.
+
+the agent runs on three platforms:
+
+- **Windows** 10 or later, 64-bit, as a Windows service
+- **macOS** 15 or later on Apple silicon, as a launchd daemon
+- **Linux**, Ubuntu 24.04, as a systemd unit
+
+each machine also gets the owlette desktop app: the local window, plus a tray
+icon on Windows and Linux or a menu bar item on macOS, for the same
+configuration the dashboard edits. not every feature reaches every platform;
+[platform support](/docs/reference/platform-support) lists what works where.
+
+new to owlette? [getting started](/docs/getting-started) takes you from an
+account to your first monitored machine in a few minutes.
+
+---
+
+## start here
 
 <Cards>
   <Card
     href="/docs/getting-started"
     icon={<BookOpen />}
     title="getting started"
-    description="install owlette, pair your first machine, and understand the core workflow."
+    description="create an account and a site, install the agent, and pair your first machine."
+  />
+  <Card
+    href="/docs/agent/installation"
+    icon={<Download />}
+    title="install the agent"
+    description="the installer for each platform, silent and preseeded installs, and how pairing works."
+  />
+  <Card
+    href="/docs/dashboard"
+    icon={<LayoutDashboard />}
+    title="the dashboard"
+    description="every page of the web dashboard and what it is for, from the machine list to the admin panel."
+  />
+  <Card
+    href="/docs/reference/platform-support"
+    icon={<Laptop />}
+    title="platform support"
+    description="which features work on Windows, macOS and Linux, and what each one needs."
+  />
+</Cards>
+
+---
+
+## run your fleet
+
+<Cards>
+  <Card
+    href="/docs/dashboard/machine-monitoring"
+    icon={<Activity />}
+    title="machine monitoring"
+    description="live CPU, memory, disk, GPU and network metrics, their history, and machine status."
+  />
+  <Card
+    href="/docs/dashboard/process-management"
+    icon={<MonitorCog />}
+    title="process management"
+    description="add processes, choose when they run, and let owlette relaunch them when they crash."
+  />
+  <Card
+    href="/docs/dashboard/restart-schedules"
+    icon={<CalendarClock />}
+    title="restart schedules"
+    description="restart machines on a weekly schedule in their own timezone, and share it as a preset."
+  />
+  <Card
+    href="/docs/dashboard/displays"
+    icon={<Monitor />}
+    title="displays"
+    description="store a machine's monitor layout, watch for drift from it, and put it back."
+  />
+  <Card
+    href="/docs/dashboard/deployments"
+    icon={<Rocket />}
+    title="deployments"
+    description="install software silently on one machine or many, and track every install."
+  />
+  <Card
+    href="/docs/dashboard/roost"
+    icon={<FolderSync />}
+    title="roost"
+    description="sync project folders to machines as immutable versions you can roll back."
+  />
+  <Card
+    href="/docs/dashboard/swoop"
+    icon={<ScreenShare />}
+    title="swoop"
+    description="see a machine's screen live in the browser, and control it behind a second factor."
+  />
+  <Card
+    href="/docs/dashboard/hoot"
+    icon={<Bot />}
+    title="hoot"
+    description="an AI assistant that diagnoses and manages machines by running tools on them."
+  />
+  <Card
+    href="/docs/dashboard/talons"
+    icon={<Workflow />}
+    title="talons"
+    description="site automations: a trigger, an optional condition, and the outputs to run."
+  />
+</Cards>
+
+---
+
+## automate
+
+<Cards>
+  <Card
+    href="/docs/api/overview"
+    icon={<Network />}
+    title="API overview"
+    description="what the public REST API covers, how API keys and scopes work, and where to begin."
   />
   <Card
     href="/docs/api"
     icon={<Braces />}
-    title="api reference"
-    description="open the interactive scalar reference for every public endpoint."
+    title="API reference"
+    description="the interactive reference for every public endpoint."
   />
   <Card
     href="/docs/cli/overview"
     icon={<Terminal />}
-    title="cli"
-    description="use the owlette command line for auth, roost, machines, processes, and webhooks."
+    title="CLI"
+    description="the owlette command line for auth, roost, machines, processes and webhooks."
+  />
+  <Card
+    href="/docs/api/webhooks"
+    icon={<Webhook />}
+    title="webhooks"
+    description="signed events posted to your systems when a version publishes, a deploy fails or a machine drops."
   />
   <Card
     href="/docs/api/sdk-node"
     icon={<Package />}
-    title="node sdk"
-    description="call owlette from node and typescript services."
+    title="Node SDK"
+    description="call owlette from Node and TypeScript services."
   />
   <Card
     href="/docs/api/sdk-python"
     icon={<Package />}
-    title="python sdk"
-    description="call owlette from python automation and backend jobs."
+    title="Python SDK"
+    description="call owlette from Python automation and backend jobs."
+  />
+</Cards>
+
+---
+
+## reference and operations
+
+<Cards>
+  <Card
+    href="/docs/architecture"
+    icon={<Layers />}
+    title="architecture"
+    description="how the agent, the dashboard, Firestore and object storage fit together."
+  />
+  <Card
+    href="/docs/reference"
+    icon={<BookMarked />}
+    title="reference"
+    description="authentication, the agent command channel, hoot tools and the Firestore data model."
+  />
+  <Card
+    href="/docs/troubleshooting"
+    icon={<LifeBuoy />}
+    title="troubleshooting"
+    description="common problems across the agent, the dashboard and pairing, and how to fix them."
+  />
+  <Card
+    href="/docs/setup"
+    icon={<Server />}
+    title="self-hosting"
+    description="run your own instance: Firebase, Cloudflare R2, the web app and its scheduled jobs."
   />
   <Card
     href="/docs/changelog"
     icon={<FileClock />}
     title="changelog"
-    description="track user-facing changes and release notes."
+    description="every release and what changed in it."
   />
 </Cards>

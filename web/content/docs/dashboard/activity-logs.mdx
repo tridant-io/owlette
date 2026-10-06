@@ -1,119 +1,192 @@
 ---
 title: "activity logs"
-description: "The activity logs page shows a site-scoped timeline for agent, process, command, deployment, and scheduled reboot events. Open it from the dashboard menu by selecting logs, or go directly to /logs."
-keywords: ["history", "audit trail", "event log", "who did what"]
+description: "the logs page is a site's timeline of agent, process, command, deployment, restart, display, talon and swoop events: filter and search it, expand a row for detail, clear it, or read it over the API."
+keywords: ["history", "audit trail", "event log", "who did what", "what happened", "crash history", "reboot history", "clear logs", "delete logs", "search logs", "retention", "how long are logs kept", "event feed"]
 ---
 
+open **logs** in the dashboard navigation, or go to `/logs`. it shows the current site's events, newest first. every member of the site can read it; clearing it needs a site owner or admin.
+
+who started a [swoop](/docs/dashboard/swoop) session, and who was refused, is kept in the session's own audit trail, not here; see [what is recorded](/docs/dashboard/swoop#what-is-recorded).
+
 ---
 
-## event types
+## reading the timeline
 
-Common stored action values include:
+the page loads 50 entries at a time. the first 50 update live; scroll to the end and the next 50 load, with **loading more...** while they do.
 
-| action | label | typical level |
-|--------|-------|---------------|
-| `agent_started` | agent started | info |
-| `agent_stopped` | agent stopped | info |
-| `process_started` | process started | info |
-| `process_killed` | process killed | warning |
-| `process_crash` | process crashed | error |
-| `process_exited` | process exited | info |
-| `process_start_failed` | start failed | error |
-| `process_launch_failed` | launch failed | error |
-| `command_executed` | command executed | info |
-| `deployment_completed` | deployment completed | info |
-| `deployment_failed` | deployment failed | error |
-| `deployment_cancelled` | deployment cancelled | warning |
-| `scheduled_reboot_announced` | scheduled restart announced | info |
-| `scheduled_reboot_success` | scheduled restart completed | info |
-| `scheduled_reboot_cancelled` | scheduled restart cancelled | warning |
-| `scheduled_reboot_missed` | scheduled restart missed | warning |
-| `scheduled_reboot_failed` | scheduled restart failed | error |
+| column | shows |
+|---|---|
+| level | **info**, **warning** or **error**. any other level shows as plain text: `display_monitor_removed` is logged as `critical` |
+| time | how long ago, such as "2m ago". hover it for the full date and time |
+| event | the stored action with underscores as spaces: `scheduled_reboot_success` reads "scheduled reboot success", while the filter calls it **scheduled restart completed** |
+| machine | the machine's name. a talon run that is not tied to one machine shows `site` |
+| process | the process, for process events, and the installer, for deployment events |
+| details | the start of the details text. a camera icon means a crash screenshot is attached |
 
-The menu also includes **all actions** as the reset value. The scheduled-restart
-outcomes are explained in [restart schedules](/docs/dashboard/restart-schedules#what-shows-up-in-the-logs).
+click a row to expand it: the machine ID, the user when a person caused the event, the full timestamp, the full details, and the crash screenshot, which opens full size when clicked. the button beside **search** expands or collapses every loaded row (**expand all**, **collapse all**).
+
+the header counts **events**, **warnings** and **errors** among the entries loaded and shown, search included, not across the whole site. a `critical` entry counts in neither warnings nor errors.
+
+full timestamps follow your **display times in** setting in [account settings](/docs/dashboard/account-settings#preferences). in the per-machine mode the log uses the site's timezone, since a row does not carry its machine's.
 
 ---
 
 ## filtering
 
-Select **show filters** to narrow the timeline.
+**show filters** opens the filter row.
 
 | filter | options |
-|--------|---------|
-| **action type** | all actions, or a dashboard-supported action value |
-| **machine** | all machines, or a machine present in the loaded logs |
-| **level** | all levels, info, warning, error |
-| **date range** | all time, last hour, last 24 hours, today, yesterday, last 7 days, last 30 days, this week, this month, last month, custom range |
+|---|---|
+| **action type** | a searchable list of the actions below, grouped as they are here (**search actions…**). tick any number; none ticked is **all actions**. **select all** (or **select matches** while searching the list) and **none** set it in one go |
+| **machine** | **all machines**, or a machine ID among the entries loaded |
+| **level** | **all levels**, **info**, **warning**, **error** |
+| **date range** | **all time**, **last hour**, **last 24 hours**, **today**, **yesterday**, **last 7 days**, **last 30 days**, **this week** (from Monday), **this month**, **last month**, **custom range** |
 
-When **custom range** is selected, the page shows **from** and **to** date inputs. Use **reset filters** to clear action, machine, level, and date filters.
+**custom range** adds **from** and **to** dates. ranges use your computer's clock. **reset filters** clears all four.
 
----
-
-## browsing logs
-
-The first batch is loaded with a real-time Firestore listener, ordered newest first when the active filters allow it. The page loads 50 entries at a time and uses infinite scroll: when you reach the end of the visible list, the next batch is fetched automatically and a **loading more...** indicator appears.
-
-There are no numbered page controls on the current page.
+the filters run on the server, so they reach every entry the site has, not only the ones loaded. the action list holds the common actions; others reach the feed too, and search finds them.
 
 ---
 
-## log entry details
+## searching
 
-Each collapsed row shows:
+**search** opens a field, "search logs...". it matches the event text, the raw action, the machine name and ID, the process, the details and the level.
 
-| field | description |
-|-------|-------------|
-| **level** | Severity badge for info, warning, error, or another stored level |
-| **action** | Stored action value rendered as readable text |
-| **machine** | Machine name for the event |
-| **process** | Process name when the event is process-scoped |
-| **timestamp** | Rendered using the user's selected dashboard time display mode |
-| **details** | Short text preview when present |
-| **screenshot** | Camera marker when a crash screenshot is attached |
-
-Expand a row to see the machine id, user id when present, the full timestamp, full details text, and an attached crash screenshot preview.
+while you search, the page loads every entry matching the filters, up to the 2,000 most recent, and searches those. past that cap it says "searching the most recent 2,000 logs in scope — add a date or machine filter to reach older entries." scrolling does not load more while searching. `esc` clears the field.
 
 ---
 
-## storage and API
+## event types
 
-Logs are stored under:
+grouped as in the **action type** filter.
 
-```text
-sites/{siteId}/logs/{logId}
-```
+### agent
 
-The dashboard reads from that collection directly. The site logs API reads the same collection with cursor pagination:
+| action | filter label | level | when |
+|---|---|---|---|
+| `agent_started` | agent started | info | the agent's service started |
+| `agent_stopped` | agent stopped | info | the service stopped cleanly |
+| `update_success` | agent update succeeded | info | a self-update came back on the target version |
+| `update_failed` | agent update failed | error | a self-update came back on the old version |
+| `update_unknown` | agent update version mismatch | warning | a self-update came back on neither version |
+| `watchdog_restart` | watchdog restart | warning | the agent restarted itself because its connection stopped working. the reason is in the details |
+| `watchdog_budget_exhausted` | watchdog budget exhausted | warning | out of self-restarts. the agent keeps running and reconnecting, without restarting |
+| `unexpected_service_restart` | unexpected service restart | warning | the service started again with no shutdown signal and no reboot |
+| `install_permissions_repaired` | install permissions repaired | warning | at startup the agent found and reset changed permissions on its install folders (Windows) |
 
-```http
-GET /api/sites/{siteId}/logs?action=process_crash&machineId=machine-1&level=error&since=1714521600000&until=1714607999999
-```
+### processes
 
-Supported API query filters are `action`, `machineId`, `level`, `since`, `until`, `page_size`, and `page_token`.
+| action | filter label | level | when |
+|---|---|---|---|
+| `process_started` | process started | info | owlette launched a managed process |
+| `process_restarted` | process restarted | info | a restart command restarted it, or someone did from the owlette app on the machine |
+| `process_stopped` | process stopped | warning | a stop command stopped it |
+| `process_killed` | process killed | warning | a kill command killed it, or owlette did to restart it. a schedule window closing logs it at info |
+| `process_crash` | process crashed | error | it stopped unexpectedly; a crash screenshot may be attached |
+| `process_exited` | process exited | info | it exited on its own with exit code 0 |
+| `process_start_failed` | process start failed | error | launching it raised an error |
+| `process_launch_failed` | process launch failed | error | its executable path does not exist |
+| `exe_missing` | executable missing | error | the same missing executable, written with suggested paths; it drives the dashboard's executable-missing toast |
 
-Stored log entries may include `timestamp`, `action`, `level`, `machineId`, `machineName`, `processName`, `processId`, `details`, `userId`, `screenshotUrl`, `eventType`, `exePath`, and `suggestedPaths`.
+### commands
+
+| action | filter label | level | when |
+|---|---|---|---|
+| `command_executed` | command executed | info, sometimes warning or error | a remote command ran on the machine; the details name it. a cancel from the dashboard during a restart countdown is logged here as "Pending reboot/shutdown cancelled from dashboard" |
+
+### deployments
+
+one row per machine when its install, or an agent update sent with a deployment, finishes. the process column carries the installer name.
+
+| action | filter label | level | when |
+|---|---|---|---|
+| `deployment_completed` | deployment completed | info | the install finished on that machine |
+| `deployment_failed` | deployment failed | error | it failed there; the details carry the agent's result |
+| `deployment_cancelled` | deployment cancelled | warning | listed in the filter, but the current agent does not write it: a cancelled target leaves no row |
+
+see [deployments](/docs/dashboard/deployments).
+
+### restarts
+
+| action | filter label | level | when |
+|---|---|---|---|
+| `scheduled_reboot_announced` | scheduled restart announced | warning | a scheduled restart's countdown started |
+| `scheduled_reboot_success` | scheduled restart completed | info | the machine came back and the agent matched it to the attempt |
+| `scheduled_reboot_failed` | scheduled restart failed | error | the OS refused it, or the attempt was interrupted |
+| `scheduled_reboot_missed` | scheduled restart missed | warning | it was noticed more than five minutes late and skipped |
+| `scheduled_reboot_cancelled` | scheduled restart cancelled | info | the schedule was edited while an attempt was pending, which dropped the attempt |
+| `external_reboot` | external restart | warning | the machine restarted outside owlette, after a clean shutdown |
+| `unexpected_reboot` | unexpected restart | warning | the machine booted with no shutdown signal before it. Windows only: on macOS and Linux such a boot is not reported |
+
+the scheduled outcomes are explained in [restart schedules](/docs/dashboard/restart-schedules#what-shows-up-in-the-logs).
+
+### displays
+
+fifteen actions, from `display_monitor_added` to `display_auto_restore_circuit_breaker_tripped`, described in [displays](/docs/dashboard/displays#events). displays are Windows only, so only Windows machines log them.
+
+### talons
+
+| action | filter label | level | when |
+|---|---|---|---|
+| `talon_triggered` | talon triggered | info | a talon run started |
+| `talon_succeeded` | talon succeeded | info | the run succeeded |
+| `talon_failed` | talon failed | error | the run failed |
+| `talon_skipped` | talon skipped | warning | the run was skipped, or a delayed run was missed |
+
+the details read `talon name — trigger — result`. see [talons](/docs/dashboard/talons#runs-failures-and-audit).
+
+### swoop
+
+| action | filter label | level | when |
+|---|---|---|---|
+| `swoop_session_start` | swoop session started | info | the machine started a streamer for a session |
+| `swoop_session_end` | swoop session ended | info | the streamer stopped; the details give the reason |
+| `swoop_spawn_refused` | swoop spawn refused | warning | the agent refused to start a streamer; the details give the reason |
+
+the agent writes a few more `swoop_*` rows, such as token refreshes and firewall changes, that the filter does not list; search finds them.
 
 ---
 
 ## clearing logs
 
-The **clear logs** button permanently deletes logs for the current site. It opens a confirmation dialog before sending:
+**clear logs** permanently deletes entries from the current site. site owners and admins see it, and it is disabled while nothing is loaded.
+
+the **clear event logs** dialog lists what it will delete: the **action type**, **machine** and **level** you have filtered on, plus its own **from (optional)** and **to (optional)** dates. the page's **date range** filter is not part of it; only the dialog's dates are, taken as whole days in your display timezone. the search box never limits a clear, and the dialog says so while you are searching. with nothing set, it warns that it will delete every event log on the site, across all machines.
+
+**clear logs** in the dialog deletes. the list empties and refills from what remains.
+
+---
+
+## over the API
+
+entries live in `sites/{siteId}/logs/{logId}`. the dashboard reads them there directly; the API reads the same collection.
+
+```http
+GET /api/sites/{siteId}/logs?action=process_crash&machineId=machine-1&level=error&since=2026-10-01T00:00:00Z
+```
+
+- **filters**: `action` (one), `machineId`, `level` (`debug`, `info`, `warning`, `error` or `critical`), and `since` / `until`, each unix milliseconds or ISO 8601
+- **pages**: `page_size`, 50 by default and at most 200, and `page_token` from the last response's `next_page_token`. see [pagination](/docs/api/pagination)
+- **each entry**: `id`, `siteId`, `timestamp` (ISO 8601), `action`, `level`, `machineId`, `machineName`, `processName`, `details`, `userId`, `screenshotUrl`
+- **one entry**: `GET /api/sites/{siteId}/logs/{logId}`
+
+reading needs read access to the site. clearing is a `DELETE` on the same path:
 
 ```http
 DELETE /api/sites/{siteId}/logs
-Idempotency-Key: dashboard-clear-logs-<uuid>
+Idempotency-Key: <unique-key>
 Content-Type: application/json
 
-{ "action": "deployment_failed", "machineId": "machine-1", "level": "error" }
+{ "actions": ["process_crash", "process_start_failed"], "machineId": "machine-1", "since": 1790812800000 }
 ```
 
-Clearing requires the site-scoped `SITE_LOGS_MANAGE` capability. Site admins have this capability for their assigned sites; superadmins have it globally. API-key calls must use an admin-capable key.
+- **filters**: `action` or `actions` (a list, not both), `machineId`, `level`, `since`, `until`
+- **everything**: with no filter the body must be `{ "all": true }`, and `all` must be left out when any filter is set
+- **who**: a site owner or admin, or an API key with admin permission, with an [`Idempotency-Key`](/docs/api/idempotency)
+- **response**: `siteId`, `deletedCount` and the `filters` applied. a clear cannot be undone
 
-The delete body can include `action`, `machineId`, and `level` filters. If no filters are provided, the body must explicitly be:
+---
 
-```json
-{ "all": true }
-```
+## retention
 
-The response includes `siteId`, `deletedCount`, and the applied `filters`. Whole-site clears and filtered clears are destructive and cannot be undone. The current dashboard clear action applies action, machine, and level filters only; date range filters are view filters and are not sent in the clear request.
+entries older than 400 days are deleted by a scheduled job, along with talon runs of the same age. each run removes a bounded number, so a large backlog clears over several runs.
