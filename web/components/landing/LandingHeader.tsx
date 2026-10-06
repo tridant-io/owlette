@@ -107,7 +107,9 @@ export function LandingHeader() {
               {linkEl(link)}
             </Button>
           ))}
-          <DropdownMenu>
+          {/* not modal: a modal menu locks the page's scroll, and dropping the
+              scrollbar shifts the whole page sideways */}
+          <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="sm" className={`${ghostClass} gap-1`}>
                 download

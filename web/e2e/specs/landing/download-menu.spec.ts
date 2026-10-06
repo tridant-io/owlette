@@ -20,6 +20,8 @@ test.describe('landing — download', () => {
     for (const [i, href] of PERMALINKS.entries()) {
       await expect(items.nth(i)).toHaveAttribute('href', href);
     }
+    // the page keeps its scroll, so its scrollbar and layout stay put
+    await expect(page.locator('body')).not.toHaveAttribute('data-scroll-locked');
   });
 
   test('the phone menu lists them on one row, inside the screen', async ({ page }) => {
