@@ -29,6 +29,7 @@ const MACHINE_ID = `mach-swoop-${SUFFIX}`;
 const EXCLUDED_ID = `mach-excluded-${SUFFIX}`;
 const OFFLINE_ID = `mach-offline-${SUFFIX}`;
 const RETURNING_ID = `mach-returning-${SUFFIX}`;
+const RELOAD_ID = `mach-reload-${SUFFIX}`;
 const SESSIONS = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/sessions`;
 const KILL = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/kill`;
 
@@ -154,6 +155,7 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, OFFLINE_ID, { displayName: `offline box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${OFFLINE_ID}`).set({ online: false }, { merge: true });
   await seedMachine(SITE_ID, RETURNING_ID, { displayName: `returning box ${SUFFIX}` });
+  await seedMachine(SITE_ID, RELOAD_ID, { displayName: `reload box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -236,6 +238,35 @@ test.describe('the viewer page', () => {
     expect(after.state).toBe('ended');
     expect(after.endReason).toBe('closed');
     await expect(page.getByRole('button', { name: /reconnect/i })).toBeVisible();
+  });
+
+  test('a reload keeps control after the 12-hour window, without asking again', async ({ page }) => {
+    const spent = await signIn(page, operator, operatorSecret);
+    const sessions = `/api/sites/${SITE_ID}/machines/${RELOAD_ID}/swoop/sessions`;
+    const minted = (r: { url(): string; request(): { method(): string }; status(): number }) =>
+      r.url().endsWith(sessions) && r.request().method() === 'POST' && r.status() === 201;
+    await page.goto(`/swoop/${SITE_ID}/${RELOAD_ID}`);
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+    const first = page.waitForResponse(minted, { timeout: 45_000 });
+    await dialog.getByPlaceholder('6-digit code').fill(await freshTotp(page, operatorSecret, spent));
+    await dialog.getByRole('button', { name: /^confirm$/i }).click();
+    expect(((await (await first).json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+    await expect(dialog).toBeHidden();
+
+    // the 12 hours since the ceremony have passed: only the tab's own
+    // continuity can bring control back now.
+    const windows = await getAdminDb().collection(`users/${operator.uid}/swoop_step_up`).get();
+    const lapsed = Date.now() - 13 * 60 * 60 * 1000;
+    await Promise.all(windows.docs.map((d) => d.ref.set({ openedAt: lapsed, expiresAt: lapsed + 1 }, { merge: true })));
+
+    const again = page.waitForResponse(minted, { timeout: 45_000 });
+    await page.reload();
+    const response = await again;
+    expect((JSON.parse(response.request().postData() ?? '{}') as { continuity?: string }).continuity).toBeTruthy();
+    expect(((await response.json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+    await expect(dialog).toBeHidden();
   });
 
   test('a member is refused control and watches instead, with no ceremony', async ({ page }) => {
