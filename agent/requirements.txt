@@ -29,9 +29,9 @@ mss==9.0.2  # Fast cross-platform screenshot library
 # PawnIO driver the installer deploys — replaced WinTmp, whose bundled LHM
 # still extracted the blocklisted WinRing0 driver at runtime (python.sys).
 HardwareMonitor==1.2.1 ; sys_platform == "win32"
-pythonnet==3.1.0 ; sys_platform == "win32"  # HardwareMonitor's CLR bridge (was transitive via WinTmp) — pinned like everything else
+pythonnet==3.2.0 ; sys_platform == "win32"  # HardwareMonitor's CLR bridge (was transitive via WinTmp) — pinned like everything else
 wmi==1.5.1 ; sys_platform == "win32"  # DIRECT dependency (hardware_profile + shared_utils disk/BIOS probes); used to arrive transitively through WinTmp
-nvidia-ml-py==13.610.43  # NVML bindings — the GPU load/VRAM/temperature source (shared_utils, mcp_tools)
+nvidia-ml-py==13.615.71  # NVML bindings — the GPU load/VRAM/temperature source (shared_utils, mcp_tools)
 
 # swoop doorbell — the one persistent WebSocket the agent holds to the signalling
 # room (swoop_doorbell.py). Approved in plan.md, "Approved new dependencies".
@@ -62,14 +62,16 @@ websocket-client==1.9.2
 # The SDK vendors the Claude CLI (_bundled/claude.exe), but installer size is
 # unaffected: build_installer_full.bat deletes it behind a verify-and-fail guard
 # and agents fetch their own sha256-pinned copy (see cortex_cli_fetch.py).
-# Bumping this MOVES THAT PIN: 0.1.69 carried CLI 2.1.121, 0.2.152 carries
-# 2.1.259 — re-run scripts/upload-cortex-cli.mjs for dev AND prod after this
+# Bumping this MOVES THAT PIN: 0.1.69 carried CLI 2.1.121, 0.2.159 carries
+# 2.1.281 — re-run scripts/upload-cortex-cli.mjs for dev AND prod after this
 # lands, or hoot keeps fetching the old CLI.
-claude-agent-sdk==0.2.153
+# Only pin a release that ships a win_amd64 wheel: 0.2.157 and 0.2.160-0.2.163
+# ship none, and pip then builds the sdist, which has no CLI, and exits 0.
+claude-agent-sdk==0.2.159
 mcp==2.2.0
 
 # Error monitoring (optional — only active when DSN configured in config.json)
-sentry-sdk==2.69.2
+sentry-sdk==2.71.0
 
 # Firebase integration - now using REST API with OAuth tokens (no Admin SDK needed)
 # firebase-admin==6.4.0  # REMOVED - replaced with REST API client
