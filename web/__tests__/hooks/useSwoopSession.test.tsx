@@ -271,3 +271,37 @@ describe('useSwoopSession — how a session ends', () => {
     expect(wired.signalOpen).toEqual([false, true]);
   });
 });
+
+describe('useSwoopSession — control across a reload of the tab', () => {
+  const mintBody = (index: number) => JSON.parse(String(mints()[index][1]?.body)) as { continuity?: string };
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    mint = { status: 201, body: { data: { ...GRANT, continuity: 'continuity-1' } } };
+  });
+
+  it('a page loaded again in the same tab presents the last control session’s continuity', async () => {
+    await open();
+    expect(mintBody(0).continuity).toBeUndefined();
+
+    // a reload runs no unmount: the next page simply mounts in the same tab.
+    await open();
+    expect(mintBody(1).continuity).toBe('continuity-1');
+  });
+
+  it('the operator’s end forgets it, so the next page asks again', async () => {
+    await open();
+    act(() => swoop.end());
+
+    await open();
+    expect(mintBody(1).continuity).toBeUndefined();
+  });
+
+  it('a kill forgets it', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('kill'));
+
+    await open();
+    expect(mintBody(1).continuity).toBeUndefined();
+  });
+});

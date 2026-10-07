@@ -11,6 +11,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — reloading swoop keeps control without the second factor
+
+Reloading the page during a swoop session no longer asks for your passkey or
+code again once the 12-hour window has passed. A tab that held control keeps
+it across a reload. A new tab still asks, and ending the session or a kill on
+the machine closes it as before.
+
 ### changed — the docs cover Windows, macOS and Linux
 
 The docs and READMEs are up to date. A new platform support page says what
