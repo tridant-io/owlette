@@ -65,12 +65,10 @@ export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave
   // with the keyboard captured a tap of esc goes to the machine, and the hold
   // is the exit the browser reserves. without the lock a tap leaves as usual.
   const [escHint, setEscHint] = useState(false);
-  // windowed, every key — tab too — goes to the machine, so the way out is
-  // said each time the stage takes the keyboard.
-  const [leaveHint, setLeaveHint] = useState(false);
-  // stable, or every stats tick re-renders the stage and restarts the timers.
+  // stable, or every stats tick re-renders the stage and restarts the timer.
   const hideEscHint = useCallback(() => setEscHint(false), []);
-  const hideLeaveHint = useCallback(() => setLeaveHint(false), []);
+  // windowed, every key — tab too — goes to the machine. the way out is told
+  // to a screen reader only: on screen it was noise.
   const leaveHintId = useId();
   // a view-only session captures nothing, so its keys never leave the page.
   const capture = swoopInputCapture(session);
@@ -129,12 +127,6 @@ export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave
       aria-label={capture ? 'remote screen' : undefined}
       aria-describedby={windowedCapture ? leaveHintId : undefined}
       onPointerDown={onPointerDown}
-      onFocus={(e) => {
-        if (e.target === e.currentTarget && windowedCapture) setLeaveHint(true);
-      }}
-      onBlur={(e) => {
-        if (e.target === e.currentTarget) setLeaveHint(false);
-      }}
       className="dark relative h-full w-full overflow-hidden bg-swoop-stage outline-none touch-none overscroll-none [&:fullscreen]:bg-black"
     >
       <video
@@ -164,9 +156,6 @@ export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave
       )}
       {state === 'connected' && escHint && (
         <Hint onDone={hideEscHint}>hold esc for two seconds to leave fullscreen</Hint>
-      )}
-      {state === 'connected' && leaveHint && windowedCapture && (
-        <Hint onDone={hideLeaveHint}>press esc twice to leave the remote screen</Hint>
       )}
       {windowedCapture && (
         <span id={leaveHintId} className="sr-only">
