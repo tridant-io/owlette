@@ -8,9 +8,9 @@
  * a few seconds when fullscreen engages in a browser that has keyboard lock,
  * and never in one that does not.
  *
- * windowed, every key goes to the machine, tab included, so the stage says the
- * way out — esc twice — each time it takes the keyboard, and sends focus where
- * the page says when it is used. and a touch drag on the stage is the
+ * windowed, every key goes to the machine, tab included. the way out — esc
+ * twice — is told to a screen reader, not shown, and sends focus where the page
+ * says when it is used. and a touch drag on the stage is the
  * machine's: the page must not pan, or pull-to-refresh reload it mid-session.
  */
 
@@ -87,21 +87,15 @@ describe('SwoopStage esc hint', () => {
 });
 
 describe('SwoopStage — leaving with the keyboard', () => {
-  it('says esc twice leaves, for four seconds, when the stage takes the keyboard in a window', () => {
-    jest.useFakeTimers();
+  it('shows no tip when the stage takes the keyboard in a window', () => {
     captureControl();
     const stageRef = renderStage();
 
     expect(stageRef.current).toHaveFocus();
-    expect(screen.getByText('press esc twice to leave the remote screen')).toBeInTheDocument();
-
-    act(() => {
-      jest.advanceTimersByTime(4000);
-    });
-    expect(screen.queryByText('press esc twice to leave the remote screen')).toBeNull();
+    expect(screen.queryByText(/esc twice/)).toBeNull();
   });
 
-  it('tells a screen reader the same, on a surface that passes its keys through', () => {
+  it('tells a screen reader the way out, on a surface that passes its keys through', () => {
     captureControl();
     renderStage();
 
