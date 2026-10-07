@@ -620,6 +620,113 @@ impl FloorTimer {
     }
 }
 
+/// How early a frame may arrive against its rung's slot and still go to the
+/// encoder. Desktop Duplication delivers a 60 Hz panel at a 16.65 ms p50 with
+/// a 1.35 ms sd (`capture`), so a gate with no slack at 60 would drop every
+/// frame that lands a hair early.
+const RATE_GATE_SLACK: Duration = Duration::from_millis(2);
+
+/// The ladder's frame-rate rung, enforced by handing the encoder fewer frames,
+/// the top rung included: the encoder's rate control, its per-frame budget and
+/// the pacer are all sized for 60, so a 120 Hz or variable-refresh panel handed
+/// through whole overshoots its bitrate by its rate over 60.
+///
+/// Slotted rather than timed from the last frame: each admission books the
+/// next slot one interval after its own, so a frame that came late does not
+/// push the next one late. A slot never lags the frame that filled it, so a
+/// still desktop banks one frame at most and never a burst.
+#[derive(Debug, Default)]
+pub struct RateGate {
+    next: Option<Instant>,
+}
+
+impl RateGate {
+    /// Whether a fresh frame at `now` goes to the encoder, at one per `interval`.
+    pub fn admit(&mut self, now: Instant, interval: Duration) -> bool {
+        match self.next {
+            Some(next) if now + RATE_GATE_SLACK < next => false,
+            Some(next) => {
+                self.next = Some((next + interval).max(now));
+                true
+            }
+            None => {
+                self.next = Some(now + interval);
+                true
+            }
+        }
+    }
+}
+
+/// How long frames may go out to a viewer with no `fb` coming back before the
+/// log says so. The browser reports twice a second whenever it presented a new
+/// frame (`web/lib/swoop/feedback.ts`) and the floor sends one every
+/// [`FLOOR_INTERVAL`] on a still desktop, so this is twenty missed reports and
+/// not a quiet screen.
+pub const FEEDBACK_SILENCE: Duration = Duration::from_secs(10);
+
+/// How recent a viewer's last ping must be for its feedback channel to count as
+/// up. It pings once a second; a channel that carries no ping either is a dead
+/// path, which ICE and the viewer's own watchdog already answer.
+const PING_FRESH: Duration = Duration::from_secs(5);
+
+/// A viewer whose picture stopped while everything else carried on: frames
+/// written to it, its pings still arriving, and no `fb` back, which is a
+/// decoder that stopped presenting. The governor reads that silence as no
+/// signal and holds its target (`transport/governor.rs`), which is right for
+/// the rate and leaves the log with nothing to say; this is only the log line,
+/// once per episode.
+#[derive(Debug)]
+pub struct FeedbackWatch {
+    /// The last `fb`, or the last look that found nothing going out: a viewer
+    /// sent no frames owes no feedback.
+    quiet_since: Instant,
+    last_ping: Option<Instant>,
+    silent: bool,
+}
+
+impl FeedbackWatch {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            quiet_since: now,
+            last_ping: None,
+            silent: false,
+        }
+    }
+
+    pub fn ping(&mut self, now: Instant) {
+        self.last_ping = Some(now);
+    }
+
+    /// One `fb`. `Some` is how long the silence it ends had lasted, when that
+    /// silence was reported.
+    pub fn fb(&mut self, now: Instant) -> Option<Duration> {
+        let silence = now.saturating_duration_since(self.quiet_since);
+        self.quiet_since = now;
+        std::mem::take(&mut self.silent).then_some(silence)
+    }
+
+    /// Nothing went out to this viewer since the last look.
+    pub fn idle(&mut self, now: Instant) {
+        if !self.silent {
+            self.quiet_since = now;
+        }
+    }
+
+    /// Frames went out to this viewer since the last look. `Some` is the
+    /// silence to report, the first time it reaches [`FEEDBACK_SILENCE`].
+    pub fn sending(&mut self, now: Instant) -> Option<Duration> {
+        let silence = now.saturating_duration_since(self.quiet_since);
+        let pinging = self
+            .last_ping
+            .is_some_and(|at| now.saturating_duration_since(at) < PING_FRESH);
+        if self.silent || !pinging || silence < FEEDBACK_SILENCE {
+            return None;
+        }
+        self.silent = true;
+        Some(silence)
+    }
+}
+
 /// §5's control gate for the `swoop-control` channel, host side: a viewer
 /// without `ctl` that sends something gated is dropped and the attempt is
 /// reported — once per viewer, because the attempt is as often a held key
@@ -839,7 +946,7 @@ pub use host::run;
 mod host {
     use std::io::{self, BufRead};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -847,10 +954,9 @@ mod host {
     use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 
     use super::{
-        codec_wire_name, feature_room, limits_for, pick_codec, tier_encodes, tiers, CaptureGate,
-        moved, settles, Denials, Feature, FeatureRequest, FeatureStatus, FloorTimer, Joining,
-        Outbox,
-        SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
+        codec_wire_name, feature_room, limits_for, moved, pick_codec, settles, tier_encodes, tiers,
+        CaptureGate, Denials, Feature, FeatureRequest, FeatureStatus, FeedbackWatch, FloorTimer,
+        Joining, Outbox, RateGate, SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
     use crate::capture::{OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS};
@@ -914,8 +1020,9 @@ mod host {
     /// short of 60 fps.
     const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
-    /// Desktop Duplication is vsync-locked at the panel's rate; 60 is what the
-    /// encoder's rate control is sized for.
+    /// Desktop Duplication is vsync-locked at the panel's rate, which is not
+    /// always 60; 60 is what the encoder's rate control and the pacer are sized
+    /// for, so [`RateGate`] holds the top rung to it.
     const TARGET_FPS: u32 = 60;
 
     /// Capture → session, and it is bounded because the whole point is that a
@@ -1141,6 +1248,7 @@ mod host {
         }
 
         let stop = Arc::new(AtomicBool::new(false));
+        let capture_drops = Arc::new(AtomicU64::new(0));
         let (worker_tx, worker_rx) = bounded::<FromWorker>(WORKER_QUEUE);
         let (capture_tx, capture_rx) = bounded::<ToCapture>(8);
         let (input_tx, input_rx) = bounded::<ToInput>(256);
@@ -1151,10 +1259,11 @@ mod host {
         let spawned = {
             let tx = worker_tx.clone();
             let stop = Arc::clone(&stop);
+            let drops = Arc::clone(&capture_drops);
             let output = output.clone();
             thread::Builder::new()
                 .name("swoop-capture".into())
-                .spawn(move || capture_thread(output, caps, clock, tx, capture_rx, stop))
+                .spawn(move || capture_thread(output, caps, clock, tx, capture_rx, stop, drops))
         };
         let capture_handle = match spawned {
             Ok(handle) => handle,
@@ -1254,6 +1363,7 @@ mod host {
                 encoder_budget,
                 worker_rx,
                 capture_tx: capture_tx.clone(),
+                capture_drops,
                 input_tx: input_tx.clone(),
                 service_rx,
                 resolver_tx,
@@ -1372,6 +1482,7 @@ mod host {
         encoder_budget: u32,
         worker_rx: Receiver<FromWorker>,
         capture_tx: Sender<ToCapture>,
+        capture_drops: Arc<AtomicU64>,
         input_tx: Sender<ToInput>,
         service_rx: Receiver<FromService>,
         resolver_tx: Sender<ToResolver>,
@@ -1452,6 +1563,7 @@ mod host {
             codec_caps: w.codec_caps,
             leases: LeaseLedger::from_bundle(bundle),
             capture_tx: w.capture_tx,
+            capture_drops: w.capture_drops,
             input_tx: w.input_tx,
             worker_rx: w.worker_rx,
             service_rx: w.service_rx,
@@ -1476,6 +1588,7 @@ mod host {
             last_status: w.started,
             status_logged: w.started,
             cuts_logged: 0,
+            window: Window::new(w.started),
             encoder: None,
             display: 0,
             sas_pending: None,
@@ -1585,6 +1698,9 @@ mod host {
         /// what this session owes a lease that did.
         leases: LeaseLedger,
         capture_tx: Sender<ToCapture>,
+        /// Encoded frames the capture thread had no room for in the worker
+        /// queue, counted there and taken here by the rate line.
+        capture_drops: Arc<AtomicU64>,
         input_tx: Sender<ToInput>,
         worker_rx: Receiver<FromWorker>,
         service_rx: Receiver<FromService>,
@@ -1608,6 +1724,8 @@ mod host {
         /// When the rate story was last logged, and the cuts it reported.
         status_logged: Instant,
         cuts_logged: u64,
+        /// What the next rate line reports besides the rate.
+        window: Window,
         /// The backend the capture thread's encoders are open on, as the
         /// selection chain named it. `None` until the first encoder opens —
         /// a session with no viewer has no encoder and nothing to report.
@@ -1672,6 +1790,7 @@ mod host {
         last_size: Option<(u16, u16)>,
         /// `peer.stats().frames_written` at the last `status`.
         frames_at_status: u64,
+        feedback: FeedbackWatch,
     }
 
     impl Viewer {
@@ -1690,6 +1809,7 @@ mod host {
                 sequencer: FrameSequencer::new(),
                 last_size: None,
                 frames_at_status: 0,
+                feedback: FeedbackWatch::new(Instant::now()),
             }
         }
 
@@ -1697,6 +1817,39 @@ mod host {
             self.peer
                 .as_ref()
                 .is_some_and(|peer| peer.state() == PeerState::Connected)
+        }
+    }
+
+    /// What the rate line adds per window, so the log can tell a late host loop
+    /// from a viewer whose decoder stopped: TEC-B4A's picture froze for three
+    /// minutes on 2026-10-07 with the host sending throughout, and nothing in
+    /// the log said which side had stalled. Counted from the last line logged.
+    #[derive(Debug)]
+    struct Window {
+        since: Instant,
+        /// Keyframes the session asked an encoder for, after the coalescing.
+        keyframes_forced: u64,
+        /// PLI and FIR, from every viewer.
+        keyframes_requested: u64,
+        /// Deltas a viewer's send pacer refused.
+        pacer_refusals: u64,
+        /// The longest turn of the session loop, and the longest stdout write
+        /// inside one: the write is synchronous, so a service that stops
+        /// draining the pipe stalls every peer behind it.
+        longest_turn: Duration,
+        longest_emit: Duration,
+    }
+
+    impl Window {
+        fn new(now: Instant) -> Self {
+            Self {
+                since: now,
+                keyframes_forced: 0,
+                keyframes_requested: 0,
+                pacer_refusals: 0,
+                longest_turn: Duration::ZERO,
+                longest_emit: Duration::ZERO,
+            }
         }
     }
 
@@ -1710,11 +1863,13 @@ mod host {
         }
 
         fn emit(&mut self, event: &Event) {
+            let started = Instant::now();
             if let Err(e) = ipc::emit(&mut self.out, event) {
                 // A half-written line desynchronises the service's reader, and
                 // a broken pipe means the service is already gone.
                 ::log::error!("swoop: stdout event failed: {e}");
             }
+            self.window.longest_emit = self.window.longest_emit.max(started.elapsed());
         }
 
         fn send(&mut self, message: &Message) {
@@ -1730,6 +1885,7 @@ mod host {
 
         fn serve(&mut self) -> (Exit, ExitReason) {
             loop {
+                let turn = Instant::now();
                 if let Some(end) = self.pump_service() {
                     return end;
                 }
@@ -1749,6 +1905,7 @@ mod host {
                 if let Some(end) = self.deadlines() {
                     return end;
                 }
+                self.window.longest_turn = self.window.longest_turn.max(turn.elapsed());
             }
         }
 
@@ -2202,6 +2359,11 @@ mod host {
                         self.broadcast(None, Channel::SwoopCursor, &message)
                     }
                     Ok(FromWorker::SourceSize { width, height }) => {
+                        ::log::info!(
+                            "swoop: the captured source is {width}x{height}, was {}x{}",
+                            self.source.0,
+                            self.source.1
+                        );
                         self.source = (width, height);
                         // Capture dropped its encoders with the old texture, so
                         // this is a resend and not a diff — a new source that
@@ -2824,7 +2986,10 @@ mod host {
                     self.send(&message);
                 }
                 PeerEvent::Ice(event) => self.on_ice_event(viewer, event),
-                PeerEvent::KeyframeRequest => self.request_idr(codec),
+                PeerEvent::KeyframeRequest => {
+                    self.window.keyframes_requested += 1;
+                    self.request_idr(codec);
+                }
                 PeerEvent::ChannelOpen(Channel::SwoopControl) => self.send_hello_host(viewer),
                 PeerEvent::ChannelOpen(channel) => ::log::debug!("swoop: {channel:?} open"),
                 // The browser owns the five and never re-opens one it did
@@ -2849,6 +3014,7 @@ mod host {
                     // browser's pli, so a drop storm costs one keyframe per
                     // window rather than one per drop.
                     ::log::debug!("swoop: pacer refused frame {frame_id} ({bytes} bytes)");
+                    self.window.pacer_refusals += 1;
                     self.request_idr(codec);
                 }
                 PeerEvent::ChannelWriteRefused {
@@ -3114,7 +3280,11 @@ mod host {
                 ::log::warn!("swoop: malformed feedback message");
                 return;
             };
+            let now = Instant::now();
             if let Feedback::Ping { id, t_us } = message {
+                if let Some(v) = self.viewer_mut(viewer) {
+                    v.feedback.ping(now);
+                }
                 // `hostUs` must be in the same epoch as §4's `tSendUs`: the
                 // browser's offset is `hostUs − viewerUs` and the governor
                 // undoes it against the send stamp. The reply goes back on
@@ -3129,7 +3299,15 @@ mod host {
             }
             // Each viewer's own path, measured by its own governor.
             if let Some(v) = self.viewer_mut(viewer) {
-                v.governor.on_feedback(Instant::now(), &message);
+                if matches!(message, Feedback::Fb { .. }) {
+                    if let Some(silence) = v.feedback.fb(now) {
+                        ::log::info!(
+                            "swoop: viewer {viewer}: picture feedback resumed after {} s",
+                            silence.as_secs()
+                        );
+                    }
+                }
+                v.governor.on_feedback(now, &message);
             }
         }
 
@@ -3205,6 +3383,7 @@ mod host {
             if !self.keyframes.request(codec, Instant::now()) {
                 return;
             }
+            self.window.keyframes_forced += 1;
             let _ = self.capture_tx.try_send(ToCapture::Idr(codec));
         }
 
@@ -3346,17 +3525,24 @@ mod host {
             let mut fps = 0u32;
             for v in self.viewers.iter_mut() {
                 let Some(peer) = v.peer.as_ref() else {
+                    v.feedback.idle(now);
                     continue;
                 };
                 bitrate_kbps = bitrate_kbps.saturating_add((peer.sent_bps() / 1000) as u32);
                 target_kbps = target_kbps.saturating_add(v.governor.target_bps() / 1000);
                 let frames = peer.stats().frames_written;
-                let seen = frames
-                    .saturating_sub(v.frames_at_status)
-                    .checked_div(elapsed.as_secs().max(1))
-                    .unwrap_or(0) as u32;
+                let written = frames.saturating_sub(v.frames_at_status);
                 v.frames_at_status = frames;
-                fps = fps.max(seen);
+                fps = fps.max(per_second(written, elapsed));
+                if written == 0 {
+                    v.feedback.idle(now);
+                } else if let Some(silence) = v.feedback.sending(now) {
+                    ::log::warn!(
+                        "swoop: viewer {}: frames going out, no picture feedback for {} s",
+                        v.id,
+                        silence.as_secs()
+                    );
+                }
             }
             // The outbox's refusals have no `status` field — nothing outside
             // this process can act on them — so they stay a log line.
@@ -3387,15 +3573,27 @@ mod host {
                     self.cuts_logged = stats.cuts;
                     self.status_logged = now;
                     let rung = v.governor.rung();
+                    let window = std::mem::replace(&mut self.window, Window::new(now));
                     ::log::info!(
-                        "swoop: {fps} fps sent, {bitrate_kbps} kbps on the wire, target {target_kbps} kbps, rung {}fps/{}, {} cuts, {} gaps, governor {:?}",
+                        "swoop: {fps} fps sent, {bitrate_kbps} kbps on the wire, target {target_kbps} kbps, rung {}fps/{}, {} cuts, {} gaps, governor {:?}; in {} s: {} keyframes forced, {} requested by viewers, {} pacer refusals, {} capture drops, longest turn {} ms, longest stdout write {} ms",
                         rung.fps,
                         rung.resolution.wire_name(),
                         stats.cuts,
                         stats.frame_gaps,
-                        v.governor.state(now)
+                        v.governor.state(now),
+                        now.duration_since(window.since).as_secs(),
+                        window.keyframes_forced,
+                        window.keyframes_requested,
+                        window.pacer_refusals,
+                        self.capture_drops.swap(0, Ordering::Relaxed),
+                        window.longest_turn.as_millis(),
+                        window.longest_emit.as_millis()
                     );
                 }
+            } else {
+                // Nobody watching: the next viewer's first line starts here.
+                self.window = Window::new(now);
+                self.capture_drops.store(0, Ordering::Relaxed);
             }
             let denials = self.denials.count() + self.input.denials();
             let dropped = self.input.dropped();
@@ -3542,6 +3740,7 @@ mod host {
         tx: Sender<FromWorker>,
         rx: Receiver<ToCapture>,
         stop: Arc<AtomicBool>,
+        drops: Arc<AtomicU64>,
     ) {
         // Attached before the duplication is opened, and its first result is
         // dropped: `follow` reports "the desktop changed" on the initial
@@ -3558,6 +3757,7 @@ mod host {
             tx,
             rx,
             stop,
+            drops,
             watcher,
             wanted: Vec::new(),
             reported: None,
@@ -3593,6 +3793,8 @@ mod host {
         tx: Sender<FromWorker>,
         rx: Receiver<ToCapture>,
         stop: Arc<AtomicBool>,
+        /// Encoded frames `tx` had no room for, for the session's rate line.
+        drops: Arc<AtomicU64>,
         /// Not `Send`: a desktop association belongs to the thread that made
         /// it, so it is created on this thread and never leaves it.
         watcher: DesktopWatcher,
@@ -3617,10 +3819,10 @@ mod host {
         /// belongs to the size it was opened for.
         scaler: Option<Downscaler>,
         force_irap: bool,
-        /// When this tier's encoder was last handed anything, for its rung's
-        /// frame-rate gate, and for the floor.
+        /// When this tier's encoder was last handed anything, for the floor.
         floor: FloorTimer,
-        last_encode: Option<Instant>,
+        /// Its rung's frame rate, over the fresh frames.
+        gate: RateGate,
     }
 
     impl TierPass {
@@ -3633,7 +3835,7 @@ mod host {
                 // see nothing at all.
                 force_irap: true,
                 floor: FloorTimer::new(now),
-                last_encode: None,
+                gate: RateGate::default(),
             }
         }
 
@@ -3897,15 +4099,8 @@ mod host {
                 if fresh {
                     // The ladder's frame-rate rung, and the only place it can be
                     // enforced: a CBR encoder handed every frame just spends the
-                    // same budget on all of them. Not applied at the top rung —
-                    // duplication is vsync-locked at the panel's rate, so a gate
-                    // there would drop every other frame on the jitter of a
-                    // 16.67 ms interval.
-                    if tier.want.fps < TARGET_FPS
-                        && tier.last_encode.is_some_and(|at| {
-                            now.saturating_duration_since(at) < frame_interval(tier.want.fps)
-                        })
-                    {
+                    // same budget on all of them.
+                    if !tier.gate.admit(now, frame_interval(tier.want.fps)) {
                         continue;
                     }
                 } else if !tier.floor.due(now) {
@@ -3959,9 +4154,8 @@ mod host {
                             // hands them straight to the session; the rest
                             // answer them from `encode` below.
                             let tx = ctx.tx.clone();
-                            created.set_sink(Box::new(move |frame| {
-                                tx.try_send(FromWorker::Frame(Box::new(frame))).is_ok()
-                            }));
+                            let drops = Arc::clone(&ctx.drops);
+                            created.set_sink(Box::new(move |frame| hand_over(&tx, &drops, frame)));
                             tier.encoder = Some(created);
                             if ctx.backend != Some(backend) {
                                 ctx.backend = Some(backend);
@@ -3986,18 +4180,15 @@ mod host {
                         // encoder that runs a frame behind is not a stalled
                         // desktop.
                         tier.floor.fed(now);
-                        tier.last_encode = Some(now);
                         // Cleared on the submit the encoder accepted, not on
                         // an answer: a backend that delivers through its sink
                         // answers nothing here, and the forced frame is in
                         // its queue already.
                         tier.force_irap = false;
                         if let Some(encoded) = encoded {
-                            // A full queue means the session thread fell behind.
-                            // The frame is dropped rather than stalling capture,
-                            // and the next one is an IRAP so the gap cannot
-                            // dangle.
-                            if ctx.tx.try_send(FromWorker::Frame(Box::new(encoded))).is_err() {
+                            // The next one is an IRAP, so the gap a dropped
+                            // frame leaves cannot dangle.
+                            if !hand_over(&ctx.tx, &ctx.drops, encoded) {
                                 tier.force_irap = true;
                             }
                         }
@@ -4238,6 +4429,28 @@ mod host {
         Duration::from_micros(1_000_000 / u64::from(fps.max(1)))
     }
 
+    /// One encoded frame onto the worker queue, or counted as dropped. A full
+    /// queue means the session thread fell behind, and capture never waits on
+    /// it.
+    fn hand_over(tx: &Sender<FromWorker>, drops: &AtomicU64, frame: EncodedFrame) -> bool {
+        let sent = tx.try_send(FromWorker::Frame(Box::new(frame))).is_ok();
+        if !sent {
+            drops.fetch_add(1, Ordering::Relaxed);
+        }
+        sent
+    }
+
+    /// A count over a window, per second and rounded. Fractional seconds,
+    /// because the status tick runs late whenever the loop does: whole seconds
+    /// read a late tick as 81–91 fps on a 60 Hz panel (TEC-B4A, 2026-10-07).
+    fn per_second(count: u64, over: Duration) -> u32 {
+        let secs = over.as_secs_f64();
+        if secs <= 0.0 {
+            return 0;
+        }
+        (count as f64 / secs).round() as u32
+    }
+
     fn frame_codec(codec: Codec) -> FrameCodec {
         match codec {
             Codec::H265 => FrameCodec::Hevc,
@@ -4356,11 +4569,9 @@ mod host {
         }
 
         /// The frame-rate rung is enforced by feeding the encoder less often,
-        /// and the gate is deliberately not applied at [`TARGET_FPS`]: at 60 the
-        /// interval is under the 16.67 ms a vsync-locked duplication delivers
-        /// at, so a gate there would drop every other frame on jitter alone.
+        /// one frame per interval of the rung.
         #[test]
-        fn a_frame_rate_rung_is_one_interval_and_the_top_rung_is_never_gated() {
+        fn a_frame_rate_rung_is_one_interval() {
             use crate::session::quality::{FPS_CAPS, MIN_LADDER_FPS};
 
             assert_eq!(frame_interval(30), Duration::from_micros(33_333));
@@ -4374,6 +4585,68 @@ mod host {
             }
             // A divisor that cannot be zero, whatever it is handed.
             assert_eq!(frame_interval(0), Duration::from_micros(1_000_000));
+        }
+
+        /// Frames the gate takes from ten seconds of a panel at `period_us`,
+        /// each frame up to a millisecond and a half off its vsync either way.
+        fn gated(period_us: u64, frames: u64, interval: Duration) -> usize {
+            const JITTER_US: [i64; 6] = [0, 1_500, -1_500, 800, -1_200, 300];
+            let t0 = Instant::now();
+            let mut gate = RateGate::default();
+            (0..frames)
+                .filter(|k| {
+                    let jitter = JITTER_US[*k as usize % JITTER_US.len()];
+                    let at = (2_000 + k * period_us).saturating_add_signed(jitter);
+                    gate.admit(t0 + Duration::from_micros(at), interval)
+                })
+                .count()
+        }
+
+        /// The top rung is gated like every other, because the encoder and the
+        /// pacer are sized for 60 whatever the panel runs at — and the gate's
+        /// slack and slots are what keep it from decimating a 60 Hz panel.
+        #[test]
+        fn the_top_rung_holds_a_120_hz_panel_to_60_and_passes_a_60_hz_one_whole() {
+            let top = frame_interval(TARGET_FPS);
+            assert_eq!(
+                gated(16_667, 600, top),
+                600,
+                "a 60 Hz panel lost frames to jitter"
+            );
+            let capped = gated(8_333, 1_200, top);
+            assert!(
+                (599..=601).contains(&capped),
+                "a 120 Hz panel came through at {capped} frames in 10 s"
+            );
+            let half = gated(16_667, 600, frame_interval(30));
+            assert!(
+                (299..=301).contains(&half),
+                "a 30 fps rung took {half} of 600"
+            );
+        }
+
+        /// A still desktop banks at most the one frame that ends it: after a
+        /// pause the next two go, the third waits for its slot.
+        #[test]
+        fn a_pause_banks_one_frame_and_never_a_burst() {
+            let top = frame_interval(TARGET_FPS);
+            let t0 = Instant::now();
+            let mut gate = RateGate::default();
+            assert!(gate.admit(t0, top));
+            let woke = t0 + Duration::from_secs(1);
+            assert!(gate.admit(woke, top));
+            assert!(gate.admit(woke + Duration::from_millis(1), top));
+            assert!(!gate.admit(woke + Duration::from_millis(4), top));
+            assert!(gate.admit(woke + top, top));
+        }
+
+        /// The status tick runs late whenever the loop does, so the rate is per
+        /// fractional second: 174 frames over 2.9 s is a 60 Hz stream, not 87.
+        #[test]
+        fn the_sent_rate_is_counted_over_fractional_seconds() {
+            assert_eq!(per_second(174, Duration::from_millis(2_900)), 60);
+            assert_eq!(per_second(120, Duration::from_secs(2)), 60);
+            assert_eq!(per_second(7, Duration::ZERO), 0);
         }
 
         /// The route validates `reason` against `^[a-z0-9_]{1,48}$` and refuses
@@ -4441,7 +4714,17 @@ mod host {
             let (capture_tx, capture_rx) = bounded::<ToCapture>(8);
             let handle = {
                 let stop = Arc::clone(&stop);
-                thread::spawn(move || capture_thread(output, backends, clock, tx, capture_rx, stop))
+                thread::spawn(move || {
+                    capture_thread(
+                        output,
+                        backends,
+                        clock,
+                        tx,
+                        capture_rx,
+                        stop,
+                        Arc::default(),
+                    )
+                })
             };
 
             let source = match rx.recv_timeout(CAPTURE_OPEN_TIMEOUT) {
@@ -4560,7 +4843,17 @@ mod host {
             let (capture_tx, capture_rx) = bounded::<ToCapture>(8);
             let handle = {
                 let stop = Arc::clone(&stop);
-                thread::spawn(move || capture_thread(output, backends, clock, tx, capture_rx, stop))
+                thread::spawn(move || {
+                    capture_thread(
+                        output,
+                        backends,
+                        clock,
+                        tx,
+                        capture_rx,
+                        stop,
+                        Arc::default(),
+                    )
+                })
             };
 
             let source = match rx.recv_timeout(CAPTURE_OPEN_TIMEOUT) {
@@ -4935,6 +5228,62 @@ mod tests {
         floor.fed(now);
         assert!(!floor.due(now + Duration::from_millis(499)));
         assert!(floor.due(now + FLOOR_INTERVAL));
+    }
+
+    /// Frames out, pings in and no `fb` back is a decoder that stopped
+    /// presenting: reported once when it reaches the threshold, and once more
+    /// when the feedback comes back.
+    #[test]
+    fn a_viewer_whose_frames_go_unanswered_is_reported_once_and_again_on_its_return() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut watch = FeedbackWatch::new(t0);
+        watch.ping(at(8_000));
+        assert_eq!(
+            watch.sending(at(9_000)),
+            None,
+            "nine seconds is under the threshold"
+        );
+        watch.ping(at(10_000));
+        assert_eq!(watch.sending(at(11_000)), Some(Duration::from_secs(11)));
+        watch.ping(at(12_000));
+        assert_eq!(watch.sending(at(13_000)), None, "one line per episode");
+        assert_eq!(watch.fb(at(14_000)), Some(Duration::from_secs(14)));
+        assert_eq!(watch.fb(at(14_500)), None, "and one when it ends");
+
+        // A healthy viewer reports twice a second and is never one.
+        for tick in 30..90u64 {
+            watch.ping(at(tick * 500));
+            watch.fb(at(tick * 500));
+            assert_eq!(watch.sending(at(tick * 500 + 1)), None);
+        }
+    }
+
+    /// Silence is only a stalled picture while frames are going out and the
+    /// channel itself is up: a viewer sent nothing owes nothing, and one whose
+    /// pings stopped too is a dead path that ICE and its own watchdog answer.
+    #[test]
+    fn an_idle_stream_or_a_dead_channel_is_not_a_stalled_picture() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+
+        let mut never_pinged = FeedbackWatch::new(t0);
+        assert_eq!(never_pinged.sending(at(20)), None);
+
+        let mut dead = FeedbackWatch::new(t0);
+        dead.ping(at(1));
+        assert_eq!(dead.sending(at(20)), None, "the last ping is 19 s old");
+
+        let mut idle = FeedbackWatch::new(t0);
+        idle.idle(at(19));
+        idle.ping(at(20));
+        assert_eq!(
+            idle.sending(at(21)),
+            None,
+            "frames have only gone out for 2 s"
+        );
+        idle.ping(at(29));
+        assert_eq!(idle.sending(at(29)), Some(Duration::from_secs(10)));
     }
 
     /// §5: the attempt is reported, not every message behind it — a held key

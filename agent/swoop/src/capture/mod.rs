@@ -535,12 +535,38 @@ impl Live {
     }
 }
 
+/// What a duplication was opened at: the texture size and the mode's refresh
+/// rate, for the log line every open and rebuild writes.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Mode {
+    size: (u32, u32),
+    /// `DXGI_RATIONAL`, numerator over denominator. A zero denominator is a
+    /// rate the driver did not state.
+    refresh: (u32, u32),
+}
+
+#[cfg(windows)]
+impl std::fmt::Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (width, height) = self.size;
+        match self.refresh {
+            (_, 0) => write!(f, "{width}x{height}"),
+            // Two decimals, which is what tells 59.94 from 60.
+            (num, den) => {
+                let hz = (f64::from(num) / f64::from(den) * 100.0).round() / 100.0;
+                write!(f, "{width}x{height}@{hz}Hz")
+            }
+        }
+    }
+}
+
 /// Open a device and a duplication for the named output.
 ///
 /// The factory is created fresh every time on purpose: after a mode change the
 /// old one is stale, and the output's rect and mode can have changed under us.
 #[cfg(windows)]
-fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, (u32, u32))> {
+fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, Mode)> {
     set_dpi_awareness();
     let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }?;
     let mut a = 0u32;
@@ -579,7 +605,10 @@ fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, (u32
                     copy_size: (0, 0),
                 },
                 info,
-                size,
+                Mode {
+                    size,
+                    refresh: (mode.RefreshRate.Numerator, mode.RefreshRate.Denominator),
+                },
             ));
         }
     }
@@ -648,6 +677,8 @@ enum Step {
 pub struct Duplication {
     output: OutputInfo,
     size: (u32, u32),
+    /// What the last open found, so a rebuild's line can say what changed.
+    mode: Option<Mode>,
     live: Option<Live>,
     signal: RebuildSignal,
     generation: u64,
@@ -670,6 +701,7 @@ impl Duplication {
         let mut source = Self {
             output: output.clone(),
             size: (0, 0),
+            mode: None,
             live: None,
             generation: signal.generation(),
             signal,
@@ -682,7 +714,7 @@ impl Duplication {
         // The first duplication takes the same retry as a rebuild: a session can
         // be asked for while the desktop is still settling, and those failures
         // are the transient ones either way.
-        source.rebuild()?;
+        source.rebuild("opened")?;
         Ok(source)
     }
 
@@ -710,12 +742,15 @@ impl Duplication {
         self.signal.bump();
     }
 
-    fn rebuild(&mut self) -> anyhow::Result<()> {
+    /// `why` is the log line's word for what happened: the first open, or
+    /// what the rebuild answers.
+    fn rebuild(&mut self, why: &str) -> anyhow::Result<()> {
         // Drop the stale duplication, its device and its factory before
         // re-enumerating: the output's coordinates and mode can have changed,
         // and the old duplication still holds the output.
         self.live = None;
-        let deadline = Instant::now() + REDUPLICATE_DEADLINE;
+        let started = Instant::now();
+        let deadline = started + REDUPLICATE_DEADLINE;
         loop {
             // Only the input desktop can be duplicated, and only from a thread
             // on it: left on the desktop a UAC prompt switched away from, every
@@ -724,9 +759,18 @@ impl Duplication {
             // deadline, then exit 12.
             follow_input_desktop();
             match open_live(&self.output.device_name) {
-                Ok((live, output, size)) => {
+                Ok((live, output, mode)) => {
+                    let was = match self.mode.replace(mode) {
+                        Some(was) if was != mode => format!(", was {was}"),
+                        _ => String::new(),
+                    };
+                    ::log::info!(
+                        "swoop: capture of {} {why} in {} ms at {mode}{was}",
+                        output.device_name,
+                        started.elapsed().as_millis()
+                    );
                     self.output = output;
-                    self.size = size;
+                    self.size = mode.size;
                     self.live = Some(live);
                     self.generation = self.signal.generation();
                     self.recovering = Some(Instant::now());
@@ -784,14 +828,14 @@ impl Duplication {
         observer: &mut dyn FnMut(&PointerSample),
     ) -> anyhow::Result<Option<Frame>> {
         if self.live.is_none() || self.generation != self.signal.generation() {
-            self.rebuild()?;
+            self.rebuild("rebuilt after a desktop switch")?;
         }
         match self.step(timeout_ms, observer)? {
             Step::Frame(frame) => Ok(Some(frame)),
             Step::Nothing => Ok(None),
             Step::Lost => {
                 self.signal.bump();
-                self.rebuild()?;
+                self.rebuild("rebuilt after ACCESS_LOST")?;
                 Ok(None)
             }
         }
@@ -1074,6 +1118,20 @@ mod tests {
     #[test]
     fn virtual_bounds_of_no_outputs_is_none() {
         assert!(virtual_bounds(&[]).is_none());
+    }
+
+    /// The rebuild line's mode: a whole rate as a whole number, an NTSC one to
+    /// the two decimals that tell it from 60, and an unstated one left out.
+    #[cfg(windows)]
+    #[test]
+    fn a_mode_reads_as_size_at_its_refresh_rate() {
+        let mode = |refresh| Mode {
+            size: (1920, 1080),
+            refresh,
+        };
+        assert_eq!(mode((60, 1)).to_string(), "1920x1080@60Hz");
+        assert_eq!(mode((60_000, 1_001)).to_string(), "1920x1080@59.94Hz");
+        assert_eq!(mode((0, 0)).to_string(), "1920x1080");
     }
 
     #[test]

@@ -23,6 +23,17 @@ decoder was the cause, that tab switches to h264.
 The codec choice in the quality menu now takes effect: choosing one
 reconnects with it.
 
+### changed — swoop's machine log says why a picture stalls
+
+Every ten seconds of a swoop session, the machine's swoop log now also counts
+the keyframes it sent and the ones viewers asked for, the frames it had to
+hold back, and its slowest moment, so a frozen picture can be traced to the
+machine or to the viewer. It warns when a viewer's picture stops updating while
+frames keep going out, says when it comes back, and notes each time the screen
+capture restarts or the display changes size or refresh rate. The frame rate it
+logs is no longer overstated, and on a display faster than 60 Hz swoop sends at
+most 60 frames a second, which is what its bitrate is set for.
+
 ### fixed — reloading swoop keeps control without the second factor
 
 Reloading the page during a swoop session no longer asks for your passkey or
