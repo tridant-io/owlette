@@ -209,6 +209,15 @@ export function SwoopToolbar({
 
   const live = state === 'connected' && session !== null;
   const badge = badgeFor(state, stats, retryIn);
+  // a picture that kept freezing leaves its session up, and a new one is the operator's call.
+  const frozen = stats?.stall.recovery === 'frozen';
+  const reconnectButton = (
+    <BarTooltip label="reconnect">
+      <Button variant="ghost" size="icon-sm" aria-label="reconnect" onClick={onReconnect}>
+        <RotateCcw aria-hidden />
+      </Button>
+    </BarTooltip>
+  );
 
   return (
     <div
@@ -298,17 +307,16 @@ export function SwoopToolbar({
           {/* swoop runs in its own tab, so the only way on from an ended or failed
               session is another one; "end" has nothing left to end there. */}
           {state === 'ended' || state === 'error' ? (
-            <BarTooltip label="reconnect">
-              <Button variant="ghost" size="icon-sm" aria-label="reconnect" onClick={onReconnect}>
-                <RotateCcw aria-hidden />
-              </Button>
-            </BarTooltip>
+            reconnectButton
           ) : (
-            <BarTooltip label="end session">
-              <Button variant="ghost-destructive" size="icon-sm" aria-label="end session" onClick={onEnd}>
-                <PowerOff aria-hidden />
-              </Button>
-            </BarTooltip>
+            <>
+              {frozen && reconnectButton}
+              <BarTooltip label="end session">
+                <Button variant="ghost-destructive" size="icon-sm" aria-label="end session" onClick={onEnd}>
+                  <PowerOff aria-hidden />
+                </Button>
+              </BarTooltip>
+            </>
           )}
         </SwoopBarMenuPlacement.Provider>
       </div>

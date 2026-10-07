@@ -183,3 +183,30 @@ describe('SwoopStage — no media path', () => {
     expect(screen.queryByText("can't reach this machine from your network")).toBeNull();
   });
 });
+
+describe('SwoopStage — a picture that froze', () => {
+  it('says the picture is being restarted, not reconnected, while the element is reattached', () => {
+    renderStage({ state: 'connected', stall: 'reattaching' });
+    expect(screen.getByRole('status')).toHaveTextContent('picture stalled — restarting the picture');
+    expect(screen.queryByText(/reconnecting/)).toBeNull();
+  });
+
+  it('says so in place of "session ended" while the reconnect is due', () => {
+    renderStage({ state: 'ended', stall: 'reconnecting' });
+    expect(screen.getByRole('status')).toHaveTextContent('picture stalled — reconnecting');
+    expect(screen.queryByText('session ended')).toBeNull();
+  });
+
+  it('raises the frozen picture as an alert over the live session once it stops recovering on its own', () => {
+    renderStage({ state: 'connected', stall: 'frozen' });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('the picture froze');
+    expect(alert).toHaveTextContent(/reconnect from the bar/);
+  });
+
+  it('says nothing about a stall when there is none', () => {
+    renderStage({ state: 'ended' });
+    expect(screen.getByText('session ended')).toBeInTheDocument();
+    expect(screen.queryByText(/picture stalled|picture froze/)).toBeNull();
+  });
+});

@@ -23,6 +23,7 @@ const EMPTY_STATS = {
   frame: null,
   feedback: null,
   leaseExpiresAt: 0,
+  stall: { recovery: 'none', episodes: 0, kind: null },
 } as unknown as SwoopStats;
 
 /** a `getStats()` report: a map with the `get`/`forEach` the classifier uses. */
@@ -150,6 +151,18 @@ describe('SwoopStatsOverlay path indicator', () => {
     expect(screen.getByText('wait for paint')).toBeInTheDocument();
     expect(screen.getByText('paint → display')).toBeInTheDocument();
     expect(screen.queryByText('decode → present')).toBeNull();
+  });
+
+  it('counts the pictures that froze in this tab, and where the last one died', async () => {
+    const stats = { ...EMPTY_STATS, stall: { recovery: 'none', episodes: 2, kind: 'decode' } } as unknown as SwoopStats;
+    const session = sessionWith(async () => report({}));
+    await act(async () => {
+      render(<SwoopStatsOverlay session={session} stats={stats} open />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('frozen pictures')).toBeInTheDocument();
+    expect(screen.getByText('2 (last: decode)')).toBeInTheDocument();
   });
 
   it('names the path, the cap in force and why', async () => {

@@ -290,3 +290,91 @@ describe('swoop receiver — recovery points', () => {
     expect(h.frames.map((f) => [f.frameId, f.width, f.height])).toEqual([[12, 1280, 720]]);
   });
 });
+
+describe('swoop receiver — what the stall watchdog reads', () => {
+  it('counts every rvfc callback, joined or not, and keeps the last record’s codec', async () => {
+    const h = await started();
+    h.present({});
+    h.present({ rtpTimestamp: 5 });
+    h.receiver.handleMeta(record({ irap: true, frameId: 0, rtpTimestamp90k: 1, codec: 'h264' }));
+
+    const d = h.receiver.diagnostics();
+    expect(d.rvfcCallbacks).toBe(2);
+    expect(d.codec).toBe('h264');
+  });
+
+  it('keeps the rvfc chain alive when a frame subscriber throws', async () => {
+    const v = fakeVideo();
+    const receiver = new SwoopReceiver({
+      video: v.video,
+      onFrame: () => {
+        throw new Error('a subscriber bug');
+      },
+    });
+    receiver.attachTrack(fakeTrackEvent(fakeStream(), { jitterBufferTarget: null }));
+    await receiver.start();
+    receiver.handleMeta(readVector(KEY_VECTOR));
+
+    expect(() => v.present({ rtpTimestamp: 123456789 })).toThrow('a subscriber bug');
+    expect(v.armed()).toBe(true);
+    v.present({ rtpTimestamp: 1 });
+    expect(receiver.diagnostics().rvfcCallbacks).toBe(2);
+  });
+
+  it('reattaches the same stream to the same element, plays it and replaces the pending rvfc request', async () => {
+    const h = await started();
+    const cancel = jest.fn();
+    (h.raw as unknown as { cancelVideoFrameCallback: jest.Mock }).cancelVideoFrameCallback = cancel;
+
+    await h.receiver.reattach();
+
+    expect(h.raw.srcObject).toBe(h.stream);
+    expect(h.raw.play).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(h.raw.requestVideoFrameCallback).toHaveBeenCalledTimes(2);
+    expect(h.armed()).toBe(true);
+  });
+
+  it('does not reattach a stopped receiver', async () => {
+    const h = await started();
+    h.receiver.stop();
+    await h.receiver.reattach();
+    expect(h.raw.srcObject).toBeNull();
+    expect(h.raw.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the video receiver’s inbound counters through the allow-list', async () => {
+    const v = fakeVideo();
+    const getStats = jest.fn(async () =>
+      new Map<string, unknown>([
+        ['IT01V', { type: 'inbound-rtp', kind: 'video', ssrc: 9, framesReceived: 90, framesDecoded: 80, codecId: 'C1' }],
+        ['C1', { type: 'codec', mimeType: 'video/H264' }],
+      ]),
+    );
+    const receiver = new SwoopReceiver({ video: v.video });
+    receiver.attachTrack(fakeTrackEvent(fakeStream(), { jitterBufferTarget: null, getStats } as never));
+    await receiver.start();
+
+    await expect(receiver.inboundStats()).resolves.toEqual({
+      framesReceived: 90,
+      framesDecoded: 80,
+      codecMimeType: 'video/H264',
+    });
+  });
+
+  it('has no inbound counters before a track, or when the browser refuses them', async () => {
+    const v = fakeVideo();
+    const receiver = new SwoopReceiver({ video: v.video });
+    await expect(receiver.inboundStats()).resolves.toBeNull();
+
+    receiver.attachTrack(
+      fakeTrackEvent(fakeStream(), {
+        jitterBufferTarget: null,
+        getStats: async () => {
+          throw new Error('closed');
+        },
+      } as never),
+    );
+    await expect(receiver.inboundStats()).resolves.toBeNull();
+  });
+});

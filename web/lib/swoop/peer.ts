@@ -67,6 +67,7 @@
  */
 
 import { backoffDelayMs } from '@/lib/swoop/backoff';
+import type { SwoopCodecChoice } from '@/lib/swoop/codecStore';
 import {
   PLAYOUT_DELAY_URI,
   PLAYOUT_DELAY_MAX_MS,
@@ -247,6 +248,13 @@ export interface SwoopPeerOptions {
    * a better report on — nothing else should set it.
    */
   hostRelayAllocation?: () => boolean;
+  /**
+   * which codecs the video m-line offers. the machine picks from the first
+   * offer only (hevc whenever `h265` appears in it, `pick_codec` in
+   * `agent/swoop/src/session/mod.rs`), so this is fixed for the peer's life
+   * and a change needs a new session. absent is `auto`.
+   */
+  codec?: SwoopCodecChoice;
   playoutDelay?: PlayoutDelay;
   relayProbeMs?: number;
   disconnectedGraceMs?: number;
@@ -319,6 +327,45 @@ export function extractIceUfrag(sdp: string): string | null {
     return line.slice('a=ice-ufrag:'.length).trim() || null;
   }
   return null;
+}
+
+/**
+ * the entries that are not a picture of their own: retransmission, redundancy
+ * and fec. they ride along with whichever codec is kept, and the host uses rtx.
+ */
+function isCodecHelper(mimeType: string): boolean {
+  const mime = mimeType.toLowerCase();
+  return mime === 'video/rtx' || mime === 'video/red' || mime === 'video/ulpfec' || mime.startsWith('video/flexfec');
+}
+
+/**
+ * the video transceiver's codec list for a choice, or null for the browser's
+ * own. `h264` offers h.264 alone, which is the whole point: the host takes
+ * hevc whenever the offer names it. `hevc` only leads with it and keeps the
+ * rest, so a machine that cannot encode hevc still answers in h.264 rather
+ * than with no picture.
+ */
+export function codecPreferences(codecs: RTCRtpCodec[], choice: SwoopCodecChoice): RTCRtpCodec[] | null {
+  if (choice === 'auto') return null;
+  const wanted = choice === 'h264' ? 'video/h264' : 'video/h265';
+  const primary = codecs.filter((codec) => codec.mimeType.toLowerCase() === wanted);
+  if (primary.length === 0) return null;
+  const rest = codecs.filter((codec) => !primary.includes(codec));
+  return choice === 'h264'
+    ? [...primary, ...rest.filter((codec) => isCodecHelper(codec.mimeType))]
+    : [...primary, ...rest];
+}
+
+function applyCodecChoice(transceiver: RTCRtpTransceiver | undefined, choice: SwoopCodecChoice): void {
+  if (choice === 'auto' || typeof transceiver?.setCodecPreferences !== 'function') return;
+  if (typeof RTCRtpReceiver === 'undefined') return;
+  try {
+    const preferred = codecPreferences(RTCRtpReceiver.getCapabilities('video')?.codecs ?? [], choice);
+    if (preferred) transceiver.setCodecPreferences(preferred);
+  } catch {
+    // a list the browser refuses throws rather than degrading; its own list
+    // still gets a picture, in whatever codec the machine picks.
+  }
 }
 
 /** is the extension on the answer's video m-line? section 3 says it MUST be. */
@@ -444,7 +491,7 @@ export class SwoopPeer {
 
   /** build the two transceivers and the five channels, then offer. */
   async start(): Promise<void> {
-    this.pc.addTransceiver('video', { direction: 'recvonly' });
+    applyCodecChoice(this.pc.addTransceiver('video', { direction: 'recvonly' }), this.options.codec ?? 'auto');
     // the browser offers and the host answers, so an m-line the offer does not
     // carry is one the host can never add: without this, a streamer with a
     // working opus encoder has nowhere to put it. the track is taken off the

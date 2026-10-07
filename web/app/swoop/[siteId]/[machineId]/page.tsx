@@ -101,7 +101,15 @@ export default function SwoopPage({
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="min-h-0 flex-1">
-          <SwoopStage session={session} state={state} noPath={noPath} stageRef={stageRef} videoRef={videoRef} onLeave={leaveStage}>
+          <SwoopStage
+            session={session}
+            state={state}
+            noPath={noPath}
+            stall={stats.stall.recovery}
+            stageRef={stageRef}
+            videoRef={videoRef}
+            onLeave={leaveStage}
+          >
             <SwoopCursor session={session} />
             <SwoopPresence session={session} />
             <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />

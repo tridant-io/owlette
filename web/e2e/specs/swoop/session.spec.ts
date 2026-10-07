@@ -30,6 +30,7 @@ const EXCLUDED_ID = `mach-excluded-${SUFFIX}`;
 const OFFLINE_ID = `mach-offline-${SUFFIX}`;
 const RETURNING_ID = `mach-returning-${SUFFIX}`;
 const RELOAD_ID = `mach-reload-${SUFFIX}`;
+const CODEC_ID = `mach-codec-${SUFFIX}`;
 const SESSIONS = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/sessions`;
 const KILL = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/kill`;
 
@@ -156,6 +157,7 @@ test.beforeAll(async () => {
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${OFFLINE_ID}`).set({ online: false }, { merge: true });
   await seedMachine(SITE_ID, RETURNING_ID, { displayName: `returning box ${SUFFIX}` });
   await seedMachine(SITE_ID, RELOAD_ID, { displayName: `reload box ${SUFFIX}` });
+  await seedMachine(SITE_ID, CODEC_ID, { displayName: `codec box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -296,6 +298,66 @@ test.describe('the viewer page', () => {
     expect(await background(stage)).toMatch(/^(?:lab|oklch)\([\d.]+ 0 0\)$/);
 
     await page.getByRole('button', { name: /end session/i }).click();
+  });
+
+  test('a codec choice is kept for the machine and starts a new session whose offer carries it', async ({ page }) => {
+    // every offer the page makes, as it hands it to its own connection: the
+    // emulator has no signalling worker to read one off.
+    await page.addInitScript(() => {
+      const offers: string[] = [];
+      (window as unknown as { swoopOffers: string[] }).swoopOffers = offers;
+      const setLocal = RTCPeerConnection.prototype.setLocalDescription;
+      RTCPeerConnection.prototype.setLocalDescription = function (
+        this: RTCPeerConnection,
+        description?: RTCLocalSessionDescriptionInit,
+      ) {
+        if (description?.type === 'offer' && description.sdp) offers.push(description.sdp);
+        return setLocal.call(this, description as RTCLocalSessionDescriptionInit);
+      };
+    });
+    /** the codec names on an offer's video m-line. */
+    const videoCodecs = (sdp: string): string[] => {
+      const section = sdp.split(/\r?\n(?=m=)/).find((part) => part.startsWith('m=video')) ?? '';
+      return [...new Set([...section.matchAll(/^a=rtpmap:\d+ ([^/]+)\//gm)].map((match) => match[1].toLowerCase()))];
+    };
+    const offers = () => page.evaluate(() => (window as unknown as { swoopOffers: string[] }).swoopOffers);
+
+    // the watcher needs no ceremony, so both sessions are minted without one.
+    await signIn(page, watcher);
+    const sessions = `/api/sites/${SITE_ID}/machines/${CODEC_ID}/swoop/sessions`;
+    const minted = (r: { url(): string; request(): { method(): string }; status(): number }) =>
+      r.url().endsWith(sessions) && r.request().method() === 'POST' && r.status() === 201;
+    const deletes: string[] = [];
+    page.on('request', (r) => {
+      if (r.method() === 'DELETE' && r.url().includes('/swoop/sessions/')) deletes.push(r.url());
+    });
+
+    const first = page.waitForResponse(minted, { timeout: 45_000 });
+    await page.goto(`/swoop/${SITE_ID}/${CODEC_ID}`);
+    await first;
+    await expect.poll(async () => (await offers()).length).toBe(1);
+    expect(videoCodecs((await offers())[0])).toContain('vp8');
+
+    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await page.getByRole('menuitem', { name: /^codec/ }).click();
+    await expect(page.getByText('reconnects to apply.')).toBeVisible();
+    const second = page.waitForResponse(minted, { timeout: 45_000 });
+    await page.getByRole('menuitemradio', { name: 'h264' }).click();
+    await second;
+
+    // the new session's offer names h.264 and nothing else that carries a picture.
+    await expect.poll(async () => (await offers()).length).toBe(2);
+    const narrowed = videoCodecs((await offers())[1]);
+    expect(narrowed).toContain('h264');
+    expect(narrowed.filter((codec) => !['h264', 'rtx', 'red', 'ulpfec', 'flexfec-03'].includes(codec))).toEqual([]);
+
+    const stored = await page.evaluate((key) => sessionStorage.getItem(key), `owlette.swoop.codec/${SITE_ID}/${CODEC_ID}`);
+    expect(stored).toBe('h264');
+    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await expect(page.getByRole('menuitem', { name: /^codec/ })).toHaveText(/^codec\s*h264$/);
+    await page.keyboard.press('Escape');
+    // replaced, not ended: a DELETE would void the tab's continuity.
+    expect(deletes).toEqual([]);
   });
 
   test('the site switch and the exclusion list refuse before any ceremony', async ({ page }) => {

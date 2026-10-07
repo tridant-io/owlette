@@ -1,7 +1,7 @@
 ---
 title: "swoop"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "bandwidth", "passkey", "2fa", "linux", "macos", "agent version"]
+keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "agent version"]
 ---
 
 swoop puts a machine's screen in your browser, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -90,7 +90,7 @@ an account with no passkey and no authenticator app cannot take control, and bac
 the toolbar carries the session state, an **end** button, and:
 
 - **fullscreen with keyboard and mouse capture**: takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so
-- **latency stats**: an overlay, off by default because it covers the picture. its codec row shows what the picture is arriving in
+- **latency stats**: an overlay, off by default because it covers the picture. its codec row shows what the picture is arriving in, and **frozen pictures** how often the picture [froze](#when-the-picture-freezes) in this tab
 - **display picker**: which of the machine's monitors you are looking at
 - **quality**: see [quality](#quality) below
 - **audio**: off unless you ask for it
@@ -113,11 +113,11 @@ the quality menu has one row per setting. it opens once the session has connecte
 | bandwidth | **auto**, or 5, 10, 20, 30, 50, 80 or 100 Mbps | at once |
 | resolution | native, 1440p, 1080p, 720p | at once |
 | frame rate | 60 or 30 fps | at once |
-| codec | **auto**, or h264 and, where your browser can decode it in hardware, HEVC | the menu says on reconnect; see below |
+| codec | **auto**, or h264 and, where your browser can decode it in hardware, HEVC | at once, by reconnecting; see below |
 
 bandwidth, resolution and frame rate are upper limits: the machine lowers them when the connection needs it. **auto** bandwidth starts a source above 2.5 megapixels, such as a 1440p or 4K-class display, at 80 Mbps, and anything smaller at 20 Mbps. a new session starts back at the defaults: auto, native, 60 fps.
 
-the machine settles the codec once, when a session starts: HEVC when your browser offers it and the machine can encode it, otherwise h264. today it keeps that order whatever the codec row says, so the row does not change what you get; the latency stats show the codec in use.
+the machine settles the codec once, when a session starts: HEVC when your browser offers it and the machine can encode it, otherwise h264. so choosing a codec reconnects: the viewer starts a new session in the same tab, without asking for the second factor again. **h264** offers only h264. **HEVC** asks for it first and still gets h264 from a machine that cannot encode it. **auto** lets the machine pick. the choice holds for that machine until the tab closes, and the latency stats show the codec in use.
 
 ### clipboard
 
@@ -143,6 +143,15 @@ UAC prompts and ctrl + alt + del need agent 4.1.4, and win + l needs 4.1.5.
 - an update or restart of the machine's agent sends the viewer to reconnect too, once the agent is back. agents older than 4.0.4 end the session instead, and so does the update from one of them
 - what does end it: the **end** button, closing the tab, an admin's kill, another tab or device opening swoop on the same machine, or the lease check below refusing
 - a viewer holds a **5-minute lease**, renewed silently while the tab is open. the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
+
+### when the picture freezes
+
+the viewer watches the picture as well as the connection. when the machine keeps sending frames and none appear for three seconds, with the tab in front and the connection up, the viewer says **picture stalled — reconnecting** and starts a new session on its own, in the same tab and without asking for the second factor again. a picture that arrives and is only not being painted is first restarted in place (**picture stalled — restarting the picture**), and the new session follows only if that shows nothing within two seconds.
+
+- a still screen never counts: the machine sends at least two frames a second even when nothing moves, and each of them shows. neither does a pause on the machine's side, such as a UAC prompt or a display switch
+- it starts a new session this way at most twice in ten minutes; restarting the picture in place does not count. after that the session stays up and the viewer says **the picture froze**, which goes away if the picture comes back. **reconnect** in the bar starts a new session, and the ten minutes again
+- when the browser's HEVC decoder was the cause, the new session and every later one in that tab use h264: Chrome has no software fallback for HEVC once its hardware decoder fails. the quality menu's codec row shows **h264**; set it back to **auto** to try HEVC again
+- each freeze is recorded on the server with the browser's video counters, for diagnosis. nothing reaches the machine
 
 ---
 

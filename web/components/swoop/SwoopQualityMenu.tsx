@@ -16,10 +16,12 @@
  * own axes and `preset` carries the resolution cap — the only one without a
  * field. `agent/swoop/src/session/quality.rs` reads exactly that.
  *
- * codec preference is not a control message at all. the host picks the codec by
- * reading the browser's **offer** (`session::pick_codec`), so the preference is
- * applied to the transceiver and takes effect at the next negotiation, which is
- * why its submenu says "on reconnect" rather than pretending to switch mid-session.
+ * codec preference is not a control message at all. the host picks the codec
+ * once, from the browser's first **offer** (`session::pick_codec`), so a choice
+ * is stored for this tab and machine (`lib/swoop/codecStore.ts`) and applied by
+ * a new session, which the menu starts in place of this one. it is per machine
+ * rather than per session, unlike the ceilings: a picture that froze on a dead
+ * hevc decoder writes `h264` there too, and the row shows it.
  * the options come from `probeClientCaps`, never from a webcodecs probe: spike
  * 2.12 measured edge exposing no `video/H265` to `RTCRtpReceiver` on the same
  * box where it decodes hevc happily through webcodecs, and offering hevc there
@@ -42,6 +44,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
+import { readCodecChoice, writeCodecChoice, type SwoopCodecChoice } from '@/lib/swoop/codecStore';
 import { encodeControlMessage, type SwoopCodec } from '@/lib/swoop/protocol';
 import type { SwoopSession } from '@/lib/swoop/features';
 import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
@@ -64,56 +67,14 @@ const RESOLUTION = ['native', '1440p', '1080p', '720p'] as const;
 
 const FRAME_RATE = [60, 30];
 
-type CodecPreference = 'auto' | SwoopCodec;
-
 interface Ceiling {
   /** kbps on the wire; `0` is "unstated" and the host takes its own default. */
   bandwidth: number;
   resolution: string;
   fps: number;
-  codec: CodecPreference;
 }
 
-const DEFAULTS: Ceiling = { bandwidth: 0, resolution: 'native', fps: 60, codec: 'auto' };
-
-/** av1 is in the protocol's codec union but no host encodes it yet (plan.md
- *  d5), so it is here for the mapping and never reaches the menu — the options
- *  come from what the receiver advertises, not from this table. */
-const MIME: Record<SwoopCodec, string> = {
-  hevc: 'video/h265',
-  h264: 'video/h264',
-  av1: 'video/av1',
-};
-
-/**
- * put the preferred codec first on the video transceiver, or hand back the
- * browser's own order for `auto`. a no-op on a browser without the api — the
- * host answers with whatever the offer actually carries either way.
- */
-function applyCodecPreference(session: SwoopSession, preference: CodecPreference): void {
-  if (typeof RTCRtpReceiver === 'undefined') return;
-  const transceiver = session.peer.connection
-    .getTransceivers()
-    .find((candidate) => candidate.receiver.track?.kind === 'video');
-  if (typeof transceiver?.setCodecPreferences !== 'function') return;
-  try {
-    const all = RTCRtpReceiver.getCapabilities('video')?.codecs ?? [];
-    if (preference === 'auto') {
-      transceiver.setCodecPreferences([]);
-      return;
-    }
-    const wanted = MIME[preference];
-    const preferred = all.filter((codec) => codec.mimeType.toLowerCase() === wanted);
-    // never narrow the offer to one codec: a preference that removed the rest
-    // would turn a host with no hevc encoder into a session with no video.
-    if (preferred.length > 0) {
-      transceiver.setCodecPreferences([...preferred, ...all.filter((codec) => !preferred.includes(codec))]);
-    }
-  } catch {
-    // an invalid preference list throws rather than degrading; the browser's
-    // own order is a fine answer and the session keeps running.
-  }
-}
+const DEFAULTS: Ceiling = { bandwidth: 0, resolution: 'native', fps: 60 };
 
 /** one axis: its name, what is chosen, and the options a level down. */
 function Axis({ label, value, children }: { label: string; value: string; children: ReactNode }) {
@@ -139,15 +100,20 @@ export interface SwoopQualityMenuProps {
 export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
   const menuPlacement = useBarMenuPlacement();
   const [ceiling, setCeiling] = useState<Ceiling>(DEFAULTS);
+  const [codec, setCodec] = useState<SwoopCodecChoice>(() =>
+    session ? readCodecChoice(session.siteId, session.machineId) : 'auto',
+  );
   const [owner, setOwner] = useState(session);
   const [offerable, setOfferable] = useState<SwoopCodec[]>([]);
 
   // a new session starts at the host's own default, so the menu does too rather
-  // than showing a ceiling the host was never told about. adjusted in render
-  // rather than in an effect, which would render the stale ceiling first.
+  // than showing a ceiling the host was never told about; the codec is the one
+  // that session offered. adjusted in render rather than in an effect, which
+  // would render the stale values first.
   if (owner !== session) {
     setOwner(session);
     setCeiling(DEFAULTS);
+    setCodec(session ? readCodecChoice(session.siteId, session.machineId) : 'auto');
   }
 
   useEffect(() => {
@@ -164,10 +130,6 @@ export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
     const merged = { ...ceiling, ...next };
     setCeiling(merged);
     if (!session) return;
-    if (next.codec !== undefined) {
-      applyCodecPreference(session, merged.codec);
-      return;
-    }
     session.send(
       'swoop-control',
       encodeControlMessage({
@@ -177,6 +139,14 @@ export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
         maxFps: merged.fps,
       }),
     );
+  };
+
+  // `auto` also clears the h.264 a frozen hevc picture fell back to.
+  const chooseCodec = (choice: SwoopCodecChoice) => {
+    if (!session || choice === codec) return;
+    writeCodecChoice(session.siteId, session.machineId, choice);
+    setCodec(choice);
+    session.restart();
   };
 
   const live = session !== null;
@@ -233,11 +203,8 @@ export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
           </DropdownMenuRadioGroup>
         </Axis>
 
-        <Axis label="codec" value={ceiling.codec}>
-          <DropdownMenuRadioGroup
-            value={ceiling.codec}
-            onValueChange={(value) => update({ codec: value as CodecPreference })}
-          >
+        <Axis label="codec" value={codec}>
+          <DropdownMenuRadioGroup value={codec} onValueChange={(value) => chooseCodec(value as SwoopCodecChoice)}>
             <DropdownMenuRadioItem value="auto">auto</DropdownMenuRadioItem>
             {offerable.map((option) => (
               <DropdownMenuRadioItem key={option} value={option}>
@@ -246,7 +213,7 @@ export function SwoopQualityMenu({ session }: SwoopQualityMenuProps) {
             ))}
           </DropdownMenuRadioGroup>
           <DropdownMenuSeparator />
-          <p className="px-2 py-1.5 text-xs text-muted-foreground">takes effect on reconnect.</p>
+          <p className="px-2 py-1.5 text-xs text-muted-foreground">reconnects to apply.</p>
         </Axis>
 
         <DropdownMenuSeparator />

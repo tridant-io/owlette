@@ -132,6 +132,19 @@ export const screenshotUploadRateLimit = redis
     })
   : null;
 
+/**
+ * Swoop stall reports: 1 per 30 s per session. A report is one log line about
+ * a frozen picture, and a page declares a stall at most once per episode.
+ */
+export const swoopStallReportRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(1, '30 s'),
+      prefix: 'swoop-stall',
+      analytics: true,
+    })
+  : null;
+
 /** API key consumers: 300/hr per IP — headroom for CI. */
 export const apiRateLimit = redis
   ? new Ratelimit({

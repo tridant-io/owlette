@@ -10,6 +10,7 @@ if (!('crypto' in globalThis)) {
 }
 
 import { PLAYOUT_DELAY_URI, base64UrlDecode, type SignalingMessage } from '@/lib/swoop/protocol';
+import type { SwoopCodecChoice } from '@/lib/swoop/codecStore';
 import {
   ANSWER_TIMEOUT_MS,
   DISCONNECTED_GRACE_MS,
@@ -18,6 +19,7 @@ import {
   RESTART_ANSWER_TIMEOUT_MS,
   SwoopPeer,
   candidateType,
+  codecPreferences,
   createSwoopIdentity,
   extractIceUfrag,
   partitionIceServers,
@@ -99,6 +101,8 @@ class FakePeerConnection {
   iceConnectionState = 'new';
   localDescription: { sdp: string } | null = null;
   transceivers: { kind: string; init: unknown }[] = [];
+  /** every `setCodecPreferences` call, by the kind of transceiver it was made on. */
+  codecPreferences: { kind: string; codecs: RTCRtpCodec[] }[] = [];
 
   private active: RTCConfiguration;
 
@@ -125,8 +129,9 @@ class FakePeerConnection {
     this.oniceconnectionstatechange?.();
   }
 
-  addTransceiver(kind: string, init: unknown): void {
+  addTransceiver(kind: string, init: unknown): Pick<RTCRtpTransceiver, 'setCodecPreferences'> {
     this.transceivers.push({ kind, init });
+    return { setCodecPreferences: (codecs) => void this.codecPreferences.push({ kind, codecs: [...codecs] }) };
   }
 
   createDataChannel(label: string, init: RTCDataChannelInit): FakeDataChannel {
@@ -240,7 +245,11 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): PeerHarness {
+function peerHarness(
+  state = newState(),
+  iceServers: RTCIceServer[] = [STUN],
+  codec?: SwoopCodecChoice,
+): PeerHarness {
   const sent: SignalingMessage[] = [];
   const errors: SwoopPeerError[] = [];
   const endings: string[] = [];
@@ -265,6 +274,7 @@ function peerHarness(state = newState(), iceServers: RTCIceServer[] = [STUN]): P
     onNoPath: (value) => noPaths.push(value),
     leaseToken: async () => `viewer.jwt.${(counters.leases += 1)}`,
     factory: factoryFor(state, IDENTITY.certificate),
+    codec,
   });
   openPeers.push(peer);
 
@@ -1407,5 +1417,84 @@ describe('swoop peer — no media path', () => {
 
     await jest.advanceTimersByTimeAsync(NO_PATH_MS * 3);
     expect(h.noPaths).toEqual([]);
+  });
+});
+
+describe('swoop peer — the codec the offer carries', () => {
+  // what chrome lists for a receiver that decodes both: the primary codecs,
+  // then the helpers that ride with them.
+  const CAPS: RTCRtpCodec[] = [
+    { mimeType: 'video/VP8', clockRate: 90000 },
+    { mimeType: 'video/rtx', clockRate: 90000 },
+    { mimeType: 'video/H264', clockRate: 90000, sdpFmtpLine: 'packetization-mode=1;profile-level-id=42e01f' },
+    { mimeType: 'video/H264', clockRate: 90000, sdpFmtpLine: 'packetization-mode=1;profile-level-id=640034' },
+    { mimeType: 'video/H265', clockRate: 90000 },
+    { mimeType: 'video/AV1', clockRate: 90000 },
+    { mimeType: 'video/red', clockRate: 90000 },
+    { mimeType: 'video/ulpfec', clockRate: 90000 },
+    { mimeType: 'video/flexfec-03', clockRate: 90000 },
+  ];
+  const mimes = (codecs: RTCRtpCodec[] | null | undefined) => codecs?.map((codec) => codec.mimeType) ?? null;
+
+  beforeEach(() => {
+    (globalThis as unknown as { RTCRtpReceiver: unknown }).RTCRtpReceiver = {
+      getCapabilities: (kind: string) => (kind === 'video' ? { codecs: CAPS, headerExtensions: [] } : null),
+    };
+  });
+  afterEach(() => {
+    delete (globalThis as unknown as { RTCRtpReceiver?: unknown }).RTCRtpReceiver;
+  });
+
+  it('offers h.264 alone, with its rtx, red and fec, when the tab chose h264', async () => {
+    const h = peerHarness(newState(), [STUN], 'h264');
+    await h.peer.start();
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+
+    // the host takes hevc whenever `h265` appears in the offer, so it must not.
+    expect(pc.codecPreferences.map((call) => call.kind)).toEqual(['video']);
+    expect(mimes(pc.codecPreferences[0].codecs)).toEqual([
+      'video/H264',
+      'video/H264',
+      'video/rtx',
+      'video/red',
+      'video/ulpfec',
+      'video/flexfec-03',
+    ]);
+    // the preference is in place before the offer that carries it.
+    expect(h.sent.map((m) => m.type)).toEqual(['offer']);
+  });
+
+  it('leads with hevc for hevc but keeps the rest, so a machine without it still answers in h.264', () => {
+    expect(mimes(codecPreferences(CAPS, 'hevc'))).toEqual([
+      'video/H265',
+      'video/VP8',
+      'video/rtx',
+      'video/H264',
+      'video/H264',
+      'video/AV1',
+      'video/red',
+      'video/ulpfec',
+      'video/flexfec-03',
+    ]);
+  });
+
+  it.each<[string, SwoopCodecChoice | undefined]>([
+    ['auto', 'auto'],
+    ['no choice', undefined],
+  ])('leaves the browser’s own list alone for %s', async (_what, codec) => {
+    const h = peerHarness(newState(), [STUN], codec);
+    await h.peer.start();
+    expect((h.peer.connection as unknown as FakePeerConnection).codecPreferences).toEqual([]);
+  });
+
+  it('leaves the list alone when the browser cannot receive the codec chosen', () => {
+    expect(codecPreferences(CAPS.filter((codec) => codec.mimeType !== 'video/H265'), 'hevc')).toBeNull();
+  });
+
+  it('starts on a browser with no codec api at all', async () => {
+    delete (globalThis as unknown as { RTCRtpReceiver?: unknown }).RTCRtpReceiver;
+    const h = peerHarness(newState(), [STUN], 'h264');
+    await expect(h.peer.start()).resolves.toBeUndefined();
+    expect((h.peer.connection as unknown as FakePeerConnection).codecPreferences).toEqual([]);
   });
 });

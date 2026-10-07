@@ -7,6 +7,18 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### fixed — a frozen swoop picture recovers on its own
+
+A swoop picture could stop on one frame while the session stayed up, with
+the machine still sending, until the page was reloaded. The viewer now
+notices within a few seconds, says "picture stalled — reconnecting" and
+starts a new session in the same tab, without asking for the second factor.
+It does this at most twice in ten minutes; after that the session stays up,
+says the picture froze, and offers reconnect. When the browser's HEVC
+decoder was the cause, that tab switches to h264.
+The codec choice in the quality menu now takes effect: choosing one
+reconnects with it.
+
 ### fixed — reloading swoop keeps control without the second factor
 
 Reloading the page during a swoop session no longer asks for your passkey or
