@@ -79,7 +79,7 @@ control is gated on a **step-up**: a fresh second-factor check, prompted in the 
 - an **authenticator code**, the 6 digits from your authenticator app
 - a **backup code** (**use a backup code instead**). each one works once
 
-the 12 hours run from the check itself, and using the window does not extend it. the window belongs to you and that machine, so a new tab or a reload inside it does not ask again, but only from a sign-in that itself passed a second-factor check: a browser that skipped it because it was remembered asks once more. a tab that holds control also keeps it across its own reconnects for as long as it stays open. a [kill](#ending-and-killing) on the machine closes every window on it.
+the 12 hours run from the check itself, and using the window does not extend it. the window belongs to you and that machine, so a new tab or a reload inside it does not ask again, but only from a sign-in that itself passed a second-factor check: a browser that skipped it because it was remembered asks once more. a tab that holds control also keeps it across its own reconnects and across a reload of the page, even after the 12 hours. a new tab asks, and ending the session yourself gives it up. a [kill](#ending-and-killing) on the machine closes every window on it.
 
 an account with no passkey and no authenticator app cannot take control, and backup codes alone do not count. signing in with Google or a password is not a second factor. the viewer says so, offers only **cancel**, and links to two-factor setup; add a factor there or under [account settings](/docs/dashboard/account-settings#security) → security, then start the session again. because the viewer asks for control first, an owner or admin in that state cannot open the viewer to watch either.
 

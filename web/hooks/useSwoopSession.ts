@@ -47,6 +47,7 @@ import { backoffDelayMs, isTransientEnd, isWithdrawal } from '@/lib/swoop/backof
 import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import { clearThisMachine, markThisMachine } from '@/lib/swoop/thisMachine';
+import { readContinuity, writeContinuity } from '@/lib/swoop/continuityStore';
 import {
   base64UrlDecode,
   encodeControlMessage,
@@ -160,7 +161,8 @@ interface SessionGrant {
   expiresAt: number;
   /**
    * a control session's continuity token: presented on this tab's next mint
-   * in place of a passkey. kept in memory only, so closing the tab forgets it.
+   * in place of a passkey. kept for the tab's life (`continuityStore.ts`), so
+   * a reload keeps it and a new tab does not have it.
    */
   continuity?: string;
 }
@@ -249,7 +251,6 @@ export function useSwoopSession(
   // the proof is held in a ref, never in state: state lands in a devtools
   // snapshot and a live second-factor proof has no business being there.
   const proofRef = useRef<SwoopStepUpProof | null>(null);
-  const continuityRef = useRef<string | null>(null);
   const endRef = useRef<(reason: string, message?: string) => void>(() => {});
   const stoppedRef = useRef(false);
 
@@ -311,9 +312,9 @@ export function useSwoopSession(
   const end = useCallback(() => {
     clearRetry();
     // a deliberate end: the next session from this tab asks again.
-    continuityRef.current = null;
+    writeContinuity(siteId, machineId, null);
     endRef.current('closed');
-  }, [clearRetry]);
+  }, [clearRetry, siteId, machineId]);
 
   // the countdown the page shows, once a second.
   useEffect(() => {
@@ -469,7 +470,7 @@ export function useSwoopSession(
       proofRef.current = null;
       // no proof in hand: the last control session's continuity stands in,
       // and the server decides whether it still counts.
-      const continuity = proof || !wantControl ? null : continuityRef.current;
+      const continuity = proof || !wantControl ? null : readContinuity(siteId, machineId);
 
       const res = await fetch(
         `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions`,
@@ -515,7 +516,7 @@ export function useSwoopSession(
       }
       const body = (await res.json()) as { data: SessionGrant };
       // a fresh token per session; a watch grant carries none and clears it.
-      continuityRef.current = body.data.continuity ?? null;
+      writeContinuity(siteId, machineId, body.data.continuity ?? null);
       return body.data;
     };
 
@@ -645,7 +646,7 @@ export function useSwoopSession(
             // over: a retry would take it back, and the two would trade it
             // forever. a 4.0.x service stop or update byes its viewers this
             // way too; later agents say `restart`, which lands below.
-            continuityRef.current = null;
+            writeContinuity(siteId, machineId, null);
             finish('kill', 'this session was ended from elsewhere.');
             return;
           }
