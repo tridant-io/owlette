@@ -8,7 +8,7 @@ cryptography==50.0.1
 # CTkMessagebox, CTkToolTip) when the Tauri desktop app replaced it — so it has
 # to be pinned here or the screenshot path breaks on the next clean build.
 Pillow==12.3.0
-packaging==24.2  # >=24.0 required by the wheel that get-pip bootstraps
+packaging==26.3  # >=24.0 required by the wheel that get-pip bootstraps
 setuptools==84.0.0  # >=78.1.1 fixes PackageIndex.download path traversal (CVE-2025-47273)
 requests==2.34.2  # >=2.32.0/.4/2.33.0 CVE fixes; 2.34.0 also fixes greedy no_proxy matching
 tzlocal==5.4.4  # Convert Windows registry tz names to IANA (e.g. "Pacific Standard Time" -> "America/Los_Angeles") for dashboard timezone display
