@@ -217,6 +217,11 @@ export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayPro
         <dd className="text-right font-mono text-foreground">
           {presenter.gaps} / {presenter.duplicates}
         </dd>
+        <dt>frozen pictures</dt>
+        <dd className="text-right font-mono text-foreground">
+          {stats.stall.episodes}
+          {stats.stall.kind ? ` (last: ${stats.stall.kind})` : ''}
+        </dd>
         <dt className="mt-1 border-t border-border pt-1">path</dt>
         <dd className="mt-1 border-t border-border pt-1 text-right font-mono text-foreground">
           {budget ? budget.label : '—'}

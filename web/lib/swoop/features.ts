@@ -104,6 +104,12 @@ export interface SwoopSession {
    * what the page shows as the reason.
    */
   end(reason: string, message?: string): void;
+  /**
+   * a new session to the same machine in place of this one, now: how a choice
+   * only an offer carries (the codec) takes effect. nothing ends server-side,
+   * so the tab's continuity carries control over without a second factor.
+   */
+  restart(): void;
 }
 
 export interface SwoopFeature {

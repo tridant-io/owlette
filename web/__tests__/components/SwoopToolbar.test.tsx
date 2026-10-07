@@ -25,7 +25,7 @@ afterEach(() => {
   jest.mocked(swoopClipboard).mockReturnValue(null);
 });
 
-function renderBar(state: SwoopSessionState) {
+function renderBar(state: SwoopSessionState, stats?: SwoopStats) {
   const onEnd = jest.fn();
   const onReconnect = jest.fn();
   // the app's root layout provides this; the fullscreen tooltip needs it.
@@ -40,6 +40,7 @@ function renderBar(state: SwoopSessionState) {
         onReconnect={onReconnect}
         statsOpen={false}
         onToggleStats={() => {}}
+        stats={stats}
       />
     </TooltipProvider>,
   );
@@ -66,6 +67,14 @@ describe('SwoopToolbar', () => {
     expect(screen.queryByRole('button', { name: /reconnect/i })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: /end session/i }));
     expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers reconnect beside end while a picture that kept freezing stays up', async () => {
+    const { onEnd, onReconnect } = renderBar('connected', { stall: { recovery: 'frozen' } } as SwoopStats);
+    expect(screen.getByRole('button', { name: /end session/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /reconnect/i }));
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+    expect(onEnd).not.toHaveBeenCalled();
   });
 
   it('no longer says anything about keyboard lock or esc in the bar', () => {
@@ -155,6 +164,7 @@ describe('SwoopToolbar', () => {
         referenceMinUs: null,
         referenceSamples: 0,
       },
+      stall: { recovery: 'none', episodes: 0, kind: null },
     });
     const bar = (rttUs: number) => (
       <TooltipProvider>

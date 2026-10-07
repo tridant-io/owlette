@@ -27,7 +27,7 @@ import { useCallback, useEffect, useId, useState, type RefObject } from 'react';
 import { Loader2 } from 'lucide-react';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
-import type { SwoopSessionState } from '@/hooks/useSwoopSession';
+import type { SwoopSessionState, SwoopStallRecovery } from '@/hooks/useSwoopSession';
 import type { SwoopNoPath } from '@/lib/swoop/peer';
 
 export interface SwoopStageProps {
@@ -35,6 +35,8 @@ export interface SwoopStageProps {
   state: SwoopSessionState;
   /** connecting found no media path; the stage says so instead of a bare "connecting". */
   noPath?: SwoopNoPath | null;
+  /** what the page is doing about a frozen picture; the stage says it over the picture. */
+  stall?: SwoopStallRecovery;
   stageRef: RefObject<HTMLDivElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
   /**
@@ -58,7 +60,10 @@ function Hint({ children, onDone }: { children: React.ReactNode; onDone: () => v
   );
 }
 
-export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave, children }: SwoopStageProps) {
+/** the stage's centred notice, over the picture or in place of it. */
+const NOTICE = 'pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-swoop-stage-ink';
+
+export function SwoopStage({ session, state, noPath, stall = 'none', stageRef, videoRef, onLeave, children }: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   // the way out, said once fullscreen holds and only where it is not obvious:
@@ -112,6 +117,10 @@ export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave
   }, [fullscreen, locked, session, stageRef]);
 
   const windowedCapture = capture !== null && !fullscreen;
+  // a stall recovery speaks for the stage until the page is connecting again.
+  const recovering = stall === 'reattaching' || stall === 'reconnecting';
+  // the picture behind a stall notice is the frozen frame, so it sits on a wash of the stage.
+  const washed = `${NOTICE} bg-swoop-stage/80`;
 
   return (
     // touch-none: a drag is the machine's, never a page pan, and android's
@@ -136,8 +145,23 @@ export function SwoopStage({ session, state, noPath, stageRef, videoRef, onLeave
         className="h-full w-full object-contain"
         aria-label="remote screen"
       />
-      {state !== 'connected' && (
-        <p className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-swoop-stage-ink">
+      {recovering && (
+        <p role="status" className={washed}>
+          <Loader2 className="size-6 animate-spin" aria-hidden />
+          {stall === 'reattaching' ? 'picture stalled — restarting the picture' : 'picture stalled — reconnecting'}
+        </p>
+      )}
+      {stall === 'frozen' && (
+        // the session is still up; only the automatic recovery has stopped.
+        <p role="alert" className={washed}>
+          the picture froze
+          <span className="max-w-sm text-center text-xs">
+            it kept freezing, so swoop stopped fixing it on its own. reconnect from the bar to try again.
+          </span>
+        </p>
+      )}
+      {state !== 'connected' && stall === 'none' && (
+        <p className={NOTICE}>
           {state !== 'ended' && <Loader2 className="size-6 animate-spin" aria-hidden />}
           {state === 'ended' ? 'session ended' : noPath ? "can't reach this machine from your network" : 'connecting'}
           {state !== 'ended' && noPath && (

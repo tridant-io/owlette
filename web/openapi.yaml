@@ -7635,7 +7635,7 @@ paths:
                   enum: [closed, killed, revoked]
                 viewerReason:
                   type: string
-                  enum: [closed, unmounted, kill, lease_expired, lease_refused, host_gone, signal_lost, peer_failed, start_failed, refused, same_machine]
+                  enum: [closed, unmounted, kill, lease_expired, lease_refused, host_gone, signal_lost, peer_failed, start_failed, refused, same_machine, picture_stalled]
                   description: The page's own reason, recorded in the audit trail beside `endReason`.
       responses:
         '200':
@@ -7748,6 +7748,114 @@ paths:
             An ended session, no such live session, or no viewer row of the
             caller's on it — whose viewers a session holds is not the caller's
             business, so all answer alike.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+  /api/sites/{siteId}/machines/{machineId}/swoop/sessions/{sessionId}/stall:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+        description: The session id (`sid`) whose picture froze.
+    post:
+      operationId: reportSwoopStall
+      tags: [Machines]
+      summary: report a frozen swoop picture
+      description: |
+        The viewer page posts this once when its picture froze while the
+        session stayed up: the machine kept sending frames and none were
+        shown. The page recovers on its own; this only records one log line
+        with the receiver's counters. Nothing reaches the machine and nothing
+        is stored.
+
+        The body is an allow-list and any other field is refused. The caller
+        must hold a viewer row on the live session. At most one report per
+        session every 30 seconds.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [viewerId, kind, action, stalledMs, hostFrames]
+              properties:
+                viewerId:
+                  type: string
+                  description: The viewer id the session was created with.
+                kind:
+                  type: string
+                  enum: [decode, render, nothing]
+                  description: |
+                    Where the picture died: `nothing` arrived, it arrived and
+                    was not decoded (`decode`), or it was decoded and never
+                    shown (`render`).
+                action:
+                  type: string
+                  enum: [reattach, reconnect, none]
+                  description: What the page does next; `none` once its automatic recoveries are used up.
+                codec:
+                  type: [string, 'null']
+                  enum: [h264, hevc, av1, null]
+                  description: The codec on the machine's frame records.
+                stalledMs:
+                  type: number
+                  minimum: 0
+                  description: How long the picture was dead when the page declared it.
+                hostFrames:
+                  type: integer
+                  minimum: 0
+                  description: Frames the machine sent in that time.
+                before:
+                  $ref: '#/components/schemas/SwoopInboundVideoStats'
+                after:
+                  $ref: '#/components/schemas/SwoopInboundVideoStats'
+            example:
+              viewerId: viewer0000000000000000000000001
+              kind: decode
+              action: reconnect
+              codec: hevc
+              stalledMs: 3012
+              hostFrames: 180
+              before: { packetsReceived: 51200, framesReceived: 9100, framesDecoded: 9040, pliCount: 3, codecMimeType: video/H265 }
+              after: { packetsReceived: 52900, framesReceived: 9280, framesDecoded: 9040, pliCount: 3, codecMimeType: video/H265 }
+      responses:
+        '204':
+          description: Recorded.
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code`: `scope_insufficient` or `forbidden` (the capability is
+            missing) and `api_key_not_permitted` (an api key called this
+            route) before the body is read; then, once the body has passed
+            the `400` checks, swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404':
+          description: |
+            An ended session, no such live session, or no viewer row of the
+            caller's on it — all answer alike.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '413':
+          description: The body is over 4 KB.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -11392,6 +11500,38 @@ components:
           description: |
             Whether the site's machines keep their displays awake and unlocked:
             no sleep, no blanking, no idle lock. On unless set to `false`.
+    SwoopInboundVideoStats:
+      type: [object, 'null']
+      additionalProperties: false
+      description: |
+        The browser's inbound-rtp counters for the session's video, reduced to
+        this allow-list: no candidate, address or id ever leaves the page.
+        Every field is optional; a browser reports what it has.
+      properties:
+        packetsReceived: { type: number }
+        packetsLost: { type: number, description: May be negative; duplicates count against it. }
+        nackCount: { type: number }
+        pliCount: { type: number }
+        firCount: { type: number }
+        framesReceived: { type: number }
+        jitterBufferEmittedCount: { type: number }
+        framesDecoded: { type: number }
+        keyFramesDecoded: { type: number }
+        framesDropped: { type: number }
+        framesPerSecond: { type: number }
+        frameWidth: { type: number }
+        frameHeight: { type: number }
+        freezeCount: { type: number }
+        pauseCount: { type: number }
+        totalFreezesDuration: { type: number }
+        totalPausesDuration: { type: number }
+        decoderImplementation:
+          type: string
+          maxLength: 64
+          description: Often withheld by the browser.
+        codecMimeType:
+          type: string
+          description: The negotiated codec, such as `video/H265`.
     ProblemDetails:
       type: object
       description: |

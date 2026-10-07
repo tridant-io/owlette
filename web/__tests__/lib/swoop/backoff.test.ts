@@ -35,6 +35,7 @@ describe('isTransientEnd', () => {
     ['signal_lost', true],
     ['peer_failed', true],
     ['start_failed', true],
+    ['picture_stalled', true],
   ];
 
   it.each(table)('%s → retry %s', (reason, transient) => {

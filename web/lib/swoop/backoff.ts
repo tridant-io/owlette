@@ -40,7 +40,8 @@ export type SwoopEndReason =
   | 'peer_failed'
   | 'start_failed'
   | 'refused'
-  | 'same_machine';
+  | 'same_machine'
+  | 'picture_stalled';
 
 /** every reason above, as the api's `viewerReason` allow-list. */
 export const SWOOP_END_REASONS: readonly SwoopEndReason[] = [
@@ -55,6 +56,7 @@ export const SWOOP_END_REASONS: readonly SwoopEndReason[] = [
   'start_failed',
   'refused',
   'same_machine',
+  'picture_stalled',
 ];
 
 export function isSwoopEndReason(value: unknown): value is SwoopEndReason {
@@ -67,6 +69,9 @@ const TRANSIENT_ENDS: ReadonlySet<string> = new Set<SwoopEndReason>([
   'signal_lost',
   'peer_failed',
   'start_failed',
+  // the transport is alive and the picture is not: only a new session brings
+  // a new decoder (`video/stall.ts`).
+  'picture_stalled',
 ]);
 
 /**

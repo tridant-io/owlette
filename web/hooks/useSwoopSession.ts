@@ -48,6 +48,7 @@ import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import { clearThisMachine, markThisMachine } from '@/lib/swoop/thisMachine';
 import { readContinuity, writeContinuity } from '@/lib/swoop/continuityStore';
+import { readCodecChoice, writeCodecChoice } from '@/lib/swoop/codecStore';
 import {
   base64UrlDecode,
   encodeControlMessage,
@@ -69,6 +70,15 @@ import {
   type FrameObservation,
   type SwoopReceiverDiagnostics,
 } from '@/lib/swoop/video/receiver';
+import {
+  classifyStall,
+  createStallDetector,
+  type InboundVideoStats,
+  type StallAction,
+  type StallKind,
+  type StallTick,
+  type SwoopStallReport,
+} from '@/lib/swoop/video/stall';
 import type { SwoopStepUpProof } from '@/lib/swoop/stepUp';
 
 /**
@@ -82,6 +92,17 @@ const RETRY_LADDER = { baseMs: 2000, capMs: 30000 };
 const RETRY_RESET_MS = 5 * 60 * 1000;
 
 /**
+ * a frozen picture is replaced with a new session on its own at most this
+ * often. past it a new session has not held, so the session stays up and the
+ * operator decides: a loop of new sessions would only spend the machine's
+ * streamer spawns. a reattach is cheap and never counts.
+ */
+const STALL_RECOVERY_CAP = 2;
+const STALL_RECOVERY_WINDOW_MS = 10 * 60 * 1000;
+/** how long a reattached element has to show a frame before the session is replaced. */
+const REATTACH_GRACE_MS = 2000;
+
+/**
  * how far the page has got. `ended` and `error` count down to the next session
  * while `retryIn` is set, and otherwise wait for the operator.
  */
@@ -92,6 +113,22 @@ export type SwoopSessionState =
   | 'connected'
   | 'ended'
   | 'error';
+
+/**
+ * what the page is doing about a frozen picture: nothing, reattaching the
+ * element, waiting on the reconnect that replaces the session, or nothing
+ * more, because `STALL_RECOVERY_CAP` was reached: the session stays up and the
+ * operator decides.
+ */
+export type SwoopStallRecovery = 'none' | 'reattaching' | 'reconnecting' | 'frozen';
+
+export interface SwoopStallStats {
+  recovery: SwoopStallRecovery;
+  /** stalls declared in this tab. */
+  episodes: number;
+  /** where the last one died. */
+  kind: StallKind | null;
+}
 
 export interface SwoopStats {
   signal: SwoopSignalStatus;
@@ -107,6 +144,7 @@ export interface SwoopStats {
   feedback: SwoopFeedbackDiagnostics | null;
   /** when the lease currently held lapses; 0 before one exists. */
   leaseExpiresAt: number;
+  stall: SwoopStallStats;
 }
 
 export interface SwoopStepUpControls {
@@ -188,10 +226,13 @@ const EMPTY_STATS: SwoopStats = {
     unmatchedClientFramesDropped: 0,
     jitterBufferTargetApplied: null,
     requestVideoFrameCallback: false,
+    rvfcCallbacks: 0,
+    codec: null,
   },
   frame: null,
   feedback: null,
   leaseExpiresAt: 0,
+  stall: { recovery: 'none', episodes: 0, kind: null },
 };
 
 /** how often the overlay's numbers are resampled. */
@@ -247,11 +288,19 @@ export function useSwoopSession(
   const retryIn = retryAt === null ? null : Math.max(0, Math.ceil((retryAt - now) / 1000));
   const retryAttemptRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // when this tab last replaced a frozen picture's session on its own; see `STALL_RECOVERY_CAP`.
+  const stallReconnectsRef = useRef<number[]>([]);
+
+  const setStall = useCallback((patch: Partial<SwoopStallStats>) => {
+    setStats((prev) => ({ ...prev, stall: { ...prev.stall, ...patch } }));
+  }, []);
 
   // the proof is held in a ref, never in state: state lands in a devtools
   // snapshot and a live second-factor proof has no business being there.
   const proofRef = useRef<SwoopStepUpProof | null>(null);
   const endRef = useRef<(reason: string, message?: string) => void>(() => {});
+  // the live run, let go of without a DELETE; a no-op once it has ended.
+  const abandonRef = useRef<() => void>(() => {});
   const stoppedRef = useRef(false);
 
   const submitProof = useCallback(async (proof: SwoopStepUpProof) => {
@@ -280,15 +329,29 @@ export function useSwoopSession(
     setRetryAt(null);
   }, []);
 
-  const reconnect = useCallback(() => {
+  const startNext = useCallback(() => {
     clearRetry();
     stoppedRef.current = false;
     proofRef.current = null;
     setError(null);
     setStepUpRequired(false);
+    // a stall recovery ends here: from now on the page is simply connecting.
+    setStall({ recovery: 'none' });
     setState('connecting');
     setAttempt((n) => n + 1);
-  }, [clearRetry]);
+  }, [clearRetry, setStall]);
+
+  /**
+   * the operator's reconnect. it may come from a live session whose picture
+   * kept freezing, which is let go of first without a DELETE: that would end
+   * the record this tab's continuity names, and the new session would ask for
+   * the second factor again. it is a fresh start, so the stall cap is too.
+   */
+  const reconnect = useCallback(() => {
+    stallReconnectsRef.current = [];
+    abandonRef.current();
+    startNext();
+  }, [startNext]);
 
   /**
    * the end of a session that was not a decision — a lost path, a host that
@@ -305,9 +368,9 @@ export function useSwoopSession(
     retryTimerRef.current = setTimeout(() => {
       retryTimerRef.current = null;
       setRetryAt(null);
-      reconnect();
+      startNext();
     }, delay);
-  }, [reconnect]);
+  }, [startNext]);
 
   const end = useCallback(() => {
     clearRetry();
@@ -344,6 +407,7 @@ export function useSwoopSession(
     let receiver: SwoopReceiver | null = null;
     let presenter: SwoopPresenter | null = null;
     let statsTimer: ReturnType<typeof setInterval> | null = null;
+    let reattachTimer: ReturnType<typeof setTimeout> | null = null;
     let grant: SessionGrant | null = null;
     let leaseExpiresAt = 0;
     // the create route already minted one, good for 60 s. spend it on the first
@@ -368,6 +432,7 @@ export function useSwoopSession(
       if (disposed) return;
       disposed = true;
       if (statsTimer !== null) clearInterval(statsTimer);
+      if (reattachTimer !== null) clearTimeout(reattachTimer);
       setSession(null);
       for (const detach of detachers.reverse()) {
         try {
@@ -408,6 +473,8 @@ export function useSwoopSession(
       teardown(reason);
       if (message !== undefined) setError(message);
       setState(next);
+      // only the stall's own end leaves its notice up, for the reconnect it waits on.
+      if (reason !== 'picture_stalled') setStall({ recovery: 'none' });
       if (isTransientEnd(reason)) {
         scheduleReconnect();
       } else {
@@ -424,6 +491,7 @@ export function useSwoopSession(
 
     const finish = (reason: string, message?: string) => leave(reason, 'ended', message);
     endRef.current = finish;
+    abandonRef.current = () => teardown('restart');
 
     const renewLease = async (fp: string): Promise<SwoopLease> => {
       if (!grant) throw new Error('swoop: no session to renew');
@@ -546,12 +614,34 @@ export function useSwoopSession(
       setState('connecting');
       setNoPath(null);
 
+      const { sid, viewerId } = grant;
+      // the picture's own watchdog: the transport can be alive while it is dead.
+      const detector = createStallDetector();
+      // the picture's first play, not the peer's: until then nothing should move.
+      let connected = false;
+      // the receiver's counters where suspicion began; the declaration reads them again.
+      let suspectStats: Promise<InboundVideoStats | null> | null = null;
+      let stallEpisode = false;
+      // past the cap: the session is up, the picture is not, and the operator decides.
+      let frozen = false;
+      // the element has counted a frame of this stream at least once.
+      let counted = false;
+      let rvfcWarned = false;
+
       receiver = new SwoopReceiver({
         video,
         onFrame: (observation) => {
           latestFrame = observation;
           presenter?.observe(observation);
-          for (const handler of frameHandlers) handler(observation);
+          for (const handler of frameHandlers) {
+            try {
+              handler(observation);
+            } catch (err) {
+              // one subscriber failing must not starve the rest of the frame,
+              // and must not fail unseen either.
+              console.error('[swoop] a frame subscriber threw', err);
+            }
+          }
         },
         onIdrRequest: () => {
           sendOnChannel('swoop-control', encodeControlMessage({ t: 'idr' }));
@@ -594,6 +684,7 @@ export function useSwoopSession(
         viewerId: grant.viewerId,
         viewerKey,
         iceServers: grant.iceServers,
+        codec: readCodecChoice(siteId, machineId),
         send: (message) => signaling?.send(message),
         refreshToken: () => signaling?.refresh() ?? Promise.resolve(),
         leaseToken: () => mintViewerToken(identity.fingerprint),
@@ -606,6 +697,7 @@ export function useSwoopSession(
           // itself. handed to the receiver it would point the `<video>` at a
           // stream with no frames in it.
           if (rtpReceiver.track.kind !== 'video') return;
+          detector.reset();
           // `attachTrack` reads exactly these two fields off the track event,
           // and the peer has already split them apart for us.
           receiver?.attachTrack({
@@ -614,6 +706,7 @@ export function useSwoopSession(
           } as unknown as RTCTrackEvent);
           void receiver?.start().then(() => {
             if (disposed) return;
+            connected = true;
             setState('connected');
             // a picture from it is a session the machine let in, so a record
             // naming it as this browser's own is stale
@@ -702,17 +795,212 @@ export function useSwoopSession(
         renewLease: () => renewLease(identity.fingerprint),
         leaseExpiresAt: () => leaseExpiresAt,
         end: finish,
+        restart: () => {
+          // torn down on a reason that sends no DELETE first: a DELETE ends the
+          // record this tab's continuity names, and the next session would ask
+          // for the second factor again.
+          teardown('restart');
+          startNext();
+        },
       };
 
       for (const feature of SWOOP_FEATURES) detachers.push(feature.attach(live));
       setSession(live);
 
+      // whether anything could be seen at all: a picture up, its link up, the tab in front.
+      const watchable = (): boolean =>
+        connected && peer?.linkUp() === true && document.visibilityState === 'visible';
+
+      // what the element can show: playing a frame in a box on screen. 2 is
+      // HAVE_CURRENT_DATA, a frame in hand.
+      const elementPlaying = (): boolean => !video.paused && video.readyState >= 2;
+
+      // the watchdog judges only a picture that should be moving and can be seen.
+      const pictureGate = (): boolean => {
+        if (!watchable() || !elementPlaying()) return false;
+        const box = video.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      };
+
+      const playbackQuality = (): VideoPlaybackQuality | null =>
+        typeof video.getVideoPlaybackQuality === 'function' ? video.getVideoPlaybackQuality() : null;
+
+      const shownFrames = (): number => {
+        const quality = playbackQuality();
+        return quality ? quality.totalVideoFrames - quality.droppedVideoFrames : 0;
+      };
+
+      // anything that changes what the watchdog compares against starts its judgement again.
+      const rebaseline = () => detector.reset();
+      document.addEventListener('visibilitychange', rebaseline);
+      document.addEventListener('fullscreenchange', rebaseline);
+      video.addEventListener('resize', rebaseline);
+      peer.connection.addEventListener('iceconnectionstatechange', rebaseline);
+      detachers.push(() => {
+        document.removeEventListener('visibilitychange', rebaseline);
+        document.removeEventListener('fullscreenchange', rebaseline);
+        video.removeEventListener('resize', rebaseline);
+        peer?.connection.removeEventListener('iceconnectionstatechange', rebaseline);
+      });
+
+      const reportStall = (report: SwoopStallReport) => {
+        // best effort: a lost report costs a log line, never the recovery.
+        void fetch(
+          `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions/${encodeURIComponent(sid)}/stall`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(report),
+          },
+        ).catch(() => undefined);
+      };
+
+      // the automatic reconnects inside the window, oldest first.
+      const recentReconnects = (at: number): number[] =>
+        stallReconnectsRef.current.filter((when) => at - when < STALL_RECOVERY_WINDOW_MS);
+
+      // a new session, and so a new decoder: the transient end the reconnect
+      // ladder answers. past the cap the session stays up instead, frozen,
+      // and the operator's reconnect is the way on.
+      const replacePicture = () => {
+        const at = Date.now();
+        const recent = recentReconnects(at);
+        if (recent.length >= STALL_RECOVERY_CAP) {
+          stallReconnectsRef.current = recent;
+          frozen = true;
+          setStall({ recovery: 'frozen' });
+          return;
+        }
+        stallReconnectsRef.current = [...recent, at];
+        setStall({ recovery: 'reconnecting' });
+        finish('picture_stalled');
+      };
+
+      // what the element has shown so far, to tell later frames by.
+      const presentedMark = () => ({ shown: shownFrames(), rvfc: receiver?.diagnostics().rvfcCallbacks ?? 0 });
+
+      // whether the reloaded element has shown a frame since `mark`. the
+      // element's counters restart with the reload, so a lower count is all new.
+      const recoveredSince = (mark: ReturnType<typeof presentedMark>): boolean => {
+        if (!elementPlaying()) return false;
+        const shown = shownFrames();
+        const fresh = shown < mark.shown ? shown : shown - mark.shown;
+        return fresh > 0 || (receiver?.diagnostics().rvfcCallbacks ?? 0) > mark.rvfc;
+      };
+
+      // one look, a grace after the reload. nothing could have shown with the
+      // tab hidden or the link down, so that waits a whole grace more; a paused
+      // element or one with no frame is a reload that failed, and escalates.
+      const checkReattach = (mark: ReturnType<typeof presentedMark>) => {
+        reattachTimer = setTimeout(() => {
+          reattachTimer = null;
+          if (disposed) return;
+          if (!watchable()) {
+            checkReattach(presentedMark());
+            return;
+          }
+          if (!recoveredSince(mark)) {
+            replacePicture();
+            return;
+          }
+          stallEpisode = false;
+          setStall({ recovery: 'none' });
+        }, REATTACH_GRACE_MS);
+      };
+
+      // a renderer that stopped painting decoded frames may only need the
+      // element reloaded; a new session if that shows nothing either.
+      const reattachPicture = () => {
+        setStall({ recovery: 'reattaching' });
+        const mark = presentedMark();
+        detector.reset();
+        void receiver?.reattach().catch(() => undefined);
+        checkReattach(mark);
+      };
+
+      const declareStall = async (
+        evidence: NonNullable<StallTick['evidence']>,
+        diagnostics: SwoopReceiverDiagnostics,
+      ) => {
+        if (stallEpisode) return;
+        stallEpisode = true;
+        const [before, after] = await Promise.all([suspectStats, receiver?.inboundStats() ?? null]);
+        suspectStats = null;
+        if (disposed) return;
+
+        const kind = classifyStall(before, after);
+        // chrome has no software fallback for h.265, so a dead hevc decoder
+        // stays dead in this tab: whichever session comes next, automatic or
+        // the operator's, offers h.264 alone.
+        const hevc = after?.codecMimeType?.toLowerCase() === 'video/h265' || diagnostics.codec === 'hevc';
+        if (kind === 'decode' && hevc) writeCodecChoice(siteId, machineId, 'h264');
+
+        const action: StallAction =
+          kind === 'render'
+            ? 'reattach'
+            : recentReconnects(Date.now()).length < STALL_RECOVERY_CAP
+              ? 'reconnect'
+              : 'none';
+        reportStall({
+          viewerId,
+          kind,
+          action,
+          codec: diagnostics.codec,
+          stalledMs: Math.round(evidence.windowMs),
+          hostFrames: evidence.hostFrames,
+          before,
+          after,
+        });
+        setStats((prev) => ({ ...prev, stall: { ...prev.stall, episodes: prev.stall.episodes + 1, kind } }));
+
+        if (action === 'reattach') reattachPicture();
+        else replacePicture();
+      };
+
+      const watchPicture = (diagnostics: SwoopReceiverDiagnostics) => {
+        const quality = playbackQuality();
+        // a reload restarts the element's counters, so this is sticky.
+        if (quality && quality.totalVideoFrames > 0) counted = true;
+        const tick = detector.tick({
+          hostFrames: diagnostics.metaRecords,
+          totalFrames: quality?.totalVideoFrames ?? 0,
+          droppedFrames: quality?.droppedVideoFrames ?? 0,
+          rvfcCallbacks: diagnostics.requestVideoFrameCallback ? diagnostics.rvfcCallbacks : null,
+          // nothing to judge by without the element's own counters, and a
+          // browser that has never counted a frame of this stream may not count
+          // them at all: armed on that, it would call every session frozen.
+          gated: quality !== null && counted && pictureGate(),
+        });
+        if (tick.rvfcSilent) {
+          if (!rvfcWarned) console.warn('[swoop] rvfc chain silent; re-armed');
+          rvfcWarned = true;
+          receiver?.rearmFrameCallback();
+        }
+        // `getStats()` is read only around a stall, never on every tick.
+        if (tick.change === 'suspect') {
+          suspectStats = receiver?.inboundStats() ?? null;
+        } else if (tick.change === 'cleared') {
+          suspectStats = null;
+          // a frozen picture that came back on its own: the alert goes, and
+          // the next freeze is judged afresh.
+          if (frozen) {
+            frozen = false;
+            stallEpisode = false;
+            setStall({ recovery: 'none' });
+          }
+        } else if (tick.change === 'stalled' && tick.evidence) {
+          void declareStall(tick.evidence, diagnostics);
+        }
+      };
+
       statsTimer = setInterval(() => {
         if (disposed) return;
+        const diagnostics = receiver?.diagnostics() ?? null;
+        if (diagnostics) watchPicture(diagnostics);
         setStats((prev) => ({
-          signal: prev.signal,
+          ...prev,
           presenter: presenter?.stats() ?? prev.presenter,
-          receiver: receiver?.diagnostics() ?? prev.receiver,
+          receiver: diagnostics ?? prev.receiver,
           frame: latestFrame,
           feedback: swoopFeedback(live)?.diagnostics() ?? null,
           leaseExpiresAt,
@@ -725,7 +1013,7 @@ export function useSwoopSession(
     });
 
     return () => teardown('unmounted');
-  }, [siteId, machineId, control, attempt, scheduleReconnect, clearRetry]);
+  }, [siteId, machineId, control, attempt, scheduleReconnect, clearRetry, startNext, setStall]);
 
   const stepUp = useMemo<SwoopStepUpControls>(
     () => ({ required: stepUpRequired, enrolled, submitProof, cancel }),
