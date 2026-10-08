@@ -60,6 +60,11 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => mockDb(),
 }));
 
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
 function collectionPath(parts: string[]): string {
   return parts.join('/');
 }
@@ -129,6 +134,12 @@ function docRef(parts: string[]) {
   };
 }
 
+import {
+  enforcePlans,
+  FREE_ENTITLEMENTS,
+  PRO_ENTITLEMENTS,
+  stopEnforcingPlans,
+} from './helpers/planEnforcement';
 import { POST } from '@/app/api/keys/route';
 import { DELETE, PATCH } from '@/app/api/keys/[keyId]/route';
 import { POST as rotatePOST } from '@/app/api/keys/[keyId]/rotate/route';
@@ -308,6 +319,57 @@ describe('/api/keys POST', () => {
       expect(mockAssertUserHasSiteAccess).toHaveBeenCalledWith('user-member', 'site-1');
     },
   );
+});
+
+describe('/api/keys plan gate', () => {
+  const siteKey = {
+    name: 'Site key',
+    scopes: [{ resource: 'site', id: 'site-1', permissions: ['read'] }],
+  };
+
+  beforeEach(enforcePlans);
+  afterEach(stopEnforcingPlans);
+
+  it('402s plan_required on the minting user’s free plan, and mints nothing', async () => {
+    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+
+    const res = await makePost(siteKey);
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({
+      code: 'plan_required',
+      entitlement: 'owlette.api_keys',
+    });
+    expect(mockGetEntitlements).toHaveBeenCalledWith('user-member');
+    expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(false);
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('mints on pro', async () => {
+    mockGetEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
+
+    expect((await makePost(siteKey)).status).toBe(200);
+  });
+
+  it('keeps revoke open on free', async () => {
+    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    store.set('users/user-member/api_keys/key-a', { keyHash: 'hash-a', keyPrefix: 'owk_live_a' });
+    store.set('api_keys/hash-a', { userId: 'user-member', keyId: 'key-a' });
+
+    expect((await makeDelete('key-a')).status).toBe(200);
+  });
+
+  it('402s a rotation on free, since a rotation mints a fresh key', async () => {
+    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    store.set('users/user-member/api_keys/key-a', { keyHash: 'hash-a', keyPrefix: 'owk_live_a' });
+    store.set('api_keys/hash-a', { userId: 'user-member', keyId: 'key-a' });
+
+    const res = await makeRotate('key-a');
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.api_keys' });
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
 });
 
 describe('/api/keys/{keyId} DELETE', () => {
