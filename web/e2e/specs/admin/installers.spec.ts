@@ -249,6 +249,34 @@ test('set-as-latest confirms via dialog and updates Firestore latest doc', async
   expect(latest.data()!.version).toBe(OLDER_VERSION.version);
 });
 
+test("shows each version's tridant id status and retries a failed one", async ({ page }) => {
+  const versions = getAdminDb().collection('installer_metadata').doc('data').collection('versions');
+  await versions.doc(LATEST_VERSION.version).update({
+    tridant: { status: 'registered', release_id: 'rel_e2e', yanked: false, error: null, at: Date.now() },
+  });
+  await versions.doc(OLDER_VERSION.version).update({
+    tridant: { status: 'failed', release_id: null, yanked: false, error: '400 download_url_not_allowed', at: Date.now() },
+  });
+
+  await page.goto('/admin/installers');
+  // RequireAdminAccess spinner — see the first test.
+  await expect(
+    page.getByRole('heading', { name: 'installers', exact: true }),
+  ).toBeVisible({ timeout: 10_000 });
+
+  const latestRow = page.locator('table tr').filter({ hasText: LATEST_VERSION.version });
+  const olderRow = page.locator('table tr').filter({ hasText: OLDER_VERSION.version });
+  await expect(latestRow).toContainText('tridant id: registered');
+  await expect(latestRow.getByRole('button', { name: 'register again' })).toHaveCount(0);
+  await expect(olderRow).toContainText('tridant id: failed (400 download_url_not_allowed)');
+
+  await olderRow.getByRole('button', { name: 'register again' }).click();
+
+  // the e2e server has no tridant id configured: the retry says so and changes nothing
+  await expect(page.getByText('tridant id is not configured on this server')).toBeVisible();
+  await expect(olderRow).toContainText('tridant id: failed (400 download_url_not_allowed)');
+});
+
 test('clicking "upload new version" opens the upload dialog', async ({ page }) => {
   await page.goto('/admin/installers');
   // RequireAdminAccess spinner — see the first test.

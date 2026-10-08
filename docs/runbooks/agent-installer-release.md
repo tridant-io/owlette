@@ -128,7 +128,7 @@ Tool discovery:
 `scripts/upload-installer.mjs` runs the 3-step API upload for every file you hand it — sha256, signed URL, bytes, finalize — so the version lands as one `installer_metadata` doc whose `files` map is keyed by platform, and `latest` carries every entry:
 
 ```bash
-node scripts/upload-installer.mjs --env dev --version X.Y.Z --notes "Release X.Y.Z" --set-latest \
+node scripts/upload-installer.mjs --env dev --version X.Y.Z --set-latest \
   agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe \
   agent/build/macos/Owlette-Installer-vX.Y.Z.pkg \
   agent/build/linux/Owlette-Installer-vX.Y.Z.deb
@@ -136,9 +136,12 @@ node scripts/upload-installer.mjs --env dev --version X.Y.Z --notes "Release X.Y
 
 - The platform is the extension: `.exe` → `windows_x64`, `.pkg` → `macos_arm64`, `.deb` → `linux_x64`. One file per platform, one to three files.
 - `--env dev` reads `OWLETTE_API_KEY` and `OWLETTE_DEV_API_URL`; `--env prod` reads `OWLETTE_API_KEY_PROD` and `OWLETTE_PROD_API_URL`, all from `/.claude/.env.local`.
-- `--set-latest` promotes the version once the last file has finalized. Leave it off until you are ready to roll out.
+- The release notes are the version's `## [X.Y.Z]` section of `docs/changelog.md`; the run stops if there is none. `--notes "…"` overrides them. They are what tridant id shows for the release.
+- Where the files land is the server's choice: with `INSTALLER_R2_ACCESS_KEY_ID` and `INSTALLER_R2_SECRET_ACCESS_KEY` set, R2 behind `https://download.tridant.io/owlette/` (prod) or `https://download-staging.tridant.io/owlette/` (dev); without them, Firebase Storage. A file on the download host is immutable: a version already published there is refused (`409 installer_published`), so bump the version.
+- `--set-latest` promotes the version once the last file has finalized and registers it with tridant id; the run prints a `tridant id:` line (`registered`, `failed (<error>)`, `skipped` or `not_configured`). A failed registration never fails the promote; retry it with **register again** on `/admin/installers`. Leave `--set-latest` off until you are ready to roll out.
 - It prints each file's sha256 and finalize response, then the `files` keys on `GET /api/installer/latest`. A failure stops the run and names the files not published.
-- Idempotency keys are deterministic (`installer-<step>-<version>-<platform>`), so a re-run within 24 hours replays the first result for an unchanged request.
+- Idempotency keys are deterministic (`installer-<step>-<version>-<platform>`), so a re-run within 24 hours replays the first result for an unchanged request. `--key-tag <tag>` appends to them, to publish a version again within that window.
+- To move a version that is still on Firebase Storage to the download host, run the same command with its exact files and `--key-tag r2`. The server refuses different bytes (`409 installer_differs`).
 
 The manual curl form is under "the 3-step api upload (in detail)" below.
 
@@ -165,7 +168,7 @@ Jobs:
 - `release`, tag-only: uses `softprops/action-gh-release@v2` and attaches the `.exe`, `.pkg` and `.deb` to the GitHub Release.
 - `verify`, tag-only: downloads the three installers and the provenance, then runs `slsa-verifier verify-artifact` over all of them.
 
-CI does not push the installers to Firebase Storage, write `installer_metadata`, update the app's `latest` installer pointer, or replace the manual 3-step API upload.
+CI does not push the installers to storage, write `installer_metadata`, update the app's `latest` installer pointer, or replace the manual 3-step API upload.
 
 To roll out CI-built installers to agents, download the exact files from the GitHub Release and hand them to `scripts/upload-installer.mjs` (path a, step 6).
 
@@ -194,7 +197,7 @@ The route wraps `withIdempotency(..., { requireKey: true })`, so missing keys ha
 
 Use a different unique idempotency key for step 1 and step 3.
 
-Do not send an idempotency key to the signed GCS URL in step 2.
+Do not send an idempotency key to the signed upload URL in step 2.
 
 ### step 1: post /api/installer/upload
 
@@ -202,7 +205,7 @@ Purpose:
 
 - create an upload intent
 - validate auth and metadata
-- return a signed GCS URL
+- return a signed upload URL: R2 behind the download host when the server has installer R2 configured, else GCS
 - record whether finalize should set this version as latest
 
 ```bash
@@ -228,21 +231,21 @@ Return shape:
 
 ```json
 {
-  "uploadUrl": "https://storage.googleapis.com/...",
+  "uploadUrl": "https://<account-id>.r2.cloudflarestorage.com/owlette-downloads-staging/uploads/<uploadId>?X-Amz-...",
   "uploadId": "...",
   "platform": "windows_x64",
-  "storagePath": "...",
+  "storagePath": "uploads/<uploadId>",
   "expiresAt": "..."
 }
 ```
 
-The signed URL has a 15-minute window. If it expires, request a new one.
+The signed URL has a 15-minute window. If it expires, request a new one. On R2 it points at a private staging key: the file reaches its public `download.tridant.io` name only when step 3 has checked it.
 
-### step 2: put to signed gcs url
+### step 2: put to the signed url
 
 Purpose:
 
-- upload the exact installer bytes to the signed GCS destination
+- upload the exact installer bytes to the signed destination
 
 ```bash
 INSTALLER="agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe"   # or the .pkg / .deb this run is for
@@ -258,7 +261,7 @@ Rules:
 - use `--data-binary`
 - upload the same bytes whose sha256 will be finalized
 - do not send `Idempotency-Key`
-- do not send the Owlette API key to GCS
+- do not send the Owlette API key to the storage host
 
 ### step 3: put /api/installer/upload (finalize)
 
@@ -291,6 +294,9 @@ If omitted, the server computes the checksum.
 - `400` missing idempotency key: add `Idempotency-Key` to step 1 or step 3.
 - `403` wrong scope: confirm `installer=*:write` and superadmin-minted key.
 - `412 checksum_mismatch`: recompute sha256 for the exact uploaded file and retry with a new key.
+- `409 installer_published` (step 1 or 3): the version's file for this platform is already on the download host, which caches it as immutable. Bump the version.
+- A `500` from step 3 on R2 can leave the record pointing at a file that never reached the download host (the copy failed). Finalize the same `uploadId` again (an R2 upload does not expire at finalize), or re-run the script with the same files and a new `--key-tag`.
+- `409 installer_differs` (step 3): the version is already published with a different file for this platform. Upload the same bytes, or bump the version.
 - Expired upload URL: signed URLs last 15 minutes; restart from step 1.
 - Wrong route: use `/api/installer/upload`, not `/api/admin/installer/upload`.
 - Missing remote checksum: current agents reject installers without `sha256_checksum`.
@@ -319,7 +325,8 @@ If omitted, the server computes the checksum.
 - [ ] API key scope is `installer=*:write`.
 - [ ] `node scripts/upload-installer.mjs` is given one file per platform, with `--set-latest` only when ready to roll out.
 - [ ] The run ends with a `latest:` line naming every platform uploaded.
-- [ ] Manual curl fallback only: unique `Idempotency-Key` on the POST and the finalize PUT, none on the GCS PUT; `--data-binary` with `Content-Type: application/octet-stream`; `checksum_sha256` supplied on finalize.
+- [ ] With `--set-latest`, the `tridant id:` line says `registered`, or the failure is retried from `/admin/installers`.
+- [ ] Manual curl fallback only: unique `Idempotency-Key` on the POST and the finalize PUT, none on the storage PUT; `--data-binary` with `Content-Type: application/octet-stream`; `checksum_sha256` supplied on finalize.
 - [ ] Any new `self.*` attribute is set in `OwletteService._init_state()`.
 - [ ] `agent/tests/unit/test_service_shutdown.py::test_the_hosted_instance_carries_every_shutdown_attribute` passes.
 - [ ] `service.log` will be tailed for at least 30 seconds after restart.

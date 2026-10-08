@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useInstallerManagement } from '@/hooks/useInstallerManagement';
+import type { TridantReleaseState } from '@/lib/tridantRelease.server';
 import type { FirestoreTs } from '@/hooks/useFirestore';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
@@ -123,6 +124,32 @@ function PlatformFile({
   );
 }
 
+/** where the version stands on tridant id; a failure offers the retry */
+function TridantStatus({
+  state,
+  busy,
+  onRegister,
+}: {
+  state: TridantReleaseState | null;
+  busy: boolean;
+  onRegister: () => void;
+}) {
+  if (!state) return null;
+  if (state.status !== 'failed') {
+    return <p className="text-xs text-muted-foreground">tridant id: {state.status}</p>;
+  }
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-danger max-w-[16rem] truncate" title={state.error ?? undefined}>
+        tridant id: failed{state.error ? ` (${state.error})` : ''}
+      </span>
+      <Button variant="link" size="sm" onClick={onRegister} disabled={busy} className="h-auto p-0 text-xs">
+        {busy ? 'registering...' : 'register again'}
+      </Button>
+    </div>
+  );
+}
+
 export default function InstallerVersionsPage() {
   const {
     versions,
@@ -132,12 +159,14 @@ export default function InstallerVersionsPage() {
     uploadVersion,
     setAsLatest,
     deleteVersion,
+    registerVersion,
     getCleanupCandidates,
     cleanupVersions,
   } = useInstallerManagement();
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [deletingVersion, setDeletingVersion] = useState<string | null>(null);
   const [settingLatest, setSettingLatest] = useState<string | null>(null);
+  const [registering, setRegistering] = useState<string | null>(null);
   const [setLatestDialogOpen, setSetLatestDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [versionToSetLatest, setVersionToSetLatest] = useState<string>('');
@@ -175,6 +204,28 @@ export default function InstallerVersionsPage() {
     } finally {
       setSettingLatest(null);
       setVersionToSetLatest('');
+    }
+  };
+
+  const handleRegister = async (version: string) => {
+    setRegistering(version);
+    try {
+      const result = await registerVersion(version);
+      if (result.status === 'registered' || result.status === 'yanked') {
+        toast.success(`${version} is ${result.status} on tridant id`);
+      } else if (result.status === 'not_configured') {
+        toast.info('tridant id is not configured on this server');
+      } else if (result.status === 'skipped') {
+        toast.info(`nothing to register: ${version} has no file on the download host`);
+      } else {
+        toast.error('registration failed', { description: result.error ?? undefined });
+      }
+    } catch (err: unknown) {
+      toast.error('registration failed', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setRegistering(null);
     }
   };
 
@@ -379,6 +430,11 @@ export default function InstallerVersionsPage() {
                             </Badge>
                           )}
                         </div>
+                        <TridantStatus
+                          state={version.tridant}
+                          busy={registering === version.version}
+                          onRegister={() => void handleRegister(version.version)}
+                        />
                       </td>
 
                       <td className="order-3 flex basis-full min-w-0 items-baseline gap-2 px-3 pb-1 md:table-cell md:px-4 md:pt-4 md:pb-3 whitespace-nowrap">

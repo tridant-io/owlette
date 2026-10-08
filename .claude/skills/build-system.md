@@ -155,7 +155,12 @@ git add -A && git commit -m "chore: bump version to X.Y.Z" && git push origin de
 # when ready to roll out. Reads OWLETTE_API_KEY + OWLETTE_DEV_API_URL (or the _PROD pair
 # for --env prod) from .claude/.env.local. Prints each finalize response, then the
 # `files` keys on /api/installer/latest; a failure stops the run and names what is left.
-node scripts/upload-installer.mjs --env dev --version X.Y.Z --notes "Release X.Y.Z" --set-latest \
+# Notes default to the version's `## [X.Y.Z]` changelog section (--notes overrides).
+# With installer R2 set on the server the files land on download(-staging).tridant.io/owlette/,
+# immutable (409 installer_published on a re-upload: bump the version); --set-latest also
+# registers the release with tridant id and prints a `tridant id:` line. --key-tag r2
+# re-publishes a version still on Firebase Storage to R2 within the 24h key window.
+node scripts/upload-installer.mjs --env dev --version X.Y.Z --set-latest \
   agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe \
   agent/build/macos/Owlette-Installer-vX.Y.Z.pkg \
   agent/build/linux/Owlette-Installer-vX.Y.Z.deb
@@ -173,7 +178,7 @@ curl -s -X POST "$BASE_URL/api/installer/upload" \
   -d '{"version":"X.Y.Z","fileName":"Owlette-Installer-vX.Y.Z.exe","releaseNotes":"...","setAsLatest":true}'
 # → returns uploadUrl, uploadId, platform, storagePath, expiresAt (15-min window)
 curl -X PUT "$UPLOAD_URL" -H "Content-Type: application/octet-stream" \
-  --data-binary @agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe   # no Idempotency-Key: a direct GCS PUT
+  --data-binary @agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe   # no Idempotency-Key: a direct R2 or GCS PUT
 curl -s -X PUT "$BASE_URL/api/installer/upload" \
   -H "Content-Type: application/json" -H "x-api-key: $API_KEY" \
   -H "Idempotency-Key: installer-finalize-X.Y.Z-windows_x64" \

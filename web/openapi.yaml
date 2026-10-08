@@ -1616,7 +1616,16 @@ paths:
                   versions:
                     type: array
                     items:
-                      $ref: '#/components/schemas/InstallerVersion'
+                      allOf:
+                        - $ref: '#/components/schemas/InstallerVersion'
+                        - type: object
+                          required: [tridant]
+                          properties:
+                            tridant:
+                              oneOf:
+                                - $ref: '#/components/schemas/TridantReleaseState'
+                                - type: 'null'
+                              description: Where the version stands in tridant id's release log; null before it is ever synced.
                   next_page_token:
                     type: string
                   nextPageToken:
@@ -1678,6 +1687,9 @@ paths:
       summary: Request signed upload URL (step 1)
       description: |
         Step 1 of the two-step installer upload; one upload per platform file.
+        The file goes to R2 behind the download host (`download.tridant.io/owlette/`
+        for prod, `download-staging.tridant.io/owlette/` for dev) when the server
+        has installer R2 configured, and to Firebase Storage otherwise.
         Returns a signed PUT URL (valid 15 minutes) and an `uploadId` for step 2
         (`PUT /api/installer/upload`). Send the binary with `PUT <uploadUrl>` and
         a `Content-Type` header equal to `contentType` (default
@@ -1691,6 +1703,10 @@ paths:
         adds that platform to the version's `files`. `releaseNotes` is applied
         only by the upload that creates the version (or re-creates a
         soft-deleted one).
+
+        A file on the download host is cached as immutable, so a version that
+        already has this platform's file there is refused
+        (`409 installer_published`): bump the version instead.
 
         Superadmin-only; API-key callers need `installer=*:write`.
         `Idempotency-Key` is required.
@@ -1768,6 +1784,12 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: "The version already has this platform's file on the download host (`code: installer_published`)."
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '422':
           description: Idempotency-Key reused with a different request body
           content:
@@ -1783,8 +1805,14 @@ paths:
         Step 2 of the two-step installer upload. Verifies the binary is in
         Storage, computes SHA-256 from the stored object, rejects a supplied
         `checksum_sha256` mismatch, and writes version metadata plus the
-        `latest` pointer when `setAsLatest` was true at step 1. Superadmin-only;
-        API-key callers need `installer=*:write`.
+        `latest` pointer when `setAsLatest` was true at step 1, then registers the
+        version with tridant id (`tridant`; a tridant id failure never fails the
+        finalize). An R2 upload lands on a private staging key; finalize copies it
+        to its public name on the download host only after these checks. It
+        refuses a public name that already serves other bytes
+        (`409 installer_published`), and an upload whose bytes differ from the
+        version's file published elsewhere (`409 installer_differs`).
+        Superadmin-only; API-key callers need `installer=*:write`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -1826,7 +1854,7 @@ paths:
                   download_url:
                     type: string
                     format: uri
-                    description: Signed read URL of this upload's file.
+                    description: The permanent public URL on the download host for an R2 upload, else a signed Firebase Storage read URL.
                   checksum_sha256:
                     type: string
                     description: SHA-256 the server computed from the stored object.
@@ -1834,6 +1862,9 @@ paths:
                     type: integer
                   files:
                     $ref: '#/components/schemas/InstallerFiles'
+                  tridant:
+                    $ref: '#/components/schemas/TridantSync'
+                    description: Present only when this finalize promoted the version.
         '400':
           description: Validation error or missing Idempotency-Key
           content:
@@ -1849,13 +1880,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '409':
-          description: 'Upload already finalized or expired (`code: upload_not_pending`).'
+          description: "Upload already finalized or expired (`code: upload_not_pending`); the public name already serves other bytes (`code: installer_published`); or an R2 upload whose bytes differ from the version's published file for this platform (`code: installer_differs`)."
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '410':
-          description: 'Upload window (15 minutes) expired; restart the flow (`code: upload_expired`).'
+          description: 'Upload window (15 minutes) expired on a Firebase Storage upload; restart the flow (`code: upload_expired`). An R2 upload stays staged and can still be finalized.'
           content:
             application/problem+json:
               schema:
@@ -1884,6 +1915,8 @@ paths:
         retained. Refuses to drop the active count below 2 — returns 409
         `min_versions_violated` if it would. Idempotent: deleting an
         already-soft-deleted version returns 200 with `alreadyDeleted: true`.
+        A version registered with tridant id is yanked there (`tridant`); a
+        tridant id failure never fails the delete.
         Superadmin-only; API-key callers need `installer=*:admin`.
       security:
         - apiKey: []
@@ -1910,6 +1943,8 @@ paths:
                     type: integer
                   alreadyDeleted:
                     type: boolean
+                  tridant:
+                    $ref: '#/components/schemas/TridantSync'
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '403': { $ref: '#/components/responses/Problem403' }
@@ -1940,6 +1975,10 @@ paths:
         `404` for it). Refuses a missing version (`404`) or a soft-deleted one
         (`409 version_deleted`). The body is ignored but must be empty or valid
         JSON. Requires `Idempotency-Key`.
+
+        Then registers the version with tridant id and yanks every registered
+        release above it, so a rollback leaves no newer build on the portal. The
+        outcome is `tridant`; a tridant id failure never fails the promote.
 
         ### Authentication and scopes
 
@@ -1979,6 +2018,8 @@ paths:
                     type: string
                   latest:
                     $ref: '#/components/schemas/InstallerVersion'
+                  tridant:
+                    $ref: '#/components/schemas/TridantSync'
         '400':
           description: Validation error or missing Idempotency-Key
           content:
@@ -2001,6 +2042,73 @@ paths:
                 $ref: '#/components/schemas/ProblemDetails'
         '422':
           description: Idempotency-Key reused with a different request body
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500': { $ref: '#/components/responses/Problem500' }
+
+  /api/installer/{version}/register:
+    post:
+      operationId: registerInstallerRelease
+      tags: [Installer]
+      summary: Sync a version with tridant id again
+      description: |
+        Runs the version's tridant id sync again after a failed registration or
+        yank: an active version at or below `latest` is imported, a deleted one
+        or one above `latest` is yanked. A tridant id failure is reported in
+        `tridant`, not as an error status. The body is ignored but must be empty
+        or valid JSON. Requires `Idempotency-Key`.
+
+        ### Authentication and scopes
+
+        Superadmin only. API-key callers need `installer=*:admin`; a session or
+        Firebase ID token needs the superadmin role.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      parameters:
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\d+\.\d+\.\d+$'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Sync ran; its outcome is `tridant`
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, tridant]
+                properties:
+                  version:
+                    type: string
+                  tridant:
+                    $ref: '#/components/schemas/TridantSync'
+        '400':
+          description: Validation error or missing Idempotency-Key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404':
+          description: Version not found
           content:
             application/problem+json:
               schema:
@@ -11418,6 +11526,40 @@ components:
           type: string
           nullable: true
           description: Uid that promoted it. Only on `latest` reads and set-latest responses.
+
+    TridantSync:
+      type: object
+      required: [status, error]
+      description: The outcome of syncing a version with tridant id's release log.
+      properties:
+        status:
+          type: string
+          enum: [registered, yanked, failed, skipped, not_configured]
+          description: "`skipped`: nothing for tridant id to hold (no file on the download host, or never registered). `not_configured`: the server has no tridant id url or release key."
+        error:
+          type: string
+          nullable: true
+          description: tridant id's status and error code on a failure, e.g. `400 download_url_not_allowed`.
+
+    TridantReleaseState:
+      type: object
+      required: [status, release_id, yanked, error, at]
+      properties:
+        status:
+          type: string
+          enum: [registered, yanked, failed]
+        release_id:
+          type: string
+          nullable: true
+          description: tridant id's release id, needed to yank it.
+        yanked:
+          type: boolean
+        error:
+          type: string
+          nullable: true
+        at:
+          type: integer
+          description: Epoch ms of the last sync.
 
     McpTool:
       type: object

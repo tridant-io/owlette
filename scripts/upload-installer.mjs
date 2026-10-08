@@ -7,20 +7,25 @@
  * carries them all.
  *
  * Usage:
- *   node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] <file>…
+ *   node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] <file>…
  *
  *   <file>   Owlette-Installer-vX.Y.Z.exe | .pkg | .deb — the platform is the
  *            extension (windows_x64 / macos_arm64 / linux_x64), one file each.
+ *   --notes  the release notes; without it, the version's `## [X.Y.Z]` section of
+ *            docs/changelog.md. They are what tridant id shows for the release.
  *   --set-latest   promotes the version once the LAST file has finalized, so the
- *                  latest pointer carries every entry rather than the first one.
+ *                  latest pointer carries every entry rather than the first one,
+ *                  and registers it with tridant id.
+ *   --key-tag      appended to the idempotency keys, to publish a version again
+ *                  within 24h (e.g. moving it from firebase storage to R2).
  *
  * Credentials (auto-loaded from web/.env.local, .claude/.env.local, scripts/.env.local):
  *   dev:  OWLETTE_API_KEY       + OWLETTE_DEV_API_URL
  *   prod: OWLETTE_API_KEY_PROD  + OWLETTE_PROD_API_URL
  *
- * Idempotency keys are deterministic (installer-<step>-<version>-<platform>): a
- * re-run within 24h replays the first result for an unchanged body, and the API
- * refuses the key if the body changed — use a new version or wait it out.
+ * Idempotency keys are deterministic (installer-<step>-<version>-<platform>[-<tag>]):
+ * a re-run within 24h replays the first result for an unchanged body, and the API
+ * refuses the key if the body changed — use a new version, a --key-tag, or wait it out.
  */
 
 import { createHash } from 'node:crypto';
@@ -37,14 +42,14 @@ const EXTENSIONS = Object.keys(PLATFORM_BY_EXT).join(', ');
 function usage(message) {
   console.error(`error: ${message}\n`);
   console.error(
-    'Usage: node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] <file>…',
+    'Usage: node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] <file>…',
   );
   process.exit(1);
 }
 
 // --- arguments ----------------------------------------------------------------
 const args = process.argv.slice(2);
-const options = { env: undefined, version: undefined, notes: '', setLatest: false };
+const options = { env: undefined, version: undefined, notes: undefined, setLatest: false, keyTag: '' };
 const paths = [];
 for (let i = 0; i < args.length; i += 1) {
   const arg = args[i];
@@ -64,13 +69,29 @@ for (let i = 0; i < args.length; i += 1) {
   else if (name === 'version') options.version = value();
   else if (name === 'notes') options.notes = value();
   else if (name === 'set-latest') options.setLatest = true;
+  else if (name === 'key-tag') options.keyTag = value();
   else usage(`unknown option --${name}`);
 }
 
-const { env, version, notes, setLatest } = options;
+const { env, version, setLatest, keyTag } = options;
 if (env !== 'dev' && env !== 'prod') usage('--env must be dev or prod');
 if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) usage('--version must be X.Y.Z');
 if (paths.length === 0) usage(`give at least one installer file (${EXTENSIONS})`);
+if (!/^[a-z0-9-]*$/.test(keyTag)) usage('--key-tag may hold only a-z, 0-9 and -');
+
+/** The body of the version's `## [X.Y.Z]` section, without its heading. */
+function changelogSection(release) {
+  const text = readFileSync(join(ROOT, 'docs', 'changelog.md'), 'utf8').replace(/\r\n/g, '\n');
+  const heading = new RegExp(`^## \\[${release.replace(/\./g, '\\.')}\\][^\\n]*\\n`, 'm').exec(text);
+  if (!heading) return null;
+  const rest = text.slice(heading.index + heading[0].length);
+  const end = rest.search(/^## \[/m);
+  return (end === -1 ? rest : rest.slice(0, end)).trim();
+}
+
+const notes = options.notes ?? changelogSection(version);
+if (notes === null) usage(`docs/changelog.md has no ## [${version}] section; add it, or pass --notes`);
+const keySuffix = keyTag ? `-${keyTag}` : '';
 
 const targets = paths.map((given) => {
   const path = resolve(given);
@@ -199,18 +220,22 @@ async function uploadOne(target, promote) {
   console.log(`${platform}  ${fileName}  ${formatMb(size)}  ${checksum}`);
 
   const intent = await api('POST', '/api/installer/upload', {
-    idempotencyKey: `installer-upload-${version}-${platform}`,
+    idempotencyKey: `installer-upload-${version}-${platform}${keySuffix}`,
     body: { version, fileName, platform, releaseNotes: notes, setAsLatest: promote },
   });
   console.log(`  uploading to ${redactUrl(intent.uploadUrl)}`);
   await putBytes(intent.uploadUrl, path, size);
 
   const finalized = await api('PUT', '/api/installer/upload', {
-    idempotencyKey: `installer-finalize-${version}-${platform}`,
+    idempotencyKey: `installer-finalize-${version}-${platform}${keySuffix}`,
     body: { uploadId: intent.uploadId, checksum_sha256: checksum },
   });
   console.log(`  finalized${promote ? ' and promoted to latest' : ''}:`);
   console.log(JSON.stringify(finalized, null, 2));
+  if (finalized.tridant) {
+    const { status, error } = finalized.tridant;
+    console.log(`tridant id: ${status}${error ? ` (${error})` : ''}`);
+  }
 }
 
 let done = 0;
