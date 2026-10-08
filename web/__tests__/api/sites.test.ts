@@ -37,6 +37,11 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
 jest.mock('firebase-admin/firestore', () => {
   class MockTimestamp {
     private readonly ms: number;
@@ -167,6 +172,13 @@ function makeCollectionRef(parts: string[]): unknown {
     orderBy: () => ref,
     limit: () => ref,
     startAfter: () => ref,
+    select: () => ref,
+    count: () => ({
+      get: async () => {
+        const snap = await (ref.get as () => Promise<{ docs: unknown[] }>)();
+        return { data: () => ({ count: snap.docs.length }) };
+      },
+    }),
     get: jest.fn(async () => {
       let docs = (collectionDocs[path] || []).slice();
       for (const w of wheres) {
@@ -235,6 +247,16 @@ jest.mock('@/lib/firebase-admin', () => ({
         },
       };
     },
+    // the ownership transfer's transaction. writes land as they are made; nothing here races.
+    runTransaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        get: (ref: { get: () => Promise<unknown> }) => ref.get(),
+        set: (ref: { set: (data: unknown) => Promise<void> }, data: unknown) => ref.set(data),
+        update: (
+          ref: { update: (patch: Record<string, unknown>) => Promise<void> },
+          patch: Record<string, unknown>,
+        ) => ref.update(patch),
+      }),
   }),
   getAdminAuth: () => ({
     verifyIdToken: jest.fn().mockRejectedValue(new Error('n/a')),
@@ -248,6 +270,7 @@ import {
   PATCH as sitePATCH,
   DELETE as siteDELETE,
 } from '@/app/api/sites/[siteId]/route';
+import { POST as transferPOST } from '@/app/api/sites/[siteId]/transfer-ownership/route';
 
 type Scope = {
   resource: 'site' | 'roost' | 'machine' | 'chat' | 'user' | 'installer';
@@ -648,5 +671,138 @@ describe('/api/sites/{siteId}', () => {
 
     expect(res.status).toBe(200);
     expect(docStore['sites/site-a']?.data).toBeNull();
+  });
+});
+
+describe('plan limits on sites', () => {
+  const FREE = {
+    ok: true,
+    resolved: false,
+    standing: 'expired',
+    inGoodStanding: false,
+    ent: { 'owlette.sites': '1', 'owlette.machines': '1' },
+    epoch: 0,
+  };
+
+  beforeEach(() => {
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.test';
+    process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
+    mockGetEntitlements.mockResolvedValue(FREE);
+  });
+
+  afterEach(() => {
+    delete process.env.PLAN_ENFORCEMENT;
+    delete process.env.TRIDANT_API_URL;
+    delete process.env.TRIDANT_LICENSE_KEY;
+  });
+
+  const createRequest = (siteId: string) =>
+    createMockRequest('http://localhost/api/sites', {
+      method: 'POST',
+      body: { siteId, name: 'Second Site' },
+    });
+
+  const transferRequest = (siteId: string, successorUid: string) =>
+    transferPOST(
+      createMockRequest(`http://localhost/api/sites/${siteId}/transfer-ownership`, {
+        method: 'POST',
+        body: { successorUid },
+      }),
+      { params: Promise.resolve({ siteId }) },
+    );
+
+  function seedMachine(siteId: string, machineId: string): void {
+    const parts = ['sites', siteId, 'machines', machineId];
+    docStore[pathFor(parts)] = { data: { online: true } };
+    syncCollection(parts, machineId, { online: true });
+  }
+
+  it("refuses a free payer's second site with 402 plan_required, writing nothing", async () => {
+    seedSite('site-a', { owner: 'free-uid' });
+    authedSession('free-uid', 'member', ['site-a']);
+
+    const res = await sitesPOST(createRequest('site-b'));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body).toMatchObject({
+      code: 'plan_required',
+      detail: "your plan doesn't cover another site. upgrade for more sites.",
+      entitlement: 'owlette.sites',
+      upgradeUrl: '/settings/plan',
+    });
+    expect(mockGetEntitlements).toHaveBeenCalledWith('free-uid');
+    expect(docStore['sites/site-b']).toBeUndefined();
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it("POSITIVE CONTROL: a free payer's first site is created", async () => {
+    authedSession('free-uid', 'member');
+
+    const res = await sitesPOST(createRequest('site-b'));
+
+    expect(res.status).toBe(201);
+    expect(docStore['sites/site-b']?.data?.owner).toBe('free-uid');
+  });
+
+  it('creates a second site without asking tridant while enforcement is off', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+    seedSite('site-a', { owner: 'free-uid' });
+    authedSession('free-uid', 'member', ['site-a']);
+
+    const res = await sitesPOST(createRequest('site-b'));
+
+    expect(res.status).toBe(201);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('refuses a transfer to a free payer who already owns a site', async () => {
+    seedSite('site-x', { owner: 'owner-uid' });
+    seedSite('site-a', { owner: 'free-uid' });
+    seedUser('free-uid', { sites: ['site-a'] });
+    authedSession('owner-uid', 'member', ['site-x']);
+
+    const res = await transferRequest('site-x', 'free-uid');
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body).toMatchObject({
+      code: 'plan_required',
+      detail: "the new owner's plan covers no more sites. they need to upgrade before taking this one.",
+      entitlement: 'owlette.sites',
+    });
+    expect(docStore['sites/site-x']?.data?.owner).toBe('owner-uid');
+  });
+
+  it("refuses a transfer that would put a free payer past their machines", async () => {
+    seedSite('site-x', { owner: 'owner-uid' });
+    seedMachine('site-x', 'machine-1');
+    seedMachine('site-x', 'machine-2');
+    seedUser('free-uid');
+    authedSession('owner-uid', 'member', ['site-x']);
+
+    const res = await transferRequest('site-x', 'free-uid');
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body).toMatchObject({
+      code: 'plan_required',
+      detail: "the new owner's plan doesn't cover this site's machines. they need to upgrade before taking this one.",
+      entitlement: 'owlette.machines',
+    });
+    expect(docStore['sites/site-x']?.data?.owner).toBe('owner-uid');
+  });
+
+  it('POSITIVE CONTROL: a free payer with room takes the site', async () => {
+    seedSite('site-x', { owner: 'owner-uid' });
+    seedMachine('site-x', 'machine-1');
+    seedUser('free-uid');
+    authedSession('owner-uid', 'member', ['site-x']);
+
+    const res = await transferRequest('site-x', 'free-uid');
+
+    expect(res.status).toBe(200);
+    expect(docStore['sites/site-x']?.data?.owner).toBe('free-uid');
   });
 });
