@@ -97,6 +97,11 @@ jest.mock('@/lib/swoop/turn.server', () => ({
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
 }));
 
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
 import { GET, PATCH } from '@/app/api/sites/[siteId]/swoop-settings/route';
 import { POST as KILL } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/kill/route';
 import { POST as START_SESSION } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/route';
@@ -590,6 +595,46 @@ describe('POST swoop/kill', () => {
 
     expect(res.status).toBe(200);
     expect(mockKill).toHaveBeenCalled();
+  });
+
+  it('kills on a plan without owlette.control, which refuses starting a session', async () => {
+    const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
+    const savedEnv = ENV_KEYS.map((key) => process.env[key]);
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.test';
+    process.env.TRIDANT_LICENSE_KEY = 'test-key';
+    mockGetEntitlements.mockResolvedValue({
+      ok: true,
+      resolved: false,
+      standing: 'expired',
+      inGoodStanding: false,
+      ent: { 'owlette.control': '0' },
+      epoch: 0,
+    });
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: true });
+
+    try {
+      const start = await START_SESSION(
+        createMockRequest(`http://localhost/api/sites/${SITE}/machines/${MACHINE}/swoop/sessions`, {
+          method: 'POST',
+          body: { control: false, fp: FP },
+        }),
+        machineContext(),
+      );
+      expect(start.status).toBe(402);
+
+      const res = await KILL(
+        createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+        machineContext(),
+      );
+      expect(res.status).toBe(200);
+      expect(mockKill).toHaveBeenCalled();
+    } finally {
+      ENV_KEYS.forEach((key, i) => {
+        if (savedEnv[i] === undefined) delete process.env[key];
+        else process.env[key] = savedEnv[i];
+      });
+    }
   });
 
   it('a member cannot kill another viewer session', async () => {

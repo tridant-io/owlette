@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { ApiAuthError } from '@/lib/apiAuth.server';
+import { problemPlanRequired } from '@/lib/apiErrors';
 import { ProcessConfigError, readProcessList } from '@/lib/processConfig.server';
 import { withIdempotency } from '@/lib/idempotency';
 import { emitMutation } from '@/lib/auditLogClient';
@@ -168,6 +169,9 @@ export function errorResponse(error: unknown, ctx: string): NextResponse {
 }
 
 function commandErrorResponse(error: ExecuteMachineCommandError): NextResponse {
+  if (error.code === 'plan_required') {
+    return problemPlanRequired(error.detail, 'owlette.control');
+  }
   if (error.code === 'machine_offline') {
     return problem(409, error.code, error.detail);
   }

@@ -2,7 +2,7 @@
 
 /**
  * Unit tests for `web/lib/actions/executeMachineCommand.server.ts`: allowlist
- * enforcement, input validation, machine-doc gating (404/409), command write
+ * enforcement, the plan gate, input validation, machine-doc gating (404/409), command write
  * shape, correlationId propagation, audit payload.
  *
  * Authorization (capability + scope + idempotency) lives in the route shim /
@@ -12,11 +12,22 @@
 
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
+// only the plan resolver reads through getAdminDb (the action core takes an
+// injected db): the site, for its payer, and the payer's user doc.
+const mockAdminCollection = jest.fn((name: string) => ({
+  doc: () => ({
+    get: async () => ({ data: () => (name === 'sites' ? { owner: 'payer_1' } : { role: 'member' }) }),
+  }),
+}));
 jest.mock('@/lib/firebase-admin', () => ({
-  getAdminDb: () => ({ collection: () => ({ doc: () => ({}) }) }),
+  getAdminDb: () => ({ collection: mockAdminCollection }),
 }));
 jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: jest.fn(),
+}));
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
 import {
@@ -27,6 +38,7 @@ import {
 } from '@/lib/actions/executeMachineCommand.server';
 import { emitMutation } from '@/lib/auditLogClient';
 import type { Actor } from '@/lib/capabilities';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 
 const mockedEmit = emitMutation as jest.MockedFunction<typeof emitMutation>;
 
@@ -595,5 +607,104 @@ describe('executeMachineCommand — audit emission', () => {
       ),
     ).rejects.toThrow(ExecuteMachineCommandError);
     expect(mockedEmit).not.toHaveBeenCalled();
+  });
+});
+
+// plan gate (plan.md decision 7)
+
+describe('executeMachineCommand — plan gate', () => {
+  const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
+  const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
+  const FREE = {
+    ok: true,
+    resolved: false,
+    standing: 'expired',
+    inGoodStanding: false,
+    ent: { 'owlette.machines': '1', 'owlette.sites': '1', 'owlette.control': '0' },
+    epoch: 0,
+  };
+  const PLAN_FREE_TYPES = ['update_owlette', 'cancel_reboot', 'dismiss_reboot_pending', 'stop_live_view', 'cancel_mcp_tool'];
+
+  function enforce(): void {
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.test';
+    process.env.TRIDANT_LICENSE_KEY = 'test-key';
+  }
+
+  beforeEach(() => {
+    for (const key of ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    mockGetEntitlements.mockResolvedValue(FREE);
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+  });
+
+  it('enforcement off: queues a gated type without reading anything for the plan', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockAdminCollection).not.toHaveBeenCalled();
+  });
+
+  for (const type of [...ALLOWED_COMMAND_TYPES].filter((t) => !PLAN_FREE_TYPES.includes(t)).sort()) {
+    it(`free: refuses ${type} with 402 plan_required and writes nothing`, async () => {
+      enforce();
+      const fake = buildFakeDb();
+      await expect(
+        executeMachineCommand(ctxFor(), { type, payload: {} }, { db: fake.db }),
+      ).rejects.toMatchObject({
+        name: 'ExecuteMachineCommandError',
+        status: 402,
+        code: 'plan_required',
+        detail: PLAN_REQUIRED_DETAIL['owlette.control'],
+      });
+      expect(mockGetEntitlements).toHaveBeenCalledWith('payer_1');
+      expect(fake.setCalls).toHaveLength(0);
+      expect(mockedEmit).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const type of PLAN_FREE_TYPES) {
+    it(`free: still queues ${type}`, async () => {
+      enforce();
+      const fake = buildFakeDb();
+      const result = await executeMachineCommand(ctxFor(), { type, payload: {} }, { db: fake.db });
+      expect(result.commandId).toMatch(/^cmd_/);
+      expect(fake.setCalls).toHaveLength(1);
+      expect(mockGetEntitlements).not.toHaveBeenCalled();
+    });
+  }
+
+  it('a plan with owlette.control queues a gated type', async () => {
+    enforce();
+    mockGetEntitlements.mockResolvedValue({ ...FREE, resolved: true, standing: 'active', ent: { 'owlette.control': '1' } });
+    const fake = buildFakeDb();
+    await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('fails open when tridant is unreachable', async () => {
+    enforce();
+    mockGetEntitlements.mockResolvedValue({ ok: false, reason: 'unreachable' });
+    const fake = buildFakeDb();
+    await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('validates the input before resolving the plan', async () => {
+    enforce();
+    const fake = buildFakeDb();
+    await expect(
+      executeMachineCommand(ctxFor(), { type: 'format_drive', payload: {} }, { db: fake.db }),
+    ).rejects.toMatchObject({ status: 400, code: 'unsupported_command_type' });
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
   });
 });

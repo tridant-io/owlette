@@ -2,7 +2,7 @@
  * Action core: queue a remote command on a machine. Shared by the public route
  * and server-side callers (hoot tool dispatch via `invokeAsSystem`, jobs).
  *
- * Owns allowlist enforcement, the offline check, the command-id mint, the
+ * Owns allowlist enforcement, the plan gate, the offline check, the command-id mint, the
  * `stampCommand` lifecycle write and the audit emission. Auth, capability,
  * rate-limit and idempotency belong to the wrapper — this ASSUMES it runs
  * inside an `authorizedSiteHandler` / `invokeAsSystem` frame with the actor's
@@ -16,6 +16,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { stampCommand } from '@/lib/commandLifecycle';
 import { emitMutation } from '@/lib/auditLogClient';
 import type { Actor } from '@/lib/capabilities';
+import { PLAN_REQUIRED_DETAIL, requireEntitlement } from '@/lib/plan.server';
 import { FieldValue } from 'firebase-admin/firestore';
 
 /**
@@ -42,6 +43,17 @@ export const ALLOWED_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'mcp_tool_call',
   'cancel_mcp_tool',
   'update_owlette',
+]);
+
+// the types a payer without `owlette.control` may still queue (plan.md decision 7):
+// every plan keeps updating, and anything already running can always be stopped.
+// dismissing a pending reboot also resets the relaunch counters crash-restart needs.
+const PLAN_FREE_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
+  'update_owlette',
+  'cancel_reboot',
+  'dismiss_reboot_pending',
+  'stop_live_view',
+  'cancel_mcp_tool',
 ]);
 
 export interface ExecuteMachineCommandInput {
@@ -157,6 +169,13 @@ export async function executeMachineCommand(
       400,
       'validation_failed',
       'field `payload` must be an object',
+    );
+  }
+  if (!PLAN_FREE_COMMAND_TYPES.has(cmdType) && (await requireEntitlement(ctx.siteId, 'owlette.control'))) {
+    throw new ExecuteMachineCommandError(
+      402,
+      'plan_required',
+      PLAN_REQUIRED_DETAIL['owlette.control'],
     );
   }
 

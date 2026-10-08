@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server';
 import {
   problem,
   problemFromError,
+  problemPlanRequired,
   problemValidation,
   ProblemType,
 } from '@/lib/apiErrors';
@@ -314,6 +315,9 @@ function normalizeCommandBody(body: CommandBody): NormalizedCommand {
 function commandErrorToProblem(err: ExecuteMachineCommandError): NextResponse {
   if (err.code === 'unsupported_command_type') {
     return unsupportedCommandType(err.detail.match(/'([^']+)'/)?.[1] ?? 'unknown');
+  }
+  if (err.code === 'plan_required') {
+    return problemPlanRequired(err.detail, 'owlette.control');
   }
   if (err.code === 'machine_offline') {
     return problem({
