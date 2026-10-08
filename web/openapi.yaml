@@ -12871,6 +12871,7 @@ components:
         flags: { control: false, deployments: false, swoop: false, hoot: false, roost: false, talons: false, webhooks: false, api_keys: false }
         activeMachinesThisMonth: 1
         ownsSites: true
+        liveMachines: [{ siteId: my-site, machineId: KIOSK-01 }]
       properties:
         enforced:
           type: boolean
@@ -12923,6 +12924,19 @@ components:
           minimum: 0
           nullable: true
           description: Distinct machines online on any UTC day this month. `null` while plans are not enforced.
+        liveMachines:
+          type: array
+          description: |
+            The machines the machine limit keeps live: the first `limits.machines`
+            across every site the caller owns, earliest paired first, then by
+            machine ID. The dashboard shows the rest behind an upgrade notice.
+            Sent only while plans are enforced with a machine limit.
+          items:
+            type: object
+            required: [siteId, machineId]
+            properties:
+              siteId: { type: string }
+              machineId: { type: string }
 
     # operational logs
     SiteLogEntry:

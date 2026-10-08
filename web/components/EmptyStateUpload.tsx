@@ -13,7 +13,8 @@ import { FolderUp, MonitorSmartphone, Rocket, Plus, Download } from 'lucide-reac
 
 interface EmptyStateUploadProps {
   machineCount: number;
-  onNewRoost: () => void;
+  /** Absent when the plan leaves roost out; the page header carries the upgrade note. */
+  onNewRoost?: () => void;
   onAddMachine?: () => void;
 }
 
@@ -42,35 +43,39 @@ export function EmptyStateUpload({
           : 'drop a folder to chunk, hash, and deploy it across your machines. only changed chunks are uploaded, so follow-up deploys are fast.'}
       </p>
 
-      <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-        {needsMachine && onAddMachine ? (
-          <>
+      {(onNewRoost || (needsMachine && onAddMachine)) && (
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+          {needsMachine && onAddMachine ? (
+            <>
+              <Button
+                onClick={onAddMachine}
+                className="cursor-pointer"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                install agent
+              </Button>
+              {onNewRoost && (
+                <Button
+                  variant="outline"
+                  onClick={onNewRoost}
+                  className="cursor-pointer"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  new roost
+                </Button>
+              )}
+            </>
+          ) : (
             <Button
-              onClick={onAddMachine}
-              className="cursor-pointer"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              install agent
-            </Button>
-            <Button
-              variant="outline"
               onClick={onNewRoost}
               className="cursor-pointer"
             >
               <Plus className="h-4 w-4 mr-2" />
               new roost
             </Button>
-          </>
-        ) : (
-          <Button
-            onClick={onNewRoost}
-            className="cursor-pointer"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            new roost
-          </Button>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       <ol
         className="mt-10 grid w-full max-w-2xl grid-cols-1 gap-4 text-left sm:grid-cols-3"

@@ -77,6 +77,11 @@ export interface PlanResponse {
     api_keys: boolean;
   };
   activeMachinesThisMonth: number | null;
+  /**
+   * the machines a counted machine limit keeps live (decision 9); the dashboard
+   * overlays the rest. sent only when enforced with a machine limit.
+   */
+  liveMachines?: Array<{ siteId: string; machineId: string }>;
 }
 
 export const PLAN_REQUIRED_DETAIL: Record<PlanFlag, string> = {

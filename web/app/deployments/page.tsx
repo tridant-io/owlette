@@ -25,6 +25,7 @@ import { FallingFeather } from '@/components/FallingFeather';
 import { LoadingWord } from '@/components/LoadingWord';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { UpdateOwletteButton } from '@/components/UpdateOwletteButton';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { useUninstall } from '@/hooks/useUninstall';
 import { formatSiteScopedTimestamp } from '@/lib/timeUtils';
 import { toast } from '@/lib/toast';
@@ -320,6 +321,7 @@ export default function DeploymentsPage() {
     sites,
     sitesLoading,
     currentSiteId,
+    currentSite,
     siteTimezone,
     hasNoSites,
     selectSite,
@@ -328,6 +330,8 @@ export default function DeploymentsPage() {
     updateSite,
     deleteSite,
   } = useCurrentSite();
+  const siteOwner = currentSite?.owner ?? null;
+  const deploymentsGated = usePlanGated('deployments', siteOwner);
   const [deployDialogOpen, setDeployDialogOpen] = useState(false);
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   const [initialSoftwareName, setInitialSoftwareName] = useState<string | undefined>(undefined);
@@ -606,13 +610,15 @@ export default function DeploymentsPage() {
               beside `new deployment` and the pair is wider than a phone. */}
           <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
             <UpdateOwletteButton siteId={currentSiteId} machines={machines} />
-            <Button
-              onClick={() => setDeployDialogOpen(true)}
-              className="cursor-pointer"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              new deployment
-            </Button>
+            <UpgradeGate flag="deployments" siteOwner={siteOwner} variant="inline">
+              <Button
+                onClick={() => setDeployDialogOpen(true)}
+                className="cursor-pointer"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                new deployment
+              </Button>
+            </UpgradeGate>
           </div>
         </div>
           );
@@ -636,14 +642,17 @@ export default function DeploymentsPage() {
             <div className="p-8 text-center">
               <p className="text-foreground font-medium mb-1">no deployments yet</p>
               <p className="text-sm text-muted-foreground mb-4">create your first deployment to install software across your machines</p>
-              <Button
-                onClick={() => setDeployDialogOpen(true)}
-                className="cursor-pointer"
-                size="sm"
-              >
-                <Plus className="h-4 w-4 mr-1" />
-                new deployment
-              </Button>
+              {/* the header already carries the upgrade note */}
+              {!deploymentsGated && (
+                <Button
+                  onClick={() => setDeployDialogOpen(true)}
+                  className="cursor-pointer"
+                  size="sm"
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  new deployment
+                </Button>
+              )}
             </div>
           ) : (
             <div className="cascade-rows divide-y divide-border">

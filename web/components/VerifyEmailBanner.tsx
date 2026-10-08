@@ -76,9 +76,27 @@ export function VerifyEmailBanner() {
     >
       <div className="mx-auto flex max-w-screen-2xl flex-wrap items-center justify-center gap-x-2 gap-y-1 px-4 py-1 text-sm">
         <Mail className="h-4 w-4 shrink-0 text-accent-cyan" aria-hidden />
-        <span className="text-foreground">please verify your email address.</span>
-        <Button type="button" variant="link" size="sm" onClick={resend} disabled={sending}>
-          {sending ? 'sending...' : 'send verification email'}
+        {/* the short copy keeps the banner one row on a phone */}
+        <span className="text-foreground">
+          <span className="sm:hidden">verify your email.</span>
+          <span className="hidden sm:inline">please verify your email address.</span>
+        </span>
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          onClick={resend}
+          disabled={sending}
+          aria-label="send verification email"
+        >
+          {sending ? (
+            'sending...'
+          ) : (
+            <>
+              <span className="sm:hidden">send link</span>
+              <span className="hidden sm:inline">send verification email</span>
+            </>
+          )}
         </Button>
       </div>
     </div>

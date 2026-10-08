@@ -8,6 +8,7 @@ import { Plus } from 'lucide-react';
 import AddWebhookDialog, { WebhookList } from '@/components/WebhookSettingsDialog';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { CompactButton } from '@/components/admin/CompactButton';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 export default function WebhooksPage() {
   const { user, isSuperadmin, userSites, lastSiteId, updateLastSite } = useAuth();
@@ -30,6 +31,8 @@ export default function WebhooksPage() {
     if (savedSite && sites.find((s) => s.id === savedSite)) return savedSite;
     return sites[0].id;
   }, [userSelectedSiteId, sites, lastSiteId]);
+  const siteOwner = sites.find((s) => s.id === selectedSiteId)?.owner ?? null;
+  const webhooksGated = usePlanGated('webhooks', siteOwner);
 
   const handleSiteChange = (siteId: string) => {
     setUserSelectedSiteId(siteId);
@@ -44,28 +47,36 @@ export default function WebhooksPage() {
           title="webhooks"
           description="configure webhook URLs to receive JSON payloads when events occur"
           toolbar={
-            sites.length > 1 && (
-              <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-                <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none bg-card border-border text-foreground">
-                  <SelectValue placeholder="select site" />
-                </SelectTrigger>
-                <SelectContent className="bg-card border-border">
-                  {sites.map((site) => (
-                    <SelectItem key={site.id} value={site.id} className="text-foreground hover:bg-muted">
-                      {site.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            (sites.length > 1 || webhooksGated) && (
+              <>
+                {sites.length > 1 && (
+                  <Select value={selectedSiteId} onValueChange={handleSiteChange}>
+                    <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none bg-card border-border text-foreground">
+                      <SelectValue placeholder="select site" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-card border-border">
+                      {sites.map((site) => (
+                        <SelectItem key={site.id} value={site.id} className="text-foreground hover:bg-muted">
+                          {site.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {/* in the toolbar, not the actions: on a phone the actions share the title's row */}
+                <UpgradeGate flag="webhooks" siteOwner={siteOwner} variant="inline" />
+              </>
             )
           }
           actions={
-            <CompactButton
-              icon={Plus}
-              label="add webhook"
-              onClick={() => setDialogOpen(true)}
-              disabled={!selectedSiteId}
-            />
+            !webhooksGated && (
+              <CompactButton
+                icon={Plus}
+                label="add webhook"
+                onClick={() => setDialogOpen(true)}
+                disabled={!selectedSiteId}
+              />
+            )
           }
         />
 

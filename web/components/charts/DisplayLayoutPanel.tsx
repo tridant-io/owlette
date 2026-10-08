@@ -49,6 +49,7 @@ import { DisplayCanvas } from './DisplayCanvas';
 import { DisplayMonitorTable } from './DisplayMonitorTable';
 import { DisplayEditorDialog } from './DisplayEditorDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { ControlUpgradeLink } from '@/components/plan/MachinePlanNotice';
 import {
   Tooltip,
   TooltipContent,
@@ -62,6 +63,12 @@ interface DisplayLayoutPanelProps {
   /** The machine's agent-written `capabilities` map, handed down from the
    * machines subscription; `displayRemoteApply` gates restore. */
   capabilities?: Record<string, number>;
+  /**
+   * the viewer's plan leaves out control (`useSitePlan`): restore and the apply
+   * self-test send commands, so they give way to a "part of core" link. viewing,
+   * storing, editing and the restore settings are configuration, and stay.
+   */
+  controlLocked?: boolean;
   onClose: () => void;
 }
 
@@ -204,6 +211,7 @@ export function DisplayLayoutPanel({
   machineName,
   siteId,
   capabilities,
+  controlLocked,
   onClose,
 }: DisplayLayoutPanelProps) {
   const { isSiteAdmin, user } = useAuth();
@@ -256,7 +264,8 @@ export function DisplayLayoutPanel({
   // `triggerForHash` fires the agent enumerate once per (site, machine, hash).
   const { catalogue: displayModes } = useDisplayModes(siteId, machineId, {
     enabled: mode === 'edit',
-    triggerForHash: profile?.signatureHash,
+    // the enumerate is a command too; without control the editor makes do without the catalogue.
+    triggerForHash: controlLocked ? undefined : profile?.signatureHash,
   });
 
   const {
@@ -1113,7 +1122,7 @@ export function DisplayLayoutPanel({
               {/* Restore setup flow: test -> store -> restore. Test is a
                   pre-enable safety check; once restore is enabled, real
                   restore/auto-restore runs are the meaningful verification. */}
-              {!remoteApplyEnabled && (
+              {!remoteApplyEnabled && !controlLocked && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span tabIndex={testApplyInFlight ? 0 : -1}>
@@ -1250,6 +1259,8 @@ export function DisplayLayoutPanel({
                     allow admins to restore the stored display layout on this machine
                   </TooltipContent>
                 </Tooltip>
+              ) : controlLocked ? (
+                <ControlUpgradeLink label="restore is part of core" className="h-8 px-3 text-xs" />
               ) : (
                 <Tooltip>
                   <TooltipTrigger asChild>

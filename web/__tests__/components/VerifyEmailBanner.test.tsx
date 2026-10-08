@@ -4,7 +4,8 @@
  *
  * VerifyEmailBanner: shown only to an unverified password account, resends
  * through POST /api/auth/verify-email, and hides once a reload of the auth user
- * (on the tab coming back into focus) reports the email verified.
+ * (on the tab coming back into focus) reports the email verified. On a phone it
+ * keeps to one row with shorter copy, and the button keeps its full name.
  */
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -59,6 +60,20 @@ describe('VerifyEmailBanner', () => {
       'please verify your email address.',
     );
     expect(screen.getByRole('button', { name: 'send verification email' })).toBeEnabled();
+  });
+
+  it('swaps in shorter copy below sm and keeps the full button name at every width', () => {
+    render(<VerifyEmailBanner />);
+
+    expect(screen.getByText('verify your email.')).toHaveClass('sm:hidden');
+    expect(screen.getByText('please verify your email address.')).toHaveClass('hidden', 'sm:inline');
+    expect(screen.getByText('send link')).toHaveClass('sm:hidden');
+    expect(screen.getByText('send verification email')).toHaveClass('hidden', 'sm:inline');
+    // the visible label changes with the width; what a screen reader hears does not
+    expect(screen.getByRole('button', { name: 'send verification email' })).toHaveAttribute(
+      'aria-label',
+      'send verification email',
+    );
   });
 
   it('renders nothing for a google sign-up', () => {

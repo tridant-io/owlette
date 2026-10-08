@@ -4,7 +4,8 @@
  * GET /api/account/plan — the signed-in user's own plan. pins the session-only
  * auth (agents refused), the unenforced answer that reads no usage, the derived
  * tier, the wire limits (null for unrestricted), the keys_missing reason, the
- * calendar-month usage window, and whether the user owns a site.
+ * calendar-month usage window, whether the user owns a site, and which
+ * machines a machine limit keeps live.
  */
 
 import { enforcePlans, stopEnforcingPlans } from '../helpers/planEnforcement';
@@ -41,7 +42,10 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
 let mockUsers: Record<string, Record<string, unknown>> = {};
 /** the owner of every site that exists. */
 let mockSiteOwners: string[] = [];
+/** the payer's sites, their machines, and each machine's pairedAt in ms (null: never stamped). */
+let mockOwnedMachines: Record<string, Record<string, number | null>> = {};
 const mockSitesQuery = jest.fn();
+const mockMachinesRead = jest.fn();
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminAuth: jest.fn(),
   getAdminDb: () => ({
@@ -59,6 +63,32 @@ jest.mock('@/lib/firebase-admin', () => ({
                 return { empty: !mockSiteOwners.includes(value) };
               },
             }),
+          }),
+          select: () => ({
+            get: async () => {
+              mockSitesQuery(field, op, value);
+              return {
+                docs: Object.entries(mockOwnedMachines).map(([siteId, machines]) => ({
+                  id: siteId,
+                  ref: {
+                    collection: (sub: string) => ({
+                      select: (...fields: string[]) => ({
+                        get: async () => {
+                          mockMachinesRead(siteId, sub, fields);
+                          return {
+                            docs: Object.entries(machines).map(([id, pairedAt]) => ({
+                              id,
+                              get: (field: string) =>
+                                field === 'pairedAt' && pairedAt !== null ? { toMillis: () => pairedAt } : undefined,
+                            })),
+                          };
+                        },
+                      }),
+                    }),
+                  },
+                })),
+              };
+            },
           }),
         }),
       };
@@ -129,7 +159,9 @@ beforeEach(() => {
   jest.useFakeTimers({ now: new Date('2026-10-07T12:00:00Z') });
   mockUsers = { u1: { role: 'user' }, root: { role: 'superadmin' } };
   mockSiteOwners = ['u1'];
+  mockOwnedMachines = { 'site-a': { 'kiosk-1': Date.UTC(2026, 8, 1) } };
   mockSitesQuery.mockClear();
+  mockMachinesRead.mockClear();
   mockRequireSessionOrIdToken.mockResolvedValue('u1');
   mockGetEntitlements.mockResolvedValue(answer(false, 'expired', ALL_KEYS('1', '1', '0')));
   mockActiveMachinesBetween.mockResolvedValue(1);
@@ -193,11 +225,12 @@ describe('GET /api/account/plan', () => {
 
     expect(res.body).toMatchObject({ enforced: false, reason, plan: null, ...UNRESTRICTED });
     expect(res.body).not.toHaveProperty('ownsSites');
+    expect(res.body).not.toHaveProperty('liveMachines');
     expect(mockActiveMachinesBetween).not.toHaveBeenCalled();
     expect(mockSitesQuery).not.toHaveBeenCalled();
   });
 
-  it('answers an unmapped payer as free, with this month of usage and the sites it owns', async () => {
+  it('answers an unmapped payer as free, with this month of usage, the sites it owns and its live machine', async () => {
     mockActiveMachinesBetween.mockResolvedValue(2);
 
     const res = await getPlan();
@@ -211,6 +244,7 @@ describe('GET /api/account/plan', () => {
       flags: NO_FLAGS,
       activeMachinesThisMonth: 2,
       ownsSites: true,
+      liveMachines: [{ siteId: 'site-a', machineId: 'kiosk-1' }],
     });
     expect(mockActiveMachinesBetween).toHaveBeenCalledWith(
       'u1',
@@ -218,6 +252,53 @@ describe('GET /api/account/plan', () => {
       new Date('2026-10-07T12:00:00Z'),
     );
     expect(mockSitesQuery).toHaveBeenCalledWith('owner', '==', 'u1', 1);
+    expect(mockSitesQuery).toHaveBeenCalledWith('owner', '==', 'u1');
+    expect(mockMachinesRead).toHaveBeenCalledWith('site-a', 'machines', ['pairedAt']);
+  });
+
+  it('keeps the earliest paired machine live across every owned site, unstamped machines last', async () => {
+    mockOwnedMachines = {
+      'site-a': { 'kiosk-b': null, 'kiosk-c': Date.UTC(2026, 9, 2) },
+      'site-b': { 'kiosk-a': null, 'kiosk-d': Date.UTC(2026, 9, 1) },
+    };
+
+    const res = await getPlan();
+
+    expect(res.body.liveMachines).toEqual([{ siteId: 'site-b', machineId: 'kiosk-d' }]);
+  });
+
+  it('breaks a pairedAt tie, and orders unstamped machines, by machine id', async () => {
+    const at = Date.UTC(2026, 9, 1);
+    mockGetEntitlements.mockResolvedValue(answer(true, 'active', ALL_KEYS('4', 'unlimited', '1')));
+    mockOwnedMachines = {
+      'site-a': { 'kiosk-z': null, 'kiosk-b': at },
+      'site-b': { 'kiosk-y': null, 'kiosk-a': at, 'kiosk-x': null },
+    };
+
+    const res = await getPlan();
+
+    expect(res.body.liveMachines).toEqual([
+      { siteId: 'site-b', machineId: 'kiosk-a' },
+      { siteId: 'site-a', machineId: 'kiosk-b' },
+      { siteId: 'site-b', machineId: 'kiosk-x' },
+      { siteId: 'site-b', machineId: 'kiosk-y' },
+    ]);
+  });
+
+  it('answers every machine live while the payer has fewer than the limit', async () => {
+    mockGetEntitlements.mockResolvedValue(answer(true, 'active', ALL_KEYS('3', 'unlimited', '1')));
+
+    const res = await getPlan();
+
+    expect(res.body.liveMachines).toEqual([{ siteId: 'site-a', machineId: 'kiosk-1' }]);
+  });
+
+  it('answers an empty live list for a payer with no machines', async () => {
+    mockOwnedMachines = {};
+
+    const res = await getPlan();
+
+    expect(res.body.liveMachines).toEqual([]);
   });
 
   it('answers ownsSites false for a user who owns no site, a member of others only', async () => {
@@ -242,6 +323,8 @@ describe('GET /api/account/plan', () => {
       flags: { ...NO_FLAGS, control: true },
     });
     expect(res.body).not.toHaveProperty('reason');
+    expect(res.body).not.toHaveProperty('liveMachines');
+    expect(mockMachinesRead).not.toHaveBeenCalled();
   });
 
   it('answers a trial with unrestricted limits as null', async () => {
@@ -251,6 +334,7 @@ describe('GET /api/account/plan', () => {
 
     expect(res.body).toMatchObject({ enforced: true, plan: 'trial', standing: 'trialing', ...UNRESTRICTED });
     expect(res.body).not.toHaveProperty('reason');
+    expect(res.body).not.toHaveProperty('liveMachines');
   });
 
   it('answers pro with a counted machine limit', async () => {

@@ -42,6 +42,7 @@ import {
 import type { LastMachineSelection } from '@/contexts/AuthContext';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { HootIcon } from '@/components/icons/HootIcon';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 /** Arrow-key nudge for the sidebar resize handle; Shift multiplies it there. */
 const SIDEBAR_RESIZE_STEP = 16;
@@ -179,6 +180,8 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
   const { sites, loading: sitesLoading } = useSites(user?.uid, userSites, isSuperadmin);
 
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
+  const siteOwner = sites.find((s) => s.id === currentSiteId)?.owner ?? null;
+  const hootGated = usePlanGated('hoot', siteOwner);
   // What the user ticked, verbatim. Pruning against the site's machines happens
   // in a memo below, never here: a selection restored from a chat doc arrives
   // before the machine listing it would be pruned against.
@@ -829,18 +832,21 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
               <p className="text-sm text-muted-foreground mb-6">
                 debug, diagnose, and manage your remote machines.
               </p>
-              <div className="rounded-lg border border-border bg-secondary p-5">
-                <KeyRound className="h-5 w-5 text-muted-foreground mx-auto mb-2" />
-                <p className="text-sm text-muted-foreground mb-3">
-                  hoot requires an LLM API key. add your anthropic or openai key in account settings.
-                </p>
-                <button
-                  onClick={() => { setSettingsInitialSection('hoot'); setAccountSettingsOpen(true); }}
-                  className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-primary-foreground font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
-                >
-                  open account settings
-                </button>
-              </div>
+              {/* a key is no use on a plan without hoot, so the upgrade comes first */}
+              <UpgradeGate flag="hoot" siteOwner={siteOwner} className="mt-0 md:mt-0">
+                <div className="rounded-lg border border-border bg-secondary p-5">
+                  <KeyRound className="h-5 w-5 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground mb-3">
+                    hoot requires an LLM API key. add your anthropic or openai key in account settings.
+                  </p>
+                  <button
+                    onClick={() => { setSettingsInitialSection('hoot'); setAccountSettingsOpen(true); }}
+                    className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-primary-foreground font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
+                  >
+                    open account settings
+                  </button>
+                </div>
+              </UpgradeGate>
             </div>
           </div>
         )}
@@ -1190,7 +1196,9 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
               hasApiKey={hasApiKey}
               onOpenSettings={() => setAccountSettingsOpen(true)}
               onToolApproval={(id, approved) => chat.addToolApprovalResponse({ id, approved })}
-              onEditMessage={chat.editMessage}
+              // an edit re-sends, which the plan refuses
+              onEditMessage={hootGated ? undefined : chat.editMessage}
+              hideSuggestions={hootGated}
               /* Fallback only: a message stamped with its own turn metadata
                  names the machines THAT turn reached (5.3). This labels the
                  older ones, which carry none. */
@@ -1213,7 +1221,8 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                     const msg = chat.error?.message || 'Unknown error';
                     try {
                       const parsed = JSON.parse(msg);
-                      return parsed.error || msg;
+                      // refusals are problem+json, which carries `detail`, not `error`
+                      return parsed.error || parsed.detail || msg;
                     } catch {
                       return msg;
                     }
@@ -1276,28 +1285,36 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
 
           {/* Input */}
           {!showConversationNotFound && (
-            <ChatInput
-              input={chat.input}
-              isLoading={chat.isLoading}
-              onInputChange={(e) => chat.setInput(e.target.value)}
-              onSubmit={(e) => {
-                e.preventDefault();
-                chat.handleSend();
-              }}
-              onStop={chat.stop}
-              pendingImages={chat.pendingImages}
-              onPasteImage={chat.handlePasteImage}
-              onRemoveImage={chat.removePendingImage}
-              mentionOptions={machineOptions}
-              /* No target, no send: an empty selection has no encoding and an
-                 unreadable one refuses to build a body at all (requestBody.ts).
-                 `targetWarning` beside the picker says which it is. */
-              sendDisabled={sendDisabled}
-              /* Same label as the picker's trigger — and nothing at all when
-                 there is no target to name, so the field never reads "ask no
-                 machines anything". */
-              targetLabel={sendDisabled ? undefined : formatTargetLabel(target.machineIds)}
-            />
+            <UpgradeGate
+              flag="hoot"
+              siteOwner={siteOwner}
+              variant="inline"
+              // takes the composer's strip, so the transcript above keeps its place
+              className="justify-center rounded-none border-x-0 border-b-0 bg-transparent px-4 py-3"
+            >
+              <ChatInput
+                input={chat.input}
+                isLoading={chat.isLoading}
+                onInputChange={(e) => chat.setInput(e.target.value)}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  chat.handleSend();
+                }}
+                onStop={chat.stop}
+                pendingImages={chat.pendingImages}
+                onPasteImage={chat.handlePasteImage}
+                onRemoveImage={chat.removePendingImage}
+                mentionOptions={machineOptions}
+                /* No target, no send: an empty selection has no encoding and an
+                   unreadable one refuses to build a body at all (requestBody.ts).
+                   `targetWarning` beside the picker says which it is. */
+                sendDisabled={sendDisabled}
+                /* Same label as the picker's trigger — and nothing at all when
+                   there is no target to name, so the field never reads "ask no
+                   machines anything". */
+                targetLabel={sendDisabled ? undefined : formatTargetLabel(target.machineIds)}
+              />
+            </UpgradeGate>
           )}
         </main>
       </div>
