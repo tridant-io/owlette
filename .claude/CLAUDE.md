@@ -2,7 +2,7 @@
 
 Owlette is a cloud-connected process management and remote deployment system for Windows, macOS and Linux machines: TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python agent service (agent; a Windows service, a launchd daemon on macOS, a systemd unit on Linux) + Next.js web dashboard (web) + Firebase/Firestore backend.
 
-**Version**: 4.1.6 | **License**: FSL-1.1-Apache-2.0
+**Version**: 4.1.7 | **License**: FSL-1.1-Apache-2.0
 
 ---
 
@@ -272,4 +272,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-10-04
+**Last Updated**: 2026-10-07
