@@ -1,10 +1,10 @@
 ---
 title: "errors"
 description: "API errors use application/problem+json with a stable code, a docsUrl, and a requestId. branch on code, never on the human-readable detail. this page lists every code the public API returns, grouped by area."
-keywords: ["error codes", "problem+json", "rfc 7807", "status codes", "requestId", "troubleshooting"]
+keywords: ["error codes", "problem+json", "rfc 7807", "status codes", "requestId", "troubleshooting", "402", "payment required"]
 ---
 
-**last updated**: 2026-10-05
+**last updated**: 2026-10-07
 
 ---
 
@@ -39,13 +39,13 @@ keywords: ["error codes", "problem+json", "rfc 7807", "status codes", "requestId
 | `instance` | on some errors, the internal operation name. diagnostic only |
 | `error` | on some routes, a copy of `detail` kept for older dashboard callers. ignore it |
 
-some codes carry extra fields — `required` on `scope_insufficient`, `expiredAt` on `token_expired`, `retryAfter` on `rate_limited`, `sent` and `supported` on `unsupported_version`, `missingChunks` on a publish `precondition_failed`, `quota` on `over_quota`. ignore fields you do not recognise; new ones may appear.
+some codes carry extra fields — `required` on `scope_insufficient`, `expiredAt` on `token_expired`, `entitlement` and `upgradeUrl` on `plan_required`, `retryAfter` on `rate_limited`, `sent` and `supported` on `unsupported_version`, `missingChunks` on a publish `precondition_failed`, `quota` on `over_quota`. ignore fields you do not recognise; new ones may appear.
 
 ### routes with a different body
 
 a few routes do not use the full envelope yet:
 
-- the machine config and process control routes — `hoot-enabled`, `launch-mode`, `reboot-pending`, `reboot-schedule`, process create, update, delete, `start`, `stop`, `restart`, `kill`, and `schedule` — answer `{ "type": "about:blank", "title", "status", "code", "detail" }` without `requestId` or `docsUrl`. `code` is still the field to branch on.
+- the machine config and process control routes — `hoot-enabled`, `launch-mode`, `reboot-pending`, `reboot-schedule`, process create, update, delete, `start`, `stop`, `restart`, `kill`, and `schedule` — answer `{ "type": "about:blank", "title", "status", "code", "detail" }` without `requestId` or `docsUrl`. `code` is still the field to branch on. a `plan_required` refusal on them is the full envelope.
 - `POST /api/sites/{siteId}/agent-tokens/revoke` validation errors, `POST /api/cli/device-code/poll`, and upstream failures on `GET /api/platform/touchdesigner/builds` answer a bare `{ "error": "..." }`.
 - a rejected `mfaProof` on a swoop session start answers `{ "error", "code" }`.
 
@@ -59,6 +59,7 @@ these can come from almost any route.
 |---|---:|---|---|
 | `unauthorized` | 401 | missing, malformed, unknown, or revoked credential | send a valid credential |
 | `token_expired` | 401 | the API key is past its `expiresAt` | rotate or create a key |
+| `plan_required` | 402 | the site owner's plan does not include the feature. not enforced during the beta | upgrade the plan named by `entitlement` |
 | `forbidden` | 403 | the caller lacks the role or capability, or their account is deactivated | use a different caller, or change access in the dashboard |
 | `scope_insufficient` | 403 | the API key lacks the resource, ID, and permission needed | add the scope named in `required` |
 | `api_key_not_permitted` | 403 | the operation refuses API keys whatever their scopes | use a dashboard session |
@@ -83,6 +84,36 @@ the request carried no usable credential: missing, malformed, unknown, revoked, 
 ### token_expired
 
 the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the key or create a new one.
+
+### plan_required
+
+`402`: the plan that pays for the site does not include what the request needs. plans apply after the beta and are not enforced yet, so no route returns this today. `entitlement` names the missing feature, and `upgradeUrl` is where the account's plan is managed, relative to the dashboard:
+
+```json
+{
+  "type": "https://owlette.app/problems/plan-required",
+  "title": "plan required",
+  "status": 402,
+  "detail": "your plan doesn't include remote control. upgrade to continue.",
+  "code": "plan_required",
+  "entitlement": "owlette.control",
+  "upgradeUrl": "/settings/plan",
+  "docsUrl": "https://owlette.app/docs/api/errors#plan_required",
+  "requestId": "5d7f7c5b-2ed6-4a56-9b2c-47dd7c84f957"
+}
+```
+
+| `entitlement` | refused |
+|---|---|
+| `owlette.sites` | creating a site past the plan's site limit, or transferring one to an owner whose plan has no room |
+| `owlette.machines` | transferring a site whose machines the new owner's plan cannot hold |
+| `owlette.control` | remote commands other than `update_owlette`, `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view` and `cancel_mcp_tool`; process start, stop, restart and kill; creating, retrying and uninstalling deployments; alert rules; starting and renewing swoop sessions; hoot messages |
+| `owlette.roost` | creating and editing roosts, uploading chunks, publishing and editing versions, deploying, resyncing and rolling back |
+| `owlette.talons` | creating, editing, testing and reassigning talons |
+| `owlette.webhooks` | creating a webhook subscription |
+| `owlette.api_keys` | creating or rotating a key, signing in the CLI, and every site request made with an API key, reads and deletes included |
+
+the site owner's plan decides, except when creating a site, creating or rotating a key, or signing in the CLI, where the caller's own plan does, and on an ownership transfer, where the new owner's does. reads, deletes and cancellations are never refused on a session. a machine past the limit is refused at pairing, not here; see [plans](/docs/plans#adding-a-machine-past-the-limit). do not retry unchanged.
 
 ### forbidden
 
@@ -343,7 +374,7 @@ retry with backoff:
 
 do not retry unchanged:
 
-- `401` and `403`
+- `401`, `402` and `403`
 - `404`
 - `400` and `422`
 - `409` and `412`, until you have re-read the current state

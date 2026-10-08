@@ -1,0 +1,150 @@
+---
+title: "plans"
+description: "owlette free, the 14-day pro trial, and core and pro billed per active machine: what each plan covers once the beta ends, what happens when a subscription lapses, and the plan_required error. none of it applies during the beta."
+keywords: ["pricing", "billing", "free plan", "free tier", "subscription", "trial", "upgrade", "downgrade", "lapse", "expired", "active machines", "machine limit", "site limit", "plan_required", "402", "cost"]
+---
+
+<Callout type="info" title={"plans are not active during the beta"}>
+
+owlette is in beta, and every feature is free while it lasts. nothing on this page is enforced yet, and nobody is billed. it describes how plans will work once the beta ends.
+
+</Callout>
+
+---
+
+## the plans
+
+after the beta there are three plans:
+
+- **owlette free** covers 1 machine and 1 site, with live status, metrics, crash-restart and updates. remote control, deployments, swoop, hoot, alerts and the pro features are not included.
+- **core** and **pro** are the paid plans, both billed per active machine per month. pro bills at least 3 machines and includes 1 TB of project storage per site. what each one includes, and the prices, are on the [pricing page](/#pricing).
+
+every new account starts with a [14-day pro trial](#the-trial).
+
+---
+
+## owlette free
+
+owlette free is for watching one machine and keeping its software running.
+
+### what keeps working
+
+- **the dashboard.** live status, metrics, history and logs.
+- **process configuration.** adding, editing and removing processes, launch modes and schedules, so crash-restart can be set up from the dashboard as well as from the machine.
+- **updates.** `update_owlette` is accepted on every plan.
+- **stopping things.** cancelling a pending reboot, dismissing a restart-pending notice, stopping live view, cancelling a running hoot tool, cancelling a deployment, and ending a swoop session.
+- **removing things.** deleting a machine, site, deployment, roost, talon, webhook or API key is never refused by a plan.
+
+### what it leaves out
+
+each of these maps to one entitlement, which is what a refusal names in its `entitlement` field:
+
+| feature | entitlement |
+|---|---|
+| a second machine, counted across every site you own | `owlette.machines` |
+| a second site | `owlette.sites` |
+| remote commands: reboot, shut down, process start, stop, restart and kill, screenshots, live view, display changes | `owlette.control` |
+| software deployments | `owlette.control` |
+| [swoop](/docs/dashboard/swoop) | `owlette.control` |
+| [hoot](/docs/dashboard/hoot), autonomous hoot included | `owlette.control` |
+| alert rules, and every alert email | `owlette.control` |
+| [roost](/docs/dashboard/roost): creating roosts, uploading, publishing, deploying and rolling back | `owlette.roost` |
+| [talons](/docs/dashboard/talons): creating, editing and testing them; scheduled and event talons pause | `owlette.talons` |
+| [webhooks](/docs/api/webhooks): creating subscriptions; deliveries pause | `owlette.webhooks` |
+| [API keys](/docs/api/authentication): creating and rotating keys, signing in the CLI, and every site request made with a key | `owlette.api_keys` |
+
+---
+
+## the trial
+
+after the beta, every account starts with a 14-day pro trial, no card. an email-and-password account starts it once its email address is verified; the dashboard shows a banner with **send verification email** until it is. a Google sign-in is verified already. accounts that already exist when plans start get the same trial then.
+
+when the trial ends, the account falls back to owlette free unless you pick core or pro.
+
+---
+
+## active machines
+
+core and pro are billed per active machine per month. **a machine counts if it was online at any point in the billing period.** a machine that stays off for a whole period is not billed for it; one that comes online for a minute is.
+
+the site's owner pays for the site's machines. the machines of every site you own count together, and a site you are only a member of costs you nothing.
+
+owlette counts once a day, at 03:00 UTC: every machine that sent a heartbeat in the previous 26 hours is recorded against the day before. a billing period's active machines are the distinct machines across its days. the two hours of overlap mean a late count misses nothing, and also that a machine online only on the day one billing period ends and the next begins can count in both.
+
+once plans apply, the plan page at `/settings/plan` shows your plan, its limits and this month's active machines; `GET /api/account/plan` answers the same as JSON.
+
+---
+
+## when a subscription ends
+
+when a paid plan or the trial ends, the account falls back to owlette free. nothing is deleted and nothing is unpaired.
+
+- **every agent keeps running.** it supervises its processes, restarts crashes, reports metrics and heartbeats as before. a plan never touches an agent's credentials, and every machine can still be updated.
+- **one machine stays live in the dashboard:** the one paired first across all your sites, with ties going to the lowest machine ID. the others show an upgrade notice in place of their metrics, while they keep running on site.
+- **extra sites stay visible**, read-only.
+- **paid features refuse new work**, as listed [above](#what-it-leaves-out), and talons stop firing. a roost rollout scheduled before the lapse is cancelled when it comes due, with the reason on the rollout; scheduled rollouts check plans once a day. alerts and webhook events raised meanwhile are not sent later.
+- **upgrading turns it all back on** as you left it: swoop settings, talons, webhooks and alert rules are kept.
+
+---
+
+## refusals
+
+### adding a machine past the limit
+
+the machine limit holds where a machine pairs. a pairing the plan has no room for is refused with:
+
+> owlette free covers one machine. upgrade to add more, or remove a machine first.
+
+- on the pairing page the message shows as you authorize, and the owlette window on the machine shows **pairing failed** with the same text — on a console pairing, `Device code poll failed: owlette free covers one machine. ...`. that phrase is spent: start a new pairing once there is room.
+- an unattended install — `/ADD=` on Windows, a [pairing preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux) on macOS and Linux — stays unpaired with the same message in its output, `logs/pairing.log` for a preseed. the phrase is not spent, so once a machine is removed the same phrase pairs on a second try, within its 10 minutes.
+- re-pairing a machine already in one of your sites always works, so a reinstall never takes a slot.
+
+### plan_required
+
+every other refusal is a `402` with `code: plan_required`. the dashboard shows the message; an API client gets the [problem+json envelope](/docs/api/errors#plan_required) with the entitlement it lacks and where to upgrade:
+
+```json
+{
+  "type": "https://owlette.app/problems/plan-required",
+  "title": "plan required",
+  "status": 402,
+  "detail": "your plan doesn't include remote control. upgrade to continue.",
+  "code": "plan_required",
+  "entitlement": "owlette.control",
+  "upgradeUrl": "/settings/plan",
+  "docsUrl": "https://owlette.app/docs/api/errors#plan_required",
+  "requestId": "5d7f7c5b-2ed6-4a56-9b2c-47dd7c84f957"
+}
+```
+
+the site owner's plan decides, whoever makes the request. creating a site, creating or rotating an API key and signing in the CLI go by the caller's own plan instead, and an ownership transfer by the new owner's, which must cover the site and its machines.
+
+background work does not refuse; it skips and logs. alert emails, webhook deliveries, talon runs and autonomous hoot stop for a site whose owner's plan lacks them, and swoop reads as switched off, so the machine itself turns sessions away. pairing is the only agent route a plan can refuse: heartbeats, token refreshes, alert reports, screenshot uploads and roost pulls never are.
+
+---
+
+## faq
+
+### am I being charged during the beta?
+
+no. plans are not enforced during the beta and nothing is billed. owlette free stays free after it.
+
+### what happens to my machines if I don't pick a plan after the trial?
+
+they keep running and supervising their processes, and you can keep updating them. one stays live in the dashboard; see [when a subscription ends](#when-a-subscription-ends).
+
+### does reinstalling the agent use up my machine?
+
+no. re-pairing a machine that is already in one of your sites is always allowed.
+
+### does a machine that was switched off all month cost anything?
+
+not for a month it never came online.
+
+### why do my scripts get a 402?
+
+API keys need a paid plan. a request made with a key answers `402 plan_required` (`entitlement: owlette.api_keys`) when the site owner's plan does not include them, and creating or rotating a key needs your own plan to. dashboard sessions are not affected. signing in the CLI needs it too: the browser says why, and the CLI reports the phrase as expired.
+
+### whose plan covers a site I'm a member of?
+
+its owner's. that site runs on its owner's plan, and you pay nothing for it. your own plan decides the sites you create and own, and the API keys you create.

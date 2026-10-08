@@ -269,6 +269,7 @@ customer doc does not. Update all three in the same commit.
 | `GET /api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/health-check` | `*/5 * * * *` | `X-Cron-Secret: <CRON_SECRET>` | 60s+ recommended |
 | `GET /api/hoot/escalation` | `*/5 * * * *` | `Authorization: Bearer <CRON_SECRET>` | default |
+| `GET /api/cron/plan-daily` | `0 3 * * *` (keep 03:00 UTC) | `X-Cron-Secret: <CRON_SECRET>` | **at least 60s** |
 | `GET /api/cron/retention` | `0 4 * * *` (or any quiet hour) | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/api-key-expiry` | `0 8 * * *` (any hour) | `X-Cron-Secret: <CRON_SECRET>` | 30s+ |
 
@@ -286,7 +287,7 @@ Four things to get right:
   unbounded one — it iterates every site, then every machine, with serial Firestore writes and serial
   per-recipient sends — so give it headroom too. No other route defines a time budget.
 - **Verify each by hand after registering, and gate on the status code, not the body.** Healthy is
-  `200`. The seven `/api/cron/*` routes answer `{"ok":true,…}`, but two bodies differ and will mislead
+  `200`. The `/api/cron/*` routes answer `{"ok":true,…}`, but two bodies differ and will mislead
   you: `/api/cron/status-ping` computes `ok` from component health (`route.ts:262`), so a correctly
   registered job legitimately returns `200` with `"ok":false` while any component is degraded; and
   `/api/hoot/escalation` answers `{"success":true,…}` with no `ok` field at all.

@@ -293,6 +293,10 @@ authorization options:
 | `/ADD=` | Windows: an unattended install with a phrase generated in the dashboard |
 | pairing preseed | macOS and Linux: an unattended install with a phrase generated in the dashboard |
 
+### the machine limit
+
+pairing is where a plan's machine limit holds. plans apply after the beta and are not enforced yet. once they are, a pairing that the plan of the site's owner has no room for is refused with "owlette free covers one machine. upgrade to add more, or remove a machine first." the pairing page shows it, the owlette window shows **pairing failed** with it, and a console pairing prints `Device code poll failed:` followed by the same text. an `/ADD=` or preseeded phrase is not spent by the refusal and pairs on a second try once a machine is removed, within its 10 minutes; a phrase refused on the pairing page is spent, so start a new pairing. re-pairing a machine already in one of the owner's sites is never refused, and a plan never unpairs a machine that is already paired. see [plans](/docs/plans).
+
 ---
 
 ## post-installation verification
