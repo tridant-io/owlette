@@ -9023,7 +9023,9 @@ paths:
         session / Firebase Auth record (`getUser(uid).email`), never from the
         request body — a body-supplied `email` is ignored. This route
         intentionally does not use the platform superadmin handler because a
-        new caller has no user document yet.
+        new caller has no user document yet. Creating the document for an
+        unverified password account also emails it a verification link; a
+        failed send does not fail the call.
       security:
         - firebaseIdToken: []
       parameters:

@@ -12,6 +12,7 @@ import { getUserShortName } from '@/lib/userUtils';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
+import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
 
 const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
 
@@ -436,6 +437,7 @@ export function PageHeader({
         </div>
       </div>
     </header>
+    <VerifyEmailBanner />
 
     {/* Mobile nav drawer — carries the site + page switchers (and the help
         items) that the `md` bar shows inline. Plain fixed positioning rather

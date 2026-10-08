@@ -3,15 +3,35 @@
  * model: role 'member' (NOT the retired 'user'), requiresMfaSetup true, and NO
  * legacy `sites[]` field — and that signup redirects to /setup-2fa, not
  * /dashboard.
+ *
+ * Also the email verification a password signup triggers: bootstrap mints the
+ * verification link (RESEND_API_KEY is unset in e2e, so the send is skipped but
+ * the code still lands in the auth emulator), and /verify-email consumes it.
+ * The banner itself sits in the app header, which a new account cannot reach
+ * before 2fa setup — it is unit-tested (VerifyEmailBanner.test.tsx).
  */
 
 import { test, expect } from '@playwright/test';
-import { getAdminDb } from '../../helpers/emulator';
+import { AUTH_EMULATOR_URL, EMULATOR_PROJECT_ID, getAdminDb } from '../../helpers/emulator';
 
 // Fresh context — no storageState, so the browser starts unauthenticated.
 test.use({ storageState: { cookies: [], origins: [] } });
 
-test('new signup writes role: member and redirects to /setup-2fa', async ({ page }) => {
+interface EmulatorOobCode {
+  email: string;
+  oobCode: string;
+  requestType: string;
+}
+
+/** The verification code the auth emulator holds for `email`, if one was minted. */
+async function verifyEmailOobCode(email: string): Promise<string | null> {
+  const res = await fetch(`${AUTH_EMULATOR_URL}/emulator/v1/projects/${EMULATOR_PROJECT_ID}/oobCodes`);
+  const { oobCodes = [] } = (await res.json()) as { oobCodes?: EmulatorOobCode[] };
+  const match = oobCodes.find((c) => c.email === email && c.requestType === 'VERIFY_EMAIL');
+  return match?.oobCode ?? null;
+}
+
+test('new signup writes role: member, redirects to /setup-2fa, and can verify its email', async ({ page }) => {
   // Unique per run so re-runs cannot collide with seeded users, even though
   // global-setup resets the emulator.
   const stamp = Date.now();
@@ -61,4 +81,14 @@ test('new signup writes role: member and redirects to /setup-2fa', async ({ page
   // here meant the very next signup re-created what the migration had removed,
   // so its "field is gone" gate could never converge.
   expect(data).not.toHaveProperty('sites');
+
+  // Verification blocks nothing: the account is still unverified and got through
+  // to 2fa setup above.
+  expect(userRecord.emailVerified).toBe(false);
+  await expect.poll(() => verifyEmailOobCode(email)).not.toBeNull();
+  const oobCode = (await verifyEmailOobCode(email))!;
+
+  await page.goto(`/verify-email?oobCode=${encodeURIComponent(oobCode)}`);
+  await expect(page.getByRole('heading', { name: 'email verified' })).toBeVisible();
+  expect((await authAdmin.getUserByEmail(email)).emailVerified).toBe(true);
 });

@@ -23,6 +23,7 @@ const API_DIR = join(ROOT, 'app', 'api');
 // Routes that are intentionally not documented (internal only)
 const INTERNAL_ROUTES = new Set([
   '/api/auth/session',
+  '/api/auth/verify-email',
   '/api/mfa/setup',
   '/api/mfa/verify-setup',
   '/api/mfa/verify-login',
