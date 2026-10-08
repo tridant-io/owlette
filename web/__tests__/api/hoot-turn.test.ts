@@ -94,6 +94,13 @@ jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: jest.fn(),
 }));
 
+// the real gate by default, which with PLAN_ENFORCEMENT unset answers before any read.
+const mockRequireEntitlement = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  ...jest.requireActual('@/lib/plan.server'),
+  requireEntitlement: (...a: unknown[]) => mockRequireEntitlement(...a),
+}));
+
 const SITE = 'site-a';
 const CHAT = 'chat-1';
 const MACHINE = 'lobby-01';
@@ -124,8 +131,16 @@ jest.mock('@/lib/firebase-admin', () => ({
 import { POST as TURN } from '@/app/api/hoot/route';
 import { POST as STOP } from '@/app/api/hoot/stop/route';
 import { emitMutation } from '@/lib/auditLogClient';
+import { problemPlanRequired } from '@/lib/apiErrors';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 import type { ResolvedAuth } from '@/lib/apiAuth.server';
 import type { StartTurnParams } from '@/lib/hoot/turnRunner.server';
+
+const { requireEntitlement: realRequireEntitlement } = jest.requireActual('@/lib/plan.server');
+
+function controlRefusal() {
+  return problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.control'], 'owlette.control');
+}
 
 function authedSession(): ResolvedAuth {
   return { userId: 'user-1', keyContext: null };
@@ -198,6 +213,54 @@ beforeEach(() => {
   mockReadTurnRecord.mockResolvedValue(null);
   mockStartTurn.mockReturnValue({ cancel: jest.fn(async () => {}) });
   mockFinishTurn.mockResolvedValue(true);
+  mockRequireEntitlement.mockImplementation(realRequireEntitlement);
+});
+
+describe('POST /api/hoot — the payer plan', () => {
+  it('refuses with 402 plan_required before claiming the lock or starting a turn', async () => {
+    mockRequireEntitlement.mockResolvedValue(controlRefusal());
+
+    const res = await TURN(turnRequest());
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.control' });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(mockAcquireTurnLock).not.toHaveBeenCalled();
+    expect(mockStartTurn).not.toHaveBeenCalled();
+    expect(emitMutation).not.toHaveBeenCalled();
+  });
+
+  it('refuses an approval resume the same way', async () => {
+    mockRequireEntitlement.mockResolvedValue(controlRefusal());
+
+    const res = await TURN(
+      turnRequest({
+        messages: [
+          {
+            id: 'a1',
+            role: 'assistant',
+            parts: [
+              {
+                type: 'tool-restart_process',
+                toolCallId: 'call-1',
+                state: 'approval-responded',
+                approval: { id: 'ap-1', approved: true },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(res.status).toBe(402);
+    expect(mockReadTurnRecord).not.toHaveBeenCalled();
+    expect(mockStartTurn).not.toHaveBeenCalled();
+  });
+
+  it('starts the turn with enforcement off', async () => {
+    const res = await TURN(turnRequest());
+    expect(res.status).toBe(200);
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(mockStartTurn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('POST /api/hoot — turn-start audit', () => {

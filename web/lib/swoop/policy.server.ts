@@ -43,6 +43,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { Capability, hasCapability, type Actor, type SiteRole } from '@/lib/capabilities';
 import { deriveMfaEnrolled, readMfaFactors } from '@/lib/mfaFactors.server';
 import type { MfaProofOutcome } from '@/lib/mfaProof.server';
+import { requireEntitlement } from '@/lib/plan.server';
 import { createHash } from 'crypto';
 
 /** `sites/{siteId}/settings/swoop`. */
@@ -137,7 +138,14 @@ export async function loadSwoopSettings(siteId: string): Promise<SwoopSiteSettin
     .collection('settings')
     .doc(SWOOP_SETTINGS_DOC)
     .get();
-  return parseSwoopSettings(snap.exists ? snap.data() : null);
+  const settings = parseSwoopSettings(snap.exists ? snap.data() : null);
+  // a payer without remote control reads as off, so every disabled path refuses,
+  // the agent doorbell's designed 403 included. the stored switch is left alone
+  // so an upgrade brings swoop back as the site had it.
+  if (settings.enabled && (await requireEntitlement(siteId, 'owlette.control'))) {
+    return { ...settings, enabled: false };
+  }
+  return settings;
 }
 
 // ------------------------------------------------------------------- decision

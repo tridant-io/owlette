@@ -55,6 +55,7 @@ import {
   TurnActiveError,
   type TurnResumeBinding,
 } from '@/lib/hoot/turnStore.server';
+import { requireEntitlement } from '@/lib/plan.server';
 
 /** The request body, as far as this route reads it. `machineName` is ignored. */
 interface HootRequestBody {
@@ -247,6 +248,11 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'you do not own this chat' }, { status: 403 });
       }
     }
+
+    // before the turn lock: `startTurn` refuses too, but only as an error chunk
+    // inside a 200 stream.
+    const planRefusal = await requireEntitlement(siteId, 'owlette.control');
+    if (planRefusal) return planRefusal;
 
     // Everything below resolves the turn's target. `siteId` is verified by this
     // point, so a machine listing can be trusted to name this site's machines.

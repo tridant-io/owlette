@@ -93,6 +93,7 @@ import {
 import { categorizeNewChat } from '@/lib/hoot/categorizeChat.server';
 import { UNTITLED_CHAT_TITLE } from '@/lib/hoot/untitledChat';
 import { sanitizeForLog } from '@/lib/logSanitize';
+import { PLAN_REQUIRED_DETAIL, requireEntitlement } from '@/lib/plan.server';
 
 /** Transient heartbeat cadence — keeps proxies from seeing an idle stream. */
 export const HEARTBEAT_INTERVAL_MS = 20_000;
@@ -478,6 +479,16 @@ export function startTurn(
         // Fail to "not new" so a read blip can't clobber an existing
         // conversation's LLM title with a placeholder.
         chatExistedAtStart = true;
+      }
+
+      // the dashboard route refuses with a 402 before it gets here; this is the
+      // gate for follow-up and talon turns, which have no response to refuse
+      // with. ahead of the one-shot approval claim, so a refused turn claims nothing.
+      if (await requireEntitlement(params.siteId, 'owlette.control')) {
+        console.warn(
+          `[hoot] turn refused in chat ${sanitizeForLog(chatId)}: the site's plan does not include owlette.control`,
+        );
+        throw new Error(PLAN_REQUIRED_DETAIL['owlette.control']);
       }
 
       const resolveLostResult = buildResolveLostResult(db, params.siteId, params.priorTurn);

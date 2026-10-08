@@ -9,15 +9,17 @@
  * answering every `doc()` with the same stub.
  */
 const mockDocs = new Map<string, Record<string, unknown>>();
+const mockReads: string[] = [];
 const mockWrites: Array<{ path: string; data: Record<string, unknown> }> = [];
 const mockReadMfaFactors = jest.fn();
+const mockGetEntitlements = jest.fn();
 
 jest.mock('@/lib/firebase-admin', () => {
   const doc = (path: string) => ({
-    get: async () => ({
-      exists: mockDocs.has(path),
-      data: () => mockDocs.get(path),
-    }),
+    get: async () => {
+      mockReads.push(path);
+      return { exists: mockDocs.has(path), data: () => mockDocs.get(path) };
+    },
     set: async (data: Record<string, unknown>) => {
       mockWrites.push({ path, data });
       mockDocs.set(path, data);
@@ -35,6 +37,10 @@ jest.mock('firebase-admin/firestore', () => ({
 jest.mock('@/lib/mfaFactors.server', () => ({
   readMfaFactors: (...args: unknown[]) => mockReadMfaFactors(...args),
   deriveMfaEnrolled: (inv: { totp: boolean; passkeys: number }) => inv.totp || inv.passkeys > 0,
+}));
+
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
 import type { Actor } from '@/lib/capabilities';
@@ -78,6 +84,7 @@ function access(over: Partial<Parameters<typeof evaluateSwoopAccess>[0]>) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockDocs.clear();
+  mockReads.length = 0;
   mockWrites.length = 0;
   mockReadMfaFactors.mockResolvedValue({ totp: true, passkeys: 0 });
 });
@@ -105,6 +112,71 @@ describe('parseSwoopSettings', () => {
   it('reads the site settings document', async () => {
     mockDocs.set(`sites/${SITE}/settings/swoop`, { enabled: true });
     expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
+  });
+});
+
+describe('loadSwoopSettings and the payer plan', () => {
+  const SETTINGS_PATH = `sites/${SITE}/settings/swoop`;
+  const PLAN_ENV = {
+    PLAN_ENFORCEMENT: 'on',
+    TRIDANT_API_URL: 'https://tridant.example.invalid',
+    TRIDANT_LICENSE_KEY: 'test-license-key',
+  };
+
+  function payerControl(value: '0' | '1') {
+    mockGetEntitlements.mockResolvedValue({
+      ok: true,
+      resolved: true,
+      standing: 'active',
+      inGoodStanding: true,
+      ent: { 'owlette.control': value },
+      epoch: 1,
+    });
+  }
+
+  beforeEach(() => {
+    Object.assign(process.env, PLAN_ENV);
+    mockDocs.set(`sites/${SITE}`, { owner: 'payer-1' });
+    mockDocs.set(SETTINGS_PATH, { enabled: true, excludedMachineIds: [MACHINE], indicator: 'tray' });
+  });
+
+  afterEach(() => {
+    for (const key of Object.keys(PLAN_ENV)) delete process.env[key];
+  });
+
+  it('reports swoop off for a payer without remote control, and keeps the stored switch', async () => {
+    payerControl('0');
+
+    expect(await loadSwoopSettings(SITE)).toEqual({
+      enabled: false,
+      excludedMachineIds: [MACHINE],
+      membersMayWatch: true,
+      indicator: 'tray',
+    });
+    expect(mockGetEntitlements).toHaveBeenCalledWith('payer-1');
+    expect(mockWrites).toEqual([]);
+    expect(mockDocs.get(SETTINGS_PATH)).toMatchObject({ enabled: true });
+  });
+
+  it('leaves swoop on for a payer with remote control', async () => {
+    payerControl('1');
+    expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
+  });
+
+  it('looks no plan up for a site that has swoop off', async () => {
+    mockDocs.set(SETTINGS_PATH, { enabled: false });
+
+    expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: false });
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockReads).toEqual([SETTINGS_PATH]);
+  });
+
+  it('reads nothing past the settings with enforcement off', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+
+    expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockReads).toEqual([SETTINGS_PATH]);
   });
 });
 

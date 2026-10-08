@@ -12,6 +12,7 @@
  *   - talon authoring / enable-toggle tools are excluded entirely (an unattended run
  *     must not author automations)
  *   - the Opus 5 advisor is offered with its per-reply cap, or not at all
+ *   - a payer without remote control is skipped with a quiet 200, before anything starts
  */
 
 import { NextRequest } from 'next/server';
@@ -80,6 +81,13 @@ jest.mock('@/lib/hoot-escalation.server', () => ({ escalate: jest.fn() }));
 
 jest.mock('@/lib/securityBoundaryMetrics.server', () => ({
   emitSecurityBoundaryMetric: jest.fn(),
+}));
+
+// the real gate by default, which with PLAN_ENFORCEMENT unset answers before any read.
+const mockRequireEntitlement = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  ...jest.requireActual('@/lib/plan.server'),
+  requireEntitlement: (...args: unknown[]) => mockRequireEntitlement(...args),
 }));
 
 const mockGetToolsByTier = jest.fn();
@@ -154,8 +162,12 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 import { POST } from '@/app/api/hoot/autonomous/route';
+import { problemPlanRequired } from '@/lib/apiErrors';
 import { SERVER_SIDE_TOOLS } from '@/lib/hoot-utils.server';
 import type { McpToolDefinition } from '@/lib/mcp-tools';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
+
+const { requireEntitlement: realRequireEntitlement } = jest.requireActual('@/lib/plan.server');
 
 const { getToolsByTier: realGetToolsByTier } = jest.requireActual('@/lib/mcp-tools') as {
   getToolsByTier: (maxTier: 1 | 2 | 3) => McpToolDefinition[];
@@ -232,6 +244,7 @@ beforeEach(() => {
   mockExecuteServerSideTool.mockResolvedValue({ ok: true });
   mockDispatchToolCall.mockResolvedValue({ ok: true });
   mockDispatchExistingCommand.mockResolvedValue({ status: 'success' });
+  mockRequireEntitlement.mockImplementation(realRequireEntitlement);
 });
 
 afterEach(() => {
@@ -239,6 +252,37 @@ afterEach(() => {
 });
 
 /* tests */
+
+describe('autonomous and the payer plan', () => {
+  it('skips quietly with a 200 when the payer lacks remote control', async () => {
+    mockRequireEntitlement.mockResolvedValue(
+      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.control'], 'owlette.control'),
+    );
+
+    const res = await POST(request());
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ accepted: false, reason: 'plan_required' });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    // no event, no session slot: nothing was started that could need cleaning up.
+    expect([...docStore.keys()]).toEqual([`sites/${SITE}/settings/cortex`]);
+  });
+
+  it('looks no plan up for a site with autonomous mode off', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: false });
+
+    const res = await POST(request());
+
+    expect(await res.json()).toEqual({ accepted: false, reason: 'autonomous_disabled' });
+    expect(mockRequireEntitlement).not.toHaveBeenCalled();
+  });
+
+  it('accepts as before with enforcement off', async () => {
+    await buildTools();
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+  });
+});
 
 describe('autonomous advisor', () => {
   it('offers the default Claude model the Opus 5 advisor, capped per reply', async () => {

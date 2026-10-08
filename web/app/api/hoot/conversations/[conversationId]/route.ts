@@ -38,6 +38,7 @@ import {
 } from '@/lib/chatStorage.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { runHootStream, SITE_TARGET_ID } from '@/lib/hootStream.server';
+import { requireEntitlement } from '@/lib/plan.server';
 import type { ModelMessage } from 'ai';
 
 interface RouteContext {
@@ -111,6 +112,10 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 
     const ownerCheck = await ensureConversationOwner(conversation, auth.userId);
     if (ownerCheck) return ownerCheck;
+
+    // ahead of the append: a refused send must leave no prompt behind to answer later.
+    const planRefusal = await requireEntitlement(conversation.siteId, 'owlette.control');
+    if (planRefusal) return planRefusal;
 
     return withIdempotency(
       request,
