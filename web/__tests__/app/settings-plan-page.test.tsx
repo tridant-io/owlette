@@ -3,9 +3,9 @@
  * @jest-environment jsdom
  *
  * /settings/plan: with plans off it says so and nothing else; when enforced it
- * names the plan and its standing, shows the limits and this month's active
- * machines, lists what is included, and offers the tiers above the current one
- * behind disabled buttons until checkout exists.
+ * names the plan and, except on free, its standing, shows the limits and this
+ * month's active machines, lists what is included, and offers the tiers above
+ * the current one behind disabled buttons until checkout exists.
  */
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -35,8 +35,26 @@ jest.mock('@/components/PageCascade', () => ({
   PageCascade: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-const NO_FLAGS = { control: false, roost: false, talons: false, webhooks: false, api_keys: false };
-const ALL_FLAGS = { control: true, roost: true, talons: true, webhooks: true, api_keys: true };
+const NO_FLAGS = {
+  control: false,
+  deployments: false,
+  swoop: false,
+  hoot: false,
+  roost: false,
+  talons: false,
+  webhooks: false,
+  api_keys: false,
+};
+const ALL_FLAGS = {
+  control: true,
+  deployments: true,
+  swoop: true,
+  hoot: true,
+  roost: true,
+  talons: true,
+  webhooks: true,
+  api_keys: true,
+};
 
 const FREE: PlanResponse = {
   enforced: true,
@@ -101,7 +119,8 @@ describe('/settings/plan', () => {
 
     const current = screen.getByTestId('current-plan');
     expect(current).toHaveTextContent('owlette free');
-    expect(within(current).getByText('expired')).toBeInTheDocument();
+    // an unmapped account's `expired` would read as a lapsed plan.
+    expect(within(current).queryByText('expired')).not.toBeInTheDocument();
     expect(usage('machine limit')).toBe('1');
     expect(usage('active this month')).toBe('1');
     expect(usage('site limit')).toBe('1');
@@ -127,12 +146,24 @@ describe('/settings/plan', () => {
     expect(upgradeButtons()).toEqual(['upgrade to core', 'upgrade to pro']);
   });
 
-  it('offers only pro on core', () => {
+  it('shows core as remote control without the pro features, offering only pro', () => {
     show(CORE);
 
-    expect(screen.getByTestId('current-plan')).toHaveTextContent('core');
+    const current = screen.getByTestId('current-plan');
+    expect(current).toHaveTextContent('core');
+    expect(within(current).getByText('active')).toBeInTheDocument();
     expect(usage('site limit')).toBe('1');
+    expect(
+      within(current).getByText('remote control, process control, display layouts, screenshots and email alerts')
+        .parentElement,
+    ).toHaveTextContent('(included)');
+    for (const feature of ['deployments', 'swoop', 'hoot', 'talons', 'roost', 'webhooks', 'API keys']) {
+      expect(within(current).getByText(feature).parentElement).toHaveTextContent(`${feature} (not included)`);
+    }
     expect(upgradeButtons()).toEqual(['upgrade to pro']);
+    expect(
+      screen.getByText(/^everything in core, plus deployments, swoop, hoot, talons, roost, webhooks, API keys and unlimited sites\./),
+    ).toBeInTheDocument();
   });
 
   it('offers no upgrade on pro', () => {

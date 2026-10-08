@@ -44,7 +44,7 @@ owlette roost push ./my-project --to rst_my_project_id --site site-1
 
 Plans are not enforced during the beta. Once they apply, a command that the
 site owner's plan does not cover fails with `402 plan_required`, and the
-message says what the plan lacks. API keys are part of the paid plans: on a
+message says what the plan lacks. API keys are part of pro: on a
 plan without them every command made with a key fails that way, and
 `owlette auth login` cannot complete — the browser shows why, and the cli
 reports the phrase as expired. See [plans](https://owlette.app/docs/plans).

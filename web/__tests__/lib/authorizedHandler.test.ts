@@ -734,9 +734,16 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     resolved: false,
     standing: 'expired',
     inGoodStanding: false,
-    ent: { 'owlette.control': '0', 'owlette.talons': '0', 'owlette.api_keys': '0' },
+    ent: {
+      'owlette.control': '0',
+      'owlette.deployments': '0',
+      'owlette.swoop': '0',
+      'owlette.talons': '0',
+      'owlette.api_keys': '0',
+    },
     epoch: 0,
   };
+  const CORE = { ...FREE, resolved: true, standing: 'active', ent: { ...FREE.ent, 'owlette.control': '1' } };
 
   beforeEach(() => {
     for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
@@ -759,10 +766,10 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
 
   it('maps the capabilities to their tridant keys', () => {
     expect(Object.fromEntries(PLAN_GATED_CAPABILITIES)).toEqual({
-      DEPLOYMENT_MANAGE: 'owlette.control',
+      DEPLOYMENT_MANAGE: 'owlette.deployments',
       ALERT_RULES_MANAGE: 'owlette.control',
-      MACHINE_REMOTE_CONTROL: 'owlette.control',
-      MACHINE_REMOTE_VIEW: 'owlette.control',
+      MACHINE_REMOTE_CONTROL: 'owlette.swoop',
+      MACHINE_REMOTE_VIEW: 'owlette.swoop',
       TALON_MANAGE: 'owlette.talons',
     });
   });
@@ -777,7 +784,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     expect(res.headers.get('Content-Type')).toContain('application/problem+json');
     expect(await res.json()).toMatchObject({
       code: 'plan_required',
-      entitlement: 'owlette.control',
+      entitlement: 'owlette.deployments',
       upgradeUrl: '/settings/plan',
     });
     expect(handler).not.toHaveBeenCalled();
@@ -785,7 +792,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     const deny = rows('deny');
     expect(deny).toHaveLength(1);
     expect(deny[0].payload.denyReason).toBe('plan_locked');
-    expect(deny[0].payload.metadata).toMatchObject({ method: 'POST', entitlement: 'owlette.control' });
+    expect(deny[0].payload.metadata).toMatchObject({ method: 'POST', entitlement: 'owlette.deployments' });
     expect(rows('allow')).toHaveLength(0);
     // the payer comes from the site doc site access already read.
     expect(siteDocReads).toBe(1);
@@ -859,15 +866,44 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     expect(mockGetEntitlements).not.toHaveBeenCalled();
   });
 
-  it('a plan with owlette.control goes through', async () => {
-    mockGetEntitlements.mockResolvedValue({ ...FREE, resolved: true, standing: 'active', ent: { 'owlette.control': '1' } });
+  it('core: an alert rules write goes through on owlette.control', async () => {
+    mockGetEntitlements.mockResolvedValue(CORE);
     const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
-    const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
+    const wrapped = authorizedSiteHandler({ capability: 'ALERT_RULES_MANAGE', siteIdParam: 'path' })(handler);
 
-    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+    const res = await wrapped(makeRequest(undefined, 'PUT'), pathParamsFor('site-a'));
 
     expect(res.status).toBe(200);
     expect(rows('allow')).toHaveLength(1);
+  });
+
+  it.each([
+    ['DEPLOYMENT_MANAGE', 'owlette.deployments'],
+    ['MACHINE_REMOTE_CONTROL', 'owlette.swoop'],
+    ['MACHINE_REMOTE_VIEW', 'owlette.swoop'],
+  ] as const)('core: refuses a %s write on the pro key %s', async (capability, entitlement) => {
+    mockGetEntitlements.mockResolvedValue(CORE);
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ entitlement, detail: PLAN_REQUIRED_DETAIL[entitlement] });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('pro: a deployment and a swoop write go through', async () => {
+    mockGetEntitlements.mockResolvedValue({
+      ...CORE,
+      ent: { ...CORE.ent, 'owlette.deployments': '1', 'owlette.swoop': '1' },
+    });
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    for (const capability of ['DEPLOYMENT_MANAGE', 'MACHINE_REMOTE_CONTROL'] as const) {
+      const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
+      expect((await wrapped(makeRequest(), pathParamsFor('site-a'))).status).toBe(200);
+    }
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 
   it('enforcement off: a gated write goes through without any plan lookup', async () => {
@@ -938,7 +974,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
         ...FREE,
         resolved: true,
         standing: 'active',
-        ent: { 'owlette.control': '1', 'owlette.api_keys': '1' },
+        ent: { 'owlette.deployments': '1', 'owlette.api_keys': '1' },
       });
       const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
       const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
@@ -949,7 +985,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
       expect(mockGetEntitlements).toHaveBeenCalledTimes(1);
     });
 
-    it('a key on a plan with api keys but not control is refused the gated write on owlette.control', async () => {
+    it('a key on a plan with api keys but not deployments is refused the gated write on owlette.deployments', async () => {
       mockGetEntitlements.mockResolvedValue({ ...FREE, ent: { ...FREE.ent, 'owlette.api_keys': '1' } });
       const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
       const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
@@ -957,7 +993,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
       const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
 
       expect(res.status).toBe(402);
-      expect((await res.json()).entitlement).toBe('owlette.control');
+      expect((await res.json()).entitlement).toBe('owlette.deployments');
     });
 
     it('enforcement off: a key goes through without any plan lookup', async () => {

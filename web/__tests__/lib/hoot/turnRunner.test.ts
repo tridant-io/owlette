@@ -992,13 +992,14 @@ describe('startTurn — the payer plan', () => {
     TRIDANT_LICENSE_KEY: 'test-license-key',
   };
 
-  function payerControl(value: '0' | '1') {
+  /** a core payer has control but not hoot; pro has both. */
+  function payerHoot(value: '0' | '1') {
     mockGetEntitlements.mockResolvedValue({
       ok: true,
       resolved: true,
       standing: 'active',
       inGoodStanding: true,
-      ent: { 'owlette.control': value },
+      ent: { 'owlette.control': '1', 'owlette.hoot': value },
       epoch: 1,
     });
   }
@@ -1013,13 +1014,13 @@ describe('startTurn — the payer plan', () => {
     for (const key of Object.keys(PLAN_ENV)) delete process.env[key];
   });
 
-  it('ends the turn with the plan refusal before any model or machine work', async () => {
-    payerControl('0');
+  it('ends a core payer turn with the plan refusal before any model or machine work', async () => {
+    payerHoot('0');
 
     const chunks = await collectChunks(startTurn(fakeDb, baseParams({ source: 'followup' })));
     await flushAsync();
 
-    const detail = PLAN_REQUIRED_DETAIL['owlette.control'];
+    const detail = PLAN_REQUIRED_DETAIL['owlette.hoot'];
     expect(chunks.some((c) => c.type === 'error' && c.errorText === detail)).toBe(true);
     expect(turnStore.finishTurn).toHaveBeenCalledWith(fakeDb, CHAT_ID, TURN_ID, 'error', detail, []);
     expect(mockGetEntitlements).toHaveBeenCalledWith('payer-1');
@@ -1028,8 +1029,8 @@ describe('startTurn — the payer plan', () => {
     expect(hootUtils.buildExecutableTools).not.toHaveBeenCalled();
   });
 
-  it('runs the turn for a payer with remote control', async () => {
-    payerControl('1');
+  it('runs the turn for a pro payer', async () => {
+    payerHoot('1');
 
     const chunks = await collectChunks(startTurn(fakeDb, baseParams()));
     await flushAsync();

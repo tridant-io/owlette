@@ -620,9 +620,10 @@ describe('executeMachineCommand — plan gate', () => {
     resolved: false,
     standing: 'expired',
     inGoodStanding: false,
-    ent: { 'owlette.machines': '1', 'owlette.sites': '1', 'owlette.control': '0' },
+    ent: { 'owlette.machines': '1', 'owlette.sites': '1', 'owlette.control': '0', 'owlette.hoot': '0' },
     epoch: 0,
   };
+  const CORE = { ...FREE, resolved: true, standing: 'active', ent: { ...FREE.ent, 'owlette.control': '1' } };
   const PLAN_FREE_TYPES = ['update_owlette', 'cancel_reboot', 'dismiss_reboot_pending', 'stop_live_view', 'cancel_mcp_tool'];
 
   function enforce(): void {
@@ -658,13 +659,16 @@ describe('executeMachineCommand — plan gate', () => {
     it(`free: refuses ${type} with 402 plan_required and writes nothing`, async () => {
       enforce();
       const fake = buildFakeDb();
+      // hoot's tool calls are hoot's (pro); every other gated type is control (core).
+      const entitlement = type === 'mcp_tool_call' ? 'owlette.hoot' : 'owlette.control';
       await expect(
         executeMachineCommand(ctxFor(), { type, payload: {} }, { db: fake.db }),
       ).rejects.toMatchObject({
         name: 'ExecuteMachineCommandError',
         status: 402,
         code: 'plan_required',
-        detail: PLAN_REQUIRED_DETAIL['owlette.control'],
+        detail: PLAN_REQUIRED_DETAIL[entitlement],
+        entitlement,
       });
       expect(mockGetEntitlements).toHaveBeenCalledWith('payer_1');
       expect(fake.setCalls).toHaveLength(0);
@@ -683,11 +687,29 @@ describe('executeMachineCommand — plan gate', () => {
     });
   }
 
-  it('a plan with owlette.control queues a gated type', async () => {
+  it('core: queues a control type', async () => {
     enforce();
-    mockGetEntitlements.mockResolvedValue({ ...FREE, resolved: true, standing: 'active', ent: { 'owlette.control': '1' } });
+    mockGetEntitlements.mockResolvedValue(CORE);
     const fake = buildFakeDb();
     await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('core: refuses a hoot tool call on owlette.hoot', async () => {
+    enforce();
+    mockGetEntitlements.mockResolvedValue(CORE);
+    const fake = buildFakeDb();
+    await expect(
+      executeMachineCommand(ctxFor(), { type: 'mcp_tool_call', payload: {} }, { db: fake.db }),
+    ).rejects.toMatchObject({ status: 402, code: 'plan_required', entitlement: 'owlette.hoot' });
+    expect(fake.setCalls).toHaveLength(0);
+  });
+
+  it('pro: queues a hoot tool call', async () => {
+    enforce();
+    mockGetEntitlements.mockResolvedValue({ ...CORE, ent: { ...CORE.ent, 'owlette.hoot': '1' } });
+    const fake = buildFakeDb();
+    await executeMachineCommand(ctxFor(), { type: 'mcp_tool_call', payload: {} }, { db: fake.db });
     expect(fake.setCalls).toHaveLength(1);
   });
 

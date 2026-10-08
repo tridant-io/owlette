@@ -316,8 +316,8 @@ function commandErrorToProblem(err: ExecuteMachineCommandError): NextResponse {
   if (err.code === 'unsupported_command_type') {
     return unsupportedCommandType(err.detail.match(/'([^']+)'/)?.[1] ?? 'unknown');
   }
-  if (err.code === 'plan_required') {
-    return problemPlanRequired(err.detail, 'owlette.control');
+  if (err.entitlement) {
+    return problemPlanRequired(err.detail, err.entitlement);
   }
   if (err.code === 'machine_offline') {
     return problem({

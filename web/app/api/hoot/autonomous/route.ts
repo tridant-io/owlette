@@ -182,8 +182,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ accepted: false, reason: 'autonomous_disabled' });
     }
 
-    if (await requireEntitlement(siteId, 'owlette.control')) {
-      console.log(`[hoot/autonomous] Skipped ${sanitizeForLog(machineId)}:${sanitizeForLog(processName)}: the site's plan does not include owlette.control`);
+    if (await requireEntitlement(siteId, 'owlette.hoot')) {
+      console.log(`[hoot/autonomous] Skipped ${sanitizeForLog(machineId)}:${sanitizeForLog(processName)}: the site's plan does not include owlette.hoot`);
       return NextResponse.json({ accepted: false, reason: 'plan_required' });
     }
 

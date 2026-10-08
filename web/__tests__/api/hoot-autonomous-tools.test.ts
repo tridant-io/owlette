@@ -12,7 +12,7 @@
  *   - talon authoring / enable-toggle tools are excluded entirely (an unattended run
  *     must not author automations)
  *   - the Opus 5 advisor is offered with its per-reply cap, or not at all
- *   - a payer without remote control is skipped with a quiet 200, before anything starts
+ *   - a payer without hoot is skipped with a quiet 200, before anything starts
  */
 
 import { NextRequest } from 'next/server';
@@ -254,16 +254,16 @@ afterEach(() => {
 /* tests */
 
 describe('autonomous and the payer plan', () => {
-  it('skips quietly with a 200 when the payer lacks remote control', async () => {
+  it('skips quietly with a 200 when the payer lacks hoot', async () => {
     mockRequireEntitlement.mockResolvedValue(
-      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.control'], 'owlette.control'),
+      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.hoot'], 'owlette.hoot'),
     );
 
     const res = await POST(request());
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ accepted: false, reason: 'plan_required' });
-    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
     expect(mockGenerateText).not.toHaveBeenCalled();
     // no event, no session slot: nothing was started that could need cleaning up.
     expect([...docStore.keys()]).toEqual([`sites/${SITE}/settings/cortex`]);
@@ -280,7 +280,7 @@ describe('autonomous and the payer plan', () => {
 
   it('accepts as before with enforcement off', async () => {
     await buildTools();
-    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
   });
 });
 

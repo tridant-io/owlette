@@ -251,7 +251,7 @@ export async function POST(request: NextRequest) {
 
     // before the turn lock: `startTurn` refuses too, but only as an error chunk
     // inside a 200 stream.
-    const planRefusal = await requireEntitlement(siteId, 'owlette.control');
+    const planRefusal = await requireEntitlement(siteId, 'owlette.hoot');
     if (planRefusal) return planRefusal;
 
     // Everything below resolves the turn's target. `siteId` is verified by this

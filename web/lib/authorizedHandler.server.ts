@@ -125,10 +125,12 @@ export const BYPASS_EXEMPT_CAPABILITIES: ReadonlySet<Capability> = new Set<Capab
  * can still remove what it built.
  */
 export const PLAN_GATED_CAPABILITIES: ReadonlyMap<Capability, PlanFlag> = new Map<Capability, PlanFlag>([
-  [Capability.DEPLOYMENT_MANAGE, 'owlette.control'],
+  [Capability.DEPLOYMENT_MANAGE, 'owlette.deployments'],
   [Capability.ALERT_RULES_MANAGE, 'owlette.control'],
-  [Capability.MACHINE_REMOTE_CONTROL, 'owlette.control'],
-  [Capability.MACHINE_REMOTE_VIEW, 'owlette.control'],
+  // only swoop's routes hold these two through this wrapper; commands, live view
+  // included, are gated in executeMachineCommand.
+  [Capability.MACHINE_REMOTE_CONTROL, 'owlette.swoop'],
+  [Capability.MACHINE_REMOTE_VIEW, 'owlette.swoop'],
   [Capability.TALON_MANAGE, 'owlette.talons'],
 ]);
 

@@ -6,7 +6,8 @@
  *
  * The plan is the signed-in user's own, as the payer for the sites they own,
  * so a member never sees another account's plan here. Renders null while the
- * plan loads, when plans are not enforced, and on core and pro.
+ * plan loads, when plans are not enforced, on core and pro, and for a user who
+ * owns no site: a member's sites run on their owners' plans.
  *
  * Tridant id sends no trial end date yet (tridant-id#76), so the trial state
  * has no countdown.
@@ -31,7 +32,7 @@ type BannerKind = 'trial' | 'free';
 
 export function TrialBanner() {
   const { plan } = usePlan();
-  if (!plan?.enforced || (plan.plan !== 'trial' && plan.plan !== 'free')) return null;
+  if (!plan?.enforced || !plan.ownsSites || (plan.plan !== 'trial' && plan.plan !== 'free')) return null;
   return <DismissibleBanner kind={plan.plan} />;
 }
 

@@ -145,7 +145,16 @@ describe('PageHeader menu scrim', () => {
 });
 
 describe('PageHeader plan entry', () => {
-  const FLAGS = { control: true, roost: true, talons: true, webhooks: true, api_keys: true };
+  const FLAGS = {
+    control: true,
+    deployments: true,
+    swoop: true,
+    hoot: true,
+    roost: true,
+    talons: true,
+    webhooks: true,
+    api_keys: true,
+  };
   const OFF: PlanResponse = {
     enforced: false,
     reason: 'enforcement_off',
@@ -160,7 +169,16 @@ describe('PageHeader plan entry', () => {
     plan: 'free',
     standing: 'expired',
     limits: { machines: 1, sites: 1 },
-    flags: { ...FLAGS, control: false, roost: false, talons: false, webhooks: false, api_keys: false },
+    flags: {
+      control: false,
+      deployments: false,
+      swoop: false,
+      hoot: false,
+      roost: false,
+      talons: false,
+      webhooks: false,
+      api_keys: false,
+    },
     activeMachinesThisMonth: 1,
   };
 

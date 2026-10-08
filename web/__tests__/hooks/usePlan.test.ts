@@ -22,7 +22,16 @@ const FREE: PlanResponse = {
   plan: 'free',
   standing: 'expired',
   limits: { machines: 1, sites: 1 },
-  flags: { control: false, roost: false, talons: false, webhooks: false, api_keys: false },
+  flags: {
+    control: false,
+    deployments: false,
+    swoop: false,
+    hoot: false,
+    roost: false,
+    talons: false,
+    webhooks: false,
+    api_keys: false,
+  },
   activeMachinesThisMonth: 1,
 };
 const PRO: PlanResponse = {
@@ -30,7 +39,16 @@ const PRO: PlanResponse = {
   plan: 'pro',
   standing: 'active',
   limits: { machines: null, sites: null },
-  flags: { control: true, roost: true, talons: true, webhooks: true, api_keys: true },
+  flags: {
+    control: true,
+    deployments: true,
+    swoop: true,
+    hoot: true,
+    roost: true,
+    talons: true,
+    webhooks: true,
+    api_keys: true,
+  },
 };
 
 function jsonResponse(body: unknown, status = 200): Response {

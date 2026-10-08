@@ -23,6 +23,9 @@ export type UpgradeFlag = keyof PlanResponse['flags'];
 
 const FEATURES: Record<UpgradeFlag, { name: string; tier: 'core' | 'pro' }> = {
   control: { name: 'remote control', tier: 'core' },
+  deployments: { name: 'deployments', tier: 'pro' },
+  swoop: { name: 'swoop', tier: 'pro' },
+  hoot: { name: 'hoot', tier: 'pro' },
   roost: { name: 'roost', tier: 'pro' },
   talons: { name: 'talons', tier: 'pro' },
   webhooks: { name: 'webhooks', tier: 'pro' },

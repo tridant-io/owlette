@@ -107,7 +107,10 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
 |---|---|
 | `owlette.sites` | creating a site past the plan's site limit, or transferring one to an owner whose plan has no room |
 | `owlette.machines` | transferring a site whose machines the new owner's plan cannot hold |
-| `owlette.control` | remote commands other than `update_owlette`, `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view` and `cancel_mcp_tool`; process start, stop, restart and kill; creating, retrying and uninstalling deployments; alert rules; starting and renewing swoop sessions; hoot messages |
+| `owlette.control` | remote commands other than `update_owlette`, `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view`, `cancel_mcp_tool` and `mcp_tool_call`; process start, stop, restart and kill; alert rules |
+| `owlette.deployments` | creating, retrying and uninstalling deployments |
+| `owlette.swoop` | starting and renewing swoop sessions |
+| `owlette.hoot` | hoot messages and hoot's tool calls (`mcp_tool_call`) |
 | `owlette.roost` | creating and editing roosts, uploading chunks, publishing and editing versions, deploying, resyncing and rolling back |
 | `owlette.talons` | creating, editing, testing and reassigning talons |
 | `owlette.webhooks` | creating a webhook subscription |

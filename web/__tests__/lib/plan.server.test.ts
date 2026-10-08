@@ -57,6 +57,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 import logger from '@/lib/logger';
 import {
   __resetForTests,
+  PLAN_REQUIRED_DETAIL,
   entitled,
   machineSlotAvailable,
   missingPlanKeys,
@@ -78,6 +79,9 @@ const FREE = {
     'owlette.machines': '1',
     'owlette.sites': '1',
     'owlette.control': '0',
+    'owlette.deployments': '0',
+    'owlette.swoop': '0',
+    'owlette.hoot': '0',
     'owlette.roost': '0',
     'owlette.talons': '0',
     'owlette.webhooks': '0',
@@ -95,6 +99,9 @@ const TRIAL = {
     'owlette.machines': 'unlimited',
     'owlette.sites': 'unlimited',
     'owlette.control': '1',
+    'owlette.deployments': '1',
+    'owlette.swoop': '1',
+    'owlette.hoot': '1',
     'owlette.roost': '1',
     'owlette.talons': '1',
     'owlette.webhooks': '1',
@@ -105,8 +112,14 @@ const TRIAL = {
 
 const PRO = { ...TRIAL, standing: 'active', ent: { ...TRIAL.ent, 'owlette.machines': '3' } };
 
+// tridant-id#76's matrix: core is remote control on one site, and none of pro.
+const CORE = { ...PRO, ent: { ...FREE.ent, 'owlette.machines': 'unlimited', 'owlette.control': '1' } };
+
 const FLAGS = [
   'owlette.control',
+  'owlette.deployments',
+  'owlette.swoop',
+  'owlette.hoot',
   'owlette.roost',
   'owlette.talons',
   'owlette.webhooks',
@@ -224,6 +237,13 @@ describe('planLimit and entitled', () => {
     expect(planLimit(plan, 'owlette.sites')).toBe(1);
   });
 
+  it('read core: control and unlimited machines on one site, none of pro', () => {
+    const plan = enforced(CORE.ent);
+    for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(flag === 'owlette.control');
+    expect(planLimit(plan, 'owlette.machines')).toBe(Infinity);
+    expect(planLimit(plan, 'owlette.sites')).toBe(1);
+  });
+
   it('read trial and pro: every flag, unlimited or counted limits', () => {
     for (const ent of [TRIAL.ent, PRO.ent]) {
       for (const flag of FLAGS) expect(entitled(enforced(ent), flag)).toBe(true);
@@ -260,6 +280,9 @@ describe('missingPlanKeys', () => {
     const plan = enforced({ 'owlette.machines': '1', 'owlette.sites': 'lots', 'owlette.control': '0' });
     expect(missingPlanKeys(plan)).toEqual([
       'owlette.sites',
+      'owlette.deployments',
+      'owlette.swoop',
+      'owlette.hoot',
       'owlette.roost',
       'owlette.talons',
       'owlette.webhooks',
@@ -275,7 +298,6 @@ describe('planTier', () => {
     standing,
     ent,
   });
-  const CORE = { ...PRO.ent, 'owlette.roost': '0', 'owlette.talons': '0', 'owlette.webhooks': '0', 'owlette.api_keys': '0' };
 
   it('is null while plans are not enforced', () => {
     expect(planTier({ enforced: false, reason: 'superadmin' })).toBeNull();
@@ -296,7 +318,7 @@ describe('planTier', () => {
 
   it.each(['active', 'past_due'])('reads %s from the entitlements: roost is pro, control is core, else free', (standing) => {
     expect(planTier(withStanding(standing, PRO.ent))).toBe('pro');
-    expect(planTier(withStanding(standing, CORE))).toBe('core');
+    expect(planTier(withStanding(standing, CORE.ent))).toBe('core');
     expect(planTier(withStanding(standing, FREE.ent))).toBe('free');
   });
 
@@ -362,6 +384,16 @@ describe('requireEntitlement', () => {
   it.each([['trial', TRIAL], ['pro', PRO]])('lets a %s payer through', async (_label, answer) => {
     mockGetEntitlements.mockResolvedValue(answer);
     for (const flag of FLAGS) expect(await requireEntitlement('s1', flag)).toBeNull();
+  });
+
+  it('lets a core payer through on control only, refusing deployments, swoop and hoot by name', async () => {
+    mockGetEntitlements.mockResolvedValue(CORE);
+    expect(await requireEntitlement('s1', 'owlette.control')).toBeNull();
+    for (const flag of ['owlette.deployments', 'owlette.swoop', 'owlette.hoot'] as const) {
+      const res = await requireEntitlement('s1', flag);
+      expect(res?.status).toBe(402);
+      expect(await res?.json()).toMatchObject({ entitlement: flag, detail: PLAN_REQUIRED_DETAIL[flag] });
+    }
   });
 
   it('lets an ownerless site through', async () => {

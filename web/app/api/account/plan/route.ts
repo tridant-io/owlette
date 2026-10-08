@@ -1,7 +1,7 @@
 /**
  * GET /api/account/plan — the signed-in user's own plan, as the payer for the
- * sites they own (plan.md decision 1): tier, standing, limits, flags and this
- * month's active machines.
+ * sites they own (plan.md decision 1): tier, standing, limits, flags, this
+ * month's active machines, and whether they own a site to pay for.
  *
  * session or the user's own firebase id token; never an agent or an api key.
  * with plans not enforced it answers `enforced: false` with the reason, every
@@ -12,6 +12,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { ApiAuthError, requireSessionOrIdToken } from '@/lib/apiAuth.server';
 import { problemForbidden, problemFromError, problemUnauthorized } from '@/lib/apiErrors';
+import { getAdminDb } from '@/lib/firebase-admin';
 import {
   entitled,
   missingPlanKeys,
@@ -44,6 +45,9 @@ export const GET = withRateLimit(
         limits: { machines: wireLimit(plan, 'owlette.machines'), sites: wireLimit(plan, 'owlette.sites') },
         flags: {
           control: entitled(plan, 'owlette.control'),
+          deployments: entitled(plan, 'owlette.deployments'),
+          swoop: entitled(plan, 'owlette.swoop'),
+          hoot: entitled(plan, 'owlette.hoot'),
           roost: entitled(plan, 'owlette.roost'),
           talons: entitled(plan, 'owlette.talons'),
           webhooks: entitled(plan, 'owlette.webhooks'),
@@ -64,7 +68,12 @@ export const GET = withRateLimit(
       // the calendar month in UTC until tridant id sends the subscription period (tridant-id#76).
       const now = new Date();
       const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-      body.activeMachinesThisMonth = await activeMachinesBetween(uid, monthStart, now);
+      const [activeMachines, owned] = await Promise.all([
+        activeMachinesBetween(uid, monthStart, now),
+        getAdminDb().collection('sites').where('owner', '==', uid).limit(1).select().get(),
+      ]);
+      body.activeMachinesThisMonth = activeMachines;
+      body.ownsSites = !owned.empty;
       return NextResponse.json(body);
     } catch (error) {
       if (error instanceof ApiAuthError) {

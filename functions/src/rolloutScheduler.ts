@@ -58,7 +58,7 @@ import {
  */
 const MAX_CLAIMS_PER_SWEEP = 25;
 
-// a scheduled rollout is a roost deploy (decision 8) and a deployment (decision 7).
+// a scheduled rollout is a roost deploy (decision 8) that queues machine commands, which are control (decision 7).
 const ROLLOUT_PLAN_FLAGS: readonly PlanSnapshotFlag[] = ['roost', 'control'];
 
 /** Identifies one `sites/{siteId}/roosts/{roostId}/rollouts/{versionId}` doc. */

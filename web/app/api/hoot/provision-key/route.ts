@@ -80,7 +80,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       );
     }
 
-    const planRefusal = await requireEntitlement(siteId, 'owlette.control');
+    const planRefusal = await requireEntitlement(siteId, 'owlette.hoot');
     if (planRefusal) return planRefusal;
 
     const commandId = `provision_cortex_key_${Date.now()}`;

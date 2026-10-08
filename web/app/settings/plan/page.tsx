@@ -30,9 +30,12 @@ const PLAN_NAMES: Record<PlanTier, string> = {
 };
 
 const FLAG_LABELS: Record<keyof PlanResponse['flags'], string> = {
-  control: 'remote control, deploy, swoop, hoot and alerts',
-  roost: 'roost',
+  control: 'remote control, process control, display layouts, screenshots and email alerts',
+  deployments: 'deployments',
+  swoop: 'swoop',
+  hoot: 'hoot',
   talons: 'talons',
+  roost: 'roost',
   webhooks: 'webhooks',
   api_keys: 'API keys',
 };
@@ -41,12 +44,12 @@ const UPGRADES = [
   {
     tier: 'core',
     price: perMachineMonth(PRICING_FACTS.core.list),
-    detail: 'remote control, deploy, swoop, hoot and alerts.',
+    detail: 'remote control, process control, display layouts, screenshots and email alerts.',
   },
   {
     tier: 'pro',
     price: perMachineMonth(PRICING_FACTS.pro.list),
-    detail: `everything in core, plus roost, talons, webhooks and API keys. ${PRICING_FACTS.pro.minMachines}-machine minimum.`,
+    detail: `everything in core, plus deployments, swoop, hoot, talons, roost, webhooks, API keys and unlimited sites. ${PRICING_FACTS.pro.minMachines}-machine minimum.`,
   },
 ] as const;
 
@@ -84,7 +87,8 @@ function PlanDetails({ plan }: { plan: PlanResponse }) {
               </p>
             )}
           </div>
-          {plan.standing && (
+          {/* an unmapped account reads `expired`, which on free would look like a lapsed plan */}
+          {plan.standing && plan.plan !== 'free' && (
             <Badge variant="outline" className="mt-0.5">
               {plan.standing.replace(/_/g, ' ')}
             </Badge>

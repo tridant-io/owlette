@@ -16,8 +16,26 @@ jest.mock('@/hooks/usePlan', () => ({
   usePlan: () => ({ plan: mockPlan, loading: false, error: null, refresh: jest.fn() }),
 }));
 
-const NO_FLAGS = { control: false, roost: false, talons: false, webhooks: false, api_keys: false };
-const ALL_FLAGS = { control: true, roost: true, talons: true, webhooks: true, api_keys: true };
+const NO_FLAGS = {
+  control: false,
+  deployments: false,
+  swoop: false,
+  hoot: false,
+  roost: false,
+  talons: false,
+  webhooks: false,
+  api_keys: false,
+};
+const ALL_FLAGS = {
+  control: true,
+  deployments: true,
+  swoop: true,
+  hoot: true,
+  roost: true,
+  talons: true,
+  webhooks: true,
+  api_keys: true,
+};
 
 const FREE: PlanResponse = {
   enforced: true,
@@ -80,6 +98,19 @@ describe('UpgradeGate', () => {
 
     renderGate({ flag: 'webhooks' });
     expect(screen.getByTestId('upgrade-gate')).toHaveTextContent("your plan doesn't include webhooks");
+  });
+
+  it.each([
+    ['deployments', 'deployments'],
+    ['swoop', 'swoop'],
+    ['hoot', 'hoot'],
+  ] as const)('gates %s on core, naming pro as the upgrade', (flag, name) => {
+    mockPlan = CORE;
+    renderGate({ flag });
+
+    expect(screen.queryByRole('button', { name: 'create roost' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('upgrade-gate')).toHaveTextContent(`your plan doesn't include ${name}`);
+    expect(screen.getByTestId('upgrade-gate')).toHaveTextContent('upgrade to pro to use it.');
   });
 
   it('names core as the upgrade for remote control', () => {

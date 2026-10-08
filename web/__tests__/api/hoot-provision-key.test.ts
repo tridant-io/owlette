@@ -9,7 +9,7 @@
  * there — before the poll, and regardless of how the poll ends. The key must
  * never appear in the row.
  *
- * A payer without remote control is refused with 402 plan_required before the
+ * A payer without hoot is refused with 402 plan_required before the
  * queue write, so nothing is queued or audited.
  */
 
@@ -147,13 +147,13 @@ beforeEach(() => {
 describe('POST /api/hoot/provision-key — the payer plan', () => {
   it('refuses with 402 plan_required and queues nothing', async () => {
     mockRequireEntitlement.mockResolvedValue(
-      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.control'], 'owlette.control'),
+      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.hoot'], 'owlette.hoot'),
     );
 
     const res = await POST(request());
     expect(res.status).toBe(402);
-    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.control' });
-    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.hoot' });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
     expect(mockPendingSet).not.toHaveBeenCalled();
     expect(emitMutation).not.toHaveBeenCalled();
   });
@@ -174,7 +174,7 @@ describe('POST /api/hoot/provision-key — the payer plan', () => {
 
     const res = await POST(request());
     expect(res.status).toBe(200);
-    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
     expect(mockPendingSet).toHaveBeenCalledTimes(1);
   });
 });

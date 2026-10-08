@@ -2,8 +2,9 @@
 /**
  * @jest-environment jsdom
  *
- * TrialBanner: hidden while the plan loads, with plans off and on core or pro;
- * a pro trial and owlette free each get one line linking to /settings/plan. A
+ * TrialBanner: hidden while the plan loads, with plans off, on core or pro, and
+ * for a user who owns no site; a pro trial and owlette free each get one line
+ * linking to /settings/plan. A
  * dismissal holds for seven days on the shared device-prefs doc, and nothing
  * shows until that stored value has been read.
  */
@@ -40,8 +41,26 @@ jest.mock('@/hooks/useDevicePrefFlag', () => {
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const NO_FLAGS = { control: false, roost: false, talons: false, webhooks: false, api_keys: false };
-const ALL_FLAGS = { control: true, roost: true, talons: true, webhooks: true, api_keys: true };
+const NO_FLAGS = {
+  control: false,
+  deployments: false,
+  swoop: false,
+  hoot: false,
+  roost: false,
+  talons: false,
+  webhooks: false,
+  api_keys: false,
+};
+const ALL_FLAGS = {
+  control: true,
+  deployments: true,
+  swoop: true,
+  hoot: true,
+  roost: true,
+  talons: true,
+  webhooks: true,
+  api_keys: true,
+};
 
 const FREE: PlanResponse = {
   enforced: true,
@@ -50,6 +69,7 @@ const FREE: PlanResponse = {
   limits: { machines: 1, sites: 1 },
   flags: NO_FLAGS,
   activeMachinesThisMonth: 1,
+  ownsSites: true,
 };
 const TRIAL: PlanResponse = { ...FREE, plan: 'trial', standing: 'trialing', flags: ALL_FLAGS };
 const CORE: PlanResponse = { ...FREE, plan: 'core', standing: 'active', flags: { ...NO_FLAGS, control: true } };
@@ -79,6 +99,17 @@ describe('TrialBanner', () => {
     ['on pro', PRO],
   ])('renders nothing when %s, and reads no dismissal', (_label, plan) => {
     mockPlan = plan;
+    const { container } = render(<TrialBanner />);
+
+    expect(container).toBeEmptyDOMElement();
+    expect(mockUseDevicePrefNumber).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['owlette free', FREE],
+    ['a pro trial', TRIAL],
+  ])('renders nothing on %s for a user who owns no site, whose sites run on their owners plans', (_label, plan) => {
+    mockPlan = { ...plan, ownsSites: false };
     const { container } = render(<TrialBanner />);
 
     expect(container).toBeEmptyDOMElement();

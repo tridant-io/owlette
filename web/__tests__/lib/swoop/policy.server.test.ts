@@ -123,13 +123,14 @@ describe('loadSwoopSettings and the payer plan', () => {
     TRIDANT_LICENSE_KEY: 'test-license-key',
   };
 
-  function payerControl(value: '0' | '1') {
+  /** a core payer has control but not swoop; pro has both. */
+  function payerSwoop(value: '0' | '1') {
     mockGetEntitlements.mockResolvedValue({
       ok: true,
       resolved: true,
       standing: 'active',
       inGoodStanding: true,
-      ent: { 'owlette.control': value },
+      ent: { 'owlette.control': '1', 'owlette.swoop': value },
       epoch: 1,
     });
   }
@@ -144,8 +145,8 @@ describe('loadSwoopSettings and the payer plan', () => {
     for (const key of Object.keys(PLAN_ENV)) delete process.env[key];
   });
 
-  it('reports swoop off for a payer without remote control, and keeps the stored switch', async () => {
-    payerControl('0');
+  it('reports swoop off for a core payer, and keeps the stored switch', async () => {
+    payerSwoop('0');
 
     expect(await loadSwoopSettings(SITE)).toEqual({
       enabled: false,
@@ -158,8 +159,8 @@ describe('loadSwoopSettings and the payer plan', () => {
     expect(mockDocs.get(SETTINGS_PATH)).toMatchObject({ enabled: true });
   });
 
-  it('leaves swoop on for a payer with remote control', async () => {
-    payerControl('1');
+  it('leaves swoop on for a pro payer', async () => {
+    payerSwoop('1');
     expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
   });
 

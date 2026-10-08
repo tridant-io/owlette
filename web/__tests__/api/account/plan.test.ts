@@ -3,8 +3,8 @@
 /**
  * GET /api/account/plan — the signed-in user's own plan. pins the session-only
  * auth (agents refused), the unenforced answer that reads no usage, the derived
- * tier, the wire limits (null for unrestricted), the keys_missing reason, and
- * the calendar-month usage window.
+ * tier, the wire limits (null for unrestricted), the keys_missing reason, the
+ * calendar-month usage window, and whether the user owns a site.
  */
 
 import { enforcePlans, stopEnforcingPlans } from '../helpers/planEnforcement';
@@ -39,12 +39,29 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
 }));
 
 let mockUsers: Record<string, Record<string, unknown>> = {};
+/** the owner of every site that exists. */
+let mockSiteOwners: string[] = [];
+const mockSitesQuery = jest.fn();
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminAuth: jest.fn(),
   getAdminDb: () => ({
     collection: (name: string) => {
-      if (name !== 'users') throw new Error(`unexpected collection ${name}`);
-      return { doc: (uid: string) => ({ get: async () => ({ data: () => mockUsers[uid] }) }) };
+      if (name === 'users') {
+        return { doc: (uid: string) => ({ get: async () => ({ data: () => mockUsers[uid] }) }) };
+      }
+      if (name !== 'sites') throw new Error(`unexpected collection ${name}`);
+      return {
+        where: (field: string, op: string, value: string) => ({
+          limit: (n: number) => ({
+            select: () => ({
+              get: async () => {
+                mockSitesQuery(field, op, value, n);
+                return { empty: !mockSiteOwners.includes(value) };
+              },
+            }),
+          }),
+        }),
+      };
     },
   }),
 }));
@@ -62,6 +79,9 @@ const ALL_KEYS = (machines: string, sites: string, flag: '0' | '1') => ({
   'owlette.machines': machines,
   'owlette.sites': sites,
   'owlette.control': flag,
+  'owlette.deployments': flag,
+  'owlette.swoop': flag,
+  'owlette.hoot': flag,
   'owlette.roost': flag,
   'owlette.talons': flag,
   'owlette.webhooks': flag,
@@ -77,10 +97,28 @@ const answer = (resolved: boolean, standing: string, ent: Record<string, string>
   epoch: 1,
 });
 
-const UNRESTRICTED = {
-  limits: { machines: null, sites: null },
-  flags: { control: true, roost: true, talons: true, webhooks: true, api_keys: true },
+const ALL_FLAGS = {
+  control: true,
+  deployments: true,
+  swoop: true,
+  hoot: true,
+  roost: true,
+  talons: true,
+  webhooks: true,
+  api_keys: true,
 };
+const NO_FLAGS = {
+  control: false,
+  deployments: false,
+  swoop: false,
+  hoot: false,
+  roost: false,
+  talons: false,
+  webhooks: false,
+  api_keys: false,
+};
+
+const UNRESTRICTED = { limits: { machines: null, sites: null }, flags: ALL_FLAGS };
 
 async function getPlan() {
   return parseResponse(await GET(createMockRequest('/api/account/plan')));
@@ -90,6 +128,8 @@ beforeEach(() => {
   __resetForTests();
   jest.useFakeTimers({ now: new Date('2026-10-07T12:00:00Z') });
   mockUsers = { u1: { role: 'user' }, root: { role: 'superadmin' } };
+  mockSiteOwners = ['u1'];
+  mockSitesQuery.mockClear();
   mockRequireSessionOrIdToken.mockResolvedValue('u1');
   mockGetEntitlements.mockResolvedValue(answer(false, 'expired', ALL_KEYS('1', '1', '0')));
   mockActiveMachinesBetween.mockResolvedValue(1);
@@ -138,6 +178,7 @@ describe('GET /api/account/plan', () => {
     });
     expect(mockGetEntitlements).not.toHaveBeenCalled();
     expect(mockActiveMachinesBetween).not.toHaveBeenCalled();
+    expect(mockSitesQuery).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -151,10 +192,12 @@ describe('GET /api/account/plan', () => {
     const res = await getPlan();
 
     expect(res.body).toMatchObject({ enforced: false, reason, plan: null, ...UNRESTRICTED });
+    expect(res.body).not.toHaveProperty('ownsSites');
     expect(mockActiveMachinesBetween).not.toHaveBeenCalled();
+    expect(mockSitesQuery).not.toHaveBeenCalled();
   });
 
-  it('answers an unmapped payer as free, with this month of usage', async () => {
+  it('answers an unmapped payer as free, with this month of usage and the sites it owns', async () => {
     mockActiveMachinesBetween.mockResolvedValue(2);
 
     const res = await getPlan();
@@ -165,14 +208,40 @@ describe('GET /api/account/plan', () => {
       plan: 'free',
       standing: 'expired',
       limits: { machines: 1, sites: 1 },
-      flags: { control: false, roost: false, talons: false, webhooks: false, api_keys: false },
+      flags: NO_FLAGS,
       activeMachinesThisMonth: 2,
+      ownsSites: true,
     });
     expect(mockActiveMachinesBetween).toHaveBeenCalledWith(
       'u1',
       new Date('2026-10-01T00:00:00Z'),
       new Date('2026-10-07T12:00:00Z'),
     );
+    expect(mockSitesQuery).toHaveBeenCalledWith('owner', '==', 'u1', 1);
+  });
+
+  it('answers ownsSites false for a user who owns no site, a member of others only', async () => {
+    mockSiteOwners = ['someone-else'];
+
+    const res = await getPlan();
+
+    expect(res.body).toMatchObject({ enforced: true, plan: 'free', ownsSites: false });
+  });
+
+  it('answers core: control with unlimited machines on one site, without the pro flags', async () => {
+    mockGetEntitlements.mockResolvedValue(
+      answer(true, 'active', { ...ALL_KEYS('unlimited', '1', '0'), 'owlette.control': '1' }),
+    );
+
+    const res = await getPlan();
+
+    expect(res.body).toMatchObject({
+      enforced: true,
+      plan: 'core',
+      limits: { machines: null, sites: 1 },
+      flags: { ...NO_FLAGS, control: true },
+    });
+    expect(res.body).not.toHaveProperty('reason');
   });
 
   it('answers a trial with unrestricted limits as null', async () => {
@@ -202,10 +271,18 @@ describe('GET /api/account/plan', () => {
     expect(res.body).toMatchObject({
       enforced: true,
       reason: 'keys_missing',
-      missingKeys: ['owlette.roost', 'owlette.talons', 'owlette.webhooks', 'owlette.api_keys'],
+      missingKeys: [
+        'owlette.deployments',
+        'owlette.swoop',
+        'owlette.hoot',
+        'owlette.roost',
+        'owlette.talons',
+        'owlette.webhooks',
+        'owlette.api_keys',
+      ],
       plan: 'pro',
       limits: { machines: 5, sites: 1 },
-      flags: { control: true, roost: true, talons: true, webhooks: true, api_keys: true },
+      flags: ALL_FLAGS,
     });
   });
 

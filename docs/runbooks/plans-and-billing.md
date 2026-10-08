@@ -75,18 +75,19 @@ staging key against production answers `rejected`, which fails open.
 Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
 
 - [ ] **tridant-id #75 and #76 shipped on staging.** These cover the free entitlements
-  (`owlette.machines`, `owlette.sites`, `owlette.control`, `owlette.roost`, `owlette.talons`,
-  `owlette.webhooks`, `owlette.api_keys`), S2S trial start, metered prices, `POST /v1/usage`, and the
-  period in the entitlement answer. Verify with an unmapped probe subject, using the key from the
-  next step held in `$TRIDANT_LICENSE_KEY` (never echo it):
+  (`owlette.machines`, `owlette.sites`, `owlette.control`, `owlette.deployments`, `owlette.swoop`,
+  `owlette.hoot`, `owlette.roost`, `owlette.talons`, `owlette.webhooks`, `owlette.api_keys`), S2S
+  trial start, metered prices, `POST /v1/usage`, and the period in the entitlement answer. Verify
+  with an unmapped probe subject, using the key from the next step held in `$TRIDANT_LICENSE_KEY`
+  (never echo it):
 
   ```bash
   curl -s -H "Authorization: Bearer $TRIDANT_LICENSE_KEY" \
     "https://api-staging.tridant.io/v1/licenses/owlette:runbook-probe/entitlements?app=owlette"
   ```
 
-  Expect `200`, `resolved: false`, `standing: "expired"`, and an `ent` holding all seven keys:
-  machines and sites `1`, the five flags `0`. Any key absent here shows up later as `keys_missing`.
+  Expect `200`, `resolved: false`, `standing: "expired"`, and an `ent` holding all ten keys:
+  machines and sites `1`, the eight flags `0`. Any key absent here shows up later as `keys_missing`.
 - [ ] **License key set on railway-dev.** Create a `license.read` key in admin-staging.tridant.io.
   In the Railway UI (service `owlette-dev`, environment `dev`), set it as `TRIDANT_LICENSE_KEY`, and
   set `TRIDANT_API_URL=https://api-staging.tridant.io`. Put the secret in the UI, never on a command

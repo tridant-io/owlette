@@ -125,11 +125,13 @@ jest.mock('@/lib/actions/executeMachineCommand.server', () => {
     status: number;
     code: string;
     detail: string;
-    constructor(status: number, code: string, detail: string) {
+    entitlement?: string;
+    constructor(status: number, code: string, detail: string, entitlement?: string) {
       super(detail);
       this.status = status;
       this.code = code;
       this.detail = detail;
+      this.entitlement = entitlement;
     }
   }
   return {
@@ -865,7 +867,12 @@ describe.each([
 
   it('returns 402 plan_required when the payer lacks owlette.control', async () => {
     mockExecuteMachineCommand.mockRejectedValueOnce(
-      new FakeExecuteMachineCommandError(402, 'plan_required', "your plan doesn't include remote control. upgrade to continue."),
+      new FakeExecuteMachineCommandError(
+        402,
+        'plan_required',
+        "your plan doesn't include remote control. upgrade to continue.",
+        'owlette.control',
+      ),
     );
     const res = await handler(
       jsonReq(`${urlDetail()}/${verb}`, 'POST', {}, { 'idempotency-key': `${verb}-k402` }),

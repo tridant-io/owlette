@@ -16,7 +16,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { stampCommand } from '@/lib/commandLifecycle';
 import { emitMutation } from '@/lib/auditLogClient';
 import type { Actor } from '@/lib/capabilities';
-import { PLAN_REQUIRED_DETAIL, requireEntitlement } from '@/lib/plan.server';
+import { PLAN_REQUIRED_DETAIL, requireEntitlement, type PlanFlag } from '@/lib/plan.server';
 import { FieldValue } from 'firebase-admin/firestore';
 
 /**
@@ -45,8 +45,8 @@ export const ALLOWED_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'update_owlette',
 ]);
 
-// the types a payer without `owlette.control` may still queue (plan.md decision 7):
-// every plan keeps updating, and anything already running can always be stopped.
+// the types every plan may queue (plan.md decision 7): every plan keeps
+// updating, and anything already running can always be stopped.
 // dismissing a pending reboot also resets the relaunch counters crash-restart needs.
 const PLAN_FREE_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'update_owlette',
@@ -55,6 +55,11 @@ const PLAN_FREE_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'stop_live_view',
   'cancel_mcp_tool',
 ]);
+
+/** the plan key a gated type needs: a tool call is hoot's, every other type is control. */
+function commandPlanKey(cmdType: string): PlanFlag {
+  return cmdType === 'mcp_tool_call' ? 'owlette.hoot' : 'owlette.control';
+}
 
 export interface ExecuteMachineCommandInput {
   /** Command type — must be in `ALLOWED_COMMAND_TYPES`. */
@@ -90,12 +95,15 @@ export class ExecuteMachineCommandError extends Error {
   readonly status: number;
   readonly code: string;
   readonly detail: string;
-  constructor(status: number, code: string, detail: string) {
+  /** set on a `plan_required` refusal: the plan key it lacks. */
+  readonly entitlement?: PlanFlag;
+  constructor(status: number, code: string, detail: string, entitlement?: PlanFlag) {
     super(detail);
     this.name = 'ExecuteMachineCommandError';
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.entitlement = entitlement;
   }
 }
 
@@ -171,12 +179,11 @@ export async function executeMachineCommand(
       'field `payload` must be an object',
     );
   }
-  if (!PLAN_FREE_COMMAND_TYPES.has(cmdType) && (await requireEntitlement(ctx.siteId, 'owlette.control'))) {
-    throw new ExecuteMachineCommandError(
-      402,
-      'plan_required',
-      PLAN_REQUIRED_DETAIL['owlette.control'],
-    );
+  if (!PLAN_FREE_COMMAND_TYPES.has(cmdType)) {
+    const planKey = commandPlanKey(cmdType);
+    if (await requireEntitlement(ctx.siteId, planKey)) {
+      throw new ExecuteMachineCommandError(402, 'plan_required', PLAN_REQUIRED_DETAIL[planKey], planKey);
+    }
   }
 
   const safePayload = stripReservedKeys(input.payload);

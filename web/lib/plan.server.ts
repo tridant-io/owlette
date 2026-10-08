@@ -21,6 +21,9 @@ import { getEntitlements } from '@/lib/tridantEntitlements.server';
 export const PLAN_LIMITS = ['owlette.machines', 'owlette.sites'] as const;
 export const PLAN_FLAGS = [
   'owlette.control',
+  'owlette.deployments',
+  'owlette.swoop',
+  'owlette.hoot',
   'owlette.roost',
   'owlette.talons',
   'owlette.webhooks',
@@ -57,16 +60,30 @@ export interface PlanResponse {
   /** why plans are off; when enforced, `keys_missing` while tridant sends no readable value for `missingKeys`. */
   reason?: PlanOffReason | 'keys_missing';
   missingKeys?: PlanKey[];
+  /** whether the user owns a site, so pays for one; sent only when enforced. */
+  ownsSites?: boolean;
   plan: PlanTier | null;
   standing: string | null;
   /** null is unrestricted. */
   limits: { machines: number | null; sites: number | null };
-  flags: { control: boolean; roost: boolean; talons: boolean; webhooks: boolean; api_keys: boolean };
+  flags: {
+    control: boolean;
+    deployments: boolean;
+    swoop: boolean;
+    hoot: boolean;
+    roost: boolean;
+    talons: boolean;
+    webhooks: boolean;
+    api_keys: boolean;
+  };
   activeMachinesThisMonth: number | null;
 }
 
 export const PLAN_REQUIRED_DETAIL: Record<PlanFlag, string> = {
   'owlette.control': "your plan doesn't include remote control. upgrade to continue.",
+  'owlette.deployments': "your plan doesn't include deployments. upgrade to continue.",
+  'owlette.swoop': "your plan doesn't include swoop. upgrade to continue.",
+  'owlette.hoot': "your plan doesn't include hoot. upgrade to continue.",
   'owlette.roost': "your plan doesn't include roost. upgrade to continue.",
   'owlette.talons': "your plan doesn't include talons. upgrade to continue.",
   'owlette.webhooks': "your plan doesn't include webhooks. upgrade to continue.",

@@ -113,7 +113,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     if (ownerCheck) return ownerCheck;
 
     // ahead of the append: a refused send must leave no prompt behind to answer later.
-    const planRefusal = await requireEntitlement(conversation.siteId, 'owlette.control');
+    const planRefusal = await requireEntitlement(conversation.siteId, 'owlette.hoot');
     if (planRefusal) return planRefusal;
 
     return withIdempotency(

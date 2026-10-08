@@ -26,6 +26,12 @@ export const PRO_ENTITLEMENTS = {
   epoch: 1,
 };
 
+/** core: remote control on one site; deployments, swoop, hoot and the rest of pro withheld. */
+export const CORE_ENTITLEMENTS = {
+  ...PRO_ENTITLEMENTS,
+  ent: { ...flags('0'), 'owlette.control': '1', 'owlette.machines': 'unlimited', 'owlette.sites': '1' },
+};
+
 export function enforcePlans(): void {
   process.env.PLAN_ENFORCEMENT = 'on';
   process.env.TRIDANT_API_URL = 'https://api-staging.tridant.io';

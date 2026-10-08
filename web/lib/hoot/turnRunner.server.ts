@@ -484,11 +484,11 @@ export function startTurn(
       // the dashboard route refuses with a 402 before it gets here; this is the
       // gate for follow-up and talon turns, which have no response to refuse
       // with. ahead of the one-shot approval claim, so a refused turn claims nothing.
-      if (await requireEntitlement(params.siteId, 'owlette.control')) {
+      if (await requireEntitlement(params.siteId, 'owlette.hoot')) {
         console.warn(
-          `[hoot] turn refused in chat ${sanitizeForLog(chatId)}: the site's plan does not include owlette.control`,
+          `[hoot] turn refused in chat ${sanitizeForLog(chatId)}: the site's plan does not include owlette.hoot`,
         );
-        throw new Error(PLAN_REQUIRED_DETAIL['owlette.control']);
+        throw new Error(PLAN_REQUIRED_DETAIL['owlette.hoot']);
       }
 
       const resolveLostResult = buildResolveLostResult(db, params.siteId, params.priorTurn);

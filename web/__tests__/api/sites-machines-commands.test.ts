@@ -878,7 +878,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
         resolved: false,
         standing: 'expired',
         inGoodStanding: false,
-        ent: { 'owlette.control': '0' },
+        ent: { 'owlette.control': '0', 'owlette.hoot': '0' },
         epoch: 0,
       });
     });
@@ -921,6 +921,24 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
         (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
       );
       expect(mergeCalls).toHaveLength(0);
+    });
+
+    it('402 plan_required naming owlette.hoot for mcp_tool_call, the hoot tool path', async () => {
+      queueIdemOnly();
+      asMemberOwner();
+      const req = createMockRequest(
+        `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+        {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'idem-free-mcp' },
+          body: { type: 'mcp_tool_call', params: { tool_name: 'get_system_info' } },
+        },
+      );
+      const res = await commandsPOST(req, {
+        params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
+      });
+      expect(res.status).toBe(402);
+      expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.hoot' });
     });
 
     it('202 for update_owlette, which every plan keeps', async () => {

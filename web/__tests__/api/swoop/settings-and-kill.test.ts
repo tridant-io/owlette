@@ -597,7 +597,7 @@ describe('POST swoop/kill', () => {
     expect(mockKill).toHaveBeenCalled();
   });
 
-  it('kills on a plan without owlette.control, which refuses starting a session', async () => {
+  it('kills on a plan without owlette.swoop, which refuses starting a session', async () => {
     const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
     const savedEnv = ENV_KEYS.map((key) => process.env[key]);
     process.env.PLAN_ENFORCEMENT = 'on';
@@ -608,7 +608,7 @@ describe('POST swoop/kill', () => {
       resolved: false,
       standing: 'expired',
       inGoodStanding: false,
-      ent: { 'owlette.control': '0' },
+      ent: { 'owlette.control': '0', 'owlette.swoop': '0' },
       epoch: 0,
     });
     staged.set(`sites/${SITE}/settings/swoop`, { enabled: true });

@@ -17,7 +17,7 @@ owlette is in beta, and every feature is free while it lasts. nothing on this pa
 after the beta there are three plans:
 
 - **owlette free** covers 1 machine and 1 site, with live status, metrics, crash-restart and updates. remote control, deployments, swoop, hoot, alerts and the pro features are not included.
-- **core** and **pro** are the paid plans, both billed per active machine per month. pro bills at least 3 machines and includes 1 TB of project storage per site. what each one includes, and the prices, are on the [pricing page](/#pricing).
+- **core** and **pro** are the paid plans, both billed per active machine per month, with unlimited machines. core adds remote control: commands, process control, display layouts, screenshots and email alerts, on 1 site. pro adds deployments, swoop, hoot, talons, roost, webhooks, API keys and unlimited sites, bills at least 3 machines and includes 1 TB of project storage per site. the full lists and the prices are on the [pricing page](/#pricing).
 
 every new account starts with a [14-day pro trial](#the-trial).
 
@@ -37,21 +37,21 @@ owlette free is for watching one machine and keeping its software running.
 
 ### what it leaves out
 
-each of these maps to one entitlement, which is what a refusal names in its `entitlement` field:
+each of these maps to one entitlement, which is what a refusal names in its `entitlement` field, and comes with the plan named beside it:
 
-| feature | entitlement |
-|---|---|
-| a second machine, counted across every site you own | `owlette.machines` |
-| a second site | `owlette.sites` |
-| remote commands: reboot, shut down, process start, stop, restart and kill, screenshots, live view, display changes | `owlette.control` |
-| software deployments | `owlette.control` |
-| [swoop](/docs/dashboard/swoop) | `owlette.control` |
-| [hoot](/docs/dashboard/hoot), autonomous hoot included | `owlette.control` |
-| alert rules, and every alert email | `owlette.control` |
-| [roost](/docs/dashboard/roost): creating roosts, uploading, publishing, deploying and rolling back | `owlette.roost` |
-| [talons](/docs/dashboard/talons): creating, editing and testing them; scheduled and event talons pause | `owlette.talons` |
-| [webhooks](/docs/api/webhooks): creating subscriptions; deliveries pause | `owlette.webhooks` |
-| [API keys](/docs/api/authentication): creating and rotating keys, signing in the CLI, and every site request made with a key | `owlette.api_keys` |
+| feature | entitlement | plan |
+|---|---|---|
+| a second machine, counted across every site you own | `owlette.machines` | core |
+| a second site | `owlette.sites` | pro |
+| remote commands: reboot, shut down, process start, stop, restart and kill, screenshots, live view, display changes | `owlette.control` | core |
+| alert rules, and every alert email | `owlette.control` | core |
+| software deployments | `owlette.deployments` | pro |
+| [swoop](/docs/dashboard/swoop) | `owlette.swoop` | pro |
+| [hoot](/docs/dashboard/hoot), its tool calls and autonomous hoot included | `owlette.hoot` | pro |
+| [roost](/docs/dashboard/roost): creating roosts, uploading, publishing, deploying and rolling back | `owlette.roost` | pro |
+| [talons](/docs/dashboard/talons): creating, editing and testing them; scheduled and event talons pause | `owlette.talons` | pro |
+| [webhooks](/docs/api/webhooks): creating subscriptions; deliveries pause | `owlette.webhooks` | pro |
+| [API keys](/docs/api/authentication): creating and rotating keys, signing in the CLI, and every site request made with a key | `owlette.api_keys` | pro |
 
 ---
 
@@ -143,7 +143,7 @@ not for a month it never came online.
 
 ### why do my scripts get a 402?
 
-API keys need a paid plan. a request made with a key answers `402 plan_required` (`entitlement: owlette.api_keys`) when the site owner's plan does not include them, and creating or rotating a key needs your own plan to. dashboard sessions are not affected. signing in the CLI needs it too: the browser says why, and the CLI reports the phrase as expired.
+API keys need pro. a request made with a key answers `402 plan_required` (`entitlement: owlette.api_keys`) when the site owner's plan does not include them, and creating or rotating a key needs your own plan to. dashboard sessions are not affected. signing in the CLI needs it too: the browser says why, and the CLI reports the phrase as expired.
 
 ### whose plan covers a site I'm a member of?
 

@@ -457,13 +457,13 @@ describe.each([
 
   it('402 plan_required before the prompt is stored or the stream starts', async () => {
     mockRequireEntitlement.mockResolvedValue(
-      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.control'], 'owlette.control'),
+      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.hoot'], 'owlette.hoot'),
     );
 
     const res = await send(sendRequest('plan1'), ctx());
     expect(res.status).toBe(402);
-    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.control' });
-    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.hoot' });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
     expect(mockAppendMessage).not.toHaveBeenCalled();
     expect(mockRunHootStream).not.toHaveBeenCalled();
     expect(mockEmitMutation).not.toHaveBeenCalled();
@@ -472,7 +472,7 @@ describe.each([
   it('streams as before with enforcement off', async () => {
     const res = await send(sendRequest('plan2'), ctx());
     expect(res.status).toBe(200);
-    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
     expect(mockRunHootStream).toHaveBeenCalledTimes(1);
   });
 });

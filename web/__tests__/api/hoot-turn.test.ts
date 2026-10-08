@@ -139,7 +139,7 @@ import type { StartTurnParams } from '@/lib/hoot/turnRunner.server';
 const { requireEntitlement: realRequireEntitlement } = jest.requireActual('@/lib/plan.server');
 
 function controlRefusal() {
-  return problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.control'], 'owlette.control');
+  return problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.hoot'], 'owlette.hoot');
 }
 
 function authedSession(): ResolvedAuth {
@@ -222,8 +222,8 @@ describe('POST /api/hoot — the payer plan', () => {
 
     const res = await TURN(turnRequest());
     expect(res.status).toBe(402);
-    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.control' });
-    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.hoot' });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
     expect(mockAcquireTurnLock).not.toHaveBeenCalled();
     expect(mockStartTurn).not.toHaveBeenCalled();
     expect(emitMutation).not.toHaveBeenCalled();
@@ -258,7 +258,7 @@ describe('POST /api/hoot — the payer plan', () => {
   it('starts the turn with enforcement off', async () => {
     const res = await TURN(turnRequest());
     expect(res.status).toBe(200);
-    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.control');
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
     expect(mockStartTurn).toHaveBeenCalledTimes(1);
   });
 });

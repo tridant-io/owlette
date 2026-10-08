@@ -139,10 +139,10 @@ export async function loadSwoopSettings(siteId: string): Promise<SwoopSiteSettin
     .doc(SWOOP_SETTINGS_DOC)
     .get();
   const settings = parseSwoopSettings(snap.exists ? snap.data() : null);
-  // a payer without remote control reads as off, so every disabled path refuses,
-  // the agent doorbell's designed 403 included. the stored switch is left alone
-  // so an upgrade brings swoop back as the site had it.
-  if (settings.enabled && (await requireEntitlement(siteId, 'owlette.control'))) {
+  // a payer without swoop reads as off, so every disabled path refuses, the
+  // agent doorbell's designed 403 included. the stored switch is left alone so
+  // an upgrade brings swoop back as the site had it.
+  if (settings.enabled && (await requireEntitlement(siteId, 'owlette.swoop'))) {
     return { ...settings, enabled: false };
   }
   return settings;

@@ -104,7 +104,7 @@ info:
     | 500  | Internal server error (`internal_error`) |
     | 503  | Service unavailable - user record or audit log unreachable (`service_unavailable`) |
 
-    Once plans apply after the beta, API keys are a paid feature: a
+    Once plans apply after the beta, API keys are a pro feature: a
     site-scoped request made with an API key answers `402 plan_required`
     (`entitlement: owlette.api_keys`) when the site owner's plan does not
     include them, reads and deletes included. Sessions are not affected. See
@@ -6439,7 +6439,8 @@ paths:
         Once plans apply after the beta, every type except `update_owlette`,
         `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view` and
         `cancel_mcp_tool` needs the site owner's plan to include remote
-        control, else 402 `plan_required` (`entitlement: owlette.control`).
+        control, else 402 `plan_required` (`entitlement: owlette.control`);
+        `mcp_tool_call` needs hoot instead (`entitlement: owlette.hoot`).
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -10248,7 +10249,7 @@ components:
                 properties:
                   entitlement:
                     type: string
-                    enum: [owlette.machines, owlette.sites, owlette.control, owlette.roost, owlette.talons, owlette.webhooks, owlette.api_keys]
+                    enum: [owlette.machines, owlette.sites, owlette.control, owlette.deployments, owlette.swoop, owlette.hoot, owlette.roost, owlette.talons, owlette.webhooks, owlette.api_keys]
                     description: The plan entitlement the request needs.
                   upgradeUrl:
                     type: string
@@ -12867,8 +12868,9 @@ components:
         plan: free
         standing: expired
         limits: { machines: 1, sites: 1 }
-        flags: { control: false, roost: false, talons: false, webhooks: false, api_keys: false }
+        flags: { control: false, deployments: false, swoop: false, hoot: false, roost: false, talons: false, webhooks: false, api_keys: false }
         activeMachinesThisMonth: 1
+        ownsSites: true
       properties:
         enforced:
           type: boolean
@@ -12883,6 +12885,9 @@ components:
           type: array
           items: { type: string }
           description: Entitlement keys treated as unrestricted because no readable value was sent.
+        ownsSites:
+          type: boolean
+          description: Whether the caller owns at least one site, and so pays for one. Sent only while plans are enforced.
         plan:
           type: string
           enum: [trial, free, core, pro]
@@ -12901,11 +12906,14 @@ components:
             sites: { type: integer, minimum: 0, nullable: true }
         flags:
           type: object
-          required: [control, roost, talons, webhooks, api_keys]
+          required: [control, deployments, swoop, hoot, roost, talons, webhooks, api_keys]
           properties:
             control:
               type: boolean
-              description: Remote control, deployments, swoop, hoot and alerts.
+              description: Remote commands, process control, display layouts, screenshots and email alerts.
+            deployments: { type: boolean }
+            swoop: { type: boolean }
+            hoot: { type: boolean }
             roost: { type: boolean }
             talons: { type: boolean }
             webhooks: { type: boolean }
