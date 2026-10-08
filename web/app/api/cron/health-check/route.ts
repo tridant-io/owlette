@@ -7,6 +7,7 @@ import { wrapEmailLayout, EMAIL_COLORS, emailTimestamp, escapeHtml, safeEmailSub
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
 import { fireWebhooks } from '@/lib/webhookSender.server';
 import { tapTalonMatcher } from '@/lib/talons/matcher.server';
+import { createPlanMemo } from '@/lib/planPause.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { publicOrigin } from '@/lib/publicOrigin.server';
 
@@ -491,10 +492,12 @@ export async function GET(request: NextRequest) {
   const resendClient = getResend();
   const baseUrl = publicOrigin(request);
   let alertsSent = 0;
+  // one plan lookup per payer for the whole run, shared by recipients, webhooks and talons
+  const planMemo = createPlanMemo();
 
   for (const plan of sendPlans) {
     try {
-      const recipients = await getSiteAlertRecipients(plan.siteId, 'healthAlerts');
+      const recipients = await getSiteAlertRecipients(plan.siteId, 'healthAlerts', planMemo);
       if (recipients.length === 0) {
         console.warn(`[cron/health-check] No recipients for site ${plan.siteId}`);
         continue;
@@ -551,7 +554,8 @@ export async function GET(request: NextRequest) {
           'machine.offline',
           {
             machine: { id: m.machineId, name: m.machineId, lastSeen: new Date(m.lastHeartbeatMs).toISOString() },
-          }
+          },
+          planMemo,
         ).catch(console.error);
 
         // Deliberately with the webhook fan-out, not the email branch:
@@ -561,7 +565,7 @@ export async function GET(request: NextRequest) {
           kind: 'event',
           eventType: 'machine_offline',
           machineId: m.machineId,
-        });
+        }, planMemo);
       }
     } catch (error) {
       console.error(`[cron/health-check] Failed to send alert for site ${plan.siteId}:`, error);
