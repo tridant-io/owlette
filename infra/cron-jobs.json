@@ -222,6 +222,30 @@
       "note": "The only route with an explicit wall-clock budget: SWEEP_BUDGET_MS is 50_000 ms (route.ts:74), with 25 claims and 25 deferral claims per sweep. A healthy sweep may use up to ~50s, so the scheduler timeout must be at least 60s or a good run gets cut off mid-flight."
     },
     {
+      "id": "cron-plan-daily",
+      "path": "/api/cron/plan-daily",
+      "method": "GET",
+      "authHeader": "X-Cron-Secret",
+      "authScheme": "raw",
+      "authEnvVar": "CRON_SECRET",
+      "schedule": "0 3 * * *",
+      "cadenceLabel": "daily at 03:00",
+      "minTimeoutSeconds": 60,
+      "environments": ["dev", "prod"],
+      "urls": {
+        "dev": "https://dev.owlette.app/api/cron/plan-daily",
+        "prod": "https://owlette.app/api/cron/plan-daily"
+      },
+      "purpose": "Pages through every site and, for each site with an owner (the payer), unions the machines whose lastHeartbeat falls in the last 26 hours (ACTIVE_WINDOW_MS, web/lib/planUsage.server.ts) into billing_usage/{payerUid}/days/{YYYY-MM-DD} as an array union. The 03:00 run stamps the previous UTC day; a billing period's active machines are the union of its days. Then writes plan_snapshot/{payerUid} = {enforced, control, roost, resolvedAt} from the plan resolver for every payer, which rolloutScheduler and distributionFanout read before writing a command, and deletes day documents older than 100 days (USAGE_RETENTION_DAYS). With PLAN_ENFORCEMENT off, every snapshot is enforced:false with control and roost true. Nothing is reported to tridant id yet.",
+      "failureMode": {
+        "silent": true,
+        "description": "Active machines are never recorded, so a billing period reads as zero active machines, or short by every day the job missed. plan_snapshot is never refreshed: a payer who lapses keeps whatever their last snapshot allowed, so scheduled rollouts and roost fan-out in Cloud Functions keep writing commands for them, and a payer who upgrades stays blocked there if their last snapshot said no. A payer with no snapshot at all is allowed. Day documents past 100 days are never pruned."
+      },
+      "detectedBy": "nothing — no status component covers this route. Read the response body: snapshots should equal payers, errors should be 0, and machines is non-zero on any fleet with a machine online in the last day.",
+      "sourceFile": "web/app/api/cron/plan-daily/route.ts",
+      "note": "Rerun-safe: the day stamp is an array union and the snapshot an overwrite, so a retry or a double registration changes nothing. Keep the 03:00 slot: the run labels its window with the previous UTC day, and the 26-hour window overlaps the previous run by two hours, so a run up to two hours late still misses nothing. Runtime scales with the fleet: one machines read per site, and with enforcement on one plan lookup per payer, ten at a time, each bounded by the 5-second tridant id timeout."
+    },
+    {
       "id": "hoot-escalation",
       "path": "/api/hoot/escalation",
       "method": "GET",
