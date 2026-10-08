@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { InteractiveBackground } from './InteractiveBackground';
 import { EYE_HALO_DAY, EYE_HALO_GRADIENT, OwletteEye } from './OwletteEye';
 import type { HeroHeadline } from '@/lib/heroHeadlines';
+import { PRICE_LINE } from '@/lib/product-facts';
 import { LICENSE_URL } from '@/lib/repoLinks';
 
 interface HeroSectionProps {
@@ -64,12 +65,12 @@ export function HeroSection({ headline }: HeroSectionProps) {
 
         {/* Platform pill row */}
         <p className="mt-6 sm:mt-8 text-xs sm:text-sm text-muted-foreground text-center hero-enter-delay-3">
-          windows, macos and linux <span className="mx-1 sm:mx-2">&middot;</span> free during beta <span className="mx-1 sm:mx-2">&middot;</span>
+          windows, macos and linux <span className="mx-1 sm:mx-2">&middot;</span> <span className="whitespace-nowrap">{PRICE_LINE}</span> <span className="mx-1 sm:mx-2">&middot;</span>
           <a
             href={LICENSE_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-foreground transition-colors"
+            className="whitespace-nowrap hover:text-foreground transition-colors"
           >
             FSL-1.1 source on github
           </a>

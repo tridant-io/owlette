@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { ArrowRight } from 'lucide-react';
+import { PRICE_LINE } from '@/lib/product-facts';
 
 export function CTASection() {
   return (
@@ -8,7 +9,7 @@ export function CTASection() {
 
       <div className="relative z-10 max-w-2xl mx-auto text-center">
         <p className="text-sm text-accent-warm font-medium mb-4 tracking-wider uppercase">
-          free during beta
+          {PRICE_LINE}
         </p>
 
         <h2 className="section-headline text-foreground mb-8">

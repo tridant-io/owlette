@@ -34,7 +34,7 @@ test.describe('landing — hero', () => {
     const pillRow = hero.locator('p', { hasText: 'windows, macos and linux' });
     await expect(pillRow).toBeVisible();
     await expect(pillRow).toContainText('windows, macos and linux');
-    await expect(pillRow).toContainText('free during beta');
+    await expect(pillRow).toContainText('free during beta, then free for 1 machine');
     await expect(pillRow).toContainText('FSL-1.1');
 
     // Static copy, so a plain text match is deterministic.

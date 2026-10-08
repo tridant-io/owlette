@@ -1,9 +1,10 @@
 /**
  * Landing — pricing regression.
  *
- * Locks the two-tier layout (core + pro): the per-machine rates, the "free during beta"
- * label, the 3-machine pro minimum and the roost storage allowance must break CI rather
- * than silently ship. The landing page is public, so this spec runs without storage state.
+ * Locks the three-tier layout (owlette free + core + pro): the free limits, the
+ * per-machine rates, the "free during beta" label, the 3-machine pro minimum, the roost
+ * storage allowance and the after-beta model must break CI rather than silently ship.
+ * The landing page is public, so this spec runs without storage state.
  */
 
 import { test, expect } from '@playwright/test';
@@ -11,7 +12,7 @@ import { test, expect } from '@playwright/test';
 test.use({ storageState: { cookies: [], origins: [] } });
 
 test.describe('landing — pricing', () => {
-  test('renders core and pro tier cards with the expected copy and CTAs', async ({ page }) => {
+  test('renders free, core and pro tier cards with the expected copy and CTAs', async ({ page }) => {
     await page.goto('/');
 
     const pricing = page.locator('section#pricing');
@@ -20,17 +21,33 @@ test.describe('landing — pricing', () => {
     await expect(
       pricing.getByRole('heading', { name: /simple, transparent pricing\./i }),
     ).toBeVisible();
+    await expect(pricing).toContainText('three tiers.');
 
-    // Two tier cards — start at the tier heading, then climb to the card
-    // shell so layout wrappers with both cards are not selected.
+    // Three tier cards — start at the tier heading, then climb to the card
+    // shell so layout wrappers with every card are not selected.
     const tierCard = (name: string) => pricing
       .getByRole('heading', { name, exact: true })
       .locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " rounded-2xl ")][1]');
+    const freeCard = tierCard('owlette free');
     const coreCard = tierCard('core');
     const proCard = tierCard('pro');
 
+    await expect(freeCard).toBeVisible();
     await expect(coreCard).toBeVisible();
     await expect(proCard).toBeVisible();
+
+    // Free card — 1 machine and 1 site, monitoring only, free after beta too.
+    await expect(freeCard).toContainText('after beta, too');
+    await expect(freeCard).toContainText('1 machine and 1 site');
+    await expect(freeCard).toContainText('live status & metrics');
+    await expect(freeCard).toContainText('crash detection & auto-restart');
+    await expect(freeCard).toContainText('owlette updates');
+    await expect(freeCard).not.toContainText('/machine/month');
+    await expect(freeCard).not.toContainText('process control');
+    await expect(freeCard).not.toContainText('alerts');
+    await expect(freeCard).not.toContainText('deployment');
+    await expect(freeCard).not.toContainText('swoop');
+    await expect(freeCard).not.toContainText('hoot');
 
     // Core card — $20 per machine per month, free during beta, $10 founders rate.
     await expect(coreCard).toContainText('$20');
@@ -80,8 +97,15 @@ test.describe('landing — pricing', () => {
     await expect(proCard).toContainText('everything in core, plus:');
     await expect(coreCard).not.toContainText('everything in core, plus:');
 
-    // Both cards CTA → /register.
+    // Every card CTA → /register.
+    await expect(freeCard.getByRole('link', { name: 'get started', exact: true })).toHaveAttribute('href', '/register');
     await expect(coreCard.getByRole('link', { name: 'get started', exact: true })).toHaveAttribute('href', '/register');
     await expect(proCard.getByRole('link', { name: 'get started', exact: true })).toHaveAttribute('href', '/register');
+
+    // The after-beta model — trial, fallback to free, per-active-machine billing.
+    await expect(pricing).toContainText('after beta, every account starts with a 14-day pro trial, no card.');
+    await expect(pricing).toContainText('falls back to owlette free');
+    await expect(pricing).toContainText('billed per active machine per month.');
+    await expect(pricing).toContainText('a machine counts if it was online at any point in the billing period.');
   });
 });
