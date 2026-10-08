@@ -19,6 +19,7 @@ export const ProblemType = {
   PayloadTooLarge: 'https://owlette.app/problems/payload-too-large',
   RateLimited: 'https://owlette.app/problems/rate-limited',
   QuotaExceeded: 'https://owlette.app/problems/quota-exceeded',
+  PlanRequired: 'https://owlette.app/problems/plan-required',
   Internal: 'https://owlette.app/problems/internal-error',
   ServiceUnavailable: 'https://owlette.app/problems/service-unavailable',
 } as const;
@@ -37,6 +38,7 @@ const PROBLEM_CODES: Record<ProblemTypeUri, string> = {
   [ProblemType.PayloadTooLarge]: 'payload_too_large',
   [ProblemType.RateLimited]: 'rate_limited',
   [ProblemType.QuotaExceeded]: 'quota_exceeded',
+  [ProblemType.PlanRequired]: 'plan_required',
   [ProblemType.Internal]: 'internal_error',
   [ProblemType.ServiceUnavailable]: 'service_unavailable',
 };
@@ -199,6 +201,21 @@ export function problemQuotaExceeded(detail: string, upgradeUrl?: string): NextR
     status: 402,
     detail,
     ...(upgradeUrl ? { upgradeUrl } : {}),
+  });
+}
+
+/**
+ * the payer's plan lacks `entitlement`, a tridant key such as `owlette.control`
+ * (plan.md decision 5). agent routes never answer this: agents read `error`.
+ */
+export function problemPlanRequired(detail: string, entitlement: string): NextResponse {
+  return problem({
+    type: ProblemType.PlanRequired,
+    title: 'plan required',
+    status: 402,
+    detail,
+    entitlement,
+    upgradeUrl: '/settings/plan',
   });
 }
 
