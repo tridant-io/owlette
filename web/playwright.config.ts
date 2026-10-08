@@ -41,6 +41,8 @@ const THIRD_PARTY_CREDENTIALS = [
   // reach cloudflare (TURN credential minting) and the R2 object store.
   'CLOUDFLARE_TURN_KEY_API_TOKEN',
   'R2_S3_SECRET_ACCESS_KEY',
+  // reaches tridant id; under OWLETTE_E2E entitlements come from e2e_entitlements/{uid} instead.
+  'TRIDANT_LICENSE_KEY',
   // local tooling (terraform, wrangler, `vercel env pull`), never read by web/;
   // blanked so a developer's .env.local still starts the suite.
   'CLOUDFLARE_API_TOKEN',
