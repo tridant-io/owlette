@@ -15,7 +15,7 @@ for the agent itself — every log file on every platform, running it in the for
 **check**:
 
 1. internet connectivity on the agent machine
-2. firewall rules — outbound HTTPS (port 443) must be allowed to `owlette.app`, `dev.owlette.app`, `*.googleapis.com`, `*.firebaseio.com`, and the Cloudflare R2 endpoint used for roost chunks (usually `*.r2.cloudflarestorage.com`)
+2. firewall rules — outbound HTTPS (port 443) must be allowed to `owlette.app`, `dev.owlette.app`, `*.googleapis.com`, `*.firebaseio.com`, the Cloudflare R2 endpoint used for roost chunks (usually `*.r2.cloudflarestorage.com`), and `download.tridant.io`, where agent updates download from
 3. `service.log` for specific errors — `C:\ProgramData\Owlette\logs\` on Windows, `/Library/Application Support/Owlette/logs/` on macOS, `/var/lib/owlette/logs/` on Linux
 4. that `firebase.enabled` is `true` in `config.json`
 5. that `firebase.site_id` matches a site that exists in Firestore

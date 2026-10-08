@@ -149,3 +149,38 @@ describe('scripts/env-manifest.json — swoop keys', () => {
     expect(problems).toEqual([]);
   });
 });
+
+/** the keys installer releases need: R2 for the files, tridant id for the release log. */
+const INSTALLER_RELEASE_VARS: ReadonlyArray<{ name: string; class: string }> = [
+  { name: 'INSTALLER_R2_ACCESS_KEY_ID', class: 'secret' },
+  { name: 'INSTALLER_R2_SECRET_ACCESS_KEY', class: 'secret' },
+  { name: 'TRIDANT_RELEASE_KEY', class: 'secret' },
+  { name: 'TRIDANT_API_URL', class: 'config' },
+];
+
+describe('scripts/env-manifest.json — installer release keys', () => {
+  it('registers each on all three deploy surfaces, the keys as secret', () => {
+    const problems: string[] = [];
+    for (const { name, class: expected } of INSTALLER_RELEASE_VARS) {
+      const entry = manifest.vars[name];
+      if (!entry) {
+        problems.push(`${name} — missing from "vars", so \`sync-env.mjs check\` never reports it absent.`);
+        continue;
+      }
+      // TRIDANT_API_URL is shared with plan enforcement, which may class it must-match
+      const allowed = name === 'TRIDANT_API_URL' ? [expected, 'must-match'] : [expected];
+      if (!allowed.includes(entry.class)) {
+        problems.push(`${name} — class is "${entry.class}", expected "${expected}".`);
+      }
+      const declared = [...(entry.targets ?? [])].sort();
+      if (declared.join(',') !== [...ALL_TARGETS].sort().join(',')) {
+        problems.push(`${name} — targets are [${declared.join(', ')}], expected [${ALL_TARGETS.join(', ')}].`);
+      }
+      const extra = Object.keys(entry).filter((field) => !ALLOWED_ENTRY_FIELDS.includes(field));
+      if (extra.length > 0) {
+        problems.push(`${name} — unexpected field(s) ${extra.join(', ')}; values live in the provider.`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+});

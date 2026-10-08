@@ -1,7 +1,7 @@
 ---
 title: "installer management"
 description: "upload the agent installers for Windows, macOS and Linux, choose which version is latest, and clean up old ones. this is an internal owlette page; the latest version it sets is what every download button, the download link and fleet updates hand out."
-keywords: ["agent installer", "release", "upload installer", "publish agent", "exe", "pkg", "deb", "latest version", "roll back agent", "download link", "checksum"]
+keywords: ["agent installer", "release", "upload installer", "publish agent", "exe", "pkg", "deb", "latest version", "roll back agent", "download link", "checksum", "download.tridant.io", "tridant id", "yank"]
 ---
 
 **location**: admin panel → installers (`/admin/installers`)
@@ -21,6 +21,7 @@ the page uses the same `/api/installer/*` API as the CLI and the SDKs; see [`owl
 - **current latest version** shows the latest version with its `Latest` badge, the date it was first uploaded, and one tile per platform
 - the version table has the columns `version`, `uploaded` (the date, with "by" and the uploader's user ID under it), `release notes` (or `no notes`) and `actions`
 - under each version row, from tablet width up, the three platforms sit side by side as tiles. a phone shows the version rows only
+- under a version number, `tridant id: registered`, `tridant id: yanked` or, in red, `tridant id: failed (<error>)` with **register again**; see [tridant id](#tridant-id). a version that was never synced shows nothing
 
 a platform tile shows the platform (`windows`, `macOS (apple silicon)`, `linux (.deb)`), the file's size and `sha256` with the first 12 characters of its checksum, and two icon buttons: download, and copy link. a platform the version has no file for reads `not uploaded`.
 
@@ -37,36 +38,40 @@ the `actions` cell holds `set as latest` and a delete icon, and only on rows tha
    - Linux (`linux_x64`): `Owlette-Installer-v4.1.6.deb`
 3. check the version, add **release notes (optional)**, decide on **set as latest (all platforms)** (ticked by default), then click **upload installer**.
 
-one upload is one file. upload each platform's file under the same version number and they join one version record. uploading a platform again under the same version replaces that platform's file.
+one upload is one file. upload each platform's file under the same version number and they join one version record.
+
+**a published file never changes.** the download host caches every file as immutable for a year, so a version that already has a platform's file there refuses another upload of it (`installer_published`): bump the version instead. a version still on Firebase Storage can be uploaded again, which is how it moves to the download host, but only with the same bytes (`installer_differs` otherwise).
 
 **write the release notes on the first file.** a version's release notes, uploader and date come from its first upload, and later uploads keep them: notes typed on the second or third file are dropped.
 
 **upload every platform before promoting.** each upload with **set as latest (all platforms)** ticked makes that version latest with the files it has so far. promote after the Windows file alone and `/download?os=macos` answers `404` "no macos build in v4.1.6" until the Mac file lands and the version is promoted again. the simplest order is to upload every file with the box cleared, then use `set as latest` on the version's row. once a version is latest its row has no `set as latest`, so a file added to it later needs the box ticked on that upload.
 
-uploading a version number that was soft-deleted starts a fresh record: new notes and date, and only the files uploaded from then on.
+uploading a version number that was soft-deleted starts a fresh record: new notes and date, and only the files uploaded from then on. a file it already had on the download host can only come back with the same bytes.
 
 ### the upload flow
 
 the dashboard computes the file's SHA-256 in the browser, then makes three calls:
 
-1. **request a URL**: `POST /api/installer/upload` with `version`, `fileName`, `contentType`, an optional `platform`, optional `releaseNotes`, and `setAsLatest` (default `true`). the route needs an `Idempotency-Key`, checks the version format and that the extension matches `platform` when one is sent, records `installer_uploads/{uploadId}`, and returns a signed `uploadUrl` with `uploadId`, `platform`, `storagePath` and `expiresAt`. the URL works for 15 minutes.
-2. **upload the binary**: the browser `PUT`s the file straight to that URL and shows progress.
-3. **finalize**: `PUT /api/installer/upload` with `uploadId` and `checksum_sha256`, again with an `Idempotency-Key`. the route hashes the stored file itself, adds it to the version's `files` map, and moves the latest pointer if the upload asked for it.
+1. **request a URL**: `POST /api/installer/upload` with `version`, `fileName`, `contentType`, an optional `platform`, optional `releaseNotes`, and `setAsLatest` (default `true`). the route needs an `Idempotency-Key`, checks the version format and that the extension matches `platform` when one is sent, records `installer_uploads/{uploadId}`, and returns a signed `uploadUrl` with `uploadId`, `platform`, `storagePath` and `expiresAt`. the URL works for 15 minutes. it refuses a version whose file for this platform is already on the download host (`installer_published`, 409).
+2. **upload the binary**: the browser `PUT`s the file straight to that URL and shows progress. on the download host it lands on a private staging key, not yet at its public link.
+3. **finalize**: `PUT /api/installer/upload` with `uploadId` and `checksum_sha256`, again with an `Idempotency-Key`. the route hashes the stored file itself, adds it to the version's `files` map, and moves the latest pointer if the upload asked for it. on the download host it then copies the file to its public link, so nothing reaches that link before every check has passed. a finalize that promotes also registers the version with tridant id.
 
 finalize can refuse:
 
 | code | status | when |
 |---|---|---|
 | `checksum_mismatch` | 412 | the checksum sent does not match the stored file. upload it again |
-| `upload_expired` | 410 | the 15-minute window passed. request a new URL |
+| `upload_expired` | 410 | the 15-minute window passed on a Firebase Storage upload. request a new URL. an upload to the download host can still be finalized |
 | `binary_missing` | 404 | nothing was uploaded to the signed URL |
 | `upload_not_pending` | 409 | that upload was already finalized or expired |
+| `installer_published` | 409 | the public link already serves other bytes, for example a deleted version's file. bump the version |
+| `installer_differs` | 409 | the version is already published with a different file for this platform. upload the same bytes, or bump the version |
 
 ---
 
 ## set as latest
 
-`set as latest` on a row asks **set as latest version**, "Set version X as the latest version for all platforms?", and **OK** calls `POST /api/installer/{version}/set-latest`. that rewrites `installer_metadata/latest` with every file the version has. it is also how you roll back when a newer installer has a problem. a soft-deleted version is refused (`version_deleted`).
+`set as latest` on a row asks **set as latest version**, "Set version X as the latest version for all platforms?", and **OK** calls `POST /api/installer/{version}/set-latest`. that rewrites `installer_metadata/latest` with every file the version has. it is also how you roll back when a newer installer has a problem. a soft-deleted version is refused (`version_deleted`). it then registers the version with tridant id and yanks any newer registered version there; see [tridant id](#tridant-id).
 
 the latest version is what everyone gets:
 
@@ -77,12 +82,24 @@ the latest version is what everyone gets:
 
 ## deleting a version
 
-the delete icon asks **delete version**, and **delete** calls `DELETE /api/installer/{version}`. it is a soft delete: the version gets `deletedAt` and `deletedBy`, and its files stay in Storage. there is no restore; uploading the same number again starts a fresh record.
+the delete icon asks **delete version**, and **delete** calls `DELETE /api/installer/{version}`. it is a soft delete: the version gets `deletedAt` and `deletedBy`, and its files stay in storage, so commands already sent with their links still work. a version registered with tridant id is yanked there. there is no restore; uploading the same number again starts a fresh record, which the download host only accepts for a version that never reached it.
 
 a delete is refused for:
 
 - the current latest version (`latest_version_protected`)
 - any version when only two active versions are left (`min_versions_violated`)
+
+---
+
+## tridant id
+
+every promoted version is listed in tridant id's owlette release log, which the tridant portal shows. a version is listed while it is active and not newer than latest:
+
+- **set as latest**, or an upload that promotes, imports the version with every file it has on the download host. it also yanks any registered version above it, so a rollback leaves no newer build on the portal, and un-yanks the promoted version if it was yanked before
+- **delete** yanks the version
+- only files on the download host are registered; a version still on Firebase Storage is skipped
+
+a tridant id failure never blocks the promote or the delete. it shows under the version as `tridant id: failed (<error>)`, for example `400 download_url_not_allowed`, and **register again** runs the same sync once more (`POST /api/installer/{version}/register`). with no tridant id configured on the server, nothing is registered.
 
 ---
 
@@ -102,7 +119,7 @@ the footer's `delete N versions` deletes them one at a time through the same del
 
 every signed-in account has a download button in the dashboard header. it offers the latest installer for the platform the browser runs on, and its menu (**choose installer platform**) lists all three with a download and a copy-link icon each. a platform the latest version has no file for is greyed out with "no installer in this version"; an Intel Mac is told "intel macs are not supported". the button reads `installer_metadata/latest` directly.
 
-`GET /download` is the permalink, with no sign-in. it picks the file from the browser's user agent, or from `?os=windows|macos|linux`, and redirects to that file's signed URL. a platform the latest version lacks gets a plain-text `404`, "no `<os>` build in v`<version>`". with no latest version set it redirects to the sign-in page.
+`GET /download` is the permalink, with no sign-in. it picks the file from the browser's user agent, or from `?os=windows|macos|linux`, and redirects to that file's download link. a platform the latest version lacks gets a plain-text `404`, "no `<os>` build in v`<version>`". with no latest version set it redirects to the sign-in page.
 
 `GET /api/installer/latest` returns the same record as JSON, for superadmins and `installer=*:read` keys only.
 
@@ -115,26 +132,36 @@ each version is `installer_metadata/data/versions/{version}`:
 | field | what it holds |
 |---|---|
 | `version` | the `X.Y.Z` version |
-| `files` | one entry per platform, keyed `windows_x64`, `macos_arm64` or `linux_x64`, each with `download_url`, `checksum_sha256`, `file_size`, `file_name` (the name you uploaded) and `uploaded_at` |
+| `files` | one entry per platform, keyed `windows_x64`, `macos_arm64` or `linux_x64`, each with `download_url`, `checksum_sha256`, `file_size`, `file_name` (the served name on the download host; on Firebase Storage, the name you uploaded) and `uploaded_at` |
 | `download_url`, `checksum_sha256`, `file_size` | the Windows file's values again, for older readers. a version with no Windows file has none |
 | `release_notes` | the notes from the version's first upload, or `null` |
 | `uploaded_at` / `release_date` | when the version's first upload was finalized |
 | `uploaded_by` | the user ID of whoever requested the version's first upload; for an API key, the key's owner |
 | `deletedAt`, `deletedBy` | `null` while active; set by a delete |
+| `tridant` | the last tridant id sync: `status` (`registered`, `yanked` or `failed`), `release_id`, `yanked`, `error` and `at`. absent before the first sync |
 
-`installer_metadata/latest` is a copy of the promoted version, plus `promoted_at` and `promoted_by`. a version uploaded before per-platform files carries its Windows installer in the flat fields, and is read as `files.windows_x64`.
+`installer_metadata/latest` is a copy of the promoted version without `tridant`, plus `promoted_at` and `promoted_by`. a version uploaded before per-platform files carries its Windows installer in the flat fields, and is read as `files.windows_x64`.
 
 ---
 
 ## storage
 
-files live under `agent-installers/versions/{version}/`, one per platform, always under these names whatever the uploaded file was called:
+each file is stored under one of these names, whatever the uploaded file was called:
 
 ```text
 Owlette-Installer-v{version}.exe
 Owlette-Installer-v{version}.pkg
 Owlette-Installer-v{version}.deb
 ```
+
+with installer R2 configured on the server, files go to R2 behind tridant's download host and are served at a permanent public link:
+
+| environment | link | bucket |
+|---|---|---|
+| owlette.app | `https://download.tridant.io/owlette/<file>` | `owlette-downloads` |
+| dev.owlette.app | `https://download-staging.tridant.io/owlette/<file>` | `owlette-downloads-staging` |
+
+without it, files go to Firebase Storage under `agent-installers/versions/{version}/` with signed links valid until 2030. versions published there keep those links.
 
 Firestore holds:
 

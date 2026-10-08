@@ -1,11 +1,18 @@
 /**
  * POST /api/installer/upload — step 1: request a signed upload URL; the client then
- * uploads the binary directly to Firebase Storage with it.
+ * uploads the binary directly with it, to R2 behind the download host when
+ * installer R2 is configured (`installerStorage.server.ts`), else to Firebase Storage.
  *
  * PUT /api/installer/upload — step 2 (finalize): verify the file is in Storage, compute
  * the checksum, reject a caller-supplied mismatch, merge the file into
  * `installer_metadata/data/versions/{version}.files.<platform>` and optionally
- * write the `latest` pointer.
+ * write the `latest` pointer and register the release with tridant id.
+ *
+ * A file on the download host is cached as immutable, so its name never gets new
+ * bytes. An R2 upload lands on a private staging key, and finalize copies it to the
+ * public name only after every check: a name already serving other bytes is refused
+ * (409 installer_published), as is an upload whose bytes differ from the version's
+ * file published elsewhere (409 installer_differs).
  *
  * Auth (both verbs): an api key with `installer=*:write` (superadmin-only at minting),
  * or a superadmin session / id-token.
@@ -34,6 +41,17 @@ import {
   platformFromExtension,
   type InstallerPlatform,
 } from '@/lib/installerPlatform';
+import {
+  discardInstallerUpload,
+  installerPublicUrl,
+  installerStagingKey,
+  isInstallerR2Configured,
+  presignInstallerUpload,
+  publishInstaller,
+  publishedInstallerSha256,
+  readInstaller,
+} from '@/lib/installerStorage.server';
+import { syncInstallerRelease } from '@/lib/tridantRelease.server';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
@@ -147,30 +165,44 @@ export async function POST(request: NextRequest) {
         const setAsLatest = body.setAsLatest !== false; // default true
 
         const db = getAdminDb();
-        const storage = getAdminStorage();
-        const bucket = storage.bucket();
-        const storagePath = `agent-installers/versions/${version}/${installerFileName(version, platform)}`;
-        const file = bucket.file(storagePath);
-
+        const onR2 = isInstallerR2Configured();
         const expiresAt = new Date(
           Date.now() + SIGNED_URL_EXPIRY_MINUTES * 60 * 1000,
         );
-        const uploadUrl = IS_E2E
-          ? `http://127.0.0.1:9199/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?uploadType=media`
-          : (
-              await file.getSignedUrl({
-                action: 'write',
-                version: 'v4',
-                expires: expiresAt,
-                contentType,
-              })
-            )[0];
 
         const uploadId = randomUUID();
+        let storagePath: string;
+        let uploadUrl: string;
+        if (onR2) {
+          // the object is asked, not the record: a record whose copy never
+          // landed must stay recoverable by uploading the same bytes again.
+          // finalize is what guards the public name
+          const objectName = installerFileName(version, platform);
+          if ((await publishedInstallerSha256(objectName)) !== null) {
+            return installerPublished(objectName, 'is already published on the download host');
+          }
+          storagePath = installerStagingKey(uploadId);
+          uploadUrl = await presignInstallerUpload(storagePath, contentType, SIGNED_URL_EXPIRY_MINUTES * 60);
+        } else {
+          const bucket = getAdminStorage().bucket();
+          storagePath = `agent-installers/versions/${version}/${installerFileName(version, platform)}`;
+          uploadUrl = IS_E2E
+            ? `http://127.0.0.1:9199/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?uploadType=media`
+            : (
+                await bucket.file(storagePath).getSignedUrl({
+                  action: 'write',
+                  version: 'v4',
+                  expires: expiresAt,
+                  contentType,
+                })
+              )[0];
+        }
+
         await db.collection('installer_uploads').doc(uploadId).set({
           version,
           fileName,
           platform,
+          storage: onR2 ? 'r2' : 'firebase',
           storagePath,
           userId: auth.userId,
           releaseNotes,
@@ -286,7 +318,9 @@ export async function PUT(request: NextRequest) {
           (typeof uploadData.expiresAt?.toMillis === 'function'
             ? uploadData.expiresAt.toMillis()
             : Number(uploadData.expiresAt)) || 0;
-        if (Date.now() > expiresAtMs) {
+        // the window bounds the signed url; a staged r2 upload stays where it
+        // is, so a finalize whose copy failed can be finished later
+        if (uploadData.storage !== 'r2' && Date.now() > expiresAtMs) {
           await db
             .collection('installer_uploads')
             .doc(uploadId)
@@ -301,12 +335,15 @@ export async function PUT(request: NextRequest) {
           });
         }
 
-        const storage = getAdminStorage();
-        const bucket = storage.bucket();
-        const file = bucket.file(uploadData.storagePath);
-
-        const [exists] = await file.exists();
-        if (!exists) {
+        const version = uploadData.version as string;
+        // an upload requested before `platform` was recorded is a windows exe
+        const platform: InstallerPlatform = uploadData.platform ?? 'windows_x64';
+        const onR2 = uploadData.storage === 'r2';
+        const objectName = installerFileName(version, platform);
+        const stored = onR2
+          ? await readR2Upload(uploadData.storagePath, objectName)
+          : await readFirebaseUpload(uploadData.storagePath);
+        if (!stored) {
           return problem({
             type: ProblemType.NotFound,
             title: 'binary not in storage',
@@ -318,14 +355,8 @@ export async function PUT(request: NextRequest) {
           });
         }
 
-        const [metadata] = await file.getMetadata();
-        const fileSize = parseInt(metadata.size as string, 10) || 0;
-
-        const [fileBuffer] = await file.download();
-        const computedChecksum = createHash('sha256')
-          .update(fileBuffer)
-          .digest('hex');
-        if (providedChecksum && providedChecksum !== computedChecksum) {
+        const { size: fileSize, sha256: finalChecksum, downloadUrl } = stored;
+        if (providedChecksum && providedChecksum !== finalChecksum) {
           return problem({
             type: ProblemType.PreconditionFailed,
             title: 'checksum mismatch',
@@ -336,29 +367,21 @@ export async function PUT(request: NextRequest) {
             code: 'checksum_mismatch',
           });
         }
-        const finalChecksum = computedChecksum;
 
-        const downloadExpiry = new Date('2030-01-01');
-        // the emulator cannot sign urls; its media endpoint is the public read
-        const downloadUrl = IS_E2E
-          ? `http://127.0.0.1:9199/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(uploadData.storagePath)}?alt=media`
-          : (
-              await file.getSignedUrl({
-                action: 'read',
-                expires: downloadExpiry,
-              })
-            )[0];
-
-        const version = uploadData.version as string;
-        // an upload requested before `platform` was recorded is a windows exe
-        const platform: InstallerPlatform = uploadData.platform ?? 'windows_x64';
+        // the public name may hold bytes no record mentions any more, e.g. a
+        // deleted version's file, so the object itself is asked
+        const publishedSha = onR2 ? await publishedInstallerSha256(objectName) : null;
+        if (publishedSha !== null && publishedSha !== finalChecksum) {
+          return installerPublished(objectName, 'already serves other bytes on the download host');
+        }
         const now = Date.now();
 
         const fileEntry = {
           download_url: downloadUrl,
           checksum_sha256: finalChecksum,
           file_size: fileSize,
-          file_name: uploadData.fileName,
+          // on r2 the stored name is the file the download host serves
+          file_name: onR2 ? objectName : uploadData.fileName,
           uploaded_at: now,
         };
         const alias =
@@ -374,12 +397,18 @@ export async function PUT(request: NextRequest) {
         const latestRef = db.collection('installer_metadata').doc('latest');
 
         // one transaction so two platforms finalizing at once both land in `files`
-        const versionData = await db.runTransaction(async (tx) => {
+        const finalized = await db.runTransaction(async (tx) => {
           const snap = await tx.get(versionRef);
           const existing = snap.data() ?? {};
           // a re-upload of a deleted version is a new release of that number:
           // fresh version-level fields, and only the files uploaded from here on
           const fresh = !snap.exists || typeof existing.deletedAt === 'number';
+          const published = fresh
+            ? undefined
+            : normalizeInstallerFiles({ ...existing, version })[platform];
+          if (onR2 && published?.checksum_sha256 && published.checksum_sha256 !== finalChecksum) {
+            return { kind: 'differs' as const };
+          }
           const merged: Record<string, unknown> = {
             ...(fresh
               ? {
@@ -389,6 +418,8 @@ export async function PUT(request: NextRequest) {
                   release_date: Timestamp.fromMillis(now),
                   uploaded_by: uploadData.userId,
                   deletedAt: null,
+                  // tridant id still holds the release, yanked; its id lets a promote lift that
+                  ...(existing.tridant ? { tridant: existing.tridant } : {}),
                 }
               : existing),
             ...alias,
@@ -396,16 +427,36 @@ export async function PUT(request: NextRequest) {
           };
           tx.set(versionRef, merged);
           if (uploadData.setAsLatest) {
+            // the registration state belongs to the version, not the pointer
+            const { tridant: _tridant, ...pointer } = merged;
             tx.set(latestRef, {
-              ...merged,
+              ...pointer,
               files: normalizeInstallerFiles(merged),
               release_date: isoReleaseDate(merged.release_date, now),
               promoted_at: now,
               promoted_by: auth.userId,
             });
           }
-          return merged;
+          return { kind: 'merged' as const, merged };
         });
+
+        if (finalized.kind === 'differs') {
+          return problem({
+            type: ProblemType.Conflict,
+            title: 'installer differs from the published file',
+            status: 409,
+            detail: `v${version} is already published with a different ${platform} file; upload the same bytes, or bump the version`,
+            instance: '/api/installer/upload',
+            code: 'installer_differs',
+          });
+        }
+
+        // only now, with every check passed and the record written, does the
+        // file reach its public name; a failed copy leaves the upload pending,
+        // so finalizing it again finishes the job
+        if (onR2 && publishedSha === null) {
+          await publishInstaller(uploadData.storagePath, objectName, finalChecksum, stored.contentType);
+        }
 
         await db
           .collection('installer_uploads')
@@ -415,6 +466,7 @@ export async function PUT(request: NextRequest) {
             completedAt: now,
             file_size: fileSize,
           });
+        if (onR2) await discardInstallerUpload(uploadData.storagePath);
 
         emitMutation({
           kind: 'installer_mutated',
@@ -434,6 +486,8 @@ export async function PUT(request: NextRequest) {
           },
         });
 
+        const tridant = uploadData.setAsLatest ? await syncInstallerRelease(version) : null;
+
         return applyAuthDeprecations(
           NextResponse.json({
             version,
@@ -441,7 +495,8 @@ export async function PUT(request: NextRequest) {
             download_url: downloadUrl,
             checksum_sha256: finalChecksum,
             file_size: fileSize,
-            files: normalizeInstallerFiles(versionData),
+            files: normalizeInstallerFiles(finalized.merged),
+            ...(tridant ? { tridant } : {}),
           }),
           auth.scopeCheck,
         );
@@ -451,6 +506,50 @@ export async function PUT(request: NextRequest) {
   } catch (err) {
     return problemFromError(err, 'installer/upload:PUT');
   }
+}
+
+interface StoredUpload {
+  size: number;
+  sha256: string;
+  contentType: string;
+  downloadUrl: string;
+}
+
+function installerPublished(objectName: string, state: string) {
+  return problem({
+    type: ProblemType.Conflict,
+    title: 'installer already published',
+    status: 409,
+    detail: `${objectName} ${state}, which caches it as immutable; bump the version`,
+    instance: '/api/installer/upload',
+    code: 'installer_published',
+  });
+}
+
+/** the staged upload, with the public url it is published at. */
+async function readR2Upload(stagingKey: string, objectName: string): Promise<StoredUpload | null> {
+  const object = await readInstaller(stagingKey);
+  return object && { ...object, downloadUrl: installerPublicUrl(objectName) };
+}
+
+async function readFirebaseUpload(storagePath: string): Promise<StoredUpload | null> {
+  const bucket = getAdminStorage().bucket();
+  const file = bucket.file(storagePath);
+  const [exists] = await file.exists();
+  if (!exists) return null;
+
+  const [metadata] = await file.getMetadata();
+  const [fileBuffer] = await file.download();
+  // the emulator cannot sign urls; its media endpoint is the public read
+  const downloadUrl = IS_E2E
+    ? `http://127.0.0.1:9199/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media`
+    : (await file.getSignedUrl({ action: 'read', expires: new Date('2030-01-01') }))[0];
+  return {
+    size: parseInt(metadata.size as string, 10) || 0,
+    sha256: createHash('sha256').update(fileBuffer).digest('hex'),
+    contentType: metadata.contentType || 'application/octet-stream',
+    downloadUrl,
+  };
 }
 
 // `latest` keeps release_date as an iso string: deployed agents parse it as text

@@ -38,6 +38,10 @@ const THIRD_PARTY_CREDENTIALS = [
   'SWOOP_SIGNAL_URL',
   'SWOOP_SIGNAL_RING_SECRET',
   'STRIPE_SECRET_KEY_TEST',
+  // the installer bucket and tridant id's release log; blank keeps uploads on the
+  // storage emulator and registration not configured.
+  'INSTALLER_R2_SECRET_ACCESS_KEY',
+  'TRIDANT_RELEASE_KEY',
   // reach cloudflare (TURN credential minting) and the R2 object store.
   'CLOUDFLARE_TURN_KEY_API_TOKEN',
   'R2_S3_SECRET_ACCESS_KEY',

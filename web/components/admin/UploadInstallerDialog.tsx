@@ -149,7 +149,7 @@ export default function UploadInstallerDialog({
         <DialogHeader>
           <DialogTitle className="text-foreground">upload new installer version</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Upload a new owlette Agent installer version to Firebase Storage
+            Upload a new owlette Agent installer version
           </DialogDescription>
         </DialogHeader>
 
