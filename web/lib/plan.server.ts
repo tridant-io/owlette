@@ -49,6 +49,22 @@ export type Plan =
   | { enforced: false; reason: PlanOffReason }
   | { enforced: true; resolved: boolean; standing: string; ent: Record<string, string> };
 
+export type PlanTier = 'trial' | 'free' | 'core' | 'pro';
+
+/** `GET /api/account/plan`: the signed-in user's plan as a payer. */
+export interface PlanResponse {
+  enforced: boolean;
+  /** why plans are off; when enforced, `keys_missing` while tridant sends no readable value for `missingKeys`. */
+  reason?: PlanOffReason | 'keys_missing';
+  missingKeys?: PlanKey[];
+  plan: PlanTier | null;
+  standing: string | null;
+  /** null is unrestricted. */
+  limits: { machines: number | null; sites: number | null };
+  flags: { control: boolean; roost: boolean; talons: boolean; webhooks: boolean; api_keys: boolean };
+  activeMachinesThisMonth: number | null;
+}
+
 export const PLAN_REQUIRED_DETAIL: Record<PlanFlag, string> = {
   'owlette.control': "your plan doesn't include remote control. upgrade to continue.",
   'owlette.roost': "your plan doesn't include roost. upgrade to continue.",
@@ -121,12 +137,19 @@ export async function resolvePlan(payerUid: string | null): Promise<Plan> {
   return { enforced: true, resolved: answer.resolved, standing: answer.standing, ent: answer.ent };
 }
 
+/** a value as tridant sends it: a count, Infinity for `unlimited`, or null when absent or unreadable. */
+function readLimit(value: string | undefined): number | null {
+  if (value === 'unlimited') return Infinity;
+  if (value !== undefined && /^\d+$/.test(value)) return Number(value);
+  return null;
+}
+
 /** the payer's limit for `key`: a count, or Infinity when unrestricted. a flag is 0 or 1. */
 export function planLimit(plan: Plan, key: PlanKey): number {
   if (!plan.enforced) return Infinity;
   const value = plan.ent[key];
-  if (value === 'unlimited') return Infinity;
-  if (value !== undefined && /^\d+$/.test(value)) return Number(value);
+  const limit = readLimit(value);
+  if (limit !== null) return limit;
   // until tridant-id#76 defines the owlette keys, a missing key must not lock anyone out. task 6.4 flips it.
   if (onceOnly(`unrestricted:${key}`)) {
     logger.warn(`[plan] tridant sent ${value === undefined ? 'no value' : 'an unreadable value'} for ${key}; treating it as unrestricted`, {
@@ -138,6 +161,26 @@ export function planLimit(plan: Plan, key: PlanKey): number {
 
 export function entitled(plan: Plan, key: PlanKey): boolean {
   return planLimit(plan, key) > 0;
+}
+
+/** the keys `planLimit` treats as unrestricted only because tridant sent no readable value. */
+export function missingPlanKeys(plan: Plan): PlanKey[] {
+  if (!plan.enforced) return [];
+  return [...PLAN_LIMITS, ...PLAN_FLAGS].filter((key) => readLimit(plan.ent[key]) === null);
+}
+
+/**
+ * the tier a plan reads as, null when plans are not enforced. tridant's answer
+ * names no tier, so it is derived: an unmapped or ended payer is free, a
+ * trialing one is on trial, otherwise roost means pro and control means core.
+ */
+export function planTier(plan: Plan): PlanTier | null {
+  if (!plan.enforced) return null;
+  if (!plan.resolved || plan.standing === 'expired' || plan.standing === 'canceled') return 'free';
+  if (plan.standing === 'trialing') return 'trial';
+  if (entitled(plan, 'owlette.roost')) return 'pro';
+  if (entitled(plan, 'owlette.control')) return 'core';
+  return 'free';
 }
 
 /** a 402 `plan_required` when the site's payer lacks `key`, else null. */

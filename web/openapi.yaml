@@ -353,6 +353,39 @@ paths:
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
 
+  /api/account/plan:
+    get:
+      operationId: getAccountPlan
+      tags: [Quotas]
+      summary: Get the signed-in user's plan
+      description: |
+        The caller's own plan as the payer for the sites they own: tier,
+        standing, limits, feature flags, and the machines active this month.
+        No body; no query params. Agent credentials get `403`.
+
+        While plans are not enforced, `enforced` is `false`, `reason` says
+        why, every flag is `true`, every limit is `null` (unrestricted), and
+        `plan`, `standing` and `activeMachinesThisMonth` are `null`. When
+        enforced, `reason` is `keys_missing` only while the license server
+        sends no readable value for the keys in `missingKeys`, which are
+        treated as unrestricted.
+
+        `activeMachinesThisMonth` counts distinct machines online on any UTC
+        day from the 1st of the current month; the daily count runs at 03:00
+        UTC and stamps the previous day.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: The caller's plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountPlanResponse' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
   /api/platform/email/config:
     get:
       operationId: getPlatformEmailConfig
@@ -12747,6 +12780,62 @@ components:
           type: integer
           format: int64
           minimum: 0
+    AccountPlanResponse:
+      type: object
+      required: [enforced, plan, standing, limits, flags, activeMachinesThisMonth]
+      example:
+        enforced: true
+        plan: free
+        standing: expired
+        limits: { machines: 1, sites: 1 }
+        flags: { control: false, roost: false, talons: false, webhooks: false, api_keys: false }
+        activeMachinesThisMonth: 1
+      properties:
+        enforced:
+          type: boolean
+          description: Whether plan limits apply to this account.
+        reason:
+          type: string
+          enum: [enforcement_off, not_configured, unreachable, rejected, malformed_response, superadmin, no_payer, keys_missing]
+          description: |
+            Why plans are not enforced. With `enforced: true`, only
+            `keys_missing`, alongside `missingKeys`.
+        missingKeys:
+          type: array
+          items: { type: string }
+          description: Entitlement keys treated as unrestricted because no readable value was sent.
+        plan:
+          type: string
+          enum: [trial, free, core, pro]
+          nullable: true
+          description: "`null` while plans are not enforced."
+        standing:
+          type: string
+          nullable: true
+          description: Subscription standing, e.g. `active`, `trialing`, `past_due`, `expired`, `canceled`.
+        limits:
+          type: object
+          required: [machines, sites]
+          description: "`null` is unrestricted."
+          properties:
+            machines: { type: integer, minimum: 0, nullable: true }
+            sites: { type: integer, minimum: 0, nullable: true }
+        flags:
+          type: object
+          required: [control, roost, talons, webhooks, api_keys]
+          properties:
+            control:
+              type: boolean
+              description: Remote control, deployments, swoop, hoot and alerts.
+            roost: { type: boolean }
+            talons: { type: boolean }
+            webhooks: { type: boolean }
+            api_keys: { type: boolean }
+        activeMachinesThisMonth:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Distinct machines online on any UTC day this month. `null` while plans are not enforced.
 
     # operational logs
     SiteLogEntry:

@@ -59,8 +59,10 @@ import {
   __resetForTests,
   entitled,
   machineSlotAvailable,
+  missingPlanKeys,
   payerForSite,
   planLimit,
+  planTier,
   requireEntitlement,
   resolvePlan,
   siteSlotAvailable,
@@ -244,6 +246,62 @@ describe('planLimit and entitled', () => {
 
   it.each(['-1', 'lots', '1.5', ''])('treat an unreadable value %p as unrestricted', (value) => {
     expect(planLimit(enforced({ 'owlette.machines': value }), 'owlette.machines')).toBe(Infinity);
+  });
+});
+
+describe('missingPlanKeys', () => {
+  it('is empty for an unenforced plan and for a full answer', () => {
+    expect(missingPlanKeys({ enforced: false, reason: 'enforcement_off' })).toEqual([]);
+    expect(missingPlanKeys(enforced(FREE.ent))).toEqual([]);
+    expect(missingPlanKeys(enforced(TRIAL.ent))).toEqual([]);
+  });
+
+  it('lists the keys sent without a readable value, limits first', () => {
+    const plan = enforced({ 'owlette.machines': '1', 'owlette.sites': 'lots', 'owlette.control': '0' });
+    expect(missingPlanKeys(plan)).toEqual([
+      'owlette.sites',
+      'owlette.roost',
+      'owlette.talons',
+      'owlette.webhooks',
+      'owlette.api_keys',
+    ]);
+  });
+});
+
+describe('planTier', () => {
+  const withStanding = (standing: string, ent: Record<string, string>, resolved = true): Plan => ({
+    enforced: true,
+    resolved,
+    standing,
+    ent,
+  });
+  const CORE = { ...PRO.ent, 'owlette.roost': '0', 'owlette.talons': '0', 'owlette.webhooks': '0', 'owlette.api_keys': '0' };
+
+  it('is null while plans are not enforced', () => {
+    expect(planTier({ enforced: false, reason: 'superadmin' })).toBeNull();
+  });
+
+  it('reads an unmapped payer as free, whatever its standing or keys', () => {
+    expect(planTier(withStanding('expired', FREE.ent, false))).toBe('free');
+    expect(planTier(withStanding('active', PRO.ent, false))).toBe('free');
+  });
+
+  it.each(['expired', 'canceled'])('reads a %s subscription as free, even with pro keys', (standing) => {
+    expect(planTier(withStanding(standing, PRO.ent))).toBe('free');
+  });
+
+  it('reads trialing as trial', () => {
+    expect(planTier(withStanding('trialing', TRIAL.ent))).toBe('trial');
+  });
+
+  it.each(['active', 'past_due'])('reads %s from the entitlements: roost is pro, control is core, else free', (standing) => {
+    expect(planTier(withStanding(standing, PRO.ent))).toBe('pro');
+    expect(planTier(withStanding(standing, CORE))).toBe('core');
+    expect(planTier(withStanding(standing, FREE.ent))).toBe('free');
+  });
+
+  it('reads an active payer whose keys are missing as pro, since missing is unrestricted', () => {
+    expect(planTier(withStanding('active', {}))).toBe('pro');
   });
 });
 
