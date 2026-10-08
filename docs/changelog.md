@@ -23,17 +23,6 @@ decoder was the cause, that tab switches to h264.
 The codec choice in the quality menu now takes effect: choosing one
 reconnects with it.
 
-### changed — swoop's machine log says why a picture stalls
-
-Every ten seconds of a swoop session, the machine's swoop log now also counts
-the keyframes it sent and the ones viewers asked for, the frames it had to
-hold back, and its slowest moment, so a frozen picture can be traced to the
-machine or to the viewer. It warns when a viewer's picture stops updating while
-frames keep going out, says when it comes back, and notes each time the screen
-capture restarts or the display changes size or refresh rate. The frame rate it
-logs is no longer overstated, and on a display faster than 60 Hz swoop sends at
-most 60 frames a second, which is what its bitrate is set for.
-
 ### fixed — reloading swoop keeps control without the second factor
 
 Reloading the page during a swoop session no longer asks for your passkey or
@@ -112,6 +101,25 @@ one that is greyed out, such as quality before the session connects.
 
 The quality menu's footnote now names bandwidth, resolution and frame rate as
 upper limits the machine lowers when the connection needs it.
+
+## [4.1.7] - 2026-10-07
+
+### changed — swoop's machine log says why a picture stalls
+
+Every ten seconds of a swoop session, the machine's swoop log now also counts
+the keyframes it sent and the ones viewers asked for, the frames it had to
+hold back, and its slowest moment, so a frozen picture can be traced to the
+machine or to the viewer. It warns when a viewer's picture stops updating while
+frames keep going out, says when it comes back, and notes each time the screen
+capture restarts or the display changes size or refresh rate. The frame rate it
+logs is no longer overstated, and on a display faster than 60 Hz swoop sends at
+most 60 frames a second, which is what its bitrate is set for.
+
+### changed — updated components
+
+The owlette app moves to Tauri 2.12, and the agent and the swoop streamer take
+the latest minor and patch releases of their libraries, including the Claude
+agent SDK behind hoot, now 0.2.159, the newest release with a Windows build.
 
 ## [4.1.6] - 2026-10-04
 
