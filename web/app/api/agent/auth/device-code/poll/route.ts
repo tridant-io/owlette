@@ -5,6 +5,7 @@ import { withRateLimit } from '@/lib/withRateLimit';
 import { apiError } from '@/lib/apiErrorResponse';
 import { DEVICE_CODE_WRAP_VERSION } from '@/lib/deviceCodeCrypto';
 import { normalizePairPhrase } from '@/lib/pairPhrases';
+import { machineLimitRefusal, stampPairedAt } from '@/lib/pairingPlan.server';
 
 const MINT_CLAIM_LEASE_MS = 60_000;
 
@@ -32,7 +33,9 @@ function sanitizeMachineId(value: unknown): { ok: true; machineId: string | null
 
 /**
  * POST /api/agent/auth/device-code/poll — agent polls for authorization.
- * 202 pending · 200 authorized · 410 expired · 404 unknown code.
+ * 202 pending · 200 authorized · 402 machine limit `{ error }` (a code refused at
+ * authorize, or a deferred mint the site's plan has no slot for) · 410 expired ·
+ * 404 unknown code.
  *
  * Body is one of:
  * - deviceCode — interactive flow, preferred; the 200 carries
@@ -156,6 +159,10 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         return { body: { status: 'pending' }, status: 202 } as const;
       }
 
+      if (data.status === 'refused') {
+        return { error: data.refusedReason as string, status: 402 } as const;
+      }
+
       if (data.status === 'authorized') {
         const isV1 =
           data.wrapVersion === DEVICE_CODE_WRAP_VERSION &&
@@ -223,6 +230,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
               phrase: docRef.id,
             },
             status: 200,
+            paired: { siteId: data.siteId as string, machineId: data.machineId as string },
           } as const;
         }
 
@@ -244,8 +252,15 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       return { error: 'Invalid device code state', status: 400 } as const;
     });
 
-    if ('claim' in result) {
+    if (result.claim) {
       const claimedMachineId = result.machineId;
+      // the phrase is not consumed and the claim lease just lapses, so the same
+      // phrase works once a machine is removed.
+      const refusal = await machineLimitRefusal(result.siteId, claimedMachineId);
+      if (refusal) {
+        return NextResponse.json({ error: refusal }, { status: 402 });
+      }
+
       const agentUid = `agent_${result.siteId}_${claimedMachineId}`.replace(/[^a-zA-Z0-9_]/g, '_');
       const claims = {
         role: 'agent',
@@ -337,6 +352,8 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         return NextResponse.json({ error: 'Invalid pairing phrase' }, { status: 404 });
       }
 
+      await stampPairedAt(result.siteId, claimedMachineId);
+
       return NextResponse.json(
         {
           accessToken: idToken,
@@ -353,6 +370,12 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         { error: result.error },
         { status: result.status }
       );
+    }
+
+    // stamped at handover, not at authorize: an authorize after the installer
+    // stopped polling must not leave a machine doc that holds a plan slot.
+    if (result.paired) {
+      await stampPairedAt(result.paired.siteId, result.paired.machineId);
     }
 
     return NextResponse.json(result.body, { status: result.status });

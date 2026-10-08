@@ -80,6 +80,14 @@ function offBeforeReads(): 'enforcement_off' | 'not_configured' | null {
   return 'not_configured';
 }
 
+/**
+ * whether plans can be enforced at all, answered without a read. callers that
+ * would otherwise read a payer or site first check this.
+ */
+export function plansEnforced(): boolean {
+  return offBeforeReads() === null;
+}
+
 /** the site's payer, its owner (decision 1). pass site data already read to skip the read. */
 export async function payerForSite(
   siteId: string,
