@@ -81,12 +81,11 @@ if (!/^[a-z0-9-]*$/.test(keyTag)) usage('--key-tag may hold only a-z, 0-9 and -'
 
 /** The body of the version's `## [X.Y.Z]` section, without its heading. */
 function changelogSection(release) {
-  const text = readFileSync(join(ROOT, 'docs', 'changelog.md'), 'utf8').replace(/\r\n/g, '\n');
-  const heading = new RegExp(`^## \\[${release.replace(/\./g, '\\.')}\\][^\\n]*\\n`, 'm').exec(text);
-  if (!heading) return null;
-  const rest = text.slice(heading.index + heading[0].length);
-  const end = rest.search(/^## \[/m);
-  return (end === -1 ? rest : rest.slice(0, end)).trim();
+  const lines = readFileSync(join(ROOT, 'docs', 'changelog.md'), 'utf8').split(/\r?\n/);
+  const start = lines.findIndex((line) => line.startsWith(`## [${release}]`));
+  if (start === -1) return null;
+  const end = lines.findIndex((line, i) => i > start && line.startsWith('## ['));
+  return lines.slice(start + 1, end === -1 ? undefined : end).join('\n').trim();
 }
 
 const notes = options.notes ?? changelogSection(version);
