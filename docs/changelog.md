@@ -11,6 +11,19 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — agent installers download from download.tridant.io
+
+Agent installers are moving from Firebase Storage to
+`https://download.tridant.io/owlette/`, with permanent links that never
+change. A firewall or proxy that allows hosts by name must allow
+`download.tridant.io` on port 443, or machines cannot update. Versions
+published before the move keep their old links. A published installer is
+never replaced: uploading the same version again is refused, so a fix gets a
+new version number. Every version that becomes latest is also listed in
+tridant id's owlette release log, and a deleted or rolled-back version is
+pulled from it; `/admin/installers` shows each version's status there and can
+retry a failed one.
+
 ### added — owlette free, the pro trial and per-machine billing, for after the beta
 
 The pricing page shows three plans for after the beta: owlette free, with one

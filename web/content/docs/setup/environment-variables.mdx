@@ -136,6 +136,19 @@ the buckets stay private: uploads and downloads use presigned URLs, and version 
 
 `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_R2_API_TOKEN` are inputs to `scripts/provision-r2.mjs`, not runtime variables. never set them on a deployment.
 
+### agent installers (optional)
+
+agent installers go to R2 behind tridant's download host when these are set, read in `web/lib/installerStorage.server.ts`, and to Firebase Storage when they are not:
+
+| variable | format | what it does |
+|----------|--------|-------------|
+| `INSTALLER_R2_ACCESS_KEY_ID` | R2 access key ID | an R2 token with object read and write on this environment's installer bucket only: `owlette-downloads` for `prod`, `owlette-downloads-staging` for `dev` |
+| `INSTALLER_R2_SECRET_ACCESS_KEY` | R2 secret access key | the matching secret |
+| `TRIDANT_API_URL` | `https://api.tridant.io` (dev: `https://api-staging.tridant.io`) | tridant id, where promoted installers are registered |
+| `TRIDANT_RELEASE_KEY` | tridant id API key | a `release.write` key for owlette Core. without it, or without `TRIDANT_API_URL`, nothing is registered |
+
+the bucket and the public link follow the roost environment: `https://download.tridant.io/owlette/<file>` for `prod`, `https://download-staging.tridant.io/owlette/<file>` for `dev`. `R2_S3_ENDPOINT` is shared with roost.
+
 ---
 
 ## URL configuration (required in production)

@@ -84,7 +84,7 @@ the installer upgrades in place. it does not run a separate config backup and re
 
 ## update command payload
 
-`installer_url` is the latest version's file for the machine's platform:
+`installer_url` is the latest version's file for the machine's platform, on `https://download.tridant.io/owlette/` (versions published before the move to that host keep their Firebase Storage link):
 
 - Windows (`windows_x64`): `Owlette-Installer-v4.1.6.exe`
 - macOS (`macos_arm64`): `Owlette-Installer-v4.1.6.pkg`
@@ -93,7 +93,7 @@ the installer upgrades in place. it does not run a separate config backup and re
 ```json
 {
   "type": "update_owlette",
-  "installer_url": "https://firebasestorage.googleapis.com/.../<the file for this machine's platform>",
+  "installer_url": "https://download.tridant.io/owlette/Owlette-Installer-v4.1.6.exe",
   "target_version": "4.1.6",
   "checksum_sha256": "2f4c2f0e6d8f0c2f2a4f6f7a8b9c0d1e2f3a4b5c6d7e8f90123456789abcdef0",
   "deployment_id": "deploy_abc123"
@@ -149,6 +149,10 @@ if the machine goes offline and does not come back, check it in person if no oth
 2. `systemctl status owlette-agent` shows whether the service came back; `sudo systemctl start owlette-agent` starts it.
 3. if apt reports an interrupted package operation, `sudo dpkg --configure -a` finishes it.
 4. `service.log` and `update_in_progress.json` tell the same story as on Windows.
+
+### download fails
+
+`service.log` says `Download failed after 3 attempts` and the machine stays on its version. the machine could not fetch `installer_url`: a firewall or proxy that allows hosts by name must allow `download.tridant.io` on port 443, where installers are served from.
 
 ### version did not change
 

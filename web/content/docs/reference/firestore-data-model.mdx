@@ -432,8 +432,8 @@ owlette's own installer releases. **access**: public read; writes are server onl
 
 | document | notes |
 | --- | --- |
-| `installer_metadata/data/versions/{version}` | one release: `version`, `release_notes`, `release_date`, `uploaded_at`, `uploaded_by`, `deletedAt` (soft delete), and `files`, keyed by platform (`windows_x64`, `macos_arm64`, `linux_x64`), each `{ download_url, checksum_sha256, file_size, file_name, uploaded_at }`. the flat `download_url`, `checksum_sha256` and `file_size` mirror the Windows file for older readers. |
-| `installer_metadata/latest` | a copy of the latest release's record, plus `promoted_at` and `promoted_by`. |
+| `installer_metadata/data/versions/{version}` | one release: `version`, `release_notes`, `release_date`, `uploaded_at`, `uploaded_by`, `deletedAt` (soft delete), and `files`, keyed by platform (`windows_x64`, `macos_arm64`, `linux_x64`), each `{ download_url, checksum_sha256, file_size, file_name, uploaded_at }`. the flat `download_url`, `checksum_sha256` and `file_size` mirror the Windows file for older readers. `tridant` holds the last tridant id sync: `{ status, release_id, yanked, error, at }`. |
+| `installer_metadata/latest` | a copy of the latest release's record without `tridant`, plus `promoted_at` and `promoted_by`. |
 | `installer_metadata/cortex_cli_{osfamily}_{arch}` | the pinned Claude CLI for local hoot, per platform (`windows_x64`, `macos_universal`, `linux_x64`, `linux_arm64`): `version`, `downloadUrl`, `sha256`, `size`, `storagePath`, `md5Base64`, `uploadedAt`, `uploadedBy`. the unsuffixed `cortex_cli` is the copy agents before 3.4 read. |
 
 `installer_uploads/{uploadId}` (server only) holds upload sessions while a file is in flight.
