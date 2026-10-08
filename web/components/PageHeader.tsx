@@ -7,12 +7,14 @@ import { useAuth } from '@/contexts/AuthContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
-import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard } from 'lucide-react';
 import { getUserShortName } from '@/lib/userUtils';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
+import { TrialBanner } from '@/components/plan/TrialBanner';
+import { usePlan } from '@/hooks/usePlan';
 
 const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
 
@@ -83,7 +85,7 @@ interface Site {
 }
 
 interface PageHeaderProps {
-  currentPage: 'Dashboard' | 'Deploy' | 'Roost' | 'Logs' | 'Hoot' | 'Talons' | 'API Keys' | 'Webhooks' | 'dashboard' | 'deploy' | 'roost' | 'logs' | 'hoot' | 'talons' | 'api keys' | 'webhooks';
+  currentPage: 'Dashboard' | 'Deploy' | 'Roost' | 'Logs' | 'Hoot' | 'Talons' | 'API Keys' | 'Webhooks' | 'dashboard' | 'deploy' | 'roost' | 'logs' | 'hoot' | 'talons' | 'api keys' | 'webhooks' | 'plan';
   sites?: Site[];
   currentSiteId?: string;
   onSiteChange?: (siteId: string) => void;
@@ -105,6 +107,7 @@ export function PageHeader({
 }: PageHeaderProps) {
   const router = useRouter();
   const { user, signOut, isSuperadmin, administersAnySite } = useAuth();
+  const { plan } = usePlan();
   const [reportBugOpen, setReportBugOpen] = useState(false);
   const [feedbackLabel, setFeedbackLabel] = useState('report a bug');
   const [feedbackFading, setFeedbackFading] = useState(false);
@@ -421,6 +424,15 @@ export function PageHeader({
                   account settings
                 </DropdownMenuItem>
               )}
+              {plan?.enforced && (
+                <DropdownMenuItem
+                  onClick={() => router.push('/settings/plan')}
+                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                >
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  plan
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onClick={async () => {
                   await signOut();
@@ -438,6 +450,7 @@ export function PageHeader({
       </div>
     </header>
     <VerifyEmailBanner />
+    <TrialBanner />
 
     {/* Mobile nav drawer — carries the site + page switchers (and the help
         items) that the `md` bar shows inline. Plain fixed positioning rather
