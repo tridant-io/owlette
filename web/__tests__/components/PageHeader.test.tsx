@@ -19,12 +19,14 @@ jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
 
+let siteAdmin = true;
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     user: { uid: 'op-uid', email: 'op@example.com', displayName: 'op' },
     signOut: jest.fn(),
     isSuperadmin: false,
     administersAnySite: false,
+    isSiteAdmin: () => siteAdmin,
   }),
 }));
 
@@ -69,6 +71,46 @@ async function openDrawer() {
   await rendered.user.click(trigger);
   return { ...rendered, trigger, drawer: screen.getByRole('dialog', { name: 'menu' }) };
 }
+
+// the current site's editor, one click from the site switcher, for its admins only.
+describe('PageHeader site settings', () => {
+  afterEach(() => {
+    siteAdmin = true;
+  });
+
+  async function openSiteSwitcher(onSiteSettings: () => void) {
+    const user = userEvent.setup();
+    render(
+      <PageHeader
+        currentPage="dashboard"
+        sites={SITES}
+        currentSiteId="site-a"
+        onSiteChange={jest.fn()}
+        onManageSites={jest.fn()}
+        onSiteSettings={onSiteSettings}
+      />,
+    );
+    await user.click(screen.getByTestId('site-switcher-trigger'));
+    await screen.findByRole('menuitem', { name: 'manage sites' });
+    return user;
+  }
+
+  it("opens the current site's settings for its admin", async () => {
+    const onSiteSettings = jest.fn();
+    const user = await openSiteSwitcher(onSiteSettings);
+
+    await user.click(screen.getByRole('menuitem', { name: 'site settings' }));
+
+    expect(onSiteSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not offered to a member', async () => {
+    siteAdmin = false;
+    await openSiteSwitcher(jest.fn());
+
+    expect(screen.queryByRole('menuitem', { name: 'site settings' })).toBeNull();
+  });
+});
 
 describe('PageHeader mobile nav drawer', () => {
   it('is a modal dialog that takes focus when it opens', async () => {

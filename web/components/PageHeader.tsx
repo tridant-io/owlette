@@ -7,7 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
-import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, SlidersHorizontal } from 'lucide-react';
 import { getUserShortName } from '@/lib/userUtils';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
@@ -87,6 +87,8 @@ interface PageHeaderProps {
   currentSiteId?: string;
   onSiteChange?: (siteId: string) => void;
   onManageSites?: () => void;
+  /** Opens the current site's editor. Shown to that site's admins only. */
+  onSiteSettings?: () => void;
   actionButton?: React.ReactNode;
   onAccountSettings?: () => void;
   disableNav?: boolean;
@@ -98,12 +100,13 @@ export function PageHeader({
   currentSiteId,
   onSiteChange,
   onManageSites,
+  onSiteSettings,
   actionButton,
   onAccountSettings,
   disableNav,
 }: PageHeaderProps) {
   const router = useRouter();
-  const { user, signOut, isSuperadmin, administersAnySite } = useAuth();
+  const { user, signOut, isSuperadmin, administersAnySite, isSiteAdmin } = useAuth();
   const [reportBugOpen, setReportBugOpen] = useState(false);
   const [feedbackLabel, setFeedbackLabel] = useState('report a bug');
   const [feedbackFading, setFeedbackFading] = useState(false);
@@ -188,6 +191,8 @@ export function PageHeader({
   // Non-null only when there is actually a site to switch to. Holds the narrowed
   // callback so bar and drawer can call it without re-testing the same conditions.
   const selectSite = sites.length > 0 && currentSiteId && onSiteChange ? onSiteChange : null;
+  // the same narrowing for the current site's editor, which only its admins can use.
+  const openSiteSettings = currentSiteId && onSiteSettings && isSiteAdmin(currentSiteId) ? onSiteSettings : null;
   const PageIcon = PAGE_ICONS[currentPage.toLowerCase()];
 
   // the scrim mounts with the first open menu and goes once its fade-out ends:
@@ -256,17 +261,24 @@ export function PageHeader({
                         {site.id === currentSiteId && <Check className="h-4 w-4 text-accent-cyan flex-shrink-0" />}
                       </DropdownMenuItem>
                     ))}
+                    {(openSiteSettings || onManageSites) && <DropdownMenuSeparator className="bg-border" />}
+                    {openSiteSettings && (
+                      <DropdownMenuItem
+                        onClick={openSiteSettings}
+                        className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                      >
+                        <SlidersHorizontal className="mr-2 h-4 w-4" />
+                        site settings
+                      </DropdownMenuItem>
+                    )}
                     {onManageSites && (
-                      <>
-                        <DropdownMenuSeparator className="bg-border" />
-                        <DropdownMenuItem
-                          onClick={onManageSites}
-                          className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
-                        >
-                          <Settings className="mr-2 h-4 w-4" />
-                          manage sites
-                        </DropdownMenuItem>
-                      </>
+                      <DropdownMenuItem
+                        onClick={onManageSites}
+                        className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                      >
+                        <Settings className="mr-2 h-4 w-4" />
+                        manage sites
+                      </DropdownMenuItem>
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -486,6 +498,19 @@ export function PageHeader({
                   {site.id === currentSiteId && <Check className="h-4 w-4 flex-shrink-0 text-accent-cyan" />}
                 </button>
               ))}
+              {openSiteSettings && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    openSiteSettings();
+                    setNavDrawerOpen(false);
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+                >
+                  <SlidersHorizontal className="h-4 w-4 flex-shrink-0" />
+                  site settings
+                </button>
+              )}
               {onManageSites && (
                 <button
                   type="button"

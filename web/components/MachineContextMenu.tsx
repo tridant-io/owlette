@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useSyncExternalStore } from 'react';
-import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay } from 'lucide-react';
+import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay, MonitorOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -51,18 +51,28 @@ interface MachineContextMenuProps {
   onLiveView?: () => void;
   /**
    * `capabilities.swoop === 1` from the heartbeat: the machine has a streamer
-   * installed. Swoop then replaces live view in the online block — exactly one
-   * of the two renders. Whether this user may actually get a session is decided
-   * server-side (site enablement, membersMayWatch, step-up), not here.
+   * installed. Swoop then replaces live view in the online block, unless the
+   * site has swoop off (`swoopOff`). Whether this user may actually get a
+   * session is still decided server-side (site enablement, membersMayWatch,
+   * step-up); `swoopOff` only stops the menu offering one the server refuses.
    */
   swoopCapable?: boolean;
   /**
    * live swoop viewers, mirrored onto the machine doc by the server from the
    * session records. counted on the swoop row and on the trigger only while the
-   * machine is online and swoop-capable, so a stale mirror never badges live view.
+   * machine is online, swoop-capable and its site has swoop on, so a stale
+   * mirror never badges live view.
    */
   swoopViewers?: number;
   onSwoop?: () => void;
+  /**
+   * The site has swoop turned off, so a swoop-capable machine falls back to live
+   * view. Admins get a way to the switch, and members learn who can flip it,
+   * instead of a viewer the server refuses.
+   */
+  swoopOff?: boolean;
+  /** Opens the site's editor, where the swoop switch lives. */
+  onSiteSettings?: () => void;
   onViewDisplays?: () => void;
   rebootSchedule?: RestartSchedule;
 }
@@ -85,6 +95,8 @@ export function MachineContextMenu({
   swoopCapable,
   swoopViewers,
   onSwoop,
+  swoopOff,
+  onSiteSettings,
   onViewDisplays,
   rebootSchedule,
 }: MachineContextMenuProps) {
@@ -97,7 +109,7 @@ export function MachineContextMenu({
   const [showRestartScheduleDialog, setShowRestartScheduleDialog] = useState(false);
   const { userPreferences, updateUserPreferences } = useAuth();
   const isMuted = userPreferences.mutedMachines.includes(machineId);
-  const watching = isOnline && swoopCapable ? (swoopViewers ?? 0) : 0;
+  const watching = isOnline && swoopCapable && !swoopOff ? (swoopViewers ?? 0) : 0;
   // the machine this browser runs on, once its streamer has said so
   const onThisMachine = useSyncExternalStore(
     subscribeThisMachine,
@@ -353,8 +365,31 @@ export function MachineContextMenu({
                   slideshow stays for every agent that can't, so the menu never
                   loses its screen entry. It leads: the live picture is the
                   entry people reach for, the still is the fallback. It alone
-                  wears the brand colour, so the eye lands on it first. */}
-              {swoopCapable ? (
+                  wears the brand colour, so the eye lands on it first. With
+                  the site's swoop off, live view comes back and the swoop row
+                  says how to turn it on. */}
+              {swoopCapable && swoopOff && (isSiteAdmin ? (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSiteSettings?.();
+                  }}
+                  data-testid="machine-context-menu-swoop-off"
+                  className="text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
+                >
+                  <MonitorPlay className="mr-2 h-4 w-4" />
+                  turn on swoop…
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem disabled data-testid="machine-context-menu-swoop-off" className="items-start">
+                  <MonitorOff className="mr-2 mt-0.5 h-4 w-4" />
+                  <span className="flex flex-col">
+                    swoop is off
+                    <span className="text-xs text-muted-foreground">ask a site owner or admin to turn it on</span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
+              {swoopCapable && !swoopOff ? (
                 <DropdownMenuItem
                   onClick={(e) => {
                     e.stopPropagation();

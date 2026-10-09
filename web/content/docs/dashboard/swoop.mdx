@@ -35,7 +35,9 @@ the Windows streamer encodes on the GPU's NVENC encoder, the only one it ships w
 
 swoop is **off** until a site turns it on: that is the default, and it is per site.
 
-a site owner or admin flips it in **manage sites** → the site's pencil (**edit site**) → the **swoop** switch, beside [keep screens awake](/docs/dashboard/getting-started#site-settings). the switch takes effect the moment it moves; it is not part of the panel's save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
+a site owner or admin flips it in **site settings** (in the site switcher, or **manage sites** → the site's pencil) → the **swoop** switch, beside [keep screens awake](/docs/dashboard/getting-started#site-settings). the switch takes effect the moment it moves; it is not part of the panel's save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
+
+while a site has swoop off, the menu of a machine that can stream shows **turn on swoop…** to a site owner or admin, which opens site settings, and tells a member that swoop is off and to ask a site owner or admin. both get live view in the meantime.
 
 the rest of the policy has no dashboard control yet. it is set with `PATCH /api/sites/{siteId}/swoop-settings` from a signed-in session as a site owner or admin; an API key is refused here too.
 
