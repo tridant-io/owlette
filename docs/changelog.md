@@ -59,6 +59,16 @@ tridant id's owlette release log, and a deleted or rolled-back version is
 pulled from it; `/admin/installers` shows each version's status there and can
 retry a failed one.
 
+### fixed — the swoop viewer says why it cannot start, and has a way back
+
+Opening swoop on a site where it is turned off showed a "connecting" spinner
+that never stopped, with the reason in small text at the bottom and no clear
+way out. The viewer now stops and says why in the middle of the screen. When
+swoop is off for the site, site admins get a link to the site's settings and
+members are told to ask a site owner or admin. A back-to-dashboard arrow
+starts the session bar in every state, and an ended or failed session also
+offers a back to dashboard button.
+
 ### fixed — a frozen swoop picture recovers on its own
 
 A swoop picture could stop on one frame while the session stayed up, with

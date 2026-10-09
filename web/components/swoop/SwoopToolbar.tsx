@@ -1,10 +1,10 @@
 'use client';
 
 /**
- * the session bar: the machine's name, a badge only when something is wrong,
- * the one gesture that takes fullscreen, keyboard lock and pointer lock
- * together, and whatever menus the page hands it as children. every button is
- * an icon with a tooltip; the bar stays clean.
+ * the session bar: the way back to the dashboard, the machine's name, a badge
+ * only when something is wrong, the one gesture that takes fullscreen,
+ * keyboard lock and pointer lock together, and whatever menus the page hands
+ * it as children. every button is an icon with a tooltip; the bar stays clean.
  *
  * **all three locks ride one click, and the order is fixed.** keyboard lock is
  * only granted in js-initiated fullscreen, so fullscreen must be awaited first;
@@ -29,7 +29,8 @@
  */
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { Eye, Gauge, Info, Maximize, Minimize, PowerOff, RotateCcw } from 'lucide-react';
+import Link from 'next/link';
+import { ArrowLeft, Eye, Gauge, Info, Maximize, Minimize, PowerOff, RotateCcw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -220,51 +221,61 @@ export function SwoopToolbar({
   );
 
   return (
-    <div
-      ref={ref}
-      data-testid="session-bar"
-      className={cn(
-        'flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2',
-        'md:bar-side:w-11 md:bar-side:shrink-0 md:bar-side:flex-col md:bar-side:flex-nowrap md:bar-side:border-b-0',
-        'md:bar-side:px-0 md:bar-side:py-3 md:bar-left:border-r md:bar-right:border-l',
-      )}
-    >
-      <span
-        className={cn('truncate text-sm font-medium text-foreground md:bar-side:min-h-0', VERTICAL)}
-        title={machineId}
+    <SwoopBarMenuPlacement.Provider value={menuPlacementFor(position)}>
+      <div
+        ref={ref}
+        data-testid="session-bar"
+        className={cn(
+          'flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2',
+          'md:bar-side:w-11 md:bar-side:shrink-0 md:bar-side:flex-col md:bar-side:flex-nowrap md:bar-side:border-b-0',
+          'md:bar-side:px-0 md:bar-side:py-3 md:bar-left:border-r md:bar-right:border-l',
+        )}
       >
-        {machineId}
-      </span>
+        {/* the way out in every state, a refused or failed session included.
+            leaving unmounts the page, which ends a live session properly. */}
+        <BarTooltip label="back to dashboard">
+          <Button asChild variant="ghost" size="icon-sm">
+            <Link href="/dashboard" aria-label="back to dashboard">
+              <ArrowLeft aria-hidden />
+            </Link>
+          </Button>
+        </BarTooltip>
 
-      {badge && (
-        <Badge variant={badge.tone} data-testid="session-badge" className={VERTICAL}>
-          {badge.label}
-        </Badge>
-      )}
+        <span
+          className={cn('truncate text-sm font-medium text-foreground md:bar-side:min-h-0', VERTICAL)}
+          title={machineId}
+        >
+          {machineId}
+        </span>
 
-      {session && !session.ctl && (
-        <Badge variant="outline" className={VERTICAL}>
-          <Eye aria-hidden />
-          view only
-        </Badge>
-      )}
+        {badge && (
+          <Badge variant={badge.tone} data-testid="session-badge" className={VERTICAL}>
+            {badge.label}
+          </Badge>
+        )}
 
-      {notice && <Notice text={notice} />}
-      {!hostReads && (
-        <Notice
-          text="the machine's clipboard is not shared: on a mac, allow owlette under paste from other apps in system settings"
-          testId="clipboard-notice"
-        />
-      )}
-      {clipboardHeld && (
-        <Notice
-          text="your browser held back the machine's copy: click the picture to take it, or allow the clipboard for this site"
-          testId="clipboard-held-notice"
-        />
-      )}
+        {session && !session.ctl && (
+          <Badge variant="outline" className={VERTICAL}>
+            <Eye aria-hidden />
+            view only
+          </Badge>
+        )}
 
-      <div className="ml-auto flex items-center gap-1 md:bar-side:ml-0 md:bar-side:mt-auto md:bar-side:flex-col">
-        <SwoopBarMenuPlacement.Provider value={menuPlacementFor(position)}>
+        {notice && <Notice text={notice} />}
+        {!hostReads && (
+          <Notice
+            text="the machine's clipboard is not shared: on a mac, allow owlette under paste from other apps in system settings"
+            testId="clipboard-notice"
+          />
+        )}
+        {clipboardHeld && (
+          <Notice
+            text="your browser held back the machine's copy: click the picture to take it, or allow the clipboard for this site"
+            testId="clipboard-held-notice"
+          />
+        )}
+
+        <div className="ml-auto flex items-center gap-1 md:bar-side:ml-0 md:bar-side:mt-auto md:bar-side:flex-col">
           {children}
 
           <BarTooltip label={statsOpen ? 'hide latency stats' : 'latency stats'}>
@@ -304,8 +315,8 @@ export function SwoopToolbar({
             </Button>
           </BarTooltip>
 
-          {/* swoop runs in its own tab, so the only way on from an ended or failed
-              session is another one; "end" has nothing left to end there. */}
+          {/* an ended or failed session has nothing left to end: the way on is
+              another one, or the way back. */}
           {state === 'ended' || state === 'error' ? (
             reconnectButton
           ) : (
@@ -318,8 +329,8 @@ export function SwoopToolbar({
               </BarTooltip>
             </>
           )}
-        </SwoopBarMenuPlacement.Provider>
+        </div>
       </div>
-    </div>
+    </SwoopBarMenuPlacement.Provider>
   );
 }

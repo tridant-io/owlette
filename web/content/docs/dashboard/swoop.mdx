@@ -89,6 +89,7 @@ an account with no passkey and no authenticator app cannot take control, and bac
 
 the toolbar carries the session state, an **end** button, and:
 
+- **back to dashboard**: the arrow at the start of the bar, there in every state. leaving the page ends your session
 - **fullscreen with keyboard and mouse capture**: takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so
 - **latency stats**: an overlay, off by default because it covers the picture. its codec row shows what the picture is arriving in, and **frozen pictures** how often the picture [froze](#when-the-picture-freezes) in this tab
 - **display picker**: which of the machine's monitors you are looking at
@@ -241,12 +242,12 @@ in a mixed fleet, what a session can do depends on the agent of the machine you 
 
 ## refusal codes
 
-a refused session arrives as a [problem](/docs/api/errors) with a `code`. the viewer shows its sentence, and the last column says whether it tries again by itself.
+a refused session arrives as a [problem](/docs/api/errors) with a `code`. the viewer shows its sentence in the middle of the screen with a **back to dashboard** button, and the last column says whether it tries again by itself.
 
 | code | status | when | the viewer |
 |---|---|---|---|
 | `api_key_not_permitted` | 403 | the caller used an API key | stops |
-| `swoop_disabled` | 403 | the site has swoop off | stops |
+| `swoop_disabled` | 403 | the site has swoop off | stops, and offers a site owner or admin **open site settings**; a member is told to ask one |
 | `machine_excluded` | 403 | the machine is in `excludedMachineIds` | stops |
 | `forbidden` | 403 | your role on the site does not include the capability, as when a member asks for control. the detail reads "capability not granted" | asks to watch instead |
 | `capability_missing` | 403 | the same, caught at a lease renewal: you lost control or access during the session | stops |
