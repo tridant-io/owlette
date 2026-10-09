@@ -7,6 +7,14 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### fixed — cancel on the two-factor screen reaches the login page
+
+**cancel and sign out** on the two-factor screen signed the user out but
+could leave them on that screen with only a "signed out" toast: the browser
+signed out before the server session ended, so the trip to the login page
+bounced straight back. Sign-out now ends the session first, and cancel opens
+the login page with a full page load.
+
 ### changed — swoop's switch is easier to find
 
 The site switcher has a **site settings** item that opens the current site's
