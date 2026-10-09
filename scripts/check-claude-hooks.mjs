@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 /**
- * Proves the Claude Code hooks in .claude/ can actually reach the model.
- * Three hooks sat dead for months: one never parsed, two wrote output fields
- * Claude Code ignores. Each check below would have caught one of them.
+ * Proves the Claude Code hooks, skills, agents and commands in .claude/ can
+ * actually reach the model. Three hooks sat dead for months (one never parsed,
+ * two wrote output fields Claude Code ignores) and an agent was dropped for an
+ * unquoted ": " in its description. Each check below catches one of those.
  *
  *   1. every hook command in .claude/settings.json points at a file that exists
  *   2. every .mjs under .claude/hooks parses (node --check)
  *   3. only lib/hook-output.mjs writes stdout, so the schema lives in one place
  *   4. each registered hook, fed a no-op call for its event, emits nothing or
  *      valid hook JSON; so do the lib/hook-output.mjs writers
+ *   5. every skill, agent and command has frontmatter Claude Code will load:
+ *      skills are folders, names match, and no single-line value carries an
+ *      unquoted ": " (invalid YAML, so the file is silently dropped)
  *
  * Run: node scripts/check-claude-hooks.mjs (CI: .github/workflows/claude-hooks.yml)
  */
@@ -102,8 +106,50 @@ for (const [event, code] of Object.entries(libCalls)) {
   if (err) fail(`lib/hook-output.mjs (${event}): ${err}`)
 }
 
+// 5. frontmatter claude code will load
+function frontmatterError(file, expectName) {
+  const lines = readFileSync(file, 'utf-8').replace(/\r/g, '').split('\n')
+  if (lines[0] !== '---') return 'no frontmatter'
+  const end = lines.indexOf('---', 1)
+  if (end < 0) return 'unterminated frontmatter'
+  const fields = {}
+  let key = null
+  for (const line of lines.slice(1, end)) {
+    // an indented line continues the previous key's value (wrapped text or a list)
+    if (/^\s/.test(line)) {
+      if (key && !fields[key]) fields[key] = line.trim()
+      continue
+    }
+    const m = line.match(/^([\w-]+):\s*(.*)$/)
+    if (!m) continue
+    key = m[1]
+    fields[key] = m[2]
+    // in a plain scalar, a colon before a space or the line end starts a mapping
+    const plain = m[2].replace(/\s+#.*$/, '')
+    if (!/^["'|>[{]/.test(plain) && /:(\s|$)/.test(plain)) return `${key} has an unquoted ":" (invalid YAML)`
+  }
+  if (!fields.description) return 'no description'
+  if (expectName && fields.name?.replace(/^["']|["']$/g, '') !== expectName) return `name is not "${expectName}"`
+  return null
+}
+
+const CLAUDE = join(ROOT, '.claude')
+const mdIn = (dir) => readdirSync(dir).filter((f) => f.endsWith('.md'))
+for (const f of mdIn(join(CLAUDE, 'skills'))) fail(`.claude/skills/${f} is a flat file; skills load only from <name>/SKILL.md`)
+const definitions = [
+  ...readdirSync(join(CLAUDE, 'skills'), { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => [join(CLAUDE, 'skills', e.name, 'SKILL.md'), e.name]),
+  ...mdIn(join(CLAUDE, 'agents')).map((f) => [join(CLAUDE, 'agents', f), f.slice(0, -3)]),
+  ...mdIn(join(CLAUDE, 'commands')).map((f) => [join(CLAUDE, 'commands', f), null]),
+]
+for (const [file, name] of definitions) {
+  const err = existsSync(file) ? frontmatterError(file, name) : 'missing'
+  if (err) fail(`${relative(ROOT, file)}: ${err}`)
+}
+
 if (failures.length) {
   console.error(`claude hooks: ${failures.length} problem(s)\n${failures.map((f) => `  - ${f}`).join('\n')}`)
   process.exit(1)
 }
-console.log(`claude hooks: ${registered.length} registered hooks and ${hookFiles(HOOKS).length} files ok`)
+console.log(`claude hooks: ${registered.length} registered hooks, ${hookFiles(HOOKS).length} hook files and ${definitions.length} skills, agents and commands ok`)

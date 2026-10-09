@@ -23,7 +23,7 @@ pipeline lives in `vm/`.
 | script | wired into |
 |---|---|
 | `check-no-token-logs.mjs` | `.github/workflows/no-token-logs.yml` |
-| `check-claude-hooks.mjs` | `.github/workflows/claude-hooks.yml`: every `.claude/hooks` file parses, writes stdout only through `lib/hook-output.mjs`, and emits valid hook JSON |
+| `check-claude-hooks.mjs` | `.github/workflows/claude-hooks.yml`: every `.claude/hooks` file parses, writes stdout only through `lib/hook-output.mjs`, and emits valid hook JSON; every skill, agent and command has frontmatter Claude Code will load |
 | `scan-firestore-writes.mjs` | `web/package.json` → `npm run scan:firestore-writes` — the standing lockdown invariant: browser control-plane writes must stay at 0 |
 | `check-system-invoker-callers.mjs` | `web/eslint.config.mjs` + a jest twin (`web/__tests__/eslint/system-invoker-allowlist.test.ts`) |
 | `check-status-page-ready.mjs` | Deploy runbooks + `infra/cron-jobs.json` (Instatus status-page readiness) |
