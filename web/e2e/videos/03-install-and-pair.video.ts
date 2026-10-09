@@ -463,8 +463,7 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
         // Anchored ^…$ so it can only resolve to the command box itself; every
         // ancestor carries more text. Also proves the rendered command picked up
         // the seeded version — without installer_metadata the box would read
-        // "Owlette-Installer-v....exe" while the CLIPBOARD got "vundefined"
-        // (AddMachineButton.tsx:339 vs :345).
+        // "Owlette-Installer-v....exe".
         const commandBox = dialog.getByText(
           new RegExp(
             `^Owlette-Installer-v${LATEST_VERSION.replace(/\./g, '\\.')}\\.exe\\s+/ADD=[a-z-]+\\s+/SILENT$`,
@@ -476,9 +475,9 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
 
         await clickWithCursor(
           page,
-          dialog.getByRole('button', { name: 'copy silent install command' }),
+          dialog.getByRole('button', { name: 'copy windows silent install command' }),
         );
-        await expect(page.getByText('Command copied to clipboard')).toBeVisible();
+        await expect(page.getByText('windows silent install command copied')).toBeVisible();
         // b09 must be the LAST narrate in the scene — finishTake settles only the
         // final mark and then writes the sidecar. The cursor rests on the copy
         // button inside the centred modal, nowhere near the bottom-right toaster

@@ -46,5 +46,23 @@ export function environmentToken(host: string): string | null {
  * Includes its own leading space so callers can concatenate unconditionally.
  */
 export function serverFlagFor(host: string): string {
-  return environmentToken(host) === 'dev' ? ' /SERVER=dev' : '';
+  return isDevHost(host) ? ' /SERVER=dev' : '';
+}
+
+/**
+ * The `config/pairing.json` preseed that spends `phrase` on macOS and Linux —
+ * their only way to use a generated phrase unattended.
+ *
+ * Names the dev server exactly when `serverFlagFor` does; without it a machine
+ * that was never paired pairs with owlette.app. Spaced like the installation
+ * docs so the two read the same.
+ */
+export function pairingPreseedFor(phrase: string, host: string): string {
+  const server = isDevHost(host) ? ', "server": "dev"' : '';
+  return `{"phrase": ${JSON.stringify(phrase)}${server}}`;
+}
+
+/** The one rule both install commands use to decide they must name dev. */
+function isDevHost(host: string): boolean {
+  return environmentToken(host) === 'dev';
 }
