@@ -274,7 +274,7 @@ function setup(options: SetupOptions = {}): SetupResult {
 }
 
 // Mirrors layout.tsx: without TooltipProvider every render throws on the panel's Radix tooltips.
-function panelElement(capabilities?: Record<string, number>, machineId = 'machine-1') {
+function panelElement(capabilities?: Record<string, number>, machineId = 'machine-1', controlLocked?: boolean) {
   return (
     <TooltipProvider>
       <DisplayLayoutPanel
@@ -282,6 +282,7 @@ function panelElement(capabilities?: Record<string, number>, machineId = 'machin
         machineName="Lobby Display"
         siteId="site-a"
         capabilities={capabilities}
+        controlLocked={controlLocked}
         onClose={jest.fn()}
       />
     </TooltipProvider>
@@ -582,5 +583,44 @@ describe('DisplayLayoutPanel — drift dot persistence', () => {
     expect(
       screen.getByRole('button', { name: /stored, \d+ display change/ }),
     ).toBeInTheDocument();
+  });
+});
+
+// the viewer's plan leaves out control (useSitePlan): what sends a command
+// gives way to a "part of core" link; configuration stays.
+describe('DisplayLayoutPanel — without control', () => {
+  it('trades restore for a part-of-core link to the plan page', () => {
+    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: true });
+    render(panelElement({ displayRemoteApply: 1 }, 'machine-1', true));
+
+    expect(screen.queryByTestId('display-recall-button')).not.toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'restore is part of core' });
+    expect(link).toHaveAttribute('href', '/settings/plan');
+    expect(link).toHaveTextContent('part of core');
+    expect(screen.getByTestId('display-store-button')).toBeInTheDocument();
+  });
+
+  it('drops the apply self-test but keeps enabling restore, a setting', () => {
+    setup({ canSiteAdmin: true, remoteApplyEnabled: false });
+    render(panelElement(undefined, 'machine-1', true));
+
+    expect(screen.queryByTestId('display-test-apply-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('display-enable-remote-apply-button')).toBeInTheDocument();
+  });
+
+  it('asks the agent for no mode catalogue, which would be a command', () => {
+    setup({ canSiteAdmin: true });
+    render(panelElement(undefined, 'machine-1', true));
+
+    expect(mockedUseDisplayModes).toHaveBeenLastCalledWith('site-a', 'machine-1', expect.objectContaining({ triggerForHash: undefined }));
+  });
+
+  it('leaves restore, the self-test and the catalogue alone with control', () => {
+    setup({ canSiteAdmin: true, remoteApplyEnabled: false });
+    renderPanel();
+
+    expect(screen.getByTestId('display-test-apply-button')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /part of core/ })).not.toBeInTheDocument();
+    expect(mockedUseDisplayModes).toHaveBeenLastCalledWith('site-a', 'machine-1', expect.objectContaining({ triggerForHash: 'sig-abc' }));
   });
 });

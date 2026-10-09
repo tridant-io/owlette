@@ -22,6 +22,13 @@ jest.mock('@/lib/logger', () => ({
   },
 }));
 
+// the resolver has its own suite; here it only matters what createSite does with the answer.
+const mockSiteSlotAvailable = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  ...jest.requireActual('@/lib/plan.server'),
+  siteSlotAvailable: (uid: string) => mockSiteSlotAvailable(uid),
+}));
+
 jest.mock('firebase-admin/firestore', () => ({
   FieldValue: {
     arrayUnion: (...items: unknown[]) => ({ __op: 'arrayUnion', items }),
@@ -681,6 +688,10 @@ describe('bootstrapUser', () => {
 describe('site CRUD actions', () => {
   const CREATE_NOW = new Date('2026-02-03T04:05:06.000Z');
 
+  beforeEach(() => {
+    mockSiteSlotAvailable.mockResolvedValue(true);
+  });
+
   /** Run createSite against `db` with the fixed clock and stable inputs. */
   function runCreateSite(db: FakeDb, siteId = 'site-a') {
     return createSite(ctx, {
@@ -727,6 +738,33 @@ describe('site CRUD actions', () => {
       role: 'owner',
       status: 'active',
     });
+    // the owner is the payer, so the slot asked about is theirs.
+    expect(mockSiteSlotAvailable).toHaveBeenCalledWith('owner-1');
+  });
+
+  it('createSite refuses an owner with no site slot left, and writes nothing', async () => {
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: ['existing-site'] });
+    mockSiteSlotAvailable.mockResolvedValue(false);
+
+    const result = await runCreateSite(db);
+
+    expect(result).toEqual({ kind: 'plan_limit' });
+    expect(db.docs.get('sites/site-a')).toBeUndefined();
+    expect(db.docs.get('sites/site-a/members/owner-1')).toBeUndefined();
+    expect(db.docs.get('users/owner-1')?.sites).toEqual(['existing-site']);
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('createSite answers a taken or invalid id before asking about the plan', async () => {
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: [] });
+    db.seed('sites/site-a', { name: 'taken', owner: 'someone-else' });
+    mockSiteSlotAvailable.mockResolvedValue(false);
+
+    expect(await runCreateSite(db)).toEqual({ kind: 'already_exists' });
+    expect(await runCreateSite(db, 'Not A Valid Id!')).toMatchObject({ kind: 'invalid_site_id' });
+    expect(mockSiteSlotAvailable).not.toHaveBeenCalled();
   });
 
   it('createSite preserves memberships the creator already had', async () => {

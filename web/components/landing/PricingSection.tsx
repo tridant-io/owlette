@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Check } from 'lucide-react';
 import {
+  AFTER_BETA,
+  FREE_SCOPE,
   INCLUDED_STORAGE,
   PRICING_FACTS,
   STORAGE_OVERAGE,
@@ -12,6 +14,13 @@ interface TierFeature {
   label: string;
   asterisk?: boolean;
 }
+
+const freeFeatures: TierFeature[] = [
+  { label: FREE_SCOPE },
+  { label: 'live status & metrics' },
+  { label: 'crash detection & auto-restart' },
+  { label: 'owlette updates' },
+];
 
 const coreFeatures: TierFeature[] = [
   { label: 'process monitoring & auto-recovery' },
@@ -42,17 +51,32 @@ const proFeatures: TierFeature[] = [
 interface TierCardProps {
   name: string;
   price: string;
-  unit: string;
+  unit?: string;
+  /** a list price is struck while beta makes it free; owlette free has none to strike. */
+  struck?: boolean;
+  note?: string;
   features: TierFeature[];
   highlighted?: boolean;
   preludeNote?: string;
   priceFootnote?: string;
 }
 
-function TierCard({ name, price, unit, features, highlighted = false, preludeNote, priceFootnote }: TierCardProps) {
+function TierCard({
+  name,
+  price,
+  unit,
+  struck = true,
+  note = 'free during beta',
+  features,
+  highlighted = false,
+  preludeNote,
+  priceFootnote,
+}: TierCardProps) {
+  // on wide screens each card's five blocks sit on rows shared across the
+  // cards (subgrid), so the dividers line up however the price wraps
   return (
     <div
-      className={`relative rounded-2xl border bg-card/60 px-6 sm:px-10 text-center flex flex-col ${
+      className={`relative rounded-2xl border bg-card/60 px-6 sm:px-10 lg:px-8 text-center flex flex-col lg:grid lg:grid-rows-subgrid lg:row-span-5 ${
         highlighted ? 'border-accent-cyan/40' : 'border-border'
       }`}
     >
@@ -69,26 +93,32 @@ function TierCard({ name, price, unit, features, highlighted = false, preludeNot
         </h3>
         {/* translucent ink loses more contrast on paper than on navy, so the
             struck price takes more of it by day to fade by the same amount */}
-        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 mb-1 opacity-50 dark:opacity-35">
-          <span className="text-5xl sm:text-6xl font-heading font-bold text-foreground line-through decoration-2">
+        <div
+          className={`flex flex-wrap items-center justify-center gap-x-3 gap-y-1 mb-1 ${
+            struck ? 'opacity-50 dark:opacity-35' : ''
+          }`}
+        >
+          <span
+            className={`text-5xl sm:text-6xl font-heading font-bold text-foreground ${
+              struck ? 'line-through decoration-2' : ''
+            }`}
+          >
             {price}
           </span>
-          <span className="text-lg sm:text-xl">
-            {unit}
-          </span>
+          {unit && (
+            <span className="text-lg sm:text-xl">
+              {unit}
+            </span>
+          )}
         </div>
         <p className="text-accent-warm font-semibold text-xl">
-          free during beta
+          {note}
         </p>
-        {/* Always rendered (with a non-breaking-space fallback) so the
-            horizontal divider lines up across both cards regardless of
-            whether the tier has a price footnote. */}
-        <p
-          className={`text-sm text-muted-foreground mt-2 ${priceFootnote ? '' : 'opacity-0 select-none'}`}
-          aria-hidden={priceFootnote ? undefined : true}
-        >
-          {priceFootnote ?? ' '}
-        </p>
+        {priceFootnote && (
+          <p className="text-sm text-muted-foreground mt-2">
+            {priceFootnote}
+          </p>
+        )}
       </div>
 
       <hr className="border-border/50" />
@@ -137,17 +167,24 @@ function TierCard({ name, price, unit, features, highlighted = false, preludeNot
 export function PricingSection() {
   return (
     <section id="pricing" className="pt-16 sm:pt-24 pb-32 sm:pb-48 px-4 sm:px-6 -scroll-mt-8 sm:-scroll-mt-16">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-6xl mx-auto">
         <div className="text-center max-w-3xl mx-auto">
           <h2 className="section-headline text-foreground mb-4">
             simple, transparent pricing.
           </h2>
           <p className="section-subheadline mb-12">
-            two tiers. no hidden fees. pay only for what you run.
+            three tiers. no hidden fees. pay only for what you run.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-x-6 lg:gap-y-0">
+          <TierCard
+            name="owlette free"
+            price="free"
+            struck={false}
+            note="after beta, too"
+            features={freeFeatures}
+          />
           <TierCard
             name="core"
             price={usd(PRICING_FACTS.core.list)}
@@ -174,6 +211,9 @@ export function PricingSection() {
             </a>
           </p>
           <p className="mt-10 text-sm text-muted-foreground/80">
+            {AFTER_BETA}
+          </p>
+          <p className="mt-2 text-sm text-muted-foreground/80">
             founders pricing is the rate you keep, not an introductory period.
           </p>
           <p className="mt-2 text-sm text-muted-foreground/80">

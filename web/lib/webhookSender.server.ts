@@ -8,6 +8,7 @@
 import { getAdminDb } from '@/lib/firebase-admin';
 import { WEBHOOK_SECRETS_COLLECTION } from '@/lib/webhookSecrets.server';
 import logger from '@/lib/logger';
+import { pausedByPlan, type PlanMemo } from '@/lib/planPause.server';
 import { DISPLAY_EVENT_ROUTING } from '@/lib/alerts/displayEventRouting';
 import crypto from 'crypto';
 
@@ -228,12 +229,15 @@ export function formatForPlatform(
 /**
  * Fire all enabled webhooks for a site subscribed to the given event. Non-blocking
  * (Promise.allSettled), never throws. Returns the number delivered successfully.
+ * Paused, not failed, when the site's payer has no `owlette.webhooks`; pass a
+ * batch's `planMemo` to resolve each payer once.
  */
 export async function fireWebhooks(
   siteId: string,
   siteName: string,
   eventType: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  planMemo?: PlanMemo
 ): Promise<number> {
   const db = getAdminDb();
 
@@ -265,6 +269,17 @@ export async function fireWebhooks(
   });
 
   if (liveDocs.length === 0) return 0;
+
+  // after the subscription query on purpose: a site with nothing subscribed has
+  // nothing to pause, and checking first would charge every event the lookup.
+  // a pause touches no delivery state, so it never counts toward auto-disable.
+  if (await pausedByPlan(siteId, 'owlette.webhooks', planMemo)) {
+    logger.warn("webhook delivery paused: the site's plan has no webhooks", {
+      context: 'webhookSender',
+      data: { siteId, eventType, webhooks: liveDocs.length },
+    });
+    return 0;
+  }
 
   const payload: WebhookPayload = {
     event: eventType,

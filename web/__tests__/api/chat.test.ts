@@ -97,6 +97,13 @@ jest.mock('@/lib/membership.server', () => {
   };
 });
 
+// the real gate by default, which with PLAN_ENFORCEMENT unset answers before any read.
+const mockRequireEntitlement = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  ...jest.requireActual('@/lib/plan.server'),
+  requireEntitlement: (...a: unknown[]) => mockRequireEntitlement(...a),
+}));
+
 const mockResolveAuth = jest.fn();
 jest.mock('@/lib/apiAuth.server', () => {
   const actual = jest.requireActual('@/lib/apiAuth.server');
@@ -138,6 +145,11 @@ import {
   PATCH as renamePATCH,
   DELETE as deleteDELETE,
 } from '@/app/api/hoot/conversations/[conversationId]/route';
+import { POST as chatAliasSendPOST } from '@/app/api/chat/[conversationId]/route';
+import { problemPlanRequired } from '@/lib/apiErrors';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
+
+const { requireEntitlement: realRequireEntitlement } = jest.requireActual('@/lib/plan.server');
 
 // Helpers
 
@@ -227,6 +239,7 @@ beforeEach(() => {
     nextPageToken: '',
   });
   mockAppendMessage.mockResolvedValue({ messageCount: 1, spilled: false });
+  mockRequireEntitlement.mockImplementation(realRequireEntitlement);
   mockSoftDelete.mockResolvedValue({ alreadyDeleted: false, deletedAt: Timestamp.now() });
   mockRename.mockImplementation(async (_id: string, title: unknown) => ({
     title: typeof title === 'string' ? title.trim() : 'untitled chat',
@@ -424,6 +437,43 @@ describe('POST /api/hoot/conversations', () => {
       ),
     );
     expect(res.headers.get('Idempotent-Replayed')).toBe('true');
+  });
+});
+
+// POST /api/hoot/conversations/{conversationId} and its /api/chat twin - the payer plan
+
+describe.each([
+  ['/api/hoot/conversations', sendPOST],
+  ['/api/chat', chatAliasSendPOST],
+])('POST %s/{conversationId} — the payer plan', (base, send) => {
+  function sendRequest(key: string) {
+    return jsonReq(
+      `http://localhost${base}/${CONV}`,
+      'POST',
+      { role: 'user', content: 'restart the kiosk' },
+      { 'idempotency-key': key },
+    );
+  }
+
+  it('402 plan_required before the prompt is stored or the stream starts', async () => {
+    mockRequireEntitlement.mockResolvedValue(
+      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.hoot'], 'owlette.hoot'),
+    );
+
+    const res = await send(sendRequest('plan1'), ctx());
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.hoot' });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
+    expect(mockAppendMessage).not.toHaveBeenCalled();
+    expect(mockRunHootStream).not.toHaveBeenCalled();
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('streams as before with enforcement off', async () => {
+    const res = await send(sendRequest('plan2'), ctx());
+    expect(res.status).toBe(200);
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
+    expect(mockRunHootStream).toHaveBeenCalledTimes(1);
   });
 });
 

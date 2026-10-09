@@ -18,6 +18,7 @@ import {
 import { Loader2, Plus, Webhook, X } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { CopyButton } from '@/components/CopyButton';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { CreateWebhookDialog } from './CreateWebhookDialog';
 import { WebhookCard, type WebhookListItem } from './WebhookCard';
 
@@ -57,6 +58,8 @@ export default function WebhooksSettingsPage() {
   const site = sites.find((s) => s.id === selectedSite);
   const canManage =
     !!selectedSite && (isSiteAdmin(selectedSite) || (!!user && site?.owner === user.uid));
+  const siteOwner = site?.owner ?? null;
+  const webhooksGated = usePlanGated('webhooks', siteOwner);
   const [webhooks, setWebhooks] = useState<WebhookListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -164,13 +167,15 @@ export default function WebhooksSettingsPage() {
                 </Select>
               )}
               {canManage && (
-                <Button
-                  type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className="cursor-pointer"
-                >
-                  <Plus className="h-4 w-4 mr-1" /> create webhook
-                </Button>
+                <UpgradeGate flag="webhooks" siteOwner={siteOwner} variant="inline">
+                  <Button
+                    type="button"
+                    onClick={() => setCreateOpen(true)}
+                    className="cursor-pointer"
+                  >
+                    <Plus className="h-4 w-4 mr-1" /> create webhook
+                  </Button>
+                </UpgradeGate>
               )}
             </div>
           </div>
@@ -223,14 +228,17 @@ export default function WebhooksSettingsPage() {
                       roost activity.
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => setCreateOpen(true)}
-                    className="cursor-pointer"
-                  >
-                    <Plus className="h-3.5 w-3.5 mr-1" /> create your first webhook
-                  </Button>
+                  {/* the header already carries the upgrade note */}
+                  {!webhooksGated && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => setCreateOpen(true)}
+                      className="cursor-pointer"
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" /> create your first webhook
+                    </Button>
+                  )}
                 </>
               ) : (
                 <div>

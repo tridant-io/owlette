@@ -1,7 +1,7 @@
 ---
 title: "Firestore data model"
 description: "every Firestore collection owlette reads or writes: what each document holds, who writes it, and what the security rules let a browser or an agent touch directly."
-keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions"]
+keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "pairedAt"]
 ---
 
 each section below lists a path, its fields, and its **access**: what `firestore.rules` lets a signed-in browser or a paired agent do directly. *server only* means the rules deny the path, or it falls through to the deny-all rule at the bottom, and only route handlers, Cloud Functions and workers reach it through the Admin SDK. the Admin SDK bypasses the rules, so every server write enforces its own checks.
@@ -78,6 +78,8 @@ firestore/
 |-- agent_refresh_tokens/{tokenHash}               rules
 |-- agent_tokens/{tokenId}                         rules
 |-- device_codes/{phrase}                          rules
+|-- billing_usage/{payerUid}/days/{YYYY-MM-DD}
+|-- plan_snapshot/{payerUid}
 `-- cli_device_codes, idempotency_cache, pending_*_alerts, ... (see platform)
 ```
 
@@ -92,7 +94,7 @@ the site. **access**: site members read; writes are server only.
 | field | type | notes |
 | --- | --- | --- |
 | `name` | string | site display name. |
-| `owner` | string | uid of the user who created the site. **legacy**: still written on creation, but no rule consults it — access comes from `members`. |
+| `owner` | string | uid of the site's owner: the creator, moved by an ownership transfer. no rule consults it — access comes from `members` — but it names the site's payer, whose plan applies to the site once [plans](/docs/plans) are enforced. |
 | `createdAt` | timestamp | creation time. |
 | `timezone` | string | IANA timezone for site-scoped scheduling. |
 | `timeFormat` | string | `12h` or `24h`, the site's clock format. |
@@ -203,6 +205,7 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | `siteId` | string | owning site. |
 | `online` | boolean | agent-reported online flag. the dashboard also checks heartbeat age. |
 | `lastHeartbeat` | timestamp | updated with each heartbeat. |
+| `pairedAt` | timestamp | written by the server when the machine first receives credentials, and kept on a re-pair. after a plan lapses, the machine with the earliest one stays live in the dashboard. missing on machines paired before it existed. |
 | `agent_version` | string | agent build version. |
 | `osFamily` | string | `windows`, `macos` or `linux`, written on every heartbeat. an unrecognized platform is reported verbatim; the dashboard treats that, and an absent field (agents before 4.0.0), as `windows`. |
 | `arch` | string | `x64` or `arm64` (an unrecognized value verbatim). with `osFamily`, it picks the installer a fleet update sends. |
@@ -683,7 +686,7 @@ these are server only unless noted.
 | `api_keys/{keyHash}` | the API key lookup: `{ userId, keyId, environment, scopes, expiresAt, retiresAt, revokedAt }`. the rules deny it explicitly. |
 | `agent_refresh_tokens/{tokenHash}` | hashed agent refresh tokens: `siteId`, `machineId`, `version`, `createdBy`, `createdAt`, `lastUsed`, `agentUid`, and for rotation `predecessorHash`, `supersededAt`, `supersededBy`, `retiresAt`. `expiresAt` absent means the token never expires. see [token management](/docs/dashboard/admin/token-management). |
 | `agent_tokens/{tokenId}` | legacy registration codes, still written by the installer-generation and setup-token routes. |
-| `device_codes/{phrase}` | a pairing phrase's state, alive for 10 minutes and deleted once the agent consumes it: `deviceCodeHash`, `wrapVersion`, `machineId`, `version`, `status`, `createdAt`, `expiresAt`, `siteId`, `authorizedBy`, `authorizedAt`, `encryptedCredentials`, `preauthorizedIntent`, `deferTokenMint`. see [authentication](/docs/reference/authentication). |
+| `device_codes/{phrase}` | a pairing phrase's state, alive for 10 minutes and deleted once the agent consumes it: `deviceCodeHash`, `wrapVersion`, `machineId`, `version`, `status`, `createdAt`, `expiresAt`, `siteId`, `authorizedBy`, `authorizedAt`, `encryptedCredentials`, `preauthorizedIntent`, `deferTokenMint`. `status` is `refused`, with the message in `refusedReason`, when the plan's machine limit turned the authorization down. see [authentication](/docs/reference/authentication). |
 | `cli_device_codes/{phrase}` | the CLI's sign-in phrase: `deviceCodeHash`, `status`, `createdAt`, `expiresAt` (10 minutes), `authorizedBy`, `authorizedAt`, `siteId`, `keyId`, `encryptedCredentials`. |
 | `mfa_pending/{uid}` | a TOTP setup secret while enrollment is in progress. |
 | `webauthn_challenges/{challengeId}` | single-use passkey challenges. |
@@ -696,6 +699,15 @@ these are server only unless noted.
 | `global/audit_log/entries/{entryId}` | platform audit records for actions outside any site. |
 | `status_pings/{ms}` | status-page probe results. |
 | `dmca_notices/{id}` | notices from `POST /api/legal/dmca`. |
+
+### plans
+
+two server-only collections, written by the daily `/api/cron/plan-daily` job at 03:00 UTC and keyed by the payer, the uid in a site's `owner`. both fall through to the deny-all rule. nothing is billed or withheld from them until [plans](/docs/plans) are enforced; until then every snapshot reads `enforced: false`.
+
+| path | holds |
+| --- | --- |
+| `billing_usage/{payerUid}/days/{YYYY-MM-DD}` | `{ machineIds, updatedAt }`: the machines across the payer's sites whose `lastHeartbeat` fell in the 26 hours before the run, recorded against the previous UTC day as an array union, so a rerun adds nothing. a billing period's active machines are the distinct IDs across its days. documents older than 100 days are deleted. |
+| `plan_snapshot/{payerUid}` | `{ enforced, control, roost, resolvedAt }`: the payer's plan as last resolved, overwritten each run. Cloud Functions cannot ask the plan service, so the scheduled-rollout function reads this instead: a due rollout scheduled before `resolvedAt` is aborted, with the reason, when `enforced` is `true` and `control` or `roost` is `false`. no snapshot means allow. |
 
 ---
 

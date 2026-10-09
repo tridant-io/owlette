@@ -4,6 +4,8 @@ import { useState } from 'react';
 import React from 'react';
 import { Plus, Minus } from 'lucide-react';
 import {
+  AFTER_BETA,
+  FREE_COVERS,
   INCLUDED_STORAGE,
   PRICING_FACTS,
   STORAGE_OVERAGE,
@@ -14,7 +16,7 @@ import {
 const faqs: { q: string; a: React.ReactNode }[] = [
   {
     q: "is it actually free?",
-    a: `during beta, yes — both tiers, no credit card, no trial clock. after beta: core is ${perMachineMonth(
+    a: `during beta, yes — every tier, no credit card, no trial clock. ${AFTER_BETA} owlette free covers ${FREE_COVERS}. core is ${perMachineMonth(
       PRICING_FACTS.core.list,
     )} for monitoring, process control, displays, and alerts on a single site. pro is ${perMachineMonth(
       PRICING_FACTS.pro.list,
@@ -24,7 +26,7 @@ const faqs: { q: string; a: React.ReactNode }[] = [
       PRICING_FACTS.foundersCohort
     } customers keep a founders rate of ${usd(PRICING_FACTS.core.founders)} core / ${usd(
       PRICING_FACTS.pro.founders,
-    )} pro, permanently. no per-user fees on either.`,
+    )} pro, permanently. no per-user fees on any tier.`,
   },
   {
     q: "does it work on mac or linux?",

@@ -11,6 +11,7 @@ import {
   problemUnauthorized,
   problemForbidden,
   problemNotFound,
+  problemPlanRequired,
   problemScopeInsufficient,
   problemTokenExpired,
 } from '@/lib/apiErrors';
@@ -33,6 +34,13 @@ import {
 } from '@/lib/capabilities';
 import { checkRoostVersion } from '@/lib/versionHeader';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
+import {
+  entitled,
+  PLAN_REQUIRED_DETAIL,
+  requireEntitlement,
+  resolvePlan,
+  type PlanFlag,
+} from '@/lib/plan.server';
 import { SITE_ID_RE, resolveSiteAccess } from '@/lib/sitePolicy.server';
 
 export const MAX_HASHES_PER_REQUEST = 1000;
@@ -346,11 +354,14 @@ function runScopeCheck(
  * matrix keyed on the global role locked an owner out of their own site. The
  * matrix is keyed on per-site standing now and `owner` is a row in it, so
  * ownership is granted by the matrix rather than routed around it.
+ *
+ * `planFlag` also requires the site payer's plan flag, once the capability holds.
  */
 async function requireSiteCapability(
   auth: ResolvedAuth,
   capability: Capability,
   siteId: string,
+  planFlag?: PlanFlag,
 ): Promise<NextResponse | null> {
   const outcome = await resolveSiteAccess(auth.userId, siteId);
   // A refusal here is not distinguished by reason: membership and scope were
@@ -374,26 +385,61 @@ async function requireSiteCapability(
   if (!hasCapability(actor, capability, siteId)) {
     return problemForbidden('capability not granted');
   }
-  return null;
+  return planFlag ? requireEntitlement(siteId, planFlag, outcome.facts.siteData) : null;
 }
 
+/**
+ * DISTRIBUTION_MANAGE plus the payer's `owlette.roost`, for creating a roost and
+ * uploading to one (plan.md decision 8).
+ */
 export async function requireDistributionManageCapability(
   auth: ResolvedAuth,
   siteId: string,
 ): Promise<NextResponse | null> {
-  return requireSiteCapability(auth, Capability.DISTRIBUTION_MANAGE, siteId);
+  return requireSiteCapability(auth, Capability.DISTRIBUTION_MANAGE, siteId, 'owlette.roost');
 }
 
 /**
  * WEBHOOK_MANAGE gate for the mutating `/api/webhooks/**` handlers (create,
  * update, delete, rotate-secret, test). Read paths — list, detail, deliveries,
  * probe — stay at member level.
+ *
+ * `create` also requires the payer's `owlette.webhooks` (plan.md decision 8). the
+ * rest stay open, so a payer who lapsed can still tidy up what they made.
  */
 export async function requireWebhookManageCapability(
   auth: ResolvedAuth,
   siteId: string,
+  { create = false }: { create?: boolean } = {},
 ): Promise<NextResponse | null> {
-  return requireSiteCapability(auth, Capability.WEBHOOK_MANAGE, siteId);
+  return requireSiteCapability(
+    auth,
+    Capability.WEBHOOK_MANAGE,
+    siteId,
+    create ? 'owlette.webhooks' : undefined,
+  );
+}
+
+/**
+ * a 402 unless `uid` may mint api keys (plan.md decision 8). the minting user's
+ * own plan decides, whichever sites the key is scoped to.
+ */
+export async function requireApiKeyMintPlan(uid: string): Promise<NextResponse | null> {
+  if (entitled(await resolvePlan(uid), 'owlette.api_keys')) return null;
+  return problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.api_keys'], 'owlette.api_keys');
+}
+
+/**
+ * an api-key request also needs the site payer's `owlette.api_keys` (plan.md
+ * decision 8). sessions are untouched: the dashboard is gated feature by feature.
+ */
+async function requireApiKeyPlan(
+  auth: ResolvedAuth,
+  siteId: string,
+  siteData: Record<string, unknown> | null,
+): Promise<NextResponse | null> {
+  if (!auth.keyContext) return null;
+  return requireEntitlement(siteId, 'owlette.api_keys', siteData);
 }
 
 function isMutationPermission(permission: ApiKeyPermission): boolean {
@@ -416,14 +462,19 @@ function isMutationPermission(permission: ApiKeyPermission): boolean {
  * `authorizedSiteHandler`, so the divergence this comment used to describe is
  * gone — `__tests__/lib/authorizationParity.test.ts` now pins the AGREEMENT,
  * not the difference. Three auditors were nearly misled by the old wording.
+ *
+ * the site document comes back so the plan gates skip a second read of it.
  */
 async function assertSiteAccessOrProblem(
   userId: string,
   siteId: string,
-): Promise<NextResponse | null> {
+): Promise<
+  | { ok: true; siteData: Record<string, unknown> | null }
+  | { ok: false; response: NextResponse }
+> {
   try {
-    await assertUserHasSiteAccess(userId, siteId);
-    return null;
+    const { siteData } = await assertUserHasSiteAccess(userId, siteId);
+    return { ok: true, siteData };
   } catch (err) {
     if (err instanceof ApiAuthError) {
       // An INACTIVE caller is 403, not the collapsed 404 (Wave 1 task 1.3).
@@ -435,12 +486,12 @@ async function assertSiteAccessOrProblem(
       // NOTE this fires for a MISSING user document as well as a soft-deleted
       // one, so an api key whose owner was hard-deleted also moves 404 -> 403.
       if (err.code === 'user_inactive') {
-        return problemForbidden(err.message);
+        return { ok: false, response: problemForbidden(err.message) };
       }
       if (err.status === 404 || err.status === 403) {
-        return problemNotFound('site not found or no access');
+        return { ok: false, response: problemNotFound('site not found or no access') };
       }
-      return problemForbidden();
+      return { ok: false, response: problemForbidden() };
     }
     throw err;
   }
@@ -470,11 +521,14 @@ export async function requireSiteAuthAndScope(
     };
   }
 
-  const accessError = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
-  if (accessError) return { ok: false, response: accessError };
+  const access = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
+  if (!access.ok) return access;
 
   const scopeResult = runScopeCheck(authResult.auth, 'site', siteId, permission);
   if (!scopeResult.ok) return scopeResult;
+
+  const planError = await requireApiKeyPlan(authResult.auth, siteId, access.siteData);
+  if (planError) return { ok: false, response: planError };
 
   auditApiKeyUse(authResult.auth, siteId, req);
 
@@ -553,11 +607,14 @@ export async function requireMachineAuthAndScope(
   const authResult = await resolveAuthOrProblem(req);
   if (!authResult.ok) return authResult;
 
-  const accessError = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
-  if (accessError) return { ok: false, response: accessError };
+  const access = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
+  if (!access.ok) return access;
 
   const scopeResult = runScopeCheck(authResult.auth, 'machine', machineId, permission);
   if (!scopeResult.ok) return scopeResult;
+
+  const planError = await requireApiKeyPlan(authResult.auth, siteId, access.siteData);
+  if (planError) return { ok: false, response: planError };
 
   auditApiKeyUse(authResult.auth, siteId, req);
 
@@ -599,16 +656,29 @@ export async function requireRoostAuthAndScope(
   const authResult = await resolveAuthOrProblem(req);
   if (!authResult.ok) return authResult;
 
-  const accessError = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
-  if (accessError) return { ok: false, response: accessError };
+  const access = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
+  if (!access.ok) return access;
 
   if (isMutationPermission(permission)) {
-    const capabilityError = await requireDistributionManageCapability(authResult.auth, siteId);
+    const capabilityError = await requireSiteCapability(
+      authResult.auth,
+      Capability.DISTRIBUTION_MANAGE,
+      siteId,
+    );
     if (capabilityError) return { ok: false, response: capabilityError };
   }
 
   const scopeResult = runScopeCheck(authResult.auth, 'roost', roostId, permission);
   if (!scopeResult.ok) return scopeResult;
+
+  const planError = await requireApiKeyPlan(authResult.auth, siteId, access.siteData);
+  if (planError) return { ok: false, response: planError };
+
+  // deleting stays open on every plan (plan.md decision 8), so a payer who lapsed can clean up.
+  if (isMutationPermission(permission) && req.method !== 'DELETE') {
+    const roostError = await requireEntitlement(siteId, 'owlette.roost', access.siteData);
+    if (roostError) return { ok: false, response: roostError };
+  }
 
   auditApiKeyUse(authResult.auth, siteId, req);
 
@@ -690,11 +760,14 @@ export async function requireChatAuthAndScope(
   const authResult = await resolveAuthOrProblem(req);
   if (!authResult.ok) return authResult;
 
-  const accessError = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
-  if (accessError) return { ok: false, response: accessError };
+  const access = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
+  if (!access.ok) return access;
 
   const scopeResult = runScopeCheck(authResult.auth, 'chat', siteId, permission);
   if (!scopeResult.ok) return scopeResult;
+
+  const planError = await requireApiKeyPlan(authResult.auth, siteId, access.siteData);
+  if (planError) return { ok: false, response: planError };
 
   auditApiKeyUse(authResult.auth, siteId, req);
 

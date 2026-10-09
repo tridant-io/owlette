@@ -72,6 +72,11 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
 const mockResolveAuth = jest.fn();
 const mockAssertSite = jest.fn();
 
@@ -857,6 +862,105 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
     expect(res.status).toBe(422);
     const body = await res.json();
     expect(body.code).toBe('idempotency_key_mismatch');
+  });
+
+  describe('on owlette free (plan.md decision 7)', () => {
+    const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
+    const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
+
+    beforeEach(() => {
+      for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
+      process.env.PLAN_ENFORCEMENT = 'on';
+      process.env.TRIDANT_API_URL = 'https://tridant.test';
+      process.env.TRIDANT_LICENSE_KEY = 'test-key';
+      mockGetEntitlements.mockResolvedValue({
+        ok: true,
+        resolved: false,
+        standing: 'expired',
+        inGoodStanding: false,
+        ent: { 'owlette.control': '0', 'owlette.hoot': '0' },
+        epoch: 0,
+      });
+    });
+
+    afterEach(() => {
+      for (const key of ENV_KEYS) {
+        if (savedEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = savedEnv[key];
+      }
+    });
+
+    /** a superadmin payer is unrestricted, so the caller (and site owner) is a plain member here. */
+    function asMemberOwner(): void {
+      mocks.userDocs.set('user-1', { role: 'member', sites: [SITE] });
+    }
+
+    it('402 plan_required for reboot_machine, and nothing is queued', async () => {
+      queueIdemOnly();
+      asMemberOwner();
+      const req = createMockRequest(
+        `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+        {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'idem-free-reboot' },
+          body: { type: 'reboot_machine' },
+        },
+      );
+      const res = await commandsPOST(req, {
+        params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
+      });
+      expect(res.status).toBe(402);
+      expect(res.headers.get('Content-Type')).toContain('application/problem+json');
+      expect(await res.json()).toMatchObject({
+        type: 'https://owlette.app/problems/plan-required',
+        code: 'plan_required',
+        entitlement: 'owlette.control',
+        upgradeUrl: '/settings/plan',
+      });
+      const mergeCalls = mocks.set.mock.calls.filter(
+        (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
+      );
+      expect(mergeCalls).toHaveLength(0);
+    });
+
+    it('402 plan_required naming owlette.hoot for mcp_tool_call, the hoot tool path', async () => {
+      queueIdemOnly();
+      asMemberOwner();
+      const req = createMockRequest(
+        `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+        {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'idem-free-mcp' },
+          body: { type: 'mcp_tool_call', params: { tool_name: 'get_system_info' } },
+        },
+      );
+      const res = await commandsPOST(req, {
+        params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
+      });
+      expect(res.status).toBe(402);
+      expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.hoot' });
+    });
+
+    it('202 for update_owlette, which every plan keeps', async () => {
+      queueIdemAndMachine({ online: true });
+      asMemberOwner();
+      const req = createMockRequest(
+        `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+        {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'idem-free-update' },
+          body: {
+            type: 'update_owlette',
+            params: { installer_url: 'https://example.test/i.exe', target_version: '4.1.7', checksum_sha256: 'a'.repeat(64) },
+          },
+        },
+      );
+      const res = await commandsPOST(req, {
+        params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
+      });
+      expect(res.status).toBe(202);
+      expect(lastMergedCommand().type).toBe('update_owlette');
+    });
   });
 });
 

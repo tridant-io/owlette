@@ -5,7 +5,8 @@
  * PageHeader below `md`: the nav drawer behaves as the modal it looks like —
  * focus moves in, tab stays in, escape is claimed and focus goes back to the
  * menu button — the current site stays named beside that button, and the menu
- * scrim exists only while a menu is open.
+ * scrim exists only while a menu is open. the user menu links the plan page
+ * only while plans are enforced.
  *
  * jsdom applies no media queries, so `md:hidden` markup renders here as it does
  * on a phone; the breakpoint itself is not on trial.
@@ -14,9 +15,20 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PageHeader } from '@/components/PageHeader';
+import type { PlanResponse } from '@/lib/plan.server';
 
+const mockPush = jest.fn();
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: jest.fn() }),
+  useRouter: () => ({ push: mockPush }),
+}));
+
+let mockPlan: PlanResponse | undefined;
+jest.mock('@/hooks/usePlan', () => ({
+  usePlan: () => ({ plan: mockPlan, loading: false, error: null, refresh: jest.fn() }),
+}));
+
+jest.mock('@/components/plan/TrialBanner', () => ({
+  TrialBanner: () => <div data-testid="trial-banner-mount" />,
 }));
 
 jest.mock('@/contexts/AuthContext', () => ({
@@ -129,5 +141,78 @@ describe('PageHeader menu scrim', () => {
 
     expect(await screen.findByRole('menu')).toBeInTheDocument();
     expect(container.querySelector('.backdrop-blur-\\[2px\\]')).not.toBeNull();
+  });
+});
+
+describe('PageHeader plan entry', () => {
+  const FLAGS = {
+    control: true,
+    deployments: true,
+    swoop: true,
+    hoot: true,
+    roost: true,
+    talons: true,
+    webhooks: true,
+    api_keys: true,
+  };
+  const OFF: PlanResponse = {
+    enforced: false,
+    reason: 'enforcement_off',
+    plan: null,
+    standing: null,
+    limits: { machines: null, sites: null },
+    flags: FLAGS,
+    activeMachinesThisMonth: null,
+  };
+  const FREE: PlanResponse = {
+    enforced: true,
+    plan: 'free',
+    standing: 'expired',
+    limits: { machines: 1, sites: 1 },
+    flags: {
+      control: false,
+      deployments: false,
+      swoop: false,
+      hoot: false,
+      roost: false,
+      talons: false,
+      webhooks: false,
+      api_keys: false,
+    },
+    activeMachinesThisMonth: 1,
+  };
+
+  afterEach(() => {
+    mockPlan = undefined;
+    mockPush.mockReset();
+  });
+
+  it.each([
+    ['loading', undefined],
+    ['not enforced', OFF],
+  ])('leaves plan out of the user menu while plans are %s', async (_label, plan) => {
+    mockPlan = plan;
+    const { user } = renderHeader();
+
+    await user.click(screen.getByTestId('user-menu-trigger'));
+
+    expect(await screen.findByRole('menuitem', { name: 'sign out' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'plan' })).toBeNull();
+  });
+
+  it('links the plan page from the user menu while plans are enforced', async () => {
+    mockPlan = FREE;
+    const { user } = renderHeader();
+
+    await user.click(screen.getByTestId('user-menu-trigger'));
+    await user.click(await screen.findByRole('menuitem', { name: 'plan' }));
+
+    expect(mockPush).toHaveBeenCalledWith('/settings/plan');
+  });
+
+  it('mounts the plan banner under the header', () => {
+    renderHeader();
+
+    expect(screen.getByTestId('trial-banner-mount')).toBeInTheDocument();
   });
 });

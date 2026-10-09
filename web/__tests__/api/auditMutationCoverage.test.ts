@@ -54,6 +54,8 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'auth/forgot-password',
   // session create/destroy (sign-in / sign-out); the authentication act, not a resource mutation.
   'auth/session',
+  // resends the caller's own email-verification link; email only, no persisted owlette state.
+  'auth/verify-email',
   // user-submitted bug/feature intake into `bug_reports`; touches no fleet, account, or security state.
   'bug-report',
   // read-only upload negotiation — returns which chunk hashes are missing, writes nothing.

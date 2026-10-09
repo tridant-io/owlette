@@ -92,6 +92,7 @@ info:
     |------|---------|
     | 400  | Bad request - missing or invalid parameters (`validation_failed`) |
     | 401  | Unauthorized - missing, invalid, or expired credential (`unauthorized`, `token_expired`) |
+    | 402  | Plan required - the site owner's plan does not include the feature (`plan_required`). Not enforced during the beta |
     | 403  | Forbidden - scope, role, or capability missing (`scope_insufficient`, `forbidden`), or an operation that refuses API keys (`api_key_not_permitted`) |
     | 404  | Not found - including a site that exists but the caller cannot access |
     | 409  | Conflict - resource is in an incompatible state |
@@ -102,6 +103,12 @@ info:
     | 429  | Rate limit exceeded (`rate_limited`) |
     | 500  | Internal server error (`internal_error`) |
     | 503  | Service unavailable - user record or audit log unreachable (`service_unavailable`) |
+
+    Once plans apply after the beta, API keys are a pro feature: a
+    site-scoped request made with an API key answers `402 plan_required`
+    (`entitlement: owlette.api_keys`) when the site owner's plan does not
+    include them, reads and deletes included. Sessions are not affected. See
+    `/docs/plans`.
 
     ## Base URLs
 
@@ -312,6 +319,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ApiKeyCreateResponse' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -352,6 +360,39 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
+
+  /api/account/plan:
+    get:
+      operationId: getAccountPlan
+      tags: [Quotas]
+      summary: Get the signed-in user's plan
+      description: |
+        The caller's own plan as the payer for the sites they own: tier,
+        standing, limits, feature flags, and the machines active this month.
+        No body; no query params. Agent credentials get `403`.
+
+        While plans are not enforced, `enforced` is `false`, `reason` says
+        why, every flag is `true`, every limit is `null` (unrestricted), and
+        `plan`, `standing` and `activeMachinesThisMonth` are `null`. When
+        enforced, `reason` is `keys_missing` only while the license server
+        sends no readable value for the keys in `missingKeys`, which are
+        treated as unrestricted.
+
+        `activeMachinesThisMonth` counts distinct machines online on any UTC
+        day from the 1st of the current month; the daily count runs at 03:00
+        UTC and stamps the previous day.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: The caller's plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountPlanResponse' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
 
   /api/platform/email/config:
     get:
@@ -868,6 +909,7 @@ paths:
                   ruleCount: { type: integer, minimum: 0 }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
@@ -956,6 +998,7 @@ paths:
               schema: { $ref: '#/components/schemas/Talon' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -1114,6 +1157,7 @@ paths:
                   reassignedCount: { type: integer }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '422': { $ref: '#/components/responses/Problem422' }
@@ -1193,6 +1237,7 @@ paths:
               schema: { $ref: '#/components/schemas/Talon' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
@@ -1311,6 +1356,7 @@ paths:
                     items: { $ref: '#/components/schemas/TalonRunSummary' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
@@ -2422,6 +2468,7 @@ paths:
 
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '422': { $ref: '#/components/responses/Problem422' }
@@ -2802,6 +2849,7 @@ paths:
                     description: Expiry shared by every URL in the response (60 minutes after issue).
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -3046,6 +3094,7 @@ paths:
               schema: { $ref: '#/components/schemas/VersionPublishResult' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '412':
@@ -3177,6 +3226,7 @@ paths:
                       type: string
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409':
@@ -3263,6 +3313,7 @@ paths:
               schema: { $ref: '#/components/schemas/ApiKeyCreateResponse' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
@@ -3374,6 +3425,7 @@ paths:
               schema: { $ref: '#/components/schemas/ApiKeyRotateResponse' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -3500,6 +3552,7 @@ paths:
                     description: Present only when set.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -3572,6 +3625,7 @@ paths:
                     description: Fields written, including `updatedAt`.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -3704,6 +3758,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409':
@@ -3821,6 +3876,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '422': { $ref: '#/components/responses/Problem422' }
@@ -4039,6 +4095,7 @@ paths:
                     enum: [true]
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -4164,6 +4221,7 @@ paths:
               schema: { $ref: '#/components/schemas/DeploymentPlan' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -4384,6 +4442,7 @@ paths:
                       field, in which case no decision was stored.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '409': { $ref: '#/components/responses/Problem409' }
         '422': { $ref: '#/components/responses/Problem422' }
@@ -4795,6 +4854,7 @@ paths:
                         status: { type: string, enum: [pending] }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '413': { $ref: '#/components/responses/Problem413' }
@@ -4848,6 +4908,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '413':
@@ -4994,6 +5055,7 @@ paths:
                     items: { type: string }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -5108,6 +5170,7 @@ paths:
                     items: { type: string }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -6008,6 +6071,7 @@ paths:
               schema: { $ref: '#/components/schemas/WebhookWithSecret' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '422': { $ref: '#/components/responses/Problem422' }
@@ -6479,6 +6543,12 @@ paths:
 
         Returns 409 `machine_offline` if `machines/{machineId}.online`
         is `false` — the command is NOT queued.
+
+        Once plans apply after the beta, every type except `update_owlette`,
+        `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view` and
+        `cancel_mcp_tool` needs the site owner's plan to include remote
+        control, else 402 `plan_required` (`entitlement: owlette.control`);
+        `mcp_tool_call` needs hoot instead (`entitlement: owlette.hoot`).
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6576,6 +6646,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409':
@@ -6884,6 +6955,7 @@ paths:
                   keyPrefix: { type: string }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: Forbidden - superadmin required for `user` or `installer` scopes.
           content:
@@ -7615,6 +7687,7 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: |
             `code`, in check order: `scope_insufficient`, `forbidden` (the
@@ -7840,6 +7913,7 @@ paths:
                       expiresAt: { type: integer, description: Epoch milliseconds for the new lease. }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: |
             `code`, in check order: `scope_insufficient`, `forbidden` (the
@@ -7945,6 +8019,7 @@ paths:
           description: Recorded.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: |
             `code`: `scope_insufficient` or `forbidden` (the capability is
@@ -8771,6 +8846,7 @@ paths:
                       status: { type: string, example: pending }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -8813,6 +8889,7 @@ paths:
                       status: { type: string, example: pending }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -8855,6 +8932,7 @@ paths:
                       status: { type: string, example: pending }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -8897,6 +8975,7 @@ paths:
                       status: { type: string, example: pending }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -9131,7 +9210,9 @@ paths:
         session / Firebase Auth record (`getUser(uid).email`), never from the
         request body — a body-supplied `email` is ignored. This route
         intentionally does not use the platform superadmin handler because a
-        new caller has no user document yet.
+        new caller has no user document yet. Creating the document for an
+        unverified password account also emails it a verification link; a
+        failed send does not fail the call.
       security:
         - firebaseIdToken: []
       parameters:
@@ -9823,6 +9904,7 @@ paths:
                   newOwnerUid: { type: string }
         '400': { description: Validation failure, or successor is soft-deleted }
         '401': { description: Unauthorized }
+        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { description: Forbidden (caller is not the owner or a superadmin) }
         '404': { description: Site or successor not found }
         '409': { description: Successor already owns the site, or the site records no owner }
@@ -10257,6 +10339,39 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/ProblemDetails' }
+    PlanRequired:
+      description: |
+        Plan required (`code: plan_required`): the plan of the site's owner
+        does not include what the request needs, and `entitlement` names it.
+        On `POST /api/sites`, the API-key mint routes and the CLI sign-in the
+        caller's own plan decides; on an ownership transfer, the new owner's.
+        Plans are not enforced during the beta, so no route answers this yet.
+        See `/docs/plans`.
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+              - { $ref: '#/components/schemas/ProblemDetails' }
+              - type: object
+                required: [entitlement, upgradeUrl]
+                properties:
+                  entitlement:
+                    type: string
+                    enum: [owlette.machines, owlette.sites, owlette.control, owlette.deployments, owlette.swoop, owlette.hoot, owlette.roost, owlette.talons, owlette.webhooks, owlette.api_keys]
+                    description: The plan entitlement the request needs.
+                  upgradeUrl:
+                    type: string
+                    description: Where the account's plan is managed, relative to the dashboard origin.
+          example:
+            type: https://owlette.app/problems/plan-required
+            title: plan required
+            status: 402
+            detail: your plan doesn't include remote control. upgrade to continue.
+            entitlement: owlette.control
+            upgradeUrl: /settings/plan
+            code: plan_required
+            docsUrl: https://owlette.app/docs/api/errors#plan_required
+            requestId: 5d7f7c5b-2ed6-4a56-9b2c-47dd7c84f957
     Problem403:
       description: |
         Forbidden — an inactive account or a missing role capability
@@ -12887,6 +13002,83 @@ components:
           type: integer
           format: int64
           minimum: 0
+    AccountPlanResponse:
+      type: object
+      required: [enforced, plan, standing, limits, flags, activeMachinesThisMonth]
+      example:
+        enforced: true
+        plan: free
+        standing: expired
+        limits: { machines: 1, sites: 1 }
+        flags: { control: false, deployments: false, swoop: false, hoot: false, roost: false, talons: false, webhooks: false, api_keys: false }
+        activeMachinesThisMonth: 1
+        ownsSites: true
+        liveMachines: [{ siteId: my-site, machineId: KIOSK-01 }]
+      properties:
+        enforced:
+          type: boolean
+          description: Whether plan limits apply to this account.
+        reason:
+          type: string
+          enum: [enforcement_off, not_configured, unreachable, rejected, malformed_response, superadmin, no_payer, keys_missing]
+          description: |
+            Why plans are not enforced. With `enforced: true`, only
+            `keys_missing`, alongside `missingKeys`.
+        missingKeys:
+          type: array
+          items: { type: string }
+          description: Entitlement keys treated as unrestricted because no readable value was sent.
+        ownsSites:
+          type: boolean
+          description: Whether the caller owns at least one site, and so pays for one. Sent only while plans are enforced.
+        plan:
+          type: string
+          enum: [trial, free, core, pro]
+          nullable: true
+          description: "`null` while plans are not enforced."
+        standing:
+          type: string
+          nullable: true
+          description: Subscription standing, e.g. `active`, `trialing`, `past_due`, `expired`, `canceled`.
+        limits:
+          type: object
+          required: [machines, sites]
+          description: "`null` is unrestricted."
+          properties:
+            machines: { type: integer, minimum: 0, nullable: true }
+            sites: { type: integer, minimum: 0, nullable: true }
+        flags:
+          type: object
+          required: [control, deployments, swoop, hoot, roost, talons, webhooks, api_keys]
+          properties:
+            control:
+              type: boolean
+              description: Remote commands, process control, display layouts, screenshots and email alerts.
+            deployments: { type: boolean }
+            swoop: { type: boolean }
+            hoot: { type: boolean }
+            roost: { type: boolean }
+            talons: { type: boolean }
+            webhooks: { type: boolean }
+            api_keys: { type: boolean }
+        activeMachinesThisMonth:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Distinct machines online on any UTC day this month. `null` while plans are not enforced.
+        liveMachines:
+          type: array
+          description: |
+            The machines the machine limit keeps live: the first `limits.machines`
+            across every site the caller owns, earliest paired first, then by
+            machine ID. The dashboard shows the rest behind an upgrade notice.
+            Sent only while plans are enforced with a machine limit.
+          items:
+            type: object
+            required: [siteId, machineId]
+            properties:
+              siteId: { type: string }
+              machineId: { type: string }
 
     # operational logs
     SiteLogEntry:

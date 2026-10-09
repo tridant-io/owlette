@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
 import { MachineStatusPill } from '@/components/MachineStatusPill';
+import { ControlUpgradeLink, MachinePlanLock, MachinePlanNotice } from '@/components/plan/MachinePlanNotice';
 import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, Pencil, Copy, Square, Plus, Clock, Monitor, Cog, Settings2, MoreVertical, BellOff, RotateCcw } from 'lucide-react';
@@ -263,6 +264,10 @@ interface MachineRowProps {
   /** Column-dropdown selection (cpu/disk/gpu/nic). Unset kinds fall back to the machine's
    * reported primary device, which is also what "auto (most active)" selects. */
   listPref?: DeviceSelection;
+  /** set when the machine falls outside the viewer's plan (`useSitePlan`): the machines it covers. */
+  planLimit?: number | null;
+  controlLocked?: boolean;
+  swoopLocked?: boolean;
 }
 
 // Memoized: the dashboard hands every row stable props, so a heartbeat
@@ -294,7 +299,11 @@ export const MachineRow = memo(function MachineRow({
   onSwoop,
   showLocalClock,
   listPref,
+  planLimit,
+  controlLocked,
+  swoopLocked,
 }: MachineRowProps) {
+  const planLocked = planLimit != null;
   // Held keeps the row mounted through the close animation.
   // `animOpen` lags `isExpanded` by one frame on open so the row mounts at grid-rows-[0fr]
   // and CSS sees a transition to [1fr] — without the lag both renders see 1fr and nothing
@@ -341,7 +350,7 @@ export const MachineRow = memo(function MachineRow({
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
   const isMuted = fullPrefs.mutedMachines.includes(machine.machineId);
-  const sparklineData = useAllSparklineData(currentSiteId, machine.machineId);
+  const sparklineData = useAllSparklineData(currentSiteId, planLocked ? null : machine.machineId);
 
   // Drift dot reads the heartbeat's `metrics.displayDriftCount` instead of opening per-row
   // subscriptions to displayProfiles + displayAssignments.
@@ -388,71 +397,80 @@ export const MachineRow = memo(function MachineRow({
     <>
       <TableRow
         data-testid="machine-row"
-        className="border-border/50 bg-card-sunken hover:bg-[var(--surface-hover)] dark:hover:bg-secondary/30 cursor-pointer"
-        onClick={handleRowClick}
+        className={cn(
+          'border-border/50 bg-card-sunken hover:bg-[var(--surface-hover)] dark:hover:bg-secondary/30',
+          !planLocked && 'cursor-pointer',
+        )}
+        onClick={planLocked ? undefined : handleRowClick}
       >
         {/* The row click is the mouse target; this is the disclosure keyboard
             and screen-reader users get. */}
         <TableCell className="w-8 p-1">
-          <button
-            type="button"
-            aria-expanded={isExpanded}
-            aria-controls={heldExpanded ? processesId : undefined}
-            aria-label={`processes for ${machine.machineId}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleExpanded();
-            }}
-            className="flex h-8 w-6 items-center justify-center rounded-md cursor-pointer"
-          >
-            <ChevronDown
-              className={`h-4 w-4 text-foreground/70 transition-transform duration-150 ease-out motion-reduce:transition-none ${isExpanded ? '-rotate-180' : 'rotate-0'}`}
-            />
-          </button>
+          {!planLocked && (
+            <button
+              type="button"
+              aria-expanded={isExpanded}
+              aria-controls={heldExpanded ? processesId : undefined}
+              aria-label={`processes for ${machine.machineId}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleExpanded();
+              }}
+              className="flex h-8 w-6 items-center justify-center rounded-md cursor-pointer"
+            >
+              <ChevronDown
+                className={`h-4 w-4 text-foreground/70 transition-transform duration-150 ease-out motion-reduce:transition-none ${isExpanded ? '-rotate-180' : 'rotate-0'}`}
+              />
+            </button>
+          )}
         </TableCell>
         <TableCell className="w-[130px] font-medium text-foreground select-text overflow-hidden">
           <div className="flex flex-col gap-0.5 min-w-0">
             <div className="flex items-center gap-2">
-              <div className="relative flex-shrink-0">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onMetricClick?.('display');
-                      }}
-                      data-testid="open-display-panel"
-                      className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 w-8 p-0"
-                      aria-label="view displays"
-                    >
-                      <Monitor className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>view displays</p>
-                  </TooltipContent>
-                </Tooltip>
-                {displayDriftCount > 0 && (
-                  <span
-                    className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-warning-solid pointer-events-none"
-                    role="img"
-                    aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                    title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                  />
-                )}
-                {machine.displayBreakerTripped && (
-                  <span
-                    className={`absolute inline-block w-2 h-2 rounded-full bg-destructive pointer-events-none ${
-                      displayDriftCount > 0 ? '-bottom-0.5 -right-0.5' : '-top-0.5 -right-0.5'
-                    }`}
-                    role="img"
-                    aria-label="auto-restore disabled — circuit breaker tripped"
-                    title="auto-restore disabled — circuit breaker tripped"
-                  />
-                )}
-              </div>
+              {planLocked ? (
+                <MachinePlanLock />
+              ) : (
+                <div className="relative flex-shrink-0">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onMetricClick?.('display');
+                        }}
+                        data-testid="open-display-panel"
+                        className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 w-8 p-0"
+                        aria-label="view displays"
+                      >
+                        <Monitor className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>view displays</p>
+                    </TooltipContent>
+                  </Tooltip>
+                  {displayDriftCount > 0 && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-warning-solid pointer-events-none"
+                      role="img"
+                      aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                      title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                    />
+                  )}
+                  {machine.displayBreakerTripped && (
+                    <span
+                      className={`absolute inline-block w-2 h-2 rounded-full bg-destructive pointer-events-none ${
+                        displayDriftCount > 0 ? '-bottom-0.5 -right-0.5' : '-top-0.5 -right-0.5'
+                      }`}
+                      role="img"
+                      aria-label="auto-restore disabled — circuit breaker tripped"
+                      title="auto-restore disabled — circuit breaker tripped"
+                    />
+                  )}
+                </div>
+              )}
               <span className="truncate">{machine.machineId}</span>
               {isMuted && <span title="alerts muted"><BellOff className="h-3 w-3 text-muted-foreground flex-shrink-0" /></span>}
             </div>
@@ -504,199 +522,207 @@ export const MachineRow = memo(function MachineRow({
             button inside is its keyboard entry — its click bubbles to that
             handler. Invisible while the column is collapsed to 0px, so a
             clipped button never takes focus. */}
-        {/* CPU with Sparkline */}
-        <TableCell
-          className="text-foreground p-0 w-0 sm:w-[150px] overflow-hidden"
-          onClick={(e) => { e.stopPropagation(); onMetricClick?.('cpu'); }}
-        >
-          <button
-            type="button"
-            aria-label={`open cpu history for ${machine.machineId}`}
-            className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
-          >
-            <div className="opacity-80">
-              <SparklineChart data={sparklineData.cpu} color="cpu" height={52} loading={sparklineData.loading} />
-            </div>
-            <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(cpuDevice?.percent ?? 0)}`} />
-            <div className="absolute inset-0 flex items-center p-2 pl-2.5 overflow-hidden">
-              {cpuDevice && typeof cpuDevice.percent === 'number' ? (
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs text-muted-foreground truncate" title={cpuDevice.model || 'Unknown CPU'}>
-                    {cpuDevice.model || 'Unknown CPU'}
-                  </div>
-                  <div className="text-sm font-semibold whitespace-nowrap">
-                    {cpuDevice.percent}%
-                    {typeof cpuDevice.temperature === 'number' && (
-                      <span className={`ml-1 text-xs font-medium ${getTemperatureColorClass(cpuDevice.temperature)}`}>
-                        {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ) : '-'}
-            </div>
-          </button>
-        </TableCell>
-        {/* Memory with Sparkline */}
-        <TableCell
-          className="text-foreground p-0 w-0 sm:w-[110px] overflow-hidden"
-          onClick={(e) => { e.stopPropagation(); onMetricClick?.('memory'); }}
-        >
-          <button
-            type="button"
-            aria-label={`open ram history for ${machine.machineId}`}
-            className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
-          >
-            <div className="opacity-80">
-              <SparklineChart data={sparklineData.memory} color="memory" height={52} loading={sparklineData.loading} />
-            </div>
-            <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(memoryPercent)}`} />
-            <div className="absolute inset-0 flex items-center p-2 pl-2.5 overflow-hidden">
-              {machine.metrics?.memory && memoryUsedGb !== undefined ? (
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold">{memoryPercent}%</div>
-                  <div className="text-muted-foreground text-xs truncate">
-                    {memoryTotalGb !== null
-                      ? formatStorageRange(memoryUsedGb, memoryTotalGb)
-                      : `${memoryUsedGb.toFixed(1)} GB`}
-                  </div>
-                </div>
-              ) : '-'}
-            </div>
-          </button>
-        </TableCell>
-        {/* Disk with Sparkline */}
-        <TableCell
-          className="text-foreground p-0 w-0 lg:w-[150px] overflow-hidden"
-          onClick={(e) => { e.stopPropagation(); onMetricClick?.('disk'); }}
-        >
-          <button
-            type="button"
-            aria-label={`open disk history for ${machine.machineId}`}
-            className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
-          >
-            <div className="opacity-80">
-              <SparklineChart data={sparklineData.disk} color="disk" height={52} loading={sparklineData.loading} />
-            </div>
-            <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(diskDevice?.percent ?? 0)}`} />
-            <div className="absolute inset-0 flex items-end gap-3 p-2 pl-2.5 overflow-hidden">
-              {diskDevice && typeof diskDevice.percent === 'number' && typeof diskDevice.usedGb === 'number' ? (
-                <>
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold">{diskDevice.percent}%</div>
-                    <div className="text-muted-foreground text-xs truncate" title={diskDevice.id}>
-                      {typeof diskDevice.totalGb === 'number'
-                        ? formatStorageRange(diskDevice.usedGb, diskDevice.totalGb)
-                        : `${diskDevice.usedGb.toFixed(1)} GB`}
-                    </div>
-                  </div>
-                  {(() => {
-                    const io = machine.metrics?.diskio?.[diskDevice.id];
-                    if (!io || (io.readBps === 0 && io.writeBps === 0)) return null;
-                    return (
-                      <div className="ml-auto flex-shrink-0 flex gap-1 text-xs font-medium">
-                        <div className="flex flex-col text-right">
-                          <span style={{ color: DISK_IO_COLORS.read }}>r</span>
-                          <span style={{ color: DISK_IO_COLORS.write }}>w</span>
-                        </div>
-                        <div className="flex flex-col text-left tabular-nums">
-                          <span style={{ color: DISK_IO_COLORS.read }}>{formatDiskIO(io.readBps)}</span>
-                          <span style={{ color: DISK_IO_COLORS.write }}>{formatDiskIO(io.writeBps)}</span>
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </>
-              ) : '-'}
-            </div>
-          </button>
-        </TableCell>
-        {/* GPU with Sparkline */}
-        <TableCell
-          className="text-foreground p-0 w-0 lg:w-[190px] overflow-hidden"
-          onClick={(e) => { e.stopPropagation(); onMetricClick?.('gpu'); }}
-        >
-          <button
-            type="button"
-            aria-label={`open gpu history for ${machine.machineId}`}
-            className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
-          >
-            <div className="opacity-80">
-              <SparklineChart data={sparklineData.gpu} color="gpu" height={52} loading={sparklineData.loading} />
-            </div>
-            <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(gpuDevice?.usagePercent ?? 0)}`} />
-            <div className="absolute inset-0 flex items-center p-2 pl-2.5 overflow-hidden">
-              {gpuDevice && gpuDevice.name && gpuDevice.name !== 'N/A' && typeof gpuDevice.usagePercent === 'number' ? (
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs text-muted-foreground truncate" title={gpuDevice.name}>
-                    {gpuDevice.name}
-                  </div>
-                  <div className="text-sm font-semibold whitespace-nowrap">
-                    {gpuDevice.usagePercent}%
-                    {typeof gpuDevice.vramUsedGb === 'number' && typeof gpuDevice.vramTotalGb === 'number' && (
-                      <span className="text-muted-foreground text-xs ml-1 font-normal">
-                        ({formatStorageRange(gpuDevice.vramUsedGb, gpuDevice.vramTotalGb)})
-                      </span>
-                    )}
-                    {typeof gpuDevice.temperature === 'number' && (
-                      <span className={`ml-1 text-xs font-medium ${getTemperatureColorClass(gpuDevice.temperature)}`}>
-                        {formatTemperature(gpuDevice.temperature, userPreferences.temperatureUnit)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <span className="text-muted-foreground">N/A</span>
-              )}
-            </div>
-          </button>
-        </TableCell>
-        {/* Network */}
-        <TableCell
-          className="text-foreground p-0 w-0 xl:w-[130px] overflow-hidden"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (nicDevice) onMetricClick?.(`${nicDevice.id}_tx_util` as MetricType);
-          }}
-        >
-          {(() => {
-            if (
-              !nicDevice ||
-              typeof nicDevice.txBps !== 'number' ||
-              typeof nicDevice.rxBps !== 'number'
-            ) {
-              return <span className="text-muted-foreground text-xs p-2">-</span>;
-            }
-            const txUtil = nicDevice.txUtil ?? 0;
-            const rxUtil = nicDevice.rxUtil ?? 0;
-            const maxUtil = Math.max(txUtil, rxUtil);
-            const linkSpeed = nicDevice.linkSpeedMbps;
-            const titleText = typeof linkSpeed === 'number'
-              ? `${nicDevice.id} (${linkSpeed} Mbps)`
-              : nicDevice.id;
-            return (
+        {planLimit != null ? (
+          <TableCell colSpan={5} className="p-0 overflow-hidden">
+            <MachinePlanNotice limit={planLimit} className="px-3 py-2" />
+          </TableCell>
+        ) : (
+          <>
+            {/* CPU with Sparkline */}
+            <TableCell
+              className="text-foreground p-0 w-0 sm:w-[150px] overflow-hidden"
+              onClick={(e) => { e.stopPropagation(); onMetricClick?.('cpu'); }}
+            >
               <button
                 type="button"
-                aria-label={`open network history for ${machine.machineId}`}
-                className={cn('relative block h-[52px] w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible xl:visible', staleClass)}
+                aria-label={`open cpu history for ${machine.machineId}`}
+                className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
               >
-                <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(maxUtil)}`} />
-                {/* the same 52px box as the sparkline cells; three lines fit with no vertical padding */}
-                <div className="absolute inset-0 flex flex-col justify-center px-2 pl-2.5 overflow-hidden">
-                  <div className="text-xs text-muted-foreground truncate" title={titleText}>
-                    {nicDevice.id}
-                  </div>
-                  <div className="text-xs font-medium">
-                    <span className="text-[var(--series-nic-tx-1)]">{'\u2191 '}{formatThroughput(nicDevice.txBps)}</span>
-                  </div>
-                  <div className="text-xs font-medium">
-                    <span className="text-[var(--series-nic-rx-1)]">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
-                  </div>
+                <div className="opacity-80">
+                  <SparklineChart data={sparklineData.cpu} color="cpu" height={52} loading={sparklineData.loading} />
+                </div>
+                <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(cpuDevice?.percent ?? 0)}`} />
+                <div className="absolute inset-0 flex items-center p-2 pl-2.5 overflow-hidden">
+                  {cpuDevice && typeof cpuDevice.percent === 'number' ? (
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs text-muted-foreground truncate" title={cpuDevice.model || 'Unknown CPU'}>
+                        {cpuDevice.model || 'Unknown CPU'}
+                      </div>
+                      <div className="text-sm font-semibold whitespace-nowrap">
+                        {cpuDevice.percent}%
+                        {typeof cpuDevice.temperature === 'number' && (
+                          <span className={`ml-1 text-xs font-medium ${getTemperatureColorClass(cpuDevice.temperature)}`}>
+                            {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ) : '-'}
                 </div>
               </button>
-            );
-          })()}
-        </TableCell>
+            </TableCell>
+            {/* Memory with Sparkline */}
+            <TableCell
+              className="text-foreground p-0 w-0 sm:w-[110px] overflow-hidden"
+              onClick={(e) => { e.stopPropagation(); onMetricClick?.('memory'); }}
+            >
+              <button
+                type="button"
+                aria-label={`open ram history for ${machine.machineId}`}
+                className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible sm:visible', staleClass)}
+              >
+                <div className="opacity-80">
+                  <SparklineChart data={sparklineData.memory} color="memory" height={52} loading={sparklineData.loading} />
+                </div>
+                <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(memoryPercent)}`} />
+                <div className="absolute inset-0 flex items-center p-2 pl-2.5 overflow-hidden">
+                  {machine.metrics?.memory && memoryUsedGb !== undefined ? (
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold">{memoryPercent}%</div>
+                      <div className="text-muted-foreground text-xs truncate">
+                        {memoryTotalGb !== null
+                          ? formatStorageRange(memoryUsedGb, memoryTotalGb)
+                          : `${memoryUsedGb.toFixed(1)} GB`}
+                      </div>
+                    </div>
+                  ) : '-'}
+                </div>
+              </button>
+            </TableCell>
+            {/* Disk with Sparkline */}
+            <TableCell
+              className="text-foreground p-0 w-0 lg:w-[150px] overflow-hidden"
+              onClick={(e) => { e.stopPropagation(); onMetricClick?.('disk'); }}
+            >
+              <button
+                type="button"
+                aria-label={`open disk history for ${machine.machineId}`}
+                className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
+              >
+                <div className="opacity-80">
+                  <SparklineChart data={sparklineData.disk} color="disk" height={52} loading={sparklineData.loading} />
+                </div>
+                <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(diskDevice?.percent ?? 0)}`} />
+                <div className="absolute inset-0 flex items-end gap-3 p-2 pl-2.5 overflow-hidden">
+                  {diskDevice && typeof diskDevice.percent === 'number' && typeof diskDevice.usedGb === 'number' ? (
+                    <>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold">{diskDevice.percent}%</div>
+                        <div className="text-muted-foreground text-xs truncate" title={diskDevice.id}>
+                          {typeof diskDevice.totalGb === 'number'
+                            ? formatStorageRange(diskDevice.usedGb, diskDevice.totalGb)
+                            : `${diskDevice.usedGb.toFixed(1)} GB`}
+                        </div>
+                      </div>
+                      {(() => {
+                        const io = machine.metrics?.diskio?.[diskDevice.id];
+                        if (!io || (io.readBps === 0 && io.writeBps === 0)) return null;
+                        return (
+                          <div className="ml-auto flex-shrink-0 flex gap-1 text-xs font-medium">
+                            <div className="flex flex-col text-right">
+                              <span style={{ color: DISK_IO_COLORS.read }}>r</span>
+                              <span style={{ color: DISK_IO_COLORS.write }}>w</span>
+                            </div>
+                            <div className="flex flex-col text-left tabular-nums">
+                              <span style={{ color: DISK_IO_COLORS.read }}>{formatDiskIO(io.readBps)}</span>
+                              <span style={{ color: DISK_IO_COLORS.write }}>{formatDiskIO(io.writeBps)}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </>
+                  ) : '-'}
+                </div>
+              </button>
+            </TableCell>
+            {/* GPU with Sparkline */}
+            <TableCell
+              className="text-foreground p-0 w-0 lg:w-[190px] overflow-hidden"
+              onClick={(e) => { e.stopPropagation(); onMetricClick?.('gpu'); }}
+            >
+              <button
+                type="button"
+                aria-label={`open gpu history for ${machine.machineId}`}
+                className={cn('relative block w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible lg:visible', staleClass)}
+              >
+                <div className="opacity-80">
+                  <SparklineChart data={sparklineData.gpu} color="gpu" height={52} loading={sparklineData.loading} />
+                </div>
+                <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(gpuDevice?.usagePercent ?? 0)}`} />
+                <div className="absolute inset-0 flex items-center p-2 pl-2.5 overflow-hidden">
+                  {gpuDevice && gpuDevice.name && gpuDevice.name !== 'N/A' && typeof gpuDevice.usagePercent === 'number' ? (
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs text-muted-foreground truncate" title={gpuDevice.name}>
+                        {gpuDevice.name}
+                      </div>
+                      <div className="text-sm font-semibold whitespace-nowrap">
+                        {gpuDevice.usagePercent}%
+                        {typeof gpuDevice.vramUsedGb === 'number' && typeof gpuDevice.vramTotalGb === 'number' && (
+                          <span className="text-muted-foreground text-xs ml-1 font-normal">
+                            ({formatStorageRange(gpuDevice.vramUsedGb, gpuDevice.vramTotalGb)})
+                          </span>
+                        )}
+                        {typeof gpuDevice.temperature === 'number' && (
+                          <span className={`ml-1 text-xs font-medium ${getTemperatureColorClass(gpuDevice.temperature)}`}>
+                            {formatTemperature(gpuDevice.temperature, userPreferences.temperatureUnit)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground">N/A</span>
+                  )}
+                </div>
+              </button>
+            </TableCell>
+            {/* Network */}
+            <TableCell
+              className="text-foreground p-0 w-0 xl:w-[130px] overflow-hidden"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (nicDevice) onMetricClick?.(`${nicDevice.id}_tx_util` as MetricType);
+              }}
+            >
+              {(() => {
+                if (
+                  !nicDevice ||
+                  typeof nicDevice.txBps !== 'number' ||
+                  typeof nicDevice.rxBps !== 'number'
+                ) {
+                  return <span className="text-muted-foreground text-xs p-2">-</span>;
+                }
+                const txUtil = nicDevice.txUtil ?? 0;
+                const rxUtil = nicDevice.rxUtil ?? 0;
+                const maxUtil = Math.max(txUtil, rxUtil);
+                const linkSpeed = nicDevice.linkSpeedMbps;
+                const titleText = typeof linkSpeed === 'number'
+                  ? `${nicDevice.id} (${linkSpeed} Mbps)`
+                  : nicDevice.id;
+                return (
+                  <button
+                    type="button"
+                    aria-label={`open network history for ${machine.machineId}`}
+                    className={cn('relative block h-[52px] w-full text-left cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-muted/50 transition-colors overflow-hidden invisible xl:visible', staleClass)}
+                  >
+                    <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${getUsageColorClass(maxUtil)}`} />
+                    {/* the same 52px box as the sparkline cells; three lines fit with no vertical padding */}
+                    <div className="absolute inset-0 flex flex-col justify-center px-2 pl-2.5 overflow-hidden">
+                      <div className="text-xs text-muted-foreground truncate" title={titleText}>
+                        {nicDevice.id}
+                      </div>
+                      <div className="text-xs font-medium">
+                        <span className="text-[var(--series-nic-tx-1)]">{'\u2191 '}{formatThroughput(nicDevice.txBps)}</span>
+                      </div>
+                      <div className="text-xs font-medium">
+                        <span className="text-[var(--series-nic-rx-1)]">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })()}
+            </TableCell>
+          </>
+        )}
         <TableCell className="w-0 md:w-[96px] overflow-hidden p-0 md:p-2">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -734,6 +760,9 @@ export const MachineRow = memo(function MachineRow({
               onSwoop={onSwoop}
               onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}
               rebootSchedule={machine.rebootSchedule}
+              planLocked={planLocked}
+              controlLocked={controlLocked}
+              swoopLocked={swoopLocked}
             />
           )}
         </TableCell>
@@ -742,7 +771,7 @@ export const MachineRow = memo(function MachineRow({
       {/* Expanded Process Details Row — kept mounted while heldExpanded so
           the close animation can play; the grid-template-rows transition on
           the inner wrapper animates the height in/out. */}
-      {heldExpanded && (
+      {heldExpanded && !planLocked && (
         <TableRow key={`${machine.machineId}-processes`} className="border-border/50">
           <TableCell colSpan={10} className="p-0 overflow-hidden">
             <div
@@ -902,26 +931,32 @@ export const MachineRow = memo(function MachineRow({
                                     duplicate
                                   </Button>
                                   )}
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => onRestartProcess(process.id, process.name)}
-                                    className="bg-card border border-border text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                                    disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
-                                  >
-                                    <RotateCcw className="h-3 w-3 mr-1" />
-                                    restart
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => onKillProcess(process.id, process.name)}
-                                    className="bg-card border border-border text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
-                                    disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
-                                  >
-                                    <Square className="h-3 w-3 mr-1" />
-                                    kill
-                                  </Button>
+                                  {controlLocked ? (
+                                    <ControlUpgradeLink label="restart and kill are part of core" />
+                                  ) : (
+                                    <>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => onRestartProcess(process.id, process.name)}
+                                        className="bg-card border border-border text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                        disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
+                                      >
+                                        <RotateCcw className="h-3 w-3 mr-1" />
+                                        restart
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => onKillProcess(process.id, process.name)}
+                                        className="bg-card border border-border text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                                        disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
+                                      >
+                                        <Square className="h-3 w-3 mr-1" />
+                                        kill
+                                      </Button>
+                                    </>
+                                  )}
                                     </>
                                   )}
                                 </div>
@@ -1000,40 +1035,46 @@ export const MachineRow = memo(function MachineRow({
                                       )}
                                     </DropdownMenuContent>
                                   </DropdownMenu>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => onRestartProcess(process.id, process.name)}
-                                        aria-label={`restart ${process.name}`}
-                                        className="bg-card border border-border text-foreground disabled:cursor-not-allowed disabled:opacity-50 h-8 w-8 p-0"
-                                        disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
-                                      >
-                                        <RotateCcw className="h-3 w-3" />
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>restart process</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => onKillProcess(process.id, process.name)}
-                                        aria-label={`kill ${process.name}`}
-                                        className="bg-card border border-border text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50 h-8 w-8 p-0"
-                                        disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
-                                      >
-                                        <Square className="h-3 w-3" />
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>kill process</p>
-                                    </TooltipContent>
-                                  </Tooltip>
+                                  {controlLocked ? (
+                                    <ControlUpgradeLink label="restart and kill are part of core" />
+                                  ) : (
+                                    <>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => onRestartProcess(process.id, process.name)}
+                                            aria-label={`restart ${process.name}`}
+                                            className="bg-card border border-border text-foreground disabled:cursor-not-allowed disabled:opacity-50 h-8 w-8 p-0"
+                                            disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
+                                          >
+                                            <RotateCcw className="h-3 w-3" />
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>restart process</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => onKillProcess(process.id, process.name)}
+                                            aria-label={`kill ${process.name}`}
+                                            className="bg-card border border-border text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50 h-8 w-8 p-0"
+                                            disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
+                                          >
+                                            <Square className="h-3 w-3" />
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>kill process</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </>
+                                  )}
                                     </>
                                   )}
                                 </div>

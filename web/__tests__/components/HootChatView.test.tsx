@@ -31,6 +31,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { HootChatView } from '@/app/hoot/components/HootChatView';
 import type { ChatConversation, ChatLoadedTarget } from '@/hooks/useHoot';
 import type { HootTarget, ChatTargetType } from '@/lib/hoot/target';
+import type { PlanResponse } from '@/lib/plan.server';
 
 // jsdom ships no ResizeObserver; Radix's menu and popover positioning build one.
 global.ResizeObserver = class {
@@ -73,7 +74,7 @@ const CHAT_ID = 'chat_live';
 
 // Mutable fixtures. `mock`-prefixed so the jest.mock factories below may close
 // over them (babel-plugin-jest-hoist allows exactly that).
-let mockSites: { id: string; name: string }[] = [SITE_A, SITE_B];
+let mockSites: { id: string; name: string; owner?: string }[] = [SITE_A, SITE_B];
 let mockMachines: MockMachine[] = THREE_MACHINES;
 /** Per-site override, for the cases where "which site is the header on" is the point. */
 let mockMachinesBySite: Record<string, MockMachine[]> = {};
@@ -141,6 +142,11 @@ jest.mock('@/contexts/AuthContext', () => ({
   }),
 }));
 
+let mockPlan: PlanResponse | undefined;
+jest.mock('@/hooks/usePlan', () => ({
+  usePlan: () => ({ plan: mockPlan, loading: false, error: null, refresh: jest.fn() }),
+}));
+
 jest.mock('@/hooks/useFirestore', () => ({
   useSites: () => ({ sites: mockSites, loading: false }),
   // Site-aware, because "the header followed the chat's site" is only visible
@@ -204,10 +210,24 @@ jest.mock('@/app/hoot/components/ShareChatDialog', () => ({
 }));
 
 // Stands in for the transcript, and reports the fallback label it was handed
-// for messages that carry no per-turn metadata of their own.
+// for messages that carry no per-turn metadata of their own, and whether it
+// may offer suggestions and edits, which both send.
 jest.mock('@/app/hoot/components/ChatWindow', () => ({
-  ChatWindow: ({ approvalTargetLabel }: { approvalTargetLabel?: string }) => (
-    <div data-testid="chat-window" data-approval-target-label={approvalTargetLabel} />
+  ChatWindow: ({
+    approvalTargetLabel,
+    hideSuggestions,
+    onEditMessage,
+  }: {
+    approvalTargetLabel?: string;
+    hideSuggestions?: boolean;
+    onEditMessage?: unknown;
+  }) => (
+    <div
+      data-testid="chat-window"
+      data-approval-target-label={approvalTargetLabel}
+      data-hide-suggestions={String(Boolean(hideSuggestions))}
+      data-can-edit={String(Boolean(onEditMessage))}
+    />
   ),
 }));
 
@@ -289,6 +309,8 @@ beforeEach(() => {
   mockChatOptions = null;
   mockCollapsedGroups = new Set<string>();
   mockPrefsHydrated = true;
+  mockPlan = undefined;
+  mockChat.error = null;
 });
 
 describe('HootChatView conversation groups', () => {
@@ -621,5 +643,65 @@ describe('HootChatView labels', () => {
     expect(screen.getByRole('button', { name: /^deployment triage/ })).toHaveTextContent(
       'all machines',
     );
+  });
+});
+
+const ALL_FLAGS: PlanResponse['flags'] = {
+  control: true,
+  deployments: true,
+  swoop: true,
+  hoot: true,
+  roost: true,
+  talons: true,
+  webhooks: true,
+  api_keys: true,
+};
+const CORE_PLAN: PlanResponse = {
+  enforced: true,
+  plan: 'core',
+  standing: 'active',
+  limits: { machines: null, sites: 1 },
+  flags: { ...ALL_FLAGS, deployments: false, swoop: false, hoot: false, roost: false, talons: false, webhooks: false, api_keys: false },
+  activeMachinesThisMonth: 3,
+};
+
+describe('HootChatView plan', () => {
+  it("shows a refusal's problem detail, not its raw json", () => {
+    mockChat.error = new Error(
+      JSON.stringify({
+        type: 'https://owlette.app/docs/api/errors#plan_required',
+        title: 'Payment Required',
+        status: 402,
+        detail: "your plan doesn't include hoot. upgrade to continue.",
+        code: 'plan_required',
+      }),
+    );
+    renderView();
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent("your plan doesn't include hoot. upgrade to continue.");
+    expect(alert).not.toHaveTextContent('plan_required');
+  });
+
+  it("puts the upgrade note where the composer was on the viewer's own site", () => {
+    mockPlan = CORE_PLAN;
+    mockSites = [{ ...SITE_A, owner: 'user-1' }, SITE_B];
+    renderView();
+
+    expect(screen.getByTestId('upgrade-gate-inline')).toHaveTextContent("your plan doesn't include hoot.");
+    expect(document.querySelector('[data-chat-input]')).toBeNull();
+    const transcript = screen.getByTestId('chat-window');
+    expect(transcript).toHaveAttribute('data-hide-suggestions', 'true');
+    expect(transcript).toHaveAttribute('data-can-edit', 'false');
+  });
+
+  it('keeps the composer on a site another account pays for', () => {
+    mockPlan = CORE_PLAN;
+    mockSites = [{ ...SITE_A, owner: 'someone-else' }, SITE_B];
+    renderView();
+
+    expect(screen.queryByTestId('upgrade-gate-inline')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-chat-input]')).not.toBeNull();
+    expect(screen.getByTestId('chat-window')).toHaveAttribute('data-can-edit', 'true');
   });
 });

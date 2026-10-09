@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
+import { useSitePlan } from '@/hooks/useSitePlan';
 import { PageCascade } from '@/components/PageCascade';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { Card } from '@/components/ui/card';
@@ -335,6 +336,7 @@ const LogRow = React.memo(function LogRow({
   userTz,
   siteTz,
   timeFormat,
+  hideScreenshot,
 }: {
   log: LogEvent;
   isExpanded: boolean;
@@ -344,7 +346,9 @@ const LogRow = React.memo(function LogRow({
   userTz?: string;
   siteTz?: string;
   timeFormat: '12h' | '24h';
+  hideScreenshot?: boolean;
 }) {
+  const screenshotUrl = hideScreenshot ? undefined : log.screenshotUrl;
   return (
     <Collapsible
       open={isExpanded}
@@ -384,7 +388,7 @@ const LogRow = React.memo(function LogRow({
             <TruncatedText text={log.processName || '—'} className="text-muted-foreground" data-testid="log-process" />
             {/* details preview (flex, truncates) + screenshot indicator — hidden once expanded, where the full details render below (avoids duplicating the text). Below `md` it takes its own full-width line under the other fields. */}
             <div className="flex items-center gap-2 min-w-0 w-full md:w-auto">
-              {!isExpanded && log.screenshotUrl && <Camera className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
+              {!isExpanded && screenshotUrl && <Camera className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
               {!isExpanded && (log.details ? (
                 <TruncatedText text={log.details} className="text-muted-foreground min-w-0" data-testid="log-details" />
               ) : (
@@ -422,12 +426,12 @@ const LogRow = React.memo(function LogRow({
               <p className="text-foreground mt-1 whitespace-pre-wrap break-words select-text">{log.details}</p>
             </div>
           )}
-          {log.screenshotUrl && (
+          {screenshotUrl && (
             <div className="flex-shrink-0 border-t md:border-t-0 md:border-l border-border/50 pt-3 md:pt-0 md:pl-6">
               <span className="text-muted-foreground text-xs">crash screenshot</span>
-              <button type="button" onClick={() => onOpenScreenshot(log.screenshotUrl!)} className="block mt-1">
+              <button type="button" onClick={() => onOpenScreenshot(screenshotUrl)} className="block mt-1">
                 <img
-                  src={log.screenshotUrl}
+                  src={screenshotUrl}
                   alt="crash screenshot"
                   className="rounded border border-border/50 max-w-[200px] max-h-[120px] object-cover hover:opacity-80 transition-opacity cursor-pointer"
                 />
@@ -447,6 +451,7 @@ export default function LogsPage() {
     sites,
     sitesLoading,
     currentSiteId,
+    currentSite,
     siteTimezone,
     hasNoSites,
     selectSite,
@@ -462,6 +467,8 @@ export default function LogsPage() {
   // member never sees a control that would 403. Hidden, not disabled, matching the
   // dashboard's write-action gating.
   const canManageLogs = !!currentSiteId && isSiteAdmin(currentSiteId);
+  // crash screenshots are part of control; only on a site the viewer owns, see useSitePlan.
+  const { controlLocked } = useSitePlan(currentSiteId, currentSite?.owner);
 
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [logsLoading, setLogsLoading] = useState(true);
@@ -1218,6 +1225,7 @@ export default function LogsPage() {
                   userTz={userPreferences.timezone}
                   siteTz={siteTimezone}
                   timeFormat={userPreferences.timeFormat || '12h'}
+                  hideScreenshot={controlLocked}
                 />
               ))
             )}

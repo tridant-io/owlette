@@ -58,6 +58,10 @@ jest.mock('@/lib/swoop/turn.server', () => ({
   ...jest.requireActual('@/lib/swoop/turn.server'),
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
 }));
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
 
 import { POST as bundlePOST } from '@/app/api/agent/swoop/bundle/route';
 import { POST as doorbellPOST } from '@/app/api/agent/swoop/doorbell-token/route';
@@ -195,6 +199,40 @@ describe('POST /api/agent/swoop/doorbell-token', () => {
     );
     expect(response.status).toBe(403);
     expect((await response.json()).code).toBe('machine_excluded');
+  });
+
+  it('answers a core payer, whose plan has no swoop, with the same designed 403 swoop_disabled', async () => {
+    agentToken();
+    docs.set(`sites/${SITE}`, { owner: 'payer-1' });
+    mockGetEntitlements.mockResolvedValue({
+      ok: true,
+      resolved: true,
+      standing: 'active',
+      inGoodStanding: true,
+      ent: { 'owlette.control': '1', 'owlette.swoop': '0' },
+      epoch: 1,
+    });
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.example.invalid';
+    process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
+
+    try {
+      const response = await doorbellPOST(
+        createMockRequest('http://localhost/api/agent/swoop/doorbell-token', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer agent-token' },
+          body: {},
+        }),
+      );
+      expect(response.status).toBe(403);
+      expect((await response.json()).code).toBe('swoop_disabled');
+      expect(mockGetEntitlements).toHaveBeenCalledWith('payer-1');
+      expect(docs.get(settingsPath(SITE))).toMatchObject({ enabled: true });
+    } finally {
+      delete process.env.PLAN_ENFORCEMENT;
+      delete process.env.TRIDANT_API_URL;
+      delete process.env.TRIDANT_LICENSE_KEY;
+    }
   });
 });
 

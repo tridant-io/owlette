@@ -25,6 +25,7 @@ import { verifyUserSiteAccess } from '@/lib/hoot-utils.server';
 import { Capability, hasCapability, type Actor } from '@/lib/capabilities';
 import { apiError } from '@/lib/apiErrorResponse';
 import { emitMutation } from '@/lib/auditLogClient';
+import { requireEntitlement } from '@/lib/plan.server';
 import { getUserIdFromSession, withRateLimit } from '@/lib/withRateLimit';
 
 const COMMAND_TIMEOUT_MS = 15_000;
@@ -78,6 +79,9 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         { status: 403 },
       );
     }
+
+    const planRefusal = await requireEntitlement(siteId, 'owlette.hoot');
+    if (planRefusal) return planRefusal;
 
     const commandId = `provision_cortex_key_${Date.now()}`;
     const pendingRef = db

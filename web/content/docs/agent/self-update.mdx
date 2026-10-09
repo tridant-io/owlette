@@ -58,6 +58,8 @@ on the next service start, the agent reads the update marker, compares the insta
 
 the dashboard uses the current latest installer metadata automatically and sends an `update_owlette` command with the installer URL, expected SHA-256 checksum, and target version. it picks the file by the machine's platform — the `osFamily_arch` key it reports: `windows_x64`, `macos_arm64` or `linux_x64` (an agent that reports neither is treated as Windows x64). a machine whose platform the latest version has no file for is skipped and named in the result with the reason. see [deployments](/docs/dashboard/deployments).
 
+no plan holds updates back. plans apply after the beta, and even then `update_owlette` is accepted on every plan, owlette free and a lapsed subscription included. see [plans](/docs/plans).
+
 ### on the machine itself
 
 nothing asks anything of the person at the machine, on any platform, but the app does disappear for a moment:

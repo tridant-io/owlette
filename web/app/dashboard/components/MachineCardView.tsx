@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
 import { MachineStatusPill } from '@/components/MachineStatusPill';
+import { ControlUpgradeLink, MachinePlanLock, MachinePlanNotice } from '@/components/plan/MachinePlanNotice';
 import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor } from 'lucide-react';
@@ -41,6 +42,7 @@ import { DisplayCanvas } from '@/components/charts/DisplayCanvas';
 import { resolveDevice, shouldShowDeviceDropdown } from '@/lib/deviceResolvers';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { Machine, Process, LaunchMode, ScheduleBlock } from '@/hooks/useFirestore';
+import type { SitePlan } from '@/hooks/useSitePlan';
 import type { MetricType } from '@/components/charts';
 
 interface MachineCardViewProps {
@@ -78,6 +80,8 @@ interface MachineCardViewProps {
   onScreenshot?: (machineId: string) => void;
   onLiveView?: (machineId: string) => void;
   onSwoop?: (machineId: string) => void;
+  /** the viewer's plan on this site (`useSitePlan`); unset is unrestricted. */
+  sitePlan?: SitePlan;
 }
 
 /** The view's handlers, passed to each card as-is: they take the machineId, so
@@ -106,6 +110,10 @@ interface MachineCardProps extends MachineCardHandlers {
   cardPref: DeviceSelection;
   onSetCardPref: (machineId: string, kind: DeviceKind, id: string | null) => void;
   showLocalClock?: boolean;
+  /** set when the machine falls outside the viewer's plan: the machines it covers. */
+  planLimit?: number | null;
+  controlLocked?: boolean;
+  swoopLocked?: boolean;
 }
 
 const NO_CARD_PREF: DeviceSelection = {};
@@ -158,14 +166,18 @@ const MachineCard = memo(function MachineCard({
   onLiveView,
   onSwoop,
   showLocalClock,
+  planLimit,
+  controlLocked,
+  swoopLocked,
 }: MachineCardProps) {
   const machineId = machine.machineId;
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
   const isMuted = fullPrefs.mutedMachines.includes(machineId);
   const openMetric = onMetricClick ? (metric: MetricType) => onMetricClick(machineId, metric) : undefined;
+  const planLocked = planLimit != null;
 
-  const sparklineData = useAllSparklineData(currentSiteId, machine.machineId);
+  const sparklineData = useAllSparklineData(currentSiteId, planLocked ? null : machine.machineId);
 
   // Always subscribed so the COLLAPSED summary can show resolutions instead
   // of "no data". No assigned-layout sub — the drift dot reads the
@@ -173,7 +185,7 @@ const MachineCard = memo(function MachineCard({
   const { profile: displayProfile } = useDisplayState(
     currentSiteId,
     machine.machineId,
-    { enabled: true, subscribeAssigned: false }
+    { enabled: !planLocked, subscribeAssigned: false }
   );
   const displayMonitors = displayProfile?.monitors ?? [];
   const displayDriftCount = machine.metrics?.displayDriftCount ?? 0;
@@ -268,46 +280,50 @@ const MachineCard = memo(function MachineCard({
           <div className="flex items-center gap-2.5 min-w-0">
             {/* Display icon — quick access to the display panel, mirrors the
                 list view's per-row Monitor button (drift/breaker dots included). */}
-            <div className="relative flex-shrink-0">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openMetric?.('display');
-                    }}
-                    data-testid="open-display-panel"
-                    className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 w-8 p-0"
-                    aria-label="view displays"
-                  >
-                    <Monitor className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>view displays</p>
-                </TooltipContent>
-              </Tooltip>
-              {displayDriftCount > 0 && (
-                <span
-                  className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-warning-solid pointer-events-none"
-                  role="img"
-                  aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                  title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                />
-              )}
-              {machine.displayBreakerTripped && (
-                <span
-                  className={`absolute inline-block w-2 h-2 rounded-full bg-destructive pointer-events-none ${
-                    displayDriftCount > 0 ? '-bottom-0.5 -right-0.5' : '-top-0.5 -right-0.5'
-                  }`}
-                  role="img"
-                  aria-label="auto-restore disabled — circuit breaker tripped"
-                  title="auto-restore disabled — circuit breaker tripped"
-                />
-              )}
-            </div>
+            {planLocked ? (
+              <MachinePlanLock />
+            ) : (
+              <div className="relative flex-shrink-0">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openMetric?.('display');
+                      }}
+                      data-testid="open-display-panel"
+                      className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 w-8 p-0"
+                      aria-label="view displays"
+                    >
+                      <Monitor className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>view displays</p>
+                  </TooltipContent>
+                </Tooltip>
+                {displayDriftCount > 0 && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-warning-solid pointer-events-none"
+                    role="img"
+                    aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                    title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                  />
+                )}
+                {machine.displayBreakerTripped && (
+                  <span
+                    className={`absolute inline-block w-2 h-2 rounded-full bg-destructive pointer-events-none ${
+                      displayDriftCount > 0 ? '-bottom-0.5 -right-0.5' : '-top-0.5 -right-0.5'
+                    }`}
+                    role="img"
+                    aria-label="auto-restore disabled — circuit breaker tripped"
+                    title="auto-restore disabled — circuit breaker tripped"
+                  />
+                )}
+              </div>
+            )}
             <div className="flex flex-col min-w-0">
               <CardTitle className="text-xl font-semibold text-foreground select-text flex items-center gap-1.5 min-w-0">
                 <span className="truncate" title={machineId}>{machineId}</span>
@@ -392,18 +408,30 @@ const MachineCard = memo(function MachineCard({
                 onSwoop={onSwoop ? () => onSwoop(machineId) : undefined}
                 onViewDisplays={openMetric ? () => openMetric('display') : undefined}
                 rebootSchedule={machine.rebootSchedule}
+                planLocked={planLocked}
+                controlLocked={controlLocked}
+                swoopLocked={swoopLocked}
               />
             )}
           </div>
         </div>
       </CardHeader>
+      {/* outside the plan, the notice stands in for everything below the header.
+          flex-1: a grid row stretches the card to its neighbour's height, and the
+          notice fills it instead of leaving an empty card under a short one. */}
+      {planLimit != null && (
+        <MachinePlanNotice
+          limit={planLimit}
+          className="flex-1 flex-col justify-center border-t border-border/50 px-4 py-4 text-center"
+        />
+      )}
       {/* Restart Pending Banner. The flag is agent-written and only the agent's
           next service start clears it locally, so it outlives an unreachable
           machine — still worth showing (the operator wants to know it is set),
           but not as a live alarm. `machine.online` is the derived flag from
           `isMachineOnline`: the same 5-minute heartbeat rule as
           `isHeartbeatStale`, plus the agent's own flag. */}
-      {machine.rebootPending?.active && (
+      {!planLocked && machine.rebootPending?.active && (
         <div
           data-testid="reboot-pending-banner"
           className={`mx-4 mb-2 p-3 rounded-lg border ${
@@ -420,8 +448,9 @@ const MachineCard = memo(function MachineCard({
             </div>
             {isSiteAdmin && (
               <div className="flex items-center gap-1.5 flex-shrink-0">
-                {/* No approve while offline: the command would 409 machine_offline. */}
-                {machine.online && (
+                {/* No approve while offline: the command would 409 machine_offline.
+                    nor without control: approving is a restart command. */}
+                {machine.online && !controlLocked && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -473,7 +502,7 @@ const MachineCard = memo(function MachineCard({
         </div>
       )}
 
-      {machine.metrics && (
+      {!planLocked && machine.metrics && (
         <Collapsible open={statsExpanded} onOpenChange={onToggleStats}>
           {!statsExpanded && (
             <CollapsibleTrigger asChild>
@@ -761,112 +790,114 @@ const MachineCard = memo(function MachineCard({
       )}
 
       {/* Displays Collapsible */}
-      <Collapsible open={effectiveDisplaysExpanded} onOpenChange={onToggleDisplays}>
-        {!effectiveDisplaysExpanded && (
-          <CollapsibleTrigger asChild>
-            <Button variant="ghost" className="w-full border-t border-border/50 rounded-none cursor-pointer px-4 py-2.5 h-auto">
-              <div className="flex items-center gap-2 w-full select-none">
-                <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                {displayMonitors.length > 0 ? (
-                  <div className="flex items-center gap-2.5 text-sm text-muted-foreground overflow-hidden min-w-0">
-                    <span className="tabular-nums flex-shrink-0">
-                      <span className="text-foreground font-medium">{displayMonitors.length}</span> display{displayMonitors.length === 1 ? '' : 's'}
-                    </span>
-                    <span className="text-border/60 flex-shrink-0">|</span>
-                    <span className="truncate tabular-nums">
-                      {displayMonitors.map((m, i) => {
-                        const rotated = m.rotation === 90 || m.rotation === 270;
-                        const w = rotated ? m.resolution.height : m.resolution.width;
-                        const h = rotated ? m.resolution.width : m.resolution.height;
-                        return (
-                          <span key={m.id}>
-                            {i > 0 && <span className="mx-1.5 text-border/60">·</span>}
-                            <span className={m.primary ? 'text-foreground font-medium' : ''}>{w}x{h}</span>
-                          </span>
-                        );
-                      })}
-                    </span>
-                    {displayDriftCount > 0 && (
-                      <span
-                        className="inline-block w-2 h-2 rounded-full bg-warning-solid ml-2 flex-shrink-0"
-                        role="img"
-                        aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                        title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                      />
-                    )}
-                    {machine.displayBreakerTripped && (
-                      <span
-                        className="inline-block w-2 h-2 rounded-full bg-destructive ml-1 flex-shrink-0"
-                        role="img"
-                        aria-label="auto-restore disabled — circuit breaker tripped"
-                        title="auto-restore disabled — circuit breaker tripped"
-                      />
-                    )}
+      {!planLocked && (
+        <Collapsible open={effectiveDisplaysExpanded} onOpenChange={onToggleDisplays}>
+          {!effectiveDisplaysExpanded && (
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" className="w-full border-t border-border/50 rounded-none cursor-pointer px-4 py-2.5 h-auto">
+                <div className="flex items-center gap-2 w-full select-none">
+                  <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  {displayMonitors.length > 0 ? (
+                    <div className="flex items-center gap-2.5 text-sm text-muted-foreground overflow-hidden min-w-0">
+                      <span className="tabular-nums flex-shrink-0">
+                        <span className="text-foreground font-medium">{displayMonitors.length}</span> display{displayMonitors.length === 1 ? '' : 's'}
+                      </span>
+                      <span className="text-border/60 flex-shrink-0">|</span>
+                      <span className="truncate tabular-nums">
+                        {displayMonitors.map((m, i) => {
+                          const rotated = m.rotation === 90 || m.rotation === 270;
+                          const w = rotated ? m.resolution.height : m.resolution.width;
+                          const h = rotated ? m.resolution.width : m.resolution.height;
+                          return (
+                            <span key={m.id}>
+                              {i > 0 && <span className="mx-1.5 text-border/60">·</span>}
+                              <span className={m.primary ? 'text-foreground font-medium' : ''}>{w}x{h}</span>
+                            </span>
+                          );
+                        })}
+                      </span>
+                      {displayDriftCount > 0 && (
+                        <span
+                          className="inline-block w-2 h-2 rounded-full bg-warning-solid ml-2 flex-shrink-0"
+                          role="img"
+                          aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                          title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                        />
+                      )}
+                      {machine.displayBreakerTripped && (
+                        <span
+                          className="inline-block w-2 h-2 rounded-full bg-destructive ml-1 flex-shrink-0"
+                          role="img"
+                          aria-label="auto-restore disabled — circuit breaker tripped"
+                          title="auto-restore disabled — circuit breaker tripped"
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground text-sm">displays: no data</span>
+                  )}
+                </div>
+              </Button>
+            </CollapsibleTrigger>
+          )}
+          <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+            <CollapsibleTrigger asChild>
+              <button type="button" aria-label="collapse displays" className="block w-full border-t border-border/50 relative cursor-pointer group">
+                <span className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <span className="relative flex items-center px-4 py-1.5 select-none">
+                  <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
+                </span>
+              </button>
+            </CollapsibleTrigger>
+            <div
+              className={`relative px-6 pb-4 pt-2 ${openMetric ? 'cursor-pointer hover:bg-[var(--surface-hover)] transition-colors' : ''}`}
+              onClick={openMetric ? (e) => { e.stopPropagation(); openMetric('display'); } : undefined}
+            >
+              {openMetric && <TileButton label={`open display layout for ${machineId}`} />}
+              {displayMonitors.length > 0 ? (
+                /* One column below sm: the monitor list's nowrap rows (name +
+                   resolution + primary star) demand ~200px of min-content each,
+                   and a two-`fr` split doubles that demand into the card's
+                   intrinsically-sized grid track — which is what pushed the
+                   document past 390px. Stacked, the panes share one track and the
+                   shared enclosure rounds top/bottom instead of left/right. */
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">
+                  <div className="min-w-0 h-[160px] border border-border/30 bg-card border-b-0 sm:border-b rounded-t-lg sm:rounded-tr-none sm:rounded-bl-lg md:border-r-0 overflow-hidden">
+                    <DisplayCanvas
+                      monitors={displayMonitors}
+                      mosaicGrids={displayProfile?.mosaicGrids}
+                      labelMode="indexOnly"
+                      className="h-[160px]"
+                    />
                   </div>
-                ) : (
-                  <span className="text-muted-foreground text-sm">displays: no data</span>
-                )}
-              </div>
-            </Button>
-          </CollapsibleTrigger>
-        )}
-        <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
-          <CollapsibleTrigger asChild>
-            <button type="button" aria-label="collapse displays" className="block w-full border-t border-border/50 relative cursor-pointer group">
-              <span className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-              <span className="relative flex items-center px-4 py-1.5 select-none">
-                <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
-              </span>
-            </button>
-          </CollapsibleTrigger>
-          <div
-            className={`relative px-6 pb-4 pt-2 ${openMetric ? 'cursor-pointer hover:bg-[var(--surface-hover)] transition-colors' : ''}`}
-            onClick={openMetric ? (e) => { e.stopPropagation(); openMetric('display'); } : undefined}
-          >
-            {openMetric && <TileButton label={`open display layout for ${machineId}`} />}
-            {displayMonitors.length > 0 ? (
-              /* One column below sm: the monitor list's nowrap rows (name +
-                 resolution + primary star) demand ~200px of min-content each,
-                 and a two-`fr` split doubles that demand into the card's
-                 intrinsically-sized grid track — which is what pushed the
-                 document past 390px. Stacked, the panes share one track and the
-                 shared enclosure rounds top/bottom instead of left/right. */
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">
-                <div className="min-w-0 h-[160px] border border-border/30 bg-card border-b-0 sm:border-b rounded-t-lg sm:rounded-tr-none sm:rounded-bl-lg md:border-r-0 overflow-hidden">
-                  <DisplayCanvas
-                    monitors={displayMonitors}
-                    mosaicGrids={displayProfile?.mosaicGrids}
-                    labelMode="indexOnly"
-                    className="h-[160px]"
-                  />
+                  <div className="h-[160px] border border-border/30 bg-card rounded-b-lg sm:rounded-bl-none sm:rounded-tr-lg overflow-hidden flex flex-col justify-center gap-1.5 px-3 text-xs text-muted-foreground">
+                    {displayMonitors.map((m, i) => {
+                      // Post-rotation dims, matching Windows and the canvas
+                      // rect: a 4K panel at 270° reads 2160×3840.
+                      const isPortrait = m.rotation === 90 || m.rotation === 270;
+                      const effW = isPortrait ? m.resolution.height : m.resolution.width;
+                      const effH = isPortrait ? m.resolution.width : m.resolution.height;
+                      return (
+                        <div key={m.id} className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono text-muted-foreground shrink-0">{i + 1}</span>
+                          <span className="text-foreground font-medium truncate">{m.friendlyName || m.id}</span>
+                          <span className="text-muted-foreground shrink-0 tabular-nums">{effW}×{effH}</span>
+                          {m.primary && <span className="text-accent-warm shrink-0" role="img" aria-label="primary">★</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div className="h-[160px] border border-border/30 bg-card rounded-b-lg sm:rounded-bl-none sm:rounded-tr-lg overflow-hidden flex flex-col justify-center gap-1.5 px-3 text-xs text-muted-foreground">
-                  {displayMonitors.map((m, i) => {
-                    // Post-rotation dims, matching Windows and the canvas
-                    // rect: a 4K panel at 270° reads 2160×3840.
-                    const isPortrait = m.rotation === 90 || m.rotation === 270;
-                    const effW = isPortrait ? m.resolution.height : m.resolution.width;
-                    const effH = isPortrait ? m.resolution.width : m.resolution.height;
-                    return (
-                      <div key={m.id} className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono text-muted-foreground shrink-0">{i + 1}</span>
-                        <span className="text-foreground font-medium truncate">{m.friendlyName || m.id}</span>
-                        <span className="text-muted-foreground shrink-0 tabular-nums">{effW}×{effH}</span>
-                        {m.primary && <span className="text-accent-warm shrink-0" role="img" aria-label="primary">★</span>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <div className="text-xs text-muted-foreground py-4 text-center">no display data reported</div>
-            )}
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
+              ) : (
+                <div className="text-xs text-muted-foreground py-4 text-center">no display data reported</div>
+              )}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
       {/* Expandable Process List */}
-      {machine.processes && machine.processes.length > 0 && (
+      {!planLocked && machine.processes && machine.processes.length > 0 && (
         <Collapsible open={processesExpanded} onOpenChange={onToggleProcesses}>
           {!processesExpanded && (
             <CollapsibleTrigger asChild>
@@ -1089,40 +1120,46 @@ const MachineCard = memo(function MachineCard({
                                   configuration actions — a mis-click here
                                   interrupts a live process */}
                               <div className="ml-auto flex items-center gap-2 md:gap-3">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => onRestartProcess(machineId, process.id, process.name)}
-                                    aria-label={`restart ${process.name}`}
-                                    className="bg-card border border-border/50 text-foreground disabled:cursor-not-allowed disabled:opacity-50 p-2"
-                                    disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
-                                  >
-                                    <RotateCcw className="h-3 w-3" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>restart process</p>
-                                </TooltipContent>
-                              </Tooltip>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => onKillProcess(machineId, process.id, process.name)}
-                                    aria-label={`kill ${process.name}`}
-                                    className="bg-card border border-border/50 text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50 p-2"
-                                    disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
-                                  >
-                                    <Square className="h-3 w-3" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>kill process</p>
-                                </TooltipContent>
-                              </Tooltip>
+                              {controlLocked ? (
+                                <ControlUpgradeLink label="restart and kill are part of core" />
+                              ) : (
+                                <>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => onRestartProcess(machineId, process.id, process.name)}
+                                        aria-label={`restart ${process.name}`}
+                                        className="bg-card border border-border/50 text-foreground disabled:cursor-not-allowed disabled:opacity-50 p-2"
+                                        disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
+                                      >
+                                        <RotateCcw className="h-3 w-3" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>restart process</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => onKillProcess(machineId, process.id, process.name)}
+                                        aria-label={`kill ${process.name}`}
+                                        className="bg-card border border-border/50 text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50 p-2"
+                                        disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
+                                      >
+                                        <Square className="h-3 w-3" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>kill process</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </>
+                              )}
                               </div>
                             </>
                           )}
@@ -1150,7 +1187,7 @@ const MachineCard = memo(function MachineCard({
       )}
 
       {/* add process button for machines with no processes — admin-only */}
-      {isSiteAdmin && (!machine.processes || machine.processes.length === 0) && (
+      {!planLocked && isSiteAdmin && (!machine.processes || machine.processes.length === 0) && (
         <div className="border-t border-border/50 flex justify-center p-3">
           <Button
             variant="ghost"
@@ -1176,6 +1213,7 @@ export function MachineCardView({
   siteTimezone = 'UTC',
   siteTimeFormat = '12h',
   schedulesFollowSiteTime,
+  sitePlan,
   ...handlers
 }: MachineCardViewProps) {
   const { userPreferences, isSiteAdmin } = useAuth();
@@ -1214,6 +1252,9 @@ export function MachineCardView({
           onSetCardPref={setCardPref}
           schedulesFollowSiteTime={schedulesFollowSiteTime}
           showLocalClock={showLocalClock}
+          planLimit={sitePlan?.machineLimitFor(machine.machineId)}
+          controlLocked={sitePlan?.controlLocked}
+          swoopLocked={sitePlan?.swoopLocked}
         />
       ))}
     </div>

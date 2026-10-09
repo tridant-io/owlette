@@ -40,17 +40,14 @@ owlette roost push ./my-project --to rst_my_project_id --site site-1
 - `whoami` - print the active user, scopes, environment, profile, and api host.
 - `version` - print cli and server version compatibility details.
 
-## free-trial notice
+## plans
 
-While your account is on its free trial, the cli prints a one-line reminder to
-stderr, at most once per command:
-
-```
-owlette: trial ends 2026-08-15T00:00:00.000Z; choose a plan to keep API access
-```
-
-stdout is untouched, so `--json` output stays pipeable into `jq`. Once the
-trial ends, commands fail with `402 trial_expired` until a plan is chosen.
+Plans are not enforced during the beta. Once they apply, a command that the
+site owner's plan does not cover fails with `402 plan_required`, and the
+message says what the plan lacks. API keys are part of pro: on a
+plan without them every command made with a key fails that way, and
+`owlette auth login` cannot complete — the browser shows why, and the cli
+reports the phrase as expired. See [plans](https://owlette.app/docs/plans).
 
 full docs at [docs/cli/overview.md](https://github.com/tridant-io/owlette/tree/main/docs/cli/overview.md) (or owlette.app/docs/cli once published).
 

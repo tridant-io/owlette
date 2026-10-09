@@ -19,6 +19,7 @@ import { FallingFeather } from '@/components/FallingFeather';
 import { LoadingWord } from '@/components/LoadingWord';
 import { ManageSitesDialog } from '@/components/ManageSitesDialog';
 import { PageHeader } from '@/components/PageHeader';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useAuth } from '@/contexts/AuthContext';
@@ -45,12 +46,15 @@ export default function TalonsPage() {
     sites,
     sitesLoading,
     currentSiteId,
+    currentSite,
     createSite,
     updateSite,
     deleteSite,
     selectSite,
     pickSite,
   } = useCurrentSite();
+  const siteOwner = currentSite?.owner ?? null;
+  const talonsGated = usePlanGated('talons', siteOwner);
 
   const { machines } = useMachines(currentSiteId);
   const { talons, loading: talonsLoading, error } = useTalons(currentSiteId);
@@ -202,16 +206,18 @@ export default function TalonsPage() {
             </p>
           </div>
 
-          <Button
-            type="button"
-            data-testid="talon-create"
-            onClick={openCreate}
-            disabled={!currentSiteId}
-            className="flex-shrink-0 cursor-pointer"
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            create talon
-          </Button>
+          <UpgradeGate flag="talons" siteOwner={siteOwner} variant="inline" className="flex-shrink-0">
+            <Button
+              type="button"
+              data-testid="talon-create"
+              onClick={openCreate}
+              disabled={!currentSiteId}
+              className="flex-shrink-0 cursor-pointer"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              create talon
+            </Button>
+          </UpgradeGate>
         </div>
 
         {/* Ahead of the loading branch: `loading` is derived from "the listener
@@ -242,12 +248,15 @@ export default function TalonsPage() {
             <p className="mt-1 text-xs text-muted-foreground">
               a talon watches for something — a schedule, a threshold, an event — and acts on it.
             </p>
-            <div className="mt-3 flex justify-center">
-              <Button type="button" size="sm" onClick={openCreate} className="cursor-pointer">
-                <Plus className="mr-1 h-3.5 w-3.5" />
-                create talon
-              </Button>
-            </div>
+            {/* the header already carries the upgrade note */}
+            {!talonsGated && (
+              <div className="mt-3 flex justify-center">
+                <Button type="button" size="sm" onClick={openCreate} className="cursor-pointer">
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  create talon
+                </Button>
+              </div>
+            )}
           </Card>
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-card">

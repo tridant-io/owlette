@@ -55,10 +55,16 @@ jest.mock('@/lib/toast', () => ({
 
 async function openMenu(props: {
   isOnline?: boolean;
+  isSiteAdmin?: boolean;
+  rebooting?: boolean;
   swoopCapable?: boolean;
   swoopViewers?: number;
   onSwoop?: () => void;
   onLiveView?: () => void;
+  onViewDisplays?: () => void;
+  planLocked?: boolean;
+  controlLocked?: boolean;
+  swoopLocked?: boolean;
 }) {
   const user = userEvent.setup();
   render(
@@ -175,5 +181,78 @@ describe('MachineContextMenu — swoop viewer count', () => {
     expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-swoop-count')).not.toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-swoop-pill')).not.toBeInTheDocument();
+  });
+});
+
+// the viewer's own plan on a site they own (useSitePlan): server gates every
+// action regardless, so these only keep the menu from offering what would fail.
+describe('MachineContextMenu — plan', () => {
+  it('links a locked swoop to the plan page instead of opening a session', async () => {
+    await openMenu({ swoopCapable: true, swoopLocked: true });
+
+    const item = screen.getByTestId('machine-context-menu-swoop-upgrade');
+    expect(item).toHaveTextContent('swooppart of pro');
+    expect(item).toHaveAttribute('href', '/settings/plan');
+    expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
+  });
+
+  it('drops live view and screenshot when control is out of the plan', async () => {
+    await openMenu({ controlLocked: true, onViewDisplays: jest.fn() });
+
+    expect(screen.queryByTestId('machine-context-menu-live-view')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-screenshot')).not.toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-view-displays')).toBeInTheDocument();
+  });
+
+  it('keeps a locked swoop row when control is out of the plan too, as on free', async () => {
+    await openMenu({ swoopCapable: true, swoopLocked: true, controlLocked: true });
+
+    expect(screen.getByTestId('machine-context-menu-swoop-upgrade')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-screenshot')).not.toBeInTheDocument();
+  });
+
+  it('keeps only alerts, the token and removal on a machine outside the plan', async () => {
+    await openMenu({ planLocked: true, isSiteAdmin: true, swoopCapable: true, onViewDisplays: jest.fn() });
+
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'mute alerts',
+      'revoke token',
+      'remove machine',
+    ]);
+  });
+
+  it('collapses restart and shutdown into one row linking to the plan page, keeping schedule restarts', async () => {
+    await openMenu({ controlLocked: true, isSiteAdmin: true, swoopCapable: true, swoopLocked: true, onViewDisplays: jest.fn() });
+
+    const row = screen.getByTestId('machine-context-menu-control-upgrade');
+    expect(row).toHaveTextContent('remote controlpart of core');
+    expect(row).toHaveAttribute('href', '/settings/plan');
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'remote controlpart of core',
+      'schedule restarts',
+      'swooppart of pro',
+      'view displays',
+      'mute alerts',
+      'revoke token',
+      'remove machine',
+    ]);
+  });
+
+  it('still offers cancelling a restart without control, which every plan may', async () => {
+    await openMenu({ controlLocked: true, isSiteAdmin: true, rebooting: true });
+
+    expect(screen.getByTestId('machine-context-menu-cancel-reboot')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-control-upgrade')).not.toBeInTheDocument();
+  });
+
+  it('offers everything as before when the plan leaves it all in', async () => {
+    await openMenu({ isSiteAdmin: true, onViewDisplays: jest.fn() });
+
+    expect(screen.getByTestId('machine-context-menu-reboot')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-shutdown')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-control-upgrade')).not.toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-screenshot')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-view-displays')).toBeInTheDocument();
   });
 });

@@ -72,8 +72,21 @@ jest.mock('@/lib/hoot/categorizeChat.server', () => ({
   categorizeNewChat: jest.fn(),
 }));
 
+// the plan gate reads the payer through the admin sdk; it lands on the same in-memory store.
+jest.mock('@/lib/firebase-admin', () => ({
+  __esModule: true,
+  getAdminDb: () => fakeDb,
+}));
+
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  __esModule: true,
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
 import * as turnStore from '@/lib/hoot/turnStore.server';
 import * as hootUtils from '@/lib/hoot-utils.server';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 import type { SiteMachineSummary } from '@/lib/hoot-utils.server';
 import * as llm from '@/lib/llm';
 import { getToolsByTier } from '@/lib/mcp-tools';
@@ -969,6 +982,71 @@ describe('startTurn — error paths', () => {
       'Hoot is disabled on every machine this turn targets.',
       [],
     );
+  });
+});
+
+describe('startTurn — the payer plan', () => {
+  const PLAN_ENV = {
+    PLAN_ENFORCEMENT: 'on',
+    TRIDANT_API_URL: 'https://tridant.example.invalid',
+    TRIDANT_LICENSE_KEY: 'test-license-key',
+  };
+
+  /** a core payer has control but not hoot; pro has both. */
+  function payerHoot(value: '0' | '1') {
+    mockGetEntitlements.mockResolvedValue({
+      ok: true,
+      resolved: true,
+      standing: 'active',
+      inGoodStanding: true,
+      ent: { 'owlette.control': '1', 'owlette.hoot': value },
+      epoch: 1,
+    });
+  }
+
+  beforeEach(() => {
+    mockGetEntitlements.mockReset();
+    Object.assign(process.env, PLAN_ENV);
+    store[`sites/${SITE_ID}`] = { owner: 'payer-1' };
+  });
+
+  afterEach(() => {
+    for (const key of Object.keys(PLAN_ENV)) delete process.env[key];
+  });
+
+  it('ends a core payer turn with the plan refusal before any model or machine work', async () => {
+    payerHoot('0');
+
+    const chunks = await collectChunks(startTurn(fakeDb, baseParams({ source: 'followup' })));
+    await flushAsync();
+
+    const detail = PLAN_REQUIRED_DETAIL['owlette.hoot'];
+    expect(chunks.some((c) => c.type === 'error' && c.errorText === detail)).toBe(true);
+    expect(turnStore.finishTurn).toHaveBeenCalledWith(fakeDb, CHAT_ID, TURN_ID, 'error', detail, []);
+    expect(mockGetEntitlements).toHaveBeenCalledWith('payer-1');
+    expect(llm.createModel).not.toHaveBeenCalled();
+    expect(hootUtils.listSiteMachines).not.toHaveBeenCalled();
+    expect(hootUtils.buildExecutableTools).not.toHaveBeenCalled();
+  });
+
+  it('runs the turn for a pro payer', async () => {
+    payerHoot('1');
+
+    const chunks = await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(chunks.some((c) => c.type === 'text-delta')).toBe(true);
+    expect(chunks.some((c) => c.type === 'error')).toBe(false);
+  });
+
+  it('looks nothing up with enforcement off', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+
+    const chunks = await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(chunks.some((c) => c.type === 'text-delta')).toBe(true);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
   });
 });
 

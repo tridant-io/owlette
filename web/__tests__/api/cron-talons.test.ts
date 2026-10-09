@@ -9,6 +9,8 @@ const getSiteTimezoneMock = jest.fn();
 const getTalonMock = jest.fn();
 /** The hoot follow-up pass; its own behaviour is covered by followupSweep.test.ts. */
 const fireDueFollowupsMock = jest.fn();
+/** The plan pause; its own behaviour is covered by planPause.server.test.ts. */
+const pausedByPlanMock = jest.fn();
 
 /**
  * Talon docs keyed `${siteId}/${talonId}`. The claim transaction reads and
@@ -179,6 +181,11 @@ jest.mock('@/lib/hoot/followupSweep.server', () => ({
   fireDueFollowups: (...args: unknown[]) => fireDueFollowupsMock(...args),
 }));
 
+jest.mock('@/lib/planPause.server', () => ({
+  createPlanMemo: () => ({ sites: new Map(), payers: new Map() }),
+  pausedByPlan: (...args: unknown[]) => pausedByPlanMock(...args),
+}));
+
 import { GET } from '@/app/api/cron/talons/route';
 
 const MIN = 60_000;
@@ -283,6 +290,8 @@ beforeEach(() => {
     deferralQueryFails = false;
     runTalonMock.mockReset();
     runTalonMock.mockResolvedValue([]);
+    pausedByPlanMock.mockReset();
+    pausedByPlanMock.mockResolvedValue(false);
     getSiteTimezoneMock.mockReset();
     getSiteTimezoneMock.mockResolvedValue('UTC');
     getTalonMock.mockReset();
@@ -342,6 +351,20 @@ describe('GET /api/cron/talons', () => {
       expect.objectContaining({ id: 'talon-1', name: 'restart signage' }),
       { siteId: 'node-pa', triggerSummary: 'schedule' },
     );
+  });
+
+  it("claims but does not run a scheduled talon whose site's plan lacks talons", async () => {
+    dueRefs = [seedTalon('node-pa', 'talon-1', scheduleTalon({ nextRunAt: new Date(Date.now() - 1 * MIN) }))];
+    pausedByPlanMock.mockResolvedValue(true);
+
+    const { body } = await sweep();
+
+    expect(body).toMatchObject({ ok: true, due: 1, executed: 0 });
+    expect(runTalonMock).not.toHaveBeenCalled();
+    expect(pausedByPlanMock).toHaveBeenCalledWith('node-pa', 'owlette.talons', expect.anything());
+    // the slot is spent, so a lapsed site doesn't build a backlog that fires on upgrade
+    const advanced = talonStore.get('node-pa/talon-1')?.nextRunAt as Date;
+    expect(advanced.getTime()).toBeGreaterThan(Date.now());
   });
 
   it('queries only enabled talons that are already due, oldest first', async () => {
@@ -657,6 +680,18 @@ describe('GET /api/cron/talons — delayed event triggers', () => {
       status: 'skipped',
       error: 'talon_disabled',
     });
+  });
+
+  it("skips a deferral whose site's plan lacks talons, and says so on the crumb", async () => {
+    seedDelayedTalon();
+    dueDeferralRefs = [seedDeferral('node-pa', 'run-1')];
+    pausedByPlanMock.mockResolvedValue(true);
+
+    const { body } = await sweep();
+
+    expect(body).toMatchObject({ deferredFired: 0, deferredSkipped: 1 });
+    expect(runTalonMock).not.toHaveBeenCalled();
+    expect(deferralStore.get('node-pa/run-1')).toMatchObject({ status: 'skipped', error: 'plan_paused' });
   });
 
   it('skips a talon that was deleted while its deferral waited', async () => {

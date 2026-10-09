@@ -21,13 +21,16 @@ import { RefreshCw, AlertCircle, AlertTriangle, CheckCircle2, Loader2, X } from 
 import { useOwletteUpdates } from '@/hooks/useOwletteUpdates';
 import { Machine } from '@/hooks/useFirestore';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 
 interface UpdateOwletteButtonProps {
   siteId: string;
   machines: Machine[];
+  /** below sm, only the icon and the count, so a phone's one-row heading keeps its room. */
+  compact?: boolean;
 }
 
-export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonProps) {
+export function UpdateOwletteButton({ siteId, machines, compact }: UpdateOwletteButtonProps) {
   const {
     outdatedMachines,
     latestVersion,
@@ -142,26 +145,30 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
   }
 
   const inProgressCount = updatingMachines.size;
+  const label = inProgressCount > 0 ? 'updating owlette' : 'update owlette';
+  const spaced = compact ? 'sm:ml-2' : 'ml-2';
+  const wide = compact ? 'hidden sm:inline-flex' : undefined;
 
   return (
     <>
       <Button
         onClick={handleOpenDialog}
         variant="outline"
+        aria-label={compact ? `${label}${latestVersion ? ` to v${latestVersion}` : ''}` : undefined}
         className="border-accent-warm text-accent-warm hover:bg-accent-warm/10 hover:text-accent-warm-hover cursor-pointer"
       >
-        <RefreshCw className={`h-4 w-4 mr-2 ${inProgressCount > 0 ? 'animate-spin' : ''}`} />
-        {inProgressCount > 0 ? 'updating owlette' : 'update owlette'}
+        <RefreshCw className={cn('h-4 w-4', compact ? 'sm:mr-2' : 'mr-2', inProgressCount > 0 && 'animate-spin')} />
+        <span className={wide}>{label}</span>
         {latestVersion && (
-          <span className="ml-2 text-xs">to v{latestVersion}</span>
+          <span className={cn('ml-2 text-xs', wide)}>to v{latestVersion}</span>
         )}
         {selectableMachineIds.length > 0 && (
-          <Badge className="ml-2 bg-accent-warm text-background">
+          <Badge className={cn(spaced, 'bg-accent-warm text-background')}>
             {selectableMachineIds.length}
           </Badge>
         )}
         {inProgressCount > 0 && (
-          <Badge className="ml-2">
+          <Badge className={cn('ml-2', wide)}>
             in progress: {inProgressCount}
           </Badge>
         )}

@@ -45,6 +45,11 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => mockDb(),
 }));
 
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
 function collectionPath(parts: string[]): string {
   return parts.join('/');
 }
@@ -124,6 +129,11 @@ function docRef(parts: string[]) {
   };
 }
 
+import {
+  enforcePlans,
+  FREE_ENTITLEMENTS,
+  stopEnforcingPlans,
+} from '../helpers/planEnforcement';
 import { GET, POST } from '@/app/api/account/api-keys/route';
 import { DELETE } from '@/app/api/account/api-keys/[keyId]/route';
 
@@ -310,6 +320,41 @@ describe('/api/account/api-keys', () => {
       }),
     );
     expect(JSON.stringify(mockEmitMutation.mock.calls)).not.toContain(json.key);
+  });
+});
+
+describe('/api/account/api-keys plan gate', () => {
+  const create = () =>
+    POST(new NextRequest('http://localhost/api/account/api-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Deploy' }),
+    }));
+
+  beforeEach(() => {
+    enforcePlans();
+    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+  });
+  afterEach(stopEnforcingPlans);
+
+  it('402s plan_required on the minting user’s free plan, and mints nothing', async () => {
+    store.set('users/test-admin', { role: 'user' });
+
+    const res = await create();
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({
+      code: 'plan_required',
+      entitlement: 'owlette.api_keys',
+    });
+    expect(mockGetEntitlements).toHaveBeenCalledWith('test-admin');
+    expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(false);
+  });
+
+  it('mints for a superadmin, whatever tridant says', async () => {
+    store.set('users/test-admin', { role: 'superadmin' });
+
+    expect((await create()).status).toBe(200);
   });
 });
 

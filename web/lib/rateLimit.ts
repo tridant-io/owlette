@@ -104,6 +104,16 @@ export const agentAlertRateLimit = redis
     })
   : null;
 
+/** Verification email resends: 5/hr per user — every call is a real email send. */
+export const verifyEmailRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(5, '1 h'),
+      prefix: 'verify-email',
+      analytics: true,
+    })
+  : null;
+
 /** Installer uploads: 5/hr per IP against storage abuse; 30/hr in dev. */
 export const uploadRateLimit = redis
   ? new Ratelimit({
