@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import fs from 'fs';
 import { test, expect } from '@playwright/test';
 import { authenticator } from 'otplib';
 import { E2E_BASE_URL, getAdminDb } from '../../helpers/emulator';
@@ -92,6 +93,14 @@ test('setup-2fa generates a manual secret, verifies TOTP, and shows backup codes
 
   await expect(page.getByText(/save backup codes/i)).toBeVisible();
   await expect(page.getByRole('button', { name: /continue to dashboard/i })).toBeVisible();
+
+  const downloading = page.waitForEvent('download');
+  await page.getByRole('button', { name: /download codes/i }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe('owlette-backup-codes.txt');
+  const sheet = fs.readFileSync(await download.path(), 'utf8');
+  expect(sheet).toContain(`account: ${user.email}`);
+  expect(sheet.match(/^\d+\.\s+\S+$/gm)).toHaveLength(10);
 });
 
 test('verify-2fa with trust-device mints a 30-day cookie and skips the challenge on reload + re-login', async ({

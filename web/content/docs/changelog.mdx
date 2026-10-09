@@ -21,6 +21,13 @@ port 3478. When no path comes up, the viewer now says which end never reached
 the relay instead of blaming the viewer's network, and the machine's swoop log
 says whether it gathered a relay candidate and why not. Fixes #328.
 
+### added — backup codes download as a file
+
+The backup codes screen at the end of two-factor setup has a **download
+codes** button next to **copy all codes**. It saves the ten codes, and the
+account they belong to, as `owlette-backup-codes.txt`, so a sheet that is
+shown only once no longer has to survive on the clipboard.
+
 ### changed — agent installers download from download.tridant.io
 
 Agent installers are moving from Firebase Storage to
