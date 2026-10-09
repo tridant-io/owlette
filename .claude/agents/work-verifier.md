@@ -1,6 +1,6 @@
 ---
 name: work-verifier
-description: Spec-axis reviewer for a diff. Checks a change against the plan, issue or request it was meant to implement: what is missing, what was added unasked, what looks implemented but wrong. /verify runs it beside code-architecture-reviewer.
+description: "Spec-axis reviewer for a diff. Checks a change against the plan, issue or request it was meant to implement: what is missing, what was added unasked, what looks implemented but wrong. /verify runs it beside code-architecture-reviewer."
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
