@@ -536,7 +536,7 @@ export default function TokensPage() {
             <DialogTitle>revoke token for {tokenToRevoke?.machineId}?</DialogTitle>
             <DialogDescription className="text-muted-foreground">
               This will immediately invalidate the machine&apos;s authentication token.
-              The agent will disconnect and cannot reconnect until re-registered with a new registration code.
+              The agent will leave its site and cannot reconnect until it is paired again with a new phrase.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -567,7 +567,7 @@ export default function TokensPage() {
             </DialogTitle>
             <DialogDescription className="text-muted-foreground">
               This will immediately invalidate ALL agent tokens for this site ({tokens.length} tokens).
-              All agents will disconnect and require re-registration to reconnect.
+              All agents will leave the site and must be paired again with a new phrase to reconnect.
               <br /><br />
               <strong className="text-warning">this action cannot be undone.</strong>
             </DialogDescription>

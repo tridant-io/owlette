@@ -20,7 +20,7 @@ try:
 
     with patch("secure_storage.get_storage", return_value=mock_storage), \
          patch("secure_storage.SecureStorage", return_value=mock_storage):
-        from auth_manager import AuthManager, AuthenticationError, TokenRefreshError
+        from auth_manager import AuthManager, AuthenticationError, TokenRefreshError, TokenRevokedError
 except ImportError:
     pytest.skip("auth_manager not importable", allow_module_level=True)
 except Exception as exc:
@@ -203,6 +203,86 @@ class TestBackoff:
         # Should have made an HTTP call to refresh
         assert mock_post.called
         assert token == "fresh-token"
+
+
+# TestRefusedRefresh — a 401/403 is the server saying the credential is dead for good
+class TestRefusedRefresh:
+    @staticmethod
+    def _refused(status_code, error):
+        response = MagicMock()
+        response.status_code = status_code
+        response.json.return_value = {"error": error}
+        return response
+
+    @pytest.mark.parametrize("status_code", [401, 403])
+    def test_the_service_hook_owns_a_refused_refresh(self, storage, status_code):
+        # #327: before this hook the store was cleared and the machine stayed
+        # paired, syncing on its access token for up to an hour with nothing
+        # on the dashboard to show for the revoke.
+        reasons = []
+        am = AuthManager(
+            api_base="https://owlette.app/api",
+            machine_id="TEST-MACHINE",
+            storage=storage,
+            on_revoked=reasons.append,
+        )
+
+        with patch("requests.post", return_value=self._refused(status_code, "Invalid refresh token")):
+            # a distinct error: the unpair handler tells a refused refresh
+            # (the revoke is real) from one it could not ask for
+            with pytest.raises(TokenRevokedError):
+                am.refresh_now()
+
+        assert reasons == ["the server refused the agent token: Invalid refresh token"]
+        # the hook's unpair clears the store itself; a second clear here would
+        # race the offline flush the hook sets in motion
+        storage.clear_tokens.assert_not_called()
+
+    def test_a_store_emptied_by_another_holder_is_the_same_revoke(self, storage):
+        # hoot runs its own AuthManager with no hook and clears the store on
+        # its own 401; if it wins that race the service's refresh finds no
+        # token, which used to be the pre-fix dead state: paired, no credential
+        reasons = []
+        storage.get_refresh_token.return_value = None
+        am = AuthManager(
+            api_base="https://owlette.app/api",
+            machine_id="TEST-MACHINE",
+            storage=storage,
+            on_revoked=reasons.append,
+        )
+
+        with patch("requests.post") as post:
+            with pytest.raises(TokenRevokedError):
+                am.refresh_now()
+
+        assert not post.called
+        assert reasons == ["no refresh token left in storage"]
+
+    def test_without_a_hook_a_refused_refresh_only_clears_the_store(self, auth_manager, storage):
+        # the pairing flows and the hoot CLI build an AuthManager with no hook
+        with patch("requests.post", return_value=self._refused(401, "Invalid refresh token")):
+            with pytest.raises(TokenRefreshError):
+                auth_manager.refresh_access_token()
+
+        storage.clear_tokens.assert_called_once()
+
+    def test_a_rate_limited_refresh_is_not_a_revoke(self, storage):
+        reasons = []
+        am = AuthManager(
+            api_base="https://owlette.app/api",
+            machine_id="TEST-MACHINE",
+            storage=storage,
+            on_revoked=reasons.append,
+        )
+
+        with patch("requests.post", return_value=self._refused(429, "Too many requests")) as post:
+            with pytest.raises(TokenRefreshError) as raised:
+                am.refresh_now()
+
+        assert not isinstance(raised.value, TokenRevokedError)
+        assert post.called
+        assert reasons == []
+        storage.clear_tokens.assert_not_called()
 
 
 # TestApiBase — every token request goes to api_base

@@ -109,6 +109,12 @@ class TokenRefreshError(Exception):
     pass
 
 
+class TokenRevokedError(TokenRefreshError):
+    """The server refused the refresh token for good (401/403): revoked, expired, or
+    bound to another machine. Nothing short of a new pairing recovers from it."""
+    pass
+
+
 class TokenRefreshNetworkError(TokenRefreshError):
     """
     Refresh failed at the transport layer — no HTTP response (unreachable host, DNS,
@@ -131,10 +137,17 @@ class AuthManager:
         api_base: Optional[str] = None,
         machine_id: Optional[str] = None,
         storage: Optional[SecureStorage] = None,
+        on_revoked: Optional[Callable[[str], None]] = None,
     ):
-        """api_base must be an owlette API base; machine_id defaults to the persisted id, storage to the singleton."""
+        """api_base must be an owlette API base; machine_id defaults to the persisted id, storage to the singleton.
+
+        on_revoked owns a refused refresh (401/403): the service passes its
+        unpair. Without it the store is cleared and nothing else moves (the
+        pairing flows, the hoot CLI).
+        """
         if not api_base:
             raise ValueError("api_base is required for AuthManager initialization")
+        self._on_revoked = on_revoked
         self.api_base = api_base.rstrip('/')
         # every token request goes to api_base
         if not shared_utils.is_owlette_api_base(self.api_base):
@@ -399,6 +412,12 @@ class AuthManager:
 
             refresh_token = self.storage.get_refresh_token()
             if not refresh_token:
+                # a store that emptied mid-run was cleared by another holder of
+                # the credential (hoot, on its own refused refresh): the same
+                # revoke, so the same exit
+                if self._on_revoked is not None:
+                    self._on_revoked("no refresh token left in storage")
+                    raise TokenRevokedError("No refresh token found in storage")
                 raise TokenRefreshError("No refresh token found in storage")
 
             url = f"{self.api_base}/agent/auth/refresh"
@@ -425,9 +444,13 @@ class AuthManager:
                     error_msg = f"HTTP {response.status_code}: {response.text[:200]}"
 
                 if response.status_code in [401, 403]:
-                    error_type = "Authentication failed (invalid/expired tokens)"
-                    logger.warning("Refresh token invalid/expired, clearing storage")
-                    self.storage.clear_tokens()
+                    if self._on_revoked is not None:
+                        self._on_revoked(f"the server refused the agent token: {error_msg}")
+                    else:
+                        logger.warning("Refresh token invalid/expired, clearing storage")
+                        self.storage.clear_tokens()
+                    logger.error(f"Token refresh failed: refused by the server - {error_msg}")
+                    raise TokenRevokedError(f"Token refresh refused: {error_msg}")
                 elif response.status_code == 429:
                     error_type = "Rate limited by server"
                 elif response.status_code == 500:
@@ -502,6 +525,13 @@ class AuthManager:
         except Exception as e:
             logger.error(f"Unexpected error during token refresh: {e}")
             raise TokenRefreshError(f"Unexpected error: {e}")
+
+    def refresh_now(self) -> None:
+        """Refresh regardless of expiry, serialised with the automatic refreshes.
+        Raises TokenRevokedError when the server refuses the credential, another
+        TokenRefreshError when it could not be asked."""
+        with self._refresh_lock:
+            self.refresh_access_token()
 
     def get_valid_token(self) -> str:
         """

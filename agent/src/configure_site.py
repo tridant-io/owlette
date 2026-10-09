@@ -755,6 +755,28 @@ def _drop_cloud_cache() -> None:
         logging.info("Deleted cached Firebase config")
 
 
+def unpair(reason: str) -> None:
+    """Detach this machine from its site because the server cut it off (an
+    `unpair` command, or a refresh it refused).
+
+    Cloud sync off first: the service loop answers that by stopping its cloud
+    client and flushing `online: false` while the access token still works.
+    Then the cached cloud config and the credentials, each best-effort, as in
+    `run_leave_site`. Unlike a leave, the machine id stays: the dashboard row
+    survives a revoke, and a re-pair from this machine should land on it.
+    """
+    import secure_storage
+
+    logging.warning(f"Unpairing from the site: {reason}")
+    _disable_cloud_sync(shared_utils.load_config())
+    try:
+        _drop_cloud_cache()
+    except Exception as e:
+        logging.warning(f"Unpair: failed to delete cached config (non-critical): {e}")
+    if not secure_storage.get_storage().clear_tokens():
+        logging.warning("Unpair: the token store could not be removed")
+
+
 def _deregister(site: _PairedSite) -> None:
     """Delete this machine's document from the site; raises when it could not."""
     client = None

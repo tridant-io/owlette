@@ -1628,6 +1628,8 @@ class FirebaseClient:
         'mcp_tool_call', 'capture_screenshot', 'cancel_sync', 'cancel_mcp_tool',
         'swoop_session_requested', 'swoop_kill', 'swoop_refresh',
         'site_settings_refresh',
+        # a revoke must not wait behind an install
+        'unpair',
     })
 
     def _process_command(self, cmd_id: str, cmd_data: Dict[str, Any]):

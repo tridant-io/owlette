@@ -78,7 +78,9 @@ the machine menu is described in [revoke token](/docs/dashboard/machine-monitori
 
 ## effect on agents
 
-revoking deletes the record at once. a running agent keeps its cached one-hour access token until it expires; at its next refresh the server answers `401`, and the agent wipes its token store. it then shows as disconnected and stays that way until it is paired again with a new phrase or registration code. a `403`, which the server returns when the machine ID does not match the token, wipes the store the same way.
+revoking deletes the record at once and queues an `unpair` command on every machine whose token it deleted. a running agent picks the command up within a minute and first asks the server for a refresh; only a refused refresh makes it leave: it switches cloud sync off, drops its cached cloud config and token store, flushes `online: false`, ends any swoop session and the hoot process, and the owlette app on the machine offers **join site**. the machine stays listed, offline, until it is removed or paired again with a new phrase. an agent whose refresh still succeeds ignores the command: a machine sharing the hostname whose own token survived, or a machine paired again after a revoke it never saw.
+
+an agent that is offline at the time keeps its cached one-hour access token until it expires; at its next refresh the server answers `401` and the agent leaves the site the same way. a `403`, which the server returns when the machine ID does not match the token, does the same. agents on 4.1.7 or earlier do not act on the command: they only wipe their token store at that refresh and stay online on the dashboard until then, up to an hour.
 
 the refresh endpoint allows 120 requests per hour per IP address, shared by every machine behind one NAT. a refused (`429`) refresh does not wipe anything; the agent retries.
 

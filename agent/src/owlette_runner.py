@@ -184,7 +184,8 @@ if __name__ == '__main__':
                     except Exception as e:
                         logging.warning(f"Network gate error (proceeding anyway): {e}")
 
-                    auth_manager = AuthManager(api_base=api_base)
+                    auth_manager = AuthManager(
+                        api_base=api_base, on_revoked=_service_instance.unpair)
 
                     if not auth_manager.is_authenticated():
                         logging.error("Agent not authenticated - no refresh token found in encrypted storage")
