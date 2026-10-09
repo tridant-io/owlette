@@ -24,7 +24,9 @@
  */
 
 import { useCallback, useEffect, useId, useState, type RefObject } from 'react';
+import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
 import type { SwoopSessionState, SwoopStallRecovery } from '@/hooks/useSwoopSession';
@@ -33,6 +35,14 @@ import type { SwoopNoPath } from '@/lib/swoop/peer';
 export interface SwoopStageProps {
   session: SwoopSession | null;
   state: SwoopSessionState;
+  /** why the session ended or failed; said in the middle of the stage, where it is seen. */
+  error?: string | null;
+  /** seconds until the next automatic reconnect, while one is scheduled. */
+  retryIn?: number | null;
+  /** the api's code for a refusal that is final; `swoop_disabled` says where to turn swoop on. */
+  refusal?: string | null;
+  /** where this user turns swoop on for the site; null for one who cannot. */
+  settingsHref?: string | null;
   /** connecting found no media path; the stage says so instead of a bare "connecting". */
   noPath?: SwoopNoPath | null;
   /** what the page is doing about a frozen picture; the stage says it over the picture. */
@@ -61,7 +71,9 @@ function Hint({ children, onDone }: { children: React.ReactNode; onDone: () => v
 }
 
 /** the stage's centred notice, over the picture or in place of it. */
-const NOTICE = 'pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-swoop-stage-ink';
+const NOTICE = 'pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-base text-swoop-stage-ink';
+/** a notice's second line, one size down from its first; every notice uses it. */
+const NOTICE_DETAIL = 'max-w-sm text-center text-sm';
 
 /**
  * why there is no path, as far as this end can tell: whether a relay was
@@ -82,7 +94,20 @@ function noPathDetail(noPath: SwoopNoPath): string {
   return 'the relay was reached and still no path came up. reconnect to try again, or try another network.';
 }
 
-export function SwoopStage({ session, state, noPath, stall = 'none', stageRef, videoRef, onLeave, children }: SwoopStageProps) {
+export function SwoopStage({
+  session,
+  state,
+  error = null,
+  retryIn = null,
+  refusal = null,
+  settingsHref = null,
+  noPath,
+  stall = 'none',
+  stageRef,
+  videoRef,
+  onLeave,
+  children,
+}: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   // the way out, said once fullscreen holds and only where it is not obvious:
@@ -138,6 +163,9 @@ export function SwoopStage({ session, state, noPath, stall = 'none', stageRef, v
   const windowedCapture = capture !== null && !fullscreen;
   // a stall recovery speaks for the stage until the page is connecting again.
   const recovering = stall === 'reattaching' || stall === 'reconnecting';
+  // an ended or failed session is not connecting: it says why, and the way on.
+  const settled = state === 'ended' || state === 'error';
+  const swoopOff = refusal === 'swoop_disabled';
   // the picture behind a stall notice is the frozen frame, so it sits on a wash of the stage.
   const washed = `${NOTICE} bg-swoop-stage/80`;
 
@@ -174,18 +202,42 @@ export function SwoopStage({ session, state, noPath, stall = 'none', stageRef, v
         // the session is still up; only the automatic recovery has stopped.
         <p role="alert" className={washed}>
           the picture froze
-          <span className="max-w-sm text-center text-xs">
+          <span className={NOTICE_DETAIL}>
             it kept freezing, so swoop stopped fixing it on its own. reconnect from the bar to try again.
           </span>
         </p>
       )}
-      {state !== 'connected' && stall === 'none' && (
+      {state !== 'connected' && !settled && stall === 'none' && (
         <p className={NOTICE}>
-          {state !== 'ended' && <Loader2 className="size-6 animate-spin" aria-hidden />}
-          {state === 'ended' ? 'session ended' : noPath ? "can't reach this machine from your network" : 'connecting'}
-          {state !== 'ended' && noPath && (
-            <span className="max-w-sm text-center text-xs">{noPathDetail(noPath)}</span>
+          <Loader2 className="size-6 animate-spin" aria-hidden />
+          {noPath ? "can't reach this machine from your network" : 'connecting'}
+          {noPath && (
+            <span className={NOTICE_DETAIL}>{noPathDetail(noPath)}</span>
           )}
+        </p>
+      )}
+      {settled && stall === 'none' && (
+        <p role="alert" className={`${NOTICE} px-4 text-center`}>
+          {state === 'ended' ? 'session ended' : error}
+          {state === 'ended' && error && <span className={NOTICE_DETAIL}>{error}</span>}
+          {/* a session that failed after finding no path keeps saying which network to look at */}
+          {noPath && <span className={NOTICE_DETAIL}>{noPathDetail(noPath)}</span>}
+          {retryIn !== null && <span className={NOTICE_DETAIL}>reconnecting in {retryIn} s…</span>}
+          {swoopOff && (
+            <span className={NOTICE_DETAIL}>
+              {settingsHref ? 'turn it on in site settings.' : 'ask a site owner or admin to turn it on.'}
+            </span>
+          )}
+          <span className="pointer-events-auto flex gap-2">
+            {swoopOff && settingsHref && (
+              <Button asChild size="sm">
+                <Link href={settingsHref}>open site settings</Link>
+              </Button>
+            )}
+            <Button asChild variant="outline" size="sm">
+              <Link href="/dashboard">back to dashboard</Link>
+            </Button>
+          </span>
         </p>
       )}
       {state === 'connected' && fullscreen && !locked && (

@@ -158,6 +158,8 @@ export interface SwoopStepUpControls {
 export interface UseSwoopSession {
   state: SwoopSessionState;
   error: string | null;
+  /** the api's code when it refused the session for good, such as `swoop_disabled`; the stage explains it. */
+  refusal: string | null;
   stats: SwoopStats;
   /**
    * the live session, once the peer is up. this is what every toolbar, menu and
@@ -275,6 +277,7 @@ export function useSwoopSession(
 
   const [state, setState] = useState<SwoopSessionState>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const [stats, setStats] = useState<SwoopStats>(EMPTY_STATS);
   const [stepUpRequired, setStepUpRequired] = useState(false);
   const [session, setSession] = useState<SwoopSession | null>(null);
@@ -579,6 +582,7 @@ export function useSwoopSession(
         // a machine briefly offline, an edge in front of the app or a bad
         // moment may all come back, and the ladder waits them out.
         const final = isWithdrawal(res.status, code) || res.status === 400 || res.status === 404;
+        if (final && !disposed) setRefusal(code);
         fail(res.status === 401 ? 'sign in again to resume.' : detail, !final);
         return null;
       }
@@ -595,6 +599,7 @@ export function useSwoopSession(
 
       setState('authorizing');
       setError(null);
+      setRefusal(null);
 
       const identity = await createSwoopIdentity();
       if (disposed) return;
@@ -1020,5 +1025,5 @@ export function useSwoopSession(
     [stepUpRequired, enrolled, submitProof, cancel],
   );
 
-  return { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath };
+  return { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath };
 }
