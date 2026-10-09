@@ -1,5 +1,5 @@
 # swoop across the internet — Tasks
-**Progress**: 5/9 complete
+**Progress**: 6/9 complete
 
 ## Wave 1: STUN on both ends
 
@@ -46,7 +46,7 @@
 
 ## Wave 3: the relay in the session
 
-- [ ] **Task 3.1: Relayed candidates carry media** `[agent]`
+- [x] **Task 3.1: Relayed candidates carry media** `[agent]`
   - Files: `agent/swoop/src/transport/rtc.rs`, `agent/swoop/src/session/mod.rs`.
   - Do: With a `turn:` server and credentials in the bundle, allocate on the peer's socket, add
     `Candidate::relayed(relay, local, "udp")`, demultiplex TURN traffic before str0m and feed relayed datagrams as
@@ -56,6 +56,15 @@
   - Done when: clippy and tests pass, including two real `Rtc` peers on loopback that connect only through a fake
     TURN server.
 
+- [ ] **Task 3.3: The host's relay over TCP and TLS** `[agent]`
+  - Do: Issue #328's remaining ask. The host allocates over UDP 3478 only; a machine on a network that allows no UDP
+    out gathers neither a server-reflexive nor a relay candidate. Cloudflare also lists `turn:…:53?transport=udp`,
+    `turn:…:3478?transport=tcp` and `turns:…:5349|443`: try UDP 53 as a second UDP server first (cheap, same
+    socket), then a TCP/TLS leg (a second transport under the peer: TURN over a stream per RFC 8656 §3.1 with
+    RFC 4571 framing, reported as `PathProfile::RelayTls`). Also: re-allocate when an allocation is lost mid-session (the 12 h
+    credential ttl ends a relayed session today, `turn.server.ts`), which needs re-minted credentials from the api.
+  - Done when: a host on a UDP-blocked lab network connects through TLS 443; a relayed session outlives 12 h.
+
 - [ ] **Task 3.2: Measured through a real TURN server** `[agent]`
   - Do: coturn on the kiosk VM (lab only, long-term credentials); an ignored live test from B4A allocates, permits,
     binds and echoes through it. Repeat against Cloudflare when the owner's key exists.
@@ -63,7 +72,10 @@
 
 ## Wave 4: ship it
 
-- [ ] **Task 4.1: Docs and release** `[agent]`
+- [ ] **Task 4.1: Docs and release** `[agent]` (docs and changelog done 2026-10-09; release pending)
+  - Order: the web with the viewer change (the browser's stage 2 no longer stands down for a host relay) must be
+    live in an environment before its machines get 4.1.8; an old web with a new host leaves a UDP-blocked viewer
+    without its browser relay. Dev deploys the web on merge; at the prod promotion, web first, then the installer.
   - Do: `swoop.mdx` says what networks work and what a relay adds; both changelogs; release with the next version.
   - Done when: released to dev and installed on the four machines.
 
@@ -95,3 +107,32 @@
 - 3.1 not started: host-side relay wiring into rtc.rs. With the owner's Cloudflare key set, the browser's stage-2
   relay already works against a host that now offers its public address, so 3.1 is the cheaper path (D13) and the
   fix for UDP-blocked host networks, not a prerequisite for relayed sessions.
+
+### 2026-10-09
+- Issue #328 (dbagaric): a session from a 5G hotspot to `mini` in Zagreb failed with "even the relay could not get
+  through" with the Cloudflare key set on dev. The host logs showed what the plan predicted: host + srflx only,
+  no relay. Something between the office and the relay dropped the viewer's relayed checks (an egress filter or a
+  NAT mapping the relay could not hit; which one is unconfirmed, and the fix's path avoids all of them: the host
+  only ever talks to the relay on 3478). The host's own `peer poll failed: poll_output` hid its cause behind
+  anyhow's outer context; it now logs the chain.
+- 3.1 done on branch `swoop/host-relay` (worktree `Owlette-swoop-wan-wt`): `Allocation` wired into `RtcPeer` on each
+  viewer's socket (bind starts it; TURN datagrams taken off the socket by content, so one address serving STUN and
+  TURN works; relayed receives fed to str0m at the relayed address; transmits whose source is the relayed address
+  wrapped, with a permission asked for on the first miss; permissions for every remote candidate, trickled or in
+  the offer; a channel bound once the relay pair is nominated; the allocation released on drop). The session
+  resolves the bundle's `turn:` UDP entry off-thread like STUN, hands it to each peer, sets the governor's path
+  profile from the ICE edges and reports `path: relay` in status. The `turn` cargo feature is gone: the client ships
+  in every build.
+- Tests: `turn/fake.rs`, a TURN server for tests (401 challenge, long-term integrity, permissions, channels, Send and
+  Data, ChannelData), and in rtc.rs: the allocation becomes one trickled `typ relay` candidate and is released on
+  drop; a silent relay leaves the peer without one; two peers connect only through the fake relay (the viewer's
+  one candidate is an unroutable public address, the host's relay candidate its only route) with the pair reported
+  relayed and a channel bound. 455 lib tests, clippy clean, default and audio-opus.
+- Viewer: the browser's stage-2 relay no longer stands down when the host holds one (a pair on it is chosen only
+  when nothing else works, and on a udp-blocked network nothing else can). `SwoopNoPath` says which ends reached
+  the relay and the stage copy names the network to look at. Docs: the "from another network" section lists the
+  machine's outbound needs. Changelog entry under Unreleased; ships with the next release.
+- Still owed: 3.2 against Cloudflare (a real session from off-net; the reporter can rerun from the hotspot once
+  the release is on `mini`), 3.3 (host TCP/TLS, re-allocation), 4.1's release, 4.2. Not proven: UDP 3478 out from
+  the Zagreb office to `turn.cloudflare.com` (141.101.90.1), a different address from the STUN that worked
+  (162.159.207.0).

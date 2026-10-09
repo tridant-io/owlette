@@ -1606,7 +1606,7 @@ mod tests {
     }
 
     /// Allocates and releases on a real TURN server named by `SWOOP_TURN_LIVE` (`host:port,username,password`):
-    /// `cargo test --features turn -- --ignored live_allocation`. Prints the relayed and mapped addresses, never
+    /// `cargo test -- --ignored live_allocation`. Prints the relayed and mapped addresses, never
     /// the credentials.
     #[test]
     #[ignore = "needs a turn server; set SWOOP_TURN_LIVE"]

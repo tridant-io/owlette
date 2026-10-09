@@ -10,8 +10,9 @@
  * full 12h ttl through session end, kill and membership revocation. Wiring it
  * up needs somewhere to keep the username handle first — both call sites
  * discard it, and `assertNoKeyMaterial` would reject a field named for a
- * credential. Tracked with the metering (task 8.4) and the host-side
- * allocation (task 7.4); until then a relay allocation outlives its session.
+ * credential. Tracked with the metering (task 8.4). The host releases its own
+ * allocation when a peer goes (agent 4.1.8), so what outlives a session is the
+ * credential, not an allocation; the browser's allocation ends with the tab.
  */
 
 import logger from '@/lib/logger';

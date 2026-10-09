@@ -25,6 +25,20 @@ token survived ignores the command. An agent that is offline at the time
 leaves the site the moment the server refuses its next refresh. Agents on
 4.1.7 or earlier still only wipe their token store at that refresh.
 
+### fixed — swoop connects from strict networks through the relay
+
+A swoop session from a phone hotspot or another strict network failed with
+"even the relay could not get through" although a relay was set up: the
+machine's side never used it, so a viewer whose router allows no inbound path
+had nothing to connect to. From agent 4.1.8 the machine takes a relayed
+address of its own on the TURN server and offers it to the viewer, so a viewer
+behind any router reaches it; the browser's own relay is still tried when
+nothing has connected after three seconds, so a network that allows only TCP
+gets through too. The machine's network has to allow UDP out to the relay on
+port 3478. When no path comes up, the viewer now says which end never reached
+the relay instead of blaming the viewer's network, and the machine's swoop log
+says whether it gathered a relay candidate and why not. Fixes #328.
+
 ### changed — agent installers download from download.tridant.io
 
 Agent installers are moving from Firebase Storage to

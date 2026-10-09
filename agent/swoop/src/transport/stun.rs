@@ -56,9 +56,16 @@ pub fn server_host_port(url: &str) -> Option<(&str, u16)> {
     let rest = &url[5..];
     // a query is not part of a stun uri, but `?transport=udp` is a common slip
     let rest = rest.split_once('?').map_or(rest, |(before, _)| before);
-    let (host, port) = match rest.rsplit_once(':') {
+    host_port(rest)
+}
+
+/// The `host[:port]` of a stun or turn URL once its scheme and query are off,
+/// with the port both schemes default to. `None` for no host, a port that is
+/// not one, or an IPv6 literal.
+pub(super) fn host_port(authority: &str) -> Option<(&str, u16)> {
+    let (host, port) = match authority.rsplit_once(':') {
         Some((host, port)) => (host, port.parse().ok()?),
-        None => (rest, DEFAULT_PORT),
+        None => (authority, DEFAULT_PORT),
     };
     (!host.is_empty() && !host.contains([':', '['])).then_some((host, port))
 }

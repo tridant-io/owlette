@@ -1,21 +1,22 @@
 name: claude hooks
 
-# The Claude Code hooks in .claude/ fail silently: a hook that does not parse,
-# or writes an output field Claude Code ignores, still exits 0. Three did for
-# months. scripts/check-claude-hooks.mjs proves each one parses and speaks the
-# hook schema.
+# What lives in .claude/ fails silently: a hook that does not parse or writes
+# a field Claude Code ignores still exits 0, and a skill or agent with invalid
+# frontmatter is simply never loaded. scripts/check-claude-hooks.mjs catches both.
 
 on:
   pull_request:
     paths:
       - '.claude/**'
       - 'scripts/check-claude-hooks.mjs'
+      - 'scripts/__tests__/push-target.test.mjs'
       - '.github/workflows/claude-hooks.yml'
   push:
     branches: [main, dev]
     paths:
       - '.claude/**'
       - 'scripts/check-claude-hooks.mjs'
+      - 'scripts/__tests__/push-target.test.mjs'
       - '.github/workflows/claude-hooks.yml'
 
 concurrency:
@@ -27,7 +28,7 @@ permissions:
 
 jobs:
   check:
-    name: claude hooks parse and speak the hook schema
+    name: claude hooks, skills and agents load
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -39,5 +40,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: check every hook
+      - name: check every hook, skill and agent
         run: node scripts/check-claude-hooks.mjs
+
+      - name: push-target tells pushes and merges from mentions
+        run: node --test scripts/__tests__/push-target.test.mjs
