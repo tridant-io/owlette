@@ -1308,6 +1308,13 @@ class OwletteService:
         except Exception as e:
             logging.warning(f"Failed to register site handlers: {e}")
 
+        # unpair: the dashboard revoked this machine's agent token.
+        try:
+            from pairing_commands import register_handlers as _register_pairing_handlers
+            _register_pairing_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register pairing handlers: {e}")
+
         self.firebase_client = None
 
         # install-tree hardening: main() does the start-up repair and sets
@@ -1363,7 +1370,7 @@ class OwletteService:
             logging.info(f"Initializing Firebase client - site: {site_id}, project: {project_id}")
 
             from auth_manager import AuthManager
-            auth_manager = AuthManager(api_base=api_base)
+            auth_manager = AuthManager(api_base=api_base, on_revoked=self.unpair)
 
             if not auth_manager.is_authenticated():
                 logging.error("Agent not authenticated - no refresh token found")
@@ -3042,6 +3049,28 @@ class OwletteService:
             except Exception as e:
                 logging.debug(f"[SHUTDOWN] swoop kill failed: {e}")
         self._swoop_shutdown.set()
+
+    def unpair(self, reason):
+        """Leave the site because the server cut this machine off.
+
+        Swoop is ended here because the cloud-client stop the main loop runs
+        does not reach it: a viewer must not keep a picture of a machine the
+        site has just revoked, and the doorbell would keep minting with a
+        credential the server now refuses. Swoop then stays down until the
+        service next starts, as it already does after an in-place re-pair.
+        Hoot is ended for the same reason: it holds its own access token for
+        up to an hour, and site members could keep chatting with and running
+        tools on a revoked machine through it. A relaunch exits on its own
+        once the config carries no site.
+        """
+        configure_site.unpair(reason)
+        self._stop_swoop()
+        if self._is_cortex_alive():
+            try:
+                psutil.Process(self.cortex_pid).terminate()
+                logging.info("Hoot process ended: this machine left its site")
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                logging.warning(f"Could not end the hoot process: {e}")
 
     def _check_console_session(self):
         """Tell swoop when the active console session changes. Runs on the 5s tick.

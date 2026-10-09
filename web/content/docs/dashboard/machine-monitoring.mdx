@@ -187,7 +187,7 @@ the **⋮** button on a card or row opens the machine menu. when someone is in a
 | **screenshot** | online | captures the machine's screen and opens the screenshot history |
 | **view displays** | any signed-in user | opens the [displays](/docs/dashboard/displays) panel |
 | **mute alerts** / **unmute alerts** | any signed-in user | silences every alert email for this machine, **for you only**. listed under [account settings → alerts](/docs/dashboard/account-settings#muted-machines) |
-| **revoke token** | site admin | invalidates the agent's refresh token for this hostname. see below |
+| **revoke token** | site admin | invalidates the agent's refresh token for this hostname and cuts the agent off. see below |
 | **remove machine** | site admin | removes the machine from the site. see below |
 
 which machines can host swoop, take screenshots or show live view depends on the platform. a Mac needs the owlette app running with Screen Recording granted. a Linux machine cannot host swoop, and although its menu still shows **live view** and **screenshot**, both fail on Linux for now. see [platform support](/docs/reference/platform-support#screens).
@@ -196,7 +196,9 @@ an offline machine keeps **schedule restarts**, **view displays**, **mute alerts
 
 ### revoke token
 
-revoking invalidates the agent's stored refresh token, so that agent cannot reconnect until it is paired again. two scopes are offered: **revoke current token**, the most recently used token for the hostname, or **revoke all for hostname**, every token for it — which also disconnects any other machine sharing that hostname.
+revoking invalidates the agent's stored refresh token and tells the agent to leave the site: within a minute it confirms with the server that its token is gone, drops its site and credentials, ends any swoop session and the hoot process, goes offline on the dashboard, and the owlette app on the machine offers **join site**. the machine stays listed, offline, until it is removed or paired again with a new phrase. two scopes are offered: **revoke current token**, the most recently used token for the hostname, which leaves any other machine sharing that hostname running, or **revoke all for hostname**, every token for it — which cuts off every machine sharing that hostname.
+
+an agent that is offline when you revoke leaves the site the moment it comes back and the server refuses its refresh. agents on 4.1.7 or earlier do not act on the revoke until that refresh either, so they stay online on the dashboard for up to an hour.
 
 this is the per-machine version of the [token management](/docs/dashboard/admin/token-management) page, which does the same across a whole site.
 

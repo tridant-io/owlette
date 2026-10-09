@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { FieldValue } from 'firebase-admin/firestore';
 import type { Firestore, DocumentReference, QueryDocumentSnapshot } from 'firebase-admin/firestore';
 import { adminDb } from '@/lib/firebase-admin';
 import { withRateLimit } from '@/lib/withRateLimit';
@@ -8,10 +9,44 @@ import { isTokenDead, tokenTimestampToMillis } from '@/lib/agentTokens';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
 import { siteAuditActor } from '@/lib/actions/auditActor.server';
 import { emitMutation } from '@/lib/auditLogClient';
+import { writeCommandFanOut } from '@/lib/commandLifecycle';
 
 type RouteParams = {
   siteId: string;
 } & Record<string, string | undefined>;
+
+/**
+ * Deleting the token doc is invisible to a live agent until its next refresh,
+ * up to an hour away (#327): the `unpair` command is what reaches it now. The
+ * agent confirms with the server before acting, so a stale command is harmless.
+ * Never fatal — the tokens are already gone — and `writeCommandFanOut`
+ * isolates each machine's write, so one failure cannot hide another's.
+ */
+async function queueUnpair(
+  db: Firestore,
+  siteId: string,
+  machineIds: Iterable<string>,
+  queuedBy: string,
+  auditCorrelationId: string,
+): Promise<void> {
+  const ids = [...new Set(machineIds)].filter((id) => typeof id === 'string' && id.length > 0);
+  if (ids.length === 0) return;
+  const results = await writeCommandFanOut(
+    siteId,
+    ids,
+    'cmd_unpair',
+    // `timestamp` is the field the agent's hourly stale-command sweep reads.
+    { type: 'unpair', siteId, status: 'pending', queuedBy, timestamp: FieldValue.serverTimestamp() },
+    { db, auditCorrelationId },
+  );
+  for (const result of results) {
+    if (!result.ok) {
+      logger.warn(
+        `Revoke: unpair command not queued for machine ${result.machineId} in site ${siteId}: ${result.error}`,
+      );
+    }
+  }
+}
 
 /**
  * Chunked deletes — a write batch caps at 500 ops and revoke-all/prune can
@@ -133,6 +168,17 @@ export const POST = withRateLimit(authorizedSiteHandler<RouteParams>({
         db,
         tokensSnapshot.docs.map((doc) => doc.ref),
       );
+      // Only machines that still had a usable token have an agent to cut off.
+      const now = Date.now();
+      await queueUnpair(
+        db,
+        siteId,
+        tokensSnapshot.docs
+          .filter((doc) => !isTokenDead(doc.data(), now))
+          .map((doc) => doc.data().machineId),
+        auditActor,
+        ctx.correlationId,
+      );
 
       logger.info(`Revoked ${revokedCount} tokens for site ${siteId}`);
       emitRevoked('all', revokedCount);
@@ -164,6 +210,13 @@ export const POST = withRateLimit(authorizedSiteHandler<RouteParams>({
 
       await tokenRef.delete();
       revokedCount = 1;
+      await queueUnpair(
+        db,
+        siteId,
+        isTokenDead(tokenData, Date.now()) ? [] : [tokenData?.machineId],
+        auditActor,
+        ctx.correlationId,
+      );
 
       logger.info(`Revoked token ${tokenId} for site ${siteId}`);
       emitRevoked(
@@ -205,6 +258,8 @@ export const POST = withRateLimit(authorizedSiteHandler<RouteParams>({
         }
 
         revokedCount = await deleteRefsInChunks(db, pick ? [pick.ref] : []);
+        // No live token means no agent to cut off: nothing to queue.
+        await queueUnpair(db, siteId, pick ? [machineId] : [], auditActor, ctx.correlationId);
 
         logger.info(`Revoked ${revokedCount} current token for machine ${machineId} in site ${siteId}`);
         emitRevoked('machine-latest', revokedCount, machineId);
@@ -222,6 +277,9 @@ export const POST = withRateLimit(authorizedSiteHandler<RouteParams>({
         db,
         tokensSnapshot.docs.map((doc) => doc.ref),
       );
+      const now = Date.now();
+      const hadUsableToken = tokensSnapshot.docs.some((doc) => !isTokenDead(doc.data(), now));
+      await queueUnpair(db, siteId, hadUsableToken ? [machineId] : [], auditActor, ctx.correlationId);
 
       logger.info(`Revoked ${revokedCount} tokens for machine ${machineId} in site ${siteId}`);
       emitRevoked('machine', revokedCount, machineId);

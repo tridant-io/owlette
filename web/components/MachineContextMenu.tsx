@@ -136,11 +136,11 @@ export function MachineContextMenu({
       const revokedCount = data.revokedCount ?? 0;
       if (scope === 'all') {
         toast.success(`Tokens revoked for ${machineName}`, {
-          description: `revoked ${revokedCount} token(s) for this hostname. affected agents must re-register to reconnect.`,
+          description: `revoked ${revokedCount} token(s) for this hostname. the affected agents are leaving the site and must be paired again to reconnect.`,
         });
       } else if (revokedCount > 0) {
         toast.success(`Token revoked for ${machineName}`, {
-          description: 'revoked the most recently used token for this hostname; that agent must re-register to reconnect.',
+          description: 'revoked the most recently used token for this hostname; that agent is leaving the site and must be paired again to reconnect.',
         });
       } else {
         toast.info(`No live token for ${machineName}`, {
@@ -466,7 +466,7 @@ export function MachineContextMenu({
           <DialogHeader>
             <DialogTitle>revoke token for {machineName}?</DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              revoking disconnects the agent, which must re-register to reconnect.
+              revoking cuts the agent off: it leaves this site, drops its credentials and goes offline within a minute. to reconnect it must be paired again with a new phrase.
               <br /><br />
               if this hostname was re-paired, or if more than one machine shares it, there may be several tokens:
               <br />

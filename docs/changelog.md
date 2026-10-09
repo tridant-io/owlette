@@ -11,6 +11,20 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — revoking a token now cuts the agent off
+
+**revoke token** on a machine, and **revoke** on the agent tokens page,
+deleted the token but changed nothing on the machine for up to an hour: the
+agent kept syncing on its one-hour access token, and the dashboard kept
+showing it online with live metrics. The server now also queues an `unpair`
+command, and an agent on this release acts on it within a minute: it confirms
+with the server that its token is gone, leaves the site, drops its
+credentials, ends any swoop session and the hoot process, and goes offline,
+and the owlette app on the machine offers **join site**. A machine sharing the hostname whose own
+token survived ignores the command. An agent that is offline at the time
+leaves the site the moment the server refuses its next refresh. Agents on
+4.1.7 or earlier still only wipe their token store at that refresh.
+
 ### fixed — swoop connects from strict networks through the relay
 
 A swoop session from a phone hotspot or another strict network failed with
