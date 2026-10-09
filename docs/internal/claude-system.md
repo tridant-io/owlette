@@ -27,10 +27,10 @@ Skills are folders, never flat files: Claude Code silently skips `.claude/skills
 
 | hook | event | does |
 |---|---|---|
-| `track-edits.mjs` | PostToolUse Edit/Write | logs edited paths to `.claude/session-edits.json` (10 min window) |
+| `track-edits.mjs` | PostToolUse Edit/Write | logs edited paths, with the session that made them, to `.claude/session-edits.json` (10 min window) |
 | `deploy-agent.mjs` | PostToolUse Edit/Write | mirrors an edited `agent/src/*.py` into `C:\ProgramData\Owlette\agent\src` and restarts the service |
-| `pre-commit-check.mjs` | PreToolUse Bash | on `git commit`/`push`, runs tsc + jest for web edits and pytest for agent edits from the edit log; denies the call on failure |
-| `post-push-e2e.mjs` | PostToolUse Bash | when a push or `gh pr merge` lands web changes on dev/main, tells Claude to watch the playwright e2e run |
+| `pre-commit-check.mjs` | PreToolUse Bash | on a `git commit`/`push` that lands in this repo, runs tsc + jest for this session's web edits and pytest for its agent edits; denies the call on failure. Commits in other repos and other sessions' edits are left alone |
+| `post-push-e2e.mjs` | PostToolUse Bash | when a push or `gh pr merge` lands web changes on this repo's dev/main (not another repo or remote), tells Claude to watch the playwright e2e run |
 | `post-push-installer.mjs` | PostToolUse Bash | when agent files land on dev/main, reminds Claude that machines only get them through an installer release |
 
 Hooks fail silently: a hook that does not parse, or writes a field Claude Code ignores, still exits 0. So every hook writes stdout only through `lib/hook-output.mjs`, and `node scripts/check-claude-hooks.mjs` (CI: `.github/workflows/claude-hooks.yml`) proves each one parses and emits valid hook JSON. It also fails on frontmatter Claude Code would silently drop: a flat skill file, a missing description, a name that does not match, or an unquoted `:` in a value. Run it after any change under `.claude/`.
