@@ -9,12 +9,14 @@ on:
     paths:
       - '.claude/**'
       - 'scripts/check-claude-hooks.mjs'
+      - 'scripts/__tests__/push-target.test.mjs'
       - '.github/workflows/claude-hooks.yml'
   push:
     branches: [main, dev]
     paths:
       - '.claude/**'
       - 'scripts/check-claude-hooks.mjs'
+      - 'scripts/__tests__/push-target.test.mjs'
       - '.github/workflows/claude-hooks.yml'
 
 concurrency:
@@ -38,5 +40,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: check every hook
+      - name: check every hook, skill and agent
         run: node scripts/check-claude-hooks.mjs
+
+      - name: push-target tells pushes and merges from mentions
+        run: node --test scripts/__tests__/push-target.test.mjs

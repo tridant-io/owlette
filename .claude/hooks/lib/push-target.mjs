@@ -8,6 +8,25 @@ import { execSync } from 'child_process'
 
 const BRANCHES = ['dev', 'main']
 
+const PUSH = /^\s*git\s+push\b/
+const MERGE = /^\s*gh\s+pr\s+merge\b/
+
+// only the part of a compound command that runs it, and only when it starts
+// with it: `git push -u origin x && gh pr create --base dev` is not a push to
+// dev, and an echo that mentions `gh pr merge` is not a merge
+const segment = (command, re) => command.split(/&&|\|\||[;|\n]/).find((s) => re.test(s)) ?? null
+
+export const namedBranch = (command) =>
+  segment(command, PUSH)?.match(/[\s:](dev|main)(?=\s|$)/)?.[1] ?? null
+
+/** the merged pr's number or url ref ('' merges the current branch's pr), or null when nothing merges */
+export function mergedPrRef(command) {
+  const merge = segment(command, MERGE)
+  if (merge === null) return null
+  const args = merge.replace(MERGE, '')
+  return args.match(/\/pull\/(\d+)/)?.[1] ?? args.match(/(?:^|\s)#?(\d+)(?=\s|$)/)?.[1] ?? ''
+}
+
 const run = (cmd, cwd) =>
   execSync(cmd, { cwd, encoding: 'utf-8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] }).trim()
 
@@ -19,14 +38,14 @@ export function pushTarget(data) {
   const output = typeof res === 'string' ? res : `${res.stdout || ''}\n${res.stderr || ''}`
   if (/\[rejected\]|failed to push|^fatal:/m.test(output)) return null
 
-  const merge = command.match(/\bgh\s+pr\s+merge\b(.*)/)
-  if (merge) return mergedPr(merge[1], cwd)
+  const ref = mergedPrRef(command)
+  if (ref !== null) return mergedPr(ref, cwd)
 
-  if (!/\bgit\s+push\b/.test(command)) return null
-  if (/--dry-run\b|--delete\b|\s:\S/.test(command)) return null
+  const push = segment(command, PUSH)
+  if (push === null) return null
+  if (/--dry-run\b|--delete\b|\s:\S/.test(push)) return null
 
-  const named = command.match(/\bgit\s+push\b.*?[\s:](dev|main)(?=\s|$)/)?.[1]
-  let branch = named
+  let branch = namedBranch(command)
   try {
     branch ??= run('git rev-parse --abbrev-ref HEAD', cwd)
   } catch {
@@ -45,8 +64,7 @@ export function pushTarget(data) {
   }
 }
 
-function mergedPr(args, cwd) {
-  const ref = args.match(/\/pull\/(\d+)/)?.[1] ?? args.match(/(?:^|\s)#?(\d+)(?=\s|$)/)?.[1] ?? ''
+function mergedPr(ref, cwd) {
   try {
     const pr = JSON.parse(run(`gh pr view ${ref} --json state,baseRefName,mergeCommit,files`, cwd))
     if (pr.state !== 'MERGED' || !BRANCHES.includes(pr.baseRefName)) return null
