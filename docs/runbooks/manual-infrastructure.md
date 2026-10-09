@@ -382,7 +382,7 @@ was fielded before 3.4.
 Four documents carry the detail this file deliberately does not duplicate. The summaries are here so
 a person on call knows what exists without opening `.claude/`.
 
-**`.claude/skills/cf-load-balancing.md` — the `owlette.app` failover load balancer.**
+**`.claude/skills/cf-load-balancing/SKILL.md` — the `owlette.app` failover load balancer.**
 `owlette.app` sits behind a Cloudflare LB with two origins on different clouds: Railway
 (`owlette-prod`) as primary, Vercel (`owlette` project) as standby, kept fresh via git-connect. A
 monitor polls `GET /api/health` every 60s expecting 200 and sending `Host: owlette.app`; both pools
@@ -396,7 +396,7 @@ Railway origin hostname, never `owlette.app` itself (the LB would loop back on i
 `~> 4.52` provider pin is deliberate — v5 renamed `default_pool_ids`, `fallback_pool_id`, and the
 `header {}` blocks.
 
-**`.claude/skills/env-management.md` — env var parity across three surfaces.**
+**`.claude/skills/env-management/SKILL.md` — env var parity across three surfaces.**
 The three targets are `railway-dev` (serves dev.owlette.app), `railway-prod` (serves owlette.app), and
 `vercel-prod` (owlette.app failover). Both Railway services live in the **single environment named
 `dev`** — production is a separate *service*, not an environment, so address it as

@@ -110,15 +110,13 @@ jobs:
         working-directory: agent/host
         run: cargo test --locked
 
-      # turn is off by default until the relay is wired into sessions; built here so its
-      # client and its tests do not rot meanwhile.
       - name: clippy owlette-swoop
         working-directory: agent/swoop
-        run: cargo clippy --all-targets --features turn -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: test owlette-swoop
         working-directory: agent/swoop
-        run: cargo test --locked --features turn
+        run: cargo test --locked
 
       # audio-opus is what build_installer_full.bat ships, and it is not a
       # default feature -- without this the ~20 #[cfg(feature = "audio-opus")]
@@ -249,11 +247,11 @@ jobs:
       - name: clippy owlette-swoop
         if: runner.os == 'macOS'
         working-directory: agent/swoop
-        run: cargo clippy --all-targets --no-default-features --features encode-videotoolbox,audio-opus,turn -- -D warnings
+        run: cargo clippy --all-targets --no-default-features --features encode-videotoolbox,audio-opus -- -D warnings
       - name: test owlette-swoop
         if: runner.os == 'macOS'
         working-directory: agent/swoop
-        run: cargo test --locked --no-default-features --features encode-videotoolbox,audio-opus,turn
+        run: cargo test --locked --no-default-features --features encode-videotoolbox,audio-opus
 
       - name: clippy owlette-swoop (stub)
         if: runner.os == 'Linux'

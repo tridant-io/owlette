@@ -1,79 +1,52 @@
 ---
-description: Verify completed work against plan success criteria
+description: Two-axis review of finished work. Runs the checks, then a standards reviewer and a spec reviewer in parallel on the diff, and asks for evidence from where the owner will look. Use after /execute or /next, before a PR, or when the owner asks to verify, review or audit work.
 ---
 
-Verify that completed work meets the plan's success criteria. Run this after /execute or /next completes all tasks.
+Two reviewers, kept apart so neither masks the other: code can follow every convention and still build the wrong thing, or build the right thing in a way that breaks the conventions.
 
-## Process
+## 1. Pin the diff
 
-### Step 1: Load Plan
+The fixed point is whatever the owner named; otherwise `git fetch origin dev` and use `git merge-base HEAD origin/dev`. Record the diff command (`git diff <base>...HEAD`, three dots) and `git log --oneline <base>..HEAD`. Confirm the ref resolves and the diff is non-empty before going further.
 
-Read all three files from `dev/active/[task-name]/`:
-- `plan.md` — for success criteria and approach
-- `tasks.md` — for task-level done-when criteria
-- `context.md` — for key decisions and integration points
+## 2. Find the spec
 
-### Step 2: Build Check
+In this order: the `dev/active/<task>/` folder for this work (plan.md Success Criteria, tasks.md "Done when" lines); issue numbers in the commit messages (`gh issue view <n>`); the owner's request in this conversation, quoted verbatim. If none exists, the spec axis reports "no spec available".
 
-Run both builds and capture output:
-```bash
-cd web && npx tsc --noEmit 2>&1
-```
-```bash
-cd agent && python -m py_compile src/*.py 2>&1
-```
+## 3. Run the checks for what the diff touches
 
-### Step 3: Task-Level Verification
+- `web/`: `cd web && npx eslint <changed files> && npx tsc --noEmit && npx jest --bail`; for `web/**`, `firestore.rules` or `firebase.json`, run /preflight before any push.
+- `agent/`: `agent/.venv/Scripts/python -m pytest agent/tests/ -q`
+- `desktop/`: `cd desktop && npm run typecheck && npm run lint && npm test`
+- `agent/host`: `cargo clippy --all-targets -- -D warnings && cargo test --locked` in that folder
+- `.claude/`: `node scripts/check-claude-hooks.mjs`
 
-For each completed task, verify its **Done when** criteria:
-- Read the files the task modified
-- Check that the described changes are actually present and correct
-- Flag any task where the criteria aren't fully met
+## 4. Review on two axes
 
-### Step 4: Plan-Level Verification
+Spawn **code-architecture-reviewer** and **work-verifier** in one message, so they run in parallel. Give both the diff command and the commit list; give work-verifier the spec (path or quoted text). Wait for both.
 
-Check the plan's overall **Success Criteria**:
-- Are all functional requirements met?
-- Do the pieces integrate correctly?
-- Are there any obvious gaps between what was planned and what was built?
+## 5. Evidence from where the owner looks
 
-### Step 5: Regression Check
+For a user-facing change, verify it in the place the owner will see it (dev.owlette.app after the deploy, the installed agent, the desktop app) in the state they use (dark mode, their OS), and capture before/after: a screenshot or command output. If that hasn't happened, the report says "not verified in <target>"; it never says done.
 
-Look for common issues:
-- Unused imports or variables introduced
-- Missing error handling on new code paths
-- Type errors or lint issues
-- Broken patterns (e.g., direct Firestore calls instead of hooks)
-
-### Step 6: Report
+## 6. Report
 
 ```
-## Verification Report
+## Verification
 
-### Build
-- Web (TypeScript): [PASS/FAIL — details if fail]
-- Agent (Python): [PASS/FAIL — details if fail]
+### Checks
+[each command: pass/fail, failing lines]
 
-### Task Verification
-- [x] Task 1.1: [PASS] — [brief note]
-- [x] Task 1.2: [PASS] — [brief note]
-- [x] Task 2.1: [FAIL] — [what's wrong]
+### Standards
+[code-architecture-reviewer's report, verbatim or lightly cleaned]
 
-### Success Criteria
-- [x] [Criterion 1]: Met
-- [ ] [Criterion 2]: Not met — [what's missing]
+### Spec
+[work-verifier's report, verbatim or lightly cleaned]
 
-### Issues Found
-1. [Issue description + file:line + suggested fix]
-2. [...]
+### Evidence
+[target, before/after, or "not verified in <target>"]
 
-### Verdict: [PASS / PASS WITH NOTES / FAIL]
-[Summary — what's good, what needs fixing]
+### Verdict: PASS / PASS WITH NOTES / FAIL
+[findings per axis and the worst one in each; no merged ranking across axes]
 ```
 
-If FAIL: list exactly what needs to be fixed. The user can then address issues manually or run /next on remaining work.
-
-If PASS: suggest archiving the dev docs:
-```bash
-mv dev/active/[task-name] dev/completed/[task-name]
-```
+On FAIL, list exactly what to fix. On PASS with a dev/active folder, suggest archiving it: `mv dev/active/[task-name] dev/completed/[task-name]`.

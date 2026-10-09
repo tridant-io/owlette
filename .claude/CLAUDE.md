@@ -2,7 +2,9 @@
 
 Owlette is a cloud-connected process management and remote deployment system for Windows, macOS and Linux machines: TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python agent service (agent; a Windows service, a launchd daemon on macOS, a systemd unit on Linux) + Next.js web dashboard (web) + Firebase/Firestore backend.
 
-**Version**: 4.1.7 | **License**: FSL-1.1-Apache-2.0
+**Version**: 4.1.8 | **License**: FSL-1.1-Apache-2.0
+
+**Words and settled decisions:** use the terms in `GLOSSARY.md` (and none of the synonyms it lists under _Avoid_), and read the ADRs in `docs/adr/` for the area you touch. Output that contradicts an ADR says so and argues the reversal; it never overrides one quietly.
 
 ---
 
@@ -11,7 +13,7 @@ Owlette is a cloud-connected process management and remote deployment system for
 **Files you must not touch:**
 - `firestore.rules` — don't modify without explicit request
 - `.tokens.enc` / credential files — never read, log, or commit
-- `owlette_installer.iss` — only modify if you understand the full build pipeline (see `.claude/skills/build-system.md`)
+- `owlette_installer.iss` — only modify if you understand the full build pipeline (see the build-system skill)
 
 **Agent landmines:**
 - **Never import `firebase_admin`** — we use a custom REST client
@@ -29,22 +31,15 @@ Owlette is a cloud-connected process management and remote deployment system for
 
 **Workflow:**
 - **Don't push to `main` directly** — all work through `dev`, then PR
-- **Don't create new `docs/*.md` files** without being asked
+- **Don't create new `docs/*.md` files** without being asked, except an ADR in `docs/adr/` for a decision that is hard to reverse, surprising without context, and the result of a real trade-off (one paragraph; format in `docs/adr/0001-*`)
 - **Don't install new npm/pip packages** without confirming first
 - **Don't modify `.claude/hooks/` or `.claude/settings.json`** without explicit request
 
 ---
 
-## In-Flight Major Initiative: roost (project distribution v2)
+## roost (project distribution)
 
-A multi-quarter rewrite of project distribution into a content-addressed sync platform (Cloudflare R2, immutable manifests, atomic deploy, rollback). Branded as "roost" (always lowercase). Plan + tasks live at `dev/active/project-distribution-v2/`. Memory: `project_roost.md`.
-
-**Key decisions** (do not relitigate):
-- No `/api/v2/` URL prefix — the new routes ARE the API (`/api/chunks/`, `/api/roosts/`).
-- No backwards compatibility with v1 agents — clean cutover, v3.0.0 agent is required to consume new uploads.
-- No header-based version negotiation (no `Accept: application/vnd.owlette.v2+json`).
-- v3-deferred (do NOT rebuild in v2): bidirectional sync, LAN swarm, Ed25519 manifest signing, FastCDC. (Public CLI was originally on this list but shipped via the api-sprint + roost-public-api waves — now `@owlette/cli` v1.0.0-rc.0; see `project_npm_packages.md`.)
-- Nav label `projects` → `roost`. `verify_files` field dropped (manifest is authoritative).
+Content-addressed sync of project folders to machines: chunks on Cloudflare R2, immutable versions, atomic deploy, rollback. Always lowercase. Its settled decisions (no `/api/v2/` prefix, no header negotiation, no v1-agent compatibility, the v3-deferred list) are ADRs 0007 and 0008; don't relitigate them.
 
 ---
 
@@ -69,7 +64,7 @@ cd web && npm run lint                   # Lint
 
 # Agent
 powershell -File scripts/bootstrap-windows.ps1 -InstallAgentDeps   # agent/.venv (Python 3.11) + requirements*.txt
-agent/.venv/Scripts/python -m pytest agent/tests/                  # Agent tests (what the commit hook runs)
+agent/.venv/Scripts/python -m pytest agent/tests/                  # Agent tests (what the Claude commit gate runs)
 cd agent/src && ../.venv/Scripts/python owlette_runner.py --debug  # Debug mode (requires admin)
 cd agent && build_installer_full.bat              # Full build (~5-10 min)
 cd agent && build_installer_quick.bat             # Quick build (~30 sec)
@@ -103,7 +98,7 @@ Version files: `/VERSION`, `agent/VERSION`, `web/package.json`, `firestore.rules
 
 **E2E verification (two layers).** The `playwright e2e` GitHub Action ([.github/workflows/e2e.yml](../.github/workflows/e2e.yml)) gates pushes to `dev`/`main` that touch `web/**`, `firestore.rules`, or `firebase.json`.
 - **Proactive (preferred):** before pushing such changes, run `/preflight` — it runs lint, typecheck, unit tests, and the local e2e suite (the exact mirror of CI, ~45s steady-state). Fix reds locally; don't ship them to a branch that auto-deploys.
-- **Reactive (safety net):** after a `git push` to `dev`/`main` in e2e scope, the `post-push-e2e.mjs` hook reminds you to watch the triggered run with `gh run watch <id> --exit-status` (run it in the background). On failure: `gh run view <id> --log-failed`, diagnose, and **propose** a fix — never auto-fix-and-repush (`dev` auto-deploys, `main` is protected).
+- **Reactive (safety net):** after a `git push` or `gh pr merge` lands on `dev`/`main` in e2e scope, the `post-push-e2e.mjs` hook reminds you to watch the triggered run with `gh run watch <id> --exit-status` (run it in the background). On failure: `gh run view <id> --log-failed`, diagnose, and **propose** a fix — never auto-fix-and-repush (`dev` auto-deploys, `main` is protected).
 
 ---
 
@@ -133,9 +128,9 @@ Agents authenticate via a device code flow — no browser login on the target ma
 
 **Web**: Push to `dev`/`main` triggers Railway auto-deploy. A Vercel project (`owlette` in the `tridant-7931a9aa` team; the Experiential scope it lived in until 2026-09-24 is blocked) is configured as a failover origin for owlette.app behind Cloudflare Load Balancing.
 
-**Env vars** (Railway dev/prod + Vercel prod): managed via `scripts/env-manifest.json` (canonical key registry — keys + metadata, never values) and `node scripts/sync-env.mjs` (`status` / `check` / `diff` / `sync <target>`). Full workflow + the `must-match` secret rules + the Vercel read-back caveat: `.claude/skills/env-management.md`.
+**Env vars** (Railway dev/prod + Vercel prod): managed via `scripts/env-manifest.json` (canonical key registry — keys + metadata, never values) and `node scripts/sync-env.mjs` (`status` / `check` / `diff` / `sync <target>`). Full workflow + the `must-match` secret rules + the Vercel read-back caveat: the env-management skill.
 
-**Failover load balancer**: `owlette.app` is fronted by a Cloudflare LB (Railway primary, Vercel standby) defined as Terraform in `infra/cloudflare/`. Health probe is `/api/health`. Apply workflow, token scope, and the origin-hostname gotchas: `.claude/skills/cf-load-balancing.md`.
+**Failover load balancer**: `owlette.app` is fronted by a Cloudflare LB (Railway primary, Vercel standby) defined as Terraform in `infra/cloudflare/`. Health probe is `/api/health`. Apply workflow, token scope, and the origin-hostname gotchas: the cf-load-balancing skill.
 
 **Confirm live state against the API — don't infer it from the repo.** When the question is what is actually deployed or true on dev/prod (is this route shipped, what version is the latest installer, is a machine online, does this key carry that scope), query the running API. Keys are in `.claude/.env.local`: `OWLETTE_API_KEY` (dev — broad scopes) against `$OWLETTE_DEV_API_URL`, `OWLETTE_API_KEY_PROD` (**installer-scoped only** — 403 `scope_insufficient` on site/machine routes) against `$OWLETTE_PROD_API_URL`. Auth header is `x-api-key`. Use `curl`, not python `urllib` — Cloudflare bot-blocks the latter with `error code: 1010`. No-auth reads: `GET /api/health`, `GET /api/openapi` (interactive reference at `/docs/api`). Status codes alone settle "is it deployed": 401 = deployed and gated, 403 = authed but wrong scope, 404 = not deployed.
 
@@ -144,7 +139,7 @@ Agents authenticate via a device code flow — no browser login on the target ma
 
 **IMPORTANT — installer release order (do not reorder):** bump the version (`node scripts/sync-versions.js X.Y.Z`) **and** add the `## [X.Y.Z] - YYYY-MM-DD` entry to `docs/changelog.md`, then commit — *before* building. `build_installer_full.bat` bakes the version into the exe filename and binary, and an installer must never ship without a matching changelog entry.
 
-**Full release recipe** — the non-interactive build invocation (the `pause`-hang gotcha) plus the 3-step signed-URL upload → finalize API flow — lives in `.claude/skills/build-system.md` → "Agent Installer Release". That skill auto-activates on installer/release/version work.
+**Full release recipe** — the non-interactive build invocation (the `pause`-hang gotcha) plus the 3-step signed-URL upload → finalize API flow — lives in the build-system skill (`.claude/skills/build-system/SKILL.md`) → "Agent Installer Release". Its description triggers it on installer, release and version work.
 
 ---
 
@@ -244,12 +239,12 @@ For non-trivial features, use the wave-based planning and execution system. Each
 - `/next` — Execute the next single task in the current context (for smaller features or when you want to review each step)
 
 ### Verification & Lifecycle
-- `/verify` — Check completed work against plan's success criteria + build check
+- `/verify` — Checks, then a standards reviewer and a spec reviewer in parallel on the diff, plus evidence from where the owner looks
 - `/save` — Save progress to dev docs before context compaction
 - `/resume` — Restore context in a new session from dev docs
 
 ### Debugging
-- `/debug` — Scientific method debugging: observe → hypothesize → test → diagnose → fix → verify
+- `/debug` — A command that reproduces the bug red comes first, then hypotheses, a regression test, the fix, and proof where the owner saw it
 
 ### Build
 - `/build-and-fix` — Build web + agent, fix all errors, repeat until clean
@@ -272,4 +267,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-10-07
+**Last Updated**: 2026-10-09

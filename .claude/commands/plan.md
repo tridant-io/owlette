@@ -6,7 +6,7 @@ You are planning a feature or task. Follow this process strictly.
 
 ## Phase 1: Research (Parallel Agents)
 
-Before writing a single line of plan, **research the codebase**. Spawn 2-3 Explore agents in parallel:
+Before writing a single line of plan, **research the codebase**. Spawn 2-3 codebase-researcher agents in parallel:
 
 1. **Existing patterns**: How similar features are implemented in this repo
 2. **Affected code**: Read the files you'll need to modify; understand their current state

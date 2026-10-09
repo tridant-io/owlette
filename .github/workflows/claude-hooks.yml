@@ -1,0 +1,47 @@
+name: claude hooks
+
+# What lives in .claude/ fails silently: a hook that does not parse or writes
+# a field Claude Code ignores still exits 0, and a skill or agent with invalid
+# frontmatter is simply never loaded. scripts/check-claude-hooks.mjs catches both.
+
+on:
+  pull_request:
+    paths:
+      - '.claude/**'
+      - 'scripts/check-claude-hooks.mjs'
+      - 'scripts/__tests__/push-target.test.mjs'
+      - '.github/workflows/claude-hooks.yml'
+  push:
+    branches: [main, dev]
+    paths:
+      - '.claude/**'
+      - 'scripts/check-claude-hooks.mjs'
+      - 'scripts/__tests__/push-target.test.mjs'
+      - '.github/workflows/claude-hooks.yml'
+
+concurrency:
+  group: claude-hooks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: claude hooks, skills and agents load
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+
+      - name: check every hook, skill and agent
+        run: node scripts/check-claude-hooks.mjs
+
+      - name: push-target tells pushes and merges from mentions
+        run: node --test scripts/__tests__/push-target.test.mjs

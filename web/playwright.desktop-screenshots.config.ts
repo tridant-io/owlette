@@ -19,7 +19,7 @@ import { defineConfig } from '@playwright/test';
  * `agent-*.png`, `light` switches the app to light and writes `agent-*-light.png`.
  *
  * Needs a real installed agent, so this is a release-time step, not CI — see
- * `.claude/skills/build-system.md` → "Agent Installer Release".
+ * `.claude/skills/build-system/SKILL.md` → "Agent Installer Release".
  */
 
 const OUTPUT_DIR =

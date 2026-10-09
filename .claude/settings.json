@@ -1,4 +1,5 @@
 {
+  "claudeMdExcludes": ["**/agent/CLAUDE.md"],
   "hooks": {
     "PostToolUse": [
       {
@@ -37,18 +38,6 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/activate-skills.mjs\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -57,18 +46,6 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-commit-check.mjs\"",
             "timeout": 180
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-builds.mjs\"",
-            "timeout": 120
           }
         ]
       }

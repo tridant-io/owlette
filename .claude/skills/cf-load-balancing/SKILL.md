@@ -1,3 +1,8 @@
+---
+name: cf-load-balancing
+description: "The owlette.app failover load balancer: a Cloudflare LB with Railway primary and Vercel standby, kept as Terraform in infra/cloudflare, probing /api/health. Use for failover, the load balancer, Cloudflare, terraform, the Vercel standby or origin, an origin outage, health checks or probe cost, check_regions, and the vercel-origin.owlette.app hostname."
+---
+
 # Cloudflare Load Balancing (owlette.app failover) Guidelines
 
 **Applies To**: The `owlette.app` failover load balancer — Railway primary, Vercel standby
@@ -16,19 +21,21 @@ Terraform (IaC) in `infra/cloudflare/` for a Cloudflare load balancer that fails
   only (its Ignored Build Step cancels every other deployment)
 
 **Status: live since ~2026-09-24.** There is no terraform state on the dev box; the
-live pools were last changed by API (2026-10-04, `check_regions`). Verify with a GET on
-`accounts/{account_id}/load_balancers/pools` before assuming anything.
+live pools were last changed by API (2026-10-04, `check_regions`, since mirrored into
+`main.tf`). Verify with a GET on `accounts/{account_id}/load_balancers/pools` before
+assuming anything.
 
-Companion systems: [[env-management]] (env var parity across both origins) and the
-`/api/health` readiness probe both origins are checked against.
+Companion systems: the env-management skill (env var parity across both origins) and the
+`/api/health` readiness probe both origins are checked against
+(`web/app/api/health/route.ts`).
 
 ---
 
 ## Topology (infra/cloudflare/main.tf)
 
 1. **monitor** — `GET /api/health` every 60s, expects `200`. `/api/health` returns 200
-   only when the origin can reach Firestore, so an origin that's up but cut off from
-   its backend is correctly marked unhealthy.
+   only when the origin can read Firestore within 2.5s (503 otherwise), so an origin
+   that's up but cut off from its backend is correctly marked unhealthy.
 2. **two pools** — `owlette-railway-primary`, `owlette-vercel-standby`. Each origin sends
    its own Host header, which Cloudflare also uses for that origin's health checks (an
    endpoint override beats the monitor's):
@@ -39,7 +46,9 @@ Companion systems: [[env-management]] (env var parity across both origins) and t
      Railway.
 3. **load balancer** on `owlette.app` — `steering_policy = "off"` = cascade: send all
    traffic to the first healthy pool in `default_pool_ids` (Railway), fall back to
-   Vercel only when Railway's monitor fails.
+   Vercel when Railway's monitor fails. `adaptive_routing { failover_across_pools = true }`
+   also retries a request Railway fails mid-flight against Vercel at once, instead of
+   waiting for the next health check.
 
 ---
 
@@ -58,9 +67,9 @@ terraform apply      # creates monitor + pools + LB
 `/c/Users/<user>/AppData/Local/Microsoft/WinGet/Links`.
 
 Applying moves `owlette.app` behind the load balancer immediately. Prove failover on a
-throwaway hostname first (e.g. a temporary LB on `lbtest.owlette.app` whose Railway
-monitor path is deliberately broken, expecting `/api/health` to answer `origin: vercel`),
-then delete it.
+throwaway hostname first (set `lb_host = "lbtest.owlette.app"` for a temporary LB whose
+Railway monitor path is deliberately broken, expecting `/api/health` to answer
+`origin: vercel` or `vercel:<region>`), then delete it.
 
 ### Required inputs (terraform.tfvars)
 
@@ -102,8 +111,8 @@ and **Zone › Load Balancers › Edit** (for the owlette.app zone). Pass via en
   origin, or the LB loops back on itself.
 - **Don't build absolute URLs from the Host header in web code.** Behind the LB the
   Vercel origin sees `Host: vercel-origin.owlette.app`. Use `publicOrigin(request)`
-  (`web/lib/publicOrigin.server.ts`). Same-origin redirects from `proxy.ts` are fine —
-  Next sends them as relative `Location` headers.
+  (`web/lib/publicOrigin.server.ts`, which prefers `NEXT_PUBLIC_BASE_URL`). Same-origin
+  redirects from `web/proxy.ts` are fine — Next sends them as relative `Location` headers.
 - **Don't bump the cloudflare provider to v5** without migrating — the module targets
   the v4 schema (`default_pool_ids`/`fallback_pool_id`, `header {}` blocks). v5 renamed
   these. The `~> 4.52` pin in `versions.tf` is deliberate.

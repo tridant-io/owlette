@@ -35,13 +35,17 @@
  *    first candidate already gathered when the offer is built.
  * 2. **relay is stage 2, and the host's own allocation comes first.**
  *    cloudflare bills only server→client egress, so an allocation the *host*
- *    holds carries the video direction unbilled (plan.md D13) — a browser-side
- *    allocation pays for the same bytes. so the relay servers in `iceServers`
- *    are withheld from the first attempt and added only when the host reports
- *    it holds no allocation of its own. today it never does: the host's `turn`
- *    cargo feature has no client behind it yet (task 7.4), so the report is
- *    always "no allocation" and stage 2 always runs. when 7.4 lands, the host
- *    trickles a `typ relay` candidate of its own and this side stands down.
+ *    holds carries the video direction unbilled (plan.md D13), and the host
+ *    gathers one from agent 4.1.8 on, trickled as a `typ relay` candidate. a
+ *    browser-side allocation pays for the same bytes, so the relay servers in
+ *    `iceServers` are withheld from the first attempt and added only when
+ *    nothing has connected `RELAY_PROBE_MS` after the answer — whether or not
+ *    the host holds one: a pair on the browser's relay has the lowest priority
+ *    of all and is selected only when no other pair works, which is exactly
+ *    when it is needed (a network that blocks udp outright, where only turn
+ *    over tcp or tls gets through). the issue-328 hotspot was the other case:
+ *    udp fine on both ends, no inbound path to either, and no relay on the
+ *    host's side to meet in the middle.
  * 3. **one promotion attempt.** a relayed pair still selected at
  *    `RELAY_PROBE_MS` is usually a direct path that gathered late; one restart
  *    is worth it and a second never is.
@@ -124,10 +128,21 @@ export const RESTART_CAP_MS = 15000;
  */
 export const NO_PATH_MS = 20_000;
 
-/** what the page is told when no media path came up within `NO_PATH_MS`. */
+/**
+ * what the page is told when no media path came up within `NO_PATH_MS`: which
+ * ends reached the relay, so the page can say whose network is in the way.
+ */
 export interface SwoopNoPath {
   /** the session had a relay (the browser's turn, or the host's allocation), so even that failed. */
   relayConfigured: boolean;
+  /** the host trickled a `typ relay` candidate: its network let it reach the relay. */
+  hostRelay: boolean;
+  /**
+   * this browser gathered a `typ relay` candidate: this network let it reach
+   * the relay. `null` when it never tried one of its own, because the session
+   * minted no relay servers or stage 2 never ran.
+   */
+  browserRelay: boolean | null;
 }
 
 export interface PlayoutDelay {
@@ -239,15 +254,6 @@ export interface SwoopPeerOptions {
    * with task 3.9; the fix belongs in PROTOCOL.md.**
    */
   leaseToken?: () => Promise<string>;
-  /**
-   * does the host hold a turn allocation of its own?
-   *
-   * the default reads the only report that exists before media flows: a host
-   * that holds an allocation surfaces it as a `typ relay` candidate (task 7.4),
-   * and one that does not never sends one. an override is here for 7.4 to hang
-   * a better report on — nothing else should set it.
-   */
-  hostRelayAllocation?: () => boolean;
   /**
    * which codecs the video m-line offers. the machine picks from the first
    * offer only (hevc whenever `h265` appears in it, `pick_codec` in
@@ -408,6 +414,8 @@ export class SwoopPeer {
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   /** the host trickled a `typ relay` candidate: it holds an allocation. */
   private hostRelay = false;
+  /** this browser gathered a `typ relay` candidate: its own allocation worked. */
+  private browserRelay = false;
   private closed = false;
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private relayTimer: ReturnType<typeof setTimeout> | null = null;
@@ -612,7 +620,7 @@ export class SwoopPeer {
       iceRestarted: this.iceRestarted,
       promotionUsed: this.promotionUsed,
       browserRelayAdded: this.browserRelayAdded,
-      hostHoldsRelay: this.hostHoldsRelay(),
+      hostHoldsRelay: this.hostRelay,
       channels: [...this.channels.keys()],
       playoutDelay: this.playoutDelay,
     };
@@ -677,6 +685,7 @@ export class SwoopPeer {
   private onLocalCandidate(candidate: RTCIceCandidate | null): void {
     // the null candidate is end-of-gathering; there is no wire form for it.
     if (this.closed || !candidate || !candidate.candidate) return;
+    if (candidateType(candidate.candidate) === 'relay') this.browserRelay = true;
     this.options.send({
       type: 'candidate',
       candidate: candidate.candidate,
@@ -764,7 +773,11 @@ export class SwoopPeer {
       this.noPathTimer = null;
       if (this.closed || this.linkUp()) return;
       this.noPathShown = true;
-      this.options.onNoPath?.({ relayConfigured: this.relayServers.length > 0 || this.hostRelay });
+      this.options.onNoPath?.({
+        relayConfigured: this.relayServers.length > 0 || this.hostRelay,
+        hostRelay: this.hostRelay,
+        browserRelay: this.browserRelay || (this.browserRelayAdded ? false : null),
+      });
     }, this.noPathMs);
   }
 
@@ -832,16 +845,15 @@ export class SwoopPeer {
   }
 
   /**
-   * stage 2: nothing is connected and the host holds no allocation of its own,
-   * so the browser's turn servers go in and ice restarts with them. one
-   * attempt — if relay does not connect the session either, a second identical
-   * gathering will not change that.
+   * stage 2: nothing is connected, so the browser's turn servers go in and ice
+   * restarts with them. one attempt — if relay does not connect the session
+   * either, a second identical gathering will not change that. the host's own
+   * relay candidate does not stand this down: a pair on the browser's relay is
+   * chosen only when nothing else works, and on a network that blocks udp it
+   * is the only pair that can.
    */
   private async addBrowserRelay(): Promise<void> {
     if (this.browserRelayAdded || this.relayServers.length === 0) return;
-    // the host's relay candidate means the video direction is already unbilled
-    // through its allocation (plan.md D13); a second one here pays twice.
-    if (this.hostHoldsRelay()) return;
     this.pc.setConfiguration({
       ...this.pc.getConfiguration(),
       iceServers: [...this.directServers, ...this.relayServers],
@@ -852,10 +864,6 @@ export class SwoopPeer {
     // the promotion attempt is still owed: this restart was about connecting at
     // all, and the pair it connects on may well be a relayed one.
     if (this.browserRelayAdded && !this.promotionUsed && !this.closed) this.armRelayProbe();
-  }
-
-  private hostHoldsRelay(): boolean {
-    return this.options.hostRelayAllocation?.() ?? this.hostRelay;
   }
 
   /** `'relay' | 'direct'` for the selected pair, `null` when there is none. */
