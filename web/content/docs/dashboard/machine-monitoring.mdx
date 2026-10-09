@@ -204,11 +204,11 @@ this is the per-machine version of the [token management](/docs/dashboard/admin/
 
 ### remove machine
 
-removal is permanent: it deletes the machine's data, process configuration and command history, and deregisters the agent.
+removal is permanent: it deletes the machine's data, process configuration and command history, and revokes the agent's token.
 
 - **a machine with deployments in progress cannot be removed.** the dialog blocks confirmation until they finish.
-- **an online machine can be removed.** its agent notices and stops syncing.
-- getting it back means running the installer and pairing it again with a fresh three-word phrase.
+- **an online machine can be removed.** an agent on 4.1.8 or later notices within seconds, stops syncing, drops its credentials and offers **join site** in the app. an older agent keeps writing on its access token, so the machine comes back and stays until that token expires, within the hour; remove it again then, or update the agent first.
+- getting it back means pairing again from the app on that machine, or running the installer again, with a fresh three-word phrase.
 
 ---
 

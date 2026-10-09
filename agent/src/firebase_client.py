@@ -150,6 +150,10 @@ class FirebaseClient:
     ensuring robust reconnection handling for all failure scenarios.
     """
 
+    # Class-level because the heartbeat and keep-awake tests build the client
+    # with __new__ and skip __init__. See _on_removed_from_site.
+    _removed = False
+
     def __init__(self, auth_manager: AuthManager, project_id: str, site_id: str, config_cache_path: str = "config/firebase_cache.json"):
         """
         Initialize Firebase client with OAuth authentication.
@@ -205,6 +209,8 @@ class FirebaseClient:
 
         self.command_callback: Optional[Callable] = None
         self.config_update_callback: Optional[Callable] = None
+        # Takes a reason; the service leaves the site with it. See _on_removed_from_site.
+        self.removed_callback: Optional[Callable[[str], None]] = None
 
         # Slow-command queue (installs/uninstalls/updates — serialised).
         # Worker starts in start(), after self.running = True.
@@ -380,41 +386,57 @@ class FirebaseClient:
         Args:
             event: ConnectionEvent with old_state, new_state, reason
         """
-        if event.new_state == ConnectionState.FATAL_ERROR:
-            self._handle_fatal_error(event.reason)
-        elif event.new_state == ConnectionState.CONNECTED:
+        if event.new_state == ConnectionState.CONNECTED:
             # Daemon thread: a slow drain must not block the state listener,
             # which every other listener queues behind.
             self._drain_pending_alerts_async()
 
-    def _handle_fatal_error(self, reason: str):
+    def _on_removed_from_site(self):
+        """The dashboard removed this machine: its config doc, deleted in the
+        same batch as the machine doc, vanished from under the config listener.
+
+        Removal deletes the refresh token too, but the access token is good for
+        up to an hour, and every heartbeat, presence and health write upserts,
+        so the next one wrote the row straight back (#326). From here nothing
+        in this process writes: `connected` answers False, the metrics loop
+        ends, and stop() skips its `online: false` flush, which would have
+        recreated the row as an offline ghost. The callback leaves the site
+        locally and ends hoot, which writes on a token of its own. Then the
+        row is deleted once more on the access token this process still holds
+        in memory: a heartbeat that landed between the dashboard's delete and
+        this poll had already put it back, and nothing else would take it away.
+
+        `running` goes False only after the callback has switched cloud sync
+        off, or the main loop could read a stopped client under an enabled
+        config and build a fresh one, which cannot see the doc is gone.
         """
-        Handle fatal connection errors (e.g., machine removed from site).
+        if self._removed:
+            return
+        self._removed = True
+        self.logger.warning(
+            "This machine was removed from the site on the dashboard - "
+            "stopping all cloud writes")
+        if self._command_listener_stop is not None:
+            self._command_listener_stop.set()
+        if self._config_listener_stop is not None:
+            self._config_listener_stop.set()
 
-        Args:
-            reason: Reason for the fatal error
-        """
-        self.logger.error(f"Fatal connection error: {reason}")
-
-        reason_lower = reason.lower()
-        if any(x in reason_lower for x in ['403', '404', 'permission', 'not found']):
-            self.logger.warning("Machine may have been removed from site via web dashboard")
-            self.logger.info("Disabling Firebase and clearing site_id in local config")
-
+        if self.removed_callback is None:
+            self.logger.warning("No removal callback registered - the local config still names the site")
+        else:
             try:
-                config = shared_utils.read_config()
+                self.removed_callback('this machine was removed from the site on the dashboard')
+            except Exception as e:
+                self.logger.error(f"Removal callback failed: {e}")
+        self.running = False
 
-                if 'firebase' not in config:
-                    config['firebase'] = {}
-
-                config['firebase']['enabled'] = False
-                config['firebase']['site_id'] = ''
-
-                shared_utils.save_config(config)
-                self.logger.info("Local config updated - machine deregistered from site")
-
-            except Exception as config_error:
-                self.logger.error(f"Failed to update local config after removal detection: {config_error}")
+        if self.db is None:
+            return
+        try:
+            self.db.delete_document(f"sites/{self.site_id}/machines/{self.machine_id}")
+            self.logger.info("Removed machine: deleted the row a late heartbeat may have written back")
+        except Exception as e:
+            self.logger.warning(f"Removed machine: could not delete the row again, it may linger offline: {e}")
 
     # Thread Factories (for ConnectionManager supervision)
 
@@ -596,12 +618,13 @@ class FirebaseClient:
 
     @property
     def connected(self) -> bool:
-        """Check if connected to Firestore (via ConnectionManager)."""
-        return self.connection_manager.is_connected
+        """Check if connected to Firestore (via ConnectionManager). False for
+        good once the dashboard removed this machine: every writer checks it."""
+        return not self._removed and self.connection_manager.is_connected
 
     def is_connected(self) -> bool:
         """Check if connected to Firestore."""
-        return self.connection_manager.is_connected
+        return self.connected
 
     def get_machine_id(self) -> str:
         """Get the persisted machine identity — this machine's document id."""
@@ -733,10 +756,14 @@ class FirebaseClient:
         """
         if intentional:
             self.logger.info("Stopping Firebase client (intentional restart - leaving presence untouched)...")
+        elif self._removed:
+            self.logger.info("Stopping Firebase client (machine removed from the site - nothing to mark offline)...")
         else:
             self.logger.info("Stopping Firebase client and setting machine offline...")
 
         # Offline BEFORE stopping threads, or the write has no transport left.
+        # `connected` is False after a removal, so the flush that would
+        # recreate the deleted row never runs.
         if not intentional and self.connected and self.db:
             # Bound outside the try so the failure log below can always read it.
             max_attempts = 3
@@ -982,45 +1009,50 @@ class FirebaseClient:
 
             def on_config_changed(config_data):
                 """Handle config document changes."""
-                if config_data is not None:
-                    incoming_hash = hashlib.md5(json.dumps(config_data, sort_keys=True).encode()).hexdigest()
+                # The poller never reports None for a doc that never existed,
+                # so None is a doc that was there and is gone: the dashboard
+                # removed this machine.
+                if config_data is None:
+                    self._on_removed_from_site()
+                    return
+                incoming_hash = hashlib.md5(json.dumps(config_data, sort_keys=True).encode()).hexdigest()
 
-                    if incoming_hash == self._last_uploaded_config_hash:
-                        self.logger.debug(f"Skipping self-originated config change (hash: {incoming_hash[:8]}...)")
-                        # One-shot: without clearing, a later change that happens to
-                        # hash the same (web reverting a value) is dropped forever.
-                        self._last_uploaded_config_hash = None
-                        return
+                if incoming_hash == self._last_uploaded_config_hash:
+                    self.logger.debug(f"Skipping self-originated config change (hash: {incoming_hash[:8]}...)")
+                    # One-shot: without clearing, a later change that happens to
+                    # hash the same (web reverting a value) is dropped forever.
+                    self._last_uploaded_config_hash = None
+                    return
 
-                    # Second echo guard, and the one that catches our own
-                    # merge:true writes: upload_config hashes the PAYLOAD it
-                    # sends while this hashes the doc that comes back, and the
-                    # post-write doc is a superset whenever remote-only fields
-                    # exist, so the hash above never matches. Agent-originated
-                    # writes mirror themselves into the cache, so an echo that
-                    # equals the cache carries nothing new. Must be checked
-                    # BEFORE the cache is overwritten below.
-                    if config_sync.configs_equal(config_data, self.cached_config):
-                        self.logger.debug(
-                            f"Skipping config echo identical to the cached doc "
-                            f"(hash: {incoming_hash[:8]}...)"
-                        )
-                        return
+                # Second echo guard, and the one that catches our own
+                # merge:true writes: upload_config hashes the PAYLOAD it
+                # sends while this hashes the doc that comes back, and the
+                # post-write doc is a superset whenever remote-only fields
+                # exist, so the hash above never matches. Agent-originated
+                # writes mirror themselves into the cache, so an echo that
+                # equals the cache carries nothing new. Must be checked
+                # BEFORE the cache is overwritten below.
+                if config_sync.configs_equal(config_data, self.cached_config):
+                    self.logger.debug(
+                        f"Skipping config echo identical to the cached doc "
+                        f"(hash: {incoming_hash[:8]}...)"
+                    )
+                    return
 
-                    self.logger.info(f"Config change detected in Firestore (hash: {incoming_hash[:8]}...)")
+                self.logger.info(f"Config change detected in Firestore (hash: {incoming_hash[:8]}...)")
 
-                    self._save_cached_config(config_data)
-                    self.cached_config = config_data
+                self._save_cached_config(config_data)
+                self.cached_config = config_data
 
-                    if self.config_update_callback:
-                        try:
-                            self.config_update_callback(config_data)
-                        except Exception as e:
-                            self.logger.error(f"Error in config update callback: {e}")
-                            import traceback
-                            self.logger.error(f"Traceback: {traceback.format_exc()}")
-                    else:
-                        self.logger.warning("No config update callback registered")
+                if self.config_update_callback:
+                    try:
+                        self.config_update_callback(config_data)
+                    except Exception as e:
+                        self.logger.error(f"Error in config update callback: {e}")
+                        import traceback
+                        self.logger.error(f"Traceback: {traceback.format_exc()}")
+                else:
+                    self.logger.warning("No config update callback registered")
 
             _thread, _wake, stop = self.db.listen_to_document(
                 config_path, on_config_changed,
@@ -2378,6 +2410,12 @@ class FirebaseClient:
         """
         self.config_update_callback = callback
         self.logger.debug("Config update callback registered")
+
+    def register_removed_callback(self, callback: Callable[[str], None]):
+        """Register the function that leaves the site once the dashboard has
+        removed this machine. It takes the reason."""
+        self.removed_callback = callback
+        self.logger.debug("Removed callback registered")
 
     # Machine Flags (reboot, shutdown, reboot pending)
 

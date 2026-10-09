@@ -1394,6 +1394,7 @@ class OwletteService:
 
             self.firebase_client.register_command_callback(self.handle_firebase_command)
             self.firebase_client.register_config_update_callback(self.handle_config_update)
+            self.firebase_client.register_removed_callback(self._on_removed_from_site)
 
             # Sync config: pull from Firestore (source of truth), or seed if new machine
             sync_result = self.firebase_client.sync_config_on_startup()
@@ -3071,6 +3072,25 @@ class OwletteService:
                 logging.info("Hoot process ended: this machine left its site")
             except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                 logging.warning(f"Could not end the hoot process: {e}")
+
+    # How long a removal waits for hoot to exit before the cloud client deletes
+    # the machine row again: off Windows, terminate is SIGTERM and hoot answers
+    # it with an `offline` write of its own, which must land before that delete.
+    REMOVED_HOOT_EXIT_TIMEOUT_SECONDS = 5.0
+
+    def _on_removed_from_site(self, reason):
+        """The dashboard removed this machine (#326): leave the site, then wait
+        for hoot's exit so the cloud client's final delete is the last write."""
+        pid = self.cortex_pid if self._is_cortex_alive() else None
+        self.unpair(reason)
+        if pid is None:
+            return
+        try:
+            psutil.Process(pid).wait(timeout=self.REMOVED_HOOT_EXIT_TIMEOUT_SECONDS)
+        except psutil.TimeoutExpired:
+            logging.warning("Hoot did not exit in time; its last write may put the removed row back")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
 
     def _check_console_session(self):
         """Tell swoop when the active console session changes. Runs on the 5s tick.
@@ -9255,6 +9275,7 @@ class OwletteService:
                 self.firebase_client.register_command_callback(self.handle_firebase_command)
 
                 self.firebase_client.register_config_update_callback(self.handle_config_update)
+                self.firebase_client.register_removed_callback(self._on_removed_from_site)
 
                 # Before the config sync, which routinely takes 15s: until this
                 # runs the status file says disconnected and the tray shows a red
