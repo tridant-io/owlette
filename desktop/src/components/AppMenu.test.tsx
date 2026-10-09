@@ -148,4 +148,18 @@ describe('AppMenu appearance', () => {
     fireEvent.click(screen.getByTestId('menu-appearance-dark'))
     expect(setAppearanceTheme).toHaveBeenCalledExactlyOnceWith('dark')
   })
+
+  it('opens outside the menu panel, which would otherwise clip it', async () => {
+    // the panel's backdrop-blur makes it the containing block for the fixed
+    // submenu, and its overflow then hides everything past its right edge:
+    // the owner saw a highlighted "appearance" row and no submenu
+    setup(true)
+
+    await openAppearance()
+    const panel = screen.getByTestId('menu-appearance').closest('[data-slot="dropdown-menu-content"]')
+    const submenu = screen.getByTestId('menu-appearance-dark').closest('[data-slot="dropdown-menu-sub-content"]')
+    expect(panel).not.toBeNull()
+    expect(submenu).not.toBeNull()
+    expect(panel!.contains(submenu)).toBe(false)
+  })
 })
