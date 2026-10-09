@@ -30,3 +30,21 @@ The server took the 401 challenge, our MD5 long-term key and HMAC-SHA1 integrity
 address; the client checks the server's own integrity on that answer. Not yet exercised live: permissions, channels
 and relayed media (the lab is all private addresses, which the client refuses to permit by design, as Cloudflare
 does) and Cloudflare itself (needs the owner's TURN key).
+
+## 3.1: relayed media on loopback through a fake TURN server (2026-10-09)
+
+`cargo test --lib -- relay` in `agent/swoop` on TEC-A4D:
+
+```
+test transport::rtc::tests::a_relay_that_never_answers_leaves_the_peer_without_one ... ok
+test transport::rtc::tests::the_fake_relays_allocation_becomes_one_trickled_relay_candidate ... ok
+test transport::rtc::tests::two_peers_connect_only_through_the_fake_relay ... ok
+```
+
+The third test is the plan's "two real Rtc peers on loopback that connect only through a fake TURN server": the
+viewer's only candidate is 198.51.100.7:50000, which nothing on the box can route to, and all it knows of the host
+is the relay candidate 203.0.113.5:40000 the fake server granted. ICE and DTLS complete, the host reports the
+nominated pair as relayed, the server holds a permission for the viewer's address and a channel bound to it.
+
+Owed from a real network: a session to a 4.1.8 host from off-net, with the swoop log showing
+`relay candidate gathered` and `media path is relay`.

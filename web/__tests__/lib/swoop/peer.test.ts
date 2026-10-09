@@ -793,15 +793,17 @@ describe('swoop peer — stage-2 browser turn', () => {
     expect(h.errors).toEqual([]);
   });
 
-  it('leaves the browser relay out when the host trickled a relay candidate of its own', async () => {
+  it('still adds the browser relay when the host trickled a relay candidate of its own', async () => {
     jest.useFakeTimers();
     const state = newState();
     state.stats = noStats();
     const h = peerHarness(state, [STUN, TURN]);
     await h.peer.start();
     await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
-    // task 7.4's allocation, announced the only way it can be before media
-    // flows: as a candidate.
+    // the host's allocation, announced the only way it can be before media
+    // flows: as a candidate. nothing connected through it either, so on a
+    // network that blocks udp the browser's turn over tcp is the last pair
+    // left, and it goes in.
     await h.peer.handleSignal({
       type: 'candidate',
       candidate: 'candidate:4 1 udp 41885439 198.51.100.7 49203 typ relay raddr 0.0.0.0 rport 0',
@@ -809,34 +811,11 @@ describe('swoop peer — stage-2 browser turn', () => {
       sdpMLineIndex: 0,
     });
 
-    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS);
 
     expect(h.peer.diagnostics().hostHoldsRelay).toBe(true);
-    expect(state.configurations).toHaveLength(0);
-    expect(state.restarts).toBe(0);
-  });
-
-  it('honours an explicit host report over the candidate it saw', async () => {
-    jest.useFakeTimers();
-    const state = newState();
-    state.stats = noStats();
-    const sent: SignalingMessage[] = [];
-    const peer = new SwoopPeer({
-      identity: IDENTITY,
-      sid: SID,
-      viewerId: VIEWER_ID,
-      viewerKey: VIEWER_KEY,
-      iceServers: [STUN, TURN],
-      send: (message) => sent.push(message),
-      hostRelayAllocation: () => true,
-      factory: factoryFor(state, IDENTITY.certificate),
-    });
-    openPeers.push(peer);
-    await peer.start();
-    await peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
-
-    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS * 10);
-    expect(state.configurations).toHaveLength(0);
+    expect(state.configurations).toHaveLength(1);
+    expect(state.restarts).toBe(1);
   });
 
   it('never restarts for a stage 2 it has no relay servers for', async () => {
@@ -1379,7 +1358,7 @@ describe('swoop peer — no media path', () => {
     expect(h.noPaths).toEqual([]);
     await jest.advanceTimersByTimeAsync(1);
     // stun only: nothing was relayed, so the page can say a relay would help.
-    expect(h.noPaths).toEqual([{ relayConfigured: false }]);
+    expect(h.noPaths).toEqual([{ relayConfigured: false, hostRelay: false, browserRelay: null }]);
     // the session stays open; the restart ladder keeps trying underneath.
     expect(h.state.closed).toBe(0);
   });
@@ -1399,15 +1378,75 @@ describe('swoop peer — no media path', () => {
     await jest.advanceTimersByTimeAsync(NO_PATH_MS);
     (h.peer.connection as unknown as FakePeerConnection).iceState('connected');
 
-    expect(h.noPaths).toEqual([{ relayConfigured: false }, null]);
+    expect(h.noPaths).toEqual([{ relayConfigured: false, hostRelay: false, browserRelay: null }, null]);
   });
 
-  it('says a relay was there when the session had turn servers', async () => {
+  it('says a relay was there when the session had turn servers, and that neither end reached it', async () => {
     jest.useFakeTimers();
+    const state = newState();
+    state.stats = noStats();
+    const h = peerHarness(state, [STUN, TURN]);
+    await h.peer.start();
+    await h.peer.handleSignal({ type: 'answer', to: VIEWER_ID, sdp: answerSdp(), mac: HOST_MAC });
+
+    // stage 2 ran at T+3 s and the host answered its restart; nothing gathered
+    // against the browser's relay: this browser tried and failed.
+    await jest.advanceTimersByTimeAsync(RELAY_PROBE_MS);
+    expect(h.peer.diagnostics().browserRelayAdded).toBe(true);
+    await h.peer.handleSignal({
+      type: 'answer',
+      to: VIEWER_ID,
+      sdp: answerSdp(HOST_FINGERPRINT, true, 'stage2'),
+      mac: HOST_MAC,
+    });
+    await jest.advanceTimersByTimeAsync(NO_PATH_MS - RELAY_PROBE_MS);
+    expect(h.noPaths).toEqual([{ relayConfigured: true, hostRelay: false, browserRelay: false }]);
+  });
+
+  it('does not blame this browser for a relay it never tried', async () => {
+    jest.useFakeTimers();
+    // a pair was up at T+3 s, so stage 2 never ran, and it dropped later.
     const h = await answered([STUN, TURN]);
 
     await jest.advanceTimersByTimeAsync(NO_PATH_MS);
-    expect(h.noPaths).toEqual([{ relayConfigured: true }]);
+    expect(h.peer.diagnostics().browserRelayAdded).toBe(false);
+    expect(h.noPaths).toEqual([{ relayConfigured: true, hostRelay: false, browserRelay: null }]);
+  });
+
+  it('says which ends reached the relay: the host by its candidate, this browser by its own', async () => {
+    jest.useFakeTimers();
+    const h = await answered([STUN, TURN]);
+    await h.peer.handleSignal({
+      type: 'candidate',
+      candidate: 'candidate:4 1 udp 41885439 198.51.100.7 49203 typ relay raddr 0.0.0.0 rport 0',
+      sdpMid: '0',
+      sdpMLineIndex: 0,
+    });
+    const pc = h.peer.connection as unknown as FakePeerConnection;
+    pc.onicecandidate?.({
+      candidate: {
+        candidate: 'candidate:2 1 udp 25108223 203.0.113.9 61000 typ relay raddr 0.0.0.0 rport 0',
+        sdpMid: '0',
+        sdpMLineIndex: 0,
+      },
+    } as unknown as { candidate: RTCIceCandidate | null });
+
+    await jest.advanceTimersByTimeAsync(NO_PATH_MS);
+    expect(h.noPaths).toEqual([{ relayConfigured: true, hostRelay: true, browserRelay: true }]);
+  });
+
+  it('counts a host relay candidate as a relay even with no turn servers of its own', async () => {
+    jest.useFakeTimers();
+    const h = await answered([STUN]);
+    await h.peer.handleSignal({
+      type: 'candidate',
+      candidate: 'candidate:4 1 udp 41885439 198.51.100.7 49203 typ relay raddr 0.0.0.0 rport 0',
+      sdpMid: '0',
+      sdpMLineIndex: 0,
+    });
+
+    await jest.advanceTimersByTimeAsync(NO_PATH_MS);
+    expect(h.noPaths).toEqual([{ relayConfigured: true, hostRelay: true, browserRelay: null }]);
   });
 
   it('is quiet once the peer is closed', async () => {

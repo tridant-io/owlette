@@ -166,20 +166,52 @@ describe('SwoopStage — no media path', () => {
   });
 
   it('says the machine cannot be reached, and that no relay is set up', () => {
-    renderStage({ state: 'connecting', noPath: { relayConfigured: false } });
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: false, hostRelay: false, browserRelay: null },
+    });
     expect(screen.getByText("can't reach this machine from your network")).toBeTruthy();
     expect(screen.getByText(/no relay is set up for this site/)).toBeTruthy();
     expect(screen.queryByText('connecting')).toBeNull();
   });
 
-  it('says even the relay failed when there was one', () => {
-    renderStage({ state: 'connecting', noPath: { relayConfigured: true } });
+  it("blames the machine's network when the host never reached the relay", () => {
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: true, hostRelay: false, browserRelay: true },
+    });
     expect(screen.getByText("can't reach this machine from your network")).toBeTruthy();
-    expect(screen.getByText(/even the relay could not get through/)).toBeTruthy();
+    expect(screen.getByText(/the machine's side never reached the relay/)).toBeTruthy();
+  });
+
+  it('blames this network when the host reached the relay and the browser did not', () => {
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: true, hostRelay: true, browserRelay: false },
+    });
+    expect(screen.getByText(/the machine reached the relay but this browser did not/)).toBeTruthy();
+  });
+
+  it('blames neither network when the relay was reached, or this browser never tried one', () => {
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: true, hostRelay: true, browserRelay: true },
+    });
+    expect(screen.getByText(/the relay was reached and still no path came up/)).toBeTruthy();
+    cleanup();
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: true, hostRelay: true, browserRelay: null },
+    });
+    expect(screen.getByText(/the relay was reached and still no path came up/)).toBeTruthy();
+    expect(screen.queryByText(/this browser did not/)).toBeNull();
   });
 
   it('shows the picture, not the message, once connected', () => {
-    renderStage({ state: 'connected', noPath: { relayConfigured: false } });
+    renderStage({
+      state: 'connected',
+      noPath: { relayConfigured: false, hostRelay: false, browserRelay: null },
+    });
     expect(screen.queryByText("can't reach this machine from your network")).toBeNull();
   });
 });
