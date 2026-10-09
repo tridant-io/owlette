@@ -262,7 +262,10 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
       <DialogContent className="sm:max-w-md" data-testid="join-site-dialog">
         <DialogHeader>
           <div className="flex items-center gap-2">
-            <DialogTitle onClick={handleTitleClick}>join a site</DialogTitle>
+            {/* select-none: five clicks would otherwise leave the title highlighted */}
+            <DialogTitle className="select-none" onClick={handleTitleClick}>
+              join a site
+            </DialogTitle>
             {environment && (
               // The badge is the way back: a click returns the pairing to
               // owlette.app, so the backdoor is undone without reopening.
