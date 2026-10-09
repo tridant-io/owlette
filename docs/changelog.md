@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — the desktop app's appearance submenu opens
+
+Choosing **appearance** in the desktop app's menu highlighted the row and
+showed nothing: the submenu was drawn inside the menu panel and clipped by
+its edge. It now opens beside the menu like any other submenu.
+
 ### fixed — revoking a token now cuts the agent off
 
 **revoke token** on a machine, and **revoke** on the agent tokens page,
