@@ -99,14 +99,14 @@ how the phrase reaches the machine depends on its platform:
 | **how** | `Owlette-Installer-v<version>.exe /ADD=<phrase> /SILENT`. on dev.owlette.app the dashboard's command carries `/SERVER=dev` too | `config/pairing.json` in the data root before the package installs, with `phrase` and optionally `server` and `kiosk_user` | the same |
 | **what runs it** | the installer runs `configure_site.py --add` | the package's postinstall runs `configure_site.py --preseed` in the background | the package's postinst does the same |
 
-the **generate code** dialog still says silent install is Windows only; the preseed is the macOS and Linux equivalent, and [installation](/docs/agent/installation#the-pairing-preseed-macos-and-linux) has the recipe. `kiosk_user` is only reported in the pairing log: it does not add that account to the `owlette` or `_owlette` group, which you still do by hand. a machine that already has a site is never re-paired by the file; `OWLETTE_ADD=<phrase>` in the environment of `configure_site.py --preseed` takes the file's place and does re-pair it.
+the **generate code** dialog shows both: the Windows command, and the preseed's contents for macOS and Linux; [installation](/docs/agent/installation#the-pairing-preseed-macos-and-linux) has the paths and commands. `kiosk_user` is only reported in the pairing log: it does not add that account to the `owlette` or `_owlette` group, which you still do by hand. a machine that already has a site is never re-paired by the file; `OWLETTE_ADD=<phrase>` in the environment of `configure_site.py --preseed` takes the file's place and does re-pair it.
 
 ### the add machine dialog
 
 the **+** (**add machine**) button on the dashboard opens two tabs, both for the site you have selected:
 
 - **enter code**: type the phrase a machine is showing and **authorize**. the dialog posts it to the authorize route with the site ID, and the machine's next poll completes the pairing
-- **generate code**: makes a pre-authorized phrase, as above, and shows it with the silent install command. it expires 10 minutes after it was made
+- **generate code**: makes a pre-authorized phrase, as above, and shows it with the Windows silent install command and the macOS and Linux pairing preseed. it expires 10 minutes after it was made
 
 every site member sees the button, but authorizing needs `MACHINE_ENROLL`, so a plain member's attempt is refused. generating a phrase spends two requests from the budget below.
 

@@ -25,6 +25,16 @@ token survived ignores the command. An agent that is offline at the time
 leaves the site the moment the server refuses its next refresh. Agents on
 4.1.7 or earlier still only wipe their token store at that refresh.
 
+### fixed — a generated pairing phrase works on macOS and Linux
+
+**add machine → generate code** showed only the Windows `/ADD=` command and
+told macOS and Linux to pair from the app, so a phrase generated for an
+unattended install had no use there; the pairing preseed is the only way
+those platforms can spend one. The tab now also shows the preseed, ready to
+copy, with `"server": "dev"` when the code was generated on dev.owlette.app:
+save it as `config/pairing.json` in the data root before installing the
+package. Fixes #322.
+
 ### fixed — swoop connects from strict networks through the relay
 
 A swoop session from a phone hotspot or another strict network failed with
