@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — the desktop app's appearance submenu opens
+
+Choosing **appearance** in the desktop app's menu highlighted the row and
+showed nothing: the submenu was drawn inside the menu panel and clipped by
+its edge. It now opens beside the menu like any other submenu.
+
 ### fixed — revoking a token now cuts the agent off
 
 **revoke token** on a machine, and **revoke** on the agent tokens page,
@@ -39,6 +45,16 @@ enough. An agent on 4.1.7 or earlier still writes the machine back and stops
 only when its access token expires, within the hour; remove it again then.
 (#326)
 
+### fixed — a generated pairing phrase works on macOS and Linux
+
+**add machine → generate code** showed only the Windows `/ADD=` command and
+told macOS and Linux to pair from the app, so a phrase generated for an
+unattended install had no use there; the pairing preseed is the only way
+those platforms can spend one. The tab now also shows the preseed, ready to
+copy, with `"server": "dev"` when the code was generated on dev.owlette.app:
+save it as `config/pairing.json` in the data root before installing the
+package. Fixes #322.
+
 ### fixed — swoop connects from strict networks through the relay
 
 A swoop session from a phone hotspot or another strict network failed with
@@ -53,6 +69,13 @@ port 3478. When no path comes up, the viewer now says which end never reached
 the relay instead of blaming the viewer's network, and the machine's swoop log
 says whether it gathered a relay candidate and why not. Fixes #328.
 
+### added — backup codes download as a file
+
+The backup codes screen at the end of two-factor setup has a **download
+codes** button next to **copy all codes**. It saves the ten codes, and the
+account they belong to, as `owlette-backup-codes.txt`, so a sheet that is
+shown only once no longer has to survive on the clipboard.
+
 ### changed — agent installers download from download.tridant.io
 
 Agent installers are moving from Firebase Storage to
@@ -65,6 +88,16 @@ new version number. Every version that becomes latest is also listed in
 tridant id's owlette release log, and a deleted or rolled-back version is
 pulled from it; `/admin/installers` shows each version's status there and can
 retry a failed one.
+
+### fixed — the swoop viewer says why it cannot start, and has a way back
+
+Opening swoop on a site where it is turned off showed a "connecting" spinner
+that never stopped, with the reason in small text at the bottom and no clear
+way out. The viewer now stops and says why in the middle of the screen. When
+swoop is off for the site, site admins get a link to the site's settings and
+members are told to ask a site owner or admin. A back-to-dashboard arrow
+starts the session bar in every state, and an ended or failed session also
+offers a back to dashboard button.
 
 ### fixed — a frozen swoop picture recovers on its own
 

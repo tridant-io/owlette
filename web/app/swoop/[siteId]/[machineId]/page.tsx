@@ -15,6 +15,7 @@
  */
 
 import { use, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
 import {
   applyBarPosition,
@@ -44,10 +45,9 @@ export default function SwoopPage({
   params: Promise<{ siteId: string; machineId: string }>;
 }) {
   const { siteId, machineId } = use(params);
-  const { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath } = useSwoopSession(
-    siteId,
-    machineId,
-  );
+  const { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath } =
+    useSwoopSession(siteId, machineId);
+  const { isSiteAdmin } = useAuth();
   // the keyboard follows the machine's system. no hook reads one machine
   // document, so this takes it off the site's list; an agent that reports no
   // system is a windows one.
@@ -56,7 +56,7 @@ export default function SwoopPage({
   // the overlay covers the picture, so it is off until asked for — and the
   // toolbar is out of reach once fullscreen holds, so the choice is made here.
   const [statsOpen, setStatsOpen] = useState(false);
-  // escape twice on the stage lands the keyboard on the bar's first control.
+  // escape twice on the stage lands the keyboard on the bar's first button.
   const toolbarRef = useRef<HTMLDivElement>(null);
   const leaveStage = useCallback(() => {
     toolbarRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
@@ -99,31 +99,24 @@ export default function SwoopPage({
         <SwoopBarPositionMenu position={position} />
       </SwoopToolbar>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1">
-          <SwoopStage
-            session={session}
-            state={state}
-            noPath={noPath}
-            stall={stats.stall.recovery}
-            stageRef={stageRef}
-            videoRef={videoRef}
-            onLeave={leaveStage}
-          >
-            <SwoopCursor session={session} />
-            <SwoopPresence session={session} />
-            <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
-          </SwoopStage>
-        </div>
-
-        {error && (
-          <p role="alert" className="px-4 py-2 text-center text-sm text-destructive">
-            {error}
-            {retryIn !== null && (
-              <span className="text-muted-foreground"> reconnecting in {retryIn} s…</span>
-            )}
-          </p>
-        )}
+      <div className="min-h-0 min-w-0 flex-1">
+        <SwoopStage
+          session={session}
+          state={state}
+          error={error}
+          retryIn={retryIn}
+          refusal={refusal}
+          settingsHref={isSiteAdmin(siteId) ? `/dashboard?settings=${encodeURIComponent(siteId)}` : null}
+          noPath={noPath}
+          stall={stats.stall.recovery}
+          stageRef={stageRef}
+          videoRef={videoRef}
+          onLeave={leaveStage}
+        >
+          <SwoopCursor session={session} />
+          <SwoopPresence session={session} />
+          <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
+        </SwoopStage>
       </div>
 
       <SwoopStepUpDialog

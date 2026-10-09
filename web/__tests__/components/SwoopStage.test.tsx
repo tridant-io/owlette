@@ -216,6 +216,49 @@ describe('SwoopStage — no media path', () => {
   });
 });
 
+describe('SwoopStage — a session that failed or ended', () => {
+  it('keeps the relay diagnosis when a session that found no path fails', () => {
+    renderStage({
+      state: 'error',
+      error: 'this machine did not answer.',
+      retryIn: 7,
+      noPath: { relayConfigured: true, hostRelay: false, browserRelay: null },
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('this machine did not answer.');
+    expect(alert).toHaveTextContent("the machine's side never reached the relay");
+    expect(alert.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('says why and when it tries again, without a spinner that says connecting', () => {
+    renderStage({ state: 'error', error: 'this machine is offline.', retryIn: 7 });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('this machine is offline.');
+    expect(alert).toHaveTextContent('reconnecting in 7 s');
+    expect(screen.queryByText('connecting')).toBeNull();
+    expect(alert.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('says the session ended and why, with the way back', () => {
+    renderStage({ state: 'ended', error: 'this session was ended from elsewhere.' });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('session ended');
+    expect(alert).toHaveTextContent('this session was ended from elsewhere.');
+    expect(screen.getByRole('link', { name: 'back to dashboard' })).toHaveAttribute('href', '/dashboard');
+  });
+
+  it('explains only the swoop switch, not every refusal', () => {
+    renderStage({
+      state: 'error',
+      error: 'swoop is excluded on this machine.',
+      refusal: 'machine_excluded',
+      settingsHref: '/dashboard?settings=site-1',
+    });
+    expect(screen.queryByText(/turn it on/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
+  });
+});
+
 describe('SwoopStage — a picture that froze', () => {
   it('says the picture is being restarted, not reconnected, while the element is reattached', () => {
     renderStage({ state: 'connected', stall: 'reattaching' });

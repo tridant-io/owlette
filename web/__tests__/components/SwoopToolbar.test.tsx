@@ -3,9 +3,9 @@
  */
 
 /**
- * the session bar's one way on from an ended or failed session is another
- * one: "reconnect" replaces "end session" there, and nothing else. swoop runs
- * in its own tab, so there is no dashboard to go back to.
+ * the session bar's way on from an ended or failed session is another one:
+ * "reconnect" replaces "end session" there. the way back to the dashboard is
+ * on the bar in every state.
  */
 
 import React from 'react';
@@ -48,6 +48,14 @@ function renderBar(state: SwoopSessionState, stats?: SwoopStats) {
 }
 
 describe('SwoopToolbar', () => {
+  it.each(['idle', 'authorizing', 'connecting', 'connected', 'ended', 'error'] as const)(
+    'carries the way back to the dashboard while %s',
+    (state) => {
+      renderBar(state);
+      expect(screen.getByRole('link', { name: 'back to dashboard' })).toHaveAttribute('href', '/dashboard');
+    },
+  );
+
   it('offers reconnect, not end, once the session has failed', async () => {
     const { onEnd, onReconnect } = renderBar('error');
     expect(screen.queryByRole('button', { name: /end session/i })).toBeNull();

@@ -640,7 +640,7 @@ export default function Setup2FAPage() {
 
       {step === 'backup' && (
         <div className="space-y-6">
-          <BackupCodesPanel codes={backupCodes} />
+          <BackupCodesPanel codes={backupCodes} account={user?.email} />
 
           <Button
             onClick={handleFinish}

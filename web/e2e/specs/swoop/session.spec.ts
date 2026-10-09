@@ -369,6 +369,14 @@ test.describe('the viewer page', () => {
     await expect(alertLine(page)).toContainText('swoop is not enabled for this site.');
     await expect(alertLine(page)).not.toContainText('reconnecting');
     await expect(page.getByRole('dialog')).toHaveCount(0);
+    // said in the middle of the stage, with the way on (#323): never a spinner beside it.
+    await expect(page.getByText(/connecting/i)).toHaveCount(0);
+    await expect(alertLine(page).getByRole('link', { name: 'open site settings' })).toHaveAttribute(
+      'href',
+      `/dashboard?settings=${SITE_ID}`,
+    );
+    await expect(alertLine(page).getByRole('link', { name: 'back to dashboard' })).toBeVisible();
+    await expect(page.getByTestId('session-bar').getByRole('link', { name: 'back to dashboard' })).toBeVisible();
     await swoopSettings({ enabled: true });
 
     await page.goto(`/swoop/${SITE_ID}/${EXCLUDED_ID}`);
