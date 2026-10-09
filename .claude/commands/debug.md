@@ -1,81 +1,60 @@
 ---
-description: Scientific method debugging — systematic root cause analysis
+description: Root-cause a bug by first building one command that reproduces it red, then fixing it under a regression test and proving the fix where the owner saw the bug. Use when something is broken, still broken, throws, crashes, hangs, regressed, is slow, shows the same error again, or the owner says debug or fix this.
 ---
 
-Debug a problem using the scientific method. This prevents the common pitfall of changing random things and hoping something sticks.
+A theory before a reproduction is the failure this command exists to prevent. If you catch yourself reading code to build a theory and you have no red command yet, stop and go back to step 1.
 
-## Process
+Redact before you show anything: tokens, API keys and `x-api-key` values become `<REDACTED>` (CLAUDE.md: never log OAuth tokens, not even partially). Build loops against env vars so secrets stay out of the command line.
 
-### 1. Observe
-Gather facts about the problem:
-- What is the exact error message or unexpected behavior?
-- When did it start? What changed recently? (`git log --oneline -10`)
-- Is it reproducible? Under what conditions?
-- What is the expected behavior vs actual behavior?
+## 1. Build a red loop
 
-Read the relevant files and logs. Do NOT hypothesize yet — just collect data.
+This is the whole job; the rest is mechanical. Find one command that goes red on **this** bug, roughly in this order:
 
-### 2. Hypothesize
-Based on observations, form **ranked hypotheses** (most likely first):
+1. A failing test at the seam that reaches the bug: `cd web && npx jest <path>`, `agent/.venv/Scripts/python -m pytest agent/tests/<file>`, `cd web && npm run e2e -- <spec>` (Playwright on the emulators), `cargo test` in `agent/host`, `cd desktop && npm test`.
+2. `curl` against the running dev server or `$OWLETTE_DEV_API_URL` (read-only GETs; key in `.claude/.env.local`, header `x-api-key`; curl, not python urllib).
+3. A Playwright script that drives the real page and asserts on DOM, console or network, in the state the owner uses (dark mode, their viewport, their browser).
+4. The installed agent: `C:\ProgramData\Owlette\logs`, or `owlette_runner.py --debug` (see CLAUDE.md Build Commands).
+5. A replay of a captured payload (a Firestore doc, a command, a request body) through the code path in isolation.
+6. `git bisect run <loop>` when the bug appeared between two known states; a differential run (old build vs new) when outputs drift.
+7. Last resort, a step only the owner can perform: ask for all of it in one message, with the exact clicks and what to send back, never one step at a time.
+
+Then tighten it: faster (narrow the scope), sharper (assert the exact symptom, not "didn't crash"), deterministic (pin time, seed randomness). For an intermittent bug, raise the reproduction rate (loop it, add load) until it fails often enough to debug.
+
+**Done when** you have run one command at least once and shown its red output, and it asserts the owner's exact symptom (not a nearby failure), gives the same verdict every run, takes seconds, and runs without a human. If you cannot build one, say so, list what you tried, and ask for the access or captured artifact you need. Do not hypothesise without it.
+
+## 2. Minimise
+
+Cut inputs, config, data and steps one at a time, re-running the loop after each cut. **Done when** removing any remaining piece turns the loop green.
+
+## 3. Hypothesise
+
+Write 3-5 ranked, falsifiable hypotheses: "if X is the cause, changing Y makes the loop go green". Show the list to the owner and keep going; they may re-rank it from what they know. Test one variable at a time. If the top three are all eliminated, go back and re-observe rather than inventing a fourth.
+
+## 4. Instrument
+
+A debugger or targeted logs at the boundaries that separate the hypotheses. Tag every debug line `[DEBUG-xxxx]` (one random tag per session) so cleanup is one grep. For a performance bug, measure a baseline first and bisect; logs mislead there.
+
+## 5. Fix under a regression test
+
+1. Turn the minimised repro into a failing test at a seam that exercises the real bug pattern. If no such seam exists, that is a finding: say so in the report rather than writing a shallow test that would pass anyway.
+2. Watch it fail. If you forced the red by mutating code or a fixture, diff against a clean copy to prove the mutation landed.
+3. Apply the smallest fix for the root cause. Watch the test pass.
+4. Re-run the step 1 loop against the original, un-minimised scenario.
+5. Check it where the owner saw it: dev.owlette.app after the deploy, the installed service, the desktop app, the same theme and OS state. A local or headless pass alone is not "fixed".
+
+## 6. Clean up and report
+
+- [ ] the original loop is green, and the regression test passes (or the missing seam is reported)
+- [ ] `grep -r "DEBUG-xxxx"` comes back empty; throwaway scripts are deleted
+- [ ] the commit message states the confirmed cause
 
 ```
-## Hypotheses
-1. [Most likely cause] — because [evidence from observation]
-2. [Second most likely] — because [evidence]
-3. [Third most likely] — because [evidence]
+## Debug complete
+**Symptom**: [the owner's words]
+**Loop**: [the command] — red before, green after (output excerpts)
+**Root cause**: [the confirmed hypothesis and the evidence that confirmed it]
+**Fix**: [what changed and why]
+**Verified where the owner looks**: [target + before/after evidence, or "not verified in <target>"]
 ```
 
-### 3. Test
-For each hypothesis (starting with most likely):
-- Design a **minimal test** that would confirm or eliminate it
-- Run the test
-- Record the result
-
-```
-## Testing
-### H1: [hypothesis]
-- Test: [what you did]
-- Result: [CONFIRMED / ELIMINATED — evidence]
-
-### H2: [hypothesis]
-- Test: [what you did]
-- Result: [CONFIRMED / ELIMINATED — evidence]
-```
-
-Stop testing when you find the root cause. Do NOT fix anything yet.
-
-### 4. Diagnose
-State the root cause clearly:
-```
-## Root Cause
-[What is actually wrong and why, supported by test evidence]
-```
-
-### 5. Fix
-Implement the minimal fix for the root cause:
-- Fix the actual problem, not the symptom
-- Change as little as possible
-- Preserve existing patterns and conventions
-
-### 6. Verify
-Confirm the fix works:
-- Reproduce the original issue — it should be gone
-- Check for regressions: run builds (`/build-and-fix` if needed)
-- Verify edge cases around the fix
-
-### Report
-```
-## Debug Complete
-
-**Problem**: [one-line description]
-**Root cause**: [what was actually wrong]
-**Fix**: [what you changed and why]
-**Verified**: [how you confirmed it works]
-**Files changed**: [list]
-```
-
-## Rules
-- Never skip straight to fixing — understand the problem first
-- One hypothesis at a time — don't shotgun multiple changes
-- If your top 3 hypotheses are all eliminated, step back and re-observe
-- If the fix requires changes beyond the immediate bug, flag it as a follow-up rather than scope-creeping the fix
+Changes beyond the bug go in the report as follow-ups, not into the fix.

@@ -1,3 +1,8 @@
+---
+name: env-management
+description: "Owlette web env vars across Railway dev, Railway prod and the Vercel failover origin: scripts/env-manifest.json plus scripts/sync-env.mjs (status, check, diff, sync), the seven must-match secrets, and the Vercel read-back limit. Use for env vars, secrets, adding, moving or rotating a key, Railway or Vercel variables, env drift, or prod/failover parity."
+---
+
 # Env Var Management Guidelines
 
 **Applies To**: Environment variables across Railway (dev + prod) and the Vercel failover origin
@@ -53,7 +58,7 @@ node scripts/sync-env.mjs sync vercel-prod --apply        # push railway-prod �
 The seven **`must-match`** vars are the ones to never get wrong:
 - `SESSION_SECRET` — mismatch logs every user out on failover
 - `MFA_ENCRYPTION_KEY` — mismatch locks out every 2FA user
-- `LLM_ENCRYPTION_KEY` — mismatch breaks decryption of stored Cortex/LLM keys
+- `LLM_ENCRYPTION_KEY` — mismatch breaks decryption of stored hoot/LLM keys
 - `TURNSTILE_SECRET` — mismatch fails every captcha on the failover origin
 - `SWOOP_JWT_PRIVATE_KEY` — mismatch means bundles minted on one origin fail to verify at the relay
 - `SWOOP_SESSION_MASTER_KEY` — mismatch makes a session's derived keys unreadable across origins
@@ -73,6 +78,7 @@ The seven **`must-match`** vars are the ones to never get wrong:
 - **Never put values in the manifest** — keys + metadata only. It's checked into git.
 - **Never print secret values.** The tool pipes values through stdin and never echoes them; preserve that. When reading Railway vars manually, extract keys only (e.g. pipe `--json` through a `Object.keys` filter).
 - **Never sync `RAILWAY_*` vars** — they're platform-injected. The tool filters them; if you script around it, replicate that filter. Syncing `RAILWAY_PUBLIC_DOMAIN` to Vercel would break the `/api/health` origin label.
+- **Never register a `never-set` key under `vars`.** The manifest's `never-set` block lists keys the web reads that must never exist on any target (emulator hosts, `OWLETTE_E2E`, the legacy-key bypass); leaving them out of `vars` is what makes `check` flag one that appears.
 - **Don't trust a "values match" signal for Vercel secrets** — see the limitation below.
 
 ---
