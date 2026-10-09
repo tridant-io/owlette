@@ -10,7 +10,7 @@ pipeline lives in `vm/`.
 | script | purpose |
 |---|---|
 | `sync-versions.js` | Bump all 9 version surfaces at once (`node scripts/sync-versions.js X.Y.Z`). The only version-sync script — see `docs/internal/version-management.md`. |
-| `sync-env.mjs` | Reconcile Railway/Vercel env vars against `env-manifest.json` (`status` / `check` / `diff` / `sync <target>`). See `.claude/skills/env-management.md`. |
+| `sync-env.mjs` | Reconcile Railway/Vercel env vars against `env-manifest.json` (`status` / `check` / `diff` / `sync <target>`). See `.claude/skills/env-management/SKILL.md`. |
 | `env-manifest.json` | Canonical env-key registry (keys + metadata, never values). Data file — must stay beside `sync-env.mjs`. |
 | `sync-repo-refs.mjs` | Propagate the GitHub owner/repo from root `package.json` into Cargo.toml, the installer, and docs. |
 | `provision-r2.mjs` | Create the roost R2 buckets + CORS (idempotent). Sole source of truth for R2 CORS; bucket policy lives at `infra/r2/r2-bucket-policy.json`. |
@@ -23,6 +23,7 @@ pipeline lives in `vm/`.
 | script | wired into |
 |---|---|
 | `check-no-token-logs.mjs` | `.github/workflows/no-token-logs.yml` |
+| `check-claude-hooks.mjs` | `.github/workflows/claude-hooks.yml`: every `.claude/hooks` file parses, writes stdout only through `lib/hook-output.mjs`, and emits valid hook JSON |
 | `scan-firestore-writes.mjs` | `web/package.json` → `npm run scan:firestore-writes` — the standing lockdown invariant: browser control-plane writes must stay at 0 |
 | `check-system-invoker-callers.mjs` | `web/eslint.config.mjs` + a jest twin (`web/__tests__/eslint/system-invoker-allowlist.test.ts`) |
 | `check-status-page-ready.mjs` | Deploy runbooks + `infra/cron-jobs.json` (Instatus status-page readiness) |
