@@ -72,6 +72,12 @@ To try a Windows build against an installed agent, close the running app, copy
 the new `owlette-desktop.exe` into `C:\ProgramData\Owlette\app\`, and start it
 with `--tray` (or let the service start it on its next status check).
 
+To pair a machine with dev.owlette.app from the app, open **join site** and
+click the "join a site" title five times: the pairing restarts against dev and
+the orange `dev` badge appears; a click on the badge goes back to owlette.app.
+Nothing advertises it, so customers never see a choice. Unattended installs
+still use `/SERVER=dev` on Windows and the pairing preseed on macOS and Linux.
+
 ## How the app ships
 
 The app never ships on its own; each platform's agent installer carries it.

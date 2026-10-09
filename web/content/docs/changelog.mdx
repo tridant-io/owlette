@@ -61,6 +61,16 @@ copy, with `"server": "dev"` when the code was generated on dev.owlette.app:
 save it as `config/pairing.json` in the data root before installing the
 package. Fixes #322.
 
+### added — pair with dev.owlette.app from the app
+
+The app's **join a site** dialog could only pair a new machine with
+owlette.app; reaching dev.owlette.app took the `/SERVER=dev` installer flag
+on Windows or a pairing preseed on macOS and Linux. Now clicking the "join a
+site" title five times switches the pairing to dev: the `dev` badge appears
+and a dev phrase is requested; a click on the badge goes back to owlette.app.
+Nothing in the dialog advertises it, so customers see no choice. The flag and
+the preseed stay for unattended installs. Fixes #321.
+
 ### fixed — swoop connects from strict networks through the relay
 
 A swoop session from a phone hotspot or another strict network failed with
