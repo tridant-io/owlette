@@ -8,23 +8,26 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
-import { seedMachine } from '../../helpers/seed';
+import { seedMachine, setSiteSwoop } from '../../helpers/seed';
 
 const SITE_ID = 'site-A';
 // cardFor filters on hasText, so this id must share no substring with another seeded id.
 const MACHINE_ID = 'e2e-swoop-viewer-badge';
 
 const machineDoc = () => getAdminDb().doc(`sites/${SITE_ID}/machines/${MACHINE_ID}`);
+let restoreSwoop: () => Promise<void>;
 
 test.beforeAll(async () => {
   // no monitors: the hardware subdoc would outlive the machine doc's delete.
   await seedMachine(SITE_ID, MACHINE_ID, { monitorCount: 0 });
   // seedMachine writes without merge, so the swoop fields land after it.
   await machineDoc().set({ capabilities: { swoop: 1 }, swoopViewers: 2 }, { merge: true });
+  restoreSwoop = await setSiteSwoop(SITE_ID, { enabled: true });
 });
 
 test.afterAll(async () => {
   await machineDoc().delete();
+  await restoreSwoop();
 });
 
 async function cardFor(page: Page, machineId: string): Promise<Locator> {

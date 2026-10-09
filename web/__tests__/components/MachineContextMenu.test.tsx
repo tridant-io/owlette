@@ -59,6 +59,9 @@ async function openMenu(props: {
   swoopViewers?: number;
   onSwoop?: () => void;
   onLiveView?: () => void;
+  isSiteAdmin?: boolean;
+  swoopOff?: boolean;
+  onSiteSettings?: () => void;
 }) {
   const user = userEvent.setup();
   render(
@@ -108,6 +111,36 @@ describe('MachineContextMenu — swoop entry', () => {
     await user.click(screen.getByTestId('machine-context-menu-swoop'));
 
     expect(onSwoop).toHaveBeenCalledTimes(1);
+  });
+});
+
+// with the site's swoop off the server refuses every session, so the menu takes
+// an admin to the switch and tells a member who can flip it, with live view back.
+describe('MachineContextMenu — swoop off for the site', () => {
+  it('takes an admin to the switch', async () => {
+    const onSiteSettings = jest.fn();
+    const user = await openMenu({ swoopCapable: true, swoopOff: true, isSiteAdmin: true, onSiteSettings });
+
+    expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+    await user.click(screen.getByTestId('machine-context-menu-swoop-off'));
+
+    expect(onSiteSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells a member who can turn it on', async () => {
+    await openMenu({ swoopCapable: true, swoopOff: true });
+
+    const item = screen.getByTestId('machine-context-menu-swoop-off');
+    expect(item).toHaveAttribute('aria-disabled', 'true');
+    expect(item).toHaveTextContent('ask a site owner or admin to turn it on');
+    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+  });
+
+  it('says nothing on a machine without a streamer', async () => {
+    await openMenu({ swoopCapable: false, swoopOff: true, isSiteAdmin: true });
+
+    expect(screen.queryByTestId('machine-context-menu-swoop-off')).not.toBeInTheDocument();
   });
 });
 

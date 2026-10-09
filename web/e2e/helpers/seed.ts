@@ -361,6 +361,24 @@ export interface SeedMachineOptions {
 }
 
 /**
+ * Set a site's swoop policy (`sites/{siteId}/settings/swoop`, merged) and return
+ * a function that puts it back exactly as it was found: site-A is shared, and
+ * the machine menu offers swoop only where the site has it on.
+ */
+export async function setSiteSwoop(
+  siteId: string,
+  patch: Record<string, unknown>,
+): Promise<() => Promise<void>> {
+  const ref = getAdminDb().doc(`sites/${siteId}/settings/swoop`);
+  const before = (await ref.get()).data();
+  await ref.set(patch, { merge: true });
+  return async () => {
+    if (before) await ref.set(before);
+    else await ref.delete();
+  };
+}
+
+/**
  * Seed a machine with enough state for the dashboard card AND for
  * DisplayLayoutPanel to mount a real profile. Writes the status doc plus
  * `hardware/display` (what `useDisplayState` subscribes to). The Admin SDK

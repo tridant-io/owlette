@@ -334,6 +334,7 @@ export default function DeploymentsPage() {
   const [uninstallDeploymentId, setUninstallDeploymentId] = useState<string | undefined>(undefined);
   const [selectedDeploymentId, setSelectedDeploymentId] = useState<string | null>(null);
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -483,7 +484,14 @@ export default function DeploymentsPage() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => setManageDialogOpen(true)}
+        onManageSites={() => {
+          setManageEditSiteId(undefined);
+          setManageDialogOpen(true);
+        }}
+        onSiteSettings={() => {
+          setManageEditSiteId(currentSiteId);
+          setManageDialogOpen(true);
+        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
       />
@@ -491,6 +499,7 @@ export default function DeploymentsPage() {
       <ManageSitesDialog
         open={manageDialogOpen}
         onOpenChange={setManageDialogOpen}
+        editSiteId={manageEditSiteId}
         sites={sites}
         currentSiteId={currentSiteId}
         onUpdateSite={updateSite}

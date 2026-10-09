@@ -11,6 +11,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — swoop's switch is easier to find
+
+The site switcher has a **site settings** item that opens the current site's
+settings, swoop switch included, without going through the list of every
+site. On a site with swoop off, the menu of a machine that can stream offers
+a site owner or admin **turn on swoop…**, which opens those settings, and
+tells a member that swoop is off and to ask a site owner or admin. Both get
+live view in the meantime. Each row in manage sites shows whether that site
+has swoop on.
+
 ### fixed — the desktop app's appearance submenu opens
 
 Choosing **appearance** in the desktop app's menu highlighted the row and

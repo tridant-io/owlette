@@ -8,7 +8,7 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
-import { seedMachine } from '../../helpers/seed';
+import { seedMachine, setSiteSwoop } from '../../helpers/seed';
 
 const SITE_ID = 'site-A';
 // cardFor filters on hasText, so these ids must share no substring with another seeded id.
@@ -16,6 +16,7 @@ const SELF_ID = 'e2e-swoop-self-machine';
 const OTHER_ID = 'e2e-swoop-peer-machine';
 
 const machineDoc = (id: string) => getAdminDb().doc(`sites/${SITE_ID}/machines/${id}`);
+let restoreSwoop: () => Promise<void>;
 
 test.beforeAll(async () => {
   for (const id of [SELF_ID, OTHER_ID]) {
@@ -24,10 +25,12 @@ test.beforeAll(async () => {
     // seedMachine writes without merge, so the swoop capability lands after it.
     await machineDoc(id).set({ capabilities: { swoop: 1 } }, { merge: true });
   }
+  restoreSwoop = await setSiteSwoop(SITE_ID, { enabled: true });
 });
 
 test.afterAll(async () => {
   for (const id of [SELF_ID, OTHER_ID]) await machineDoc(id).delete();
+  await restoreSwoop();
 });
 
 async function swoopRow(page: Page, machineId: string): Promise<Locator> {

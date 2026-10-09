@@ -78,6 +78,9 @@ interface MachineCardViewProps {
   onScreenshot?: (machineId: string) => void;
   onLiveView?: (machineId: string) => void;
   onSwoop?: (machineId: string) => void;
+  /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
+  swoopOff?: boolean;
+  onSiteSettings?: () => void;
 }
 
 /** The view's handlers, passed to each card as-is: they take the machineId, so
@@ -88,7 +91,7 @@ type MachineCardHandlers = Pick<
   | 'onEditProcess' | 'onDuplicateProcess' | 'onCreateProcess' | 'onKillProcess' | 'onRestartProcess'
   | 'onSetLaunchMode' | 'onConfigureSchedule' | 'onRemoveMachine' | 'onMetricClick'
   | 'onRestart' | 'onShutdown' | 'onCancelRestart' | 'onDismissRestartPending'
-  | 'onScreenshot' | 'onLiveView' | 'onSwoop'
+  | 'onScreenshot' | 'onLiveView' | 'onSwoop' | 'onSiteSettings'
 >;
 
 /** Split out of the map so it can use hooks. */
@@ -103,6 +106,7 @@ interface MachineCardProps extends MachineCardHandlers {
   schedulesFollowSiteTime?: boolean;
   userPreferences: { temperatureUnit: 'C' | 'F' };
   isSiteAdmin: boolean;
+  swoopOff?: boolean;
   cardPref: DeviceSelection;
   onSetCardPref: (machineId: string, kind: DeviceKind, id: string | null) => void;
   showLocalClock?: boolean;
@@ -136,6 +140,7 @@ const MachineCard = memo(function MachineCard({
   schedulesFollowSiteTime,
   userPreferences,
   isSiteAdmin,
+  swoopOff,
   cardPref,
   onSetCardPref,
   onToggleStats,
@@ -157,6 +162,7 @@ const MachineCard = memo(function MachineCard({
   onScreenshot,
   onLiveView,
   onSwoop,
+  onSiteSettings,
   showLocalClock,
 }: MachineCardProps) {
   const machineId = machine.machineId;
@@ -390,6 +396,8 @@ const MachineCard = memo(function MachineCard({
                 swoopCapable={machine.capabilities?.swoop === 1}
                 swoopViewers={machine.swoopViewers}
                 onSwoop={onSwoop ? () => onSwoop(machineId) : undefined}
+                swoopOff={swoopOff}
+                onSiteSettings={onSiteSettings}
                 onViewDisplays={openMetric ? () => openMetric('display') : undefined}
                 rebootSchedule={machine.rebootSchedule}
               />
@@ -1176,6 +1184,7 @@ export function MachineCardView({
   siteTimezone = 'UTC',
   siteTimeFormat = '12h',
   schedulesFollowSiteTime,
+  swoopOff,
   ...handlers
 }: MachineCardViewProps) {
   const { userPreferences, isSiteAdmin } = useAuth();
@@ -1210,6 +1219,7 @@ export function MachineCardView({
           siteTimeFormat={siteTimeFormat}
           userPreferences={temperaturePrefs}
           isSiteAdmin={canSiteAdmin}
+          swoopOff={swoopOff}
           cardPref={prefs.cardView[machine.machineId] ?? NO_CARD_PREF}
           onSetCardPref={setCardPref}
           schedulesFollowSiteTime={schedulesFollowSiteTime}
