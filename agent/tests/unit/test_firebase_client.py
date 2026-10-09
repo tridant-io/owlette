@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 import logging
+import threading
 import time
 import sys
 
@@ -884,3 +885,113 @@ class TestSendDisplayAlert:
 
         assert web_keys, 'failed to parse DISPLAY_EVENT_ROUTING keys'
         assert web_keys == set(DISPLAY_ALERT_EVENT_TYPES)
+
+
+# TestRemovedFromSite — the dashboard deleted this machine (#326)
+class TestRemovedFromSite:
+    """The config doc goes in the same batch as the machine doc, so the config
+    listener seeing it vanish is the removal signal. Before this, nothing in
+    the agent ever noticed: it kept writing on its access token and each
+    heartbeat upserted the deleted row straight back."""
+
+    @pytest.fixture
+    def connected_client(self, firebase_client, mock_rest_client):
+        """A started-looking client whose config listener has registered its
+        poll callback; yields (client, that callback)."""
+        mock_rest_client.listen_to_document.return_value = (
+            MagicMock(), threading.Event(), threading.Event())
+        with patch.object(type(firebase_client.connection_manager), 'is_connected',
+                          new_callable=PropertyMock, return_value=True):
+            # running stays False so the listener loop returns right after
+            # registering, instead of sleeping until the test is torn down.
+            firebase_client._config_listener_loop()
+            on_config_changed = mock_rest_client.listen_to_document.call_args.args[1]
+            firebase_client.running = True
+            yield firebase_client, on_config_changed
+
+    def test_a_vanished_config_doc_ends_every_cloud_write(self, connected_client):
+        client, on_config_changed = connected_client
+        left = MagicMock()
+        client.register_removed_callback(left)
+
+        on_config_changed(None)
+
+        assert client._removed is True
+        assert client.connected is False, 'every writer checks connected'
+        assert client.running is False, 'the metrics loop is the heartbeat'
+        left.assert_called_once()
+        assert 'removed from the site' in left.call_args.args[0]
+
+    def test_the_row_is_deleted_again_after_the_site_is_left(self, connected_client, mock_rest_client):
+        """A heartbeat between the dashboard's delete and the poll wrote the
+        row back; hoot could still be writing until the callback ends it. So
+        the delete comes after the callback, and `running` drops only once the
+        callback has switched cloud sync off (the recovery reinit reads both)."""
+        client, on_config_changed = connected_client
+        order = []
+        client.register_removed_callback(
+            lambda reason: order.append(('callback', client.running, client.connected)))
+        mock_rest_client.delete_document.side_effect = lambda path: order.append(('delete', path))
+
+        on_config_changed(None)
+
+        assert order == [
+            ('callback', True, False),
+            ('delete', 'sites/test-site/machines/TEST-MACHINE'),
+        ]
+
+    def test_a_delete_that_fails_does_not_undo_the_detach(self, connected_client, mock_rest_client, caplog):
+        client, on_config_changed = connected_client
+        client.register_removed_callback(MagicMock())
+        mock_rest_client.delete_document.side_effect = RuntimeError('boom')
+
+        with caplog.at_level(logging.WARNING):
+            on_config_changed(None)
+
+        assert client.connected is False
+        assert 'could not delete the row again' in caplog.text
+
+    def test_stop_after_a_removal_writes_no_offline_presence(self, connected_client, mock_rest_client):
+        client, on_config_changed = connected_client
+        client.register_removed_callback(MagicMock())
+        on_config_changed(None)
+
+        client.stop()
+
+        # set(merge=True) on the deleted row would have recreated it as an
+        # offline ghost.
+        mock_rest_client.collection.assert_not_called()
+        mock_rest_client.set_document.assert_not_called()
+
+    def test_a_removal_is_reported_once(self, connected_client):
+        client, on_config_changed = connected_client
+        left = MagicMock()
+        client.register_removed_callback(left)
+
+        on_config_changed(None)
+        on_config_changed(None)
+
+        left.assert_called_once()
+
+    def test_a_present_config_doc_is_not_a_removal(self, connected_client):
+        client, on_config_changed = connected_client
+        left = MagicMock()
+        client.register_removed_callback(left)
+        client.config_update_callback = MagicMock()
+
+        with patch('firebase_client.config_sync') as cs:
+            cs.configs_equal.return_value = False
+            on_config_changed({'processes': []})
+
+        left.assert_not_called()
+        assert client._removed is False
+        client.config_update_callback.assert_called_once_with({'processes': []})
+
+    def test_a_removal_with_no_callback_still_stops_the_writes(self, connected_client, caplog):
+        client, on_config_changed = connected_client
+
+        with caplog.at_level(logging.WARNING):
+            on_config_changed(None)
+
+        assert client.connected is False
+        assert 'No removal callback registered' in caplog.text

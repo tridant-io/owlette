@@ -62,7 +62,7 @@ export function RemoveMachineDialog({
             <Alert className="border-warning-border bg-warning-surface">
               <AlertTriangle className="h-4 w-4 text-warning" />
               <AlertDescription className="text-warning text-sm ml-2">
-                this machine is currently online. the owlette agent will detect the removal and stop syncing automatically.
+                this machine is currently online. an agent on 4.1.8 or later notices within seconds, stops syncing and drops its credentials. an older agent writes the machine back until its access token expires, within the hour; remove it again then.
               </AlertDescription>
             </Alert>
           )}
@@ -76,14 +76,14 @@ export function RemoveMachineDialog({
               <li>all machine data will be deleted from Firestore</li>
               <li>process configurations will be removed</li>
               <li>command history will be cleared</li>
-              <li>the owlette agent will be deregistered</li>
+              <li>the owlette agent leaves the site and forgets its credentials (agent 4.1.8 or later)</li>
             </ul>
           </div>
 
           {/* Reinstall Notice */}
           <div className="rounded-lg border border-accent-cyan/20 bg-accent-cyan/10 p-4">
             <p className="text-sm text-accent-cyan">
-              to add this machine back to a site, you will need to re-run the owlette installer and pair it again using the 3-word phrase shown during install.
+              to add this machine back to a site, pair it again from the owlette app on that machine, or re-run the installer.
             </p>
           </div>
         </div>

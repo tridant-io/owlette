@@ -31,6 +31,20 @@ token survived ignores the command. An agent that is offline at the time
 leaves the site the moment the server refuses its next refresh. Agents on
 4.1.7 or earlier still only wipe their token store at that refresh.
 
+### fixed — removing a machine from the dashboard now sticks
+
+**remove machine** on an online machine deleted its records and token, but
+the agent was never told: it kept writing on its one-hour access token and
+each heartbeat put the machine straight back on the dashboard, online with
+live metrics. An agent on this release notices within seconds that its config
+was deleted along with the machine, stops writing, leaves the site, drops its
+credentials, ends hoot, and deletes the row once more in case a heartbeat had
+already put it back; the owlette app on the machine offers **join site**. The
+dialog and docs now say what happens, and that pairing again from the app is
+enough. An agent on 4.1.7 or earlier still writes the machine back and stops
+only when its access token expires, within the hour; remove it again then.
+(#326)
+
 ### fixed — a generated pairing phrase works on macOS and Linux
 
 **add machine → generate code** showed only the Windows `/ADD=` command and
