@@ -990,7 +990,9 @@ mod host {
         IcePolicy, SystemResolver, DISCONNECTED_LIMIT,
     };
     use crate::transport::rtc::{PeerConfig, PeerEvent, PeerState, RtcPeer};
+    use crate::transport::budget::PathProfile;
     use crate::transport::stun;
+    use crate::transport::turn::{self, TurnServer};
     use crate::transport::VideoSink;
     use crate::viewers::lease::LeaseLedger;
     use crate::viewers::roster::Roster;
@@ -1351,6 +1353,21 @@ mod host {
                 "swoop: no stun server in the bundle; peers gather host candidates only"
             ),
         }
+        // the relay the same way: the bundle carries it with its credentials
+        // only when the api minted some, and without one a peer gathers no
+        // relay candidate, which the log says once here.
+        let (turn_tx, turn_rx) = bounded::<TurnServer>(1);
+        match turn_server_in(&bundle) {
+            Some((host, port, username, password)) => {
+                thread::Builder::new()
+                    .name("swoop-turn".into())
+                    .spawn(move || turn_thread(&host, port, username, password, turn_tx))
+                    .ok();
+            }
+            None => ::log::info!(
+                "swoop: no relay in the bundle; a viewer behind a strict router cannot reach this machine"
+            ),
+        }
 
         let outcome = connect_and_serve(
             &bundle,
@@ -1369,6 +1386,7 @@ mod host {
                 resolver_tx,
                 resolved_rx,
                 stun_rx,
+                turn_rx,
             },
         );
 
@@ -1488,6 +1506,7 @@ mod host {
         resolver_tx: Sender<ToResolver>,
         resolved_rx: Receiver<FromResolver>,
         stun_rx: Receiver<SocketAddr>,
+        turn_rx: Receiver<TurnServer>,
     }
 
     fn connect_and_serve(bundle: &Bundle, w: Wiring) -> (Exit, ExitReason) {
@@ -1571,6 +1590,8 @@ mod host {
             resolved_rx: w.resolved_rx,
             stun_rx: w.stun_rx,
             stun_server: None,
+            turn_rx: w.turn_rx,
+            turn_server: None,
             ifwatch: match InterfaceWatcher::start() {
                 Ok(watcher) => Some(watcher),
                 Err(rc) => {
@@ -1710,6 +1731,10 @@ mod host {
         /// through `Live::stun_server()`.
         stun_rx: Receiver<SocketAddr>,
         stun_server: Option<SocketAddr>,
+        /// The bundle's TURN server and credentials, once the turn thread has
+        /// resolved it; read through `Live::turn_server()`.
+        turn_rx: Receiver<TurnServer>,
+        turn_server: Option<TurnServer>,
         /// The interface watcher (`NotifyIpInterfaceChange` on Windows, a
         /// `getifaddrs` walk elsewhere), as a flag this loop reads. A machine
         /// that would not start it carries on without the trigger rather than
@@ -1782,6 +1807,9 @@ mod host {
         /// §7.5's ICE decisions, per peer: a promotion attempt belongs to one
         /// ICE agent and a new peer gets a new one.
         ice: IcePolicy,
+        /// The selected pair is relayed, on either end. Status says `relay`
+        /// while any viewer is, and the governor caps that viewer's rate.
+        relayed: bool,
         /// Per track. One shared sequencer would mark another viewer's delta as
         /// a recovery point the moment this one's pacer refused a frame.
         sequencer: FrameSequencer,
@@ -1806,6 +1834,7 @@ mod host {
                 peer: None,
                 governor: Governor::new(GovernorConfig::new(auto_bps)),
                 ice: IcePolicy::new(),
+                relayed: false,
                 sequencer: FrameSequencer::new(),
                 last_size: None,
                 frames_at_status: 0,
@@ -2192,6 +2221,14 @@ mod host {
             self.stun_server
         }
 
+        /// The TURN server each new peer allocates on, the same way.
+        fn turn_server(&mut self) -> Option<TurnServer> {
+            if self.turn_server.is_none() {
+                self.turn_server = self.turn_rx.try_recv().ok();
+            }
+            self.turn_server.clone()
+        }
+
         /// This viewer's first offer: pick its codec, bind its peer, and put the
         /// tier it lands on in front of the capture thread. `false` means the
         /// viewer was refused and is already on its way out.
@@ -2230,6 +2267,7 @@ mod host {
             let bind_addr = bind_addr_toward_offer(sdp).unwrap_or(self.bind_addr);
             ::log::info!("swoop: viewer {viewer} peer binds {bind_addr}");
             let stun_server = self.stun_server();
+            let turn_server = self.turn_server();
             let peer = match RtcPeer::bind(PeerConfig {
                 bind_addr,
                 codec,
@@ -2241,6 +2279,7 @@ mod host {
                 // 1015 ms p50 of queue with every loss counter at zero.
                 enable_bwe: false,
                 stun_server,
+                turn_server,
             }) {
                 Ok(peer) => peer,
                 Err(e) => {
@@ -2622,7 +2661,9 @@ mod host {
                 };
                 let mut events = Vec::new();
                 if let Err(e) = peer.poll(Instant::now(), budget, &mut events) {
-                    ::log::error!("swoop: viewer {} peer poll failed: {e}", v.id);
+                    // `:#` for the chain: the outer context alone read as
+                    // "poll_output" in #328 and said nothing about why
+                    ::log::error!("swoop: viewer {} peer poll failed: {e:#}", v.id);
                     failed.push(v.id.clone());
                     continue;
                 }
@@ -2759,6 +2800,16 @@ mod host {
             let codec = v.codec;
             let down_for = v.ice.down_for(now);
             let action = v.ice.observe(now, event);
+            if let IceEvent::Connected { relayed } | IceEvent::PairChanged { relayed } = event {
+                if v.relayed != relayed {
+                    ::log::info!(
+                        "swoop: viewer {viewer} media path is {}",
+                        if relayed { "relay" } else { "direct" }
+                    );
+                }
+                v.relayed = relayed;
+                v.governor.set_path_profile(PathProfile::from_relayed(relayed));
+            }
             match (event, down_for) {
                 (IceEvent::Disconnected, None) => ::log::info!(
                     "swoop: viewer {viewer} ice disconnected, holding it up to {} s",
@@ -3605,8 +3656,11 @@ mod host {
                 indicator: self.indicator,
                 bitrate_kbps,
                 fps,
-                // Relay allocation is Task 7.4/7.5; everything today is direct.
-                path: MediaPath::Direct,
+                path: if self.viewers.iter().any(|v| v.relayed) {
+                    MediaPath::Relay
+                } else {
+                    MediaPath::Direct
+                },
                 display: self.display,
                 uptime_s: now.duration_since(self.started).as_secs(),
                 desktop: contributed.desktop,
@@ -4297,21 +4351,54 @@ mod host {
     /// reason as the candidates: a name lookup blocks for as long as the
     /// system resolver takes. IPv4 only, because every peer binds IPv4.
     fn stun_thread(host: &str, port: u16, tx: Sender<SocketAddr>) {
+        if let Some(server) = resolve_server("stun", host, port, "server-reflexive") {
+            let _ = tx.send(server);
+        }
+    }
+
+    /// The bundle's TURN server, resolved the same way, with the credentials
+    /// the bundle carried for it.
+    fn turn_thread(host: &str, port: u16, username: String, password: Secret, tx: Sender<TurnServer>) {
+        if let Some(addr) = resolve_server("turn", host, port, "relay") {
+            let _ = tx.send(TurnServer {
+                addr,
+                username,
+                password,
+            });
+        }
+    }
+
+    /// One server's first IPv4 address, or why there is none.
+    fn resolve_server(kind: &str, host: &str, port: u16, candidates: &str) -> Option<SocketAddr> {
         let found = (host, port)
             .to_socket_addrs()
             .map(|mut addrs| addrs.find(SocketAddr::is_ipv4));
         match found {
             Ok(Some(server)) => {
-                ::log::info!("swoop: stun server {host}:{port} is {server}");
-                let _ = tx.send(server);
+                ::log::info!("swoop: {kind} server {host}:{port} is {server}");
+                Some(server)
             }
-            Ok(None) => ::log::info!(
-                "swoop: stun server {host} has no ipv4 address; no server-reflexive candidates"
-            ),
-            Err(e) => ::log::info!(
-                "swoop: stun server {host} did not resolve ({e}); no server-reflexive candidates"
-            ),
+            Ok(None) => {
+                ::log::info!("swoop: {kind} server {host} has no ipv4 address; no {candidates} candidates");
+                None
+            }
+            Err(e) => {
+                ::log::info!("swoop: {kind} server {host} did not resolve ({e}); no {candidates} candidates");
+                None
+            }
         }
+    }
+
+    /// The first `turn:` server over UDP the bundle names with credentials:
+    /// its host and port to resolve, and the username and password. A relay
+    /// entry without credentials is no relay: the server would refuse it.
+    fn turn_server_in(bundle: &Bundle) -> Option<(String, u16, String, Secret)> {
+        bundle.ice_servers.iter().find_map(|server| {
+            let username = server.username.as_ref()?;
+            let password = server.credential.as_ref()?;
+            let (host, port) = server.urls.iter().find_map(|url| turn::server_host_port(url))?;
+            Some((host.to_owned(), port, username.clone(), password.clone()))
+        })
     }
 
     /// Control lines. Line 1 was the bundle and was read before this started.
@@ -4406,8 +4493,8 @@ mod host {
 
     /// One host candidate, on the interface that would reach the internet. A
     /// udp `connect` sends nothing; it only picks the route. Each peer learns
-    /// its own server-reflexive candidate (`transport::stun`); Task 7.4/7.5
-    /// adds relayed ones through `add_local_candidate`.
+    /// its own server-reflexive and relayed candidates (`transport::stun`,
+    /// `transport::turn`) from its own socket.
     fn local_bind_addr() -> SocketAddr {
         let found = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
             .and_then(|socket| {

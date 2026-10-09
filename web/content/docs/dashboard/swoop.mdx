@@ -159,9 +159,12 @@ the viewer watches the picture as well as the connection. when the machine keeps
 
 swoop connects the browser to the machine directly. on the same network that always works. across the internet, both ends ask a public STUN server for the address their router shows the world, and each offers it to the other: that gets through most home and office routers. the machine's half of this needs agent 4.1.3.
 
-- when both ends sit behind strict routers (many mobile networks, some corporate firewalls), a direct path is not possible and swoop needs a **relay**. a relay is set up per deployment, not per site, by whoever runs owlette: it is a Cloudflare TURN key, set in the [swoop environment variables](/docs/setup/environment-variables#swoop-required-for-remote-desktop)
-- after 20 seconds without a path the viewer stops saying **connecting** and says **can't reach this machine from your network**, and whether a relay was there to try. it keeps trying underneath, and the picture appears if a path comes up later
+- when either end sits behind a strict router (phone hotspots and most mobile networks, some corporate firewalls), a direct path is not possible and swoop needs a **relay**. a relay is set up per deployment, not per site, by whoever runs owlette: it is a Cloudflare TURN key, set in the [swoop environment variables](/docs/setup/environment-variables#swoop-required-for-remote-desktop)
+- with a relay set up, **the machine takes a relayed address of its own** (agent 4.1.8 and newer) and offers it to the viewer, so a viewer behind any router can reach it. the browser tries its own relay as well, over UDP, TCP or TLS, when nothing has connected after three seconds, which is what gets through a network that blocks UDP altogether
+- **what the machine's network has to allow out**: UDP to the STUN and TURN servers on port 3478. a firewall that allows no UDP out leaves the machine with no public address and no relay, and only viewers on its own network can reach it. the browser's side needs UDP out, or failing that TCP out to the relay on 3478 or 443
+- after 20 seconds without a path the viewer stops saying **connecting** and says **can't reach this machine from your network**, with which end never reached the relay: the machine's side (its firewall, or an agent older than 4.1.8), this browser's, or neither. it keeps trying underneath, and the picture appears if a path comes up later
 - a machine's own firewall must let the owlette agent receive on UDP. on Windows the agent adds that rule itself when swoop is turned on for the site
+- the machine's swoop log (`logs/swoop/swoop.log` under the agent's data folder) says which candidates each session gathered: `server-reflexive candidate gathered`, `relay candidate gathered`, or why not
 
 ---
 

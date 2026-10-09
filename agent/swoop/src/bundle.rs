@@ -61,6 +61,12 @@ impl Secret {
     pub fn expose(&self) -> &str {
         &self.0
     }
+
+    /// For the tests that build a bundle's worth of credentials by hand.
+    #[cfg(test)]
+    pub(crate) fn for_tests(value: &str) -> Self {
+        Self(value.to_owned())
+    }
 }
 
 impl fmt::Debug for Secret {

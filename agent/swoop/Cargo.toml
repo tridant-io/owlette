@@ -62,9 +62,6 @@ encode-openh264 = []
 # the macOS dependency table below always carries, so the feature needs no
 # crate of its own.
 encode-videotoolbox = []
-# Host-side TURN (plan.md D13, Task 7.4) is written on std UDP — str0m has no
-# TURN client and we are not adding a second stack for one.
-turn = []
 audio-opus = ["dep:audiopus", "dep:audiopus_sys"]
 # Non-default, and it must stay that way: it gates the bundle's test-only
 # `overrides` object (Task 8.7). A streamer built without it rejects a bundle

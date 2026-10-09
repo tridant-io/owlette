@@ -63,6 +63,25 @@ function Hint({ children, onDone }: { children: React.ReactNode; onDone: () => v
 /** the stage's centred notice, over the picture or in place of it. */
 const NOTICE = 'pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-swoop-stage-ink';
 
+/**
+ * why there is no path, as far as this end can tell: whether a relay was
+ * there, and which ends reached it. each sentence names the network to look
+ * at, because "check your network" sent people the wrong way (#328: the
+ * viewer's network was fine and the machine held no relay).
+ */
+function noPathDetail(noPath: SwoopNoPath): string {
+  if (!noPath.relayConfigured) {
+    return 'no relay is set up for this site, so swoop only connects when both ends can reach each other directly.';
+  }
+  if (!noPath.hostRelay) {
+    return "the machine's side never reached the relay. its network has to allow udp out to the relay, and its agent has to be up to date.";
+  }
+  if (noPath.browserRelay === false) {
+    return 'the machine reached the relay but this browser did not. check that this network allows udp or tcp out, or try another network.';
+  }
+  return 'the relay was reached and still no path came up. reconnect to try again, or try another network.';
+}
+
 export function SwoopStage({ session, state, noPath, stall = 'none', stageRef, videoRef, onLeave, children }: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -165,11 +184,7 @@ export function SwoopStage({ session, state, noPath, stall = 'none', stageRef, v
           {state !== 'ended' && <Loader2 className="size-6 animate-spin" aria-hidden />}
           {state === 'ended' ? 'session ended' : noPath ? "can't reach this machine from your network" : 'connecting'}
           {state !== 'ended' && noPath && (
-            <span className="max-w-sm text-center text-xs">
-              {noPath.relayConfigured
-                ? 'even the relay could not get through. check that this network allows udp, or try another network.'
-                : 'no relay is set up for this site, so swoop only connects when both ends can reach each other directly.'}
-            </span>
+            <span className="max-w-sm text-center text-xs">{noPathDetail(noPath)}</span>
           )}
         </p>
       )}
