@@ -18,7 +18,7 @@
  *
  * Vercel caveat: sensitive secrets cannot be read back, so this detects COVERAGE drift
  * but not VALUE drift. Parity for railway-prod↔vercel-prod comes from re-running
- * `sync vercel-prod --apply` (idempotent). See .claude/skills/env-management.md.
+ * `sync vercel-prod --apply` (idempotent). See .claude/skills/env-management/SKILL.md.
  */
 import { readFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';

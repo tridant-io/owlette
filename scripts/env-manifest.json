@@ -1,5 +1,5 @@
 {
-  "$schema-note": "Canonical registry of Owlette web env vars. KEYS + metadata only — values NEVER live here, they stay in the providers. Edit this file when you add/remove/move an env var, then run `node scripts/sync-env.mjs check`. See .claude/skills/env-management.md.",
+  "$schema-note": "Canonical registry of Owlette web env vars. KEYS + metadata only — values NEVER live here, they stay in the providers. Edit this file when you add/remove/move an env var, then run `node scripts/sync-env.mjs check`. See .claude/skills/env-management/SKILL.md.",
   "targets": {
     "railway-dev": {
       "provider": "railway",

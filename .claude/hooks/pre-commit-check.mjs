@@ -10,6 +10,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 import { agentPython, AGENT_VENV_SETUP_HINT } from './lib/agent-python.mjs'
+import { deny } from './lib/hook-output.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SESSION_FILE = join(__dirname, '..', 'session-edits.json')
@@ -26,25 +27,18 @@ try {
 
   const command = toolInput.command || ''
   const isCommit = /\bgit\s+(commit|push)\b/.test(command)
-  if (!isCommit) {
-    process.stdout.write(JSON.stringify({ decision: 'approve' }))
-    process.exit(0)
-  }
+  // No output on a pass: an "allow" here would skip the permission prompt for
+  // every Bash call in the repo, which is what the old `approve` did.
+  if (!isCommit) process.exit(0)
 
   const editedFiles = getEditedFiles()
-  if (editedFiles.length === 0) {
-    process.stdout.write(JSON.stringify({ decision: 'approve' }))
-    process.exit(0)
-  }
+  if (editedFiles.length === 0) process.exit(0)
 
   const hasWeb = editedFiles.some(f => /[/\\]web[/\\]/.test(f))
   // The Python agent dir only — web/app/api/agent/* is TypeScript, not Python.
   const hasAgent = editedFiles.some(f => /[/\\]agent[/\\]/.test(f) && !/[/\\]web[/\\]/.test(f))
 
-  if (!hasWeb && !hasAgent) {
-    process.stdout.write(JSON.stringify({ decision: 'approve' }))
-    process.exit(0)
-  }
+  if (!hasWeb && !hasAgent) process.exit(0)
 
   const errors = []
   const python = hasAgent ? agentPython(PROJECT_ROOT) : null
@@ -155,14 +149,11 @@ try {
       'BUILD CHECK FAILED — fix errors before committing:',
       ...errors
     ].join('\n')
-    process.stdout.write(JSON.stringify({ decision: 'block', reason }))
-  } else {
-    process.stdout.write(JSON.stringify({ decision: 'approve' }))
+    deny(reason)
   }
 
-} catch (err) {
-  // Fail open.
-  process.stdout.write(JSON.stringify({ decision: 'approve' }))
+} catch {
+  // Fail open: no output leaves the call to the normal permission flow.
 }
 
 process.exit(0)

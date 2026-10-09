@@ -12,7 +12,7 @@ npm run screenshots:desktop     # ~50 s, both themes
 ## When to run it
 
 At **release time, after `build_installer_full.bat`** — the step is in
-`.claude/skills/build-system.md` → "Agent Installer Release". Not at version-bump time: a
+`.claude/skills/build-system/SKILL.md` → "Agent Installer Release". Not at version-bump time: a
 bump happens before the build, so there is no release binary to photograph, and
 `sync-versions.js` deliberately does nothing but edit version files.
 
