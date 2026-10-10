@@ -18,6 +18,7 @@ import { authenticator } from 'otplib';
 import { E2E_BASE_URL, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import type { TestUser } from '../../helpers/seed';
+import { expectSignedInFooterOnOneLine } from '../../helpers/signedInFooter';
 
 authenticator.options = { step: 30, window: 1 };
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -170,6 +171,8 @@ test('a cold start signs owlette swoop in through the signed-in browser, mfa inc
     await page.goto(approveUrl);
     // the footer offers the way out for the wrong account, and says who is signed in
     await expect(page.getByTestId('sign-in-as-someone-else')).toBeVisible();
+    await expect(page.getByTestId('signed-in-email')).toHaveText(user.email);
+    await expectSignedInFooterOnOneLine(page);
     await expect(page.getByRole('heading', { name: 'sign in owlette swoop on this computer?' })).toBeVisible();
     await page.getByRole('button', { name: 'approve' }).click();
     await expect(page.getByText('done, go back to owlette swoop')).toBeVisible();

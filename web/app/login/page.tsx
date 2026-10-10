@@ -7,8 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AuthShell, AuthDivider, AuthFooterDot, authFooterLinkClass } from '@/components/auth/AuthShell';
-import { SwoopWindowStrip } from '@/components/swoop/SwoopWindowControls';
-import { Fingerprint, Globe } from 'lucide-react';
+import { SwoopWindowStrip, dragRegion } from '@/components/swoop/SwoopWindowControls';
+import { Fingerprint, Globe, MonitorPlay } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { sanitizeError } from '@/lib/errorHandler';
 import { isPopupUnavailableError } from '@/lib/inAppBrowser';
@@ -20,7 +20,6 @@ import {
   safeNextPath,
   startAppLink,
 } from '@/lib/appLink';
-import { isViewerApp } from '@/lib/swoop/viewerApp';
 import { signInWithCustomToken } from 'firebase/auth';
 import { auth as firebaseAuth } from '@/lib/firebase';
 import {
@@ -34,6 +33,7 @@ import { InAppBrowserNotice } from '@/components/InAppBrowserNotice';
 import { useFieldError } from '@/hooks/useFieldError';
 import { useInAppBrowser } from '@/hooks/useInAppBrowser';
 import { useRedirectIfAuthenticated } from '@/hooks/useRedirectIfAuthenticated';
+import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 
 // every 3 s for the 10 min a pending code lives is at most 200 exchange calls, under the route's
 // 300/h per-ip limit; a faster poll would get a full wait rate-limited part way through.
@@ -42,6 +42,25 @@ const APP_LINK_POLL_MS = 3000;
 // local clock: a clock running ahead would give up on the first poll. the route's 410 still
 // ends the wait earlier when the server expires the code first.
 const APP_LINK_WAIT_MS = 10 * 60 * 1000;
+
+/**
+ * owlette swoop's login is the app's own: its "owlette | swoop" lockup, as the picker's header
+ * shows it, and no tagline, in one narrow column.
+ */
+const SWOOP_SHELL = {
+  minimal: true,
+  brandTitle: (
+    <span className="inline-flex items-center gap-2">
+      owlette{' '}
+      <span aria-hidden className="h-5 w-px shrink-0 bg-muted-foreground/60" />
+      <span className="inline-flex items-center gap-1.5 font-medium">
+        <MonitorPlay aria-hidden className="h-5 w-5 shrink-0 text-muted-foreground" />
+        swoop
+      </span>
+    </span>
+  ),
+  brandDescription: null,
+};
 
 /**
  * Wire half of a passkey sign-in (options → ceremony → verify → Firebase session), shared by the
@@ -114,7 +133,8 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   /**
    * Progressive disclosure for the email path, mirroring /register. Latches open on first email
-   * focus and never closes, so a partly-filled form can't collapse mid-entry.
+   * focus (in owlette swoop, on its link) and never closes, so a partly-filled form can't
+   * collapse mid-entry.
    */
   const [emailFormOpen, setEmailFormOpen] = useState(false);
   /** Field-targeted validation — see hooks/useFieldError.ts. */
@@ -136,9 +156,9 @@ function LoginForm() {
   const [popupBlocked, setPopupBlocked] = useState(false);
   /**
    * inside owlette swoop, whose webview fails both google and passkey sign-in (measured), so a
-   * signed-in browser approves the app instead. read after mount, as canUsePasskey.
+   * signed-in browser approves the app instead.
    */
-  const [viewerApp, setViewerApp] = useState(false);
+  const viewerApp = useViewerAppPlatform() !== null;
   /** the absolute approval url while its browser approval is being waited on. */
   const [browserWait, setBrowserWait] = useState<string | null>(null);
   const [browserLinkExpired, setBrowserLinkExpired] = useState(false);
@@ -181,7 +201,6 @@ function LoginForm() {
 
   useEffect(() => {
     setCanUsePasskey(browserSupportsWebAuthn());
-    setViewerApp(isViewerApp());
   }, []);
 
   useEffect(() => {
@@ -514,25 +533,34 @@ function LoginForm() {
     </>
   );
 
+  const signUp = (
+    <span className="block whitespace-nowrap sm:inline">
+      don&apos;t have an account?{' '}
+      <a href="/register" className={authFooterLinkClass}>
+        sign up
+      </a>
+    </span>
+  );
+
   return (
     <AuthShell
+      {...(viewerApp ? SWOOP_SHELL : {})}
       footer={
-        <>
-          <a href="/forgot-password" className={authFooterLinkClass}>
-            forgot password?
-          </a>
-          {/* a phone's card is too narrow for both on one line: the sign-up
-              line wraps whole onto its own row instead of mid-phrase */}
-          <span className="hidden sm:inline">
-            <AuthFooterDot />
-          </span>
-          <span className="block whitespace-nowrap sm:inline">
-            don&apos;t have an account?{' '}
-            <a href="/register" className={authFooterLinkClass}>
-              sign up
+        viewerApp ? (
+          signUp
+        ) : (
+          <>
+            <a href="/forgot-password" className={authFooterLinkClass}>
+              forgot password?
             </a>
-          </span>
-        </>
+            {/* a phone's card is too narrow for both on one line: the sign-up
+                line wraps whole onto its own row instead of mid-phrase */}
+            <span className="hidden sm:inline">
+              <AuthFooterDot />
+            </span>
+            {signUp}
+          </>
+        )
       }
     >
       {/* Passwordless first: google + passkey are one group, space-y-6 splits off email. In
@@ -593,78 +621,104 @@ function LoginForm() {
         )}
       </div>
 
+      {/* in owlette swoop the email path waits behind a quiet link, form and all */}
       {viewerApp ? (
-        <p className="text-center text-sm text-muted-foreground">or use your email and password</p>
+        !emailFormOpen && (
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => setEmailFormOpen(true)}
+              className="hl-link hl-link-muted cursor-pointer text-sm text-muted-foreground"
+            >
+              or use your email and password
+            </button>
+          </div>
+        )
       ) : (
         showDivider && <AuthDivider />
       )}
 
-      <form onSubmit={handleEmailLogin} className="space-y-5" noValidate>
-        <div className="space-y-2">
-          <Label htmlFor="email" className="text-foreground">email</Label>
-          <Input
-            id="email"
-            {...fieldProps('email')}
-            type="email"
-            // Trailing "webauthn" token is what lists passkeys in this field's autofill
-            // dropdown; "username" keeps ordinary autofill and password managers working.
-            // owlette swoop drops it: passkeys fail in its webview.
-            autoComplete={viewerApp ? 'username' : 'username webauthn'}
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            // Focus (not click) so keyboard tabbing expands it, and so e2e fill() — which
-            // focuses first, email before password — opens the form for the suite.
-            onFocus={() => setEmailFormOpen(true)}
-            required
-            disabled={loading}
-            className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
-          />
-        </div>
-
-        {emailExpanded && (
-          <div className="form-reveal">
-            <div className="space-y-5">
-            <div className="space-y-2">
-              <Label htmlFor="password" className="text-foreground">password</Label>
-              <Input
-                id="password"
-                {...fieldProps('password')}
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  // Password path chosen — retire the pending autofill ceremony.
-                  cancelConditionalPasskey();
-                }}
-                required
-                disabled={loading}
-                className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
-            <FormError message={formError?.message} id="login-form-error" />
-            <Button type="submit" className="w-full text-background font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" disabled={loading}>
-              {loading ? 'signing in...' : 'sign in with email'}
-            </Button>
-            </div>
+      {(!viewerApp || emailFormOpen) && (
+        <form onSubmit={handleEmailLogin} className="space-y-5" noValidate>
+          <div className="space-y-2">
+            <Label htmlFor="email" className="text-foreground">email</Label>
+            <Input
+              id="email"
+              {...fieldProps('email')}
+              type="email"
+              // Trailing "webauthn" token is what lists passkeys in this field's autofill
+              // dropdown; "username" keeps ordinary autofill and password managers working.
+              // owlette swoop drops it: passkeys fail in its webview.
+              autoComplete={viewerApp ? 'username' : 'username webauthn'}
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              // Focus (not click) so keyboard tabbing expands it, and so e2e fill() — which
+              // focuses first, email before password — opens the form for the suite.
+              onFocus={() => setEmailFormOpen(true)}
+              // in owlette swoop the field mounts on its link's click, so the keyboard follows it
+              autoFocus={viewerApp}
+              required
+              disabled={loading}
+              className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
+            />
           </div>
-        )}
-      </form>
+
+          {emailExpanded && (
+            <div className="form-reveal">
+              <div className="space-y-5">
+              <div className="space-y-2">
+                <Label htmlFor="password" className="text-foreground">password</Label>
+                <Input
+                  id="password"
+                  {...fieldProps('password')}
+                  type="password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    // Password path chosen — retire the pending autofill ceremony.
+                    cancelConditionalPasskey();
+                  }}
+                  required
+                  disabled={loading}
+                  className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
+                />
+              </div>
+              <FormError message={formError?.message} id="login-form-error" />
+              <Button type="submit" className="w-full text-background font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" disabled={loading}>
+                {loading ? 'signing in...' : 'sign in with email'}
+              </Button>
+              {/* the browser's footer carries it; owlette swoop's shows only once asked for */}
+              {viewerApp && (
+                <p className="text-center text-sm">
+                  <a href="/forgot-password" className={authFooterLinkClass}>
+                    forgot password?
+                  </a>
+                </p>
+              )}
+              </div>
+            </div>
+          )}
+        </form>
+      )}
     </AuthShell>
   );
 }
 
 export default function LoginPage() {
+  const inViewerApp = useViewerAppPlatform() !== null;
   return (
-    <>
+    // in owlette swoop the whole page is the window's drag surface: a press on
+    // anything that is not a control moves the window
+    <div {...(inViewerApp ? dragRegion : {})}>
       {/* owlette swoop's window has no frame: its controls, and nothing in a browser */}
       <SwoopWindowStrip />
       {/* Same shell as the loaded form, so the card doesn't change shape when the
           suspense boundary resolves. */}
-      <Suspense fallback={<AuthShell loading />}>
+      <Suspense fallback={<AuthShell loading {...(inViewerApp ? SWOOP_SHELL : {})} />}>
         <LoginForm />
       </Suspense>
-    </>
+    </div>
   );
 }

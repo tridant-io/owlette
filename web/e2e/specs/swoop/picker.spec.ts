@@ -67,7 +67,9 @@ test.beforeAll(async () => {
   await grantMembership(SITE_ID, mfaViewer.uid, 'admin');
 });
 
-async function fillLogin(page: Page, user: TestUser): Promise<void> {
+async function fillLogin(page: Page, user: TestUser, { inApp = false } = {}): Promise<void> {
+  // inside owlette swoop the email form waits behind its link
+  if (inApp) await page.getByRole('button', { name: 'or use your email and password' }).click();
   await page.getByLabel(/email/i).fill(user.email);
   await page.getByLabel(/password/i).first().fill(user.password);
   await page.getByRole('button', { name: /sign in with email/i }).click();
@@ -154,7 +156,7 @@ test.describe('inside owlette swoop', () => {
 
   test('the picker is home: no way back to the dashboard, no corner button', async ({ page }) => {
     await page.goto('/login?redirect=%2Fswoop');
-    await fillLogin(page, viewer);
+    await fillLogin(page, viewer, { inApp: true });
     await expect(page).toHaveURL(/\/swoop$/, { timeout: 20_000 });
 
     await expect(page.getByTestId(`swoop-picker-machine-${ONLINE_ID}`)).toBeEnabled();
@@ -167,7 +169,7 @@ test.describe('inside owlette swoop', () => {
     context,
   }) => {
     await page.goto('/login?redirect=%2Fswoop');
-    await fillLogin(page, viewer);
+    await fillLogin(page, viewer, { inApp: true });
     await expect(page).toHaveURL(/\/swoop$/, { timeout: 20_000 });
 
     const popups: Page[] = [];
@@ -195,7 +197,7 @@ test.describe('inside owlette swoop', () => {
 
   test('a right-click or shift+enter opens the session in a new window', async ({ page, context }) => {
     await page.goto('/login?redirect=%2Fswoop');
-    await fillLogin(page, viewer);
+    await fillLogin(page, viewer, { inApp: true });
     await expect(page).toHaveURL(/\/swoop$/, { timeout: 20_000 });
 
     const online = page.getByTestId(`swoop-picker-machine-${ONLINE_ID}`);

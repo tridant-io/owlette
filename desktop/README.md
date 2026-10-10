@@ -203,7 +203,11 @@ maximizes). When the session bar runs down a side, the controls move to a slim
 strip across the top of the window holding nothing else: the controls and a
 160 px drag handle beside them at the right (on macOS only the traffic lights'
 room), with presses everywhere else going through to the picture. Fullscreen
-hides all of it.
+hides all of it. The login page is the app's own: the whole page is the drag
+surface, under an "owlette | swoop" lockup with no tagline, one "sign in with
+your browser" button, and the email form behind an "or use your email and
+password" link. The site footer (docs, privacy, terms) shows on no page in the
+app.
 
 The page reaches its window through `window.__TAURI__` (`app.withGlobalTauri`,
 so owlette.app needs no Tauri package), and `capabilities/owlette-pages.json`
