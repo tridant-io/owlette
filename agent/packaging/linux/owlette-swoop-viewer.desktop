@@ -1,0 +1,12 @@
+# owlette swoop, the viewer app, in the app menu and as the handler of
+# owlette-swoop:// links. build.sh ships this in place of the Tauri bundler's
+# launcher: one menu entry, wearing the desktop app's icon (hicolor
+# owlette-desktop, from the desktop app's deb).
+[Desktop Entry]
+Type=Application
+Name=owlette swoop
+Exec=owlette-swoop-viewer %u
+Icon=owlette-desktop
+Terminal=false
+Categories=Utility;
+MimeType=x-scheme-handler/owlette-swoop;

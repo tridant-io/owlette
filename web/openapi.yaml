@@ -8042,6 +8042,135 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
+  /api/sites/{siteId}/machines/{machineId}/swoop/step-up:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+    get:
+      operationId: readSwoopStepUpWindow
+      tags: [Machines]
+      summary: read your step-up window on a machine
+      description: |
+        Whether the caller's step-up window on this machine is open for the
+        sign-in asking: the answer a control `POST …/swoop/sessions` made now
+        would act on. `sessionPassedCeremony: false` means this sign-in skipped
+        the second factor (a remembered device), so it never reads a window,
+        however recent; it has to send `mfaProof` itself. Reads only: it opens,
+        extends and writes nothing, and takes no rate-limit token, because
+        owlette swoop polls it every 3 s while the operator passes the step-up
+        in a browser.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: The window, as this sign-in sees it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      open:
+                        type: boolean
+                        description: A control session started now needs no `mfaProof`.
+                      sessionPassedCeremony:
+                        type: boolean
+                        description: This sign-in itself passed a second factor, so it can read a window at all.
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code`: `scope_insufficient`, or `api_key_not_permitted` (an api key
+            called this route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404':
+          description: The site does not exist, or the caller has no access to it.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '500': { $ref: '#/components/responses/Problem500' }
+    post:
+      operationId: openSwoopStepUpWindow
+      tags: [Machines]
+      summary: open your step-up window on a machine
+      description: |
+        Runs the step-up on its own: a live second factor in `mfaProof` opens
+        the caller's 12-hour control window on this machine, as sending it with
+        a control `POST …/swoop/sessions` would, and starts no session. The
+        owlette swoop desktop app sends the operator to a browser page that
+        posts here, where any passkey works, and polls the `GET` above.
+
+        The proof is spent only when the missing window is the one thing
+        between the caller and control, so swoop policy refusals come first.
+        Rate-limited with control sessions: MACHINE_REMOTE_CONTROL, 10/min.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mfaProof]
+              properties:
+                mfaProof:
+                  type: object
+                  description: |
+                    Either `{ code, isBackupCode? }` (6-digit TOTP, or a backup code with
+                    `isBackupCode: true`) or `{ credential, challengeId }` (a WebAuthn assertion).
+                  properties:
+                    code: { type: string }
+                    isBackupCode: { type: boolean }
+                    credential: { type: object, additionalProperties: true }
+                    challengeId: { type: string }
+      responses:
+        '204':
+          description: Window opened.
+        '400':
+          description: |
+            `validation_failed` (bad JSON). A missing or rejected `mfaProof` answers plain
+            `{ error, code }` JSON with `code` one of mfa_proof_required, invalid_totp_code,
+            invalid_passkey_proof, totp_not_enrolled, invalid_mfa_proof, challenge_not_found,
+            invalid_challenge_type, passkey_not_found, assertion_failed.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '401':
+          description: |
+            Unauthenticated, or `code: step_up_required` when the account has no passkey or
+            authenticator app enrolled.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `forbidden` (the
+            capability is missing), `api_key_not_permitted` (an api key called
+            this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch`. A passkey challenge
+            issued to someone else answers plain `{ error, code:
+            challenge_user_mismatch }` JSON.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404':
+          description: The site does not exist, or the caller has no access to it.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
   /api/sites/{siteId}/swoop/sessions:
     parameters:
       - $ref: '#/components/parameters/SiteIdPath'

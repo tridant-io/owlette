@@ -41,7 +41,9 @@
     ".next-e2e/dev/types/**/*.ts",
     "**/*.mts",
     ".next-preview/types/**/*.ts",
-    ".next-preview/dev/types/**/*.ts"
+    ".next-preview/dev/types/**/*.ts",
+    ".next-docs-audit/types/**/*.ts",
+    ".next-docs-audit/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

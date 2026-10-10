@@ -57,7 +57,7 @@ The Rust supervisor (`agent/host`, `owlette-host.exe`) that is the Windows servi
 _Avoid_: NSSM, service wrapper, "the host" on its own
 
 **Desktop app**:
-The Tauri app in `desktop/` on every machine: the local window and the tray (menu bar) icon for processes, status and joining a site. It runs in the signed-in user's session as a separate process from the agent.
+The Tauri app in `desktop/` on every machine: the local window and the tray (menu bar) icon for processes, status and joining a site. It runs in the signed-in user's session as a separate process from the agent. An operator workstation without the agent has no desktop app and may run only owlette swoop.
 _Avoid_: tray app, GUI, agent window, the python interface (gone since 3.0.0)
 
 **Streamer**:
@@ -160,7 +160,7 @@ _Avoid_: redeploy, refresh
 ### swoop
 
 **swoop**:
-owlette's remote desktop: a live, controllable view of a machine's screen in a browser tab, streamed peer-to-peer from the streamer. It is off until a site turns it on.
+owlette's remote desktop: a live, controllable view of a machine's screen in a browser tab or an owlette swoop window, streamed peer-to-peer from the streamer. It is off until a site turns it on.
 _Avoid_: remote control, KVM, VNC, live view
 
 **Live view**:
@@ -168,19 +168,23 @@ The older screenshot slideshow that swoop replaces on machines that can stream. 
 _Avoid_: using it as a synonym for swoop
 
 **Session**:
-One browser tab's swoop connection to one machine, with its own ID and audit trail. It lasts as long as the tab and ends on end, kill or a refused lease.
+One viewer's swoop connection to one machine, from a browser tab or an owlette swoop window, with its own ID and audit trail. It lasts as long as that tab or window and ends on end, kill or a refused lease.
 _Avoid_: stream, connection, call
 
 **Viewer**:
-The browser side of a session, either watching (site membership) or in control (site owner or admin, plus a step-up).
+The side of a session that watches (site membership) or is in control (site owner or admin, plus a step-up), in a browser tab or an owlette swoop window.
 _Avoid_: client, guest
 
+**owlette swoop**:
+The desktop viewer app (`desktop/viewer`, binary `owlette-swoop-viewer`, macOS bundle `owlette swoop.app`): owlette.app's own swoop viewer in native windows, with fullscreen, OS-shortcut capture and `owlette-swoop://` links on top. Every agent installer carries it, and it needs no agent, so an operator workstation can run it alone.
+_Avoid_: viewer client, native viewer, sidecar (that is the bundled macOS streamer)
+
 **Lease**:
-The 5-minute grant a viewer renews while its tab is open. Authorization is re-checked at every renewal.
+The 5-minute grant a viewer renews while its tab or window is open. Authorization is re-checked at every renewal.
 _Avoid_: token, timeout
 
 **Kill**:
-A site owner's or admin's stop of every swoop session on a machine. It also closes every step-up window on that machine.
+A site owner's or admin's stop of every swoop session on a machine. It also closes every step-up window on that machine. The desktop app's tray item "kill all swoop sessions on this machine" (Windows) is a local stop any user at the machine can click: it ends the sessions through the streamer but closes no step-up window.
 _Avoid_: end (which only leaves your own session), disconnect
 
 **Doorbell**:

@@ -11,6 +11,30 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — owlette swoop, the desktop app for swoop
+
+owlette swoop shows the swoop viewer in a window of its own instead of a
+browser tab: native fullscreen (hold esc for two seconds to leave it), the
+session bar as the window's title bar, and a machine picker at `/swoop` laid
+out as a grid of cards. A session opens in the same window; right-click a card
+for a new one. Closing a window ends its session.
+
+Open it from **swoop** in the owlette app's tray menu or window menu, from the
+monitor icon beside **swoop** in a machine's menu or on a picker card, or with
+`owlette swoop` in the CLI, which uses the browser when the app is not
+installed. Opened from the dashboard, the app arrives signed in as you; started
+on its own, it offers **sign in with your browser**, and taking control offers
+**verify in your browser** for the second factor. On Windows the clipboard
+works both ways without a permission prompt, and while a session captures the
+tray offers **kill all swoop sessions on this machine**. Every agent installer
+now carries the app on Windows, macOS and Linux and registers
+`owlette-swoop://` links; a download for computers without the agent is not
+published yet.
+
+Known gaps: Windows gets h264 only in the app; the machine's cursor stays soft
+until the streamer sends it at full size; cmd+tab cannot be sent from macOS
+(use the keyboard menu); and the app has no pointer lock on macOS. (#325)
+
 ### changed — swoop's switch is easier to find
 
 The site switcher has a **site settings** item that opens the current site's

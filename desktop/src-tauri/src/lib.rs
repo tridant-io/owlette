@@ -1,7 +1,13 @@
 mod agent_cli;
 mod awake;
 mod commands;
+#[cfg(unix)]
+mod jobrunner;
 mod json_io;
+#[cfg(target_os = "macos")]
+mod mac_window;
+#[cfg(target_os = "macos")]
+mod menu_bar_position;
 mod paths;
 mod pid_file;
 mod process_ctl;
@@ -10,16 +16,11 @@ mod seam;
 mod service_ctl;
 mod shell_open;
 mod startup_link;
-mod tray;
-mod watchers;
-#[cfg(unix)]
-mod jobrunner;
-#[cfg(target_os = "macos")]
-mod mac_window;
-#[cfg(target_os = "macos")]
-mod menu_bar_position;
 #[cfg(target_os = "macos")]
 mod tcc;
+mod tray;
+mod viewer_launch;
+mod watchers;
 mod window_state;
 
 use std::sync::Mutex;
@@ -29,7 +30,6 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
 use crate::paths::TRAY_PID_REL;
-
 /// Emitted when one of the seam files the service owns is replaced.
 pub const EVENT_FILE_CHANGED: &str = "owlette://file-changed";
 
@@ -110,6 +110,8 @@ pub fn run() {
       commands::agent_cli_cancel,
       commands::open_owlette_path,
       commands::open_external_url,
+      commands::swoop_viewer_installed,
+      commands::open_swoop_viewer,
       commands::log_event,
       commands::sidebar_width,
       commands::set_sidebar_width,

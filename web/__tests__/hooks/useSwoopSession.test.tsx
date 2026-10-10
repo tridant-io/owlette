@@ -114,6 +114,7 @@ jest.mock('@/lib/swoop/features', () => ({
 }));
 
 import { useSwoopSession, type UseSwoopSession } from '@/hooks/useSwoopSession';
+import { STEP_UP_WINDOW_OPEN } from '@/lib/swoop/stepUp';
 
 const SITE = 'site-1';
 const MACHINE = 'machine-1';
@@ -304,6 +305,44 @@ describe('useSwoopSession — how a session ends', () => {
     act(() => wired.signaling!.onStatus!('open'));
     expect(wired.signalOpen).toEqual([false, true]);
   });
+
+  describe('owlette swoop closing the window', () => {
+    let ua: jest.SpyInstance;
+    const close = () =>
+      act(() => {
+        window.dispatchEvent(new Event('owlette:close'));
+      });
+
+    beforeEach(() => {
+      ua = jest.spyOn(navigator, 'userAgent', 'get');
+    });
+    afterEach(() => ua.mockRestore());
+
+    it('ends the session in the app, with one DELETE saying closed', async () => {
+      ua.mockReturnValue('Mozilla/5.0 owlette-swoop-viewer/0.0.0');
+      const view = await open();
+
+      close();
+      expect(swoop.state).toBe('ended');
+      expect(swoop.retryIn).toBeNull();
+      view.unmount();
+      await advance(60_000);
+
+      expect(deletes()).toHaveLength(1);
+      expect(JSON.parse(String(deletes()[0][1]?.body))).toEqual({ endReason: 'closed', viewerReason: 'closed' });
+    });
+
+    it('does nothing in a browser', async () => {
+      ua.mockReturnValue('Mozilla/5.0 Chrome/140.0');
+      await open();
+
+      close();
+      expect(swoop.state).not.toBe('ended');
+      await advance(60_000);
+
+      expect(deletes()).toHaveLength(0);
+    });
+  });
 });
 
 describe('useSwoopSession — control across a reload of the tab', () => {
@@ -337,6 +376,47 @@ describe('useSwoopSession — control across a reload of the tab', () => {
 
     await open();
     expect(mintBody(1).continuity).toBeUndefined();
+  });
+});
+
+describe('useSwoopSession — the step-up answer', () => {
+  const mintBody = (index: number) => JSON.parse(String(mints()[index][1]?.body)) as { mfaProof?: unknown };
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    mint = { status: 401, body: { code: 'step_up_required', detail: 'confirm your identity to take control.' } };
+  });
+
+  it('a proof rides on exactly one retry of the create', async () => {
+    await open();
+    expect(swoop.stepUp.required).toBe(true);
+
+    mint = { status: 201, body: { data: GRANT } };
+    await act(async () => {
+      await swoop.stepUp.submitProof({ code: '123456' });
+    });
+    await flush();
+
+    expect(mints()).toHaveLength(2);
+    expect(mintBody(1).mfaProof).toEqual({ code: '123456' });
+    expect(swoop.stepUp.required).toBe(false);
+    expect(wired.session).not.toBeNull();
+  });
+
+  it('a window opened in the browser retries the create once, with no proof in it', async () => {
+    await open();
+    expect(swoop.stepUp.required).toBe(true);
+
+    mint = { status: 201, body: { data: GRANT } };
+    await act(async () => {
+      await swoop.stepUp.submitProof(STEP_UP_WINDOW_OPEN);
+    });
+    await flush();
+
+    expect(mints()).toHaveLength(2);
+    expect(mintBody(1)).not.toHaveProperty('mfaProof');
+    expect(swoop.stepUp.required).toBe(false);
+    expect(wired.session).not.toBeNull();
   });
 });
 

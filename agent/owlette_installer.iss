@@ -73,6 +73,10 @@
 ; appears. Must stay byte-identical to `identifier` in desktop/src-tauri/
 ; tauri.conf.json and APP_USER_MODEL_ID in desktop/src-tauri/src/startup_link.rs.
 #define MyAppUserModelID "app.owlette.desktop"
+; owlette swoop, the viewer app (desktop/viewer), beside the desktop app: the
+; desktop app's tray and menu look for it there (viewer_launch.rs), and the
+; owlette-swoop:// registration and its shortcut below point at it.
+#define SwoopViewerExePath "{app}\app\owlette-swoop-viewer.exe"
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application.
@@ -132,7 +136,9 @@ Source: "build\installer_package\agent\*"; DestDir: "{app}\agent"; Flags: ignore
 
 ; Desktop app (Tauri) — the tray icon, configuration window and reboot prompt.
 ; shared_utils.get_desktop_exe_path() resolves exactly this path, so the
-; directory name is a contract with the service, not a preference.
+; directory name is a contract with the service, not a preference. The same
+; line carries owlette-swoop-viewer.exe, owlette swoop, which both build scripts
+; copy into app\ and refuse to build without.
 Source: "build\installer_package\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; WebView2 Evergreen bootstrapper. Never installed — `dontcopy` keeps it out of
@@ -378,6 +384,24 @@ Type: filesandordirs; Name: "{app}\python\Lib\site-packages\WinTmp-1.2.0.dist-in
 ; {app}\python\ itself, outside site-packages.
 Type: filesandordirs; Name: "{app}\python\Lib\site-packages"
 
+[Registry]
+; owlette-swoop:// opens owlette swoop: the website's "open in the owlette swoop
+; desktop app" hands it a session this way. The same four values
+; tauri-plugin-deep-link writes for a debug build, written machine-wide: HKA is
+; HKLM\Software\Classes in this administrative install, the machine half of
+; HKCR (Inno's documented spelling of an HKCR key). uninsdeletekey on the root
+; removes the whole tree at uninstall.
+;
+; A debug build of the viewer registers the same scheme in HKCU for itself,
+; pointing at its build tree, and HKCU shadows HKLM inside HKCR: on a dev box
+; that ran one, links keep opening the debug exe until
+; `reg delete HKCU\Software\Classes\owlette-swoop /f` clears it. The installer
+; never deletes HKCU keys; they are per user, not this installer's.
+Root: HKA; Subkey: "Software\Classes\owlette-swoop"; ValueType: string; ValueName: ""; ValueData: "URL:app.owlette.swoop-viewer protocol"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\owlette-swoop"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\owlette-swoop\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{#SwoopViewerExePath},0"
+Root: HKA; Subkey: "Software\Classes\owlette-swoop\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{#SwoopViewerExePath}"" ""%1"""
+
 [Icons]
 ; Start Menu shortcuts. Exactly ONE Start-menu entry registers the
 ; AppUserModelID — and every shortcut that does is named "Owlette".
@@ -397,6 +421,9 @@ Type: filesandordirs; Name: "{app}\python\Lib\site-packages"
 ; that lifecycle. Upgrades delete the retired "Owlette Configuration" lnk via
 ; [InstallDelete] above.
 Name: "{group}\Owlette"; Filename: "{#MyAppExePath}"; IconFilename: "{app}\agent\icons\normal.ico"; WorkingDir: "{app}\app"; AppUserModelID: "{#MyAppUserModelID}"
+; owlette swoop, the viewer app. A plain launcher: it raises no toasts, so it
+; carries no AppUserModelID of its own, and never the desktop app's (above).
+Name: "{group}\owlette swoop"; Filename: "{#SwoopViewerExePath}"; IconFilename: "{app}\agent\icons\normal.ico"; WorkingDir: "{app}\app"
 Name: "{group}\View Logs"; Filename: "{commonappdata}\Owlette\logs"; IconFilename: "{sys}\shell32.dll"; IconIndex: 4
 Name: "{group}\Edit Configuration"; Filename: "{commonappdata}\Owlette\config\config.json"; IconFilename: "{sys}\shell32.dll"; IconIndex: 70
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
@@ -459,11 +486,12 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""Remo
 Filename: "{#MyAppExePath}"; WorkingDir: "{app}\app"; Description: "open owlette"; Flags: postinstall skipifsilent nowait runasoriginaluser; Check: ShouldOfferOpenApp
 
 [UninstallRun]
-; Close the desktop app first — it lives in {app}\app and would otherwise hold
-; its own image open while CurUninstallStepChanged tries to DelTree that folder.
-; Scoped by exe path (not a bare /IM name kill) for the same reason the install
-; path is: never touch a same-named process outside this installation.
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Get-Process -Name owlette-desktop -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '*\Owlette\*' } | Stop-Process -Force -ErrorAction SilentlyContinue"""; Flags: runhidden waituntilterminated
+; Close the desktop app and owlette swoop first — both live in {app}\app and
+; would otherwise hold their own images open while CurUninstallStepChanged tries
+; to DelTree that folder. Scoped by exe path (not a bare /IM name kill) for the
+; same reason the install path is: never touch a same-named process outside
+; this installation.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Get-Process -Name owlette-desktop, owlette-swoop-viewer -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '*\Owlette\*' } | Stop-Process -Force -ErrorAction SilentlyContinue"""; Flags: runhidden waituntilterminated
 ; Stop and deregister the Windows service before uninstalling. One call: the
 ; host waits for the service to reach STOPPED (which is what lets the agent
 ; flush `online: false` and log agent_stopped) and only then removes the
@@ -1393,14 +1421,17 @@ begin
   // miss here costs a "DeleteFile failed: code 5" mid-copy. Kill it explicitly,
   // scoped by exe path so a same-named process elsewhere is never touched.
   // The service is already stopped at this point, so nothing relaunches it.
-  Log('Killing the Owlette desktop app...');
+  // owlette swoop (owlette-swoop-viewer.exe) lives in {app}\app too and holds
+  // its image the same way; an upgrade closes its windows, and any session in
+  // them ends.
+  Log('Killing the Owlette desktop app and owlette swoop...');
   Exec('powershell.exe',
     '-NoProfile -ExecutionPolicy Bypass -Command ' +
-    '"Get-Process -Name owlette-desktop -ErrorAction SilentlyContinue | ' +
+    '"Get-Process -Name owlette-desktop, owlette-swoop-viewer -ErrorAction SilentlyContinue | ' +
     'Where-Object { $_.Path -like ''*\Owlette\*'' } | ' +
     'Stop-Process -Force -ErrorAction SilentlyContinue"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Log('Desktop app kill returned: ' + IntToStr(ResultCode));
+  Log('Desktop app and owlette swoop kill returned: ' + IntToStr(ResultCode));
 
   Log('Killing Owlette Python processes by exe path...');
   Exec('powershell.exe',

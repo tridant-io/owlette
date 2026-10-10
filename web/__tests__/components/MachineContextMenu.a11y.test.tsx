@@ -47,7 +47,9 @@ jest.mock('@/lib/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
 }));
 
-function renderMenu(props: { swoopCapable?: boolean; swoopViewers?: number } = {}) {
+function renderMenu(
+  props: { swoopCapable?: boolean; swoopViewers?: number; onSwoop?: () => void; onSwoopApp?: () => void } = {},
+) {
   render(
     <TooltipProvider>
       <MachineContextMenu
@@ -88,6 +90,28 @@ describe('MachineContextMenu — accessible names and keyboard reach', () => {
 
     await user.keyboard('{Enter}');
     expect(await screen.findByText('restart schedule dialog')).toBeInTheDocument();
+  });
+
+  // the swoop row's desktop-app half is a menu item too, so arrow keys stop on it.
+  it('reaches the desktop-app half by arrow key and opens the app with enter', async () => {
+    const user = userEvent.setup();
+    const onSwoop = jest.fn();
+    const onSwoopApp = jest.fn();
+    renderMenu({ swoopCapable: true, onSwoop, onSwoopApp });
+
+    await user.tab();
+    await user.keyboard('{Enter}');
+    await screen.findByRole('menu');
+
+    const appItem = screen.getByRole('menuitem', { name: 'open in the owlette swoop desktop app' });
+    for (let i = 0; i < 8 && document.activeElement !== appItem; i++) {
+      await user.keyboard('{ArrowDown}');
+    }
+    expect(appItem).toHaveFocus();
+
+    await user.keyboard('{Enter}');
+    expect(onSwoopApp).toHaveBeenCalledTimes(1);
+    expect(onSwoop).not.toHaveBeenCalled();
   });
 
   // the trigger pill is decoration: the count is spoken once, on the swoop row.

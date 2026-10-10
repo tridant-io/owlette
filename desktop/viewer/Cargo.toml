@@ -1,0 +1,53 @@
+[package]
+name = "owlette-swoop-viewer"
+version = "4.1.8"
+description = "owlette swoop, the app that hosts owlette.app's swoop viewer in native windows"
+authors = ["Tridant Inc."]
+license = "FSL-1.1-Apache-2.0"
+repository = "https://github.com/tridant-io/owlette"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+# a lib named like the bin collides on windows (the .pdb), hence the suffix
+name = "owlette_swoop_viewer_lib"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+# the same tauri as desktop/src-tauri; this app is a window manager for
+# owlette.app and has no tray, so none of the desktop app's features
+[dependencies]
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-single-instance = "2"
+# receives owlette-swoop:// links (owner ok 2026-10-09): the registry keys,
+# CFBundleURLTypes and .desktop MimeType it writes, plus macOS's apple-event
+# delivery, which argv cannot replace
+tauri-plugin-deep-link = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+
+# ShellExecuteW for the browser handoff, as the desktop app does it: explorer.exe
+# opens file explorer for any url with a query. already in the lock file
+# through tauri
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# the clipboard grant (permissions_windows.rs) answers webview2's permission
+# request. no new package: the lock file already has it through tauri and wry,
+# at this version and, as they take it, with no features
+webview2-com = "0.39"
+
+# native keys on macos (mac.rs, keys_macos.rs): the presentation options that
+# hide the dock and stop cmd+tab while a session is fullscreen, the window
+# notifications that say when, the local key monitor, and the webview a key
+# goes to. all five are already in the lock file through tauri; the features
+# name what this crate calls, and objc2's `exception` turns a refused
+# presentation option into a log line instead of an abort
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = { version = "0.6", features = ["exception"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["block2", "NSApplication", "NSEvent", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["block2", "NSNotification", "NSOperation", "NSString", "NSURL"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["block2", "objc2-app-kit", "WKWebView"] }

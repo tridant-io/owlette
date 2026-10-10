@@ -78,7 +78,7 @@ firestore/
 |-- agent_refresh_tokens/{tokenHash}               rules
 |-- agent_tokens/{tokenId}                         rules
 |-- device_codes/{phrase}                          rules
-`-- cli_device_codes, idempotency_cache, pending_*_alerts, ... (see platform)
+`-- app_links, cli_device_codes, idempotency_cache, pending_*_alerts, ... (see platform)
 ```
 
 ---
@@ -685,6 +685,7 @@ these are server only unless noted.
 | `agent_tokens/{tokenId}` | legacy registration codes, still written by the installer-generation and setup-token routes. |
 | `device_codes/{phrase}` | a pairing phrase's state, alive for 10 minutes and deleted once the agent consumes it: `deviceCodeHash`, `wrapVersion`, `machineId`, `version`, `status`, `createdAt`, `expiresAt`, `siteId`, `authorizedBy`, `authorizedAt`, `encryptedCredentials`, `preauthorizedIntent`, `deferTokenMint`. see [authentication](/docs/reference/authentication). |
 | `cli_device_codes/{phrase}` | the CLI's sign-in phrase: `deviceCodeHash`, `status`, `createdAt`, `expiresAt` (10 minutes), `authorizedBy`, `authorizedAt`, `siteId`, `keyId`, `encryptedCredentials`. |
+| `app_links/{codeHash}` | a one-time code that signs in [owlette swoop](/docs/reference/authentication#signing-in-owlette-swoop), keyed by the code's SHA-256: `status` (`pending`, `approved` or `used`), `createdAt`, `expiresAt` (60 seconds for a code from the dashboard, 10 minutes for one the app started), `secretHash` (an app-started code only), and once approved the approver's `uid` and `mfaSatisfiedBy`, then `usedAt`. an expired record is refused when read, not swept. |
 | `mfa_pending/{uid}` | a TOTP setup secret while enrollment is in progress. |
 | `webauthn_challenges/{challengeId}` | single-use passkey challenges. |
 | `idempotency_cache/{hash}` | stored responses for `Idempotency-Key` requests, 24 hours: `userId`, `environment`, `key`, `bodyHash`, `method`, `path`, `query`, `status`, `headers`, `body`, `expiresAt`, `createdAt`. swept daily. |

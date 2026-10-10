@@ -1,4 +1,5 @@
 import {
+  BAR_POSITION_BOOT_SCRIPT,
   BAR_POSITION_SCRIPT,
   applyBarPosition,
   autoPosition,
@@ -151,5 +152,28 @@ describe('auto', () => {
 
     setPictureAspect(1024, 768);
     expect(mark()).toBe('left');
+  });
+});
+
+describe('the root layout boot script', () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.swoopBar;
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('marks a session page like the inline script does', () => {
+    window.history.replaceState({}, '', '/swoop/site-a/kiosk.lobby');
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 700 });
+    new Function(BAR_POSITION_BOOT_SCRIPT)();
+    expect(document.documentElement.dataset.swoopBar).toBe('left');
+  });
+
+  it('leaves every other page alone', () => {
+    window.history.replaceState({}, '', '/dashboard');
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 700 });
+    new Function(BAR_POSITION_BOOT_SCRIPT)();
+    expect(document.documentElement.dataset.swoopBar).toBeUndefined();
   });
 });

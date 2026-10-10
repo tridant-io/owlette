@@ -52,6 +52,11 @@ case "$1" in
     for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
       systemctl --user -M "$(id -nu "${uid}")@" restart owlette-desktop.service >/dev/null 2>&1 || true
     done
+    # owlette swoop's launcher claims owlette-swoop://: index it now rather
+    # than when desktop-file-utils' deferred dpkg trigger gets to it.
+    if command -v update-desktop-database >/dev/null 2>&1; then
+      update-desktop-database -q /usr/share/applications || true
+    fi
 
     # --- the pairing preseed ---------------------------------------------
     if [ -f "${DATA_ROOT}/config/pairing.json" ]; then

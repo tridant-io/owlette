@@ -1,7 +1,7 @@
 ---
 title: "platform authentication internals"
 description: "how people and machines prove who they are to owlette: browser sessions, device-code pairing and agent tokens on Windows, macOS and Linux, passkeys, mandatory two-factor, and per-site roles. scoped API keys are covered in API authentication."
-keywords: ["login", "sign in", "cookie", "session secret", "pairing phrase", "device code", "machine token", "refresh token", "tokens.enc", "fido2", "totp", "2fa", "mfa", "remember this device", "rbac", "permissions", "superadmin", "owner"]
+keywords: ["login", "sign in", "cookie", "session secret", "pairing phrase", "device code", "machine token", "refresh token", "tokens.enc", "fido2", "totp", "2fa", "mfa", "remember this device", "rbac", "permissions", "superadmin", "owner", "owlette swoop", "app-link", "sign in with your browser", "verify in your browser"]
 ---
 
 owlette has four ways in: a browser session for people, device-code pairing and refresh tokens for agents, passkeys, and the two-factor check every account must pass. scoped `owk_*` API keys, bearer headers and API error behaviour are in [API authentication](/docs/api/authentication).
@@ -43,6 +43,15 @@ sessions are [iron-session](https://github.com/vvo/iron-session) cookies: sealed
 ### remembering a device
 
 clearing a code at `/verify-2fa` with **trust this device** (`trustDevice: true`) sets a second cookie, `owlette_device_trust`, for 30 days. it holds a random 256-bit token; the server keeps only its SHA-256 hash, in `users/{uid}/trustedDevices/{hash}`. a later sign-in from that browser starts MFA-verified, recorded as `mfaSatisfiedBy: "device-trust"`, so [swoop's](/docs/dashboard/swoop#the-second-factor) step-up, which wants a live ceremony, still asks. dropping to zero factors, and a superadmin reset, revoke every trust record.
+
+### signing in owlette swoop
+
+[owlette swoop](/docs/dashboard/swoop#owlette-swoop), the desktop viewer app, keeps its own cookie jar, apart from the browser's, so it signs in through a browser that already holds a session, with a one-time code. a code is 32 random bytes, stored only as its SHA-256 in `app_links/{hash}` (server only) and never logged.
+
+- **from the dashboard**: `POST /api/auth/app-link`, from a session that has passed two-factor, mints an approved code that lives 60 seconds. it rides the `owlette-swoop://<host>/app-link?code=…&next=/swoop/<site>/<machine>` link, and the app's `/app-link` page exchanges it
+- **from the app**: **sign in with your browser** calls `POST /api/auth/app-link/start`, which returns a pending code, a poll secret and the page `/app-link/approve?code=…`, all good for 10 minutes. the app opens that page in the system browser, where a user whose session has passed two-factor approves it, and polls `POST /api/auth/app-link/exchange` with the code and its secret
+
+an exchange is single use, never names the uid, and answers a Firebase custom token whose `appLinkMfa` claim carries the approver's `mfaSatisfiedBy`. `POST /api/auth/session` honours the claim only for a custom-token sign-in made in the last 5 minutes, so the app's session has the approver's two-factor state. a `device-trust` approver therefore gives a `device-trust` app session, which answers swoop's step-up with a code in the app; any other can use **verify in your browser**, which passes the ceremony at `/swoop/<site>/<machine>/verify` in the system browser and opens the same 12-hour window for that user and machine while the app polls `GET …/swoop/step-up`.
 
 ---
 

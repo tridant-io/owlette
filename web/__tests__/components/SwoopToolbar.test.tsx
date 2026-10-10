@@ -9,10 +9,11 @@
  */
 
 import React from 'react';
-import { render, screen, cleanup } from '@testing-library/react';
+import { act, render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
 import { swoopClipboard } from '@/lib/swoop/clipboard';
+import type { SwoopSession } from '@/lib/swoop/features';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
 
@@ -193,5 +194,127 @@ describe('SwoopToolbar', () => {
     expect(screen.queryByTestId('session-badge')).toBeNull();
     rerender(bar(400_000));
     expect(screen.getByTestId('session-badge')).toHaveTextContent('poor connection');
+  });
+});
+
+/**
+ * owlette swoop's windows have no native frame, so there the bar is the
+ * window's title bar too (task 2.9). where the bar sits is css, read from
+ * `data-swoop-bar`, so these check the classes that pick a layout.
+ */
+describe('SwoopToolbar inside owlette swoop', () => {
+  const app = (os: string) => `Mozilla/5.0 (${os}) AppleWebKit/537.36 owlette-swoop-viewer/4.1.8`;
+  let ua: jest.SpyInstance | undefined;
+  const as = (agent: string) => {
+    ua = jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(agent);
+  };
+  afterEach(() => ua?.mockRestore());
+
+  it('leads back to the picker, not the dashboard', () => {
+    as(app('Windows NT 10.0; Win64; x64'));
+    renderBar('connected');
+    expect(screen.getByRole('link', { name: 'back to machines' })).toHaveAttribute('href', '/swoop');
+    expect(screen.queryByRole('link', { name: 'back to dashboard' })).toBeNull();
+  });
+
+  it('is only the session bar in a browser', () => {
+    renderBar('connected');
+    expect(screen.getByTestId('session-bar')).not.toHaveAttribute('data-tauri-drag-region');
+    expect(screen.queryByTestId('window-controls')).toBeNull();
+    expect(screen.queryByTestId('swoop-window-strip')).toBeNull();
+  });
+
+  it('drags the window and ends in its controls on top; on a side they move to a strip of their own', () => {
+    as(app('Windows NT 10.0; Win64; x64'));
+    renderBar('connected');
+    const bar = screen.getByTestId('session-bar');
+    expect(bar).toHaveAttribute('data-tauri-drag-region', 'deep');
+    // what is on the bar fades in; the bar's own background, the picker header's tone, stays put
+    expect(bar).toHaveClass('[&>*]:motion-safe:animate-in', '[&>*]:fade-in-0');
+    expect(bar).not.toHaveClass('fade-in-0');
+    expect(bar).not.toHaveClass('motion-safe:animate-in');
+
+    const strip = screen.getByTestId('swoop-window-strip');
+    const [onTop, onSide] = screen.getAllByTestId('window-controls');
+    // on top: the bar's last control, gone when the bar is on a side
+    expect(onTop.parentElement).toBe(bar);
+    expect(onTop).toHaveClass('md:bar-side:hidden');
+    // on a side: the strip across the top, and only then
+    expect(strip).toContainElement(onSide);
+    expect(strip).toHaveClass('hidden', 'md:bar-side:flex');
+    // a right bar starts below the strip's controls, which share its edge
+    expect(bar).toHaveClass('md:bar-right:pt-11');
+    expect(bar).not.toHaveClass('md:bar-left:pt-11');
+    // the session's own buttons are still all there
+    expect(screen.getByRole('button', { name: /end session/i })).toBeInTheDocument();
+  });
+
+  it('on macos starts after the traffic lights and draws no window buttons', () => {
+    as(app('Macintosh; Intel Mac OS X 10_15_7'));
+    renderBar('connected');
+    const bar = screen.getByTestId('session-bar');
+    expect(bar).toHaveAttribute('data-tauri-drag-region', 'deep');
+    expect(screen.getByTestId('traffic-lights-inset')).toHaveClass('md:bar-side:hidden');
+    expect(screen.queryByTestId('window-controls')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'close' })).toBeNull();
+    // the lights are on the left, so a left bar starts below them
+    expect(bar).toHaveClass('md:bar-left:pt-11');
+    expect(screen.getByTestId('swoop-window-strip')).toHaveClass('hidden', 'md:bar-side:flex');
+  });
+
+  /** the bar on a live session whose stage goes fullscreen at once. */
+  const renderLive = (requestFullscreen = jest.fn(() => Promise.resolve())) => {
+    const stage = document.createElement('div');
+    stage.requestFullscreen = requestFullscreen;
+    render(
+      <TooltipProvider delayDuration={0}>
+        <SwoopToolbar
+          session={{ ctl: true, stage } as unknown as SwoopSession}
+          machineId="TEC-B4A"
+          state="connected"
+          error={null}
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={false}
+          onToggleStats={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    return { fullscreen: screen.getByRole('button', { name: 'fullscreen with keyboard and mouse capture' }), requestFullscreen };
+  };
+
+  it.each([
+    ['on a mac it says cmd+tab stays', 'Macintosh; Intel Mac OS X 10_15_7', ' cmd+tab stays on this mac.'],
+    ['elsewhere it does not', 'Windows NT 10.0; Win64; x64', ''],
+  ])('with native keys the fullscreen tooltip says the app hands shortcuts over; %s', async (_case, os, tail) => {
+    as(`${app(os)} (keys)`);
+    const { fullscreen } = renderLive();
+    await userEvent.hover(fullscreen);
+    expect((await screen.findByRole('tooltip')).textContent).toBe(
+      `fullscreen: the app hands every shortcut it can to the machine; hold esc to come back.${tail}`,
+    );
+  });
+
+  it('takes no keyboard lock with fullscreen, which a browser with the api does take', async () => {
+    const lock = jest.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'keyboard', { value: { lock, unlock: jest.fn() }, configurable: true });
+    const engage = async () => {
+      const { fullscreen, requestFullscreen } = renderLive();
+      await userEvent.click(fullscreen);
+      await act(async () => {});
+      expect(requestFullscreen).toHaveBeenCalledTimes(1);
+      cleanup();
+    };
+    try {
+      as(`${app('Macintosh; Intel Mac OS X 10_15_7')} (keys)`);
+      await engage();
+      expect(lock).not.toHaveBeenCalled();
+
+      ua?.mockRestore();
+      await engage();
+      expect(lock).toHaveBeenCalledTimes(1);
+    } finally {
+      Reflect.deleteProperty(navigator, 'keyboard');
+    }
   });
 });

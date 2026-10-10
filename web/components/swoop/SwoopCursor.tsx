@@ -20,6 +20,12 @@
  *   machine's is not drawn: pinned to the picture's edge it looked stuck
  *   there while the real pointer moved on unseen.
  *
+ * in the owlette swoop desktop app the shape is overlaid in both cases too:
+ * the window's webview hands a css cursor to the native pointer at bitmap
+ * size, so on a scaled display it came out small and soft. there it is drawn
+ * at the machine's own cursor size, not the picture's scale. it stays soft
+ * until the streamer sends the bitmap at full size instead of 32 px (§5).
+ *
  * a shape above 32 css px is overlaid in both cases: browsers silently ignore
  * large css cursors (PROTOCOL.md §5). the host downscales to 32, so that is
  * the guard, not the path.
@@ -35,6 +41,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { MousePointer2 } from 'lucide-react';
 import { NO_CURSOR, swoopCursor, type SwoopCursorShape } from '@/lib/swoop/cursor';
 import { toPixel, useSwoopPictureBox } from '@/hooks/useSwoopPictureBox';
+import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 
 export interface SwoopCursorProps {
@@ -83,7 +90,9 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
     onPicture,
   );
   const box = useSwoopPictureBox(session);
-  const overlay = locked || (state.shape !== null && !fitsCssCursor(state.shape));
+  // the server renders no app; hydration fills it in, like the cursor store above.
+  const inApp = useViewerAppPlatform() !== null;
+  const overlay = locked || inApp || (state.shape !== null && !fitsCssCursor(state.shape));
 
   // the css half: one pointer, never two. outside pointer lock the local
   // cursor is the machine's shape — or nothing at all while an overlay stands
@@ -113,7 +122,9 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
   const left = toPixel(state.x, box.left, box.width);
   const top = toPixel(state.y, box.top, box.height);
   // css pixels per png pixel: the picture's scale times what the host shrank.
-  const scale = box.scale * (state.shape?.scale ?? 1);
+  // in the app the pointer keeps the machine's own size whatever the picture is scaled to:
+  // an operator expects a cursor the size of theirs, not one a third of it over a shrunk 4k.
+  const scale = (inApp ? 1 : box.scale) * (state.shape?.scale ?? 1);
   if (state.shape) {
     return (
       // eslint-disable-next-line @next/next/no-img-element -- a data url the host just sent, never optimised

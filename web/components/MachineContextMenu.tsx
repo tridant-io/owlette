@@ -24,6 +24,7 @@ import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import RestartScheduleDialog from '@/components/RestartScheduleDialog';
 import type { RestartSchedule } from '@/hooks/useFirestore';
+import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
 
 interface MachineContextMenuProps {
@@ -66,6 +67,12 @@ interface MachineContextMenuProps {
   swoopViewers?: number;
   onSwoop?: () => void;
   /**
+   * opens the machine in the owlette swoop desktop app, signed in as this
+   * browser is: the swoop row's second half. inside the app there is none,
+   * since the row itself opens one of its windows there.
+   */
+  onSwoopApp?: () => void;
+  /**
    * The site has swoop turned off, so a swoop-capable machine falls back to live
    * view. Admins get a way to the switch, and members learn who can flip it,
    * instead of a viewer the server refuses.
@@ -95,6 +102,7 @@ export function MachineContextMenu({
   swoopCapable,
   swoopViewers,
   onSwoop,
+  onSwoopApp,
   swoopOff,
   onSiteSettings,
   onViewDisplays,
@@ -116,6 +124,8 @@ export function MachineContextMenu({
     () => isThisMachine(siteId, machineId),
     () => false,
   );
+  // the server renders no app; hydration fills it in
+  const inApp = useViewerAppPlatform() !== null;
 
   const handleToggleMute = async () => {
     const mutedMachines = isMuted
@@ -390,27 +400,53 @@ export function MachineContextMenu({
                 </DropdownMenuItem>
               ))}
               {swoopCapable && !swoopOff ? (
-                <DropdownMenuItem
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!onThisMachine) onSwoop?.();
-                  }}
-                  disabled={onThisMachine}
-                  data-testid="machine-context-menu-swoop"
-                  className="text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
-                >
-                  <MonitorPlay className="mr-2 h-4 w-4" />
-                  swoop
-                  {onThisMachine && (
-                    <span className="ml-auto text-xs font-normal text-muted-foreground">you&apos;re on this machine</span>
+                // a split row, as restart's: swoop in this browser, or in the desktop app
+                <div className="flex items-stretch gap-1">
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!onThisMachine) onSwoop?.();
+                    }}
+                    disabled={onThisMachine}
+                    data-testid="machine-context-menu-swoop"
+                    className="flex-1 text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
+                  >
+                    <MonitorPlay className="mr-2 h-4 w-4" />
+                    swoop
+                    {onThisMachine && (
+                      <span className="ml-auto text-xs font-normal text-muted-foreground">you&apos;re on this machine</span>
+                    )}
+                    {watching > 0 && (
+                      <Badge className="ml-auto tabular-nums" data-testid="machine-context-menu-swoop-count">
+                        {watching}
+                        <span className="sr-only"> watching</span>
+                      </Badge>
+                    )}
+                  </DropdownMenuItem>
+                  {!inApp && onSwoopApp && !onThisMachine && (
+                    <>
+                      <div aria-hidden className="my-1.5 w-px bg-border" />
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSwoopApp();
+                            }}
+                            aria-label="open in the owlette swoop desktop app"
+                            data-testid="machine-context-menu-swoop-app"
+                            className="w-8 justify-center px-0 text-muted-foreground focus:bg-primary/15 focus:text-primary cursor-pointer"
+                          >
+                            <Monitor className="h-3.5 w-3.5 text-current" />
+                          </DropdownMenuItem>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>open in the owlette swoop desktop app</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </>
                   )}
-                  {watching > 0 && (
-                    <Badge className="ml-auto tabular-nums" data-testid="machine-context-menu-swoop-count">
-                      {watching}
-                      <span className="sr-only"> watching</span>
-                    </Badge>
-                  )}
-                </DropdownMenuItem>
+                </div>
               ) : (
                 <DropdownMenuItem
                   onClick={(e) => {

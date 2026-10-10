@@ -37,6 +37,13 @@ pub const TRAY_PID_REL: &str = "tmp/tray.pid";
 /// mirror onto the machine.
 pub const KEEP_AWAKE_REPORT_REL: &str = "ipc/keep_awake.json";
 
+/// touched by the tray's "kill all swoop sessions on this machine": the service
+/// ends every session the way a dashboard kill does, audited `local_tray`
+/// (`owlette_service._check_tray_swoop_kill`). windows only, like the restart
+/// flag.
+#[cfg(windows)]
+pub const SWOOP_KILL_FLAG_REL: &str = "tmp/swoop_kill.flag";
+
 /// Touched to ask a running service to exit 42 so NSSM restarts it
 /// (`owlette_service.main`, the restart-flag branch). Windows only: off it the
 /// daemon ignores a flag it did not write itself.

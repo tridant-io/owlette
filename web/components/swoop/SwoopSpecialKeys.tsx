@@ -31,6 +31,7 @@ import { isMacViewer, modifierSwap, type ModifierMapping, type ModifierSwap } fr
 import { modifierLegend } from '@/lib/swoop/modifierLegend';
 import { decodeControlMessage } from '@/lib/swoop/protocol';
 import { sendSpecialKey, specialKeysFor } from '@/lib/swoop/specialKeys';
+import { viewerAppHasNativeKeys } from '@/lib/swoop/viewerApp';
 import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
 import { BarTooltip } from '@/components/swoop/BarTooltip';
 
@@ -67,6 +68,7 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
   const [mapping, setMapping] = useState<ModifierMapping>('swap');
   const viewerIsMac = useSyncExternalStore(subscribeNever, isMacViewer, onServer);
   const keyboardLock = useSyncExternalStore(subscribeNever, hasKeyboardLock, onServer);
+  const nativeKeys = useSyncExternalStore(subscribeNever, viewerAppHasNativeKeys, onServer);
   const fullscreen = useSyncExternalStore(subscribeFullscreen, inFullscreen, onServer);
   const swap = modifierSwap(osFamily, viewerIsMac);
   const legend = modifierLegend(osFamily, viewerIsMac, mapping);
@@ -145,7 +147,7 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
         )}
         {!fullscreen && (
           <p className="px-2 py-1.5 text-xs text-muted-foreground" data-testid="super-key-note">
-            {keyboardLock
+            {keyboardLock || nativeKeys
               ? `outside fullscreen your own ${ownSystem} keeps ${superKey}. go fullscreen, or use ${holdItem} below.`
               : `this browser never hands ${superKey} to a page. use ${holdItem} below.`}
           </p>
@@ -168,9 +170,10 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
-        <p className="px-2 py-1.5 text-xs text-muted-foreground">
-          these are the shortcuts your browser or your own windows keeps. in fullscreen most
-          others reach the machine directly.
+        <p className="px-2 py-1.5 text-xs text-muted-foreground" data-testid="special-keys-footer">
+          {nativeKeys
+            ? `in fullscreen the app hands every shortcut it can to the machine; hold esc to come back.${viewerIsMac ? ' cmd+tab stays on this mac.' : ''}`
+            : 'these are the shortcuts your browser or your own windows keeps. in fullscreen most others reach the machine directly.'}
         </p>
         {note && <p className="px-2 pb-1.5 text-xs text-destructive">{note}</p>}
       </DropdownMenuContent>

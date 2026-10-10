@@ -92,6 +92,204 @@ On Windows always pass `--no-bundle`: the Tauri bundler would build its own
 NSIS installer, a second one competing with the agent's. The `nsis` entry in
 `tauri.conf.json`'s bundle targets is never built.
 
+owlette swoop, the viewer app (`viewer/`, below), ships in the same three
+installers, built by the same scripts right after the desktop app (from this
+directory's `node_modules`): on Windows `C:\ProgramData\Owlette\app\owlette-swoop-viewer.exe`
+(`--no-bundle`), with `owlette-swoop://` registered machine-wide and an
+`owlette swoop` Start-menu shortcut, all three removed at uninstall; on macOS
+`/Applications/owlette swoop.app` (`--bundles app`, signed like the desktop
+app; the build fails if its `Info.plist` lacks the `owlette-swoop` URL type);
+on Linux `/usr/bin/owlette-swoop-viewer` from its deb (`--bundles deb`) with
+the agent package's own `owlette-swoop-viewer.desktop` as its launcher and
+`x-scheme-handler/owlette-swoop` handler. Nothing starts it; the user, a link
+or the desktop app's `swoop` entries do. The quick build re-copies
+`viewer/target/release/owlette-swoop-viewer.exe` and does not compile it.
+
+## owlette swoop (the viewer app)
+
+`viewer/` is a second Tauri crate, `owlette-swoop-viewer`: **owlette swoop**, a
+window manager for owlette.app's swoop viewer. It has no frontend of its own.
+Every window loads owlette.app top-level, so the sign-in cookie, the step-up
+window and each day's web deploy carry over; `viewer/dist/index.html` is only
+the placeholder Tauri requires, and it is never shown.
+
+**One window by default; a new one on request.** The main window holds the
+picker (`/swoop`), and a session opens in it by default: a session page
+(`/swoop/<site>/<machine>`) arriving as an argument, an `owlette-swoop://` link
+or a second launch navigates the main window there and raises it (built on the
+session if there is no main window). A session gets a swoop window of its own
+instead when the main window is busy with another session (a live session is
+never cut off silently; a link to the session main is already on only raises
+it), when that session's swoop window is already open (it is raised), or when
+the page asks for one with `window.open` (the picker's right-click "open in new
+window"), which always opens or raises the session's swoop window. Any other
+page goes to the main window as before. An app-link,
+`/app-link?code=<code>&next=/swoop/<site>/<machine>` (the page signs the app
+in, then replaces itself with `next`), counts as its session in all of this; one
+whose `next` is not a relative session path is no session and opens in the main
+window. Each new
+swoop window opens 32 px right and down from the newest one still open; it is
+centred when there is none, when that one is minimised, and again after eight
+steps. There is no tray and no agent coupling: the app reads and writes nothing under the
+owlette data root, so it runs on a workstation without an agent. It shares the
+desktop app's icons and nothing else; the two crates are separate on purpose
+(their own identifiers, WebView2 profiles and instance locks).
+
+```bash
+cd desktop/viewer
+../node_modules/.bin/tauri dev -- -- https://dev.owlette.app/swoop   # debug build, opened on dev
+../node_modules/.bin/tauri build --debug --no-bundle                  # target/debug/owlette-swoop-viewer.exe
+cargo test
+cargo clippy --all-targets -- -D warnings
+```
+
+To review against a local web dev server, run `npm run dev` in `web/`, then the
+debug exe with `http://localhost:3000/swoop`; a debug build registers
+`owlette-swoop://` for itself at every start (on Windows, HKCU pointing at that
+exe), so the website's open-in-app click lands in it.
+
+A Windows debug build opens WebView2's DevTools protocol on `127.0.0.1:9222`,
+so a script can drive the real webview (`chromium.connectOverCDP`); a release
+build never does.
+
+Every agent installer carries it (see "How the app ships" above). On a dev box
+the debug build's HKCU registration shadows the installer's machine-wide one,
+so links keep opening the debug exe until
+`reg delete HKCU\Software\Classes\owlette-swoop /f` clears it. A standalone
+download comes later in the plan.
+
+**One argument, no flags.** The app takes at most one argument: an `https://`
+URL on `owlette.app` or `dev.owlette.app` (also `http://localhost:<port>` in a
+debug build), or an `owlette-swoop://<host>/<path>` link, which it rewrites to
+`https://<host>/<path>` (`http://` for `localhost:<port>` in a debug build) and
+holds to the same host check. Anything else opens
+the picker. The origin of a given URL is remembered in `viewer.json` in the
+per-user app data directory (`%APPDATA%\app.owlette.swoop-viewer` on Windows)
+as `{"origin":"https://dev.owlette.app"}`, and a launch with no argument opens
+`<that origin>/swoop`, or `https://owlette.app/swoop` before anything was
+remembered. A second launch never becomes a second process: the
+single-instance plugin hands its argument to the running one, which opens or
+raises the right window, and a second launch with no argument raises the main
+window as it is. macOS delivers `owlette-swoop://` links as an Apple event
+rather than an argument; `tauri-plugin-deep-link` covers both. A launch
+straight into a session opens only the main window, on that session, no picker. On macOS that
+link arrives just after the app starts, so a launch with no argument there
+waits 500 ms for one before it opens the picker.
+
+**Navigation.** A window may navigate only to the allowed origins,
+`*.firebaseapp.com` and `accounts.google.com` (sign-in). A `window.open` of a
+session (`/swoop/<site>/<machine>`) on an allowed origin opens a swoop window,
+whatever the main window holds; any other target opens in the system browser, http(s) only (the desktop app's
+guard in `shell_open.rs`), through `ShellExecuteW` on Windows as the desktop
+app does: `explorer.exe` opens File Explorer for any URL with a query. The
+pages get one narrow grant of Tauri IPC, the title bar's window commands (below);
+the host-to-page channel is still `eval` only. Every
+webview's user agent ends in `owlette-swoop-viewer/<version>`, which is how
+owlette.app knows it is inside the app, followed by ` (keys)` where the app
+hands OS shortcuts to the page itself (macOS, below).
+
+**No native frame: the page's top bar is the title bar.** Every window, the
+main one and each swoop window, is built without a frame (`windows.rs`):
+`decorations(false)` on Windows and Linux; on macOS the overlay title bar with a
+hidden title, so the traffic lights float over the page's top left (as in the
+desktop app, minus its `mac_window.rs` toolbar, which only buys macOS 26's
+corner radius). owlette.app draws the rest
+(`web/components/swoop/SwoopWindowControls.tsx`): the session bar on top, the
+picker's header and a strip on the login page carry minimize, maximize/restore
+and close at the right on Windows and Linux, or leave the traffic lights 78 px
+on macOS, and are the window's drag surface (`data-tauri-drag-region="deep"`:
+a press on anything in them that is not a control drags, a double press
+maximizes). When the session bar runs down a side, the controls move to a slim
+strip across the top of the window holding nothing else: the controls and a
+160 px drag handle beside them at the right (on macOS only the traffic lights'
+room), with presses everywhere else going through to the picture. Fullscreen
+hides all of it.
+
+The page reaches its window through `window.__TAURI__` (`app.withGlobalTauri`,
+so owlette.app needs no Tauri package), and `capabilities/owlette-pages.json`
+grants exactly that: windows `main` and `swoop-*`, remote URLs
+`https://owlette.app/*` and `https://dev.owlette.app/*` only (`local: false`),
+and permissions for minimize, toggle-maximize, close, start-dragging,
+is-maximized, `internal-toggle-maximize` (what Tauri's drag script calls on a
+double press) and event listen/unlisten (the resize event that swaps the
+maximize and restore icons). Nothing else: no fs, shell, dialog, webview or
+deep-link command, no other window command (measured from the page: `setTitle`,
+`unminimize`, `plugin:deep-link|get_current` and
+`plugin:webview|create_webview_window` come back "not allowed"; fs and shell
+are not even in the app). It is narrow because it is the app's own site
+working this app's windows, and nothing an owlette.app page could be made to do
+with it reaches past that window. A capability file applies to every build, so
+the local web dev server (`http://localhost:*`) gets the same grant at run time
+in a debug build only (`dev_server_capability` in `lib.rs`, built from the same
+file), matching `origin::allowed_origin`, which loads localhost in a debug
+build only. A unit test holds `owlette-pages.json` to that list.
+
+**Close = end.** The first close of any window, the main one included, is
+held: the app dispatches `owlette:close` on the page, which ends the session in
+app mode (the picker and other pages ignore it), and closes the window 300 ms
+later. The page's close button asks for the same close, so it goes through the
+same handshake. Closing the last window quits the app.
+
+**The clipboard without a prompt (Windows).** WebView2 asks before a page
+reads the clipboard ("<origin> wants to see text and images copied to the
+clipboard"), a dialog a native app must not show. Every window answers that
+request itself (`permissions_windows.rs`, attached as `windows.rs` builds the
+window): a clipboard read from an allowed origin (`origin::allowed_origin`, so
+the local dev server in a debug build only) is allowed, and WebView2 keeps the
+grant in the app's profile, after which `navigator.permissions` reports
+`clipboard-read` as granted. Any other origin, and every other permission
+(camera, microphone, location and the rest), keeps WebView2's default. Writes
+need no grant while the window has focus. Each decision is a debug-level line,
+origin only, below the info level the log keeps. Measured over CDP on the
+picker: `writeText` then `readText` round-trips, `read()` returns the item, an
+image `write` reads back as `image/png`, and no dialog opens. macOS and Linux
+are untouched by this.
+
+**Keys on macOS.** While a session page (`/swoop/<site>/<machine>`) is
+fullscreen, the app hides the Dock, turns app switching and Hide off and shows
+the menu bar only on a mouse-over (`mac.rs`), and a local key monitor
+(`keys_macos.rs`) takes the down of Cmd+Q, Cmd+W, Cmd+H and Cmd+M before the
+menu sees it and hands it to the page as `window.__owletteNativeKey(code,
+true)`, with the DOM `code` of the physical key; the page sees Meta go down and
+up as usual, and the key's up arrives as its own DOM `keyup` (a Cmd combo's up
+never passes a local monitor, and WebKit delivers it anyway). The match is on
+the key's character, as the menu's is, so Cmd+Q is the key labelled Q on
+AZERTY too. The app neither quits, closes, hides nor minimizes. Cmd+Tab switches nothing, but with switching off
+macOS swallows it, so it does not reach the machine either; Cmd+Space,
+Ctrl+arrows, Mission Control and the other system hotkeys never reach an app
+and stay with macOS, and the app leaves Ctrl+Cmd+Q (lock screen) to macOS too.
+Every other key goes to the page as before, Cmd+V, C, X and A through the
+default Edit menu included. Leaving fullscreen puts the Dock and switching
+back. The options go on as a window starts entering fullscreen
+(`NSWindowWillEnterFullScreenNotification`): set once it is there, they read
+back as set and Cmd+Tab still switches apps (measured on macOS 26.6). WebKit's
+element fullscreen moves the webview into a window of its own and leaves
+Tauri's window offscreen, so capture follows AppKit's window notifications, not
+Tauri's, and the green button's fullscreen of a session counts the same. The
+app stays a regular one (Dock icon, a place in Cmd+Tab outside a session).
+
+It logs to `owlette-swoop-viewer.log` in the per-user log directory
+(`%LOCALAPPDATA%\app.owlette.swoop-viewer\logs` on Windows), with the desktop
+app's rotation. Each open is a line `opening <origin><path>`, a launch with no
+argument `opening <origin>/swoop (home)`, a `window.open`
+`opening <origin><path> (new window)`, the main window taking a page
+`navigating main to <origin><path>`, a new swoop window
+`new swoop window <label>`, a held close
+`closing <label>: its page ends the session first`, and on macOS a session
+going fullscreen `capturing keys in fullscreen on <origin><path>` and the last
+one leaving `released keys`; no log line carries a URL's query.
+
+**Known gaps.** A lone Alt tap puts the window into its menu mode on Windows
+until native key capture lands. There is no pointer lock on macOS:
+`requestPointerLock()` is refused with `WrongDocumentError`, because WebKit
+asks its UI delegate for pointer lock only through private API; no public
+`WKUIDelegate` method exists for it (macOS 26.6 SDK) and wry 0.57's delegate
+implements none, and the app uses no private API. Cmd+Tab cannot reach the
+machine from macOS (above). Google sign-in needs the browser handoff. Only the
+picker, a session and the login page draw window controls: the second-factor
+page, `/app-link` and any other owlette.app page a link leads to have none yet.
+The frameless Linux windows are unbuilt until CI.
+
 ## Layout
 
 ```
@@ -141,6 +339,7 @@ desktop/
    ├─ src/mac_window.rs  # macOS 26 window shape
    ├─ src/menu_bar_position.rs # macOS: where the menu bar item goes on a first run
    ├─ src/shell_open.rs  # hand a path or URL to the OS opener
+   ├─ src/viewer_launch.rs # find and start owlette swoop, the viewer app, on this machine's dashboard
    ├─ src/commands.rs    # #[tauri::command] adapters (no logic)
    └─ src/lib.rs         # builder, plugins, watcher wiring, exit cleanup
 ```
@@ -152,6 +351,24 @@ closing it hides it again, so the tray icon (the menu bar item on macOS, where
 there is no Dock icon until the window opens), not a window, is what keeps the
 process alive. `src/tray.rs` replaced the old `agent/src/owlette_tray.py` and
 carries the porting notes for the status, icon and toast semantics.
+
+The tray menu is the status rows, then `swoop`, `open owlette`, `restart
+service`, `start on login` and `exit`. While a swoop session is capturing, its
+status row (`swoop: 2 viewers watching`) has `kill all swoop sessions on this
+machine` under it, on Windows: the item touches `tmp/swoop_kill.flag`, and the
+service's local config watcher ends every session within half a second through
+the same kill a dashboard kill without a session id makes, logged with the
+reason `local_tray`. No elevation. macOS and Linux do not offer it yet: there
+the daemon refuses a flag the console user wrote, and the request seam has no
+kill verb. `exit` stops the service and quits; the stop needs administrator
+rights, so it raises one UAC prompt (the one elevation a click may cause). The window's menu (`AppMenu`) is `swoop`,
+the site action, `config`, `logs`, `docs`, `submit bug report`, `appearance`,
+`start on login`, `restart service` and `reload window`. Both `swoop` entries
+open owlette swoop, the viewer app, on `<dashboard>/swoop` (`src/viewer_launch.rs`):
+the dashboard is the one `config.json`'s `firebase.api_base` names, and the app
+is looked for beside this exe on Windows and Linux and at
+`/Applications/owlette swoop.app` on macOS. When it is not there the tray item
+is greyed out and the window's row is hidden.
 
 | Argument | Meaning |
 | --- | --- |

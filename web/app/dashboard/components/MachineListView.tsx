@@ -259,6 +259,7 @@ interface MachineRowProps {
   onScreenshot?: () => void;
   onLiveView?: () => void;
   onSwoop?: () => void;
+  onSwoopApp?: () => void;
   /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
   swoopOff?: boolean;
   onSiteSettings?: () => void;
@@ -295,6 +296,7 @@ export const MachineRow = memo(function MachineRow({
   onScreenshot,
   onLiveView,
   onSwoop,
+  onSwoopApp,
   swoopOff,
   onSiteSettings,
   showLocalClock,
@@ -737,6 +739,7 @@ export const MachineRow = memo(function MachineRow({
               swoopCapable={machine.capabilities?.swoop === 1}
               swoopViewers={machine.swoopViewers}
               onSwoop={onSwoop}
+              onSwoopApp={onSwoopApp}
               swoopOff={swoopOff}
               onSiteSettings={onSiteSettings}
               onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}

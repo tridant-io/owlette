@@ -187,9 +187,11 @@ function canPreserveVerifiedMfa(
  *      prev.mfaSatisfiedBy so the ORIGINAL completion time and the ORIGINAL
  *      way it was earned both survive the every-load re-POST
  *   3. mfaSatisfiedBy==='passkey-uv' → verified, now (one UV ceremony proves
- *      credential + human, so it is both factors)
- *   4. deviceTrusted       → verified, now, satisfied BY the device-trust
- *      cookie — recorded as such, because no ceremony was run
+ *      credential + human, so it is both factors); 'challenge' likewise, which
+ *      only an app-link sign-in passes: the approver's ceremony, carried over
+ *   4. deviceTrusted, or mfaSatisfiedBy==='device-trust' (an app-link approver
+ *      whose session was device-trust-born) → verified, now, satisfied BY the
+ *      device-trust cookie — recorded as such, because no ceremony was run
  *   otherwise              → unverified → /verify-2fa
  *
  * 3 and 4 are only consulted inside the required arm, so neither can flip
@@ -213,9 +215,10 @@ export function resolveMfaOnSessionCreate(input: {
   deviceTrusted: boolean;
   /**
    * SERVER-SIDE ONLY — see the security note on `createSession`'s parameter of
-   * the same name. Set only by a route that itself performed the ceremony.
+   * the same name. Set only by a route that itself performed the ceremony, or
+   * read off a verified app-link custom-token claim.
    */
-  mfaSatisfiedBy?: 'passkey-uv';
+  mfaSatisfiedBy?: MfaSatisfiedBy;
 }): {
   mfaRequired: boolean;
   mfaVerified: boolean;
@@ -240,12 +243,12 @@ export function resolveMfaOnSessionCreate(input: {
 
   // A UV WebAuthn ceremony completed during THIS request satisfies the
   // challenge outright; the verifying route pins requireUserVerification.
-  if (mfaSatisfiedBy === 'passkey-uv') {
+  if (mfaSatisfiedBy === 'passkey-uv' || mfaSatisfiedBy === 'challenge') {
     return { mfaRequired: true, mfaVerified: true, mfaCompletedAt: now, mfaSatisfiedBy };
   }
 
   // Valid device-trust cookie; the grant is itself a fresh verification event.
-  if (deviceTrusted) {
+  if (deviceTrusted || mfaSatisfiedBy === 'device-trust') {
     return {
       mfaRequired: true,
       mfaVerified: true,
@@ -268,7 +271,9 @@ export function resolveMfaOnSessionCreate(input: {
  *   `requireUserVerification: true`. Never derive it from anything the client
  *   controls — it is the one input that can birth a verified session without a
  *   challenge, so a request-sourced value is a one-word MFA bypass. Only two
- *   call sites: app/api/auth/session/route.ts (never passes it) and
+ *   call sites: app/api/auth/session/route.ts (only the `appLinkMfa` claim of
+ *   a verified custom-token ID token, via `appLinkMfaFromIdToken` — our own
+ *   server signed it in app-link exchange) and
  *   app/api/passkeys/authenticate/verify/route.ts (literal, after
  *   `verification.verified`).
  *
@@ -279,7 +284,7 @@ export function resolveMfaOnSessionCreate(input: {
 export async function createSession(
   userId: string,
   durationDays: number = 7,
-  mfaSatisfiedBy?: 'passkey-uv'
+  mfaSatisfiedBy?: MfaSatisfiedBy
 ): Promise<void> {
   const session = await getSession();
 
@@ -299,14 +304,15 @@ export async function createSession(
   // Fresh Firestore truth; never swallow its throw.
   const resolved = await resolveMfaStateForUser(userId);
 
-  // Preserve and passkey-uv are I/O-free, so decide them first and skip the
-  // device-trust round-trip when either already settles it (behaviour-neutral:
-  // `resolveMfaOnSessionCreate` returns before reading `deviceTrusted`).
+  // Preserve and a passed-in satisfier are I/O-free, so decide them first and
+  // skip the device-trust round-trip when either already settles it
+  // (behaviour-neutral: every satisfier lands on a verified branch without
+  // needing `deviceTrusted`).
   let deviceTrusted = false;
   if (
     resolved.mfaRequired &&
     !canPreserveVerifiedMfa(prev, userId, now) &&
-    mfaSatisfiedBy !== 'passkey-uv'
+    !mfaSatisfiedBy
   ) {
     // Fail-CLOSED: any error here means untrusted → challenge, and must never
     // escape createSession.

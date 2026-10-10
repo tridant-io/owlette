@@ -17,7 +17,7 @@ This document covers the complete build-to-installation pipeline on Windows. Rea
 | **Downloads Python** | Yes (3.11.8 embedded) | No (reuses existing) |
 | **Installs pip/deps** | Yes | No |
 | **Copies source** | Yes | Yes |
-| **Builds Rust/desktop** | Yes (desktop app, owlette-host, swoop) | Rebuilds owlette-host when cargo is present; re-copies the desktop and swoop exes |
+| **Builds Rust/desktop** | Yes (desktop app, owlette swoop, owlette-host, swoop) | Rebuilds owlette-host when cargo is present; re-copies the desktop app, owlette swoop and swoop exes |
 | **Compiles installer** | Yes — exits 1 at step 9 if no ISCC is found (the package is still assembled) | Yes (requires Inno Setup) |
 | **When to use** | First build, dependency changes | Source code changes only |
 
@@ -34,7 +34,8 @@ This document covers the complete build-to-installation pipeline on Windows. Rea
 [3/9] Configure python311._pth (import paths for embedded runtime)
 [4/9] Bootstrap pip (get-pip.py)
 [5/9] Install requirements.txt (the slow step) + delete the SDK's bundled claude.exe (242MB)
-[6/9] Build the desktop app (npx tauri build --no-bundle → owlette-desktop.exe)
+[6/9] Build the desktop app (npx tauri build --no-bundle → owlette-desktop.exe), then owlette swoop
+      (desktop\viewer: ..\node_modules\.bin\tauri build --no-bundle --ci → owlette-swoop-viewer.exe)
 [7/9] Build the Rust binaries: owlette-host (agent/host) and the swoop streamer (agent/swoop, --features audio-opus, needs cmake)
 [8/9] Assemble installer_package/ directory
 [9/9] Compile with Inno Setup → Owlette-Installer-v{VERSION}.exe
@@ -55,7 +56,8 @@ build/installer_package/
 │   ├── CLAUDE.md        hoot's on-machine agent constitution
 │   └── VERSION          Version file
 ├── app/
-│   └── owlette-desktop.exe  Tauri desktop app — tray, config window, reboot prompt
+│   ├── owlette-desktop.exe  Tauri desktop app — tray, config window, reboot prompt
+│   └── owlette-swoop-viewer.exe  owlette swoop, the viewer app (owlette-swoop:// handler)
 ├── swoop/
 │   └── owlette-swoop.exe    swoop streamer (shared_utils.get_swoop_exe_path())
 ├── tools/
@@ -96,7 +98,7 @@ import site          # Enables site.main() for pip
 
 ### Installation Steps (in order)
 
-**Before files are copied — `InitializeSetup`**: `net stop OwletteService` (synchronous) and a check that it reached Stopped; kill owlette-host/nssm, owlette-swoop, owlette-desktop and the install's python/pythonw (by path, then by module); stop and delete the legacy `R0python`/`R0pythonw` kernel services; poll up to 30s for `libcrypto-3.dll` to unlock. `[InstallDelete]` then wipes `{app}\python\Lib\site-packages`, the dead `gui.log`/`tray.log` files and retired shortcuts before the copy.
+**Before files are copied — `InitializeSetup`**: `net stop OwletteService` (synchronous) and a check that it reached Stopped; kill owlette-host/nssm, owlette-swoop, owlette-desktop, owlette-swoop-viewer and the install's python/pythonw (by path, then by module); stop and delete the legacy `R0python`/`R0pythonw` kernel services; poll up to 30s for `libcrypto-3.dll` to unlock. `[InstallDelete]` then wipes `{app}\python\Lib\site-packages`, the dead `gui.log`/`tray.log` files and retired shortcuts before the copy.
 
 **Defender exclusion RETRACTION** (`[Run]`, logged to `logs\defender_setup.log`):
 ```powershell
@@ -122,8 +124,10 @@ Remove-MpPreference -ExclusionPath '{app}\python\python.sys'   # ...and the othe
 
 There is no config backup/restore. `[Files]` never touches `config\config.json` or `.tokens.enc`, so an upgrade leaves them in place; the `InitializeSetup` stop/kill/unlock sequence above is what makes overwriting the runtime safe.
 
+**`[Registry]`** writes one key, `owlette-swoop://` → `"{app}\app\owlette-swoop-viewer.exe" "%1"`, under `HKA\Software\Classes` (HKLM in this admin install; `uninsdeletekey`, so the uninstaller removes it with the files and shortcuts it recorded).
+
 ### Uninstallation Steps (`[UninstallRun]`)
-1. Kill the install's `owlette-desktop` (matched by path)
+1. Kill the install's `owlette-desktop` and `owlette-swoop-viewer` (matched by path)
 2. `owlette-host uninstall` (stops the service, waits for STOPPED so the agent
    can flush `online: false`, then deregisters it)
 3. Roll back swoop's firewall group and `SoftwareSASGeneration`
@@ -290,6 +294,7 @@ C:\ProgramData\Owlette\                  Installation + data directory
 ├── agent\icons\                         Application icons
 ├── agent\VERSION                        Version file
 ├── app\owlette-desktop.exe              Tauri desktop app
+├── app\owlette-swoop-viewer.exe         owlette swoop, the viewer app
 ├── swoop\owlette-swoop.exe              swoop streamer
 ├── tools\owlette-host.exe               Windows service host
 ├── scripts\                             Batch launchers
@@ -312,6 +317,7 @@ C:\ProgramData\Owlette\                  Installation + data directory
 
 Start Menu\Programs\Owlette\             Shortcuts
 ├── Owlette                              → app\owlette-desktop.exe (opens the window)   [AppUserModelID]
+├── owlette swoop                        → app\owlette-swoop-viewer.exe (no AppUserModelID)
 ├── View Logs                            → C:\ProgramData\Owlette\logs\
 ├── Edit Configuration                   → config.json
 └── Uninstall Owlette

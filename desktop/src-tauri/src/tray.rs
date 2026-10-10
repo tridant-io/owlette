@@ -23,6 +23,16 @@
 //!   agent is a system launchd job, so the restart is a request the daemon
 //!   carries out ([`crate::seam`]).
 //!
+//! "swoop", above "open owlette", opens owlette swoop, the viewer app, on this
+//! machine's dashboard ([`crate::viewer_launch`]). It is greyed out when the
+//! viewer is not installed, as read when the menu is built: at launch and when
+//! the health or swoop row comes or goes.
+//!
+//! on windows, "kill all swoop sessions on this machine" sits under the swoop
+//! row and exists only while it does, so it is there exactly while a session
+//! is capturing. it touches `tmp/swoop_kill.flag`, which the service reads
+//! within half a second and answers with the dashboard's kill — no elevation.
+//!
 //! Every menu action runs on its own thread: menu events arrive on the main
 //! thread and both the tray and window setters marshal back to it, so inline
 //! work would block the event loop for the length of an SCM call or UAC prompt.
@@ -42,16 +52,22 @@ use tauri::{AppHandle, Manager, Wry};
 #[cfg(not(target_os = "linux"))]
 use tauri_plugin_notification::NotificationExt;
 
+use crate::paths::{
+  self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL, UPDATE_MARKER_REL,
+};
 #[cfg(windows)]
-use crate::paths::RESTART_FLAG_REL;
-use crate::paths::{self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL, UPDATE_MARKER_REL};
+use crate::paths::{RESTART_FLAG_REL, SWOOP_KILL_FLAG_REL};
 use crate::pid_file;
 use crate::service_ctl;
 use crate::startup_link;
+use crate::viewer_launch;
 
 /// Identity of the tray icon, used to fetch it back from an app handle.
 const TRAY_ID: &str = "owlette";
 
+// not `swoop`: the live-session status row already has that id
+const ID_SWOOP: &str = "open_swoop";
+const ID_SWOOP_KILL: &str = "swoop_kill";
 const ID_OPEN: &str = "open";
 const ID_RESTART: &str = "restart";
 const ID_START_ON_LOGIN: &str = "start_on_login";
@@ -516,7 +532,9 @@ pub fn show_main_window(app: &AppHandle) {
   #[cfg(target_os = "macos")]
   {
     let shaped = window.clone();
-    if let Err(error) = window.run_on_main_thread(move || crate::mac_window::adopt_system_shape(&shaped)) {
+    if let Err(error) =
+      window.run_on_main_thread(move || crate::mac_window::adopt_system_shape(&shaped))
+    {
       log::warn!("could not reach the main thread for the window shape: {error}");
     }
   }
@@ -795,7 +813,6 @@ fn icon_is_template(code: StatusCode) -> bool {
   cfg!(target_os = "macos") && !matches!(code, StatusCode::Error)
 }
 
-
 /// Outcome of one status evaluation.
 struct Status {
   code: StatusCode,
@@ -1007,18 +1024,32 @@ fn swoop_view(doc: &StatusDoc, service_running: bool) -> Option<SwoopView> {
     return None;
   };
   let swoop = data.get("swoop")?;
-  if !swoop.get("active").and_then(Value::as_bool).unwrap_or(false) {
+  if !swoop
+    .get("active")
+    .and_then(Value::as_bool)
+    .unwrap_or(false)
+  {
     return None;
   }
 
   Some(SwoopView {
     line: swoop_line(
       swoop.get("viewers").and_then(Value::as_u64).unwrap_or(0),
-      swoop.get("controllers").and_then(Value::as_u64).unwrap_or(0),
+      swoop
+        .get("controllers")
+        .and_then(Value::as_u64)
+        .unwrap_or(0),
     ),
     since: swoop.get("since").and_then(Value::as_u64).unwrap_or(0),
     toast: swoop.get("indicator").and_then(Value::as_str) == Some("tray"),
   })
+}
+
+/// whether the menu carries "kill all swoop sessions on this machine": under
+/// the swoop row while there is one. windows only — off it the daemon refuses a
+/// flag the console user wrote, and the seam has no kill verb yet.
+fn offers_swoop_kill(view: &TrayView) -> bool {
+  cfg!(windows) && view.swoop.is_some()
 }
 
 fn swoop_line(viewers: u64, controllers: u64) -> String {
@@ -1123,7 +1154,6 @@ fn notify(_app: &AppHandle, title: &str, body: String) {
   }
 }
 
-
 fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   let version = MenuItem::with_id(
     app,
@@ -1155,8 +1185,26 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
     )?),
     None => None,
   };
+  let swoop_kill = if offers_swoop_kill(view) {
+    Some(MenuItem::with_id(
+      app,
+      ID_SWOOP_KILL,
+      "kill all swoop sessions on this machine",
+      true,
+      None::<&str>,
+    )?)
+  } else {
+    None
+  };
 
   let separator = PredefinedMenuItem::separator(app)?;
+  let open_swoop = MenuItem::with_id(
+    app,
+    ID_SWOOP,
+    "swoop",
+    viewer_launch::viewer_installed(),
+    None::<&str>,
+  )?;
   let open = MenuItem::with_id(app, ID_OPEN, "open owlette", true, None::<&str>)?;
   let restart = MenuItem::with_id(app, ID_RESTART, "restart service", true, None::<&str>)?;
   let start_on_login = CheckMenuItem::with_id(
@@ -1177,8 +1225,12 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   if let Some(swoop) = &swoop {
     items.push(swoop);
   }
+  if let Some(swoop_kill) = &swoop_kill {
+    items.push(swoop_kill);
+  }
   items.extend([
     &separator as &dyn tauri::menu::IsMenuItem<Wry>,
+    &open_swoop,
     &open,
     &restart,
     &start_on_login,
@@ -1230,17 +1282,27 @@ fn agent_version(install_root: &Path) -> String {
 /// systemd child has no `HOSTNAME` in its environment and macOS has no
 /// `/etc/hostname`, so those are fallbacks only.
 pub(crate) fn hostname() -> String {
-  let from_env = if cfg!(windows) { "COMPUTERNAME" } else { "HOSTNAME" };
+  let from_env = if cfg!(windows) {
+    "COMPUTERNAME"
+  } else {
+    "HOSTNAME"
+  };
   let mac = cfg!(target_os = "macos");
   #[cfg(unix)]
   if let Some(name) = unix_hostname() {
     return identity_name(&name, mac).to_string();
   }
-  if let Some(name) = std::env::var(from_env).ok().filter(|name| !name.trim().is_empty()) {
+  if let Some(name) = std::env::var(from_env)
+    .ok()
+    .filter(|name| !name.trim().is_empty())
+  {
     return identity_name(name.trim(), mac).to_string();
   }
   if !cfg!(windows) {
-    if let Some(name) = fs::read_to_string("/etc/hostname").ok().filter(|name| !name.trim().is_empty()) {
+    if let Some(name) = fs::read_to_string("/etc/hostname")
+      .ok()
+      .filter(|name| !name.trim().is_empty())
+    {
       return name.trim().to_string();
     }
   }
@@ -1280,7 +1342,6 @@ fn truncate(text: &str, limit: usize) -> String {
   format!("{head}...")
 }
 
-
 fn spawn_action<F>(label: &'static str, action: F)
 where
   F: FnOnce() + Send + 'static,
@@ -1295,6 +1356,13 @@ where
 
 fn handle_menu_event(app: &AppHandle, id: &str) {
   match id {
+    ID_SWOOP => {
+      if let Err(error) = viewer_launch::open_picker() {
+        log::warn!("could not open owlette swoop: {error}");
+      }
+    }
+    #[cfg(windows)]
+    ID_SWOOP_KILL => kill_swoop_sessions(app),
     ID_OPEN => show_main_window(app),
     ID_RESTART => restart_service(app),
     ID_START_ON_LOGIN => toggle_start_on_login(app),
@@ -1358,13 +1426,7 @@ fn restart_service(app: &AppHandle) {
   }
 
   let flag = root.join(RESTART_FLAG_REL);
-  let written = flag
-    .parent()
-    .map(fs::create_dir_all)
-    .unwrap_or(Ok(()))
-    .and_then(|()| fs::write(&flag, "restart_requested"));
-
-  match written {
+  match write_flag(&flag, "restart_requested") {
     Ok(()) => {
       log::info!("restart flag written — owlette-host will relaunch the agent");
       notify(
@@ -1376,6 +1438,38 @@ fn restart_service(app: &AppHandle) {
     Err(error) => {
       log::error!("could not write {}: {error}", flag.display());
       notify(app, "restart failed", error.to_string());
+    }
+  }
+}
+
+/// a flag the service's local watcher consumes: the seam the restart flag and the
+/// swoop kill flag share. unelevated; the directory is made if missing.
+fn write_flag(flag: &std::path::Path, body: &str) -> std::io::Result<()> {
+  flag
+    .parent()
+    .map(fs::create_dir_all)
+    .unwrap_or(Ok(()))
+    .and_then(|()| fs::write(flag, body))
+}
+
+/// ask the service to end every swoop session on this machine, through the
+/// same flag seam as the restart flag: no elevation, and the service's local
+/// watcher picks it up within half a second.
+#[cfg(windows)]
+fn kill_swoop_sessions(app: &AppHandle) {
+  let flag = paths::data_root().join(SWOOP_KILL_FLAG_REL);
+  match write_flag(&flag, "local_tray") {
+    Ok(()) => {
+      log::info!("swoop kill flag written — the service will end every swoop session");
+      notify(
+        app,
+        "owlette — swoop",
+        "ending every swoop session on this machine".to_string(),
+      );
+    }
+    Err(error) => {
+      log::error!("could not write {}: {error}", flag.display());
+      notify(app, "swoop kill failed", error.to_string());
     }
   }
 }
@@ -1419,7 +1513,6 @@ fn exit_owlette(app: &AppHandle) {
   thread::sleep(EXIT_SETTLE);
   app.exit(0);
 }
-
 
 /// Drop both pid markers. Called on `RunEvent::Exit`.
 pub fn clear_pid_markers() {
@@ -2127,10 +2220,18 @@ mod tests {
     fs::create_dir_all(&dir).expect("scratch");
     let marker = dir.join("update_in_progress.json");
     fs::write(&marker, "{}").expect("marker");
-    let written = fs::metadata(&marker).and_then(|m| m.modified()).expect("mtime");
+    let written = fs::metadata(&marker)
+      .and_then(|m| m.modified())
+      .expect("mtime");
 
-    assert!(update_marker_is_fresh(&marker, written + Duration::from_secs(60)));
-    assert!(!update_marker_is_fresh(&marker, written + UPDATE_MARKER_MAX_AGE + Duration::from_secs(1)));
+    assert!(update_marker_is_fresh(
+      &marker,
+      written + Duration::from_secs(60)
+    ));
+    assert!(!update_marker_is_fresh(
+      &marker,
+      written + UPDATE_MARKER_MAX_AGE + Duration::from_secs(1)
+    ));
     assert!(!update_marker_is_fresh(&dir.join("absent.json"), written));
 
     let _ = fs::remove_file(&marker);
@@ -2266,5 +2367,31 @@ mod tests {
 
     view.swoop = None;
     assert!(tooltip(&dir, &view).ends_with("status: connected to TEC"));
+  }
+
+  /// the kill item comes and goes with the swoop row, so it is offered exactly
+  /// while a session is capturing — and only where the flag seam exists
+  #[test]
+  fn the_swoop_kill_item_is_offered_only_while_a_session_is_capturing() {
+    let mut view = TrayView {
+      code: StatusCode::Normal,
+      service: "service: running".to_string(),
+      status: "status: connected to TEC".to_string(),
+      health: None,
+      swoop: swoop_view(&swoop_doc(true, 2, 1, "tray"), RUNNING),
+      start_on_login: false,
+    };
+    assert_eq!(offers_swoop_kill(&view), cfg!(windows));
+
+    // capture running with nobody counted is still a session to kill
+    view.swoop = swoop_view(&swoop_doc(true, 0, 0, "none"), RUNNING);
+    assert_eq!(offers_swoop_kill(&view), cfg!(windows));
+
+    view.swoop = swoop_view(&swoop_doc(false, 0, 0, "tray"), RUNNING);
+    assert!(!offers_swoop_kill(&view));
+    view.swoop = swoop_view(&swoop_doc(true, 1, 0, "tray"), STOPPED);
+    assert!(!offers_swoop_kill(&view));
+    view.swoop = swoop_view(&StatusDoc::Stale, RUNNING);
+    assert!(!offers_swoop_kill(&view));
   }
 }
