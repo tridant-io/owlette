@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.8] - 2026-10-10
+
 ### added — owlette swoop, the desktop app for swoop
 
 owlette swoop shows the swoop viewer in a window of its own instead of a
