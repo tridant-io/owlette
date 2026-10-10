@@ -1444,6 +1444,7 @@ fn restart_service(app: &AppHandle) {
 
 /// a flag the service's local watcher consumes: the seam the restart flag and the
 /// swoop kill flag share. unelevated; the directory is made if missing.
+#[cfg(windows)]
 fn write_flag(flag: &std::path::Path, body: &str) -> std::io::Result<()> {
   flag
     .parent()
