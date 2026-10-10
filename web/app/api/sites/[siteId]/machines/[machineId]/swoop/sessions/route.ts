@@ -33,7 +33,11 @@ import {
   SWOOP_LEASE_SECONDS,
   type SwoopIntent,
 } from '@/lib/swoop/policy.server';
-import { openStepUpFromProof, requestPassedMfaCeremony } from '@/lib/swoop/stepUp.server';
+import {
+  openStepUpFromFreshCeremony,
+  openStepUpFromProof,
+  requestSignInCeremony,
+} from '@/lib/swoop/stepUp.server';
 import { viewerKeyForResponse } from '@/lib/swoop/keys.server';
 import { mintViewerToken, canonicalizeFingerprint } from '@/lib/swoop/tokens.server';
 import { STUN_ONLY, mintTurnCredentials } from '@/lib/swoop/turn.server';
@@ -114,17 +118,28 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     // Only control reads the window, and a watch request never opens, extends,
     // touches one or even reads the login session — the two intents share no
     // state at all.
-    const stepUpOpen =
-      intent === 'control'
-        ? await hasOpenStepUpWindow({
-            userId,
-            siteId,
-            machineId,
-            sessionPassedCeremony: await requestPassedMfaCeremony(request, userId),
-          })
-        : false;
+    const ceremony = intent === 'control' ? await requestSignInCeremony(request, userId) : null;
+    const stepUpOpen = ceremony
+      ? await hasOpenStepUpWindow({
+          userId,
+          siteId,
+          machineId,
+          sessionPassedCeremony: ceremony.sessionPassedCeremony,
+        })
+      : false;
 
     let decision = evaluateSwoopAccess({ ...gate, stepUpOpen });
+    // A second factor this sign-in passed minutes ago is the step-up for this
+    // machine: it opens the window, on the record, and the decision is taken
+    // again. Asked only when the window is the one thing refusing control.
+    if (
+      !decision.ok &&
+      decision.code === 'step_up_required' &&
+      ceremony &&
+      (await openStepUpFromFreshCeremony({ ...auditBase, userId, ceremony }))
+    ) {
+      decision = evaluateSwoopAccess({ ...gate, stepUpOpen: true });
+    }
     // A tab that held control keeps it for its own life: the continuity token
     // of its last control session stands in for the ceremony, once, for the
     // same user on the same machine, unless that session was killed, closed

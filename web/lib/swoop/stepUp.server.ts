@@ -3,7 +3,8 @@
  * `swoop/sessions` (a proof in the same request as the session) and
  * `swoop/step-up` (a proof on its own, from the browser half of owlette swoop's
  * "verify in your browser"). one implementation, so the two can never disagree
- * about what opens a window or which login session may read one back.
+ * about what opens a window or which login session may read one back. the
+ * sign-in's own ceremony, when it is minutes old, opens one here too.
  */
 
 import type { NextRequest, NextResponse } from 'next/server';
@@ -20,7 +21,14 @@ import {
   markSessionMfaCeremony,
   sessionPassedMfaCeremony,
 } from '@/lib/sessionManager.server';
-import { hasEnrolledFactor, openStepUpWindow } from '@/lib/swoop/policy.server';
+import {
+  freshCeremonyCovers,
+  hasEnrolledFactor,
+  openStepUpWindow,
+  openStepUpWindowFromCeremony,
+  type SignInCeremony,
+} from '@/lib/swoop/policy.server';
+import { recordSwoopStepUpOpened, type SwoopAuditBase } from '@/lib/swoop/audit.server';
 
 /** `reason` is the audit code for the refusal, never the ceremony's detail. */
 export type StepUpResult =
@@ -28,15 +36,16 @@ export type StepUpResult =
   | { ok: false; response: NextResponse; reason: string };
 
 /**
- * Run a live second-factor ceremony, open the 12-hour window for this
+ * Run a live second-factor ceremony, open the 7-day window for this
  * (user, machine) pair, and record on the login session that it has now itself
  * proved a second factor — which is what lets this operator's reloads reuse the
- * window for the rest of those 12 hours.
+ * window for the rest of those 7 days.
  *
- * A timestamp can never stand in for any of it: a session born from the 30-day
- * device-trust cookie carries `mfaCompletedAt = now` with no ceremony behind it
- * (`lib/sessionManager.server.ts`, the `deviceTrusted` arm of
- * `resolveMfaOnSessionCreate`).
+ * A timestamp alone can never stand in for any of it: a session born from the
+ * 30-day device-trust cookie carries `mfaCompletedAt = now` with no ceremony
+ * behind it (`lib/sessionManager.server.ts`, the `deviceTrusted` arm of
+ * `resolveMfaOnSessionCreate`). The sign-in's own ceremony counts only read
+ * beside its satisfier (`openStepUpFromFreshCeremony`).
  */
 export async function openStepUpFromProof(args: {
   userId: string;
@@ -100,22 +109,56 @@ export async function openStepUpFromProof(args: {
 }
 
 /**
- * Did the LOGIN session behind this request pass a live ceremony of its own?
+ * Did the LOGIN session behind this request pass a live ceremony of its own,
+ * and when?
  *
  * Read off the server's encrypted, signed session cookie — the browser has no
  * field it can set to claim this — and only when that cookie names the caller
  * and is still live, so a request authenticated by an ID token rides on no
  * cookie it did not earn. Anything short of that reads as "no ceremony".
  */
-export async function requestPassedMfaCeremony(
+export async function requestSignInCeremony(
   request: NextRequest,
   userId: string,
-): Promise<boolean> {
+): Promise<SignInCeremony> {
   const login = await getSessionFromRequest(request);
-  return (
-    login.userId === userId &&
-    typeof login.expiresAt === 'number' &&
-    login.expiresAt > Date.now() &&
-    sessionPassedMfaCeremony(login)
-  );
+  const live =
+    login.userId === userId && typeof login.expiresAt === 'number' && login.expiresAt > Date.now();
+  return live
+    ? { sessionPassedCeremony: sessionPassedMfaCeremony(login), ceremonyAt: login.mfaCompletedAt }
+    : { sessionPassedCeremony: false, ceremonyAt: undefined };
+}
+
+/**
+ * Open the window on this machine from the sign-in's own ceremony
+ * (`requestSignInCeremony`) when it is fresh enough (`freshCeremonyCovers`), and
+ * say whether it did. The caller asks only once a missing window is the one
+ * thing refusing control, as it would before spending a proof.
+ *
+ * The audit row goes first and is awaited: a window that cannot be recorded is
+ * not opened, and the operator is asked for the step-up as before.
+ */
+export async function openStepUpFromFreshCeremony(
+  args: SwoopAuditBase & { userId: string; ceremony: SignInCeremony },
+): Promise<boolean> {
+  const { userId, ceremony, ...audit } = args;
+  const target = { userId, siteId: audit.siteId, machineId: audit.machineId };
+  // one clock for the check and the write, so the five minutes cannot run out between them
+  const nowMs = Date.now();
+  if (!(await freshCeremonyCovers({ ...target, ...ceremony, nowMs }))) return false;
+  try {
+    await recordSwoopStepUpOpened({ ...audit, reason: 'fresh_sign_in' });
+  } catch (err) {
+    logger.warn('[swoop/step-up] could not record a fresh sign-in step-up; asking for one instead', {
+      context: 'swoop/step-up',
+      data: {
+        siteId: audit.siteId,
+        machineId: audit.machineId,
+        err: err instanceof Error ? err.message : String(err),
+      },
+    });
+    return false;
+  }
+  await openStepUpWindowFromCeremony({ ...target, ...ceremony, nowMs });
+  return true;
 }

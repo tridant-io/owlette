@@ -48,11 +48,11 @@ function renderDialog(over: { enrolled?: boolean; onProof?: jest.Mock; onCancel?
 }
 
 describe('SwoopStepUpDialog', () => {
-  it('says the check covers the machine for 12 hours, reconnects included', () => {
+  it('says the check covers the machine for 7 days, reconnects included', () => {
     renderDialog();
 
     expect(
-      screen.getByText(/one check covers this machine for 12 hours, reconnects included/i),
+      screen.getByText(/one check covers this machine for 7 days, reconnects included/i),
     ).toBeInTheDocument();
   });
 

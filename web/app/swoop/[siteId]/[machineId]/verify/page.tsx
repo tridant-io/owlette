@@ -4,7 +4,7 @@
  * `/swoop/{siteId}/{machineId}/verify` — the browser half of owlette swoop's
  * step-up. the app's webview reaches only the platform authenticator, so its
  * dialog opens this page in the system browser, where any passkey works,
- * password managers included. the proof opens the caller's 12-hour window on
+ * password managers included. the proof opens the caller's 7-day window on
  * this machine (`POST …/swoop/step-up`), and the app, polling, finds it.
  *
  * protected like every `/swoop` path: the proxy wants a session with mfa

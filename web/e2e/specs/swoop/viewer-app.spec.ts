@@ -18,6 +18,9 @@
  * retries the session, which the server now grants without a proof. the app
  * is a fresh context with the app's ua, signed in through app-link as the real
  * one is; its popup only gives up the url the real app hands the system browser.
+ * a second factor the browser passed under five minutes ago is itself the
+ * step-up, so the app takes control of the first machine with no dialog; the
+ * dialog spec dates the browser's second factor back on the app-link record.
  */
 
 import crypto from 'crypto';
@@ -282,6 +285,74 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
     await getAdminDb().doc(`sites/${STEP_SITE}/settings/swoop`).set({ enabled: true }, { merge: true });
   });
 
+  /** a totp admin of the step-up site, and its secret. */
+  async function seedTotpAdmin(tag: string) {
+    const user = await seedDedicatedUser(dedicatedUser('member', `${tag}-${SUFFIX}`));
+    const secret = authenticator.generateSecret();
+    await getAdminDb().collection('users').doc(user.uid).set(
+      { mfaEnrolled: true, requiresMfaSetup: false, mfaSecret: secret, mfaFactors: { totp: true, passkeys: 0 } },
+      { merge: true },
+    );
+    await grantMembership(STEP_SITE, user.uid, 'admin');
+    return { user, secret };
+  }
+
+  /** the browser: a totp sign-in, so its session passed a second factor. returns the code it spent. */
+  async function browserSignIn(page: Page, user: { email: string; password: string }, secret: string) {
+    await page.goto('/login');
+    await page.getByLabel(/email/i).fill(user.email);
+    await page.getByLabel(/password/i).first().fill(user.password);
+    await page.getByRole('button', { name: /sign in with email/i }).click();
+    await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    if (authenticator.timeRemaining() <= 5) await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1000);
+    const spent = authenticator.generate(secret);
+    await page.getByPlaceholder('000000').fill(spent);
+    await page.getByRole('button', { name: /^verify$/i }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+    return spent;
+  }
+
+  /** the code that signs owlette swoop in from that browser, carrying its second factor. */
+  async function mintAppLink(page: Page): Promise<string> {
+    const minted = await page.evaluate(async () => {
+      const res = await fetch('/api/auth/app-link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      return { status: res.status, body: (await res.json()) as { code?: string } };
+    });
+    expect(minted.status, JSON.stringify(minted.body)).toBe(201);
+    return minted.body.code!;
+  }
+
+  test('a second factor the browser passed moments ago lets the app take control with no dialog', async ({
+    page,
+    browser,
+  }) => {
+    const { user, secret } = await seedTotpAdmin('fresh');
+    await browserSignIn(page, user, secret);
+    const code = await mintAppLink(page);
+
+    const app = await browser.newContext({ baseURL: E2E_BASE_URL, storageState: { cookies: [], origins: [] }, userAgent: APP_UA });
+    try {
+      const appPage = await app.newPage();
+      await fakeBridge(appPage);
+      const first = appPage.waitForResponse(
+        (r) => r.url().endsWith('/swoop/sessions') && r.request().method() === 'POST',
+        { timeout: 45_000 },
+      );
+      await appPage.goto(`/app-link?code=${code}&next=${encodeURIComponent(STEP_SESSION)}`);
+      await expect(appPage).toHaveURL(new RegExp(`${STEP_SESSION}$`), { timeout: 20_000 });
+
+      const grant = await first;
+      expect(grant.status(), await grant.text()).toBe(201);
+      expect(grant.request().postDataJSON()).not.toHaveProperty('mfaProof');
+      expect(((await grant.json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+      // no streamer in the emulator: the page waits for the host, with no dialog over it
+      await expect(appPage.getByText(/connecting/i).first()).toBeVisible();
+      await expect(appPage.getByRole('dialog')).toHaveCount(0);
+    } finally {
+      await app.close();
+    }
+  });
+
   /** a code that is not the one the sign-in spent: the api refuses a replayed totp. */
   async function freshTotp(page: Page, secret: string, spent: string): Promise<string> {
     let code = authenticator.generate(secret);
@@ -296,38 +367,20 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
     page,
     browser,
   }) => {
-    const user = await seedDedicatedUser(dedicatedUser('member', `stepup-${SUFFIX}`));
-    const secret = authenticator.generateSecret();
-    await getAdminDb().collection('users').doc(user.uid).set(
-      { mfaEnrolled: true, requiresMfaSetup: false, mfaSecret: secret, mfaFactors: { totp: true, passkeys: 0 } },
-      { merge: true },
-    );
-    await grantMembership(STEP_SITE, user.uid, 'admin');
+    const { user, secret } = await seedTotpAdmin('stepup');
+    const spent = await browserSignIn(page, user, secret);
 
-    // the browser: a totp sign-in, so its session passed a second factor
-    await page.goto('/login');
-    await page.getByLabel(/email/i).fill(user.email);
-    await page.getByLabel(/password/i).first().fill(user.password);
-    await page.getByRole('button', { name: /sign in with email/i }).click();
-    await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
-    if (authenticator.timeRemaining() <= 5) await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1000);
-    const spent = authenticator.generate(secret);
-    await page.getByPlaceholder('000000').fill(spent);
-    await page.getByRole('button', { name: /^verify$/i }).click();
-    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
-
-    // the app, signed in from that browser, carrying its second factor
-    const minted = await page.evaluate(async () => {
-      const res = await fetch('/api/auth/app-link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      return { status: res.status, body: (await res.json()) as { code?: string } };
-    });
-    expect(minted.status, JSON.stringify(minted.body)).toBe(201);
+    // the app, signed in from that browser, carrying its second factor, passed
+    // ten minutes ago as far as the app-link record says: too old to stand in
+    const code = await mintAppLink(page);
+    const record = getAdminDb().doc(`app_links/${crypto.createHash('sha256').update(code).digest('hex')}`);
+    await record.update({ mfaCompletedAt: Date.now() - 10 * 60 * 1000 });
 
     const app = await browser.newContext({ baseURL: E2E_BASE_URL, storageState: { cookies: [], origins: [] }, userAgent: APP_UA });
     try {
       const appPage = await app.newPage();
       await fakeBridge(appPage);
-      await appPage.goto(`/app-link?code=${minted.body.code}&next=${encodeURIComponent(STEP_SESSION)}`);
+      await appPage.goto(`/app-link?code=${code}&next=${encodeURIComponent(STEP_SESSION)}`);
       await expect(appPage).toHaveURL(new RegExp(`${STEP_SESSION}$`), { timeout: 20_000 });
 
       const dialog = appPage.getByRole('dialog');

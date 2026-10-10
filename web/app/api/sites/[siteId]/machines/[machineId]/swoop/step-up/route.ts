@@ -1,6 +1,6 @@
 /**
  * POST /api/sites/{siteId}/machines/{machineId}/swoop/step-up — run the step-up
- * ceremony on its own and open the caller's 12-hour window on this machine.
+ * ceremony on its own and open the caller's 7-day window on this machine.
  * GET  — is that window open for the login session asking?
  *
  * owlette swoop's webview reaches only the platform authenticator, so its
@@ -9,7 +9,9 @@
  * The window is (user, machine) state, so the app's next session create finds
  * it — but only from a login session that itself passed a ceremony, exactly as
  * the create would decide (`hasOpenStepUpWindow`), which is why the GET answers
- * for the session asking and says whether that session can ever read one.
+ * for the session asking and says whether that session can ever read one. A
+ * sign-in ceremony fresh enough to open the window (`freshCeremonyCovers`) reads
+ * as open too, because the create will open it.
  *
  * Nothing here is new authority: the proof, the window and the session gate are
  * `swoop/sessions`' own (`lib/swoop/stepUp.server.ts`), so a stolen cookie
@@ -26,8 +28,12 @@ import {
 import { ApiAuthError } from '@/lib/apiAuth.server';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
-import { evaluateSwoopAccess, hasOpenStepUpWindow } from '@/lib/swoop/policy.server';
-import { openStepUpFromProof, requestPassedMfaCeremony } from '@/lib/swoop/stepUp.server';
+import {
+  evaluateSwoopAccess,
+  freshCeremonyCovers,
+  hasOpenStepUpWindow,
+} from '@/lib/swoop/policy.server';
+import { openStepUpFromProof, requestSignInCeremony } from '@/lib/swoop/stepUp.server';
 import { recordSwoopDenied } from '@/lib/swoop/audit.server';
 import {
   apiKeyRefusal,
@@ -99,7 +105,9 @@ export const POST = authorizedSiteHandler<SwoopRouteParams>({
  * site-access gate and not the wrapper: the wrapper's per-capability rate limit
  * would share the bucket the session create needs right after, and its blocking
  * allow row would write one audit entry per poll. It reads only the caller's own
- * window, and opens, extends or writes nothing.
+ * window, and opens, extends or writes nothing: a fresh sign-in ceremony reads
+ * as open here, and it is the session create that follows which opens the
+ * window, behind the full swoop gate and with its audit row.
  */
 export async function GET(
   request: NextRequest,
@@ -112,15 +120,16 @@ export async function GET(
     const keyRefusal = apiKeyRefusal(auth);
     if (keyRefusal) return keyRefusal;
 
-    const sessionPassedCeremony = await requestPassedMfaCeremony(request, auth.userId);
-    const open = await hasOpenStepUpWindow({
-      userId: auth.userId,
-      siteId,
-      machineId,
-      sessionPassedCeremony,
-    });
+    const ceremony = await requestSignInCeremony(request, auth.userId);
+    const target = { userId: auth.userId, siteId, machineId };
+    const open =
+      (await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: ceremony.sessionPassedCeremony })) ||
+      (await freshCeremonyCovers({ ...target, ...ceremony }));
     return applyAuthDeprecations(
-      NextResponse.json({ ok: true, data: { open, sessionPassedCeremony } }),
+      NextResponse.json({
+        ok: true,
+        data: { open, sessionPassedCeremony: ceremony.sessionPassedCeremony },
+      }),
       auth.scopeCheck,
     );
   } catch (err) {

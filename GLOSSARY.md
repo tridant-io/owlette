@@ -95,7 +95,7 @@ A scoped, expiring `owk_live_` key whose scopes each name a resource, an ID and 
 _Avoid_: token, secret, credential
 
 **Step-up**:
-A fresh second-factor check (passkey, authenticator code or backup code) that swoop control requires, valid for that user and machine for 12 hours.
+A fresh second-factor check (passkey, authenticator code or backup code) that swoop control requires, valid for that user and machine for 7 days. A second factor passed at sign-in in the last five minutes counts as one for the machines opened in those five minutes.
 _Avoid_: re-auth, 2FA prompt
 
 ### Environments and releases

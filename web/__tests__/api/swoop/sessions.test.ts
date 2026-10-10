@@ -81,7 +81,7 @@ jest.mock('@/lib/apiAuth.server', () => {
  * is the real one — a stub would prove nothing about which satisfier counts —
  * and only the cookie plumbing around it is replaced.
  */
-const mockLogin: { userId: string; expiresAt: number; mfaSatisfiedBy?: string } = {
+const mockLogin: { userId: string; expiresAt: number; mfaSatisfiedBy?: string; mfaCompletedAt?: number } = {
   userId: '',
   expiresAt: 0,
 };
@@ -160,13 +160,16 @@ function routeContext(sessionId?: string) {
 /**
  * Sign in, and say how this login session came to be MFA-verified.
  * `device-trust` is the 30-day cookie: verified, `mfaCompletedAt = now`, and no
- * ceremony behind any of it.
+ * ceremony behind any of it. A ceremony sign-in happened an hour ago unless a
+ * test says otherwise, so it is too old to stand in for the step-up.
  */
-function signIn(userId: string, satisfiedBy?: 'challenge' | 'device-trust'): void {
+function signIn(userId: string, satisfiedBy?: 'challenge' | 'device-trust', signedInAgoMs?: number): void {
   mockResolveAuth.mockResolvedValue({ userId, keyContext: null });
   mockLogin.userId = userId;
   mockLogin.expiresAt = Date.now() + 86_400_000;
   mockLogin.mfaSatisfiedBy = satisfiedBy ?? 'challenge';
+  mockLogin.mfaCompletedAt =
+    Date.now() - (signedInAgoMs ?? (satisfiedBy === 'device-trust' ? 0 : 3_600_000));
 }
 
 /** the swoop commands this run queued, whatever the route that wrote them. */
@@ -632,7 +635,7 @@ describe('POST swoop/sessions', () => {
 
   /**
    * And the way back: one ceremony is recorded on the session that ran it, so
-   * that operator's own reloads cost nothing for the rest of the 12 hours.
+   * that operator's own reloads cost nothing for the rest of the 7 days.
    */
   it('covers a device-trust session reloads once it has run the ceremony itself', async () => {
     signIn(ADMIN, 'device-trust');
@@ -728,6 +731,138 @@ describe('POST swoop/sessions', () => {
 
     expect(status).toBe(401);
     expect(body.code).toBe('step_up_required');
+  });
+});
+
+/**
+ * owner, 2026-10-10: a second factor passed at sign-in must not be asked for
+ * again two minutes later. A ceremony this sign-in ran under five minutes ago
+ * opens the window for the machine asked for, on the record.
+ */
+describe('POST swoop/sessions — a second factor passed at sign-in', () => {
+  const controlRequest = () =>
+    POST(createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }), routeContext());
+
+  /** the window writes this run made, told apart from other writes by `openedBy`. */
+  const windowWrites = () =>
+    (mocks.set.mock.calls as [Record<string, unknown>][])
+      .map(([payload]) => payload)
+      .filter((payload) => payload.openedBy !== undefined);
+
+  const openedRows = () =>
+    (writeAuditEntryBlocking.mock.calls as [string, { metadata?: Record<string, unknown> }][])
+      .filter(([site, entry]) => site === SITE && entry.metadata?.event === 'step_up_opened')
+      .map(([, entry]) => entry);
+
+  it('takes control with no proof, opening the window from the ceremony and recording why', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(mockVerifyMfaProof).not.toHaveBeenCalled();
+    expect(windowWrites()).toEqual([
+      expect.objectContaining({ openedAt: mockLogin.mfaCompletedAt, openedBy: 'fresh_sign_in' }),
+    ]);
+    expect(openedRows()).toEqual([
+      expect.objectContaining({
+        outcome: 'allow',
+        capability: 'MACHINE_REMOTE_CONTROL',
+        target: { kind: 'machine', id: MACHINE, machineId: MACHINE },
+        metadata: { event: 'step_up_opened', reason: 'fresh_sign_in' },
+      }),
+    ]);
+    // the row is written before the window, so no window opens unrecorded
+    const rowCall = writeAuditEntryBlocking.mock.calls.findIndex(
+      (call) => (call[1] as { metadata?: { event?: string } }).metadata?.event === 'step_up_opened',
+    );
+    const windowCall = mocks.set.mock.calls.findIndex(
+      ([payload]) => (payload as Record<string, unknown>).openedBy === 'fresh_sign_in',
+    );
+    expect(writeAuditEntryBlocking.mock.invocationCallOrder[rowCall]).toBeLessThan(
+      mocks.set.mock.invocationCallOrder[windowCall],
+    );
+  });
+
+  it('reuses that window on a later create, after the five minutes', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+    expect((await controlRequest()).status).toBe(201);
+    // `mocks.set` does not feed `mocks.get`, so the window it wrote is staged
+    const [written] = windowWrites();
+    const binding = stepUpMachineBinding({ userId: ADMIN, siteId: SITE, machineId: MACHINE });
+    staged.set(`users/${ADMIN}/swoop_step_up/${binding}`, written);
+    mocks.set.mockClear();
+    writeAuditEntryBlocking.mockClear();
+
+    mockLogin.mfaCompletedAt = Date.now() - 6 * 60_000;
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(windowWrites()).toEqual([]);
+    expect(openedRows()).toEqual([]);
+  });
+
+  it('still asks a device-trust sign-in, however recent', async () => {
+    signIn(ADMIN, 'device-trust', 0);
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(windowWrites()).toEqual([]);
+    expect(openedRows()).toEqual([]);
+  });
+
+  it('still asks once the ceremony is six minutes old', async () => {
+    signIn(ADMIN, 'challenge', 6 * 60_000);
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(windowWrites()).toEqual([]);
+  });
+
+  it('still asks after a kill that came after the ceremony', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_step_up_revocations/current`, {
+      revokedAt: Date.now() - 60_000,
+    });
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(windowWrites()).toEqual([]);
+  });
+
+  it('opens no window for a request refused for another reason', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: false });
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(403);
+    expect(body.code).toBe('swoop_disabled');
+    expect(windowWrites()).toEqual([]);
+    expect(openedRows()).toEqual([]);
+  });
+
+  it('opens no window it cannot record, and asks for the step-up instead', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+    writeAuditEntryBlocking.mockImplementation(async (...args: unknown[]) => {
+      const entry = args[1] as { metadata?: { event?: string } } | undefined;
+      if (entry?.metadata?.event === 'step_up_opened') throw new Error('firestore down');
+      return undefined;
+    });
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(windowWrites()).toEqual([]);
   });
 });
 

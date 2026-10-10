@@ -39,14 +39,17 @@ jest.mock('@/lib/mfaFactors.server', () => ({
 
 import type { Actor } from '@/lib/capabilities';
 import {
+  SWOOP_FRESH_CEREMONY_MS,
   SWOOP_SETTINGS_DEFAULTS,
   SWOOP_STEP_UP_WINDOW_MS,
   SwoopPolicyError,
   evaluateLeaseRenewal,
   evaluateSwoopAccess,
+  freshCeremonyCovers,
   hasOpenStepUpWindow,
   loadSwoopSettings,
   openStepUpWindow,
+  openStepUpWindowFromCeremony,
   parseSwoopSettings,
   revokeStepUpWindows,
   stepUpMachineBinding,
@@ -275,7 +278,7 @@ describe('step-up window', () => {
     expect(binding).not.toContain(MACHINE);
   });
 
-  it('opens for 12 hours from the ceremony, on the (user, machine) document', async () => {
+  it('opens for 7 days from the ceremony, on the (user, machine) document', async () => {
     const expiresAt = await openStepUpWindow({ ...target, proof, nowMs: NOW });
 
     expect(expiresAt).toBe(NOW + SWOOP_STEP_UP_WINDOW_MS);
@@ -327,7 +330,7 @@ describe('step-up window', () => {
    * The bug this keying exists to fix: a page reload ends the swoop session and
    * starts a new one, and the ceremony must not run again for each.
    */
-  it('lets a reconnect inside the 12 hours through without a second ceremony', async () => {
+  it('lets a reconnect inside the 7 days through without a second ceremony', async () => {
     await openStepUpWindow({ ...target, proof, nowMs: NOW });
     mockWrites.length = 0;
 
@@ -336,11 +339,11 @@ describe('step-up window', () => {
     expect(
       await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS - 1 }),
     ).toBe(true);
-    // Reading a window never writes one: reuse cannot slide the 12 hours on.
+    // Reading a window never writes one: reuse cannot slide the 7 days on.
     expect(mockWrites).toHaveLength(0);
   });
 
-  it('refuses a reconnect after the 12 hours have run out', async () => {
+  it('refuses a reconnect after the 7 days have run out', async () => {
     await openStepUpWindow({ ...target, proof, nowMs: NOW });
 
     expect(await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS })).toBe(
@@ -351,7 +354,7 @@ describe('step-up window', () => {
     ).toBe(false);
   });
 
-  it('caps a stored expiry at 10 minutes from the ceremony, whatever the document says', async () => {
+  it('caps a stored expiry at 7 days from the ceremony, whatever the document says', async () => {
     mockDocs.set(windowPath(target), {
       openedAt: NOW,
       expiresAt: NOW + 30 * 24 * 60 * 60 * 1000,
@@ -445,5 +448,94 @@ describe('step-up window', () => {
       await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: false, nowMs: NOW + 1_000 }),
     ).toBe(false);
     expect(mockReadMfaFactors).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * owner, 2026-10-10: a second factor passed at sign-in must not be asked for
+ * again two minutes later. the sign-in's own ceremony stands in for the step-up
+ * for five minutes, read beside the satisfier and never on its own.
+ */
+describe('fresh sign-in ceremony', () => {
+  const NOW = 1_700_000_000_000;
+  const target = { userId: 'uid-1', siteId: SITE, machineId: MACHINE };
+  const windowPath = `users/uid-1/swoop_step_up/${stepUpMachineBinding(target)}`;
+  const fresh = { sessionPassedCeremony: true, ceremonyAt: NOW - 2 * 60_000 };
+
+  it('covers a ceremony this session ran in the last five minutes', async () => {
+    expect(await freshCeremonyCovers({ ...target, ...fresh, nowMs: NOW })).toBe(true);
+    expect(
+      await freshCeremonyCovers({ ...target, ...fresh, ceremonyAt: NOW - SWOOP_FRESH_CEREMONY_MS, nowMs: NOW }),
+    ).toBe(true);
+  });
+
+  it('does not cover one older than five minutes, and reads nothing to say so', async () => {
+    expect(
+      await freshCeremonyCovers({ ...target, ...fresh, ceremonyAt: NOW - 6 * 60_000, nowMs: NOW }),
+    ).toBe(false);
+    expect(mockReadMfaFactors).not.toHaveBeenCalled();
+  });
+
+  // a device-trust birth stamps `mfaCompletedAt = now` having run no ceremony
+  it('does not cover a session that ran no ceremony, however recent its timestamp', async () => {
+    expect(
+      await freshCeremonyCovers({ ...target, sessionPassedCeremony: false, ceremonyAt: NOW, nowMs: NOW }),
+    ).toBe(false);
+  });
+
+  it('does not cover a missing or future timestamp', async () => {
+    expect(await freshCeremonyCovers({ ...target, ...fresh, ceremonyAt: undefined, nowMs: NOW })).toBe(false);
+    expect(await freshCeremonyCovers({ ...target, ...fresh, ceremonyAt: NOW + 1_000, nowMs: NOW })).toBe(false);
+  });
+
+  it('does not cover an account with no factor left', async () => {
+    mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 0 });
+    expect(await freshCeremonyCovers({ ...target, ...fresh, nowMs: NOW })).toBe(false);
+  });
+
+  it('does not reopen a machine a kill closed after the ceremony, and does after a kill before it', async () => {
+    await revokeStepUpWindows({ siteId: SITE, machineId: MACHINE, nowMs: NOW - 60_000 });
+    expect(await freshCeremonyCovers({ ...target, ...fresh, nowMs: NOW })).toBe(false);
+
+    await revokeStepUpWindows({ siteId: SITE, machineId: MACHINE, nowMs: NOW - 3 * 60_000 });
+    expect(await freshCeremonyCovers({ ...target, ...fresh, nowMs: NOW })).toBe(true);
+  });
+
+  it('opens a window resting on the ceremony: 7 days from it, marked fresh_sign_in', async () => {
+    const expiresAt = await openStepUpWindowFromCeremony({ ...target, ...fresh, nowMs: NOW });
+
+    expect(expiresAt).toBe(fresh.ceremonyAt + SWOOP_STEP_UP_WINDOW_MS);
+    expect(mockWrites).toEqual([
+      {
+        path: windowPath,
+        data: expect.objectContaining({ openedAt: fresh.ceremonyAt, expiresAt, openedBy: 'fresh_sign_in' }),
+      },
+    ]);
+    // afterwards it is any other window, read back by a ceremony-backed session
+    expect(await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: true, nowMs: NOW + 60 * 60_000 })).toBe(
+      true,
+    );
+    expect(
+      await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: true, nowMs: expiresAt }),
+    ).toBe(false);
+  });
+
+  it('marks a window a step-up opened as the ceremony', async () => {
+    await openStepUpWindow({ ...target, proof: { ok: true, factorUsed: 'totp' }, nowMs: NOW });
+    expect(mockWrites[0].data).toEqual(expect.objectContaining({ openedBy: 'ceremony', factorUsed: 'totp' }));
+  });
+
+  it('refuses to open from a stale, ceremony-less or factor-less sign-in', async () => {
+    await expect(
+      openStepUpWindowFromCeremony({ ...target, ...fresh, ceremonyAt: NOW - 6 * 60_000, nowMs: NOW }),
+    ).rejects.toThrow(/fresh_ceremony_invalid/);
+    await expect(
+      openStepUpWindowFromCeremony({ ...target, ...fresh, sessionPassedCeremony: false, nowMs: NOW }),
+    ).rejects.toThrow(/fresh_ceremony_invalid/);
+    mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 0 });
+    await expect(openStepUpWindowFromCeremony({ ...target, ...fresh, nowMs: NOW })).rejects.toThrow(
+      /no_mfa_factors/,
+    );
+    expect(mockWrites).toHaveLength(0);
   });
 });

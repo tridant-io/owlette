@@ -10,7 +10,8 @@
  *                   exchange with code + secret.
  *
  * exchange answers a firebase custom token whose `appLinkMfa` developer claim carries the
- * approver's `mfaSatisfiedBy`; /api/auth/session reads it back through `appLinkMfaFromIdToken`.
+ * approver's `mfaSatisfiedBy`, and `appLinkMfaAt` the approver's `mfaCompletedAt`;
+ * /api/auth/session reads both back through `appLinkMfaFromIdToken`.
  *
  * security
  * - leaked approved code. actor: anyone who reads the deep link inside its 60 s (another process on
@@ -26,7 +27,11 @@
  *   approving needs a browser session that has completed mfa. pending records die after 10 min.
  * - control. swoop control still needs an open per-machine step-up window
  *   (lib/swoop/policy.server.ts). the claim carries the approver's satisfier verbatim, so a
- *   device-trust approver yields a device-trust session, which may not reuse a window.
+ *   device-trust approver yields a device-trust session, which may not reuse a window. it carries
+ *   the approver's ceremony time too, never the sign-in's: a ceremony under five minutes old opens
+ *   a window without a proof (`SWOOP_FRESH_CEREMONY_MS`), and a browser signed in days ago must not
+ *   hand the app one by approving. so a victim who signs in to approve a phisher's code hands
+ *   that app control of the machines it opens in the next five minutes, on top of the session.
  * - the claim counts only at the sign-in it was minted for: refreshed id tokens keep developer
  *   claims, so `appLinkMfaFromIdToken` also requires a fresh `auth_time`.
  */
@@ -79,6 +84,8 @@ function secretMatches(secretHash: string, secret: string | undefined): boolean 
 export interface AppLinkApprover {
   uid: string;
   mfaSatisfiedBy?: MfaSatisfiedBy;
+  /** the approver's `mfaCompletedAt`: when its second factor was passed, not when it approved. */
+  mfaCompletedAt?: number;
 }
 
 /**
@@ -99,6 +106,7 @@ export async function requireAppLinkApprover(request: NextRequest): Promise<AppL
   return {
     uid: session.userId,
     mfaSatisfiedBy: isMfaSatisfiedBy(session.mfaSatisfiedBy) ? session.mfaSatisfiedBy : undefined,
+    mfaCompletedAt: typeof session.mfaCompletedAt === 'number' ? session.mfaCompletedAt : undefined,
   };
 }
 
@@ -106,6 +114,7 @@ function approvalFields(approver: AppLinkApprover) {
   return {
     uid: approver.uid,
     ...(approver.mfaSatisfiedBy ? { mfaSatisfiedBy: approver.mfaSatisfiedBy } : {}),
+    ...(typeof approver.mfaCompletedAt === 'number' ? { mfaCompletedAt: approver.mfaCompletedAt } : {}),
   };
 }
 
@@ -194,19 +203,32 @@ export async function exchangeAppLink(
       kind: 'approved',
       uid: data.uid,
       mfaSatisfiedBy: isMfaSatisfiedBy(data.mfaSatisfiedBy) ? data.mfaSatisfiedBy : undefined,
+      mfaCompletedAt: typeof data.mfaCompletedAt === 'number' ? data.mfaCompletedAt : undefined,
     } as const;
   });
   if (result.kind !== 'approved') return result;
 
   const customToken = await getAdminAuth().createCustomToken(
     result.uid,
-    result.mfaSatisfiedBy ? { appLinkMfa: result.mfaSatisfiedBy } : undefined,
+    result.mfaSatisfiedBy
+      ? {
+          appLinkMfa: result.mfaSatisfiedBy,
+          ...(result.mfaCompletedAt !== undefined ? { appLinkMfaAt: result.mfaCompletedAt } : {}),
+        }
+      : undefined,
   );
   return { kind: 'token', customToken };
 }
 
+/** what an app-link sign-in inherits from the browser session that approved it. */
+export interface AppLinkMfa {
+  satisfiedBy: MfaSatisfiedBy;
+  /** when the approver passed its second factor; 0 when the claim does not say, so it is never fresh. */
+  completedAt: number;
+}
+
 /**
- * the `appLinkMfa` claim of a verified id token, when /api/auth/session may honour it: a
+ * the `appLinkMfa` claims of a verified id token, when /api/auth/session may honour them: a
  * custom-token sign-in, a known satisfier, and the sign-in itself rather than a later refresh.
  * without the `auth_time` bound, a firebase sign-in that outlived its 7-day cookie would keep
  * re-minting a verified session from the every-load re-POST.
@@ -214,11 +236,15 @@ export async function exchangeAppLink(
 export function appLinkMfaFromIdToken(
   decoded: DecodedIdToken,
   nowMs: number = Date.now(),
-): MfaSatisfiedBy | undefined {
+): AppLinkMfa | undefined {
   if (decoded.firebase?.sign_in_provider !== 'custom') return undefined;
   const claim: unknown = decoded.appLinkMfa;
   if (!isMfaSatisfiedBy(claim)) return undefined;
   if (typeof decoded.auth_time !== 'number') return undefined;
   if (nowMs - decoded.auth_time * 1000 > APP_LINK_CLAIM_MAX_AGE_MS) return undefined;
-  return claim;
+  const at: unknown = decoded.appLinkMfaAt;
+  return {
+    satisfiedBy: claim,
+    completedAt: typeof at === 'number' && Number.isFinite(at) ? Math.min(at, nowMs) : 0,
+  };
 }

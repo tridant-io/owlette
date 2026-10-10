@@ -14,6 +14,7 @@ interface MockSession {
   expiresAt?: number;
   mfaVerified?: boolean;
   mfaSatisfiedBy?: string;
+  mfaCompletedAt?: number;
 }
 
 const mockStore = new Map<string, Record<string, unknown>>();
@@ -92,6 +93,8 @@ import {
 } from '@/lib/appLink.server';
 
 const BASE = 1_800_000_000_000;
+/** when the approving browser passed its second factor: before it approved, not at it. */
+const CEREMONY_AT = BASE - 90_000;
 
 function post(path: string, body: Record<string, unknown> = {}): NextRequest {
   return new NextRequest(`http://localhost${path}`, {
@@ -110,6 +113,7 @@ function signedIn(overrides: MockSession = {}): void {
     expiresAt: Date.now() + 60_000,
     mfaVerified: true,
     mfaSatisfiedBy: 'challenge',
+    mfaCompletedAt: CEREMONY_AT,
     ...overrides,
   };
 }
@@ -153,7 +157,12 @@ describe('POST /api/auth/app-link (mint)', () => {
     expect(body).not.toHaveProperty('uid');
 
     const stored = record(body.code);
-    expect(stored).toMatchObject({ status: 'approved', uid: 'user-1', mfaSatisfiedBy: 'challenge' });
+    expect(stored).toMatchObject({
+      status: 'approved',
+      uid: 'user-1',
+      mfaSatisfiedBy: 'challenge',
+      mfaCompletedAt: CEREMONY_AT,
+    });
     expect(Object.values(stored ?? {})).not.toContain(body.code);
   });
 
@@ -192,12 +201,22 @@ describe('POST /api/auth/app-link/exchange', () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body).toEqual({ customToken: 'custom-token' });
-    expect(mockCreateCustomToken).toHaveBeenCalledWith('user-1', { appLinkMfa: 'challenge' });
+    expect(mockCreateCustomToken).toHaveBeenCalledWith('user-1', {
+      appLinkMfa: 'challenge',
+      appLinkMfaAt: CEREMONY_AT,
+    });
     expect(record(code)).toMatchObject({ status: 'used' });
 
     const reuse = await exchange(post('/api/auth/app-link/exchange', { code }));
     expect(reuse.status).toBe(410);
     expect(mockCreateCustomToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the ceremony time out for an approver session that has none', async () => {
+    signedIn({ mfaCompletedAt: undefined });
+    const code = await mintCode();
+    await exchange(post('/api/auth/app-link/exchange', { code }));
+    expect(mockCreateCustomToken).toHaveBeenCalledWith('user-1', { appLinkMfa: 'challenge' });
   });
 
   it('mints a claimless token for an approver with no mfa', async () => {
@@ -250,11 +269,19 @@ describe('POST /api/auth/app-link/start + approve + exchange (cold start)', () =
     signedIn({ mfaSatisfiedBy: 'passkey-uv' });
     const approved = await approve(post('/api/auth/app-link/approve', { code }));
     expect(approved.status).toBe(200);
-    expect(record(code)).toMatchObject({ status: 'approved', uid: 'user-1', mfaSatisfiedBy: 'passkey-uv' });
+    expect(record(code)).toMatchObject({
+      status: 'approved',
+      uid: 'user-1',
+      mfaSatisfiedBy: 'passkey-uv',
+      mfaCompletedAt: CEREMONY_AT,
+    });
 
     const res = await exchange(post('/api/auth/app-link/exchange', { code, secret }));
     expect(res.status).toBe(200);
-    expect(mockCreateCustomToken).toHaveBeenCalledWith('user-1', { appLinkMfa: 'passkey-uv' });
+    expect(mockCreateCustomToken).toHaveBeenCalledWith('user-1', {
+      appLinkMfa: 'passkey-uv',
+      appLinkMfaAt: CEREMONY_AT,
+    });
   });
 
   it('answers nothing for a started code without its secret, approved or not', async () => {
@@ -319,12 +346,27 @@ describe('appLinkMfaFromIdToken', () => {
       auth_time: Math.floor(BASE / 1000),
       firebase: { sign_in_provider: 'custom', identities: {} },
       appLinkMfa: 'challenge',
+      appLinkMfaAt: CEREMONY_AT,
       ...overrides,
     }) as unknown as DecodedIdToken;
 
-  it('reads the claim off a fresh custom-token sign-in', () => {
-    expect(appLinkMfaFromIdToken(token({}), BASE)).toBe('challenge');
-    expect(appLinkMfaFromIdToken(token({ appLinkMfa: 'device-trust' }), BASE)).toBe('device-trust');
+  it('reads the claims off a fresh custom-token sign-in', () => {
+    expect(appLinkMfaFromIdToken(token({}), BASE)).toEqual({
+      satisfiedBy: 'challenge',
+      completedAt: CEREMONY_AT,
+    });
+    expect(appLinkMfaFromIdToken(token({ appLinkMfa: 'device-trust' }), BASE)).toEqual({
+      satisfiedBy: 'device-trust',
+      completedAt: CEREMONY_AT,
+    });
+  });
+
+  // the app's session must never look fresher than the ceremony behind it: swoop
+  // counts a sign-in ceremony under five minutes old as its step-up.
+  it('dates a missing ceremony time at 0 and a future one at now', () => {
+    expect(appLinkMfaFromIdToken(token({ appLinkMfaAt: undefined }), BASE)?.completedAt).toBe(0);
+    expect(appLinkMfaFromIdToken(token({ appLinkMfaAt: 'soon' }), BASE)?.completedAt).toBe(0);
+    expect(appLinkMfaFromIdToken(token({ appLinkMfaAt: BASE + 60_000 }), BASE)?.completedAt).toBe(BASE);
   });
 
   it('ignores the claim on any other sign-in provider', () => {
@@ -341,7 +383,7 @@ describe('appLinkMfaFromIdToken', () => {
   });
 
   it('ignores the claim on a refreshed token long after the sign-in', () => {
-    expect(appLinkMfaFromIdToken(token({}), BASE + APP_LINK_CLAIM_MAX_AGE_MS)).toBe('challenge');
+    expect(appLinkMfaFromIdToken(token({}), BASE + APP_LINK_CLAIM_MAX_AGE_MS)?.satisfiedBy).toBe('challenge');
     expect(appLinkMfaFromIdToken(token({}), BASE + APP_LINK_CLAIM_MAX_AGE_MS + 1000)).toBeUndefined();
   });
 });

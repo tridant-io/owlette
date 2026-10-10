@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 
 import { defineConfig, devices } from '@playwright/test';
 
+import { E2E_SESSION_SECRET } from './e2e/helpers/signInCeremony';
+
 /**
  * Runs the web app against Firebase emulators (Auth + Firestore + Storage) on
  * non-default ports so it coexists with `npm run dev` on :3000.
@@ -243,8 +245,8 @@ export default defineConfig({
       FIREBASE_STORAGE_EMULATOR_HOST: STORAGE_EMULATOR_HOST,
       FIREBASE_PROJECT_ID: 'demo-playwright-e2e',
       OWLETTE_NEXT_DIST_DIR: NEXT_DIST_DIR,
-      // iron-session needs 32+ chars
-      SESSION_SECRET: 'demo-session-secret-for-emulator-playwright-tests-32chars',
+      // shared with the specs, which date a sign-in's second factor back
+      SESSION_SECRET: E2E_SESSION_SECRET,
       // swoop's mint route refuses outright with `signal_not_configured` when the
       // signal origin is blank, and the blanked third-party value above is the
       // real worker's. an unreachable origin keeps every session in the emulator:

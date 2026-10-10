@@ -11,6 +11,17 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — a second factor you just passed is the step-up, and a step-up lasts 7 days
+
+A second factor passed at sign-in in the last five minutes now counts as swoop's
+step-up for the machines opened in those five minutes, so the first machine
+after signing in takes control without asking again. That holds for owlette
+swoop signed in from a browser that has just passed one; approving the app from
+a browser that signed in earlier still asks. One step-up now covers a machine
+for 7 days instead of 12 hours. A remembered browser still asks, a kill still
+closes every window on the machine, and a step-up a sign-in stood in for is
+recorded on the audit trail (`step_up_opened`).
+
 ## [4.1.8] - 2026-10-10
 
 ### added — owlette swoop, the desktop app for swoop
