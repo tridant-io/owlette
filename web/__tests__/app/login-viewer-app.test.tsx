@@ -15,7 +15,9 @@
  */
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { renderToString } from 'react-dom/server.node';
 
+import { ViewerAppProvider } from '@/contexts/ViewerAppContext';
 import type { InAppBrowserState } from '@/hooks/useInAppBrowser';
 import { AppLinkError } from '@/lib/appLink';
 
@@ -319,5 +321,32 @@ describe('/login in a browser', () => {
     expect(screen.getByRole('link', { name: 'forgot password?' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'or use your email and password' })).not.toBeInTheDocument();
     expect(container.querySelector('[data-tauri-drag-region]')).toBeNull();
+  });
+});
+
+describe("/login in the server's html", () => {
+  // the root layout's provider carries what the request's ua said; navigator,
+  // which the server has none of, is set to say the opposite
+  const serve = (platform: 'windows' | null) =>
+    renderToString(
+      <ViewerAppProvider platform={platform} nativeKeys={false}>
+        <LoginPage />
+      </ViewerAppProvider>,
+    );
+
+  it("is already the app's page inside owlette swoop, so nothing flashes on load", () => {
+    viewerApp = false;
+    const html = serve('windows');
+    expect(html).toContain('sign in with your browser');
+    expect(html).toContain('data-tauri-drag-region');
+    expect(html).not.toContain('continue with Google');
+  });
+
+  it("is the browser's page in a browser", () => {
+    viewerApp = true;
+    const html = serve(null);
+    expect(html).toContain('continue with Google');
+    expect(html).not.toContain('sign in with your browser');
+    expect(html).not.toContain('data-tauri-drag-region');
   });
 });

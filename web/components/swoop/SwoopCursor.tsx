@@ -90,7 +90,6 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
     onPicture,
   );
   const box = useSwoopPictureBox(session);
-  // the server renders no app; hydration fills it in, like the cursor store above.
   const inApp = useViewerAppPlatform() !== null;
   const overlay = locked || inApp || (state.shape !== null && !fitsCssCursor(state.shape));
 

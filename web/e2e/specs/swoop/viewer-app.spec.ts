@@ -179,6 +179,23 @@ test.describe('inside owlette swoop — signed out', () => {
     expect(await bridgeCalls(page)).toEqual(['close']);
   });
 
+  test("the server's html is already the app's login, so the browser's never flashes first", async ({ page }) => {
+    const served = async (userAgent: string) => {
+      const res = await page.request.get('/login', { headers: { 'user-agent': userAgent } });
+      expect(res.ok()).toBe(true);
+      return res.text();
+    };
+    const app = await served(APP_UA);
+    expect(app).toContain('sign in with your browser');
+    expect(app).toContain('data-testid="swoop-window-strip"');
+    expect(app).not.toContain('continue with Google');
+    // a browser's request gets the browser's login
+    const browser = await served(devices['Desktop Chrome'].userAgent);
+    expect(browser).toContain('continue with Google');
+    expect(browser).not.toContain('sign in with your browser');
+    expect(browser).not.toContain('data-testid="swoop-window-strip"');
+  });
+
   test("the login page is the app's own: owlette swoop, no site footer, the email form behind its link", async ({
     page,
   }) => {

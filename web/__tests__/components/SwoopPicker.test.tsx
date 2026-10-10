@@ -16,8 +16,10 @@
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { renderToString } from 'react-dom/server.node';
 import { SwoopPicker } from '@/components/swoop/SwoopPicker';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { ViewerAppProvider } from '@/contexts/ViewerAppContext';
 import type { Machine } from '@/hooks/useFirestore';
 
 const SITE = 'site-1';
@@ -453,5 +455,31 @@ describe('SwoopPicker', () => {
     sites = [{ id: SITE, name: 'Site One' }];
     renderPicker();
     expect(screen.getByText('no machines in this site yet')).toBeInTheDocument();
+  });
+});
+
+describe("SwoopPicker in the server's html", () => {
+  // the root layout's provider carries what the request's ua said
+  const serve = (platform: 'windows' | null) =>
+    renderToString(
+      <ViewerAppProvider platform={platform} nativeKeys={false}>
+        <TooltipProvider delayDuration={0}>
+          <SwoopPicker />
+        </TooltipProvider>
+      </ViewerAppProvider>,
+    );
+
+  it('has no way back to the dashboard inside owlette swoop, so none flashes on load', () => {
+    machines = [machine('m1')];
+    const html = serve('windows');
+    expect(html).not.toContain('swoop-picker-dashboard-link');
+    expect(html).toContain('data-tauri-drag-region');
+  });
+
+  it('links back to the dashboard in a browser', () => {
+    machines = [machine('m1')];
+    const html = serve(null);
+    expect(html).toContain('swoop-picker-dashboard-link');
+    expect(html).not.toContain('data-tauri-drag-region');
   });
 });

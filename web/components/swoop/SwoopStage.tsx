@@ -23,7 +23,7 @@
  * changing `contentRect` breaks clicks on every non-matching aspect ratio.
  */
 
-import { useCallback, useEffect, useId, useState, useSyncExternalStore, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useState, type RefObject } from 'react';
 import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -31,10 +31,8 @@ import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
 import { isViewerApp } from '@/lib/swoop/viewerApp';
 import type { SwoopSessionState, SwoopStallRecovery } from '@/hooks/useSwoopSession';
+import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import type { SwoopNoPath } from '@/lib/swoop/peer';
-
-const subscribeNever = (): (() => void) => () => {};
-const notInApp = () => false;
 
 export interface SwoopStageProps {
   session: SwoopSession | null;
@@ -144,8 +142,8 @@ export function SwoopStage({
 }: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  // the server renders no app; the way back from a settled notice is the picker there
-  const inApp = useSyncExternalStore(subscribeNever, isViewerApp, notInApp);
+  // in the app the way back from a settled notice is the picker
+  const inApp = useViewerAppPlatform() !== null;
   // the way out, said on each entry into fullscreen and only where it is not
   // obvious: owlette swoop always says it (its hold is its own, and nothing
   // else tells it), a browser only with the keyboard captured, where a tap of

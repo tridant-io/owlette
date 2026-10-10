@@ -36,7 +36,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { isViewerApp } from '@/lib/swoop/viewerApp';
+import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import {
   codeStepUpProof,
   passkeyStepUpProof,
@@ -168,8 +168,7 @@ export function StepUpCodeFields({
 function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'open'>) {
   const ceremony = useStepUpCeremony(onProof);
   const { pending, error, setError, submit } = ceremony;
-  // mounted only once the dialog opens, so this never runs in a server render
-  const [viewerApp] = useState(isViewerApp);
+  const viewerApp = useViewerAppPlatform() !== null;
   const params = useParams<{ siteId: string; machineId: string }>();
   const machine =
     viewerApp && params?.siteId && params?.machineId
