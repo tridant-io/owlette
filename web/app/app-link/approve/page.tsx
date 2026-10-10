@@ -1,10 +1,10 @@
 'use client';
 
 import { Suspense, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { AuthShell } from '@/components/auth/AuthShell';
+import { AuthShell, AuthFooterDot } from '@/components/auth/AuthShell';
 import { Button } from '@/components/ui/button';
 import { AppLinkError, approveAppLink } from '@/lib/appLink';
 
@@ -26,7 +26,8 @@ const OUTCOME_COPY: Partial<Record<ApproveState, string>> = {
  */
 function ApproveInner() {
   const searchParams = useSearchParams();
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
+  const router = useRouter();
   const code = searchParams.get('code') ?? '';
   const [state, setState] = useState<ApproveState>(code ? 'ask' : 'gone');
 
@@ -41,9 +42,25 @@ function ApproveInner() {
     }
   };
 
+  // the wrong account at this screen is a real case (a shared desk, a browser left
+  // signed in): the way out is here, and it returns to this very page after sign-in
+  const signInAsSomeoneElse = async () => {
+    const here = `${window.location.pathname}${window.location.search}`;
+    await signOut();
+    router.replace(`/login?redirect=${encodeURIComponent(here)}`);
+  };
   const footer = user?.email ? (
     <>
       signed in as <span className="break-all">{user.email}</span>
+      <AuthFooterDot />
+      <button
+        type="button"
+        onClick={() => void signInAsSomeoneElse()}
+        className="underline-offset-2 hover:underline"
+        data-testid="sign-in-as-someone-else"
+      >
+        not you? sign in as someone else
+      </button>
     </>
   ) : undefined;
 

@@ -168,6 +168,8 @@ test('a cold start signs owlette swoop in through the signed-in browser, mfa inc
     await expect(appPage.getByText('waiting for your browser…')).toBeVisible();
 
     await page.goto(approveUrl);
+    // the footer offers the way out for the wrong account, and says who is signed in
+    await expect(page.getByTestId('sign-in-as-someone-else')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'sign in owlette swoop on this computer?' })).toBeVisible();
     await page.getByRole('button', { name: 'approve' }).click();
     await expect(page.getByText('done, go back to owlette swoop')).toBeVisible();

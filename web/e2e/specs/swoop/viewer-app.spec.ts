@@ -291,6 +291,8 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
       await expect(
         page.getByRole('heading', { name: `allow control of ${STEP_MACHINE} from owlette swoop on this computer?` }),
       ).toBeVisible();
+      await expect(page.getByText('or enter a code')).toBeVisible();
+      await expect(page.getByTestId('sign-in-as-someone-else')).toBeVisible();
       await page.getByLabel('authenticator code').fill(await freshTotp(page, secret, spent));
       await page.getByRole('button', { name: 'confirm' }).click();
       await expect(page.getByText('done, go back to owlette swoop')).toBeVisible();
