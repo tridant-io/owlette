@@ -84,6 +84,104 @@ describe('SwoopStage esc hint', () => {
     enterFullscreen(stageRef.current);
     expect(screen.queryByText(/hold esc/i)).toBeNull();
   });
+
+  it('shows no fullscreen notice in a browser, keyboard lock or not', () => {
+    (navigator as Navigator & { keyboard?: unknown }).keyboard = {
+      lock: () => Promise.resolve(),
+      unlock: () => {},
+    };
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+  });
+});
+
+/**
+ * owlette swoop has no browser overlay that tells the way out of fullscreen,
+ * and a toast would sit outside the fullscreen element, so the stage says it
+ * itself: a notice at the top on every entry, fading after four seconds.
+ */
+describe('SwoopStage esc hint inside owlette swoop', () => {
+  const APP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 owlette-swoop-viewer/4.1.8';
+  let ua: jest.SpyInstance | undefined;
+  beforeEach(() => {
+    ua = jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(APP_UA);
+  });
+  afterEach(() => ua?.mockRestore());
+
+  function exitFullscreen() {
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null });
+    act(() => {
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+  }
+
+  it('says press and hold esc on entry, fades it after four seconds, then drops it', () => {
+    jest.useFakeTimers();
+    const stageRef = renderStage();
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+
+    enterFullscreen(stageRef.current);
+    const hint = screen.getByRole('status');
+    expect(hint).toHaveAttribute('data-testid', 'fullscreen-hint');
+    expect(hint).toHaveTextContent('press and hold esc to exit fullscreen');
+    // the fade is motion-safe: with reduced motion the hint just goes
+    expect(hint).toHaveClass('motion-safe:transition-opacity');
+    expect(hint).not.toHaveClass('opacity-0');
+
+    act(() => {
+      jest.advanceTimersByTime(4000);
+    });
+    expect(screen.getByTestId('fullscreen-hint')).toHaveClass('opacity-0');
+
+    act(() => {
+      jest.advanceTimersByTime(300);
+    });
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+
+    // a pointer lock change inside fullscreen is not an entry
+    act(() => {
+      document.dispatchEvent(new Event('pointerlockchange'));
+    });
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+  });
+
+  it('says it again on every entry, and leaves with fullscreen', () => {
+    jest.useFakeTimers();
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+
+    exitFullscreen();
+    enterFullscreen(stageRef.current);
+    expect(screen.getByTestId('fullscreen-hint')).toBeInTheDocument();
+
+    exitFullscreen();
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+  });
+
+  it('is the one message: no second hold-esc line, keyboard lock or not', () => {
+    (navigator as Navigator & { keyboard?: unknown }).keyboard = {
+      lock: () => Promise.resolve(),
+      unlock: () => {},
+    };
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    expect(screen.getAllByText(/esc/i)).toHaveLength(1);
+    expect(screen.queryByText(/hold esc for two seconds/i)).toBeNull();
+  });
+
+  it('sits above the click-to-capture line rather than over it', () => {
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    const hint = screen.getByTestId('fullscreen-hint');
+    const capture = screen.getByText('click to capture the mouse');
+    expect(capture.parentElement).toBe(hint.parentElement);
+    expect(hint.compareDocumentPosition(capture) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });
 
 describe('SwoopStage — leaving with the keyboard', () => {
@@ -245,6 +343,19 @@ describe('SwoopStage — a session that failed or ended', () => {
     expect(alert).toHaveTextContent('session ended');
     expect(alert).toHaveTextContent('this session was ended from elsewhere.');
     expect(screen.getByRole('link', { name: 'back to dashboard' })).toHaveAttribute('href', '/dashboard');
+  });
+
+  it('leads back to the picker inside the owlette swoop desktop app', () => {
+    const ua = jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 owlette-swoop-viewer/4.1.8',
+    );
+    try {
+      renderStage({ state: 'ended', error: 'this session was ended from elsewhere.' });
+      expect(screen.getByRole('link', { name: 'back to machines' })).toHaveAttribute('href', '/swoop');
+      expect(screen.queryByRole('link', { name: 'back to dashboard' })).toBeNull();
+    } finally {
+      ua.mockRestore();
+    }
   });
 
   it('explains only the swoop switch, not every refusal', () => {

@@ -61,3 +61,38 @@ describe('sendSpecialKey', () => {
     expect(specialKeysFor('linux')).toEqual(specialKeysFor('windows').filter((k) => !k.sas));
   });
 });
+
+describe('specialKeysFor inside owlette swoop', () => {
+  const MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)';
+  const WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0';
+  const MAC_KEYS_APP = `${MAC} owlette-swoop-viewer/4.1.8 (keys)`;
+  const as = (ua: string) => jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(ua);
+  const ids = (hostOs: 'windows' | 'macos' | 'linux', fullscreen = false) =>
+    specialKeysFor(hostOs, fullscreen).map((k) => k.id);
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('drops cmd+q in fullscreen, which the mac app hands the machine itself; cmd+tab stays', () => {
+    as(MAC_KEYS_APP);
+    expect(ids('macos', true)).toEqual(['cmd-tab', 'cmd-space', 'cmd-ctrl-q', 'esc']);
+    // outside fullscreen the app captures nothing, and cmd+q would quit it
+    expect(ids('macos')).toContain('cmd-q');
+  });
+
+  it("changes nothing without the app's native keys", () => {
+    for (const ua of [MAC, `${MAC} owlette-swoop-viewer/4.1.8`, `${WINDOWS} owlette-swoop-viewer/4.1.8`]) {
+      as(ua);
+      expect(ids('macos', true)).toContain('cmd-q');
+    }
+  });
+
+  it("leaves a windows or linux machine's list alone, from a mac and (until it captures keys) from windows", () => {
+    as(WINDOWS);
+    const browser = { windows: ids('windows', true), linux: ids('linux', true) };
+    for (const ua of [MAC_KEYS_APP, `${WINDOWS} owlette-swoop-viewer/4.1.8 (keys)`]) {
+      as(ua);
+      expect(ids('windows', true)).toEqual(browser.windows);
+      expect(ids('linux', true)).toEqual(browser.linux);
+    }
+  });
+});

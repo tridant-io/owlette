@@ -14,6 +14,13 @@ import { SwoopCursor } from '@/components/swoop/SwoopCursor';
 import { attach } from '@/lib/swoop/cursor';
 import { SWOOP_FEATURES, type SwoopSession } from '@/lib/swoop/features';
 
+// flipped per test: the desktop app is told apart by its user-agent token.
+let inApp = false;
+jest.mock('@/lib/swoop/viewerApp', () => ({
+  ...jest.requireActual('@/lib/swoop/viewerApp'),
+  viewerAppPlatform: () => (inApp ? 'windows' : null),
+}));
+
 const PNG = 'iVBORw0KGgo=';
 
 const rect = (left: number, top: number, width: number, height: number): DOMRect =>
@@ -254,6 +261,42 @@ describe('SwoopCursor', () => {
     expect(h.stage.style.cursor).toBe('none');
     expect(screen.getByTestId('machine-cursor')).toBeInTheDocument();
     h.detach();
+  });
+
+  it('in the owlette swoop desktop app, draws the pointer at its own size whatever the picture scale', () => {
+    inApp = true;
+    try {
+      const h = harness();
+      // a 1000 px wide picture of a 500 px wide machine: the picture is 2x, the pointer is not.
+      Object.defineProperty(h.session.video, 'videoWidth', { configurable: true, get: () => 500 });
+      render(<SwoopCursor session={h.session} />);
+      h.cursor(shape());
+      h.cursor(cpos(0.5, 0.5));
+      const drawn = screen.getByTestId('machine-cursor');
+      expect(drawn.style.width).toBe('32px');
+      expect(drawn.style.left).toBe(`${0.5 * 999 - 4}px`);
+      h.detach();
+    } finally {
+      inApp = false;
+    }
+  });
+
+  it('in the owlette swoop desktop app, overlays the shape outside pointer lock and hides the local pointer', () => {
+    inApp = true;
+    try {
+      const h = harness();
+      render(<SwoopCursor session={h.session} />);
+      h.cursor(shape());
+      h.cursor(cpos(0.5, 0.5));
+      // never a css cursor there: the webview paints it at bitmap size, small and soft on a scaled display.
+      expect(h.stage.style.cursor).toBe('none');
+      const drawn = screen.getByTestId('machine-cursor');
+      expect(drawn.style.left).toBe(`${0.5 * 999 - 4}px`);
+      expect(drawn).toHaveAttribute('src', `data:image/png;base64,${PNG}`);
+      h.detach();
+    } finally {
+      inApp = false;
+    }
   });
 
   it('clears the stage css cursor on unmount', () => {

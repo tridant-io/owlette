@@ -78,6 +78,7 @@ interface MachineCardViewProps {
   onScreenshot?: (machineId: string) => void;
   onLiveView?: (machineId: string) => void;
   onSwoop?: (machineId: string) => void;
+  onSwoopApp?: (machineId: string) => void;
   /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
   swoopOff?: boolean;
   onSiteSettings?: () => void;
@@ -91,7 +92,7 @@ type MachineCardHandlers = Pick<
   | 'onEditProcess' | 'onDuplicateProcess' | 'onCreateProcess' | 'onKillProcess' | 'onRestartProcess'
   | 'onSetLaunchMode' | 'onConfigureSchedule' | 'onRemoveMachine' | 'onMetricClick'
   | 'onRestart' | 'onShutdown' | 'onCancelRestart' | 'onDismissRestartPending'
-  | 'onScreenshot' | 'onLiveView' | 'onSwoop' | 'onSiteSettings'
+  | 'onScreenshot' | 'onLiveView' | 'onSwoop' | 'onSwoopApp' | 'onSiteSettings'
 >;
 
 /** Split out of the map so it can use hooks. */
@@ -162,6 +163,7 @@ const MachineCard = memo(function MachineCard({
   onScreenshot,
   onLiveView,
   onSwoop,
+  onSwoopApp,
   onSiteSettings,
   showLocalClock,
 }: MachineCardProps) {
@@ -396,6 +398,7 @@ const MachineCard = memo(function MachineCard({
                 swoopCapable={machine.capabilities?.swoop === 1}
                 swoopViewers={machine.swoopViewers}
                 onSwoop={onSwoop ? () => onSwoop(machineId) : undefined}
+                onSwoopApp={onSwoopApp ? () => onSwoopApp(machineId) : undefined}
                 swoopOff={swoopOff}
                 onSiteSettings={onSiteSettings}
                 onViewDisplays={openMetric ? () => openMetric('display') : undefined}

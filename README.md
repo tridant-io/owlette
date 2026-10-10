@@ -82,6 +82,7 @@ bulk file bytes do **not** go through Firestore. roost chunks and version bodies
 
 - **agent** (`agent/`): Python 3.11 service. monitors processes every 5s, sends heartbeats and metrics on an adaptive interval (5s with the desktop window open, 30s while processes run, 120s idle), executes commands, works offline from cached config.
 - **desktop app** (`desktop/`): Tauri 2. the local UI, sharing the service's config file. on macOS and Linux it runs as the signed-in user beside the root daemon, and the two hand each other the work only the other can do: the app captures the screen for the daemon, and the daemon pairs, leaves a site and restarts for the app.
+- **owlette swoop** (`desktop/viewer/`): Tauri 2. the viewer app, binary `owlette-swoop-viewer`: the dashboard's swoop viewer in a window of its own instead of a browser tab, carried by every agent installer.
 - **dashboard** (`web/`): Next.js 16. real-time Firestore listeners, the REST API, and the docs site at `/docs`.
 - **cloud functions** (`functions/`): deployment status, roost fan-out and chunk verification, quotas, threshold alerts, webhook dispatch, and the audit log.
 - **object storage**: Cloudflare R2. content-addressed roost chunks and version bodies under a per-site prefix, reachable only through signed URLs.

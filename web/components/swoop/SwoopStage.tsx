@@ -23,14 +23,18 @@
  * changing `contentRect` breaks clicks on every non-matching aspect ratio.
  */
 
-import { useCallback, useEffect, useId, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useState, useSyncExternalStore, type RefObject } from 'react';
 import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
+import { isViewerApp } from '@/lib/swoop/viewerApp';
 import type { SwoopSessionState, SwoopStallRecovery } from '@/hooks/useSwoopSession';
 import type { SwoopNoPath } from '@/lib/swoop/peer';
+
+const subscribeNever = (): (() => void) => () => {};
+const notInApp = () => false;
 
 export interface SwoopStageProps {
   session: SwoopSession | null;
@@ -57,15 +61,45 @@ export interface SwoopStageProps {
   children?: React.ReactNode;
 }
 
+const HINT_MS = 4000;
+/** the fullscreen hint's fade; matches its `motion-safe:duration-300`. */
+const HINT_FADE_MS = 300;
+
 /** four seconds, once per entry, then gone. */
 function Hint({ children, onDone }: { children: React.ReactNode; onDone: () => void }) {
   useEffect(() => {
-    const timer = setTimeout(onDone, 4000);
+    const timer = setTimeout(onDone, HINT_MS);
     return () => clearTimeout(timer);
   }, [onDone]);
   return (
     <p className="pointer-events-none absolute inset-x-0 bottom-4 text-center text-xs text-swoop-stage-ink">
       {children}
+    </p>
+  );
+}
+
+/**
+ * owlette swoop's way out of fullscreen, said on every entry: the app has no
+ * browser overlay that says it, and a toast would sit outside the fullscreen
+ * element, unseen. four seconds, then a fade; with reduced motion it just goes.
+ */
+function FullscreenHint({ onDone }: { onDone: () => void }) {
+  const [fading, setFading] = useState(false);
+  useEffect(() => {
+    const fade = setTimeout(() => setFading(true), HINT_MS);
+    const done = setTimeout(onDone, HINT_MS + HINT_FADE_MS);
+    return () => {
+      clearTimeout(fade);
+      clearTimeout(done);
+    };
+  }, [onDone]);
+  return (
+    <p
+      role="status"
+      data-testid="fullscreen-hint"
+      className={`rounded-full border border-border bg-card/90 px-3 py-1.5 text-xs text-foreground shadow-sm motion-safe:transition-opacity motion-safe:duration-300 ${fading ? 'opacity-0' : ''}`}
+    >
+      press and hold esc to exit fullscreen
     </p>
   );
 }
@@ -110,12 +144,16 @@ export function SwoopStage({
 }: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  // the way out, said once fullscreen holds and only where it is not obvious:
-  // with the keyboard captured a tap of esc goes to the machine, and the hold
-  // is the exit the browser reserves. without the lock a tap leaves as usual.
-  const [escHint, setEscHint] = useState(false);
+  // the server renders no app; the way back from a settled notice is the picker there
+  const inApp = useSyncExternalStore(subscribeNever, isViewerApp, notInApp);
+  // the way out, said on each entry into fullscreen and only where it is not
+  // obvious: owlette swoop always says it (its hold is its own, and nothing
+  // else tells it), a browser only with the keyboard captured, where a tap of
+  // esc goes to the machine and the hold is the exit the browser reserves.
+  // without the lock a tap leaves as usual.
+  const [escHint, setEscHint] = useState<'app' | 'browser' | null>(null);
   // stable, or every stats tick re-renders the stage and restarts the timer.
-  const hideEscHint = useCallback(() => setEscHint(false), []);
+  const hideEscHint = useCallback(() => setEscHint(null), []);
   // windowed, every key — tab too — goes to the machine. the way out is told
   // to a screen reader only: on screen it was noise.
   const leaveHintId = useId();
@@ -131,17 +169,21 @@ export function SwoopStage({
   }, [capture, onLeave, stageRef]);
 
   useEffect(() => {
-    const sync = () => {
-      setLocked(document.pointerLockElement === stageRef.current);
+    const syncLock = () => setLocked(document.pointerLockElement === stageRef.current);
+    // the hint comes with an entry into fullscreen, not with a pointer lock change inside one
+    const syncFullscreen = () => {
+      syncLock();
       const on = document.fullscreenElement === stageRef.current;
       setFullscreen(on);
-      setEscHint(on && hasKeyboardLock());
+      if (!on) setEscHint(null);
+      else if (isViewerApp()) setEscHint('app');
+      else setEscHint(hasKeyboardLock() ? 'browser' : null);
     };
-    document.addEventListener('pointerlockchange', sync);
-    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('pointerlockchange', syncLock);
+    document.addEventListener('fullscreenchange', syncFullscreen);
     return () => {
-      document.removeEventListener('pointerlockchange', sync);
-      document.removeEventListener('fullscreenchange', sync);
+      document.removeEventListener('pointerlockchange', syncLock);
+      document.removeEventListener('fullscreenchange', syncFullscreen);
     };
   }, [stageRef]);
 
@@ -161,6 +203,7 @@ export function SwoopStage({
   }, [fullscreen, locked, session, stageRef]);
 
   const windowedCapture = capture !== null && !fullscreen;
+  const captureHint = state === 'connected' && fullscreen && !locked;
   // a stall recovery speaks for the stage until the page is connecting again.
   const recovering = stall === 'reattaching' || stall === 'reconnecting';
   // an ended or failed session is not connecting: it says why, and the way on.
@@ -237,17 +280,19 @@ export function SwoopStage({
               </Button>
             )}
             <Button asChild variant="outline" size="sm">
-              <Link href="/dashboard">back to dashboard</Link>
+              <Link href={inApp ? '/swoop' : '/dashboard'}>{inApp ? 'back to machines' : 'back to dashboard'}</Link>
             </Button>
           </span>
         </p>
       )}
-      {state === 'connected' && fullscreen && !locked && (
-        <p className="pointer-events-none absolute inset-x-0 top-4 text-center text-xs text-swoop-stage-ink">
-          click to capture the mouse
-        </p>
+      {(escHint === 'app' || captureHint) && (
+        // one column, so the two never overlap while the pointer lock is on its way
+        <div className="pointer-events-none absolute inset-x-0 top-4 flex flex-col items-center gap-2">
+          {escHint === 'app' && <FullscreenHint onDone={hideEscHint} />}
+          {captureHint && <p className="text-center text-xs text-swoop-stage-ink">click to capture the mouse</p>}
+        </div>
       )}
-      {state === 'connected' && escHint && (
+      {state === 'connected' && escHint === 'browser' && (
         <Hint onDone={hideEscHint}>hold esc for two seconds to leave fullscreen</Hint>
       )}
       {windowedCapture && (

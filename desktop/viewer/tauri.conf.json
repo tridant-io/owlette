@@ -1,0 +1,48 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "owlette swoop",
+  "mainBinaryName": "owlette-swoop-viewer",
+  "version": "4.1.8",
+  "identifier": "app.owlette.swoop-viewer",
+  "build": {
+    "frontendDist": "dist"
+  },
+  "app": {
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis",
+      "app",
+      "deb"
+    ],
+    "category": "Utility",
+    "shortDescription": "swoop into a machine from your desk",
+    "longDescription": "owlette swoop opens the swoop viewer from owlette.app in windows of its own, one per machine, so you can sign in, pick a machine and work on it from your desk.",
+    "icon": [
+      "../src-tauri/icons/32x32.png",
+      "../src-tauri/icons/128x128.png",
+      "../src-tauri/icons/128x128@2x.png",
+      "../src-tauri/icons/icon.icns",
+      "../src-tauri/icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "owlette-swoop"
+        ]
+      }
+    }
+  }
+}

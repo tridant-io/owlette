@@ -349,12 +349,12 @@ use **Windows Settings** > **Apps** > **Owlette** > **Uninstall**.
 
 the uninstaller:
 
-1. closes the desktop app.
+1. closes the desktop app and owlette swoop.
 2. stops and deregisters `OwletteService` by running `tools\owlette-host.exe uninstall`, which waits for the service to fully stop so the agent can report itself offline first.
 3. undoes swoop's machine-wide changes: it removes the `Owlette swoop` firewall rules and puts the `SoftwareSASGeneration` policy back to what it was before swoop set it. a machine that never ran swoop has nothing to undo.
 4. removes the Windows Defender exclusions that pre-PawnIO versions added, plus any leftover legacy WinRing0 driver services. the PawnIO driver stays installed — it is a shared component other tools use; remove it separately from installed apps if it is no longer needed.
 5. removes installed component directories: `python\`, `agent\`, `app\`, `tools\`, `scripts\` and `swoop\`, along with swoop's own logs (`logs\swoop\`) and scratch files.
-6. removes installed top-level files such as `README.md` and `LICENSE`.
+6. removes installed top-level files such as `README.md` and `LICENSE`, the **owlette swoop** Start menu shortcut, and the `owlette-swoop://` link registration.
 
 by default, it preserves user data under `C:\ProgramData\Owlette`, including `config\`, `logs\`, `cache\`, `tmp\` and `.tokens.enc`.
 
@@ -371,7 +371,7 @@ sudo launchctl bootout gui/$(id -u)/app.owlette.desktop
 
 # remove what the package installed, and forget its receipts
 sudo rm /Library/LaunchDaemons/app.owlette.agent.plist /Library/LaunchAgents/app.owlette.desktop.plist
-sudo rm -rf /Applications/owlette.app "/Library/Application Support/Owlette/runtime"
+sudo rm -rf /Applications/owlette.app "/Applications/owlette swoop.app" "/Library/Application Support/Owlette/runtime"
 sudo pkgutil --forget app.owlette.runtime
 sudo pkgutil --forget app.owlette.app
 ```
@@ -403,18 +403,19 @@ the Windows installer is built with [Inno Setup](https://jrsoftware.org/isinfo.p
 | agent source | Python modules under `C:\ProgramData\Owlette\agent\src\` |
 | desktop app | `C:\ProgramData\Owlette\app\owlette-desktop.exe` — the local configuration window and the tray icon, in one process |
 | swoop streamer | `C:\ProgramData\Owlette\swoop\owlette-swoop.exe` |
-| WebView2 runtime | Microsoft's Evergreen bootstrapper, run only on machines that lack the runtime the desktop app renders in (common on LTSC/IoT kiosk images) |
+| owlette swoop | `C:\ProgramData\Owlette\app\owlette-swoop-viewer.exe` — the [swoop](/docs/dashboard/swoop#owlette-swoop) viewer app, with an **owlette swoop** Start menu shortcut and the machine-wide `owlette-swoop://` link registration |
+| WebView2 runtime | Microsoft's Evergreen bootstrapper, run only on machines that lack the runtime the desktop app and owlette swoop render in (common on LTSC/IoT kiosk images) |
 | PawnIO driver | signed kernel driver LibreHardwareMonitor uses for CPU temperature sensors, installed only when absent or older than the bundled 2.2.0 (replaced the WinRing0 driver used through 3.1.0) |
 
 before anything else, every install and upgrade retracts the Windows Defender exclusions earlier versions added for the old WinRing0 driver — the PawnIO stack needs none of them, and an upgrade never runs the old uninstaller that would otherwise have cleared them. the removal, and the exclusions left in place afterwards, are appended to `C:\ProgramData\Owlette\logs\defender_setup.log`.
 
 ### the macOS package
 
-one product package with two parts: the service runtime — a standalone Python 3.11 with the agent's dependencies and source, under `/Library/Application Support/Owlette/runtime` — with its LaunchDaemon and LaunchAgent, and `owlette.app` in `/Applications`, which carries the swoop streamer inside it. both are signed and notarized. before the payload lands the package stops the running service and app; afterwards it lays out the data root, adds the console user to `_owlette`, loads both jobs and hands any preseed to the pairing flow.
+one product package with two parts: the service runtime — a standalone Python 3.11 with the agent's dependencies and source, under `/Library/Application Support/Owlette/runtime` — with its LaunchDaemon and LaunchAgent, and `owlette.app` in `/Applications`, which carries the swoop streamer inside it, with `owlette swoop.app`, the [swoop](/docs/dashboard/swoop#owlette-swoop) viewer app, beside it. both are signed and notarized. before the payload lands the package stops the running service, the app and owlette swoop; afterwards it lays out the data root, adds the console user to `_owlette`, loads both jobs and hands any preseed to the pairing flow.
 
 ### the Linux package
 
-one `owlette-agent` package: the service runtime with its own Python 3.11 under `/opt/owlette`, the systemd unit, the desktop app at `/usr/bin/owlette-desktop` with the user unit that starts it, and the polkit rule at `/etc/polkit-1/rules.d/49-owlette.rules`. it declares the app's library dependencies and `polkitd`, which is why it has to be installed with `apt-get`. an upgrade stops the service before its files are replaced, then restarts the service and every running copy of the app on the new version.
+one `owlette-agent` package: the service runtime with its own Python 3.11 under `/opt/owlette`, the systemd unit, the desktop app at `/usr/bin/owlette-desktop` with the user unit that starts it, [owlette swoop](/docs/dashboard/swoop#owlette-swoop) at `/usr/bin/owlette-swoop-viewer` with an applications entry that also opens `owlette-swoop://` links, and the polkit rule at `/etc/polkit-1/rules.d/49-owlette.rules`. it declares the app's library dependencies and `polkitd`, which is why it has to be installed with `apt-get`. an upgrade stops the service before its files are replaced, then restarts the service and every running copy of the app on the new version.
 
 ---
 

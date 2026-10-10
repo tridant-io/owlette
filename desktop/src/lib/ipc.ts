@@ -176,6 +176,19 @@ export function startupLinkEnabled(): Promise<boolean> {
   return invoke<boolean>('startup_link_enabled')
 }
 
+/** whether owlette swoop, the viewer app, is installed where the host looks for it */
+export function swoopViewerInstalled(): Promise<boolean> {
+  return invoke<boolean>('swoop_viewer_installed')
+}
+
+/**
+ * open owlette swoop on the swoop picker of this machine's dashboard. rejects
+ * with the host's message, e.g. when it is not installed.
+ */
+export function openSwoopViewer(): Promise<void> {
+  return invoke<void>('open_swoop_viewer')
+}
+
 /** macOS's answer on Screen Recording for this app; null off macOS. */
 export function screenRecordingGranted(): Promise<boolean | null> {
   return invoke<boolean | null>('screen_recording_granted')

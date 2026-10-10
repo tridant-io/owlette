@@ -6,6 +6,8 @@ Roughly prioritized. Not a commitment — just a living list of what's next.
 
 ## next up — right after swoop on macOS ships
 
+- **native swoop viewer (#325): landed on dev** as owlette swoop, the desktop viewer app (ADR 0012); still owed: Windows key capture, a published standalone download (`/download/swoop-viewer` points at the docs until then), a session tried on Linux, the viewer's HEVC check fixed for WebKit, and full-size cursor bitmaps from the streamer so the cursor is sharp.
+
 - **hoot drives a machine through swoop.** *Extremely important: the owner's pick for the sprint that follows
   swoop on macOS (2026-09-30).* With an admin's explicit authorization, hoot sees a machine's screen and sends it
   clicks and keys through the swoop streamer, so it can operate any app on the machine, not only the processes

@@ -62,8 +62,8 @@ the dashboard uses the current latest installer metadata automatically and sends
 
 nothing asks anything of the person at the machine, on any platform, but the app does disappear for a moment:
 
-- **Windows:** the installer runs with `/VERYSILENT`, so nothing appears on screen. setup closes the owlette desktop app before it copies files, so the window and the tray icon both disappear for the length of the update — that is expected, not a crash. the installer does not bring them back: the service relaunches the desktop app in tray mode as soon as it starts again.
-- **macOS:** the package stops the app in every signed-in account before it installs, then loads it again for the account at the Mac, so the menu-bar icon goes and comes back. other signed-in accounts get it back at their next login.
+- **Windows:** the installer runs with `/VERYSILENT`, so nothing appears on screen. setup closes the owlette desktop app before it copies files, so the window and the tray icon both disappear for the length of the update — that is expected, not a crash. the installer does not bring them back: the service relaunches the desktop app in tray mode as soon as it starts again. setup closes [owlette swoop](/docs/dashboard/swoop#owlette-swoop) too, which ends any swoop session open in it, and nothing reopens it.
+- **macOS:** the package stops the app in every signed-in account before it installs, then loads it again for the account at the Mac, so the menu-bar icon goes and comes back. other signed-in accounts get it back at their next login. owlette swoop is closed the same way, ending any session open in it, and is not reopened.
 - **Linux:** the service is stopped for the length of the install, about a minute, and the app is restarted on the new version in every session.
 
 on every platform the app raises no *service stopped* notification while the update marker is fresh, though the icon still shows the service down.
@@ -72,7 +72,7 @@ on every platform the app raises no *service stopped* notification while the upd
 
 | platform | preserved | replaced |
 |----------|-----------|----------|
-| Windows | everything under `C:\ProgramData\Owlette` that is not the agent's own: `config\`, `.tokens.enc`, `logs\`, `cache\`, `tmp\` | the agent's files, the bundled Python, the service host (`owlette-host.exe`), the desktop app and the swoop streamer |
+| Windows | everything under `C:\ProgramData\Owlette` that is not the agent's own: `config\`, `.tokens.enc`, `logs\`, `cache\`, `tmp\` | the agent's files, the bundled Python, the service host (`owlette-host.exe`), the desktop app, owlette swoop and the swoop streamer |
 | macOS | everything in the data root, `/Library/Application Support/Owlette`, apart from `runtime/` | `runtime/` inside the data root (the bundled Python and the agent), and `/Applications/owlette.app` with the streamer inside it |
 | Linux | the data root, `/var/lib/owlette` — the package never carries it | `/opt/owlette` (the bundled Python and the agent), the desktop app, the units and the polkit rule |
 

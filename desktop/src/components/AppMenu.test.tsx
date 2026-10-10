@@ -6,6 +6,8 @@ const openExternalUrl = vi.fn()
 const toastError = vi.fn()
 const appearanceTheme = vi.fn()
 const setAppearanceTheme = vi.fn()
+const swoopViewerInstalled = vi.fn()
+const openSwoopViewer = vi.fn()
 
 vi.mock('@/lib/agentCli', () => ({
   openOwlettePath: (...args: unknown[]) => openOwlettePath(...args),
@@ -15,6 +17,8 @@ vi.mock('@/lib/ipc', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/ipc')>()),
   appearanceTheme: () => appearanceTheme(),
   setAppearanceTheme: (theme: string) => setAppearanceTheme(theme),
+  swoopViewerInstalled: () => swoopViewerInstalled(),
+  openSwoopViewer: () => openSwoopViewer(),
 }))
 vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => toastError(...args) } }))
 
@@ -53,6 +57,8 @@ beforeEach(() => {
   toastError.mockReset()
   appearanceTheme.mockReset().mockResolvedValue('system')
   setAppearanceTheme.mockReset().mockImplementation((theme: string) => Promise.resolve(theme))
+  swoopViewerInstalled.mockReset().mockResolvedValue(false)
+  openSwoopViewer.mockReset().mockResolvedValue(undefined)
 })
 
 describe('AppMenu', () => {
@@ -118,6 +124,49 @@ describe('AppMenu', () => {
     fireEvent.click(await screen.findByTestId('menu-logs'))
     await vi.waitFor(() => expect(toastError).toHaveBeenCalled())
     expect(toastError.mock.calls[0][0]).toBe('could not open the logs folder')
+  })
+})
+
+describe('AppMenu swoop', () => {
+  it('leads the menu with swoop when owlette swoop is installed, and opens it', async () => {
+    swoopViewerInstalled.mockResolvedValue(true)
+    setup(true)
+
+    const swoop = await screen.findByTestId('menu-swoop')
+    expect(screen.getAllByRole('menuitem')[0]).toBe(swoop)
+    expect(swoop.textContent).toBe('swoop')
+
+    fireEvent.click(swoop)
+    expect(openSwoopViewer).toHaveBeenCalledOnce()
+  })
+
+  it('has no swoop row when owlette swoop is not installed', async () => {
+    setup(true)
+
+    await vi.waitFor(() => expect(swoopViewerInstalled).toHaveBeenCalledOnce())
+    await screen.findByTestId('menu-leave-site')
+    expect(screen.queryByTestId('menu-swoop')).toBeNull()
+  })
+
+  it('has no swoop row when the host cannot say', async () => {
+    swoopViewerInstalled.mockRejectedValue(new Error('no bridge'))
+    setup(true)
+
+    await vi.waitFor(() => expect(swoopViewerInstalled).toHaveBeenCalledOnce())
+    await screen.findByTestId('menu-leave-site')
+    expect(screen.queryByTestId('menu-swoop')).toBeNull()
+  })
+
+  it('tells the operator when owlette swoop will not open', async () => {
+    swoopViewerInstalled.mockResolvedValue(true)
+    openSwoopViewer.mockRejectedValue('owlette swoop is not installed')
+    setup(true)
+
+    fireEvent.click(await screen.findByTestId('menu-swoop'))
+    await vi.waitFor(() => expect(toastError).toHaveBeenCalled())
+    expect(toastError).toHaveBeenCalledWith('could not open the owlette swoop desktop app', {
+      description: 'owlette swoop is not installed',
+    })
   })
 })
 

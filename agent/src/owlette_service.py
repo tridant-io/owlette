@@ -109,6 +109,11 @@ SCM_STOP_POLL_INTERVAL = 0.25
 # full tick before an operator's edit even began uploading.
 LOCAL_CONFIG_POLL_INTERVAL = 0.5
 
+# the tray's "kill all swoop sessions on this machine" (desktop tray.rs), read on
+# the local config watcher's tick and audited under this reason.
+SWOOP_KILL_FLAG = 'tmp/swoop_kill.flag'
+SWOOP_KILL_LOCAL_TRAY = 'local_tray'
+
 # Shutdown budget once STOP_PENDING appears; overruns log a warning. MUST stay in
 # step with supervisor::CHILD_STOP_GRACE in agent/host, which terminates us after
 # exactly this long.
@@ -3489,6 +3494,37 @@ class OwletteService:
         except Exception as e:
             logging.warning(f"Could not start the session ACL repair (non-fatal): {e}")
 
+    def _check_tray_swoop_kill(self):
+        """end every swoop session when the tray asks, through tmp/swoop_kill.flag.
+
+        the desktop app's "kill all swoop sessions on this machine": the same
+        manager kill a dashboard swoop_kill without a sid makes, audited as
+        local_tray. windows only, like the restart flag — off it tmp/ is
+        group-writable, so a flag there is nobody's word, and the tray does not
+        offer the item. never raises.
+        """
+        if sys.platform != 'win32':
+            return
+        flag = shared_utils.get_data_path(SWOOP_KILL_FLAG)
+        if not os.path.isfile(flag):
+            return
+        try:
+            os.remove(flag)
+        except OSError as e:
+            # retried next tick rather than obeyed: a flag that cannot be
+            # removed would end every session that starts after it
+            logging.warning(f"Could not remove the swoop kill flag: {e}")
+            return
+        manager = self.swoop_manager
+        if manager is None:
+            logging.info("Tray asked to end swoop sessions; swoop is not running")
+            return
+        logging.info("Tray asked to end every swoop session on this machine")
+        try:
+            manager.kill(SWOOP_KILL_LOCAL_TRAY)
+        except Exception as e:
+            logging.error(f"Tray swoop kill failed: {e}")
+
     def _check_console_session_acls(self):
         """Start a session ACL repair when the console session or its user has
         changed since the last look. Called on every local config watcher tick,
@@ -5083,8 +5119,9 @@ class OwletteService:
         assumes a single invoker — single-flight dispatch, the mtime baseline
         CAS — so the main loop must not call it as well.
 
-        Each tick also looks at the console session (_check_console_session_acls),
-        which never raises.
+        Each tick also looks at the console session (_check_console_session_acls)
+        and the tray's swoop kill flag (_check_tray_swoop_kill), neither of which
+        raises.
 
         Runs on its own daemon thread, like the SCM stop watcher, and stops with
         self.is_alive.
@@ -5106,6 +5143,7 @@ class OwletteService:
                             f"({consecutive_errors}): {e}"
                         )
                 self._check_console_session_acls()
+                self._check_tray_swoop_kill()
                 time.sleep(LOCAL_CONFIG_POLL_INTERVAL)
 
         thread = threading.Thread(

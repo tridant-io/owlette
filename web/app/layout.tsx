@@ -11,6 +11,7 @@ import { Footer } from "@/components/Footer";
 import SentryInit from "@/components/SentryInit";
 import { SecurityVersionBanner } from "@/components/SecurityVersionBanner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BAR_POSITION_BOOT_SCRIPT } from '@/lib/swoop/barPosition';
 
 const geist = Geist({
   variable: "--font-geist",
@@ -143,6 +144,8 @@ export default async function RootLayout({
 
 
 -->` }} style={{ display: 'none' }} />
+        {/* the swoop bar's side, before a session page's first paint; a no-op on every other path */}
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: BAR_POSITION_BOOT_SCRIPT }} />
         <ThemeProvider nonce={nonce}>
           <SentryInit />
           <SecurityVersionBanner />

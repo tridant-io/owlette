@@ -1,6 +1,7 @@
 #!/bin/zsh
 # the owlette installer for macOS (tri-platform 5.1): one .pkg carrying the
-# service runtime, the two launchd plists and the app. runs on an Apple silicon
+# service runtime, the two launchd plists and the two apps, owlette.app and
+# owlette swoop.app (the viewer app, desktop/viewer). runs on an Apple silicon
 # Mac with the Command Line Tools, node, cargo and cmake (the streamer's opus
 # build); nothing here needs root.
 #
@@ -11,10 +12,10 @@
 #
 # the swoop streamer rides inside the app as a Tauri sidecar
 # (`bundle.externalBin` in tauri.macos.conf.json), so the pass that signs the
-# app signs it too. --skip-app reuses the last app bundle, sidecar included:
-# neither the app nor the streamer is rebuilt.
+# app signs it too. --skip-app reuses the last app bundles, sidecar included:
+# neither app nor the streamer is rebuilt.
 #
-# with APPLE_SIGNING_IDENTITY in the environment the app (Tauri) and every
+# with APPLE_SIGNING_IDENTITY in the environment both apps (Tauri) and every
 # mach-o in the runtime are signed with it; unsigned by default, which installs on a box that allows it and is what the
 # spike work runs on. with an identity the product is signed; with a keychain
 # profile or an App Store Connect api key (the three --notary-* flags together)
@@ -168,17 +169,49 @@ fi
 say "bundled streamer ${SIDECAR_VERSION}"
 cp -R "${APP}" "${PAYLOAD}/app/"
 
+# --- owlette swoop, the viewer app ------------------------------------------------
+# a second Tauri crate with no frontend and no sidecar, run from the app's
+# node_modules and signed the same way as the app. tauri-plugin-deep-link writes
+# its owlette-swoop URL type into Info.plist; without it the app installs and
+# never receives a link, so its absence fails the build.
+VIEWER_APP="${REPO}/desktop/viewer/target/release/bundle/macos/owlette swoop.app"
+if [ "${SKIP_APP}" = "0" ]; then
+  say "building owlette swoop"
+  ( cd "${REPO}/desktop/viewer" && ../node_modules/.bin/tauri build --bundles app --ci )
+fi
+[ -d "${VIEWER_APP}" ] || { echo "build.sh: no owlette swoop bundle at ${VIEWER_APP}" >&2; exit 1; }
+VIEWER_URL_TYPES="$(plutil -extract CFBundleURLTypes json -o - "${VIEWER_APP}/Contents/Info.plist" 2>/dev/null || true)"
+grep -q '"owlette-swoop"' <<< "${VIEWER_URL_TYPES}" \
+  || { echo "build.sh: owlette swoop's Info.plist declares no owlette-swoop URL scheme" >&2; exit 1; }
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  codesign --verify --strict "${VIEWER_APP}"
+  VIEWER_SIG="$(codesign -dv "${VIEWER_APP}" 2>&1)"
+  grep -q '^CodeDirectory .*flags=0x[0-9a-f]*([^)]*runtime' <<< "${VIEWER_SIG}" \
+    && grep -qx "TeamIdentifier=${APP_TEAM}" <<< "${VIEWER_SIG}" \
+    || { echo "build.sh: owlette swoop is not signed with the hardened runtime by the app's team (${APP_TEAM})" >&2; exit 1; }
+  say "owlette swoop signature verified: hardened runtime, team ${APP_TEAM}"
+fi
+say "owlette swoop declares the owlette-swoop URL scheme"
+cp -R "${VIEWER_APP}" "${PAYLOAD}/app/"
+
 # --- the packages ----------------------------------------------------------------
 say "building the component packages"
 cp -R "${PACKAGING}/scripts" "${WORK}/scripts"
 chmod 755 "${WORK}/scripts/"*
 pkgbuild --quiet --root "${PAYLOAD}/root" --identifier app.owlette.runtime --version "${VERSION}" \
   --install-location / --scripts "${WORK}/scripts" "${WORK}/owlette-runtime.pkg"
-# the app must land in /Applications: without this the installer "relocates"
-# the payload onto any other copy of the bundle spotlight knows (a build tree,
-# an old download) and the LaunchAgent's /Applications path points at nothing.
+# both apps must land in /Applications: without this the installer "relocates"
+# the payload onto any other copy of a bundle spotlight knows (a build tree, an
+# old download) and the LaunchAgent's /Applications path points at nothing (the
+# desktop app's tray looks for /Applications/owlette swoop.app the same way).
 pkgbuild --analyze --root "${PAYLOAD}/app" "${WORK}/app-components.plist" >/dev/null
-plutil -replace 0.BundleIsRelocatable -bool false "${WORK}/app-components.plist"
+BUNDLES=0
+while plutil -extract "${BUNDLES}" xml1 -o - "${WORK}/app-components.plist" >/dev/null 2>&1; do
+  plutil -replace "${BUNDLES}.BundleIsRelocatable" -bool false "${WORK}/app-components.plist"
+  BUNDLES=$((BUNDLES + 1))
+done
+[ "${BUNDLES}" = "2" ] \
+  || { echo "build.sh: the app package should hold owlette.app and owlette swoop.app, found ${BUNDLES} bundles" >&2; exit 1; }
 pkgbuild --quiet --root "${PAYLOAD}/app" --identifier app.owlette.app --version "${VERSION}" \
   --install-location /Applications --component-plist "${WORK}/app-components.plist" "${WORK}/owlette-app.pkg"
 

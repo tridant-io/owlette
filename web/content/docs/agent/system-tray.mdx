@@ -1,7 +1,7 @@
 ---
 title: "system tray"
 description: "the owlette icon in the Windows notification area, the macOS menu bar or the Linux top bar: the agent's health at a glance, a menu of common actions, and notifications. it is part of the owlette desktop app, which runs as a separate process from the service."
-keywords: ["tray icon", "menu bar", "menubar", "notification area", "top bar", "appindicator", "toast", "notification", "start on login", "login item", "autostart", "dock icon", "exit owlette"]
+keywords: ["tray icon", "menu bar", "menubar", "notification area", "top bar", "appindicator", "toast", "notification", "start on login", "login item", "autostart", "dock icon", "exit owlette", "owlette swoop", "kill swoop sessions"]
 ---
 
 ---
@@ -42,7 +42,7 @@ hovering the icon on Windows shows a tooltip with the same lines as the top of t
 
 ![the owlette tray menu, showing the version, hostname, service and cloud status above the actions](/docs-screens/agent-right-click.png)
 
-the rows above the separator are read-only status; the four below it are actions.
+the rows above the separator are read-only status, apart from the swoop kill on Windows; the five below it are actions.
 
 | menu item | description |
 |-----------|-------------|
@@ -51,6 +51,8 @@ the rows above the separator are read-only status; the four below it are actions
 | **service: &lt;state&gt;** | whether the service is `running`, `stopped`, or in `error` |
 | **status: &lt;cloud status&gt;** | whether the service is reaching owlette — `connected to <site>`, `disconnected from <site>`, `disabled`, `starting`, `not responding`, or a health probe's error code. a further row appears under it when a health probe has something to report |
 | **swoop: &lt;who&gt;** | only while a [swoop](/docs/dashboard/swoop) session is capturing this screen: `swoop: 2 viewers watching, 1 in control`, or `swoop: 1 viewer watching` with nobody in control. it disappears when the capture stops, and the tooltip carries the same line |
+| **kill all swoop sessions on this machine** | Windows only, under the swoop row while it is there: ends every swoop session on this machine within a second, with no administrator prompt. unlike a [kill](/docs/dashboard/swoop#ending-and-killing) from the dashboard it closes no second-factor window |
+| **swoop** | open [owlette swoop](/docs/dashboard/swoop#owlette-swoop), the swoop viewer app, on the machine picker of the dashboard this machine is paired with. greyed out when owlette swoop is not installed |
 | **open owlette** | open the desktop app's window |
 | **restart service** | restart the service without an administrator prompt — see [restart service](#restart-service) |
 | **start on login** | whether the desktop app starts with this account's session — see [start on login](#start-on-login) |

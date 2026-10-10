@@ -1,13 +1,14 @@
 name: rust build
 
-# The repo ships three Rust crates and no workflow compiled any of them until
+# The repo ships four Rust crates and no workflow compiled any of them until
 # this one: owlette-host (the Windows service host), owlette-swoop (the remote
-# desktop streamer) and owlette-desktop (the Tauri tray app). A clippy error or
-# a red unit test could reach dev and main and only surface in
+# desktop streamer), owlette-desktop (the Tauri tray app) and
+# owlette-swoop-viewer (owlette swoop, desktop/viewer). A clippy error or a red
+# unit test could reach dev and main and only surface in
 # build_installer_full.bat, minutes into a release build.
 #
-# The `crates` job builds all three on Windows, where all three ship. Only the
-# host is Windows-only: the desktop crate also ships on macOS and Linux
+# The `crates` job builds all four on Windows, where all four ship. Only the
+# host is Windows-only: the two desktop crates also ship on macOS and Linux
 # (`desktop-posix`), and the streamer builds on both (`swoop-posix`), where its
 # session is a stub until the macOS backends land (dev/active/swoop-macos) and
 # Linux gets its own plan.
@@ -31,6 +32,7 @@ on:
       - 'agent/swoop/**'
       - '!agent/swoop/spikes/**'
       - 'desktop/src-tauri/**'
+      - 'desktop/viewer/**'
       - '.github/workflows/rust-build.yml'
   push:
     branches: [main, dev]
@@ -39,6 +41,7 @@ on:
       - 'agent/swoop/**'
       - '!agent/swoop/spikes/**'
       - 'desktop/src-tauri/**'
+      - 'desktop/viewer/**'
       - '.github/workflows/rust-build.yml'
 
 concurrency:
@@ -60,7 +63,7 @@ jobs:
     # toolchain install. The desktop crate is by far the long pole here
     # (~3m20s clippy locally on a warm registry, several hundred
     # dependencies). 30 minutes is roughly double a pessimistic cold run and
-    # leaves room for a cache miss on all three workspaces at once.
+    # leaves room for a cache miss on every workspace at once.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -82,7 +85,7 @@ jobs:
           toolchain: '1.98.1'
           components: clippy
 
-      # One restore covering all three crates; they are separate workspaces, so
+      # One restore covering all four crates; they are separate workspaces, so
       # rust-cache needs each root named.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -90,6 +93,7 @@ jobs:
             agent/host
             agent/swoop
             desktop/src-tauri
+            desktop/viewer
           # The action's default only writes the cache on the repo's default
           # branch (main), and main is where releases land, not where work
           # does. Without dev the cache would almost never be refreshed and
@@ -150,11 +154,21 @@ jobs:
         working-directory: desktop/src-tauri
         run: cargo test --locked
 
+      # its frontendDist is a committed placeholder page: nothing to build first
+      - name: clippy owlette-swoop-viewer
+        working-directory: desktop/viewer
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test owlette-swoop-viewer
+        working-directory: desktop/viewer
+        run: cargo test --locked
+
   # the desktop crate on the other two desktops (tri-platform task 4.6): the
   # posix arms of the win32 modules compile and their tests run here, which is
   # the only place they can — the dev box is windows. one job per os with
   # `working-directory:` set to the crate, like the windows job above; ubuntu
-  # needs tauri's gtk/webkit development packages before anything links.
+  # needs tauri's gtk/webkit development packages before anything links. the
+  # viewer crate (desktop/viewer) rides the same legs.
   desktop-posix:
     name: desktop clippy + tests on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -164,11 +178,14 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         include:
           - os: ubuntu-latest
-            workspaces: desktop/src-tauri
+            workspaces: |
+              desktop/src-tauri
+              desktop/viewer
           # the macos leg builds the swoop sidecar too (below)
           - os: macos-latest
             workspaces: |
               desktop/src-tauri
+              desktop/viewer
               agent/swoop
     timeout-minutes: 30
     steps:
@@ -211,6 +228,13 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: test owlette-desktop
         working-directory: desktop/src-tauri
+        run: cargo test --locked
+
+      - name: clippy owlette-swoop-viewer
+        working-directory: desktop/viewer
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test owlette-swoop-viewer
+        working-directory: desktop/viewer
         run: cargo test --locked
 
   # the streamer off windows (swoop-macos task 1.1). macos builds the features

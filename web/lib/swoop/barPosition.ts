@@ -12,8 +12,10 @@
  * `bar-side`, `bar-left` and `bar-right` variants in globals.css), not from
  * react state: the server cannot see this browser's storage or window, so a
  * layout that waited for hydration drew the bar on top for a frame first. the
- * swoop layout's inline script sets the attribute before first paint, and
- * every change here — a choice, a resize, the picture's real shape — keeps it.
+ * root layout's boot script (`BAR_POSITION_BOOT_SCRIPT`) sets the attribute
+ * before a hard load's first paint, `SwoopBarMark` before a client
+ * navigation's, and every change here — a choice, a resize, the picture's real
+ * shape — keeps it.
  */
 
 export type SwoopBarPosition = 'top' | 'left' | 'right';
@@ -51,6 +53,15 @@ export const BAR_POSITION_SCRIPT =
   `if(p!=='top'&&p!=='left'&&p!=='right'){var w=innerWidth,h=innerHeight,a=${DEFAULT_ASPECT};` +
   `p=w>=${MD_PX}&&Math.min((w-${SIDE_BAR_PX})/a,h)>Math.min(w/a,h-${TOP_BAR_PX})?'left':''}` +
   `if(p==='left'||p==='right')document.documentElement.dataset.swoopBar=p}catch(e){}`;
+
+/**
+ * the same, from the root layout on a hard load of a session page: the root
+ * layout never re-renders on a client navigation, so react never has to
+ * rebuild a <script> it cannot run. a client navigation into a session marks
+ * through `SwoopBarMark` instead.
+ */
+export const BAR_POSITION_BOOT_SCRIPT =
+  `if(/^\\/swoop\\/[^/]+\\/[^/]+(\\/|$)/.test(location.pathname)){${BAR_POSITION_SCRIPT}}`;
 
 /** what this browser chose: auto until it chooses. */
 export function readBarChoice(): SwoopBarChoice {

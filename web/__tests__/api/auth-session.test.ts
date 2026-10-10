@@ -74,6 +74,40 @@ describe('POST /api/auth/session', () => {
 
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
-    expect(mockCreateSession).toHaveBeenCalledWith('user-1', 3);
+    expect(mockCreateSession).toHaveBeenCalledWith('user-1', 3, undefined);
+  });
+
+  describe('app-link appLinkMfa claim', () => {
+    const decoded = (provider: string, claims: Record<string, unknown> = {}) => ({
+      uid: 'user-1',
+      auth_time: Math.floor(Date.now() / 1000),
+      firebase: { sign_in_provider: provider, identities: {} },
+      ...claims,
+    });
+
+    it('passes the claim to createSession for a custom-token sign-in', async () => {
+      mockVerifyIdToken.mockResolvedValue(decoded('custom', { appLinkMfa: 'challenge' }));
+      const res = await POST(request({ idToken: 'firebase-id-token' }));
+      expect(res.status).toBe(200);
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, 'challenge');
+    });
+
+    it('passes a device-trust claim through as device-trust', async () => {
+      mockVerifyIdToken.mockResolvedValue(decoded('custom', { appLinkMfa: 'device-trust' }));
+      await POST(request({ idToken: 'firebase-id-token' }));
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, 'device-trust');
+    });
+
+    it.each(['password', 'google.com'])('ignores the claim on a %s sign-in', async (provider) => {
+      mockVerifyIdToken.mockResolvedValue(decoded(provider, { appLinkMfa: 'challenge' }));
+      await POST(request({ idToken: 'firebase-id-token' }));
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, undefined);
+    });
+
+    it('passes nothing for a custom-token sign-in without the claim (passkey)', async () => {
+      mockVerifyIdToken.mockResolvedValue(decoded('custom'));
+      await POST(request({ idToken: 'firebase-id-token' }));
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, undefined);
+    });
   });
 });

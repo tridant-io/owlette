@@ -159,7 +159,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      # Three separate workspaces, so rust-cache needs each root named — same
+      # Four separate workspaces, so rust-cache needs each root named — same
       # shape and the same pinned version as rust-build.yml, which is where this
       # repo already does Rust caching.
       #
@@ -180,6 +180,7 @@ jobs:
             agent/host
             agent/swoop
             desktop/src-tauri
+            desktop/viewer
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: build installer
@@ -337,6 +338,7 @@ jobs:
           workspaces: |
             agent/swoop
             desktop/src-tauri
+            desktop/viewer
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # a throwaway keychain holding the two developer id identities, and the

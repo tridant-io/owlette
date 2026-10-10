@@ -71,7 +71,11 @@ fn open_resolved(path: &Path) -> Result<(), String> {
 /// elsewhere. Spawned and not waited on, like the shell verb it replaces.
 #[cfg(not(windows))]
 fn launch(target: &std::ffi::OsStr) -> Result<(), String> {
-  let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+  let opener = if cfg!(target_os = "macos") {
+    "open"
+  } else {
+    "xdg-open"
+  };
   std::process::Command::new(opener)
     .arg(target)
     .stdin(std::process::Stdio::null())
@@ -148,6 +152,13 @@ pub fn open_clipboard_settings() -> Result<(), String> {
 
 /// Open an `http(s)` URL in the default browser.
 pub fn open_url(url: &str) -> Result<(), String> {
+  open_link(web_link(url)?)
+}
+
+/// `url` trimmed, when it is a web link safe to hand to another process:
+/// `http(s)` and free of control characters. The viewer launch applies the
+/// same rule ([`crate::viewer_launch`]).
+pub(crate) fn web_link(url: &str) -> Result<&str, String> {
   let trimmed = url.trim();
   let lowered = trimmed.to_ascii_lowercase();
   if !ALLOWED_SCHEMES
@@ -162,7 +173,7 @@ pub fn open_url(url: &str) -> Result<(), String> {
     return Err("refusing to open a link containing control characters".to_string());
   }
 
-  open_link(trimmed)
+  Ok(trimmed)
 }
 
 #[cfg(windows)]
@@ -227,7 +238,11 @@ mod tests {
 
   #[test]
   fn a_path_outside_the_tree_never_reaches_the_shell() {
-    let outside = if cfg!(windows) { "C:\\Windows\\System32\\cmd.exe" } else { "/etc/passwd" };
+    let outside = if cfg!(windows) {
+      "C:\\Windows\\System32\\cmd.exe"
+    } else {
+      "/etc/passwd"
+    };
     let error = open_in_tree(outside).expect_err("should refuse");
     assert!(error.contains("escapes"), "{error}");
 

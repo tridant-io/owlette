@@ -47,6 +47,7 @@ import { FallingFeather } from '@/components/FallingFeather';
 import type { Process } from '@/hooks/useFirestore';
 import { useScrollFade } from '@/hooks/useScrollFade';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
+import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 
 // Code-split: deferring parse+compile of the detail panels until a cell is clicked keeps
 // the grid-template-rows slide animation inside its frame budget. `ssr: false` because
@@ -788,6 +789,8 @@ export default function DashboardPage() {
     );
   };
 
+  const openSwoopApp = (machineId: string) => openInViewerApp(currentSiteId, machineId);
+
   // The panel opens above the machine list, so on a phone a tap on any card but
   // the first would open it off-screen.
   const revealDetailPanel = () => {
@@ -881,6 +884,7 @@ export default function DashboardPage() {
   const onScreenshot = useStableCallback(openScreenshot);
   const onLiveView = useStableCallback(openLiveView);
   const onSwoop = useStableCallback(openSwoop);
+  const onSwoopApp = useStableCallback(openSwoopApp);
   const onSiteSettings = useStableCallback(() => {
     setManageEditSiteId(currentSiteId);
     setManageDialogOpen(true);
@@ -921,10 +925,12 @@ export default function DashboardPage() {
     onScreenshot: () => onScreenshot(id),
     onLiveView: () => onLiveView(id),
     onSwoop: () => onSwoop(id),
+    onSwoopApp: () => onSwoopApp(id),
   }])), [
     machineIdsKey, toggleMachineExpanded, onEditProcess, onDuplicateProcess, onCreateProcess,
     onKillProcess, onRestartProcess, onSetLaunchMode, onConfigureSchedule, onRemoveMachineById,
     onMetricClick, onRestartMachine, onShutdownMachine, onCancelRestart, onScreenshot, onLiveView, onSwoop,
+    onSwoopApp,
   ]);
 
   useEffect(() => {
@@ -1228,6 +1234,7 @@ export default function DashboardPage() {
                   onScreenshot={onScreenshot}
                   onLiveView={onLiveView}
                   onSwoop={onSwoop}
+                  onSwoopApp={onSwoopApp}
                   swoopOff={swoopOff}
                   onSiteSettings={onSiteSettings}
                 />

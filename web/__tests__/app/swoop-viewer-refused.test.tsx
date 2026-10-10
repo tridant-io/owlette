@@ -22,6 +22,10 @@ jest.mock('@/hooks/useFirestore', () => ({
   useMachines: () => ({ machines: [], loading: false, error: null }),
 }));
 
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), prefetch: jest.fn() }),
+}));
+
 jest.mock('@/lib/swoop/clientCaps', () => ({
   probeClientCaps: async () => ({ codecs: ['h264'], hardware: [], playoutDelay: true, webCodecsHevc: false }),
 }));

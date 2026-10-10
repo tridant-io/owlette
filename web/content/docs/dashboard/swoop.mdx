@@ -1,10 +1,10 @@
 ---
 title: "swoop (remote desktop)"
-description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "agent version"]
+description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, in a browser tab or in owlette swoop, the desktop viewer app, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
+keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker"]
 ---
 
-swoop puts a machine's screen in your browser, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
+swoop puts a machine's screen in your browser, or in a window of [owlette swoop](#owlette-swoop), the desktop viewer app, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
 
 two things are true of every session and worth knowing before you turn it on:
 
@@ -17,7 +17,7 @@ a machine with someone in a session shows the count on its menu button and on th
 
 ## which machines can host it
 
-you can watch and control from any computer with a current browser. the machine on the other end has to run the swoop streamer, and that depends on its platform:
+you can watch and control from any computer with a current browser, or from [owlette swoop](#owlette-swoop). the machine on the other end has to run the swoop streamer, and that depends on its platform:
 
 | platform | hosts swoop | what it needs |
 |---|---|---|
@@ -54,11 +54,11 @@ the rest of the policy has no dashboard control yet. it is set with `PATCH /api/
 
 the **swoop** entry appears in a machine's context menu once that machine's agent reports it can stream. on a machine that cannot, the old live-view entry stays instead: exactly one of the two is ever offered.
 
-the viewer opens at `/swoop/<siteId>/<machineId>`. you can also get there from a terminal with [`owlette swoop`](/docs/cli/reference/swoop), which only opens the page; the session still starts in the browser.
+the viewer opens in a new browser tab at `/swoop/<siteId>/<machineId>`. the monitor icon beside **swoop** opens it in [owlette swoop](#owlette-swoop) instead. `/swoop` lists a site's machines as cards, each one click from a session, with the same icon. you can also get there from a terminal with [`owlette swoop`](/docs/cli/reference/swoop), which opens the page in owlette swoop when it is installed and in your browser otherwise; the session itself starts in the page.
 
 a session needs the machine to be online. swoop cannot reach a machine that has not dialled in: the request is refused with `machine_offline`, and the viewer keeps retrying until the machine is back.
 
-swoop does not open the machine you are sitting at. a browser cannot tell which computer it runs on, so the first try reaches the machine, which sees the session coming from itself and ends it with "you're on this machine". from then on that browser shows swoop greyed out for that machine, labelled **you're on this machine**. the record lives in that browser only and covers one machine at a time, and a session that does connect to the machine clears it. this needs agent 4.1.6; an older agent shows you a picture of your own screen instead.
+swoop does not open the machine you are sitting at. a browser cannot tell which computer it runs on, so the first try reaches the machine, which sees the session coming from itself and ends it with "you're on this machine". from then on that browser shows swoop greyed out for that machine, labelled **you're on this machine**. the record lives in that browser only (owlette swoop keeps its own) and covers one machine at a time, and a session that does connect to the machine clears it. this needs agent 4.1.6; an older agent shows you a picture of your own screen instead.
 
 ---
 
@@ -81,7 +81,9 @@ control is gated on a **step-up**: a fresh second-factor check, prompted in the 
 - an **authenticator code**, the 6 digits from your authenticator app
 - a **backup code** (**use a backup code instead**). each one works once
 
-the 12 hours run from the check itself, and using the window does not extend it. the window belongs to you and that machine, so a new tab or a reload inside it does not ask again, but only from a sign-in that itself passed a second-factor check: a browser that skipped it because it was remembered asks once more. a tab that holds control also keeps it across its own reconnects and across a reload of the page, even after the 12 hours. a new tab asks, and ending the session yourself gives it up. a [kill](#ending-and-killing) on the machine closes every window on it.
+the 12 hours run from the check itself, and using the window does not extend it. the window belongs to you and that machine, so a new tab or a reload inside it does not ask again, but only from a sign-in that itself passed a second-factor check: a browser that skipped it because it was remembered asks once more. a tab (or owlette swoop window) that holds control also keeps it across its own reconnects and across a reload of the page, even after the 12 hours. a new tab asks, and ending the session yourself gives it up. a [kill](#ending-and-killing) on the machine closes every window on it.
+
+in the owlette swoop desktop app, the prompt offers **verify in your browser** in place of a passkey: it opens a page in your browser, where your password manager's passkeys work, and the app takes control once you pass the check there. it is the same window, 12 hours for you and that machine. it works only if the app's own sign-in passed a second factor; if that sign-in skipped it because the browser was remembered, the app says so, and an authenticator or backup code in the app does the job.
 
 an account with no passkey and no authenticator app cannot take control, and backup codes alone do not count. signing in with Google or a password is not a second factor. the viewer says so, offers only **cancel**, and links to two-factor setup; add a factor there or under [account settings](/docs/dashboard/account-settings#security) → security, then start the session again. because the viewer asks for control first, an owner or admin in that state cannot open the viewer to watch either.
 
@@ -91,14 +93,14 @@ an account with no passkey and no authenticator app cannot take control, and bac
 
 the toolbar carries the session state, an **end** button, and:
 
-- **back to dashboard**: the arrow at the start of the bar, there in every state. leaving the page ends your session
-- **fullscreen with keyboard and mouse capture**: takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so
-- **latency stats**: an overlay, off by default because it covers the picture. its codec row shows what the picture is arriving in, and **frozen pictures** how often the picture [froze](#when-the-picture-freezes) in this tab
+- **back to dashboard**: the arrow at the start of the bar, there in every state. leaving the page ends your session. in owlette swoop it is **back to machines** and leads to the machine picker
+- **fullscreen with keyboard and mouse capture**: takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out; a session that ends or fails for good also lets go of fullscreen. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so. what owlette swoop captures is [below](#fullscreen-and-the-keyboard)
+- **latency stats**: an overlay, off by default because it covers the picture. its codec row shows what the picture is arriving in, and **frozen pictures** how often the picture [froze](#when-the-picture-freezes) in this tab or window
 - **display picker**: which of the machine's monitors you are looking at
 - **quality**: see [quality](#quality) below
 - **audio**: off unless you ask for it
-- **special keys**: the combinations the browser will not let through
-- **bar position**: the bar along the top, down the left or right edge, or **auto**, the default, which puts it wherever the picture comes out bigger in your window and moves it when you resize. a 16:9 picture in a 16:9 window has empty space at its sides, so a side bar gives the picture the height a top bar takes. on a side the machine's name runs vertically and the buttons stack at the bottom; a phone keeps the bar on top. the choice is kept in your browser
+- **special keys**: the combinations your browser, or your own computer, will not let through
+- **bar position**: the bar along the top, down the left or right edge, or **auto**, the default, which puts it wherever the picture comes out bigger in your window and moves it when you resize. a 16:9 picture in a 16:9 window has empty space at its sides, so a side bar gives the picture the height a top bar takes. on a side the machine's name runs vertically and the buttons stack at the bottom; a phone keeps the bar on top. the choice is kept in your browser, or in owlette swoop
 - **presence**: who else is in the session
 
 outside fullscreen, every key you press while the picture has focus goes to the machine, `tab` included. press `esc` twice to hand the keyboard back to the page: focus moves to the toolbar.
@@ -116,17 +118,19 @@ the quality menu has one row per setting. it opens once the session has connecte
 | bandwidth | **auto**, or 5, 10, 20, 30, 50, 80 or 100 Mbps | at once |
 | resolution | native, 1440p, 1080p, 720p | at once |
 | frame rate | 60 or 30 fps | at once |
-| codec | **auto**, or h264 and, where your browser can decode it in hardware, HEVC | at once, by reconnecting; see below |
+| codec | **auto**, or h264 and, where your browser can decode it in hardware, HEVC (never in owlette swoop on Windows) | at once, by reconnecting; see below |
 
 bandwidth, resolution and frame rate are upper limits: the machine lowers them when the connection needs it. **auto** bandwidth starts a source above 2.5 megapixels, such as a 1440p or 4K-class display, at 80 Mbps, and anything smaller at 20 Mbps. a new session starts back at the defaults: auto, native, 60 fps.
 
-the machine settles the codec once, when a session starts: HEVC when your browser offers it and the machine can encode it, otherwise h264. so choosing a codec reconnects: the viewer starts a new session in the same tab, without asking for the second factor again. **h264** offers only h264. **HEVC** asks for it first and still gets h264 from a machine that cannot encode it. **auto** lets the machine pick. the choice holds for that machine until the tab closes, and the latency stats show the codec in use.
+the machine settles the codec once, when a session starts: HEVC when your browser offers it and the machine can encode it, otherwise h264. so choosing a codec reconnects: the viewer starts a new session in the same tab or window, without asking for the second factor again. **h264** offers only h264. **HEVC** asks for it first and still gets h264 from a machine that cannot encode it. **auto** lets the machine pick. the choice holds for that machine until the tab or window closes, and the latency stats show the codec in use.
 
 ### clipboard
 
 the clipboard is shared both ways: copy on the machine and paste on your computer, or the reverse, with text up to 256 KB and images up to 15 MB. pasting into the machine needs control: ctrl+v (cmd+v on a Mac) in the viewer sends what you copied to the machine and pastes it there, with nothing for the browser to ask.
 
 a copy made on the machine reaches your clipboard at once when you have just clicked or pressed a key in the viewer. at any other time, such as a copy made at the machine itself, the browser first asks whether the site may use the clipboard (Chrome and Brave word it as "see text and images copied to the clipboard"): choose **allow**. if you close that question, the copy waits, the session bar says so, and your next click or key press in the picture takes it. if you chose **block**, change it in the site's settings, from the icon at the left of the address bar. the browser also takes a copy only while the viewer's tab is the one in front.
+
+in owlette swoop on Windows nothing asks: the app allows owlette's own pages to read the clipboard, so a copy on the machine reaches you whenever the window is in front.
 
 ### UAC prompts, lock and sign-in screens (Windows)
 
@@ -139,17 +143,75 @@ UAC prompts and ctrl + alt + del need agent 4.1.4, and win + l needs 4.1.5.
 
 ---
 
+## owlette swoop, the desktop viewer app [#owlette-swoop]
+
+owlette swoop is a small app that shows the swoop viewer in windows of its own instead of browser tabs. every window is the same viewer page from owlette.app, so the rest of this page holds in it too. what the app adds is what a browser cannot do: the session bar as the window's title bar, shortcuts your own computer would keep sent to the machine in fullscreen, and links from the dashboard and the owlette app that open straight into a session.
+
+### getting it
+
+every agent installer carries it, so a machine with owlette on it already has it:
+
+| platform | installed as |
+|---|---|
+| Windows | `C:\ProgramData\Owlette\app\owlette-swoop-viewer.exe`, with an **owlette swoop** shortcut in the Start menu |
+| macOS | `/Applications/owlette swoop.app` |
+| Linux | `/usr/bin/owlette-swoop-viewer`, with an **owlette swoop** entry among the applications |
+
+the installer also registers `owlette-swoop://` links, which is how the dashboard opens the app. a download for a computer without the agent, such as an operator's own workstation, is not published yet; until it is, use swoop in the browser there. **get it**, on the dashboard's notice that the app is not installed, leads here.
+
+the app opens only owlette.app and dev.owlette.app, so an owlette you run yourself is used from the browser.
+
+### opening it
+
+- **from the dashboard**: the monitor icon beside **swoop** in a machine's menu, or on a machine's card at `/swoop`, opens that machine in owlette swoop, already signed in as you. when nothing has opened after a second and a half, the dashboard says the app is not installed on this computer
+- **from a machine with owlette**: **swoop** in the owlette app's tray menu (the menu bar on macOS), and at the top of its window's menu, opens owlette swoop on the machine picker of the server the machine is paired with. where the app is missing the tray item is greyed out and the window's menu leaves it out
+- **from a terminal**: [`owlette swoop`](/docs/cli/reference/swoop) opens a machine in owlette swoop when it is installed, and in your browser otherwise
+
+started from the Start menu or Applications, it opens the machine picker of the server you used last, owlette.app the first time.
+
+### the picker and sessions
+
+the app opens on the machine picker, the same cards as `/swoop`. a click on a card opens its session in the same window; right-click the card, or press shift+enter on it, and choose **open in new window** to give that machine a window of its own and keep the picker. a machine already open in a window is brought to the front rather than opened twice.
+
+closing a window ends its session at once, and closing the last one quits the app. when a session that had connected ends, its window goes back to the picker, or closes if it was a window of its own. a session that never connected, because it was refused or failed, keeps its reason on screen with **back to machines**.
+
+the session bar is the window's title bar: drag it to move the window and double-click it to maximize. on Windows and Linux the minimize, maximize and close buttons sit at its right end; on macOS the window's own three buttons sit at its left. with the bar down a side, a thin strip across the top of the window holds the buttons. fullscreen hides all of it.
+
+### fullscreen and the keyboard
+
+**fullscreen with keyboard and mouse capture** works as in a browser, and holding `esc` for two seconds leaves it; a reminder says so for a few seconds as you go in. what else reaches the machine depends on your computer:
+
+- **macOS**: in fullscreen the Dock hides and switching apps is off, and cmd+q, cmd+w, cmd+h and cmd+m go to the machine instead of quitting, closing, hiding or minimizing the app. cmd+tab switches nothing but does not reach the machine either, because macOS keeps it; send it from the keyboard menu. cmd+space, Mission Control, ctrl+arrows and ctrl+cmd+q (lock) stay with macOS. the mouse is never captured: WebKit gives the app no pointer lock, so a game or a 3D view that wants raw mouse motion does not get it. outside fullscreen the app behaves like any other Mac app
+- **Windows**: the app captures no shortcuts of its own yet. fullscreen asks WebView2 for keyboard lock, as Chrome does, but how much of it takes effect in the app has not been measured yet; the keyboard menu sends the rest. win+l and ctrl+alt+del always stay with Windows. a lone `alt` tap puts the window into its menu mode until you press `esc`
+
+### signing in
+
+the app keeps its own sign-in, apart from your browser's, and you rarely meet it:
+
+- opened from the dashboard's monitor icon, it arrives signed in as you, carrying over your browser's second-factor check
+- started any other way, its sign-in page offers **sign in with your browser**: your browser opens owlette, you choose **approve** there, and the app signs in the same way. Google and passkey sign-in are not offered in the app, because neither works inside it; your email and password still do
+- taking control asks for the [second factor](#the-second-factor) as in a browser, with **verify in your browser** in place of a passkey
+
+### known gaps
+
+- on Windows the app gets h264 only: WebView2, the engine inside it, cannot decode HEVC over WebRTC, any more than Edge can. on a Mac it gets h264 for now too, until a fix to the viewer's HEVC check lands
+- the machine's cursor is drawn at its real size but looks soft, because the machine sends it shrunk to 32 pixels; it sharpens once the streamer sends it whole
+- cmd+tab cannot be sent from macOS, and the mouse is not captured there (above)
+- on Linux the app is in the package, but no session has been tried in it yet
+
+---
+
 ## how long a session lasts
 
-- a session has **no time limit**: it lasts as long as the tab that started it
+- a session has **no time limit**: it lasts as long as the tab or owlette swoop window that started it
 - a dropped network does not end it. after a short drop the same session picks up where it was; after a longer one, a sleeping laptop or a machine that stops answering, the viewer starts a new session on its own, on a growing delay (up to 30 seconds between attempts), and says so while it waits
 - an update or restart of the machine's agent sends the viewer to reconnect too, once the agent is back. agents older than 4.0.4 end the session instead, and so does the update from one of them
-- what does end it: the **end** button, closing the tab, an admin's kill, another tab or device opening swoop on the same machine, or the lease check below refusing
-- a viewer holds a **5-minute lease**, renewed silently while the tab is open. the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
+- what does end it: the **end** button, closing the tab or the window, an admin's kill, another tab or device opening swoop on the same machine, or the lease check below refusing
+- a viewer holds a **5-minute lease**, renewed silently while the tab or window is open. the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
 
 ### when the picture freezes
 
-the viewer watches the picture as well as the connection. when the machine keeps sending frames and none appear for three seconds, with the tab in front and the connection up, the viewer says **picture stalled — reconnecting** and starts a new session on its own, in the same tab and without asking for the second factor again. a picture that arrives and is only not being painted is first restarted in place (**picture stalled — restarting the picture**), and the new session follows only if that shows nothing within two seconds.
+the viewer watches the picture as well as the connection. when the machine keeps sending frames and none appear for three seconds, with the tab in front and the connection up, the viewer says **picture stalled — reconnecting** and starts a new session on its own, in the same tab or window and without asking for the second factor again. a picture that arrives and is only not being painted is first restarted in place (**picture stalled — restarting the picture**), and the new session follows only if that shows nothing within two seconds.
 
 - a still screen never counts: the machine sends at least two frames a second even when nothing moves, and each of them shows. neither does a pause on the machine's side, such as a UAC prompt or a display switch
 - it starts a new session this way at most twice in ten minutes; restarting the picture in place does not count. after that the session stays up and the viewer says **the picture froze**, which goes away if the picture comes back. **reconnect** in the bar starts a new session, and the ten minutes again
@@ -176,6 +238,8 @@ swoop connects the browser to the machine directly. on the same network that alw
 ending your own session is the **end** button in the toolbar. anyone who may be in the room may leave it.
 
 a site owner or admin can also stop **whatever anyone is running** on a machine, from **admin** → **swoop** (below) or with `POST …/swoop/kill`. a kill is deliberately not gated on the site's swoop settings: stopping a stream has to work after the feature has been switched off, which is exactly when an operator wants it most. a kill also closes every second-factor window on that machine, so anyone it cut off, a tab that was reconnecting at the time included, confirms again before taking control.
+
+on a Windows machine, the owlette app's tray menu has **kill all swoop sessions on this machine** under its swoop row while a session captures the screen. anyone at the machine can click it, and every session there ends within a second, but unlike a kill from the dashboard it closes no second-factor window. macOS and Linux do not offer it yet.
 
 ---
 
@@ -244,7 +308,7 @@ in a mixed fleet, what a session can do depends on the agent of the machine you 
 
 ## refusal codes
 
-a refused session arrives as a [problem](/docs/api/errors) with a `code`. the viewer shows its sentence in the middle of the screen with a **back to dashboard** button, and the last column says whether it tries again by itself.
+a refused session arrives as a [problem](/docs/api/errors) with a `code`. the viewer shows its sentence in the middle of the screen with a **back to dashboard** button (**back to machines** in owlette swoop), and the last column says whether it tries again by itself.
 
 | code | status | when | the viewer |
 |---|---|---|---|
@@ -267,6 +331,6 @@ a second factor that does not check out comes back with its own code, such as `i
 
 ## notes
 
-- **nothing secret travels in a URL.** the viewer URL names a site and a machine; the signalling URL names a room. tokens and keys are only ever in a response body
+- **nothing secret travels in a URL**, with one exception: the link that opens owlette swoop signed in carries a sign-in code that works once, within 60 seconds. the viewer URL names a site and a machine; the signalling URL names a room. tokens and keys are only ever in a response body
 - **running owlette yourself**: swoop needs a signalling worker and its keys, and a relay for strict routers; see the [swoop environment variables](/docs/setup/environment-variables#swoop-required-for-remote-desktop) and the [architecture](/docs/architecture#swoop-remote-desktop)
 - **related**: [`owlette swoop`](/docs/cli/reference/swoop) (open the viewer from a terminal), [machine monitoring](/docs/dashboard/machine-monitoring) (the machine cards the entry lives on), [errors](/docs/api/errors) (the problem envelope the codes above arrive in)

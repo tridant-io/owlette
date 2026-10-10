@@ -19,6 +19,7 @@ use crate::paths::{self, SERVICE_STATUS_REL};
 use crate::process_ctl::{self, TerminateOutcome, DEFAULT_GRACEFUL_TIMEOUT};
 use crate::service_ctl::{self, ServiceCommandOutcome, ServiceStatus};
 use crate::shell_open;
+use crate::viewer_launch;
 use crate::window_state::{self, DetailSections, LayoutState, ThemeChoice};
 
 /// Absolute path of the owlette data root (`%PROGRAMDATA%\Owlette`). The frontend
@@ -255,6 +256,18 @@ pub fn open_owlette_path(path: String) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn open_external_url(url: String) -> Result<(), String> {
   shell_open::open_url(&url)
+}
+
+/// Whether owlette swoop, the viewer app, is installed where this app looks for it.
+#[tauri::command(async)]
+pub fn swoop_viewer_installed() -> bool {
+  viewer_launch::viewer_installed()
+}
+
+/// Open owlette swoop on the swoop picker of this machine's dashboard.
+#[tauri::command(async)]
+pub fn open_swoop_viewer() -> Result<(), String> {
+  viewer_launch::open_picker()
 }
 
 /// Open macOS's Screen Recording pane, for the permission notice.

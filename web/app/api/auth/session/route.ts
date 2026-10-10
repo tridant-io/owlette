@@ -12,10 +12,12 @@ import {
   createSession,
   destroySession,
   getSessionData,
+  type MfaSatisfiedBy,
 } from '@/lib/sessionManager.server';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { apiError } from '@/lib/apiErrorResponse';
+import { appLinkMfaFromIdToken } from '@/lib/appLink.server';
 
 /**
  * POST /api/auth/session — create a session after successful Firebase auth.
@@ -34,10 +36,12 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     }
 
     let verifiedUserId: string;
+    let appLinkMfa: MfaSatisfiedBy | undefined;
     try {
       const adminAuth = getAdminAuth();
       const decoded = await adminAuth.verifyIdToken(idToken);
       verifiedUserId = decoded.uid;
+      appLinkMfa = appLinkMfaFromIdToken(decoded);
     } catch {
       return NextResponse.json(
         { error: 'Invalid or expired ID token' },
@@ -70,7 +74,8 @@ export const POST = withRateLimit(async (request: NextRequest) => {
 
     // Session creation reads users/{uid}.mfaEnrolled and bakes mfaRequired/mfaVerified into
     // the cookie; the proxy enforces the gate, so the POST response needn't surface them.
-    await createSession(verifiedUserId, durationDays);
+    // An app-link sign-in inherits the approving browser session's MFA state.
+    await createSession(verifiedUserId, durationDays, appLinkMfa);
 
     return NextResponse.json({
       success: true,
