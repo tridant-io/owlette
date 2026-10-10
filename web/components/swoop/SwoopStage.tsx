@@ -228,7 +228,9 @@ export function SwoopStage({
               {settingsHref ? 'turn it on in site settings.' : 'ask a site owner or admin to turn it on.'}
             </span>
           )}
-          <span className="pointer-events-auto flex gap-2">
+          {/* text lines carry leading above and below their ink and the buttons' edge does not,
+              so the same gap reads 7px tighter there; measured at these sizes */}
+          <span className="pointer-events-auto mt-[7px] flex gap-2">
             {swoopOff && settingsHref && (
               <Button asChild size="sm">
                 <Link href={settingsHref}>open site settings</Link>
