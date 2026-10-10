@@ -31,7 +31,7 @@ import { isMacViewer, modifierSwap, type ModifierMapping, type ModifierSwap } fr
 import { modifierLegend } from '@/lib/swoop/modifierLegend';
 import { decodeControlMessage } from '@/lib/swoop/protocol';
 import { sendSpecialKey, specialKeysFor } from '@/lib/swoop/specialKeys';
-import { viewerAppHasNativeKeys } from '@/lib/swoop/viewerApp';
+import { useViewerAppNativeKeys } from '@/hooks/useViewerAppPlatform';
 import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
 import { BarTooltip } from '@/components/swoop/BarTooltip';
 
@@ -68,7 +68,7 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
   const [mapping, setMapping] = useState<ModifierMapping>('swap');
   const viewerIsMac = useSyncExternalStore(subscribeNever, isMacViewer, onServer);
   const keyboardLock = useSyncExternalStore(subscribeNever, hasKeyboardLock, onServer);
-  const nativeKeys = useSyncExternalStore(subscribeNever, viewerAppHasNativeKeys, onServer);
+  const nativeKeys = useViewerAppNativeKeys();
   const fullscreen = useSyncExternalStore(subscribeFullscreen, inFullscreen, onServer);
   const swap = modifierSwap(osFamily, viewerIsMac);
   const legend = modifierLegend(osFamily, viewerIsMac, mapping);

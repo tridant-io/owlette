@@ -162,6 +162,15 @@ test.describe('inside owlette swoop', () => {
     await expect(page.getByTestId(`swoop-picker-machine-${ONLINE_ID}`)).toBeEnabled();
     await expect(page.getByTestId('swoop-picker-dashboard-link')).toHaveCount(0);
     await expect(page.getByTestId(`swoop-picker-app-${ONLINE_ID}`)).toHaveCount(0);
+
+    // nor in the server's html, so none flashes before hydration: the served
+    // picker is already the app's title bar
+    const res = await page.reload();
+    expect(res && new URL(res.url()).pathname).toBe('/swoop');
+    const html = (await res?.text()) ?? '';
+    expect(html).toContain('data-testid="swoop-picker"');
+    expect(html).toContain('data-tauri-drag-region');
+    expect(html).not.toContain('swoop-picker-dashboard-link');
   });
 
   test('a card opens the session in this window; a refusal stays put, and the bar leads back to the picker', async ({

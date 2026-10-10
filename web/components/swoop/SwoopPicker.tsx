@@ -54,8 +54,7 @@ export function SwoopPicker() {
   const [filter, setFilter] = useState('');
   const { machines, loading: machinesLoading } = useMachines(siteId);
   const { settings: swoop, loading: swoopLoading } = useSwoopSettings(siteId);
-  // the server renders the browser's page; the app's home has no dashboard to go back to,
-  // and its header is the window's title bar.
+  // the app's home has no dashboard to go back to, and its header is the window's title bar.
   const platform = useViewerAppPlatform();
   const inApp = platform !== null;
   const router = useRouter();

@@ -124,7 +124,6 @@ export function MachineContextMenu({
     () => isThisMachine(siteId, machineId),
     () => false,
   );
-  // the server renders no app; hydration fills it in
   const inApp = useViewerAppPlatform() !== null;
 
   const handleToggleMute = async () => {

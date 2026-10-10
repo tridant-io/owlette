@@ -53,9 +53,8 @@ import { swoopClipboard } from '@/lib/swoop/clipboard';
 import { cn } from '@/lib/utils';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock, keyboardLock } from '@/lib/swoop/keyboardLock';
-import { viewerAppHasNativeKeys } from '@/lib/swoop/viewerApp';
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
-import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
+import { useViewerAppNativeKeys, useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 const subscribeNever = (): (() => void) => () => {};
 
 /** an app-level round trip above this, or a delay rise above it, is a poor connection. */
@@ -173,7 +172,7 @@ export function SwoopToolbar({
   // the supported case and hydration corrects it once, without a second render
   // pass on every browser that does support it.
   const lockSupported = useSyncExternalStore(subscribeNever, hasKeyboardLock, () => true);
-  const nativeKeys = useSyncExternalStore(subscribeNever, viewerAppHasNativeKeys, () => false);
+  const nativeKeys = useViewerAppNativeKeys();
   // null in a browser, where the bar is only the session's
   const platform = useViewerAppPlatform();
 
