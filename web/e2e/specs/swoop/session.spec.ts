@@ -8,7 +8,10 @@
  * and the media path itself is proven on real machines, not here.
  *
  * `storageState` is emptied and each test signs in itself: the fixture users
- * carry no second factor, and control needs one.
+ * carry no second factor, and control needs one. a second factor passed at
+ * sign-in under five minutes ago is itself the step-up, so the specs about the
+ * step-up date the sign-in's back (`ageSignInCeremony`), and one spec keeps it
+ * fresh.
  */
 
 import crypto from 'crypto';
@@ -17,6 +20,7 @@ import { authenticator } from 'otplib';
 import { getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import { grantMembership, seedMachine, seedSite, type TestUser } from '../../helpers/seed';
+import { ageSignInCeremony } from '../../helpers/signInCeremony';
 
 authenticator.options = { step: 30, window: 1 };
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -31,6 +35,7 @@ const OFFLINE_ID = `mach-offline-${SUFFIX}`;
 const RETURNING_ID = `mach-returning-${SUFFIX}`;
 const RELOAD_ID = `mach-reload-${SUFFIX}`;
 const CODEC_ID = `mach-codec-${SUFFIX}`;
+const FRESH_ID = `mach-fresh-${SUFFIX}`;
 const SESSIONS = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/sessions`;
 const KILL = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/kill`;
 
@@ -81,8 +86,17 @@ async function freshTotp(page: Page, secret: string, spent?: string): Promise<st
 /** the page's own refusal line, not next's route announcer. */
 const alertLine = (page: Page) => page.locator('p[role="alert"]');
 
-/** signs in; returns the totp code the sign-in spent, so the next ceremony can move past it. */
-async function signIn(page: Page, user: TestUser, secret?: string): Promise<string | undefined> {
+/**
+ * signs in; returns the totp code the sign-in spent, so the next ceremony can move
+ * past it. a totp sign-in is dated ten minutes back unless `fresh`, so the step-up
+ * still asks.
+ */
+async function signIn(
+  page: Page,
+  user: TestUser,
+  secret?: string,
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<string | undefined> {
   await page.goto('/login');
   await page.getByLabel(/email/i).fill(user.email);
   await page.getByLabel(/password/i).first().fill(user.password);
@@ -95,6 +109,7 @@ async function signIn(page: Page, user: TestUser, secret?: string): Promise<stri
     await page.getByRole('button', { name: /^verify$/i }).click();
   }
   await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+  if (secret && !fresh) await ageSignInCeremony(page);
   return spent;
 }
 
@@ -158,6 +173,7 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, RETURNING_ID, { displayName: `returning box ${SUFFIX}` });
   await seedMachine(SITE_ID, RELOAD_ID, { displayName: `reload box ${SUFFIX}` });
   await seedMachine(SITE_ID, CODEC_ID, { displayName: `codec box ${SUFFIX}` });
+  await seedMachine(SITE_ID, FRESH_ID, { displayName: `fresh box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -242,7 +258,7 @@ test.describe('the viewer page', () => {
     await expect(page.getByRole('button', { name: /reconnect/i })).toBeVisible();
   });
 
-  test('a reload keeps control after the 12-hour window, without asking again', async ({ page }) => {
+  test('a reload keeps control after the 7-day window, without asking again', async ({ page }) => {
     const spent = await signIn(page, operator, operatorSecret);
     const sessions = `/api/sites/${SITE_ID}/machines/${RELOAD_ID}/swoop/sessions`;
     const minted = (r: { url(): string; request(): { method(): string }; status(): number }) =>
@@ -257,10 +273,10 @@ test.describe('the viewer page', () => {
     expect(((await (await first).json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
     await expect(dialog).toBeHidden();
 
-    // the 12 hours since the ceremony have passed: only the tab's own
+    // the 7 days since the ceremony have passed: only the tab's own
     // continuity can bring control back now.
     const windows = await getAdminDb().collection(`users/${operator.uid}/swoop_step_up`).get();
-    const lapsed = Date.now() - 13 * 60 * 60 * 1000;
+    const lapsed = Date.now() - 8 * 24 * 60 * 60 * 1000;
     await Promise.all(windows.docs.map((d) => d.ref.set({ openedAt: lapsed, expiresAt: lapsed + 1 }, { merge: true })));
 
     const again = page.waitForResponse(minted, { timeout: 45_000 });
@@ -269,6 +285,30 @@ test.describe('the viewer page', () => {
     expect((JSON.parse(response.request().postData() ?? '{}') as { continuity?: string }).continuity).toBeTruthy();
     expect(((await response.json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
     await expect(dialog).toBeHidden();
+  });
+
+  test('a second factor passed at sign-in moments ago is the step-up for the first machine', async ({ page }) => {
+    await signIn(page, operator, operatorSecret, { fresh: true });
+    const sessions = `/api/sites/${SITE_ID}/machines/${FRESH_ID}/swoop/sessions`;
+    const minted = page.waitForResponse(
+      (r) => r.url().endsWith(sessions) && r.request().method() === 'POST',
+      { timeout: 45_000 },
+    );
+    await page.goto(`/swoop/${SITE_ID}/${FRESH_ID}`);
+
+    const response = await minted;
+    expect(response.status(), await response.text()).toBe(201);
+    expect(response.request().postDataJSON()).not.toHaveProperty('mfaProof');
+    expect(((await response.json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+    await expect(page.getByText(/connecting/i).first()).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    // the window rests on the sign-in's own ceremony, and the trail says why it opened
+    const rows = await getAdminDb().collection(`sites/${SITE_ID}/audit_log`).where('target.id', '==', FRESH_ID).get();
+    const opened = rows.docs.map((d) => d.data()).filter((row) => row.metadata?.event === 'step_up_opened');
+    expect(opened.map((row) => [row.actor?.userId, row.metadata?.reason])).toEqual([[operator.uid, 'fresh_sign_in']]);
+
+    await page.getByRole('button', { name: /end session/i }).click();
   });
 
   test('a member is refused control and watches instead, with no ceremony', async ({ page }) => {

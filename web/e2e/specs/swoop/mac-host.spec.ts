@@ -5,7 +5,8 @@
  * a mac: the menu lists the mac's own chords, has no ctrl + alt + del, and
  * offers "ctrl acts as cmd", on by default. the emulator has no streamer, so the
  * session stays at "connecting"; the menu only needs the session and its `ctl`,
- * which the step-up grants, exactly as in `session.spec.ts`.
+ * which the sign-in's own second factor grants, minutes old, exactly as in
+ * `session.spec.ts`.
  */
 
 import crypto from 'crypto';
@@ -19,7 +20,7 @@ authenticator.options = { step: 30, window: 1 };
 // the viewer that is not a mac: the chromium project's desktop chrome device
 // reports windows in its user agent on every machine that runs the suite.
 test.use({ storageState: { cookies: [], origins: [] } });
-// a step-up right after a sign-in waits for the next totp period: up to 31 s.
+// a totp sign-in may wait out a period about to roll over.
 test.setTimeout(120_000);
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
@@ -29,10 +30,10 @@ const MACHINE_ID = `mach-swoop-mac-${SUFFIX}`;
 let operator: TestUser;
 let operatorSecret = '';
 
-/** a code that is not the one just spent: the api refuses a replayed totp. */
-async function freshTotp(page: Page, spent?: string): Promise<string> {
+/** this period's code, unless the period is about to roll over. */
+async function freshTotp(page: Page): Promise<string> {
   let code = authenticator.generate(operatorSecret);
-  if ((spent !== undefined && code === spent) || authenticator.timeRemaining() <= 5) {
+  if (authenticator.timeRemaining() <= 5) {
     await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1000);
     code = authenticator.generate(operatorSecret);
   }
@@ -65,22 +66,17 @@ test('a mac host gets the mac chords and ctrl acting as cmd, on by default', asy
   await page.getByLabel(/password/i).first().fill(operator.password);
   await page.getByRole('button', { name: /sign in with email/i }).click();
   await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
-  const spent = await freshTotp(page);
-  await page.getByPlaceholder('000000').fill(spent);
+  await page.getByPlaceholder('000000').fill(await freshTotp(page));
   await page.getByRole('button', { name: /^verify$/i }).click();
   await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
 
-  await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
   const minted = page.waitForResponse(
     (r) => r.url().endsWith('/swoop/sessions') && r.request().method() === 'POST' && r.status() === 201,
     { timeout: 45_000 },
   );
-  await dialog.getByPlaceholder('6-digit code').fill(await freshTotp(page, spent));
-  await dialog.getByRole('button', { name: /^confirm$/i }).click();
+  await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
   expect(((await (await minted).json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
-  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'send a key combination' }).click();
   const menu = page.getByRole('menu');

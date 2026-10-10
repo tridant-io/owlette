@@ -159,7 +159,7 @@ security-boundary audit records. **access**: site admins read; client writes are
 | `target` | map | `{ kind, id, ... }`. |
 | `outcome` | string | `allow`, `deny` or `error`. |
 | `timestamp` | timestamp | |
-| `metadata` | map | optional. swoop records name their event here, in `metadata.event`: `session_started`, `session_ended`, `session_denied`, `lease_denied`, `step_up_failed`, and host events. |
+| `metadata` | map | optional. swoop records name their event here, in `metadata.event`: `session_started`, `session_ended`, `session_denied`, `lease_denied`, `step_up_failed`, `step_up_opened` (a step-up the sign-in's own second factor stood in for, `metadata.reason: fresh_sign_in`), and host events. |
 | `denyReason`, `errorCode`, `enforcementBypassed` | string, string, boolean | optional. |
 
 hash-chained records from the `recordAuditEvent` function land in the same collection under their hash, with `sites/{siteId}/audit_log_meta/head` (`{ hash, recordedAt }`, server only) as the chain head.
@@ -669,7 +669,7 @@ dashboard layout memory. **access**: the owner reads and writes their own. one d
 | `users/{uid}/api_keys/{keyId}` | the owner reads; writes are server only | `name`, `keyHash`, `keyPrefix`, `environment`, `scopes`, `expiresAt` (ms), `createdAt`, `lastUsedAt`, `expiredMarkedAt`, `rotatedAt`, `rotatedFromKeyId`, `retiresAt`, `revokedAt`, `expiryNoticedStages`. |
 | `users/{uid}/passkeys/{credentialId}` | server only | passkey credentials and their metadata. |
 | `users/{uid}/trustedDevices/{tokenHash}` | server only | SHA-256-hashed "trust this device for 30 days" tokens. the raw token lives only in the HTTP-only `owlette_device_trust` cookie; records expire after about 30 days and are revoked when two-factor is disabled or the account is deleted. |
-| `users/{uid}/swoop_step_up/{key}` | server only | an open swoop control window for one machine: `{ openedAt, expiresAt, factorUsed (totp, backup_code or passkey), updatedAt }`, 12 hours from `openedAt`. |
+| `users/{uid}/swoop_step_up/{key}` | server only | an open swoop control window for one machine: `{ openedAt, expiresAt, openedBy, factorUsed, updatedAt }`, 7 days from `openedAt`. `openedBy` is `ceremony` (a step-up, with `factorUsed` totp, backup_code or passkey) or `fresh_sign_in` (the sign-in's own second factor, under five minutes old, with `openedAt` the time it was passed and no `factorUsed`). |
 | `users/{uid}/account_deletion/operation` | server only | progress of a self-service account deletion. |
 
 ---
@@ -685,7 +685,7 @@ these are server only unless noted.
 | `agent_tokens/{tokenId}` | legacy registration codes, still written by the installer-generation and setup-token routes. |
 | `device_codes/{phrase}` | a pairing phrase's state, alive for 10 minutes and deleted once the agent consumes it: `deviceCodeHash`, `wrapVersion`, `machineId`, `version`, `status`, `createdAt`, `expiresAt`, `siteId`, `authorizedBy`, `authorizedAt`, `encryptedCredentials`, `preauthorizedIntent`, `deferTokenMint`. see [authentication](/docs/reference/authentication). |
 | `cli_device_codes/{phrase}` | the CLI's sign-in phrase: `deviceCodeHash`, `status`, `createdAt`, `expiresAt` (10 minutes), `authorizedBy`, `authorizedAt`, `siteId`, `keyId`, `encryptedCredentials`. |
-| `app_links/{codeHash}` | a one-time code that signs in [owlette swoop](/docs/reference/authentication#signing-in-owlette-swoop), keyed by the code's SHA-256: `status` (`pending`, `approved` or `used`), `createdAt`, `expiresAt` (60 seconds for a code from the dashboard, 10 minutes for one the app started), `secretHash` (an app-started code only), and once approved the approver's `uid` and `mfaSatisfiedBy`, then `usedAt`. an expired record is refused when read, not swept. |
+| `app_links/{codeHash}` | a one-time code that signs in [owlette swoop](/docs/reference/authentication#signing-in-owlette-swoop), keyed by the code's SHA-256: `status` (`pending`, `approved` or `used`), `createdAt`, `expiresAt` (60 seconds for a code from the dashboard, 10 minutes for one the app started), `secretHash` (an app-started code only), and once approved the approver's `uid`, `mfaSatisfiedBy` and `mfaCompletedAt`, then `usedAt`. an expired record is refused when read, not swept. |
 | `mfa_pending/{uid}` | a TOTP setup secret while enrollment is in progress. |
 | `webauthn_challenges/{challengeId}` | single-use passkey challenges. |
 | `idempotency_cache/{hash}` | stored responses for `Idempotency-Key` requests, 24 hours: `userId`, `environment`, `key`, `bodyHash`, `method`, `path`, `query`, `status`, `headers`, `body`, `expiresAt`, `createdAt`. swept daily. |

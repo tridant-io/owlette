@@ -189,6 +189,8 @@ function canPreserveVerifiedMfa(
  *   3. mfaSatisfiedBy==='passkey-uv' → verified, now (one UV ceremony proves
  *      credential + human, so it is both factors); 'challenge' likewise, which
  *      only an app-link sign-in passes: the approver's ceremony, carried over
+ *      with the time it ran (`mfaSatisfiedAt`), so the app's session is never
+ *      fresher than the ceremony behind it — swoop's step-up reads that time
  *   4. deviceTrusted, or mfaSatisfiedBy==='device-trust' (an app-link approver
  *      whose session was device-trust-born) → verified, now, satisfied BY the
  *      device-trust cookie — recorded as such, because no ceremony was run
@@ -219,13 +221,15 @@ export function resolveMfaOnSessionCreate(input: {
    * read off a verified app-link custom-token claim.
    */
   mfaSatisfiedBy?: MfaSatisfiedBy;
+  /** when that ceremony ran, when it was not now: the app-link approver's. Same rule as above. */
+  mfaSatisfiedAt?: number;
 }): {
   mfaRequired: boolean;
   mfaVerified: boolean;
   mfaCompletedAt?: number;
   mfaSatisfiedBy?: MfaSatisfiedBy;
 } {
-  const { prev, resolved, userId, now, deviceTrusted, mfaSatisfiedBy } = input;
+  const { prev, resolved, userId, now, deviceTrusted, mfaSatisfiedBy, mfaSatisfiedAt } = input;
 
   if (!resolved.mfaRequired) {
     return { mfaRequired: false, mfaVerified: true };
@@ -244,7 +248,12 @@ export function resolveMfaOnSessionCreate(input: {
   // A UV WebAuthn ceremony completed during THIS request satisfies the
   // challenge outright; the verifying route pins requireUserVerification.
   if (mfaSatisfiedBy === 'passkey-uv' || mfaSatisfiedBy === 'challenge') {
-    return { mfaRequired: true, mfaVerified: true, mfaCompletedAt: now, mfaSatisfiedBy };
+    return {
+      mfaRequired: true,
+      mfaVerified: true,
+      mfaCompletedAt: mfaSatisfiedAt ?? now,
+      mfaSatisfiedBy,
+    };
   }
 
   // Valid device-trust cookie; the grant is itself a fresh verification event.
@@ -276,6 +285,9 @@ export function resolveMfaOnSessionCreate(input: {
  *   server signed it in app-link exchange) and
  *   app/api/passkeys/authenticate/verify/route.ts (literal, after
  *   `verification.verified`).
+ * @param mfaSatisfiedAt SERVER-SIDE ONLY, same rule. When the ceremony behind
+ *   `mfaSatisfiedBy` ran, if not during this request: the app-link approver's
+ *   `mfaCompletedAt`, off the same verified claim. Omitted, it is now.
  *
  * Fail-closed: device-trust lookup errors are caught and read as untrusted.
  * `resolveMfaStateForUser`'s throw propagates — a Firestore failure must never
@@ -284,7 +296,8 @@ export function resolveMfaOnSessionCreate(input: {
 export async function createSession(
   userId: string,
   durationDays: number = 7,
-  mfaSatisfiedBy?: MfaSatisfiedBy
+  mfaSatisfiedBy?: MfaSatisfiedBy,
+  mfaSatisfiedAt?: number
 ): Promise<void> {
   const session = await getSession();
 
@@ -340,6 +353,7 @@ export async function createSession(
     now,
     deviceTrusted,
     mfaSatisfiedBy,
+    mfaSatisfiedAt,
   });
 
   session.userId = userId;

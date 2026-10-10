@@ -7506,7 +7506,9 @@ paths:
         open step-up window. Send a live second-factor `mfaProof` in the same
         request to open one, or this tab's `continuity` token from its previous
         control session; a `401` with `code: step_up_required` is the refusal
-        that asks for one. Anything other than `control: true` is a watch-only
+        that asks for one. A second factor the caller's sign-in passed in the
+        last five minutes opens the window by itself, so the first machine
+        opened after signing in needs neither. Anything other than `control: true` is a watch-only
         session. Watching needs MACHINE_REMOTE_VIEW (20/min per caller), control
         MACHINE_REMOTE_CONTROL (10/min).
 
@@ -8053,7 +8055,8 @@ paths:
       description: |
         Whether the caller's step-up window on this machine is open for the
         sign-in asking: the answer a control `POST …/swoop/sessions` made now
-        would act on. `sessionPassedCeremony: false` means this sign-in skipped
+        would act on, which counts a second factor this sign-in passed in the
+        last five minutes. `sessionPassedCeremony: false` means this sign-in skipped
         the second factor (a remembered device), so it never reads a window,
         however recent; it has to send `mfaProof` itself. Reads only: it opens,
         extends and writes nothing, and takes no rate-limit token, because
@@ -8102,7 +8105,7 @@ paths:
       summary: open your step-up window on a machine
       description: |
         Runs the step-up on its own: a live second factor in `mfaProof` opens
-        the caller's 12-hour control window on this machine, as sending it with
+        the caller's 7-day control window on this machine, as sending it with
         a control `POST …/swoop/sessions` would, and starts no session. The
         owlette swoop desktop app sends the operator to a browser page that
         posts here, where any passkey works, and polls the `GET` above.

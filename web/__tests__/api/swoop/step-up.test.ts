@@ -70,7 +70,7 @@ jest.mock('@/lib/apiAuth.server', () => {
 });
 
 /** the login session behind the request; the satisfier predicate is the real one. */
-const mockLogin: { userId: string; expiresAt: number; mfaSatisfiedBy?: string } = {
+const mockLogin: { userId: string; expiresAt: number; mfaSatisfiedBy?: string; mfaCompletedAt?: number } = {
   userId: '',
   expiresAt: 0,
 };
@@ -129,11 +129,17 @@ const post = (body: Record<string, unknown>) =>
 
 const get = (machineId = MACHINE) => GET(createMockRequest(url(machineId)), routeContext(machineId));
 
-function signIn(userId: string, satisfiedBy: 'challenge' | 'device-trust' = 'challenge'): void {
+/** a ceremony sign-in an hour ago unless the test says otherwise: too old to stand in for the step-up. */
+function signIn(
+  userId: string,
+  satisfiedBy: 'challenge' | 'device-trust' = 'challenge',
+  signedInAgoMs = 3_600_000,
+): void {
   mockResolveAuth.mockResolvedValue({ userId, keyContext: null });
   mockLogin.userId = userId;
   mockLogin.expiresAt = Date.now() + 86_400_000;
   mockLogin.mfaSatisfiedBy = satisfiedBy;
+  mockLogin.mfaCompletedAt = Date.now() - signedInAgoMs;
 }
 
 /** a ceremony this user already ran, for one machine. */
@@ -325,6 +331,25 @@ describe('GET swoop/step-up', () => {
     const { body } = await parseResponse(await get());
 
     expect(body.data).toEqual({ open: false, sessionPassedCeremony: false });
+  });
+
+  // the app's poll after a fresh sign-in: the create that follows opens the window
+  it('reads open for a second factor this sign-in passed minutes ago, and writes nothing', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+
+    const { body } = await parseResponse(await get());
+
+    expect(body.data).toEqual({ open: true, sessionPassedCeremony: true });
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(writeAuditEntryBlocking).not.toHaveBeenCalled();
+  });
+
+  it('reads closed for a device-trust sign-in however recent, and a ceremony six minutes old', async () => {
+    signIn(ADMIN, 'device-trust', 0);
+    expect((await parseResponse(await get())).body.data).toEqual({ open: false, sessionPassedCeremony: false });
+
+    signIn(ADMIN, 'challenge', 6 * 60_000);
+    expect((await parseResponse(await get())).body.data).toEqual({ open: false, sessionPassedCeremony: true });
   });
 
   it('writes no audit row and takes no rate-limit token per poll', async () => {

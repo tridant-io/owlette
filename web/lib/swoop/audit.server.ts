@@ -14,7 +14,9 @@
  *
  * A control grant is not a row of its own: `session_started` with `ctl: true`
  * and `MACHINE_REMOTE_CONTROL` as the row's capability IS the grant, and a
- * second row would double-count one act.
+ * second row would double-count one act. A step-up window opened with no proof
+ * in the request IS a row of its own (`step_up_opened`), because that is the
+ * one opening no ceremony request evidences.
  */
 
 import {
@@ -37,7 +39,8 @@ export type SwoopAuditEvent =
   | 'session_ended'
   | 'session_denied'
   | 'lease_denied'
-  | 'step_up_failed';
+  | 'step_up_failed'
+  | 'step_up_opened';
 
 export interface SwoopAuditBase {
   siteId: string;
@@ -106,6 +109,26 @@ export async function recordSwoopSessionStarted(
       capability: capabilityFor(args.ctl),
       outcome: 'allow',
       metadata: { viewerId: args.viewerId, ctl: args.ctl },
+    }),
+  );
+}
+
+/**
+ * A step-up window opened without a proof in the request: the sign-in's own
+ * ceremony, minutes old, stood in for it (`reason: 'fresh_sign_in'`). Awaited,
+ * and written before the window is, so no window opens unrecorded.
+ */
+export async function recordSwoopStepUpOpened(
+  args: SwoopAuditBase & { reason: 'fresh_sign_in' },
+): Promise<void> {
+  await writeAuditEntryBlocking(
+    args.siteId,
+    swoopEntry({
+      base: args,
+      event: 'step_up_opened',
+      capability: Capability.MACHINE_REMOTE_CONTROL,
+      outcome: 'allow',
+      metadata: { reason: args.reason },
     }),
   );
 }

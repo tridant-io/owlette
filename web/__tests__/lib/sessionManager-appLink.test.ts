@@ -39,6 +39,26 @@ describe('resolveMfaOnSessionCreate — app-link satisfiers', () => {
     expect(sessionPassedMfaCeremony(out)).toBe(true);
   });
 
+  // swoop counts a sign-in ceremony under five minutes old as its step-up, so the
+  // app's session carries the approver's ceremony time, never the hand-off's.
+  it('challenge carries the approver ceremony time when the claim names one', () => {
+    const out = resolveMfaOnSessionCreate({
+      prev: {},
+      resolved: REQUIRED,
+      userId: USER,
+      now: NOW,
+      deviceTrusted: false,
+      mfaSatisfiedBy: 'challenge',
+      mfaSatisfiedAt: NOW - 3 * 24 * 60 * 60 * 1000,
+    });
+    expect(out).toEqual({
+      mfaRequired: true,
+      mfaVerified: true,
+      mfaCompletedAt: NOW - 3 * 24 * 60 * 60 * 1000,
+      mfaSatisfiedBy: 'challenge',
+    });
+  });
+
   it('device-trust takes the device-trust branch and is not a ceremony', () => {
     const out = resolveMfaOnSessionCreate({
       prev: {},

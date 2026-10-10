@@ -275,10 +275,10 @@ function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'ope
       <DialogHeader>
         <DialogTitle>confirm it&apos;s you</DialogTitle>
         <DialogDescription>
-          {/* 12 hours is `SWOOP_STEP_UP_WINDOW_MS`, which lives in a
+          {/* 7 days is `SWOOP_STEP_UP_WINDOW_MS`, which lives in a
               server-only module and so cannot be imported here. */}
           {enrolled
-            ? 'taking control of a machine needs a second factor right now — not just a signed-in session. one check covers this machine for 12 hours, reconnects included.'
+            ? 'taking control of a machine needs a second factor right now — not just a signed-in session. one check covers this machine for 7 days, reconnects included.'
             : 'taking control of a machine needs a second factor, and this account has none enrolled.'}
         </DialogDescription>
       </DialogHeader>
