@@ -207,7 +207,7 @@ test.describe('inside owlette swoop — signed out', () => {
         colorScheme === 'dark',
       );
       const path = test.info().outputPath(`swoop-login-${colorScheme}.png`);
-      await page.screenshot({ path });
+      await page.screenshot({ path, animations: 'disabled' });
       await test.info().attach(`login ${colorScheme}`, { path, contentType: 'image/png' });
     }
 
@@ -218,7 +218,7 @@ test.describe('inside owlette swoop — signed out', () => {
     await expect(page.getByLabel('password')).toBeVisible();
     await expect(page.getByRole('link', { name: 'forgot password?' })).toBeVisible();
     const open = test.info().outputPath('swoop-login-email.png');
-    await page.screenshot({ path: open });
+    await page.screenshot({ path: open, animations: 'disabled' });
     await test.info().attach('login email open', { path: open, contentType: 'image/png' });
   });
 });

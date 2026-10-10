@@ -168,11 +168,17 @@ export function AuthShell({
               minimal ? 'pb-0' : 'md:h-full md:border-r md:border-border',
             )}
           >
-            <div className="dot-grid absolute inset-0 -z-10 opacity-25" aria-hidden="true" />
-            <div
-              className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(120%_120%_at_50%_50%,transparent_35%,var(--card-recessed)_100%)]"
-              aria-hidden="true"
-            />
+            {/* minimal has no panel to set apart, and the texture's edge would
+                cut under the title */}
+            {minimal ? null : (
+              <>
+                <div className="dot-grid absolute inset-0 -z-10 opacity-25" aria-hidden="true" />
+                <div
+                  className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(120%_120%_at_50%_50%,transparent_35%,var(--card-recessed)_100%)]"
+                  aria-hidden="true"
+                />
+              </>
+            )}
             <OwletteEyeIcon size={minimal ? 56 : 80} />
             <div className="min-w-0 space-y-1">
               {brandTitleAs === 'div' ? (
