@@ -21,7 +21,9 @@ Owlette web runs on **three** env-var surfaces:
 
 > Both Railway services live in the **single `dev` environment** — production is a separate *service* (`owlette-prod`), not a separate environment. Address services by `-s owlette-prod -e dev`, not by an environment named "production" (it doesn't exist).
 
-`railway-prod` and `vercel-prod` are a **mirror pair**: they serve the same domain from two providers, so their values must be identical. `railway-dev` is independent (its own dev values).
+`railway-prod` and `vercel-prod` are a **mirror pair**: they serve the same domain from two providers, so their values must be identical. `railway-dev` is independent (its own dev values), with one exception: `EDGE_SHARED_SECRET`
+is the same value on all three, because one Cloudflare rule serves both hosts, and the tool
+does not keep railway-dev in step, so set it there by hand when it rotates.
 
 ---
 
@@ -63,7 +65,7 @@ The eight **`must-match`** vars are the ones to never get wrong:
 - `SWOOP_JWT_PRIVATE_KEY` — mismatch means bundles minted on one origin fail to verify at the relay
 - `SWOOP_SESSION_MASTER_KEY` — mismatch makes a session's derived keys unreadable across origins
 - `SWOOP_SIGNAL_RING_SECRET` — mismatch makes the relay refuse the api's rings and kill broadcasts
-- `EDGE_SHARED_SECRET` — the `X-Owlette-Edge` value Cloudflare adds (`infra/cloudflare`); one value on all three targets, and a mismatch makes every request look like it came around the edge, so network binding falls back to an unknown network (never a lockout)
+- `EDGE_SHARED_SECRET` — the `X-Owlette-Edge` value Cloudflare adds (`infra/cloudflare`); one value on all three targets, and a mismatch makes every request look like it came around the edge, so the origin treats every client as one of unknown network (never a lockout)
 
 ---
 

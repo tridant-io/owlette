@@ -24,8 +24,12 @@ Terraform (IaC) in `infra/cloudflare/` for a Cloudflare load balancer that fails
 were last changed by API (2026-10-04, `check_regions`, since mirrored into `main.tf`).
 Verify with a GET on `accounts/{account_id}/load_balancers/pools` before assuming
 anything. To plan against the live objects, import them into a local state first (see
-"Rebuilding state" below). The edge headers rule entered `main.tf` on 2026-10-10; check
-whether it is live with a GET on
+"Rebuilding state" below).
+
+**Edge headers rule: in `main.tf` since 2026-10-10, NOT applied.** The token lacks Zone ›
+Transform Rules › Edit, `EDGE_SHARED_SECRET` is on no origin yet, and the web code that
+compares it lands separately. Until all three are done the spoofing hole below is open.
+Check whether the rule is live with a GET on
 `zones/{zone_id}/rulesets/phases/http_request_late_transform/entrypoint`.
 
 Companion systems: the env-management skill (env var parity across both origins) and the
@@ -56,9 +60,9 @@ Companion systems: the env-management skill (env var parity across both origins)
    `owlette.app` and `dev.owlette.app`, sets two request headers before any origin
    fetch: `X-Owlette-Asn` = `to_string(ip.src.asnum)` (the client's network) and
    `X-Owlette-Edge` = `var.edge_shared_secret`. It matches the public host, so requests
-   the LB sends to Vercel carry them too; `set` overwrites a client's own copy. The
-   origins compare `X-Owlette-Edge` with `EDGE_SHARED_SECRET` (a must-match var, see the
-   env-management skill). Every origin answers around Cloudflare (measured 2026-10-10:
+   the LB sends to Vercel should carry them too (unverified until the first apply);
+   `set` overwrites a client's own copy. The origins compare `X-Owlette-Edge` with
+   `EDGE_SHARED_SECRET` (a must-match var, see the env-management skill). Every origin answers around Cloudflare (measured 2026-10-10:
    `curl --resolve owlette.app:443:<railway ip>`, `--resolve dev.owlette.app:443:<railway ip>`
    and `vercel-origin.owlette.app` all return 200, and a spoofed `CF-Connecting-IP`
    picks the rate-limit bucket), so a request without the secret is one of unknown
@@ -83,8 +87,10 @@ terraform apply      # creates monitor + pools + LB + edge headers rule
 
 `edge_shared_secret` is a sensitive variable: plan and apply print `(sensitive value)`,
 but the local state holds it in plain text (one more reason state stays out of git). It
-must equal `EDGE_SHARED_SECRET` on railway-dev, railway-prod and vercel-prod; rotate all
-four together. A mismatch never locks anyone out: the origin treats the request as one of
+must equal `EDGE_SHARED_SECRET` on railway-dev, railway-prod and vercel-prod. One value
+for dev and prod, since one rule serves both hosts. Rotating it touches five places
+together: `.claude/.env.local`, `terraform apply` of the rule, and the three targets
+(`sync-env.mjs` keeps only the prod pair in step, so set railway-dev by hand). A mismatch never locks anyone out: the origin treats the request as one of
 unknown network. Changing the rule only adds request headers, so it cannot break traffic,
 but the plan must show no change to the monitor, pools or LB before you apply it.
 
