@@ -32,7 +32,7 @@
     "public": "NEXT_PUBLIC_* — inlined into the client bundle at build time; not secret. Synced non-sensitive so values stay readable in Vercel.",
     "config": "Non-secret app configuration (emails, ids, endpoints, flags). Synced non-sensitive.",
     "secret": "Sensitive credential. Synced --sensitive (unreadable after write).",
-    "must-match": "Sensitive AND silently catastrophic if it differs between mirror targets. Seven: SESSION_SECRET logs everyone out, MFA_ENCRYPTION_KEY locks out 2FA users, LLM_ENCRYPTION_KEY breaks stored Cortex keys, TURNSTILE_SECRET fails every captcha, SWOOP_JWT_PRIVATE_KEY makes one origin's bundles fail at the relay, SWOOP_SESSION_MASTER_KEY makes a session's derived keys unreadable across origins, SWOOP_SIGNAL_RING_SECRET makes the relay refuse rings and kill broadcasts. Synced --sensitive.",
+    "must-match": "Sensitive AND silently catastrophic if it differs between mirror targets. Eight: SESSION_SECRET logs everyone out, MFA_ENCRYPTION_KEY locks out 2FA users, LLM_ENCRYPTION_KEY breaks stored Cortex keys, TURNSTILE_SECRET fails every captcha, SWOOP_JWT_PRIVATE_KEY makes one origin's bundles fail at the relay, SWOOP_SESSION_MASTER_KEY makes a session's derived keys unreadable across origins, SWOOP_SIGNAL_RING_SECRET makes the relay refuse rings and kill broadcasts, EDGE_SHARED_SECRET makes every request look like it bypassed cloudflare. Synced --sensitive.",
     "build": "Build-time-only credential (Sentry source-map upload). Synced --sensitive."
   },
   "never-set": {
@@ -78,6 +78,7 @@
     "CLOUDFLARE_TURN_KEY_ID": { "class": "config", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
     "CORTEX_INTERNAL_SECRET": { "class": "secret", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
     "CRON_SECRET": { "class": "secret", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
+    "EDGE_SHARED_SECRET": { "class": "must-match", "targets": ["railway-dev", "railway-prod", "vercel-prod"], "note": "the X-Owlette-Edge value cloudflare adds on owlette.app and dev.owlette.app (infra/cloudflare, var.edge_shared_secret); a request without it came around the edge, where CF-Connecting-IP and X-Owlette-Asn are client-supplied. One value for all three targets, since one transform rule serves both hosts. A mismatch makes every request look like it bypassed the edge, so network binding degrades to an unknown network, never a lockout" },
     "FIREBASE_CLIENT_EMAIL": { "class": "secret", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
     "FIREBASE_PRIVATE_KEY": { "class": "secret", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
     "FIREBASE_PROJECT_ID": { "class": "config", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
