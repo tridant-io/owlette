@@ -113,6 +113,12 @@ export interface AuthShellProps {
    * inside the identical card, so the shell does not change shape on resolve.
    */
   loading?: boolean;
+  /**
+   * owlette swoop's login: one narrow column with the brand above the form and
+   * a smaller mark, and no room kept for the site footer, which the app does
+   * not show (Footer.tsx). overrides `width`.
+   */
+  minimal?: boolean;
   /** Full-bleed band pinned to the bottom of the form column. Omit for no band. */
   footer?: ReactNode;
   /** Extra classes on the form column (e.g. a min-height to damp a resolve-time jump). */
@@ -129,6 +135,7 @@ export function AuthShell({
   brandMeta,
   width = 'default',
   loading = false,
+  minimal = false,
   footer,
   contentClassName,
   className,
@@ -140,7 +147,7 @@ export function AuthShell({
     /* pb-32 clears the app-wide fixed Footer, whose inner container is
        pointer-events-auto and otherwise swallows taps on the card's bottom
        controls at short viewport heights. */
-    <main className="relative flex min-h-screen items-center justify-center p-4 pb-32">
+    <main className={cn('relative flex min-h-screen items-center justify-center p-4', !minimal && 'pb-32')}>
       <div className="absolute inset-0 dot-grid opacity-30" aria-hidden="true" />
       <div className="absolute inset-0 blueprint-grid opacity-15" aria-hidden="true" />
 
@@ -150,18 +157,23 @@ export function AuthShell({
       <Card
         className={cn(
           'relative z-10 w-full overflow-hidden border-border bg-card p-0',
-          CARD_WIDTH[width],
+          minimal ? 'max-w-sm' : CARD_WIDTH[width],
           className,
         )}
       >
-        <div className={cn('grid', CARD_COLUMNS[width])}>
-          <CardHeader className="relative flex min-w-0 flex-col items-center justify-center space-y-4 p-8 text-center md:h-full md:border-r md:border-border">
+        <div className={cn('grid', !minimal && CARD_COLUMNS[width])}>
+          <CardHeader
+            className={cn(
+              'relative flex min-w-0 flex-col items-center justify-center space-y-4 p-8 text-center',
+              minimal ? 'pb-0' : 'md:h-full md:border-r md:border-border',
+            )}
+          >
             <div className="dot-grid absolute inset-0 -z-10 opacity-25" aria-hidden="true" />
             <div
               className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(120%_120%_at_50%_50%,transparent_35%,var(--card-recessed)_100%)]"
               aria-hidden="true"
             />
-            <OwletteEyeIcon size={80} />
+            <OwletteEyeIcon size={minimal ? 56 : 80} />
             <div className="min-w-0 space-y-1">
               {brandTitleAs === 'div' ? (
                 <CardTitle className={BRAND_TITLE_CLASS}>{brandTitle}</CardTitle>
@@ -244,5 +256,34 @@ export function AuthFooterDot() {
     <span className="px-2 text-border" aria-hidden="true">
       ·
     </span>
+  );
+}
+
+/**
+ * footer band content: who is signed in, over the way out for the wrong account.
+ * the email stays on one line (a break-all stranded its last letter on a line
+ * of its own); too long for the band, it loses its middle, keeping the start
+ * and the domain's tail, which together still say whose account it is.
+ */
+export function AuthSignedInAs({ email, onSwitch }: { email: string; onSwitch: () => void }) {
+  const cut = Math.max(0, email.indexOf('@'), email.length - 10);
+  return (
+    <>
+      <span className="flex justify-center">
+        <span className="shrink-0 whitespace-pre">signed in as </span>
+        <span className="flex min-w-0" title={email} data-testid="signed-in-email">
+          <span className="truncate">{email.slice(0, cut)}</span>
+          <span className="shrink-0">{email.slice(cut)}</span>
+        </span>
+      </span>
+      <button
+        type="button"
+        onClick={onSwitch}
+        className="mt-1 underline-offset-2 hover:underline"
+        data-testid="sign-in-as-someone-else"
+      >
+        not you? sign in as someone else
+      </button>
+    </>
   );
 }

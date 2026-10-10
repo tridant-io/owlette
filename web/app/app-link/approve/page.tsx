@@ -4,7 +4,7 @@ import { Suspense, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { AuthShell, AuthFooterDot } from '@/components/auth/AuthShell';
+import { AuthShell, AuthSignedInAs } from '@/components/auth/AuthShell';
 import { Button } from '@/components/ui/button';
 import { AppLinkError, approveAppLink } from '@/lib/appLink';
 
@@ -50,18 +50,7 @@ function ApproveInner() {
     router.replace(`/login?redirect=${encodeURIComponent(here)}`);
   };
   const footer = user?.email ? (
-    <>
-      signed in as <span className="break-all">{user.email}</span>
-      <AuthFooterDot />
-      <button
-        type="button"
-        onClick={() => void signInAsSomeoneElse()}
-        className="underline-offset-2 hover:underline"
-        data-testid="sign-in-as-someone-else"
-      >
-        not you? sign in as someone else
-      </button>
-    </>
+    <AuthSignedInAs email={user.email} onSwitch={() => void signInAsSomeoneElse()} />
   ) : undefined;
 
   const outcome = OUTCOME_COPY[state];

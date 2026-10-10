@@ -27,6 +27,7 @@ import { E2E_BASE_URL, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import { roleState } from '../../helpers/roles';
 import { grantMembership, seedMachine, seedSite } from '../../helpers/seed';
+import { expectSignedInFooterOnOneLine } from '../../helpers/signedInFooter';
 
 const SITE_ID = 'site-A';
 const MACHINE_ID = 'e2e-swoop-viewer-app';
@@ -177,6 +178,49 @@ test.describe('inside owlette swoop — signed out', () => {
     await strip.getByRole('button', { name: 'close' }).click();
     expect(await bridgeCalls(page)).toEqual(['close']);
   });
+
+  test("the login page is the app's own: owlette swoop, no site footer, the email form behind its link", async ({
+    page,
+  }) => {
+    // owlette swoop's main window
+    await page.setViewportSize({ width: 1060, height: 680 });
+    await fakeBridge(page);
+    await page.goto('/login');
+
+    await expect(page.getByRole('heading', { level: 1, name: 'owlette swoop' })).toBeVisible();
+    await expect(page.getByText('keep your installation running')).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'privacy' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'sign up' })).toBeVisible();
+
+    // a press on the page's background lands on the window's drag surface
+    const dragsAt = (x: number, y: number) =>
+      page.evaluate(
+        ([px, py]) => document.elementFromPoint(px, py)?.closest('[data-tauri-drag-region="deep"]') != null,
+        [x, y] as const,
+      );
+    expect(await dragsAt(20, 340)).toBe(true);
+    expect(await dragsAt(1040, 660)).toBe(true);
+
+    for (const colorScheme of ['dark', 'light'] as const) {
+      await page.emulateMedia({ colorScheme });
+      await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(
+        colorScheme === 'dark',
+      );
+      const path = test.info().outputPath(`swoop-login-${colorScheme}.png`);
+      await page.screenshot({ path });
+      await test.info().attach(`login ${colorScheme}`, { path, contentType: 'image/png' });
+    }
+
+    await expect(page.getByLabel('email')).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'forgot password?' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'or use your email and password' }).click();
+    await expect(page.getByLabel('email')).toBeFocused();
+    await expect(page.getByLabel('password')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'forgot password?' })).toBeVisible();
+    const open = test.info().outputPath('swoop-login-email.png');
+    await page.screenshot({ path: open });
+    await test.info().attach('login email open', { path: open, contentType: 'image/png' });
+  });
 });
 
 test.describe('in a browser — admin on site-A', () => {
@@ -293,6 +337,8 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
       ).toBeVisible();
       await expect(page.getByText('or enter a code')).toBeVisible();
       await expect(page.getByTestId('sign-in-as-someone-else')).toBeVisible();
+      await expect(page.getByTestId('signed-in-email')).toHaveText(user.email);
+      await expectSignedInFooterOnOneLine(page);
       await page.getByLabel('authenticator code').fill(await freshTotp(page, secret, spent));
       await page.getByRole('button', { name: 'confirm' }).click();
       await expect(page.getByText('done, go back to owlette swoop')).toBeVisible();

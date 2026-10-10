@@ -7,6 +7,10 @@
  * app-link code opens there, this page polls every 3 s until a signed-in browser approves it, then
  * signs in with the custom token and goes to the redirect.
  *
+ * the page is also the app's own: the owlette swoop lockup with no tagline, the email form and
+ * forgot-password behind a quiet link, one line to sign up, and the whole page the window's drag
+ * surface.
+ *
  * the browser case matters as much: outside the app the page must be exactly what it was.
  */
 import React from 'react';
@@ -44,8 +48,9 @@ jest.mock('@/hooks/useInAppBrowser', () => ({
   useInAppBrowser: () => inAppState,
 }));
 
+const mockSignIn = jest.fn();
 jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ user: null, loading: false, signIn: jest.fn(), signInWithGoogle: jest.fn() }),
+  useAuth: () => ({ user: null, loading: false, signIn: mockSignIn, signInWithGoogle: jest.fn() }),
 }));
 
 const replace = jest.fn();
@@ -96,9 +101,10 @@ afterEach(() => {
 const advance = (ms: number) => act(() => jest.advanceTimersByTimeAsync(ms));
 
 async function renderPage() {
-  render(<LoginPage />);
+  const view = render(<LoginPage />);
   // the webauthn autofill probe resolves on a microtask.
   await act(async () => {});
+  return view;
 }
 
 async function startBrowserSignIn() {
@@ -114,8 +120,59 @@ describe('/login inside owlette swoop', () => {
     expect(screen.getByRole('button', { name: /sign in with your browser/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /continue with google/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /continue with passkey/i })).not.toBeInTheDocument();
-    expect(screen.getByText('or use your email and password')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'or use your email and password' }));
     expect(screen.getByLabelText(/^email$/i)).toHaveAttribute('autocomplete', 'username');
+  });
+
+  it("is the app's own: the owlette swoop lockup and no tagline", async () => {
+    await renderPage();
+
+    expect(screen.getByRole('heading', { level: 1, name: 'owlette swoop' })).toBeInTheDocument();
+    expect(screen.queryByText('keep your installation running')).not.toBeInTheDocument();
+  });
+
+  it('keeps the email form and forgot-password behind a link until it is clicked', async () => {
+    await renderPage();
+
+    expect(screen.queryByLabelText(/^email$/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^password$/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'forgot password?' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'or use your email and password' }));
+
+    expect(screen.getByLabelText(/^email$/i)).toHaveFocus();
+    expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'forgot password?' })).toHaveAttribute('href', '/forgot-password');
+    expect(screen.queryByRole('button', { name: 'or use your email and password' })).not.toBeInTheDocument();
+  });
+
+  it('stays open after a failed sign-in', async () => {
+    mockSignIn.mockRejectedValueOnce(new Error('wrong password'));
+    await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'or use your email and password' }));
+
+    fireEvent.change(screen.getByLabelText(/^email$/i), { target: { value: 'kiosk@example.com' } });
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'nope' } });
+    fireEvent.click(screen.getByRole('button', { name: 'sign in with email' }));
+    await act(async () => {});
+
+    expect(mockSignIn).toHaveBeenCalledWith('kiosk@example.com', 'nope');
+    expect(screen.getByLabelText(/^email$/i)).toHaveValue('kiosk@example.com');
+    expect(screen.getByRole('button', { name: 'sign in with email' })).toBeEnabled();
+    expect(screen.getByRole('link', { name: 'forgot password?' })).toBeInTheDocument();
+  });
+
+  it('keeps one line to sign up at the bottom', async () => {
+    await renderPage();
+
+    expect(screen.getByText(/don.t have an account\?/)).toContainElement(screen.getByRole('link', { name: 'sign up' }));
+    expect(screen.getByRole('link', { name: 'sign up' })).toHaveAttribute('href', '/register');
+  });
+
+  it('makes the whole page the window drag surface', async () => {
+    const { container } = await renderPage();
+
+    expect(container.firstElementChild).toHaveAttribute('data-tauri-drag-region', 'deep');
   });
 
   it('never starts the passkey autofill ceremony', async () => {
@@ -252,5 +309,15 @@ describe('/login in a browser', () => {
     expect(screen.queryByText('or use your email and password')).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^email$/i)).toHaveAttribute('autocomplete', 'username webauthn');
     expect(screen.queryByTestId('swoop-window-strip')).not.toBeInTheDocument();
+  });
+
+  it("keeps owlette's brand and tagline, forgot-password in the footer, and no drag surface", async () => {
+    const { container } = await renderPage();
+
+    expect(screen.getByRole('heading', { level: 1, name: 'owlette' })).toBeInTheDocument();
+    expect(screen.getByText('keep your installation running')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'forgot password?' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'or use your email and password' })).not.toBeInTheDocument();
+    expect(container.querySelector('[data-tauri-drag-region]')).toBeNull();
   });
 });
