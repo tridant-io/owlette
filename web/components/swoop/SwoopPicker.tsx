@@ -15,7 +15,8 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AppWindow, ArrowLeft, Monitor, MonitorPlay } from 'lucide-react';
+import { AppWindow, ArrowLeft, Monitor } from 'lucide-react';
+import { SwoopLockup } from '@/components/swoop/SwoopLockup';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type Machine } from '@/hooks/useFirestore';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
@@ -143,13 +144,7 @@ export function SwoopPicker() {
         >
           <div className="flex min-w-0 items-center gap-1.5">
             <OwletteEyeIcon size={24} className="translate-y-[1px]" />
-            <span className="text-base font-semibold text-foreground translate-y-[1px]">owlette</span>
-            <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-muted-foreground/60" />
-            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground translate-y-[1px]">
-              {/* centred on the lowercase letters, not the line box, which sits it high */}
-              <MonitorPlay className="h-3.5 w-3.5 shrink-0 translate-y-px text-muted-foreground" />
-              swoop
-            </span>
+            <SwoopLockup className="translate-y-[1px]" />
           </div>
           {!inApp && (
             <Button asChild variant="ghost" size="sm">

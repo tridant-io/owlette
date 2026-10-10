@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AuthShell, AuthDivider, AuthFooterDot, authFooterLinkClass } from '@/components/auth/AuthShell';
 import { SwoopWindowStrip, dragRegion } from '@/components/swoop/SwoopWindowControls';
-import { Fingerprint, Globe, MonitorPlay } from 'lucide-react';
+import { Fingerprint, Globe } from 'lucide-react';
+import { SwoopLockup } from '@/components/swoop/SwoopLockup';
 import { toast } from '@/lib/toast';
 import { sanitizeError } from '@/lib/errorHandler';
 import { isPopupUnavailableError } from '@/lib/inAppBrowser';
@@ -49,16 +50,7 @@ const APP_LINK_WAIT_MS = 10 * 60 * 1000;
  */
 const SWOOP_SHELL = {
   minimal: true,
-  brandTitle: (
-    <span className="inline-flex items-center gap-2">
-      owlette{' '}
-      <span aria-hidden className="h-5 w-px shrink-0 bg-muted-foreground/60" />
-      <span className="inline-flex items-center gap-1.5 font-medium">
-        <MonitorPlay aria-hidden className="h-5 w-5 shrink-0 text-muted-foreground" />
-        swoop
-      </span>
-    </span>
-  ),
+  brandTitle: <SwoopLockup size="lg" />,
   brandDescription: null,
 };
 
