@@ -29,12 +29,20 @@ describe('requestNetwork', () => {
 
   it('reads a request whose edge secret does not match as unknown, asn and all', () => {
     expect(
-      requestNetwork(request({ 'x-owlette-edge': 'guess', 'x-owlette-asn': '13335', 'cf-connecting-ip': '203.0.113.77' })),
-    ).toEqual({ asn: null, prefix: '203.0.113.0/24', viaEdge: false, key: 'unknown' });
+      // around the edge, CF-Connecting-IP is the client's own and is ignored; the prefix is the proxy-appended hop's
+      requestNetwork(
+        request({
+          'x-owlette-edge': 'guess',
+          'x-owlette-asn': '13335',
+          'cf-connecting-ip': '203.0.113.77',
+          'x-forwarded-for': '203.0.113.77, 198.51.100.5',
+        }),
+      ),
+    ).toEqual({ asn: null, prefix: '198.51.100.0/24', viaEdge: false, key: 'unknown' });
   });
 
   it('reads a request with no edge headers as unknown, keeping the prefix for the log', () => {
-    expect(requestNetwork(request({ 'cf-connecting-ip': '2001:db8:abcd:12::1' }))).toEqual({
+    expect(requestNetwork(request({ 'x-forwarded-for': '2001:db8:abcd:12::1' }))).toEqual({
       asn: null,
       prefix: '2001:db8:abcd:12::/64',
       viaEdge: false,
