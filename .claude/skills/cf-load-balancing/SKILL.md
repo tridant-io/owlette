@@ -27,8 +27,9 @@ anything. To plan against the live objects, import them into a local state first
 "Rebuilding state" below).
 
 **Edge headers rule: in `main.tf` since 2026-10-10, NOT applied.** The token lacks Zone ›
-Transform Rules › Edit, `EDGE_SHARED_SECRET` is on no origin yet, and the web code that
-compares it lands separately. Until all three are done the spoofing hole below is open.
+Transform Rules › Edit and `EDGE_SHARED_SECRET` is on no origin yet; the web code that
+compares it is `web/lib/network.server.ts` (swoop's network binding, logging only until
+`SWOOP_NETWORK_BINDING=enforce`). Until both are done the spoofing hole below is open.
 Check whether the rule is live with a GET on
 `zones/{zone_id}/rulesets/phases/http_request_late_transform/entrypoint`.
 
