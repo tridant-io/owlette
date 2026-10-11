@@ -21,7 +21,9 @@ Roughly prioritized. Not a commitment — just a living list of what's next.
   - every action logged with the user who authorized the session;
   - limits hoot cannot lift itself: no passkey step-up on its own, no change to its own authorization.
 
-  Plan it with `/plan` as its own initiative once swoop on macOS (`dev/active/swoop-macos`) is released.
+  Planned 2026-10-11 at `dev/active/hoot-drives-swoop/` (tracked): hoot joins a swoop session as a viewer over the
+  service's stdin pipe to the streamer, stills on request, a human step-up per drive in the chat's approval card,
+  blocking audit per action, Windows and macOS only. Wave 0 (streamer still path, hoot-only mode) gates the rest.
 
 ---
 
