@@ -13,8 +13,8 @@
  * it comes from forwarding headers anyone can set.
  */
 
-import { createHash, timingSafeEqual } from 'crypto';
 import type { NextRequest } from 'next/server';
+import { edgeVouches } from '@/lib/edge.server';
 import { getClientIp } from '@/lib/rateLimit';
 
 export const UNKNOWN_NETWORK = 'unknown';
@@ -32,17 +32,6 @@ export interface RequestNetwork {
 
 const ASN_PATTERN = /^[1-9][0-9]{0,9}$/;
 const ASN_MAX = 4_294_967_295;
-
-function sha256(value: string): Buffer {
-  return createHash('sha256').update(value, 'utf8').digest();
-}
-
-function edgeVouches(presented: string | null): boolean {
-  const secret = process.env.EDGE_SHARED_SECRET;
-  if (!secret || !presented) return false;
-  // hashed first, so the comparison takes the same time whatever was presented
-  return timingSafeEqual(sha256(presented), sha256(secret));
-}
 
 function ipv4Prefix(ip: string): string | null {
   const octets = ip.split('.');
