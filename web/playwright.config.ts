@@ -1,4 +1,3 @@
-import { generateKeyPairSync } from 'crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -6,6 +5,12 @@ import { defineConfig, devices } from '@playwright/test';
 
 import { E2E_EDGE_SECRET, E2E_ENFORCE_PORT } from './e2e/helpers/edgeNetwork';
 import { E2E_SESSION_SECRET } from './e2e/helpers/signInCeremony';
+import {
+  E2E_SWOOP_KID,
+  E2E_SWOOP_MASTER_KEY,
+  E2E_SWOOP_SIGNAL_URL,
+  swoopE2eKeys,
+} from './e2e/helpers/swoopHost';
 
 /**
  * Runs the web app against Firebase emulators (Auth + Firestore + Storage) on
@@ -78,14 +83,6 @@ const INTERNAL_OR_OVERRIDDEN_SECRETS = [
 
 const SECRET_SHAPED = /(_KEY|_SECRET|_TOKEN|_DSN)$/;
 
-/** an ed25519 pair for the e2e server's swoop tokens: raw 32-byte halves, base64url, the shape the bundle carries. */
-function swoopE2eKeys(): { priv: string; pub: string } {
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
-  return {
-    priv: privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(16).toString('base64url'),
-    pub: publicKey.export({ format: 'der', type: 'spki' }).subarray(12).toString('base64url'),
-  };
-}
 const SWOOP_E2E_KEYS = swoopE2eKeys();
 
 /**
@@ -174,15 +171,15 @@ const webServer = {
     // swoop's mint route refuses outright with `signal_not_configured` when the
     // signal origin is blank, and the blanked third-party value above is the
     // real worker's. an unreachable origin keeps every session in the emulator:
-    // the ring fails, the polled command is queued, the page's dial never
-    // lands. the jwt keys are generated per run — nothing is committed, and
-    // no spec verifies a token — and the master key only has to be non-empty.
-    SWOOP_SIGNAL_URL: 'https://swoop-signal.e2e.invalid',
+    // the ring fails, the polled command is queued, and the page's dial lands
+    // nowhere unless a spec routes it to the fake host (e2e/helpers/swoopHost.ts),
+    // which is why that file holds the kid, the per-run keys and the master key.
+    SWOOP_SIGNAL_URL: E2E_SWOOP_SIGNAL_URL,
     SWOOP_SIGNAL_RING_SECRET: 'e2e-ring-secret-never-a-real-worker',
-    SWOOP_JWT_KID: 'e2e-swoop-kid',
+    SWOOP_JWT_KID: E2E_SWOOP_KID,
     SWOOP_JWT_PRIVATE_KEY: SWOOP_E2E_KEYS.priv,
     SWOOP_JWT_PUBLIC_KEY: SWOOP_E2E_KEYS.pub,
-    SWOOP_SESSION_MASTER_KEY: 'e2e-swoop-session-master-key-for-playwright-only',
+    SWOOP_SESSION_MASTER_KEY: E2E_SWOOP_MASTER_KEY,
     MFA_ENCRYPTION_KEY: 'demo-mfa-encryption-secret-for-playwright-only',
     NEXT_PUBLIC_SENTRY_DSN: '',
     // Empty strings short-circuit the init block in web/lib/rateLimit.ts. Without
