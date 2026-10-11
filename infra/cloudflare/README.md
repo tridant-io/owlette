@@ -10,9 +10,7 @@ Terraform for the owlette.app zone on Cloudflare (provider v4, `~> 4.52`):
   `X-Owlette-Asn` (the client's ASN, `ip.src.asnum`) and `X-Owlette-Edge` (a shared secret
   the origins compare with `EDGE_SHARED_SECRET`) to every request. Without a match the
   request came around Cloudflare, so its `CF-Connecting-IP` and `X-Owlette-Asn` are
-  whatever the client sent. **In code since 2026-10-10, not applied yet.** The origin
-  compares the secret in `web/lib/network.server.ts`, for swoop's network binding
-  (`SWOOP_NETWORK_BINDING`); the skill's status line says what is still owed.
+  whatever the client sent. Applied 2026-10-10; the skill's status line says which origins hold the secret.
 
 ## Run it
 

@@ -26,12 +26,10 @@ Verify with a GET on `accounts/{account_id}/load_balancers/pools` before assumin
 anything. To plan against the live objects, import them into a local state first (see
 "Rebuilding state" below).
 
-**Edge headers rule: in `main.tf` since 2026-10-10, NOT applied.** The token lacks Zone ›
-Transform Rules › Edit and `EDGE_SHARED_SECRET` is on no origin yet; the web code that
-compares it is `web/lib/network.server.ts` (swoop's network binding, logging only until
-`SWOOP_NETWORK_BINDING=enforce`). Until both are done the spoofing hole below is open.
-Check whether the rule is live with a GET on
-`zones/{zone_id}/rulesets/phases/http_request_late_transform/entrypoint`.
+**Edge headers rule: applied 2026-10-10** (ruleset `40ddb1cc559c4964b5d33cd483610208`, one rule,
+both hosts). `EDGE_SHARED_SECRET` is set on railway-dev; railway-prod and vercel-prod are
+still owed, so prod reads every client as an unknown network until then. Check the live
+rule with a GET on `zones/{zone_id}/rulesets/phases/http_request_late_transform/entrypoint`.
 
 Companion systems: the env-management skill (env var parity across both origins) and the
 `/api/health` readiness probe both origins are checked against
@@ -61,7 +59,7 @@ Companion systems: the env-management skill (env var parity across both origins)
    `owlette.app` and `dev.owlette.app`, sets two request headers before any origin
    fetch: `X-Owlette-Asn` = `to_string(ip.src.asnum)` (the client's network) and
    `X-Owlette-Edge` = `var.edge_shared_secret`. It matches the public host, so requests
-   the LB sends to Vercel should carry them too (unverified until the first apply);
+   the LB sends to Vercel carry them too;
    `set` overwrites a client's own copy. The origins compare `X-Owlette-Edge` with
    `EDGE_SHARED_SECRET` (a must-match var, see the env-management skill). Every origin answers around Cloudflare (measured 2026-10-10:
    `curl --resolve owlette.app:443:<railway ip>`, `--resolve dev.owlette.app:443:<railway ip>`
