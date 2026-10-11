@@ -15,7 +15,7 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AppWindow, ArrowLeft, Monitor } from 'lucide-react';
+import { AppWindow, ArrowLeft, Loader2, Monitor } from 'lucide-react';
 import { SwoopLockup } from '@/components/swoop/SwoopLockup';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type Machine } from '@/hooks/useFirestore';
@@ -95,13 +95,13 @@ export function SwoopPicker() {
 
   let body: React.ReactNode;
   if (loading || (user && sitesLoading)) {
-    body = <Notice><LoadingWord /></Notice>;
+    body = <Notice busy><LoadingWord /></Notice>;
   } else if (!user) {
     body = null;
   } else if (sites.length === 0) {
     body = <Notice>you&apos;re not a member of any site yet</Notice>;
   } else if (machinesLoading || swoopLoading) {
-    body = <Notice><LoadingWord /></Notice>;
+    body = <Notice busy><LoadingWord /></Notice>;
   } else if (machines.length === 0) {
     body = <Notice>no machines in this site yet</Notice>;
   } else if (filtered.length === 0) {
@@ -127,7 +127,7 @@ export function SwoopPicker() {
   }
 
   return (
-    <div data-testid="swoop-picker" className="min-h-screen bg-background">
+    <div data-testid="swoop-picker" className="flex min-h-screen flex-col bg-background">
       <header
         {...(inApp ? dragRegion : {})}
         // a title bar stays put while a long list scrolls
@@ -159,7 +159,7 @@ export function SwoopPicker() {
 
       <main
         className={cn(
-          'mx-auto flex max-w-6xl flex-col gap-3 px-4 py-4 md:py-6',
+          'mx-auto flex w-full max-w-6xl flex-1 flex-col gap-3 px-4 py-4 md:py-6',
           // coming back from a session, the grid fades in rather than snapping
           inApp && 'motion-safe:animate-in fade-in-0 duration-300',
         )}
@@ -193,8 +193,17 @@ export function SwoopPicker() {
   );
 }
 
-function Notice({ children }: { children: React.ReactNode }) {
-  return <p className="py-8 text-center text-sm text-muted-foreground">{children}</p>;
+/** centred in the space under the header and the site row, in the stage's "connecting" dress: a spinner over one line. */
+function Notice({ children, busy = false }: { children: React.ReactNode; busy?: boolean }) {
+  return (
+    <p
+      role={busy ? 'status' : undefined}
+      className="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center text-base text-muted-foreground"
+    >
+      {busy && <Loader2 className="size-6 animate-spin" aria-hidden />}
+      {children}
+    </p>
+  );
 }
 
 function PickerCard({
