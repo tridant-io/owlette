@@ -11,6 +11,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — swoop hosts on Windows machines without an NVIDIA GPU
+
+A Windows machine with no NVIDIA GPU can now host a swoop session. NVENC still
+comes first and gives the best picture; without it the streamer encodes h264
+through Media Foundation, which ships with Windows: on an Intel or AMD GPU's
+hardware encoder, or, on a machine with none, such as a virtual machine, on the
+CPU at up to 1280x720 and 30 frames a second on two threads, so the machine's
+own work keeps the rest of it. A bigger screen is scaled down to fit. A Windows
+N edition without the Media Feature Pack still needs an NVIDIA GPU.
+
 ### changed — a second factor you just passed is the step-up, and a step-up lasts 7 days
 
 A second factor passed at sign-in in the last five minutes now counts as swoop's

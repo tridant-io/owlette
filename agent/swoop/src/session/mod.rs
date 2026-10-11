@@ -971,7 +971,13 @@ mod host {
         self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, KillReason,
         LeftReason, MediaPath,
     };
-    use crate::platform::{self, CaptureSource, DesktopWatcher, Downscaler, InputInjector};
+    use crate::platform::{self, DesktopWatcher, Downscaler, InputInjector};
+    #[cfg(not(all(windows, feature = "testhooks")))]
+    use crate::platform::CaptureSource;
+    // a `testhooks` build opens its capture passes through the test pattern's
+    // seam, which is the desktop unless the bundle asked for the pattern
+    #[cfg(all(windows, feature = "testhooks"))]
+    use crate::capture::testpattern::{self, PassSource as CaptureSource};
     use crate::bundle::Secret;
     use crate::signal::client::{Effect, SignalTransport};
     use crate::signal::messages::channel::{
@@ -1104,6 +1110,10 @@ mod host {
         /// Which backend the selection chain actually opened on. Sent when it
         /// changes, which on a machine with one compiled backend is once.
         Backend(&'static str),
+        /// A rung failed its first frame and is out for the rest of the
+        /// session: the per-codec limits of what is left, which the tiers are
+        /// re-planned from — the rung below may cap smaller.
+        Rungs(Vec<CodecCaps>),
         /// Trigger 4 of `release_all`: the input thread's injector followed the
         /// desktop. The held sets are the session's, so the ups are too.
         DesktopSwitched,
@@ -1211,13 +1221,20 @@ mod host {
 
         // The test-only hook, which only a `testhooks` build parses at all.
         #[cfg(feature = "testhooks")]
-        if let Some(exit) = refuse_unbuilt_overrides(bundle.overrides.as_ref()) {
+        if let Some(exit) = refuse_unknown_overrides(bundle.overrides.as_ref()) {
             return (exit, ExitReason::Error);
         }
 
         // Locally before the network: a box that cannot capture or encode
         // should say so with 12 or 13 rather than after a room round trip.
-        let outputs = match platform::enumerate_outputs() {
+        #[cfg(all(windows, feature = "testhooks"))]
+        let enumerated = match bundle.overrides.as_ref().and_then(|o| o.source.as_deref()) {
+            Some(testpattern::SOURCE) => Ok(vec![testpattern::output()]),
+            _ => platform::enumerate_outputs(),
+        };
+        #[cfg(not(all(windows, feature = "testhooks")))]
+        let enumerated = platform::enumerate_outputs();
+        let outputs = match enumerated {
             Ok(outputs) if !outputs.is_empty() => outputs,
             Ok(_) => {
                 ::log::error!("swoop: no attached output to duplicate");
@@ -1236,10 +1253,9 @@ mod host {
         // capture thread opens a new encoder on every resolution rung, every
         // retarget and every ACCESS_LOST recovery.
         let caps = select::probe_all();
-        let codec_caps: Vec<CodecCaps> = caps
-            .iter()
-            .flat_map(|backend| backend.codecs.iter().cloned())
-            .collect();
+        #[cfg(feature = "testhooks")]
+        let caps = overridden_caps(caps, bundle.overrides.as_ref());
+        let codec_caps = select::codec_caps(&caps);
         let codecs: Vec<Codec> = codec_caps.iter().map(|c| c.codec).collect();
         // D14's admission cap and tier count, measured here because `caps` is
         // about to be handed to the capture thread.
@@ -1400,24 +1416,60 @@ mod host {
         outcome
     }
 
-    /// The bundle's `overrides` names a test source and a test encoder, and
-    /// both are still stubs — Task 8.7 fills `capture::testpattern` and Task 7.2
-    /// fills `encode::soft`. Until they exist there is nothing to select, and
-    /// quietly streaming the real desktop instead is how a ci run that proved
-    /// nothing looks like one that passed. The names are fixed vocabulary, not
-    /// bundle secrets, so they may be logged.
+    /// The bundle's `overrides`, checked against what this build can honour.
+    /// A source or an encoder it cannot is refused, never ignored: quietly
+    /// streaming the real desktop, or on whatever rung the chain picks, is how
+    /// a ci run that proved nothing looks like one that passed. A refused name
+    /// is not logged — it is a bundle field like any other.
     #[cfg(feature = "testhooks")]
-    fn refuse_unbuilt_overrides(overrides: Option<&crate::bundle::Overrides>) -> Option<Exit> {
+    fn refuse_unknown_overrides(overrides: Option<&crate::bundle::Overrides>) -> Option<Exit> {
         let overrides = overrides?;
-        if let Some(source) = overrides.source.as_deref() {
-            ::log::error!("swoop: override source {source:?} is not built yet (task 8.7)");
+        #[cfg(windows)]
+        let pattern = Some(testpattern::SOURCE);
+        // the pattern renders into a d3d11 texture
+        #[cfg(not(windows))]
+        let pattern: Option<&str> = None;
+        if overrides.source.is_some() && overrides.source.as_deref() != pattern {
+            ::log::error!("swoop: the override source is not one this build has");
             return Some(Exit::NoCaptureSource);
         }
         if let Some(encoder) = overrides.encoder.as_deref() {
-            ::log::error!("swoop: override encoder {encoder:?} is not built yet (task 7.2)");
-            return Some(Exit::NoEncoder);
+            if override_backend(encoder).is_none() {
+                ::log::error!("swoop: the override encoder is not a rung of this build's chain");
+                return Some(Exit::NoEncoder);
+            }
         }
         None
+    }
+
+    /// The rung an override names. `soft` is the chain's last rung, the
+    /// software floor, whatever this system calls it — the protocol's golden
+    /// bundle names it that way.
+    #[cfg(feature = "testhooks")]
+    fn override_backend(name: &str) -> Option<&'static str> {
+        if name == "soft" {
+            return select::CHAIN.last().copied();
+        }
+        select::CHAIN.iter().find(|backend| **backend == name).copied()
+    }
+
+    /// The probed backends, narrowed to the one an override names. A rung this
+    /// machine does not have leaves nothing, which is exit 13.
+    #[cfg(feature = "testhooks")]
+    fn overridden_caps(
+        caps: Vec<BackendCaps>,
+        overrides: Option<&crate::bundle::Overrides>,
+    ) -> Vec<BackendCaps> {
+        match overrides
+            .and_then(|o| o.encoder.as_deref())
+            .and_then(override_backend)
+        {
+            Some(backend) => {
+                ::log::info!("swoop: encoding only on {backend} (test override)");
+                caps.into_iter().filter(|c| c.backend == backend).collect()
+            }
+            None => caps,
+        }
     }
 
     /// §6's `status.testOverride`, as one short string. The names are fixed
@@ -2412,6 +2464,15 @@ mod host {
                         self.retier();
                     }
                     Ok(FromWorker::Backend(backend)) => self.encoder = Some(backend),
+                    // A viewer already on a codec no rung left encodes gets no
+                    // picture; its freeze watchdog reconnects it, and the new
+                    // offer is matched against what is left.
+                    Ok(FromWorker::Rungs(codec_caps)) => {
+                        self.codecs = codec_caps.iter().map(|c| c.codec).collect();
+                        self.codec_caps = codec_caps;
+                        self.tiers_sent.clear();
+                        self.retier();
+                    }
                     // Trigger 4 of `release_all`. The injector follows on the
                     // input thread because a desktop association belongs to the
                     // thread that made it; the held sets are here, so the ups are
@@ -3869,6 +3930,9 @@ mod host {
     struct TierPass {
         want: TierEncode,
         encoder: Option<Box<dyn Encoder>>,
+        /// The rung `encoder` opened on, until it has taken a frame: a failure
+        /// before then is the rung's, and it leaves the chain.
+        unproven: Option<&'static str>,
         /// This tier's own downscaler: two tiers can be two sizes, and a scaler
         /// belongs to the size it was opened for.
         scaler: Option<Downscaler>,
@@ -3884,6 +3948,7 @@ mod host {
             Self {
                 want,
                 encoder: None,
+                unproven: None,
                 scaler: None,
                 // A new tier's first frame is a recovery point or its viewers
                 // see nothing at all.
@@ -3899,6 +3964,7 @@ mod host {
         fn retarget(&mut self, want: TierEncode) {
             if (self.want.width, self.want.height) != (want.width, want.height) {
                 self.encoder = None;
+                self.unproven = None;
                 self.scaler = None;
                 self.force_irap = true;
             } else if self.want.bitrate_bps != want.bitrate_bps {
@@ -3916,6 +3982,7 @@ mod host {
         /// encode at all.
         fn rebuild(&mut self) {
             self.encoder = None;
+            self.unproven = None;
             self.scaler = None;
             self.force_irap = true;
         }
@@ -4211,6 +4278,7 @@ mod host {
                             let drops = Arc::clone(&ctx.drops);
                             created.set_sink(Box::new(move |frame| hand_over(&tx, &drops, frame)));
                             tier.encoder = Some(created);
+                            tier.unproven = Some(backend);
                             if ctx.backend != Some(backend) {
                                 ctx.backend = Some(backend);
                                 ::log::info!("swoop: encoding on {backend}");
@@ -4234,6 +4302,7 @@ mod host {
                         // encoder that runs a frame behind is not a stalled
                         // desktop.
                         tier.floor.fed(now);
+                        tier.unproven = None;
                         // Cleared on the submit the encoder accepted, not on
                         // an answer: a backend that delivers through its sink
                         // answers nothing here, and the forced frame is in
@@ -4251,6 +4320,13 @@ mod host {
                         // DeviceChanged and SizeChanged both mean the surface
                         // moved under the session: drop it and open a new one.
                         ::log::warn!("swoop: encode failed: {e}");
+                        // On its first frame it is the rung that failed, not
+                        // the surface, and opening it again fails the same way.
+                        if let Some(backend) = tier.unproven.take() {
+                            ::log::warn!("swoop: {backend} is out for the rest of this session");
+                            ctx.caps = select::without(&ctx.caps, backend);
+                            let _ = ctx.tx.try_send(FromWorker::Rungs(select::codec_caps(&ctx.caps)));
+                        }
                         tier.rebuild();
                         rebuilt = true;
                     }
@@ -5002,6 +5078,62 @@ mod host {
             assert!(still >= 2, "the floor did not feed a still desktop");
             assert_eq!(paused, 0, "capture kept running behind a cleared indicator");
             assert!(resumed >= 1, "the resume did not re-open the duplication");
+        }
+
+        // linux has no chain yet, so nothing to override
+        #[cfg(all(feature = "testhooks", any(windows, target_os = "macos")))]
+        #[test]
+        fn an_override_names_one_rung_and_soft_is_the_floor() {
+            use crate::bundle::Overrides;
+
+            let overrides = |source: Option<&str>, encoder: Option<&str>| Overrides {
+                source: source.map(str::to_owned),
+                encoder: encoder.map(str::to_owned),
+            };
+            let floor = *select::CHAIN.last().expect("a chain");
+            assert_eq!(override_backend("soft"), Some(floor));
+            assert_eq!(override_backend(select::CHAIN[0]), Some(select::CHAIN[0]));
+            assert_eq!(override_backend("x264"), None);
+
+            // what this build can honour passes; anything else is the exit it
+            // would have hit for real, never a quiet fallback
+            assert_eq!(refuse_unknown_overrides(None), None);
+            assert_eq!(
+                refuse_unknown_overrides(Some(&overrides(None, Some("soft")))),
+                None
+            );
+            assert_eq!(
+                refuse_unknown_overrides(Some(&overrides(None, Some("x264")))),
+                Some(Exit::NoEncoder)
+            );
+            assert_eq!(
+                refuse_unknown_overrides(Some(&overrides(Some("webcam"), None))),
+                Some(Exit::NoCaptureSource)
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                refuse_unknown_overrides(Some(&overrides(Some("testpattern"), Some("mf-sw")))),
+                None
+            );
+
+            let rung = |backend: &'static str| BackendCaps {
+                backend,
+                codecs: vec![CodecCaps {
+                    codec: Codec::H264,
+                    max_width: 1280,
+                    max_height: 720,
+                }],
+                accepts_bgra_texture: false,
+                max_fps: 30,
+                concurrent_sessions: 4,
+            };
+            let probed: Vec<BackendCaps> = select::CHAIN.iter().map(|b| rung(b)).collect();
+            let narrowed = overridden_caps(probed.clone(), Some(&overrides(None, Some("soft"))));
+            assert_eq!(
+                narrowed.iter().map(|c| c.backend).collect::<Vec<_>>(),
+                vec![floor]
+            );
+            assert_eq!(overridden_caps(probed.clone(), None).len(), probed.len());
         }
     }
 }

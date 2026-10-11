@@ -1,8 +1,8 @@
 //! Which backend a session encodes on, and what it falls to.
 //!
-//! The chain is NVENC → the hardware backend spike 6.7 picks (Task 7.1) → the
-//! software floor (Task 7.2), per codec. Everything that *decides* is a pure
-//! function over the [`BackendCaps`] a probe returned — [`chain_for`],
+//! The chain is NVENC → the hardware encoder MFT (`mf-hw`) → Microsoft's
+//! in-box software encoder (`mf-sw`), per codec. Everything that *decides* is
+//! a pure function over the [`BackendCaps`] a probe returned — [`chain_for`],
 //! [`select`], [`budget`] — so the whole table is unit-testable on a machine
 //! with no GPU at all. Only [`probe_all`] and [`create`] touch hardware, and
 //! they reach each backend through exactly two symbols, `probe()` and
@@ -14,30 +14,26 @@
 //! a GPU does comfortably. Task 8.2 must not tier on it either until it is
 //! redefined as fps at a streaming size.
 //!
-//! Spike 6.7 has not run, so every rung below NVENC is a stub behind a feature
-//! that is off — which is the default build. `probe_all` then returns NVENC
-//! alone, or nothing at all on a machine without it, and the table still
-//! resolves.
-//!
 //! The chain is per system: the one above on Windows, VideoToolbox alone on
-//! macOS, and the software floor alone everywhere else.
+//! macOS, and nothing yet everywhere else.
 
 use thiserror::Error;
 
-use crate::encode::{BackendCaps, Codec, Encoder, EncoderConfig};
+use crate::encode::{BackendCaps, Codec, CodecCaps, Encoder, EncoderConfig};
 use crate::ipc::Exit;
 
 /// The fallback chain, highest tier first. A backend's position here *is* its
 /// tier, and the names are the ones `BackendCaps::backend` reports and the
 /// probe JSON prints.
 ///
-/// Media Foundation sits above the software floor rather than beside it: it is
-/// in-box on every Windows install and drives whatever fixed-function encoder
-/// the machine has, so it is still hardware on a box whose vendor SDK we did
-/// not build. `openh264` is last because it is the only rung that costs the
-/// machine's own CPU — these are signage boxes running TouchDesigner.
+/// Both rungs below NVENC are Media Foundation, in-box on every Windows install
+/// (the owner's call, 2026-10-11). `mf-hw` drives whatever fixed-function
+/// encoder the machine has — Intel, AMD, or NVIDIA's own MFT. `mf-sw` is last
+/// because it is the only rung that costs the machine's own CPU, and it caps
+/// itself at 720p30 for that reason — these are signage boxes running
+/// TouchDesigner.
 #[cfg(windows)]
-pub const CHAIN: &[&str] = &["nvenc", "qsv", "amf", "mf", "openh264"];
+pub const CHAIN: &[&str] = &["nvenc", "mf-hw", "mf-sw"];
 
 /// macOS: one rung. VideoToolbox carries the hardware encoders and Apple's
 /// software H.264 behind one session, and that software encoder is the no-GPU
@@ -45,9 +41,9 @@ pub const CHAIN: &[&str] = &["nvenc", "qsv", "amf", "mf", "openh264"];
 #[cfg(target_os = "macos")]
 pub const CHAIN: &[&str] = &["videotoolbox"];
 
-/// Everywhere else: the software floor, until that system's own plan.
+/// Everywhere else: no encoder, until that system's own plan.
 #[cfg(not(any(windows, target_os = "macos")))]
-pub const CHAIN: &[&str] = &["openh264"];
+pub const CHAIN: &[&str] = &[];
 
 /// A backend's tier, or `None` for a name this build's chain does not know.
 pub fn tier(backend: &str) -> Option<usize> {
@@ -158,6 +154,25 @@ pub fn budget(caps: &[BackendCaps]) -> u32 {
         .map_or(0, |caps| caps.concurrent_sessions.max(1))
 }
 
+/// Every rung's per-codec limits, in the order `caps` lists them — the
+/// session plans its tiers from the first entry for each codec.
+pub fn codec_caps(caps: &[BackendCaps]) -> Vec<CodecCaps> {
+    caps.iter()
+        .flat_map(|backend| backend.codecs.iter().cloned())
+        .collect()
+}
+
+/// The table without `backend`. A rung that probed fine and then could not
+/// encode its first frame — the capture adapter has no encoder of its own, the
+/// driver refused the session — stays out for the rest of the session, so the
+/// next frame goes to the rung below it rather than to the same failure.
+pub fn without(caps: &[BackendCaps], backend: &str) -> Vec<BackendCaps> {
+    caps.iter()
+        .filter(|caps| caps.backend != backend)
+        .cloned()
+        .collect()
+}
+
 /// What every backend compiled into this build reports, in chain order.
 ///
 /// The only hardware call in the selection path. Each `probe()` is expected to
@@ -170,14 +185,10 @@ pub fn probe_all() -> Vec<BackendCaps> {
     let mut caps: Vec<BackendCaps> = Vec::new();
     #[cfg(all(windows, feature = "encode-nvenc"))]
     caps.push(crate::encode::nvenc::probe());
-    #[cfg(all(windows, any(feature = "encode-vpl", feature = "encode-ffmpeg")))]
-    caps.push(crate::encode::qsv::probe());
-    #[cfg(all(windows, any(feature = "encode-amf", feature = "encode-ffmpeg")))]
-    caps.push(crate::encode::amf::probe());
     #[cfg(all(windows, feature = "encode-mf"))]
-    caps.push(crate::encode::mf::probe());
-    #[cfg(any(feature = "encode-openh264", feature = "encode-ffmpeg"))]
-    caps.push(crate::encode::soft::probe());
+    caps.push(crate::encode::mf::hw::probe());
+    #[cfg(all(windows, feature = "encode-mf"))]
+    caps.push(crate::encode::mf::sw::probe());
     #[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]
     caps.push(crate::encode::videotoolbox::probe());
     caps
@@ -193,21 +204,13 @@ fn create_on(backend: &str, cfg: &EncoderConfig) -> Option<anyhow::Result<Box<dy
     if backend == "nvenc" {
         return Some(crate::encode::nvenc::create(cfg));
     }
-    #[cfg(all(windows, any(feature = "encode-vpl", feature = "encode-ffmpeg")))]
-    if backend == "qsv" {
-        return Some(crate::encode::qsv::create(cfg));
-    }
-    #[cfg(all(windows, any(feature = "encode-amf", feature = "encode-ffmpeg")))]
-    if backend == "amf" {
-        return Some(crate::encode::amf::create(cfg));
+    #[cfg(all(windows, feature = "encode-mf"))]
+    if backend == "mf-hw" {
+        return Some(crate::encode::mf::hw::create(cfg));
     }
     #[cfg(all(windows, feature = "encode-mf"))]
-    if backend == "mf" {
-        return Some(crate::encode::mf::create(cfg));
-    }
-    #[cfg(any(feature = "encode-openh264", feature = "encode-ffmpeg"))]
-    if backend == "openh264" {
-        return Some(crate::encode::soft::create(cfg));
+    if backend == "mf-sw" {
+        return Some(crate::encode::mf::sw::create(cfg));
     }
     #[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]
     if backend == "videotoolbox" {
@@ -278,19 +281,17 @@ mod tests {
         )]
     }
 
+    /// An Intel iGPU: its Quick Sync MFT, H.264 only, and the software floor
+    /// beside it, as `probe_all` would answer.
     #[cfg(windows)]
     fn intel() -> Vec<BackendCaps> {
-        vec![caps(
-            "qsv",
-            &[(Codec::H265, 4096, 4096), (Codec::H264, 4096, 4096)],
-            4,
-        )]
+        [vec![caps("mf-hw", &[(Codec::H264, 4096, 4096)], 4)], no_gpu()].concat()
     }
 
-    /// A VM: the software floor at its measured 720p ceiling, one session.
+    /// A VM: the software floor at its 720p ceiling.
     #[cfg(windows)]
     fn no_gpu() -> Vec<BackendCaps> {
-        vec![caps("openh264", &[(Codec::H264, 1280, 720)], 1)]
+        vec![caps("mf-sw", &[(Codec::H264, 1280, 720)], 4)]
     }
 
     /// A Mac with Apple silicon, as the rig's probe answered: HEVC to 8192x8192
@@ -336,12 +337,20 @@ mod tests {
                 want: Some(("nvenc", Codec::H265)),
             },
             Case {
-                name: "intel only",
+                name: "intel only: hevc preferred, the mft does h264",
                 caps: intel(),
                 codecs: vec![Codec::H265, Codec::H264],
                 width: 1920,
                 height: 1080,
-                want: Some(("qsv", Codec::H265)),
+                want: Some(("mf-hw", Codec::H264)),
+            },
+            Case {
+                name: "intel only, inside the software ceiling, still the hardware",
+                caps: intel(),
+                codecs: vec![Codec::H264],
+                width: 1280,
+                height: 720,
+                want: Some(("mf-hw", Codec::H264)),
             },
             Case {
                 name: "no gpu, inside the software ceiling",
@@ -349,7 +358,7 @@ mod tests {
                 codecs: vec![Codec::H265, Codec::H264],
                 width: 1280,
                 height: 720,
-                want: Some(("openh264", Codec::H264)),
+                want: Some(("mf-sw", Codec::H264)),
             },
             Case {
                 name: "no gpu, 1080p is above the software ceiling",
@@ -379,7 +388,7 @@ mod tests {
                 name: "the top rung's second codec beats a lower rung's first",
                 caps: vec![
                     caps("nvenc", &[(Codec::H264, 4096, 4096)], 8),
-                    caps("qsv", &[(Codec::H265, 4096, 4096)], 4),
+                    caps("mf-hw", &[(Codec::H265, 4096, 4096)], 4),
                 ],
                 codecs: vec![Codec::H265, Codec::H264],
                 width: 1920,
@@ -471,18 +480,18 @@ mod tests {
     #[test]
     fn the_chain_is_tier_order_whatever_order_the_probes_answered_in() {
         let caps = vec![
-            caps("openh264", &[(Codec::H264, 1920, 1080)], 1),
-            caps("mf", &[(Codec::H264, 4096, 4096)], 2),
+            caps("mf-sw", &[(Codec::H264, 1280, 720)], 4),
+            caps("mf-hw", &[(Codec::H264, 4096, 4096)], 4),
             caps("nvenc", &[(Codec::H264, 4096, 4096)], 8),
         ];
         assert_eq!(
-            chain_for(&caps, Codec::H264, 1920, 1080),
-            vec!["nvenc", "mf", "openh264"]
+            chain_for(&caps, Codec::H264, 1280, 720),
+            vec!["nvenc", "mf-hw", "mf-sw"]
         );
         // the size filter removes rungs, it does not reorder them
         assert_eq!(
-            chain_for(&caps, Codec::H264, 3840, 2160),
-            vec!["nvenc", "mf"]
+            chain_for(&caps, Codec::H264, 1920, 1080),
+            vec!["nvenc", "mf-hw"]
         );
         assert!(chain_for(&caps, Codec::H265, 1920, 1080).is_empty());
     }
@@ -500,16 +509,41 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn a_rung_that_failed_its_first_frame_hands_the_session_to_the_next() {
+        // an intel box whose display hangs off an adapter with no encoder:
+        // the hardware mft probes fine and cannot open on the capture device
+        let probed = intel();
+        assert_eq!(
+            select(&probed, &[Codec::H264], 1280, 720).map(|s| s.backend),
+            Some("mf-hw")
+        );
+        let left = without(&probed, "mf-hw");
+        assert_eq!(
+            select(&left, &[Codec::H264], 1280, 720).map(|s| s.backend),
+            Some("mf-sw")
+        );
+        // the limits the session re-plans from are the floor's now
+        let limits = codec_caps(&left);
+        assert_eq!(
+            limits.iter().map(|c| (c.max_width, c.max_height)).collect::<Vec<_>>(),
+            vec![(1280, 720)]
+        );
+        // and with the floor gone too there is nothing, which is exit 13
+        assert!(codec_caps(&without(&left, "mf-sw")).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn the_budget_is_the_top_rungs_and_never_a_sum() {
         assert_eq!(budget(&nvidia()), 8);
-        assert_eq!(budget(&no_gpu()), 1);
+        assert_eq!(budget(&no_gpu()), 4);
         assert_eq!(budget(&[]), 0);
         // two backends, one machine
         assert_eq!(budget(&[nvidia(), no_gpu()].concat()), 8);
         // a backend that lists codecs but no session count still does one
-        assert_eq!(budget(&[caps("mf", &[(Codec::H264, 4096, 4096)], 0)]), 1);
+        assert_eq!(budget(&[caps("mf-hw", &[(Codec::H264, 4096, 4096)], 0)]), 1);
         // an entry with no codecs is not a backend
-        assert_eq!(budget(&[caps("nvenc", &[], 8), caps("mf", &[(Codec::H264, 4096, 4096)], 2)]), 2);
+        assert_eq!(budget(&[caps("nvenc", &[], 8), caps("mf-hw", &[(Codec::H264, 4096, 4096)], 2)]), 2);
     }
 
     /// The whole point of the injected table: no rung of this one is compiled

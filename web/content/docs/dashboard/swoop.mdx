@@ -1,7 +1,7 @@
 ---
 title: "swoop (remote desktop)"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, in a browser tab or in owlette swoop, the desktop viewer app, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker"]
+keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker"]
 ---
 
 swoop puts a machine's screen in your browser, or in a window of [owlette swoop](#owlette-swoop), the desktop viewer app, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -21,13 +21,13 @@ you can watch and control from any computer with a current browser, or from [owl
 
 | platform | hosts swoop | what it needs |
 |---|---|---|
-| Windows | yes | agent 4.0.0 or later and an NVIDIA GPU. some features need a later agent; see [agent versions](#agent-versions) |
+| Windows | yes | agent 4.0.0 or later. an NVIDIA GPU gives the best picture; without one see [below](#which-machines-can-host-it). some features need a later agent; see [agent versions](#agent-versions) |
 | macOS | yes | Apple silicon, macOS 15 or later, agent 4.1.0 or later, someone logged in, and the owlette app running. see [on macOS](#on-macos) |
 | Linux | no | the Linux package ships no streamer, so the agent reports `capabilities.swoop: 0`. the menu keeps live view and screenshot, but both fail on Linux for now |
 
 a machine whose agent cannot stream never offers swoop: its menu keeps the live-view entry instead. on Linux that entry, and **screenshot** beside it, still fail for now — a Linux machine cannot capture its screen yet (see [platform support](/docs/reference/platform-support#screens)).
 
-the Windows streamer encodes on the GPU's NVENC encoder, the only one it ships with. a Windows machine without an NVIDIA GPU still offers swoop, but no session starts there: the streamer finds no encoder and exits, and the viewer reports that the machine did not answer.
+the Windows streamer encodes on an NVIDIA GPU's NVENC encoder when there is one: it gives the best picture, in h264 or HEVC, at full size. without it, the streamer encodes through Media Foundation, which is part of Windows: on the GPU's own hardware encoder (Intel or AMD), in h264; or, with no hardware encoder at all — a virtual machine, say — on the CPU, in h264 at up to 1280x720 and 30 frames a second, on two threads, so the machine's own work keeps the rest. a bigger screen is scaled down to fit. a Windows N edition without the Media Feature Pack has no Media Foundation, so there a session needs an NVIDIA GPU; without one the streamer finds no encoder and exits, and the viewer reports that the machine did not answer. agents before the release after 4.1.8 encode on NVENC only.
 
 ---
 
@@ -307,6 +307,7 @@ in a mixed fleet, what a session can do depends on the agent of the machine you 
 | answer UAC prompts; ctrl + alt + del | 4.1.4 |
 | win + l locks the machine | 4.1.5 |
 | "you're on this machine" instead of a picture of your own screen | 4.1.6 |
+| host a session on Windows without an NVIDIA GPU | the release after 4.1.8 |
 
 ---
 
