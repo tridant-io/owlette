@@ -51,6 +51,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { Capability, hasCapability, type Actor, type SiteRole } from '@/lib/capabilities';
 import { deriveMfaEnrolled, readMfaFactors } from '@/lib/mfaFactors.server';
 import type { MfaProofOutcome } from '@/lib/mfaProof.server';
+import { networkRecord, type RequestNetwork } from '@/lib/network.server';
 import { createHash } from 'crypto';
 
 /** `sites/{siteId}/settings/swoop`. */
@@ -181,7 +182,10 @@ export interface SwoopAccessInput {
   /** `ctx.auth.keyContext !== null` — an api-key caller. */
   viaApiKey: boolean;
   settings: SwoopSiteSettings;
-  /** Result of `hasOpenStepUpWindow`. Only consulted for control. */
+  /**
+   * Result of `hasOpenStepUpWindow`, and, where it is enforced, of the network
+   * binding (`lib/swoop/networks.server.ts`). Only consulted for control.
+   */
   stepUpOpen?: boolean;
 }
 
@@ -295,6 +299,8 @@ const STEP_UP_FACTORS: ReadonlySet<string> = new Set(['totp', 'backup_code', 'pa
  */
 export async function openStepUpWindow(args: StepUpTarget & {
   proof: MfaProofOutcome;
+  /** the network the ceremony ran on, recorded for the log; null when network binding is off. */
+  network?: RequestNetwork | null;
   nowMs?: number;
 }): Promise<number> {
   const proof = args.proof as { ok?: unknown; factorUsed?: unknown } | null | undefined;
@@ -321,6 +327,7 @@ export async function openStepUpWindow(args: StepUpTarget & {
     expiresAt,
     factorUsed: proof.factorUsed,
     openedBy: 'ceremony',
+    ...(args.network ? { network: networkRecord(args.network) } : {}),
     updatedAt: FieldValue.serverTimestamp(),
   });
   return expiresAt;
@@ -332,6 +339,8 @@ export interface SignInCeremony {
   sessionPassedCeremony: boolean;
   /** that session's `mfaCompletedAt`. */
   ceremonyAt: number | undefined;
+  /** that session's `mfaNetwork`: the network its ceremony ran on (`lib/swoop/networks.server.ts`). */
+  ceremonyNetwork?: string;
 }
 
 function ceremonyIsFresh(ceremony: SignInCeremony, nowMs: number): ceremony is SignInCeremony & {
@@ -372,7 +381,7 @@ export async function freshCeremonyCovers(
  * checks its proof.
  */
 export async function openStepUpWindowFromCeremony(
-  args: StepUpTarget & SignInCeremony & { nowMs?: number },
+  args: StepUpTarget & SignInCeremony & { network?: RequestNetwork | null; nowMs?: number },
 ): Promise<number> {
   if (!ceremonyIsFresh(args, args.nowMs ?? Date.now())) {
     throw new SwoopPolicyError('fresh_ceremony_invalid');
@@ -385,6 +394,7 @@ export async function openStepUpWindowFromCeremony(
     openedAt: args.ceremonyAt,
     expiresAt,
     openedBy: 'fresh_sign_in',
+    ...(args.network ? { network: networkRecord(args.network) } : {}),
     updatedAt: FieldValue.serverTimestamp(),
   });
   return expiresAt;
@@ -438,10 +448,18 @@ export async function stepUpRevokedAt(siteId: string, machineId: string): Promis
 export async function hasOpenStepUpWindow(
   args: StepUpTarget & { sessionPassedCeremony: boolean; nowMs?: number },
 ): Promise<boolean> {
+  return (await stepUpWindowState(args)).open;
+}
+
+/** `hasOpenStepUpWindow`, and the network an open window was opened on, for the log. */
+export async function stepUpWindowState(
+  args: StepUpTarget & { sessionPassedCeremony: boolean; nowMs?: number },
+): Promise<{ open: boolean; network: string | null }> {
+  const closed = { open: false, network: null };
   // First, and before any read: a session born from the 30-day device-trust
   // cookie ran no ceremony, so it inherits nothing — plan.md D10. It costs that
   // session no Firestore round trip either.
-  if (!args.sessionPassedCeremony) return false;
+  if (!args.sessionPassedCeremony) return closed;
 
   const [snap, revokedAt, enrolled] = await Promise.all([
     stepUpRef(args.userId, stepUpMachineBinding(args)).get(),
@@ -450,17 +468,19 @@ export async function hasOpenStepUpWindow(
   ]);
   // A window opened before the last factor was removed must not outlive it —
   // an account with zero factors cannot control, window or not.
-  if (!enrolled || !snap.exists) return false;
+  if (!enrolled || !snap.exists) return closed;
 
   const data = snap.data() ?? {};
   const openedAt = data.openedAt;
   const expiresAt = data.expiresAt;
-  if (typeof openedAt !== 'number' || typeof expiresAt !== 'number') return false;
-  if (openedAt <= revokedAt) return false;
+  if (typeof openedAt !== 'number' || typeof expiresAt !== 'number') return closed;
+  if (openedAt <= revokedAt) return closed;
 
   // The window's length is the READER's constant: whatever is stored can only
   // shorten it, never stretch it past 7 days from the ceremony.
-  return Math.min(expiresAt, openedAt + SWOOP_STEP_UP_WINDOW_MS) > (args.nowMs ?? Date.now());
+  if (Math.min(expiresAt, openedAt + SWOOP_STEP_UP_WINDOW_MS) <= (args.nowMs ?? Date.now())) return closed;
+  const network: unknown = data.network?.key;
+  return { open: true, network: typeof network === 'string' ? network : null };
 }
 
 /**

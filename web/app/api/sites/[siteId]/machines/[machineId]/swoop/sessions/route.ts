@@ -28,11 +28,16 @@ import logger from '@/lib/logger';
 import {
   evaluateSwoopAccess,
   hasEnrolledFactor,
-  hasOpenStepUpWindow,
   stepUpRevokedAt,
+  stepUpWindowState,
   SWOOP_LEASE_SECONDS,
   type SwoopIntent,
 } from '@/lib/swoop/policy.server';
+import {
+  controlNetwork,
+  networkAdmitsFreshCeremony,
+  networkAdmitsWindow,
+} from '@/lib/swoop/networks.server';
 import {
   openStepUpFromFreshCeremony,
   openStepUpFromProof,
@@ -50,7 +55,11 @@ import {
   upsertSwoopViewer,
 } from '@/lib/swoop/sessionStore.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
-import { recordSwoopDenied, recordSwoopSessionStarted } from '@/lib/swoop/audit.server';
+import {
+  recordSwoopDenied,
+  recordSwoopNetworkCheck,
+  recordSwoopSessionStarted,
+} from '@/lib/swoop/audit.server';
 import {
   apiKeyRefusal,
   decisionProblem,
@@ -119,14 +128,27 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     // touches one or even reads the login session — the two intents share no
     // state at all.
     const ceremony = intent === 'control' ? await requestSignInCeremony(request, userId) : null;
-    const stepUpOpen = ceremony
-      ? await hasOpenStepUpWindow({
+    const binding = ceremony ? await controlNetwork(request, userId) : null;
+    const stepUpWindow = ceremony
+      ? await stepUpWindowState({
           userId,
           siteId,
           machineId,
           sessionPassedCeremony: ceremony.sessionPassedCeremony,
         })
-      : false;
+      : null;
+    // An open window counts only from a network this user verified, once the
+    // binding is enforced; until then the check is only recorded.
+    if (binding?.network && binding.mode !== 'off') {
+      recordSwoopNetworkCheck({
+        ...auditBase,
+        mode: binding.mode,
+        network: binding.network,
+        match: binding.verified,
+        windowNetwork: stepUpWindow?.network ?? null,
+      });
+    }
+    const stepUpOpen = stepUpWindow?.open === true && binding !== null && networkAdmitsWindow(binding);
 
     let decision = evaluateSwoopAccess({ ...gate, stepUpOpen });
     // A second factor this sign-in passed minutes ago is the step-up for this
@@ -136,7 +158,9 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       !decision.ok &&
       decision.code === 'step_up_required' &&
       ceremony &&
-      (await openStepUpFromFreshCeremony({ ...auditBase, userId, ceremony }))
+      binding &&
+      networkAdmitsFreshCeremony(binding, ceremony.ceremonyNetwork) &&
+      (await openStepUpFromFreshCeremony({ ...auditBase, userId, ceremony, network: binding.network }))
     ) {
       decision = evaluateSwoopAccess({ ...gate, stepUpOpen: true });
     }
@@ -176,7 +200,13 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     // The one refusal the caller can answer inside this same request: a live
     // ceremony opens the window and the decision is taken again.
     if (!decision.ok && decision.code === 'step_up_required' && body.mfaProof !== undefined) {
-      const opened = await openStepUpFromProof({ userId, siteId, machineId, proof: body.mfaProof });
+      const opened = await openStepUpFromProof({
+        userId,
+        siteId,
+        machineId,
+        proof: body.mfaProof,
+        network: binding?.network ?? null,
+      });
       if (!opened.ok) {
         recordSwoopDenied({
           ...auditBase,

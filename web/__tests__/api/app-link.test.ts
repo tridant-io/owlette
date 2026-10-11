@@ -15,6 +15,7 @@ interface MockSession {
   mfaVerified?: boolean;
   mfaSatisfiedBy?: string;
   mfaCompletedAt?: number;
+  mfaNetwork?: string;
 }
 
 const mockStore = new Map<string, Record<string, unknown>>();
@@ -212,6 +213,18 @@ describe('POST /api/auth/app-link/exchange', () => {
     expect(mockCreateCustomToken).toHaveBeenCalledTimes(1);
   });
 
+  // swoop's network binding lets that ceremony stand in only on the network it ran on
+  it('carries the network the approver passed its second factor on', async () => {
+    signedIn({ mfaNetwork: 'asn:64500' });
+    const code = await mintCode();
+    await exchange(post('/api/auth/app-link/exchange', { code }));
+    expect(mockCreateCustomToken).toHaveBeenCalledWith('user-1', {
+      appLinkMfa: 'challenge',
+      appLinkMfaAt: CEREMONY_AT,
+      appLinkMfaNet: 'asn:64500',
+    });
+  });
+
   it('leaves the ceremony time out for an approver session that has none', async () => {
     signedIn({ mfaCompletedAt: undefined });
     const code = await mintCode();
@@ -359,6 +372,15 @@ describe('appLinkMfaFromIdToken', () => {
       satisfiedBy: 'device-trust',
       completedAt: CEREMONY_AT,
     });
+  });
+
+  it('reads the ceremony network when the claim carries one', () => {
+    expect(appLinkMfaFromIdToken(token({ appLinkMfaNet: 'asn:64500' }), BASE)).toEqual({
+      satisfiedBy: 'challenge',
+      completedAt: CEREMONY_AT,
+      network: 'asn:64500',
+    });
+    expect(appLinkMfaFromIdToken(token({ appLinkMfaNet: 64500 }), BASE)).not.toHaveProperty('network');
   });
 
   // the app's session must never look fresher than the ceremony behind it: swoop

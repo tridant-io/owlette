@@ -1,7 +1,7 @@
 ---
 title: "swoop (remote desktop)"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, in a browser tab or in owlette swoop, the desktop viewer app, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker"]
+keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker"]
 ---
 
 swoop puts a machine's screen in your browser, or in a window of [owlette swoop](#owlette-swoop), the desktop viewer app, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -84,6 +84,8 @@ control is gated on a **step-up**: a fresh second-factor check, prompted in the 
 a second factor you passed in the last five minutes, signing in here or in the browser that signs owlette swoop in, counts as the check for the machines you open in those five minutes, so the first machine after signing in does not ask again. approving owlette swoop from a browser that signed in earlier passes no second factor, so the app still asks.
 
 the 7 days run from the check itself, and using the window does not extend it. the window belongs to you and that machine, so a new tab or a reload inside it does not ask again, but only from a sign-in that itself passed a second-factor check: a browser that skipped it because it was remembered asks once more. a tab (or owlette swoop window) that holds control also keeps it across its own reconnects and across a reload of the page, even after the 7 days. a new tab asks, and ending the session yourself gives it up. a [kill](#ending-and-killing) on the machine closes every window on it.
+
+control is also tied to the networks you verified. every second factor you pass, signing in or at the prompt, verifies the network you passed it on for 7 days: your internet provider or mobile carrier, not your exact address. an open window counts only from a verified network, so a new network asks once, and passing the check adds it; a second factor passed at sign-in counts as the check only from the network it was passed on. watching is never affected, and the first time a network is verified you get an email naming it. this is rolling out: for now owlette only records which network each control request came from, and asks nothing new.
 
 in the owlette swoop desktop app, the prompt offers **verify in your browser** in place of a passkey: it opens a page in your browser, where your password manager's passkeys work, and the app takes control once you pass the check there. it is the same window, 7 days for you and that machine. it works only if the app's own sign-in passed a second factor; if that sign-in skipped it because the browser was remembered, the app says so, and an authenticator or backup code in the app does the job.
 
@@ -247,7 +249,7 @@ on a Windows machine, the owlette app's tray menu has **kill all swoop sessions 
 
 ## what is recorded
 
-every session start, every refusal and every end is written to the session's own audit trail, with the actor, the machine and whether control was held. a session whose audit row cannot be written is not started (`audit_unavailable`). a step-up that your sign-in's second factor stood in for gets a row of its own (`step_up_opened`, reason `fresh_sign_in`), written before the window opens.
+every session start, every refusal and every end is written to the session's own audit trail, with the actor, the machine and whether control was held. a session whose audit row cannot be written is not started (`audit_unavailable`). a step-up that your sign-in's second factor stood in for gets a row of its own (`step_up_opened`, reason `fresh_sign_in`), written before the window opens. every control request also records the network it came from and whether you had verified it (`step_up_network_check`).
 
 ---
 

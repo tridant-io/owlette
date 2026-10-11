@@ -27,8 +27,23 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: jest.fn(),
 }));
 
+type MockTxRef = { get: () => unknown; set: (...a: unknown[]) => unknown };
 jest.mock('@/lib/firebase-admin', () => ({
-  getAdminDb: () => mockDbFactory(),
+  getAdminDb: () => ({
+    ...mockDbFactory(),
+    // the verified-network write, committed onto the same doc mocks
+    runTransaction: async (fn: (tx: unknown) => unknown) => {
+      const writes: unknown[] = [];
+      const result = await fn({
+        get: (ref: MockTxRef) => ref.get(),
+        set: (ref: MockTxRef, ...a: unknown[]) => {
+          writes.push(ref.set(...a));
+        },
+      });
+      await Promise.all(writes);
+      return result;
+    },
+  }),
   getAdminAuth: () => ({ verifyIdToken: jest.fn().mockRejectedValue(new Error('n/a')) }),
 }));
 
@@ -70,7 +85,13 @@ jest.mock('@/lib/apiAuth.server', () => {
 });
 
 /** the login session behind the request; the satisfier predicate is the real one. */
-const mockLogin: { userId: string; expiresAt: number; mfaSatisfiedBy?: string; mfaCompletedAt?: number } = {
+const mockLogin: {
+  userId: string;
+  expiresAt: number;
+  mfaSatisfiedBy?: string;
+  mfaCompletedAt?: number;
+  mfaNetwork?: string;
+} = {
   userId: '',
   expiresAt: 0,
 };
@@ -140,6 +161,7 @@ function signIn(
   mockLogin.expiresAt = Date.now() + 86_400_000;
   mockLogin.mfaSatisfiedBy = satisfiedBy;
   mockLogin.mfaCompletedAt = Date.now() - signedInAgoMs;
+  delete mockLogin.mfaNetwork;
 }
 
 /** a ceremony this user already ran, for one machine. */
@@ -360,5 +382,78 @@ describe('GET swoop/step-up', () => {
     expect(writeAuditEntryBlocking).not.toHaveBeenCalled();
     expect(mockCheckRateLimit).not.toHaveBeenCalled();
     expect(mocks.set).not.toHaveBeenCalled();
+  });
+});
+
+describe('swoop/step-up — network binding', () => {
+  const EDGE = 'edge-secret-for-tests';
+  const HOME = '64500';
+  const AWAY = '64501';
+  const edge = (asn: string) => ({ 'x-owlette-edge': EDGE, 'x-owlette-asn': asn, 'cf-connecting-ip': '203.0.113.9' });
+  const getFrom = async (asn: string) =>
+    (await parseResponse(await GET(createMockRequest(url(), { headers: edge(asn) }), routeContext()))).body.data;
+
+  beforeEach(() => {
+    process.env.EDGE_SHARED_SECRET = EDGE;
+  });
+  afterEach(() => {
+    delete process.env.EDGE_SHARED_SECRET;
+    delete process.env.SWOOP_NETWORK_BINDING;
+  });
+
+  it('POST verifies the network the browser passed the ceremony on, and records it on the window', async () => {
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { mfaProof: { code: '123456' } }, headers: edge(HOME) }),
+      routeContext(),
+    );
+
+    expect(res.status).toBe(204);
+    const payloads = (mocks.set.mock.calls as [Record<string, unknown>][]).map(([payload]) => payload);
+    expect(payloads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ openedBy: 'ceremony', network: expect.objectContaining({ key: `asn:${HOME}` }) }),
+        expect.objectContaining({ lastVerifiedAt: expect.any(Number), asn: HOME }),
+      ]),
+    );
+  });
+
+  it('GET reads no verified network per poll while only logging', async () => {
+    openWindow(ADMIN);
+
+    expect(await getFrom(HOME)).toEqual({ open: true, sessionPassedCeremony: true });
+    expect(mocks.get.mock.calls.map(([path]) => path)).not.toContainEqual(
+      expect.stringContaining('verified_networks'),
+    );
+  });
+
+  describe('GET, enforced', () => {
+    beforeEach(() => {
+      process.env.SWOOP_NETWORK_BINDING = 'enforce';
+    });
+
+    it('reads an open window closed from a network the user has not verified, as the create would', async () => {
+      openWindow(ADMIN);
+      expect(await getFrom(HOME)).toEqual({ open: false, sessionPassedCeremony: true });
+
+      staged.set(`users/${ADMIN}/verified_networks/asn:${HOME}`, { lastVerifiedAt: Date.now() });
+      expect(await getFrom(HOME)).toEqual({ open: true, sessionPassedCeremony: true });
+    });
+
+    it('reads a fresh sign-in open only from the network its ceremony ran on', async () => {
+      signIn(ADMIN, 'challenge', 2 * 60_000);
+      mockLogin.mfaNetwork = `asn:${HOME}`;
+
+      expect(await getFrom(AWAY)).toEqual({ open: false, sessionPassedCeremony: true });
+      expect(await getFrom(HOME)).toEqual({ open: true, sessionPassedCeremony: true });
+    });
+
+    it('records no network check per poll: the create records it', async () => {
+      openWindow(ADMIN);
+
+      await getFrom(HOME);
+
+      expect(writeAuditEntry).not.toHaveBeenCalled();
+      expect(mocks.set).not.toHaveBeenCalled();
+    });
   });
 });

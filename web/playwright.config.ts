@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 import { defineConfig, devices } from '@playwright/test';
 
+import { E2E_EDGE_SECRET, E2E_ENFORCE_PORT } from './e2e/helpers/edgeNetwork';
 import { E2E_SESSION_SECRET } from './e2e/helpers/signInCeremony';
 
 /**
@@ -60,6 +61,7 @@ const THIRD_PARTY_CREDENTIALS = [
  */
 const INTERNAL_OR_OVERRIDDEN_SECRETS = [
   'SESSION_SECRET',
+  'EDGE_SHARED_SECRET',
   'MFA_ENCRYPTION_KEY',
   'TURNSTILE_SECRET',
   'UPSTASH_REDIS_REST_TOKEN',
@@ -132,6 +134,89 @@ auditEnvLocalForUnclassifiedSecrets();
 const neutralisedThirdPartyCredentials = Object.fromEntries(
   THIRD_PARTY_CREDENTIALS.map((name) => [name, '']),
 );
+
+// Env vars here drive the emulator branches in web/lib/firebase.ts and
+// firebase-admin.ts — without them the app hits real Firebase.
+const webServer = {
+  // Not `next dev`: Next 16 + Turbopack refuses a second `next dev` in the same
+  // project dir even on another port. The wrapper serves the production build,
+  // with .next/static served directly to dodge rare Windows long-suite 500s.
+  command: `node scripts/e2e-next-server.mjs --port ${PORT} --hostname 127.0.0.1`,
+  url: BASE_URL,
+  // a reused server can serve HTML referencing chunks the last e2e:build deleted
+  reuseExistingServer: false,
+  timeout: 60_000,
+  stdout: 'pipe' as const,
+  stderr: 'pipe' as const,
+  env: {
+    // Deny by default: every third-party credential blanked before the explicit
+    // overrides below, which win where the two overlap.
+    ...neutralisedThirdPartyCredentials,
+    // client-side: gates connectXEmulator() in web/lib/firebase.ts
+    NEXT_PUBLIC_USE_FIREBASE_EMULATOR: 'true',
+    NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'demo-playwright-e2e',
+    NEXT_PUBLIC_FIREBASE_API_KEY: 'demo-api-key', // emulator accepts anything non-empty
+    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: 'demo-playwright-e2e.firebaseapp.com',
+    NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'demo-playwright-e2e.firebasestorage.app',
+    NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '000000000000',
+    NEXT_PUBLIC_FIREBASE_APP_ID: 'demo-app-id',
+    NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST: AUTH_EMULATOR_HOST,
+    NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST: FIRESTORE_EMULATOR_HOST,
+    NEXT_PUBLIC_FIREBASE_STORAGE_EMULATOR_HOST: STORAGE_EMULATOR_HOST,
+    // server-side: emulator branch in web/lib/firebase-admin.ts
+    FIREBASE_AUTH_EMULATOR_HOST: AUTH_EMULATOR_HOST,
+    FIRESTORE_EMULATOR_HOST,
+    FIREBASE_STORAGE_EMULATOR_HOST: STORAGE_EMULATOR_HOST,
+    FIREBASE_PROJECT_ID: 'demo-playwright-e2e',
+    OWLETTE_NEXT_DIST_DIR: NEXT_DIST_DIR,
+    // shared with the specs, which date a sign-in's second factor back
+    SESSION_SECRET: E2E_SESSION_SECRET,
+    // swoop's mint route refuses outright with `signal_not_configured` when the
+    // signal origin is blank, and the blanked third-party value above is the
+    // real worker's. an unreachable origin keeps every session in the emulator:
+    // the ring fails, the polled command is queued, the page's dial never
+    // lands. the jwt keys are generated per run — nothing is committed, and
+    // no spec verifies a token — and the master key only has to be non-empty.
+    SWOOP_SIGNAL_URL: 'https://swoop-signal.e2e.invalid',
+    SWOOP_SIGNAL_RING_SECRET: 'e2e-ring-secret-never-a-real-worker',
+    SWOOP_JWT_KID: 'e2e-swoop-kid',
+    SWOOP_JWT_PRIVATE_KEY: SWOOP_E2E_KEYS.priv,
+    SWOOP_JWT_PUBLIC_KEY: SWOOP_E2E_KEYS.pub,
+    SWOOP_SESSION_MASTER_KEY: 'e2e-swoop-session-master-key-for-playwright-only',
+    MFA_ENCRYPTION_KEY: 'demo-mfa-encryption-secret-for-playwright-only',
+    NEXT_PUBLIC_SENTRY_DSN: '',
+    // Empty strings short-circuit the init block in web/lib/rateLimit.ts. Without
+    // this the webServer inherits UPSTASH_* from .env.local and global-setup's
+    // three back-to-back sign-ins blow the 10/min per-IP auth-session limit.
+    UPSTASH_REDIS_REST_URL: '',
+    UPSTASH_REDIS_REST_TOKEN: '',
+    // In-memory limiter too (15/min per IP): back-to-back admin-API specs hit it
+    // and 429 on contracts unrelated to the test. Production ignores this var.
+    E2E_DISABLE_RATE_LIMIT: 'true',
+    // Makes r2Client.server.ts:hasChunk() read the seeded Firestore
+    // `siteChunks/{digest}` rows instead of a real R2 HeadObject — required by
+    // any spec that runs POST /versions through the real finalize handler.
+    OWLETTE_E2E: '1',
+    // RP override honored by webauthn.server.ts only when OWLETTE_E2E==='1':
+    // the production build would otherwise use RP 'owlette.app' + https origins
+    // and no loopback ceremony could complete. 'localhost', not BASE_URL's
+    // 127.0.0.1 — an IP literal is not a valid RP ID (see e2e/helpers/webauthn.ts).
+    WEBAUTHN_RP_ID: 'localhost',
+    WEBAUTHN_ORIGINS: `http://localhost:${PORT}`,
+    // Cloudflare's always-pass test keys, so specs run the REAL
+    // verifyTurnstileToken() path rather than a bypass flag. The dummy secret
+    // answers hostname "example.com" and omits `action` — hence the allowlist
+    // entry and the `result_with_testing_key` branch in lib/turnstile.server.ts.
+    NEXT_PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
+    TURNSTILE_SECRET: '1x0000000000000000000000000000000AA',
+    TURNSTILE_HOSTNAMES: 'example.com,localhost,127.0.0.1',
+    // swoop's network binding: the edge's shared secret, which specs playing
+    // cloudflare send (e2e/helpers/edgeNetwork.ts), and the default mode,
+    // pinned so a developer's .env.local cannot change what the suite sees.
+    EDGE_SHARED_SECRET: E2E_EDGE_SECRET,
+    SWOOP_NETWORK_BINDING: 'log',
+  },
+};
 
 export default defineConfig({
   testDir: './e2e/specs',
@@ -211,81 +296,20 @@ export default defineConfig({
     },
   ],
 
-  // Env vars here drive the emulator branches in web/lib/firebase.ts and
-  // firebase-admin.ts — without them the app hits real Firebase.
-  webServer: {
-    // Not `next dev`: Next 16 + Turbopack refuses a second `next dev` in the same
-    // project dir even on another port. The wrapper serves the production build,
-    // with .next/static served directly to dodge rare Windows long-suite 500s.
-    command: `node scripts/e2e-next-server.mjs --port ${PORT} --hostname 127.0.0.1`,
-    url: BASE_URL,
-    // a reused server can serve HTML referencing chunks the last e2e:build deleted
-    reuseExistingServer: false,
-    timeout: 60_000,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: {
-      // Deny by default: every third-party credential blanked before the explicit
-      // overrides below, which win where the two overlap.
-      ...neutralisedThirdPartyCredentials,
-      // client-side: gates connectXEmulator() in web/lib/firebase.ts
-      NEXT_PUBLIC_USE_FIREBASE_EMULATOR: 'true',
-      NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'demo-playwright-e2e',
-      NEXT_PUBLIC_FIREBASE_API_KEY: 'demo-api-key', // emulator accepts anything non-empty
-      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: 'demo-playwright-e2e.firebaseapp.com',
-      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'demo-playwright-e2e.firebasestorage.app',
-      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '000000000000',
-      NEXT_PUBLIC_FIREBASE_APP_ID: 'demo-app-id',
-      NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST: AUTH_EMULATOR_HOST,
-      NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST: FIRESTORE_EMULATOR_HOST,
-      NEXT_PUBLIC_FIREBASE_STORAGE_EMULATOR_HOST: STORAGE_EMULATOR_HOST,
-      // server-side: emulator branch in web/lib/firebase-admin.ts
-      FIREBASE_AUTH_EMULATOR_HOST: AUTH_EMULATOR_HOST,
-      FIRESTORE_EMULATOR_HOST,
-      FIREBASE_STORAGE_EMULATOR_HOST: STORAGE_EMULATOR_HOST,
-      FIREBASE_PROJECT_ID: 'demo-playwright-e2e',
-      OWLETTE_NEXT_DIST_DIR: NEXT_DIST_DIR,
-      // shared with the specs, which date a sign-in's second factor back
-      SESSION_SECRET: E2E_SESSION_SECRET,
-      // swoop's mint route refuses outright with `signal_not_configured` when the
-      // signal origin is blank, and the blanked third-party value above is the
-      // real worker's. an unreachable origin keeps every session in the emulator:
-      // the ring fails, the polled command is queued, the page's dial never
-      // lands. the jwt keys are generated per run — nothing is committed, and
-      // no spec verifies a token — and the master key only has to be non-empty.
-      SWOOP_SIGNAL_URL: 'https://swoop-signal.e2e.invalid',
-      SWOOP_SIGNAL_RING_SECRET: 'e2e-ring-secret-never-a-real-worker',
-      SWOOP_JWT_KID: 'e2e-swoop-kid',
-      SWOOP_JWT_PRIVATE_KEY: SWOOP_E2E_KEYS.priv,
-      SWOOP_JWT_PUBLIC_KEY: SWOOP_E2E_KEYS.pub,
-      SWOOP_SESSION_MASTER_KEY: 'e2e-swoop-session-master-key-for-playwright-only',
-      MFA_ENCRYPTION_KEY: 'demo-mfa-encryption-secret-for-playwright-only',
-      NEXT_PUBLIC_SENTRY_DSN: '',
-      // Empty strings short-circuit the init block in web/lib/rateLimit.ts. Without
-      // this the webServer inherits UPSTASH_* from .env.local and global-setup's
-      // three back-to-back sign-ins blow the 10/min per-IP auth-session limit.
-      UPSTASH_REDIS_REST_URL: '',
-      UPSTASH_REDIS_REST_TOKEN: '',
-      // In-memory limiter too (15/min per IP): back-to-back admin-API specs hit it
-      // and 429 on contracts unrelated to the test. Production ignores this var.
-      E2E_DISABLE_RATE_LIMIT: 'true',
-      // Makes r2Client.server.ts:hasChunk() read the seeded Firestore
-      // `siteChunks/{digest}` rows instead of a real R2 HeadObject — required by
-      // any spec that runs POST /versions through the real finalize handler.
-      OWLETTE_E2E: '1',
-      // RP override honored by webauthn.server.ts only when OWLETTE_E2E==='1':
-      // the production build would otherwise use RP 'owlette.app' + https origins
-      // and no loopback ceremony could complete. 'localhost', not BASE_URL's
-      // 127.0.0.1 — an IP literal is not a valid RP ID (see e2e/helpers/webauthn.ts).
-      WEBAUTHN_RP_ID: 'localhost',
-      WEBAUTHN_ORIGINS: `http://localhost:${PORT}`,
-      // Cloudflare's always-pass test keys, so specs run the REAL
-      // verifyTurnstileToken() path rather than a bypass flag. The dummy secret
-      // answers hostname "example.com" and omits `action` — hence the allowlist
-      // entry and the `result_with_testing_key` branch in lib/turnstile.server.ts.
-      NEXT_PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
-      TURNSTILE_SECRET: '1x0000000000000000000000000000000AA',
-      TURNSTILE_HOSTNAMES: 'example.com,localhost,127.0.0.1',
+  webServer: [
+    webServer,
+    // the same app with the network binding enforced, for the one spec about it
+    // (e2e/specs/swoop/network-binding.spec.ts sets its own baseURL). the
+    // suite's server keeps the default, so nothing else changes.
+    {
+      ...webServer,
+      command: `node scripts/e2e-next-server.mjs --port ${E2E_ENFORCE_PORT} --hostname 127.0.0.1`,
+      url: `http://127.0.0.1:${E2E_ENFORCE_PORT}`,
+      env: {
+        ...webServer.env,
+        SWOOP_NETWORK_BINDING: 'enforce',
+        WEBAUTHN_ORIGINS: `http://localhost:${E2E_ENFORCE_PORT}`,
+      },
     },
-  },
+  ],
 });

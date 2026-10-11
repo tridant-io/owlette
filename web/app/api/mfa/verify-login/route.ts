@@ -15,6 +15,7 @@ import { withRateLimit } from '@/lib/withRateLimit';
 import { ApiAuthError, assertActiveUser, requireSessionUser } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { markSessionMfaVerified } from '@/lib/sessionManager.server';
+import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import {
   createTrustedDevice,
   mintDeviceTrustToken,
@@ -143,7 +144,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     // The session cookie is the authoritative MFA gate the proxy reads; this
     // flag used to live in client sessionStorage and was settable without any
     // server check.
-    await markSessionMfaVerified();
+    await markSessionMfaVerified(await signInCeremonyNetwork(request, userId));
 
     // "Trust this device for 30 days": mint an opaque token, store only its
     // SHA-256 hash, return the raw token in an HTTPOnly cookie that a later

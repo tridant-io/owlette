@@ -10,8 +10,9 @@
  *                   exchange with code + secret.
  *
  * exchange answers a firebase custom token whose `appLinkMfa` developer claim carries the
- * approver's `mfaSatisfiedBy`, and `appLinkMfaAt` the approver's `mfaCompletedAt`;
- * /api/auth/session reads both back through `appLinkMfaFromIdToken`.
+ * approver's `mfaSatisfiedBy`, `appLinkMfaAt` the approver's `mfaCompletedAt`, and
+ * `appLinkMfaNet` the approver's `mfaNetwork`; /api/auth/session reads them back through
+ * `appLinkMfaFromIdToken`.
  *
  * security
  * - leaked approved code. actor: anyone who reads the deep link inside its 60 s (another process on
@@ -31,7 +32,9 @@
  *   the approver's ceremony time too, never the sign-in's: a ceremony under five minutes old opens
  *   a window without a proof (`SWOOP_FRESH_CEREMONY_MS`), and a browser signed in days ago must not
  *   hand the app one by approving. so a victim who signs in to approve a phisher's code hands
- *   that app control of the machines it opens in the next five minutes, on top of the session.
+ *   that app control of the machines it opens in the next five minutes, on top of the session,
+ *   unless swoop's network binding is enforced: the claim carries the approver's ceremony
+ *   network as well, and the five minutes count only from that network.
  * - the claim counts only at the sign-in it was minted for: refreshed id tokens keep developer
  *   claims, so `appLinkMfaFromIdToken` also requires a fresh `auth_time`.
  */
@@ -86,6 +89,8 @@ export interface AppLinkApprover {
   mfaSatisfiedBy?: MfaSatisfiedBy;
   /** the approver's `mfaCompletedAt`: when its second factor was passed, not when it approved. */
   mfaCompletedAt?: number;
+  /** the approver's `mfaNetwork`: where that second factor was passed. */
+  mfaNetwork?: string;
 }
 
 /**
@@ -107,6 +112,7 @@ export async function requireAppLinkApprover(request: NextRequest): Promise<AppL
     uid: session.userId,
     mfaSatisfiedBy: isMfaSatisfiedBy(session.mfaSatisfiedBy) ? session.mfaSatisfiedBy : undefined,
     mfaCompletedAt: typeof session.mfaCompletedAt === 'number' ? session.mfaCompletedAt : undefined,
+    mfaNetwork: typeof session.mfaNetwork === 'string' ? session.mfaNetwork : undefined,
   };
 }
 
@@ -115,6 +121,7 @@ function approvalFields(approver: AppLinkApprover) {
     uid: approver.uid,
     ...(approver.mfaSatisfiedBy ? { mfaSatisfiedBy: approver.mfaSatisfiedBy } : {}),
     ...(typeof approver.mfaCompletedAt === 'number' ? { mfaCompletedAt: approver.mfaCompletedAt } : {}),
+    ...(typeof approver.mfaNetwork === 'string' ? { mfaNetwork: approver.mfaNetwork } : {}),
   };
 }
 
@@ -204,6 +211,7 @@ export async function exchangeAppLink(
       uid: data.uid,
       mfaSatisfiedBy: isMfaSatisfiedBy(data.mfaSatisfiedBy) ? data.mfaSatisfiedBy : undefined,
       mfaCompletedAt: typeof data.mfaCompletedAt === 'number' ? data.mfaCompletedAt : undefined,
+      mfaNetwork: typeof data.mfaNetwork === 'string' ? data.mfaNetwork : undefined,
     } as const;
   });
   if (result.kind !== 'approved') return result;
@@ -214,6 +222,7 @@ export async function exchangeAppLink(
       ? {
           appLinkMfa: result.mfaSatisfiedBy,
           ...(result.mfaCompletedAt !== undefined ? { appLinkMfaAt: result.mfaCompletedAt } : {}),
+          ...(result.mfaNetwork !== undefined ? { appLinkMfaNet: result.mfaNetwork } : {}),
         }
       : undefined,
   );
@@ -225,6 +234,8 @@ export interface AppLinkMfa {
   satisfiedBy: MfaSatisfiedBy;
   /** when the approver passed its second factor; 0 when the claim does not say, so it is never fresh. */
   completedAt: number;
+  /** the network the approver passed it on, when the claim says. */
+  network?: string;
 }
 
 /**
@@ -243,8 +254,10 @@ export function appLinkMfaFromIdToken(
   if (typeof decoded.auth_time !== 'number') return undefined;
   if (nowMs - decoded.auth_time * 1000 > APP_LINK_CLAIM_MAX_AGE_MS) return undefined;
   const at: unknown = decoded.appLinkMfaAt;
+  const net: unknown = decoded.appLinkMfaNet;
   return {
     satisfiedBy: claim,
     completedAt: typeof at === 'number' && Number.isFinite(at) ? Math.min(at, nowMs) : 0,
+    ...(typeof net === 'string' ? { network: net } : {}),
   };
 }

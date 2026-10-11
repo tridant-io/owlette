@@ -65,6 +65,7 @@ firestore/
 |   |-- passkeys/{credentialId}
 |   |-- trustedDevices/{tokenHash}
 |   |-- swoop_step_up/{key}
+|   |-- verified_networks/{key}
 |   `-- account_deletion/operation
 |-- chats/{chatId}                                 rules
 |   |-- stream/current                             rules
@@ -159,7 +160,7 @@ security-boundary audit records. **access**: site admins read; client writes are
 | `target` | map | `{ kind, id, ... }`. |
 | `outcome` | string | `allow`, `deny` or `error`. |
 | `timestamp` | timestamp | |
-| `metadata` | map | optional. swoop records name their event here, in `metadata.event`: `session_started`, `session_ended`, `session_denied`, `lease_denied`, `step_up_failed`, `step_up_opened` (a step-up the sign-in's own second factor stood in for, `metadata.reason: fresh_sign_in`), and host events. |
+| `metadata` | map | optional. swoop records name their event here, in `metadata.event`: `session_started`, `session_ended`, `session_denied`, `lease_denied`, `step_up_failed`, `step_up_opened` (a step-up the sign-in's own second factor stood in for, `metadata.reason: fresh_sign_in`), `step_up_network_check` (the network a control request came from: `mode`, `key`, `prefix`, `viaEdge`, `match`, `windowNetwork`; always outcome `allow`, the decision's own row says what happened), and host events. |
 | `denyReason`, `errorCode`, `enforcementBypassed` | string, string, boolean | optional. |
 
 hash-chained records from the `recordAuditEvent` function land in the same collection under their hash, with `sites/{siteId}/audit_log_meta/head` (`{ hash, recordedAt }`, server only) as the chain head.
@@ -669,7 +670,8 @@ dashboard layout memory. **access**: the owner reads and writes their own. one d
 | `users/{uid}/api_keys/{keyId}` | the owner reads; writes are server only | `name`, `keyHash`, `keyPrefix`, `environment`, `scopes`, `expiresAt` (ms), `createdAt`, `lastUsedAt`, `expiredMarkedAt`, `rotatedAt`, `rotatedFromKeyId`, `retiresAt`, `revokedAt`, `expiryNoticedStages`. |
 | `users/{uid}/passkeys/{credentialId}` | server only | passkey credentials and their metadata. |
 | `users/{uid}/trustedDevices/{tokenHash}` | server only | SHA-256-hashed "trust this device for 30 days" tokens. the raw token lives only in the HTTP-only `owlette_device_trust` cookie; records expire after about 30 days and are revoked when two-factor is disabled or the account is deleted. |
-| `users/{uid}/swoop_step_up/{key}` | server only | an open swoop control window for one machine: `{ openedAt, expiresAt, openedBy, factorUsed, updatedAt }`, 7 days from `openedAt`. `openedBy` is `ceremony` (a step-up, with `factorUsed` totp, backup_code or passkey) or `fresh_sign_in` (the sign-in's own second factor, under five minutes old, with `openedAt` the time it was passed and no `factorUsed`). |
+| `users/{uid}/swoop_step_up/{key}` | server only | an open swoop control window for one machine: `{ openedAt, expiresAt, openedBy, factorUsed, network, updatedAt }`, 7 days from `openedAt`. `openedBy` is `ceremony` (a step-up, with `factorUsed` totp, backup_code or passkey) or `fresh_sign_in` (the sign-in's own second factor, under five minutes old, with `openedAt` the time it was passed and no `factorUsed`). `network` (`{ key, prefix, asn }`) is the network it was opened from, absent when network binding is off. |
+| `users/{uid}/verified_networks/{key}` | server only | a network the user passed a second factor on, keyed `asn:<n>`: `{ firstSeenAt, lastVerifiedAt, asn, label }` (ms). it counts for swoop control for 7 days after `lastVerifiedAt`, checked on read; nothing expires it, and deleting the account removes it. the first entry for a key emails the user while network binding is enforced. |
 | `users/{uid}/account_deletion/operation` | server only | progress of a self-service account deletion. |
 
 ---
