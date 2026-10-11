@@ -33,7 +33,7 @@ sessions are [iron-session](https://github.com/vvo/iron-session) cookies: sealed
 | property | value |
 |----------|-------|
 | **name** | `__session` |
-| **holds** | the user ID, the session's expiry and its 2FA state (`mfaRequired`, `mfaVerified`, `mfaCompletedAt`, `mfaSatisfiedBy`, `requiresMfaSetup`). no role |
+| **holds** | the user ID, the session's expiry and its 2FA state (`mfaRequired`, `mfaVerified`, `mfaCompletedAt`, `mfaSatisfiedBy`, `mfaNetwork`, `requiresMfaSetup`). no role |
 | **sealing** | iron-session v8's defaults: AES-256-CBC with an HMAC-SHA256 integrity check, keyed by `SESSION_SECRET`. the secret must be at least 32 characters; the server throws on load without it |
 | **flags** | `HttpOnly`, `SameSite=Lax`, path `/`, and `Secure` in production |
 | **lifetime** | `POST /api/auth/session` takes `durationDays`, 1 to 30 (default 7), for the session's own expiry, but the cookie's max age is fixed at 7 days, so a longer session still ends with the cookie |
@@ -52,6 +52,10 @@ clearing a code at `/verify-2fa` with **trust this device** (`trustDevice: true`
 - **from the app**: **sign in with your browser** calls `POST /api/auth/app-link/start`, which returns a pending code, a poll secret and the page `/app-link/approve?code=…`, all good for 10 minutes. the app opens that page in the system browser, where a user whose session has passed two-factor approves it, and polls `POST /api/auth/app-link/exchange` with the code and its secret
 
 an exchange is single use, never names the uid, and answers a Firebase custom token whose `appLinkMfa` claim carries the approver's `mfaSatisfiedBy`, and `appLinkMfaAt` the time the approver passed its second factor. `POST /api/auth/session` honours the claims only for a custom-token sign-in made in the last 5 minutes, so the app's session has the approver's two-factor state and the time of the approver's ceremony, not of the hand-off: a ceremony under five minutes old counts as swoop's step-up for the machines opened in those five minutes, and a browser signed in days ago hands the app no step-up by approving. a `device-trust` approver therefore gives a `device-trust` app session, which answers swoop's step-up with a code in the app; any other can use **verify in your browser**, which passes the ceremony at `/swoop/<site>/<machine>/verify` in the system browser and opens the same 7-day window for that user and machine while the app polls `GET …/swoop/step-up`.
+
+### the network a second factor was passed on
+
+swoop control is tied to the networks you verified: a new network asks once. Cloudflare adds the client's ASN (`X-Owlette-Asn`) and a secret shared with the origin (`X-Owlette-Edge`, checked against `EDGE_SHARED_SECRET`) to every request; a request without a matching secret has network `unknown`, which never counts as verified. every second factor passed, at sign-in or at swoop's prompt, adds its network to `users/{uid}/verified_networks/{key}` (`asn:<n>`) for 7 days, and the session keeps it as `mfaNetwork` beside `mfaCompletedAt`; an app-link sign-in carries the approver's as `appLinkMfaNet`. `SWOOP_NETWORK_BINDING` sets the mode: `log` (the default) only records each control request's network, `enforce` makes an unverified network ask for the step-up and lets the sign-in's own ceremony stand in only on its own network, `off` does neither. see [swoop](/docs/dashboard/swoop#the-second-factor).
 
 ---
 

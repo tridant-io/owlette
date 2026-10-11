@@ -73,9 +73,15 @@ export const POST = withRateLimit(async (request: NextRequest) => {
 
     // Session creation reads users/{uid}.mfaEnrolled and bakes mfaRequired/mfaVerified into
     // the cookie; the proxy enforces the gate, so the POST response needn't surface them.
-    // An app-link sign-in inherits the approving browser session's MFA state, and the time of
-    // its ceremony rather than this sign-in's.
-    await createSession(verifiedUserId, durationDays, appLinkMfa?.satisfiedBy, appLinkMfa?.completedAt);
+    // An app-link sign-in inherits the approving browser session's MFA state, and the time and
+    // network of its ceremony rather than this sign-in's.
+    await createSession(
+      verifiedUserId,
+      durationDays,
+      appLinkMfa?.satisfiedBy,
+      appLinkMfa?.completedAt,
+      appLinkMfa?.network,
+    );
 
     return NextResponse.json({
       success: true,

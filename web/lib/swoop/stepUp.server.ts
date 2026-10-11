@@ -29,6 +29,8 @@ import {
   type SignInCeremony,
 } from '@/lib/swoop/policy.server';
 import { recordSwoopStepUpOpened, type SwoopAuditBase } from '@/lib/swoop/audit.server';
+import { recordVerifiedNetwork } from '@/lib/swoop/networks.server';
+import type { RequestNetwork } from '@/lib/network.server';
 
 /** `reason` is the audit code for the refusal, never the ceremony's detail. */
 export type StepUpResult =
@@ -46,12 +48,16 @@ export type StepUpResult =
  * behind it (`lib/sessionManager.server.ts`, the `deviceTrusted` arm of
  * `resolveMfaOnSessionCreate`). The sign-in's own ceremony counts only read
  * beside its satisfier (`openStepUpFromFreshCeremony`).
+ *
+ * The ceremony also verifies the network it ran on for this user
+ * (`lib/swoop/networks.server.ts`); `network` is null when that binding is off.
  */
 export async function openStepUpFromProof(args: {
   userId: string;
   siteId: string;
   machineId: string;
   proof: unknown;
+  network: RequestNetwork | null;
 }): Promise<StepUpResult> {
   const parsed = parseMfaProof(args.proof);
   if (!parsed.ok) {
@@ -87,6 +93,7 @@ export async function openStepUpFromProof(args: {
     siteId: args.siteId,
     machineId: args.machineId,
     proof: outcome,
+    network: args.network,
   });
 
   // Best effort, and deliberately after the window: the ceremony has already
@@ -104,6 +111,9 @@ export async function openStepUpFromProof(args: {
         err: err instanceof Error ? err.message : String(err),
       },
     });
+  }
+  if (args.network) {
+    await recordVerifiedNetwork({ userId: args.userId, network: args.network, machineId: args.machineId });
   }
   return { ok: true };
 }
@@ -125,7 +135,11 @@ export async function requestSignInCeremony(
   const live =
     login.userId === userId && typeof login.expiresAt === 'number' && login.expiresAt > Date.now();
   return live
-    ? { sessionPassedCeremony: sessionPassedMfaCeremony(login), ceremonyAt: login.mfaCompletedAt }
+    ? {
+        sessionPassedCeremony: sessionPassedMfaCeremony(login),
+        ceremonyAt: login.mfaCompletedAt,
+        ceremonyNetwork: login.mfaNetwork,
+      }
     : { sessionPassedCeremony: false, ceremonyAt: undefined };
 }
 
@@ -139,9 +153,9 @@ export async function requestSignInCeremony(
  * not opened, and the operator is asked for the step-up as before.
  */
 export async function openStepUpFromFreshCeremony(
-  args: SwoopAuditBase & { userId: string; ceremony: SignInCeremony },
+  args: SwoopAuditBase & { userId: string; ceremony: SignInCeremony; network: RequestNetwork | null },
 ): Promise<boolean> {
-  const { userId, ceremony, ...audit } = args;
+  const { userId, ceremony, network, ...audit } = args;
   const target = { userId, siteId: audit.siteId, machineId: audit.machineId };
   // one clock for the check and the write, so the five minutes cannot run out between them
   const nowMs = Date.now();
@@ -159,6 +173,6 @@ export async function openStepUpFromFreshCeremony(
     });
     return false;
   }
-  await openStepUpWindowFromCeremony({ ...target, ...ceremony, nowMs });
+  await openStepUpWindowFromCeremony({ ...target, ...ceremony, network, nowMs });
   return true;
 }

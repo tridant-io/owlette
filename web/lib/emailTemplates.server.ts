@@ -480,3 +480,30 @@ export function buildApiKeyExpiryEmail(
     unsubscribeUrl,
   });
 }
+
+/**
+ * Security notice: a second factor passed on a network this account had never
+ * passed one on, so for 7 days swoop control from it can use the checks the
+ * user already passed. Sent
+ * once per network by `lib/swoop/networks.server.ts`, the backstop for what the
+ * network binding cannot see (an attacker on the user's own isp). Transactional,
+ * like the password reset: no unsubscribe, because a security notice is not an
+ * alert anyone opts out of.
+ */
+export function buildNewNetworkEmail(args: {
+  network: string;
+  at: Date;
+  machineId?: string;
+}): string {
+  const content = `
+    <h2 style="color:${EMAIL_COLORS.cyan};margin:0 0 12px;font-size:18px;font-weight:700;text-transform:lowercase;">new network verified for swoop control</h2>
+    <p style="margin:0 0 20px;color:${EMAIL_COLORS.muted};">your owlette account just passed a second-factor check from a network it had not used before. for the next 7 days, taking control of a machine from this network can use the checks you have already passed instead of asking for a new one.</p>
+    ${emailDataTable([
+      { label: 'network', value: args.network },
+      { label: 'when', value: emailTimestamp(args.at) },
+      ...(args.machineId ? [{ label: 'machine', value: args.machineId }] : []),
+    ])}
+    <p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};font-size:13px;">if this wasn't you, change your password, remove any factor you don't recognise under account settings &#8594; security, and ask a site owner to kill swoop sessions you didn't start.</p>
+  `;
+  return wrapEmailLayout(content, { preheader: 'new network verified for swoop control' });
+}

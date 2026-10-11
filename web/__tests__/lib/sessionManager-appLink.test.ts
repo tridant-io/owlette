@@ -59,6 +59,38 @@ describe('resolveMfaOnSessionCreate — app-link satisfiers', () => {
     });
   });
 
+  // swoop's network binding lets the ceremony stand in for its step-up only from the
+  // network it ran on, so the network travels with the time
+  it('challenge carries the approver ceremony network; device-trust carries none', () => {
+    const input = {
+      prev: {},
+      resolved: REQUIRED,
+      userId: USER,
+      now: NOW,
+      deviceTrusted: false,
+      mfaNetwork: 'asn:64500',
+    };
+    expect(resolveMfaOnSessionCreate({ ...input, mfaSatisfiedBy: 'challenge' }).mfaNetwork).toBe('asn:64500');
+    expect(resolveMfaOnSessionCreate({ ...input, mfaSatisfiedBy: 'device-trust' })).not.toHaveProperty(
+      'mfaNetwork',
+    );
+    expect(
+      resolveMfaOnSessionCreate({
+        ...input,
+        prev: {
+          userId: USER,
+          expiresAt: NOW + 60_000,
+          mfaRequired: true,
+          mfaVerified: true,
+          mfaCompletedAt: NOW - 5_000,
+          mfaSatisfiedBy: 'challenge',
+          mfaNetwork: 'asn:7922',
+        },
+        mfaSatisfiedBy: 'challenge',
+      }).mfaNetwork,
+    ).toBe('asn:7922');
+  });
+
   it('device-trust takes the device-trust branch and is not a ceremony', () => {
     const out = resolveMfaOnSessionCreate({
       prev: {},

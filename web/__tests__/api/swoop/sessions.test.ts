@@ -29,9 +29,31 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: jest.fn(),
 }));
 
+type MockTxRef = { get: () => unknown; set: (...a: unknown[]) => unknown };
 jest.mock('@/lib/firebase-admin', () => ({
-  getAdminDb: () => mockDbFactory(),
+  getAdminDb: () => ({
+    ...mockDbFactory(),
+    // the verified-network write reads then writes on the same doc mocks, and
+    // its writes land, or fail, at commit
+    runTransaction: async (fn: (tx: unknown) => unknown) => {
+      const writes: unknown[] = [];
+      const result = await fn({
+        get: (ref: MockTxRef) => ref.get(),
+        set: (ref: MockTxRef, ...a: unknown[]) => {
+          writes.push(ref.set(...a));
+        },
+      });
+      await Promise.all(writes);
+      return result;
+    },
+  }),
   getAdminAuth: () => ({ verifyIdToken: jest.fn().mockRejectedValue(new Error('n/a')) }),
+}));
+
+const mockSendEmail = jest.fn(async (..._a: unknown[]) => ({ error: null }));
+jest.mock('@/lib/resendClient.server', () => ({
+  ...jest.requireActual('@/lib/resendClient.server'),
+  getResend: () => ({ emails: { send: (...a: unknown[]) => mockSendEmail(...a) } }),
 }));
 
 jest.mock('firebase-admin/firestore', () => ({
@@ -81,7 +103,13 @@ jest.mock('@/lib/apiAuth.server', () => {
  * is the real one — a stub would prove nothing about which satisfier counts —
  * and only the cookie plumbing around it is replaced.
  */
-const mockLogin: { userId: string; expiresAt: number; mfaSatisfiedBy?: string; mfaCompletedAt?: number } = {
+const mockLogin: {
+  userId: string;
+  expiresAt: number;
+  mfaSatisfiedBy?: string;
+  mfaCompletedAt?: number;
+  mfaNetwork?: string;
+} = {
   userId: '',
   expiresAt: 0,
 };
@@ -170,6 +198,7 @@ function signIn(userId: string, satisfiedBy?: 'challenge' | 'device-trust', sign
   mockLogin.mfaSatisfiedBy = satisfiedBy ?? 'challenge';
   mockLogin.mfaCompletedAt =
     Date.now() - (signedInAgoMs ?? (satisfiedBy === 'device-trust' ? 0 : 3_600_000));
+  delete mockLogin.mfaNetwork;
 }
 
 /** the swoop commands this run queued, whatever the route that wrote them. */
@@ -974,10 +1003,18 @@ describe('swoop audit trail', () => {
     metadata?: Record<string, unknown>;
   }
 
-  /** Swoop's own rows, told apart from the wrapper's by `metadata.event`. */
+  /**
+   * Swoop's own rows, told apart from the wrapper's by `metadata.event`. The
+   * network check rides on every control request and has its own suite below.
+   */
   const rowsFrom = (mock: jest.Mock): AuditRow[] =>
     (mock.mock.calls as [string, AuditRow][])
-      .filter(([site, entry]) => site === SITE && typeof entry.metadata?.event === 'string')
+      .filter(
+        ([site, entry]) =>
+          site === SITE &&
+          typeof entry.metadata?.event === 'string' &&
+          entry.metadata.event !== 'step_up_network_check',
+      )
       .map(([, entry]) => entry);
 
   const denyRows = () => rowsFrom(writeAuditEntry);
@@ -1143,5 +1180,278 @@ describe('swoop audit trail', () => {
         }),
       }),
     ]);
+  });
+});
+
+describe('POST swoop/sessions — network binding', () => {
+  const EDGE = 'edge-secret-for-tests';
+  const HOME = '64500';
+  const AWAY = '64501';
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  /** a control request as the edge forwards it from `asn`, or with no edge headers at all. */
+  const controlFrom = (asn: string | null, extra: Record<string, unknown> = {}) =>
+    POST(
+      createMockRequest(url(), {
+        method: 'POST',
+        body: { control: true, fp: FP, ...extra },
+        headers: asn
+          ? { 'x-owlette-edge': EDGE, 'x-owlette-asn': asn, 'cf-connecting-ip': '203.0.113.9' }
+          : {},
+      }),
+      routeContext(),
+    );
+
+  /** a network this user passed a second factor on, `agoMs` ago. */
+  function verifiedNetwork(userId: string, asn: string, agoMs = 0): void {
+    staged.set(`users/${userId}/verified_networks/asn:${asn}`, {
+      firstSeenAt: Date.now() - agoMs,
+      lastVerifiedAt: Date.now() - agoMs,
+      asn,
+      label: `AS${asn}`,
+    });
+  }
+
+  const networkRows = () =>
+    (writeAuditEntry.mock.calls as [string, { outcome: string; denyReason?: string; metadata?: Record<string, unknown> }][])
+      .filter(([site, entry]) => site === SITE && entry.metadata?.event === 'step_up_network_check')
+      .map(([, entry]) => entry);
+
+  const payloads = () => (mocks.set.mock.calls as [Record<string, unknown>][]).map(([payload]) => payload);
+  const networkWrites = () => payloads().filter((payload) => payload.lastVerifiedAt !== undefined);
+  const windowWrites = () => payloads().filter((payload) => payload.openedBy !== undefined);
+
+  /** `mocks.set` does not feed `mocks.get`, so what a ceremony wrote is staged by hand. */
+  function stageCeremonyWrites(asn: string): void {
+    const [window] = windowWrites();
+    const binding = stepUpMachineBinding({ userId: ADMIN, siteId: SITE, machineId: MACHINE });
+    staged.set(`users/${ADMIN}/swoop_step_up/${binding}`, window);
+    const [network] = networkWrites();
+    if (network) staged.set(`users/${ADMIN}/verified_networks/asn:${asn}`, network);
+    mocks.set.mockClear();
+    writeAuditEntry.mockClear();
+    mockVerifyMfaProof.mockClear();
+  }
+
+  beforeEach(() => {
+    process.env.EDGE_SHARED_SECRET = EDGE;
+  });
+  afterEach(() => {
+    delete process.env.EDGE_SHARED_SECRET;
+    delete process.env.SWOOP_NETWORK_BINDING;
+  });
+
+  describe('log, the default', () => {
+    it('decides as before on an unverified network, and records the check', async () => {
+      openWindow(ADMIN);
+
+      const { status, body } = await parseResponse(await controlFrom(HOME));
+
+      expect(status).toBe(201);
+      expect((body.data as Record<string, unknown>).ctl).toBe(true);
+      expect(networkRows()).toEqual([
+        expect.objectContaining({
+          outcome: 'allow',
+          metadata: {
+            event: 'step_up_network_check',
+            mode: 'log',
+            key: `asn:${HOME}`,
+            prefix: '203.0.113.0/24',
+            viaEdge: true,
+            match: false,
+            windowNetwork: null,
+          },
+        }),
+      ]);
+    });
+
+    it('records a verified network as a match, beside the network the window opened on', async () => {
+      openWindow(ADMIN);
+      const binding = stepUpMachineBinding({ userId: ADMIN, siteId: SITE, machineId: MACHINE });
+      staged.set(`users/${ADMIN}/swoop_step_up/${binding}`, {
+        ...staged.get(`users/${ADMIN}/swoop_step_up/${binding}`),
+        network: { key: `asn:${AWAY}`, prefix: '198.51.100.0/24', asn: AWAY },
+      });
+      verifiedNetwork(ADMIN, HOME);
+
+      expect((await controlFrom(HOME)).status).toBe(201);
+      expect(networkRows()).toEqual([
+        expect.objectContaining({
+          metadata: expect.objectContaining({ match: true, windowNetwork: `asn:${AWAY}` }),
+        }),
+      ]);
+    });
+
+    it('records an unknown network when the edge did not vouch for the request', async () => {
+      openWindow(ADMIN);
+
+      expect((await controlFrom(null)).status).toBe(201);
+      expect(networkRows()).toEqual([
+        expect.objectContaining({
+          metadata: expect.objectContaining({ key: 'unknown', viaEdge: false, match: false }),
+        }),
+      ]);
+    });
+
+    it('verifies the network a ceremony passed on and records it on the window, sending no notice', async () => {
+      const { status } = await parseResponse(await controlFrom(HOME, { mfaProof: { code: '123456' } }));
+
+      expect(status).toBe(201);
+      expect(networkWrites()).toEqual([
+        { firstSeenAt: expect.any(Number), lastVerifiedAt: expect.any(Number), asn: HOME, label: `AS${HOME}` },
+      ]);
+      expect(windowWrites()).toEqual([
+        expect.objectContaining({
+          openedBy: 'ceremony',
+          network: { key: `asn:${HOME}`, prefix: '203.0.113.0/24', asn: HOME },
+        }),
+      ]);
+      expect(mockSendEmail).not.toHaveBeenCalled();
+    });
+
+    it('records nothing for a watch request', async () => {
+      const res = await POST(
+        createMockRequest(url(), {
+          method: 'POST',
+          body: { control: false, fp: FP },
+          headers: { 'x-owlette-edge': EDGE, 'x-owlette-asn': HOME },
+        }),
+        routeContext(),
+      );
+
+      expect(res.status).toBe(201);
+      expect(networkRows()).toEqual([]);
+    });
+  });
+
+  it('off records nothing and checks nothing', async () => {
+    process.env.SWOOP_NETWORK_BINDING = 'off';
+
+    expect((await controlFrom(HOME, { mfaProof: { code: '123456' } })).status).toBe(201);
+    expect(networkRows()).toEqual([]);
+    expect(networkWrites()).toEqual([]);
+    expect(windowWrites()).toEqual([expect.not.objectContaining({ network: expect.anything() })]);
+  });
+
+  describe('enforce', () => {
+    beforeEach(() => {
+      process.env.SWOOP_NETWORK_BINDING = 'enforce';
+    });
+
+    it('asks for the step-up on a network the user never verified, open window or not', async () => {
+      openWindow(ADMIN);
+
+      const { status, body } = await parseResponse(await controlFrom(HOME));
+
+      expect(status).toBe(401);
+      expect(body.code).toBe('step_up_required');
+      expect(networkRows()).toEqual([
+        expect.objectContaining({
+          outcome: 'allow',
+          metadata: expect.objectContaining({ mode: 'enforce', match: false }),
+        }),
+      ]);
+    });
+
+    it('takes control on an open window from a verified network', async () => {
+      openWindow(ADMIN);
+      verifiedNetwork(ADMIN, HOME, DAY_MS);
+
+      expect((await controlFrom(HOME)).status).toBe(201);
+      expect(networkRows()).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ match: true }) })]);
+    });
+
+    it('lets a verification lapse after 7 days with no ceremony on that network', async () => {
+      openWindow(ADMIN);
+      verifiedNetwork(ADMIN, HOME, 8 * DAY_MS);
+
+      expect((await controlFrom(HOME)).status).toBe(401);
+    });
+
+    it('verifies the network a ceremony passed on, so the next create there takes control with no proof', async () => {
+      expect((await controlFrom(HOME, { mfaProof: { code: '123456' } })).status).toBe(201);
+      stageCeremonyWrites(HOME);
+
+      const { status, body } = await parseResponse(await controlFrom(HOME));
+
+      expect(status).toBe(201);
+      expect((body.data as Record<string, unknown>).ctl).toBe(true);
+      expect(mockVerifyMfaProof).not.toHaveBeenCalled();
+
+      // and another network still asks, the same window notwithstanding
+      expect((await controlFrom(AWAY)).status).toBe(401);
+    });
+
+    it('never matches an unknown network, even right after a ceremony on it', async () => {
+      expect((await controlFrom(null, { mfaProof: { code: '123456' } })).status).toBe(201);
+      expect(networkWrites()).toEqual([]);
+      stageCeremonyWrites(HOME);
+      staged.set(`users/${ADMIN}/verified_networks/unknown`, { lastVerifiedAt: Date.now() });
+
+      const { status, body } = await parseResponse(await controlFrom(null));
+
+      expect(status).toBe(401);
+      expect(body.code).toBe('step_up_required');
+    });
+
+    it('lets the sign-in ceremony stand in only on the network it ran on', async () => {
+      signIn(ADMIN, 'challenge', 2 * 60_000);
+      mockLogin.mfaNetwork = `asn:${HOME}`;
+      verifiedNetwork(ADMIN, HOME);
+
+      expect((await controlFrom(AWAY)).status).toBe(401);
+      expect(windowWrites()).toEqual([]);
+
+      expect((await controlFrom(HOME)).status).toBe(201);
+      expect(windowWrites()).toEqual([
+        expect.objectContaining({
+          openedBy: 'fresh_sign_in',
+          network: expect.objectContaining({ key: `asn:${HOME}` }),
+        }),
+      ]);
+    });
+
+    it('never lets the sign-in ceremony stand in from an unknown network', async () => {
+      signIn(ADMIN, 'challenge', 2 * 60_000);
+      mockLogin.mfaNetwork = 'unknown';
+
+      expect((await controlFrom(null)).status).toBe(401);
+      expect(windowWrites()).toEqual([]);
+    });
+
+    it('never lets a sign-in with no recorded network stand in', async () => {
+      signIn(ADMIN, 'challenge', 2 * 60_000);
+
+      expect((await controlFrom(HOME)).status).toBe(401);
+      expect(windowWrites()).toEqual([]);
+    });
+
+    it('emails the user once, the first time a ceremony verifies a network', async () => {
+      expect((await controlFrom(HOME, { mfaProof: { code: '123456' } })).status).toBe(201);
+
+      expect(mockSendEmail).toHaveBeenCalledTimes(1);
+      const [message] = mockSendEmail.mock.calls[0] as [{ to: string; subject: string; html: string }];
+      expect(message.to).toBe(`${ADMIN}@example.test`);
+      expect(message.subject).toBe('new network verified for swoop control');
+      expect(message.html).toContain(`AS${HOME}`);
+      expect(message.html).toContain(MACHINE);
+
+      // the entry exists now: a later ceremony on it refreshes it and sends nothing
+      const [network] = networkWrites();
+      staged.set(`users/${ADMIN}/verified_networks/asn:${HOME}`, network);
+      mocks.set.mockClear();
+      expect((await controlFrom(HOME, { mfaProof: { code: '654321' } })).status).toBe(201);
+      expect(networkWrites()).toEqual([{ lastVerifiedAt: expect.any(Number), asn: HOME, label: `AS${HOME}` }]);
+      expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it('takes control even when the network cannot be recorded', async () => {
+      mocks.set.mockImplementation(async (payload: Record<string, unknown>) => {
+        if (payload.lastVerifiedAt !== undefined) throw new Error('firestore down');
+      });
+
+      expect((await controlFrom(HOME, { mfaProof: { code: '123456' } })).status).toBe(201);
+      expect(mockSendEmail).not.toHaveBeenCalled();
+    });
   });
 });

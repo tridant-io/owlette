@@ -11,7 +11,9 @@
  * the create would decide (`hasOpenStepUpWindow`), which is why the GET answers
  * for the session asking and says whether that session can ever read one. A
  * sign-in ceremony fresh enough to open the window (`freshCeremonyCovers`) reads
- * as open too, because the create will open it.
+ * as open too, because the create will open it. Both answer to the network
+ * binding exactly as the create does (`lib/swoop/networks.server.ts`), so the
+ * app never reads open a window the create would then refuse.
  *
  * Nothing here is new authority: the proof, the window and the session gate are
  * `swoop/sessions`' own (`lib/swoop/stepUp.server.ts`), so a stolen cookie
@@ -34,6 +36,13 @@ import {
   hasOpenStepUpWindow,
 } from '@/lib/swoop/policy.server';
 import { openStepUpFromProof, requestSignInCeremony } from '@/lib/swoop/stepUp.server';
+import {
+  bindingNetwork,
+  controlNetwork,
+  networkAdmitsFreshCeremony,
+  networkAdmitsWindow,
+  networkBindingMode,
+} from '@/lib/swoop/networks.server';
 import { recordSwoopDenied } from '@/lib/swoop/audit.server';
 import {
   apiKeyRefusal,
@@ -70,7 +79,13 @@ const postHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       return decisionProblem(decision);
     }
 
-    const opened = await openStepUpFromProof({ userId, siteId, machineId, proof: body.mfaProof });
+    const opened = await openStepUpFromProof({
+      userId,
+      siteId,
+      machineId,
+      proof: body.mfaProof,
+      network: bindingNetwork(request),
+    });
     if (!opened.ok) {
       refused(opened.reason);
       return opened.response;
@@ -107,7 +122,9 @@ export const POST = authorizedSiteHandler<SwoopRouteParams>({
  * allow row would write one audit entry per poll. It reads only the caller's own
  * window, and opens, extends or writes nothing: a fresh sign-in ceremony reads
  * as open here, and it is the session create that follows which opens the
- * window, behind the full swoop gate and with its audit row.
+ * window, behind the full swoop gate and with its audit row. The network check
+ * is applied only where it decides, in `enforce`, and never recorded here, for
+ * the same reason: one row per poll, and the create records it.
  */
 export async function GET(
   request: NextRequest,
@@ -121,10 +138,13 @@ export async function GET(
     if (keyRefusal) return keyRefusal;
 
     const ceremony = await requestSignInCeremony(request, auth.userId);
+    const binding = networkBindingMode() === 'enforce' ? await controlNetwork(request, auth.userId) : null;
     const target = { userId: auth.userId, siteId, machineId };
     const open =
-      (await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: ceremony.sessionPassedCeremony })) ||
-      (await freshCeremonyCovers({ ...target, ...ceremony }));
+      ((binding === null || networkAdmitsWindow(binding)) &&
+        (await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: ceremony.sessionPassedCeremony }))) ||
+      ((binding === null || networkAdmitsFreshCeremony(binding, ceremony.ceremonyNetwork)) &&
+        (await freshCeremonyCovers({ ...target, ...ceremony })));
     return applyAuthDeprecations(
       NextResponse.json({
         ok: true,
