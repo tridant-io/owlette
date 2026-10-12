@@ -7,6 +7,8 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+## [4.1.9] - 2026-10-12
+
 ### added — swoop hosts on Windows machines without an NVIDIA GPU
 
 A Windows machine with no NVIDIA GPU can now host a swoop session. NVENC still
@@ -27,6 +29,39 @@ a browser that signed in earlier still asks. One step-up now covers a machine
 for 7 days instead of 12 hours. A remembered browser still asks, a kill still
 closes every window on the machine, and a step-up a sign-in stood in for is
 recorded on the audit trail (`step_up_opened`).
+
+### changed — swoop control is tied to the networks you verified (watching only, for now)
+
+Each second factor you pass records the network it ran on (the ISP, not the
+address), and every control request now logs whether it came from one of those
+networks. Nothing is refused yet: this is a two-week observation before swoop
+starts asking once on a new network. Cloudflare adds the network to each
+request; a request that reached an origin around Cloudflare counts as an
+unknown network.
+
+### fixed — a request that reached an origin around Cloudflare could pick its own rate-limit bucket
+
+The origins also answer requests that bypass Cloudflare, and there a
+client-supplied CF-Connecting-IP header chose the per-IP bucket on the sign-in
+and pairing limits. The header now counts only when the request carries the
+edge's shared secret; otherwise the proxy's own view of the address is used.
+
+### fixed — owlette swoop has a sign-in of its own
+
+owlette swoop's sign-in is now a minimal card of its own: no site footer, the
+window draggable anywhere, browser sign-in first and email and password behind
+a link. Its pages render right on the first paint instead of flashing the
+site's layout, and the signed-in email no longer wraps.
+
+### fixed — the swoop picker's loading notice
+
+In owlette swoop the loading text sat just under the title bar; it now sits
+centred in the window with the same spinner as the stage's "connecting" notice.
+
+### fixed — "not you?" on the verify and approve pages
+
+The pages that verify a second factor and approve a device now offer "not you?
+sign in as someone else".
 
 ## [4.1.8] - 2026-10-10
 
