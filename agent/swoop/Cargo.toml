@@ -42,22 +42,17 @@ path = "src/main.rs"
 [features]
 # NVENC is the first-class encoder (plan.md D7) and loads nvEncodeAPI64.dll by
 # absolute path at runtime, so a non-NVIDIA box simply fails probe() rather than
-# failing to start. Task 10.1 finalises the rest of this list and never adds
+# failing to start. Media Foundation is the fallback below it on Windows, a
+# hardware rung and a software floor, and ships because the owner chose it
+# (2026-10-11): it loads mfplat.dll the same way, so an N edition without the
+# Media Feature Pack still starts. Task 10.1 adds the rest and never adds
 # `testhooks`.
-default = ["encode-nvenc"]
+default = ["encode-nvenc", "encode-mf"]
 
 encode-nvenc = ["dep:moq-nvenc"]
-# The Intel/AMD/software backends are chosen by hardware measurement in spikes
-# 6.7 and 7.2, so no crate is pinned for them yet: pinning a dependency nothing
-# has established is used is worse than leaving it out (.claude/CLAUDE.md). The
-# feature names exist now so Waves 6–10 never edit this manifest; the task that
-# picks a backend adds its optional dependency to the matching line.
-encode-ffmpeg = []
-encode-vpl = []
-encode-amf = []
-# Media Foundation needs no new crate, only more of the windows bindings.
-encode-mf = ["windows/Win32_Media_MediaFoundation"]
-encode-openh264 = []
+# Media Foundation needs no new crate, only more of the windows bindings: Ole
+# for the VARIANT its codec api takes.
+encode-mf = ["windows/Win32_Media_MediaFoundation", "windows/Win32_System_Ole"]
 # VideoToolbox is a system framework reached through objc2-video-toolbox, which
 # the macOS dependency table below always carries, so the feature needs no
 # crate of its own.

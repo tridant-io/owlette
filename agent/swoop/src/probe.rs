@@ -342,11 +342,7 @@ mod tests {
     /// than printing an empty success.
     #[cfg(not(any(
         feature = "encode-nvenc",
-        feature = "encode-vpl",
-        feature = "encode-amf",
         feature = "encode-mf",
-        feature = "encode-openh264",
-        feature = "encode-ffmpeg",
         feature = "encode-videotoolbox"
     )))]
     #[test]

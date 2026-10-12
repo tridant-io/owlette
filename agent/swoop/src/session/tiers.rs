@@ -3,8 +3,9 @@
 //! # The tier count is measured, never assumed
 //!
 //! plan.md D14: **tiers = min(distinct codec classes present among viewers, the
-//! measured encoder budget)**. Both halves are read, neither is a constant, and
-//! in particular the count is never a hard-coded 2. The budget is
+//! measured encoder budget)**. Both halves are read and the count is never a
+//! hard-coded 2. The budget is measured where a driver can be asked (NVENC);
+//! the Media Foundation rungs, which cannot, report a fixed figure. It is
 //! [`crate::encode::select::budget`]'s figure — the *top rung's*
 //! `concurrent_sessions` and never a sum across backends, because two codecs
 //! served by two backends still share one machine.

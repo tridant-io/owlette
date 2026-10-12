@@ -62,4 +62,12 @@ pub mod process {
     pub fn parent_gone() -> bool {
         false
     }
+
+    /// `%SystemRoot%\System32\<file>`: the absolute path every runtime-loaded
+    /// system or driver library is opened by, never a bare name the search
+    /// path resolves.
+    pub fn system32(file: &str) -> String {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        format!("{root}\\System32\\{file}")
+    }
 }
