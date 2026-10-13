@@ -11,6 +11,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — owlette swoop opens on the server its machine is paired with
+
+Started for the first time from the Start menu, Applications or the Dock, owlette
+swoop always opened owlette.app, even on a computer paired with
+dev.owlette.app, so signing in there failed. With no server remembered from an
+earlier link, it now opens the one the owlette agent on the same computer is
+paired with, and owlette.app on a computer without the agent.
+
 ## [4.1.9] - 2026-10-12
 
 ### added — swoop hosts on Windows machines without an NVIDIA GPU
