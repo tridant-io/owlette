@@ -7,6 +7,15 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### fixed — a Mac shows its own disks and network, not simulator volumes and tunnels
+
+A Mac listed every volume macOS mounts for itself, including the iOS simulator
+runtimes Xcode installs, and every VPN and AirDrop interface. A simulator volume,
+nearly full by design, could show as the machine's main disk and a tunnel as its
+main network, and each one appearing or vanishing reloaded the machine's hardware
+details. A Mac now lists its startup and data volumes, external drives and real
+network interfaces only.
+
 ### added — owlette free, the pro trial and per-machine billing, for after the beta
 
 The pricing page shows three plans for after the beta: owlette free, with one
