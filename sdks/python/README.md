@@ -49,31 +49,22 @@ Roost(
     retry=RetryPolicy(max_attempts=3),  # optional
     transport=my_httpx_transport,     # for proxy / mTLS / recording
     timeout=30.0,
-    on_billing_warning=logger.warning,  # optional — free-trial advisory
+    on_billing_warning=logger.warning,  # accepted for compatibility; never fires
 )
 ```
 
-### billing warnings
+### plan refusals
 
-While the account is on its free trial, the api attaches an advisory
-`X-Owlette-Billing-Warning` header to responses. The SDK never prints it — a
-library has no business writing to your stderr — so pass
-`on_billing_warning` to surface it however your app already does:
+Plans are not enforced during the beta. Once they apply, a request that the
+site owner's plan does not cover raises `RoostApiError` with
+`code == "plan_required"` and `status == 402`, and is not retried.
+`error.problem["entitlement"]` names what the plan lacks — `owlette.api_keys`
+for every request made with a key on a plan without API keys. See
+[plans](https://owlette.app/docs/plans).
 
-```python
-async with Roost(
-    token=os.environ["OWLETTE_TOKEN"],
-    on_billing_warning=logger.warning,
-    # → "trial ends 2026-08-15T00:00:00.000Z; choose a plan to keep API access"
-) as client:
-    ...
-```
-
-It fires once per response carrying the header, retried attempts included, so
-deduplicate on your side if you want at-most-once. Exceptions raised by the
-callback are swallowed and can never fail a request. Once the trial ends,
-requests raise `RoostApiError` with `code == "trial_expired"` and
-`status == 402`.
+`on_billing_warning` is still accepted for compatibility but never fires: the
+api stopped sending the `X-Owlette-Billing-Warning` header when billing was
+removed.
 
 ## resources
 

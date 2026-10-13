@@ -30,12 +30,34 @@ function versionOf(path: string): number {
   return versions.get(path) ?? 0;
 }
 
+/** the collection's direct children matching one equality, as an id-only query snapshot. */
+function query(colPath: string, field?: string, value?: unknown) {
+  const ids = [...docs.entries()]
+    .filter(([p, d]) => d !== null && p.startsWith(`${colPath}/`) && !p.slice(colPath.length + 1).includes('/'))
+    .filter(([, d]) => field === undefined || (d as Record<string, unknown>)[field] === value)
+    .map(([p]) => ({ id: p.slice(colPath.length + 1) }));
+  return { docs: ids };
+}
+
+// the plan check counts the successor's sites and machines outside the transaction.
+function collection(colPath: string) {
+  return {
+    doc: (id: string) => ref(`${colPath}/${id}`),
+    select: () => ({ get: async () => query(colPath) }),
+    where: (field: string, _op: string, value: unknown) => ({
+      select: () => ({ get: async () => query(colPath, field, value) }),
+    }),
+  };
+}
+
 function ref(path: string) {
   return {
     __path: path,
-    collection: (sub: string) => ({
-      doc: (id: string) => ref(`${path}/${sub}/${id}`),
-    }),
+    get: async () => {
+      const data = docs.get(path) ?? null;
+      return { exists: data !== null, data: () => data ?? undefined };
+    },
+    collection: (sub: string) => collection(`${path}/${sub}`),
   };
 }
 
@@ -44,7 +66,7 @@ function pathOf(r: unknown): string {
 }
 
 const db = {
-  collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
+  collection: (name: string) => collection(name),
   /**
    * Optimistic-concurrency transaction. Records the version of every document
    * read; at commit time, if any of them changed, the whole attempt is discarded
@@ -88,6 +110,16 @@ const db = {
 } as unknown as FirebaseFirestore.Firestore;
 
 jest.mock('@/lib/firebase-admin', () => ({ getAdminDb: () => db }));
+
+jest.mock('@/lib/logger', () => ({
+  __esModule: true,
+  default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
 
 import { transferSiteOwnership } from '@/lib/actions/transferSiteOwnership.server';
 
@@ -190,6 +222,108 @@ describe('transferSiteOwnership — refusals', () => {
     const before = new Map(docs);
     await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: BOB, actorIsSuperadmin: false });
     expect([...docs.entries()]).toEqual([...before.entries()]);
+  });
+});
+
+describe("transferSiteOwnership — the successor's plan", () => {
+  const FREE = {
+    ok: true,
+    resolved: false,
+    standing: 'expired',
+    inGoodStanding: false,
+    ent: { 'owlette.sites': '1', 'owlette.machines': '1' },
+    epoch: 0,
+  };
+  const machine = (siteId: string, machineId: string) =>
+    docs.set(`sites/${siteId}/machines/${machineId}`, { online: true });
+
+  beforeEach(() => {
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.test';
+    process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
+    mockGetEntitlements.mockReset().mockResolvedValue(FREE);
+  });
+
+  afterEach(() => {
+    delete process.env.PLAN_ENFORCEMENT;
+    delete process.env.TRIDANT_API_URL;
+    delete process.env.TRIDANT_LICENSE_KEY;
+  });
+
+  it('refuses a free successor who already owns a site, and writes nothing', async () => {
+    docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
+    const before = new Map(docs);
+
+    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+
+    expect(res).toEqual({ ok: false, failure: { kind: 'plan_limit', entitlement: 'owlette.sites' } });
+    expect(mockGetEntitlements).toHaveBeenCalledWith(ALICE);
+    expect([...docs.entries()]).toEqual([...before.entries()]);
+  });
+
+  it("refuses a free successor when the site brings more machines than the plan covers", async () => {
+    machine(SITE, 'm1');
+    machine(SITE, 'm2');
+
+    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+
+    expect(res).toEqual({ ok: false, failure: { kind: 'plan_limit', entitlement: 'owlette.machines' } });
+    expect((docs.get(`sites/${SITE}`) as { owner: string }).owner).toBe(OWNER);
+  });
+
+  it('POSITIVE CONTROL: a free successor takes a first site with one machine', async () => {
+    machine(SITE, 'm1');
+
+    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+
+    expect(res).toEqual({ ok: true, previousOwnerUid: OWNER, newOwnerUid: ALICE });
+  });
+
+  it('does not count a machine the successor already pays for', async () => {
+    // already over a one-machine limit; a site bringing only m1 adds nothing to bill.
+    mockGetEntitlements.mockResolvedValue({
+      ...FREE,
+      ent: { 'owlette.sites': 'unlimited', 'owlette.machines': '1' },
+    });
+    docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
+    machine('site-b', 'm1');
+    machine('site-b', 'm2');
+    machine(SITE, 'm1');
+
+    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it('leaves a superadmin successor unrestricted', async () => {
+    docs.set(`users/${ALICE}`, { role: 'superadmin', sites: [] });
+    docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
+    machine(SITE, 'm1');
+    machine(SITE, 'm2');
+
+    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("answers every other refusal first, so a non-owner learns nothing of the successor's plan", async () => {
+    docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
+
+    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: BOB, actorIsSuperadmin: false });
+
+    expect(res).toEqual({ ok: false, failure: { kind: 'not_owner' } });
+  });
+
+  it('asks tridant nothing while enforcement is off', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+    docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
+    machine(SITE, 'm1');
+    machine(SITE, 'm2');
+
+    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+
+    expect(res.ok).toBe(true);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
   });
 });
 

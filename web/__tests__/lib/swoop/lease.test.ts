@@ -130,10 +130,14 @@ describe('lease.ts — the browser renewer', () => {
     detach();
   });
 
-  it('turns only the api’s policy refusal into a SwoopLeaseRefused', () => {
+  it('turns only the api’s policy or plan refusal into a SwoopLeaseRefused', () => {
     const refused = leaseFailure(403, { code: 'capability_missing', detail: 'you do not have permission to do this.' });
     expect(refused).toBeInstanceOf(SwoopLeaseRefused);
     expect(refused.message).toBe('you do not have permission to do this.');
+    // the plan gate's 402: no retry changes the plan.
+    expect(leaseFailure(402, { code: 'plan_required', detail: "your plan doesn't include swoop." })).toBeInstanceOf(
+      SwoopLeaseRefused,
+    );
 
     expect(leaseFailure(401, { code: 'unauthorized', detail: 'Unauthorized: Session expired' })).not.toBeInstanceOf(
       SwoopLeaseRefused,

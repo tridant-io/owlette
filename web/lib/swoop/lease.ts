@@ -16,7 +16,7 @@
  *    second attempt before the host's `expiry + 30 s` grace runs out, so one
  *    lost request costs nothing. renewing at 90 % would make every retry a
  *    coin toss against the grace.
- * 3. **a withdrawal is terminal; nothing else is.** the api's policy refusal
+ * 3. **a withdrawal is terminal; nothing else is.** the api's policy or plan refusal
  *    is the authorisation going away — exactly what the lease is for — and the
  *    session ends immediately. anything else, a lapsed login and a 403 from an
  *    edge in front of the app included, is retried until the host's grace
@@ -42,7 +42,7 @@ const GRACE_MS = 30_000;
 
 /**
  * a refusal the browser must not retry. `leaseFailure` makes one for the api's
- * policy answer only, so this module can tell "you are no longer allowed in"
+ * policy or plan answer only, so this module can tell "you are no longer allowed in"
  * from everything else that can go wrong on the way to the lease route.
  */
 export class SwoopLeaseRefused extends Error {

@@ -280,6 +280,39 @@ describe('useSwoopSession — how a session ends', () => {
     expect(mints()).toHaveLength(1);
   });
 
+  it('a plan refusal on the mint is final, and names the plan', async () => {
+    mint = {
+      status: 402,
+      body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
+    };
+    await open();
+    expect(swoop.state).toBe('error');
+    expect(swoop.refusal).toBe('plan_required');
+    expect(swoop.retryIn).toBeNull();
+
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
+  it('a plan refusal on a renewal ends the session for good, and names the plan', async () => {
+    await open();
+    const mintToken = wired.signaling!.mintToken;
+    await act(async () => {
+      await mintToken();
+    });
+
+    lease = { status: 402, body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue." } };
+    await act(async () => {
+      await expect(mintToken()).rejects.toThrow("your plan doesn't include swoop. upgrade to continue.");
+    });
+    expect(swoop.state).toBe('ended');
+    expect(swoop.refusal).toBe('plan_required');
+    expect(swoop.retryIn).toBeNull();
+
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
   it('a withdrawal met while re-minting ends the session with its reason', async () => {
     await open();
     const mintToken = wired.signaling!.mintToken;

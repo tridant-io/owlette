@@ -49,7 +49,7 @@ new Owlette({
   roostVersion: '2026-04-22',     // default, sent as Roost-Version header
   fetch: customFetch,             // optional — drop-in override for proxy / mtls
   retry: { maxAttempts: 3 },      // optional — overrides default policy
-  onBillingWarning: (w) => {},    // optional — free-trial countdown advisory
+  onBillingWarning: (w) => {},    // accepted for compatibility; never fires
 });
 ```
 
@@ -57,25 +57,18 @@ The sdk auto-generates an `Idempotency-Key` header on every mutating
 request so transparent retries can't create duplicate rollouts, roosts,
 or api keys.
 
-### billing warnings
+### plan refusals
 
-While the account is on its free trial, the api attaches an advisory
-`X-Owlette-Billing-Warning` header to responses. The sdk never prints it —
-a library has no business writing to your stderr — so wire up
-`onBillingWarning` to surface it however your app already surfaces warnings:
+Plans are not enforced during the beta. Once they apply, a request that the
+site owner's plan does not cover throws `OwletteApiError` with
+`code === 'plan_required'` and `status === 402`, and is not retried.
+`error.problem.entitlement` names what the plan lacks — `owlette.api_keys`
+for every request made with a key on a plan without API keys. See
+[plans](https://owlette.app/docs/plans).
 
-```ts
-const owlette = new Owlette({
-  token: process.env.OWLETTE_TOKEN!,
-  onBillingWarning: (warning) => logger.warn(warning),
-  // → "trial ends 2026-08-15T00:00:00.000Z; choose a plan to keep API access"
-});
-```
-
-It fires once per response carrying the header, retried attempts included, so
-deduplicate on your side if you want at-most-once. Throwing from the callback
-is swallowed and can never fail a request. Once the trial ends, requests throw
-`OwletteApiError` with `code === 'trial_expired'` and `status === 402`.
+`onBillingWarning` is still accepted for compatibility but never fires: the
+api stopped sending the `X-Owlette-Billing-Warning` header when billing was
+removed.
 
 ## resources
 

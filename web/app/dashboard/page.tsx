@@ -42,6 +42,9 @@ import { nextDuplicateName } from '@/lib/processNaming';
 import { AddMachineButton } from './components/AddMachineButton';
 import { SiteTimeConfirmBanner } from './components/SiteTimeConfirmBanner';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
+import { usePlan } from '@/hooks/usePlan';
+import { useSitePlan } from '@/hooks/useSitePlan';
+import { UpdateOwletteButton } from '@/components/UpdateOwletteButton';
 import { LoadingWord } from '@/components/LoadingWord';
 import { FallingFeather } from '@/components/FallingFeather';
 import type { Process } from '@/hooks/useFirestore';
@@ -933,6 +936,16 @@ export default function DashboardPage() {
     onSwoopApp,
   ]);
 
+  // sites the viewer doesn't own get no plan treatment here: their owner's
+  // plan applies, which this browser can't read, and the server gates every
+  // action on it regardless.
+  const sitePlan = useSitePlan(
+    currentSiteId,
+    sites.find((s) => s.id === currentSiteId)?.owner,
+    machinesLoading ? null : machineIdsKey,
+  );
+  const { plan } = usePlan();
+
   useEffect(() => {
     if (!loading && !user) {
       router.push('/');
@@ -1110,6 +1123,7 @@ export default function DashboardPage() {
                   machineName={heldDetailPanel.machineName}
                   siteId={currentSiteId}
                   capabilities={machines.find((m) => m.machineId === heldDetailPanel.machineId)?.capabilities}
+                  controlLocked={sitePlan.controlLocked}
                   onClose={handleCloseDetailPanel}
                 />
               ) : (
@@ -1160,6 +1174,12 @@ export default function DashboardPage() {
               <h2 className="text-lg md:text-xl font-bold text-foreground">machines</h2>
 
               <div className="flex items-center gap-2">
+                {/* with plans on, deployments can be outside the plan, and the
+                    deployments page was the only way to update; every plan may
+                    update, so the dashboard offers it too. */}
+                {plan?.enforced && isSiteAdmin(currentSiteId) && (
+                  <UpdateOwletteButton siteId={currentSiteId} machines={machines} compact />
+                )}
                 {/* Add Machine Button */}
                 <AddMachineButton
                   currentSiteId={currentSiteId}
@@ -1237,6 +1257,7 @@ export default function DashboardPage() {
                   onSwoopApp={onSwoopApp}
                   swoopOff={swoopOff}
                   onSiteSettings={onSiteSettings}
+                  sitePlan={sitePlan}
                 />
               </div>
             )}
@@ -1270,6 +1291,9 @@ export default function DashboardPage() {
                         isSiteAdmin={isSiteAdmin(currentSiteId)}
                         swoopOff={swoopOff}
                         onSiteSettings={onSiteSettings}
+                        planLimit={sitePlan.machineLimitFor(machine.machineId)}
+                        controlLocked={sitePlan.controlLocked}
+                        swoopLocked={sitePlan.swoopLocked}
                       />
                     ))}
                   </TableBody>

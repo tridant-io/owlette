@@ -24,6 +24,7 @@ import {
   type RolloutScheduleStore,
   type ScheduledRolloutRef,
 } from '../src/rolloutScheduler';
+import type { PlanSnapshot } from '../src/lib/planSnapshot';
 
 const NOW = Date.parse('2026-05-01T03:00:00.000Z');
 const MINUTE = 60_000;
@@ -176,6 +177,7 @@ function fakeClaim(
   data: RolloutDocData | null,
   nowMs = NOW,
   graceMs = MISSED_FIRE_GRACE_MS,
+  planSnapshot: PlanSnapshot | null = null,
 ): { decision: ScheduledRolloutDecision; writes: RecordedWrite[] } {
   const writes: RecordedWrite[] = [];
   const decision = applyScheduledRolloutClaim({
@@ -205,9 +207,26 @@ function fakeClaim(
     data,
     nowMs,
     graceMs,
+    planSnapshot,
   });
   return { decision, writes };
 }
+
+const HOUR = 60 * MINUTE;
+
+/** a free plan, resolved an hour ago, as the plan-daily cron writes it. */
+const FREE_SNAPSHOT: PlanSnapshot = {
+  enforced: true,
+  control: false,
+  roost: false,
+  resolvedAt: { toMillis: () => NOW - HOUR },
+};
+const ROOST_BLOCK = "the site owner's plan doesn't include roost";
+
+/** a due rollout the deploy route parked before (or after) the snapshot. */
+const scheduledBefore = (overrides: Partial<RolloutDocData> = {}) =>
+  scheduledDoc({ startedAt: { toMillis: () => NOW - 2 * HOUR }, ...overrides });
+const scheduledAfter = () => scheduledDoc({ startedAt: { toMillis: () => NOW - 30 * MINUTE } });
 
 describe('applyScheduledRolloutClaim', () => {
   it('flips the stage to canary and queues the canary wave in one claim', () => {
@@ -298,6 +317,73 @@ describe('applyScheduledRolloutClaim', () => {
     assert.match(String(abort.data.abortReason), /missed its scheduled fire window/);
   });
 
+  it('a rollout scheduled before a withholding snapshot is aborted with the reason, queuing nothing', () => {
+    const { decision, writes } = fakeClaim(scheduledBefore(), NOW, MISSED_FIRE_GRACE_MS, FREE_SNAPSHOT);
+
+    assert.deepEqual(decision, { action: 'write_off', reason: ROOST_BLOCK });
+    assert.equal(writes.length, 1);
+    const abort = writes[0]!;
+    assert.equal(abort.op, 'update');
+    assert.equal(abort.path, 'rollout');
+    assert.equal(abort.data.stage, 'aborted');
+    assert.ok(abort.data.abortedAt);
+    assert.equal(abort.data.abortReason, ROOST_BLOCK);
+  });
+
+  it('a rollout scheduled after the snapshot fires: the web checked it live, later', () => {
+    const { decision, writes } = fakeClaim(scheduledAfter(), NOW, MISSED_FIRE_GRACE_MS, FREE_SNAPSHOT);
+    assert.deepEqual(decision, { action: 'fire' });
+    assert.equal(writes.length, 3);
+  });
+
+  it('a rollout with no scheduling time counts as older than the snapshot', () => {
+    const { decision } = fakeClaim(scheduledDoc(), NOW, MISSED_FIRE_GRACE_MS, FREE_SNAPSHOT);
+    assert.deepEqual(decision, { action: 'write_off', reason: ROOST_BLOCK });
+  });
+
+  it('fires without a snapshot', () => {
+    const { decision } = fakeClaim(scheduledBefore(), NOW, MISSED_FIRE_GRACE_MS, null);
+    assert.deepEqual(decision, { action: 'fire' });
+  });
+
+  it('fires when the snapshot has no readable resolvedAt to be newer with', () => {
+    const { decision } = fakeClaim(scheduledBefore(), NOW, MISSED_FIRE_GRACE_MS, {
+      ...FREE_SNAPSHOT,
+      resolvedAt: undefined,
+    });
+    assert.deepEqual(decision, { action: 'fire' });
+  });
+
+  it('withholds on control as well as roost', () => {
+    const { decision } = fakeClaim(scheduledBefore(), NOW, MISSED_FIRE_GRACE_MS, {
+      ...FREE_SNAPSHOT,
+      roost: true,
+    });
+    assert.deepEqual(decision, {
+      action: 'write_off',
+      reason: "the site owner's plan doesn't include remote control",
+    });
+  });
+
+  it('a plan block leaves a rollout that is not due, or already claimed, alone', () => {
+    for (const doc of [scheduledBefore({ scheduledAt: NOW + MINUTE }), scheduledBefore({ stage: 'canary' })]) {
+      const { decision, writes } = fakeClaim(doc, NOW, MISSED_FIRE_GRACE_MS, FREE_SNAPSHOT);
+      assert.equal(decision.action, 'skip');
+      assert.deepEqual(writes, []);
+    }
+  });
+
+  it('a late rollout is written off for lateness even under a plan block', () => {
+    const { decision } = fakeClaim(
+      scheduledBefore({ scheduledAt: NOW - 90 * MINUTE }),
+      NOW,
+      MISSED_FIRE_GRACE_MS,
+      FREE_SNAPSHOT,
+    );
+    assert.equal(decision.action, 'write_off');
+    assert.match((decision as { reason: string }).reason, /missed its scheduled fire window/);
+  });
+
   it('ignores non-string entries in canary[]', () => {
     const { writes } = fakeClaim(
       scheduledDoc({ canary: ['machine-a', '', 42, null] }),
@@ -315,6 +401,8 @@ interface FakeStoreOptions {
   due?: ScheduledRolloutRef[];
   enabled?: Record<string, unknown>;
   enabledThrows?: boolean;
+  /** each site payer's plan snapshot; absent means none. */
+  snapshots?: Record<string, PlanSnapshot>;
   claimThrowsFor?: string[];
 }
 
@@ -322,9 +410,13 @@ function fakeStore(options: FakeStoreOptions = {}): {
   store: RolloutScheduleStore;
   claimed: string[];
   enabledReads: string[];
+  planReads: string[];
+  claimSnapshots: (PlanSnapshot | null)[];
 } {
   const claimed: string[] = [];
   const enabledReads: string[] = [];
+  const planReads: string[] = [];
+  const claimSnapshots: (PlanSnapshot | null)[] = [];
   const store: RolloutScheduleStore = {
     async listDue() {
       return options.due ?? [];
@@ -334,15 +426,20 @@ function fakeStore(options: FakeStoreOptions = {}): {
       if (options.enabledThrows) throw new Error('firestore unavailable');
       return options.enabled?.[siteId];
     },
-    async claim(ref) {
+    async readPlanSnapshot(siteId) {
+      planReads.push(siteId);
+      return options.snapshots?.[siteId] ?? null;
+    },
+    async claim(ref, _nowMs, _graceMs, planSnapshot) {
       if (options.claimThrowsFor?.includes(ref.versionId)) {
         throw new Error('transaction aborted');
       }
       claimed.push(ref.versionId);
+      claimSnapshots.push(planSnapshot);
       return { action: 'fire' };
     },
   };
-  return { store, claimed, enabledReads };
+  return { store, claimed, enabledReads, planReads, claimSnapshots };
 }
 
 describe('sweepDueScheduledRollouts', () => {
@@ -360,7 +457,7 @@ describe('sweepDueScheduledRollouts', () => {
   });
 
   it('does nothing at all when nothing is due', async () => {
-    const { store, claimed, enabledReads } = fakeStore();
+    const { store, claimed, enabledReads, planReads } = fakeStore();
     const counts = await sweepDueScheduledRollouts({ store, now: () => NOW });
     assert.deepEqual(counts, {
       due: 0,
@@ -368,14 +465,16 @@ describe('sweepDueScheduledRollouts', () => {
       missed: 0,
       skipped: 0,
       disabled: 0,
+      planBlocked: 0,
       failed: 0,
     });
     assert.deepEqual(claimed, []);
     assert.deepEqual(enabledReads, []);
+    assert.deepEqual(planReads, []);
   });
 
   it('leaves a kill-switched site untouched — no claim, no write-off', async () => {
-    const { store, claimed } = fakeStore({
+    const { store, claimed, planReads } = fakeStore({
       due: [REF],
       enabled: { 'site-alpha': false },
     });
@@ -383,9 +482,43 @@ describe('sweepDueScheduledRollouts', () => {
     const counts = await sweepDueScheduledRollouts({ store, now: () => NOW });
 
     assert.deepEqual(claimed, []);
+    assert.deepEqual(planReads, []);
     assert.equal(counts.disabled, 1);
     assert.equal(counts.fired, 0);
     assert.equal(counts.missed, 0);
+  });
+
+  it("hands each site's plan snapshot to the claim, read once per site", async () => {
+    const { store, planReads, claimSnapshots } = fakeStore({
+      due: [REF, { ...REF, versionId: 'vrs_v8' }, { ...REF, siteId: 'site-beta' }],
+      snapshots: { 'site-alpha': FREE_SNAPSHOT },
+    });
+
+    await sweepDueScheduledRollouts({ store, now: () => NOW });
+
+    assert.deepEqual(planReads, ['site-alpha', 'site-beta']);
+    assert.deepEqual(claimSnapshots, [FREE_SNAPSHOT, FREE_SNAPSHOT, null]);
+  });
+
+  it('counts plan write-offs apart from missed windows and fires', async () => {
+    const docs: Record<string, RolloutDocData> = {
+      vrs_v7: scheduledBefore(),
+      vrs_v8: scheduledBefore({ scheduledAt: NOW - 90 * MINUTE }),
+      vrs_v9: scheduledAfter(),
+    };
+    const { store } = fakeStore({
+      due: Object.keys(docs).map((versionId) => ({ ...REF, versionId })),
+      snapshots: { 'site-alpha': FREE_SNAPSHOT },
+    });
+    // the real claim, so the sweep counts what it actually decides.
+    store.claim = async (ref, nowMs, graceMs, planSnapshot) =>
+      fakeClaim(docs[ref.versionId]!, nowMs, graceMs, planSnapshot).decision;
+
+    const counts = await sweepDueScheduledRollouts({ store, now: () => NOW });
+
+    assert.equal(counts.planBlocked, 1);
+    assert.equal(counts.missed, 1);
+    assert.equal(counts.fired, 1);
   });
 
   it('reads the kill switch once per site, not once per rollout', async () => {
@@ -434,6 +567,9 @@ describe('sweepDueScheduledRollouts', () => {
       async readRoostEnabled() {
         return undefined;
       },
+      async readPlanSnapshot() {
+        return null;
+      },
       async claim(ref) {
         return outcomes[ref.versionId]!;
       },
@@ -455,6 +591,9 @@ describe('sweepDueScheduledRollouts', () => {
       },
       async readRoostEnabled() {
         return undefined;
+      },
+      async readPlanSnapshot() {
+        return null;
       },
       async claim() {
         return { action: 'fire' };

@@ -136,9 +136,11 @@ interface ChatWindowProps {
   turnRunning?: boolean;
   /** The last turn failed. The error banner explains it, so its empty reply is not shown. */
   turnErrored?: boolean;
+  /** The suggestions fill the composer, so they go when there is no composer to fill. */
+  hideSuggestions?: boolean;
 }
 
-export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage, approvalTargetLabel, toolCommands, onCancelTool, cancelPendingCommandIds, turnStale, turnRunning, turnErrored }: ChatWindowProps) {
+export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage, approvalTargetLabel, toolCommands, onCancelTool, cancelPendingCommandIds, turnStale, turnRunning, turnErrored, hideSuggestions }: ChatWindowProps) {
   const { user } = useAuth();
   const bottomRef = useRef<HTMLDivElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
@@ -280,7 +282,8 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
             i can run commands, check configs, and investigate issues you can&apos;t see from the dashboard.
           </p>
 
-          <div className="mt-4 grid grid-cols-2 gap-2">
+          {!hideSuggestions && (
+            <div className="mt-4 grid grid-cols-2 gap-2">
               {suggestions.map((suggestion) => (
                 <button
                   key={suggestion.text}
@@ -302,6 +305,7 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
                 </button>
               ))}
             </div>
+          )}
         </div>
       </div>
       </>

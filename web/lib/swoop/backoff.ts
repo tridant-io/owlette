@@ -95,12 +95,20 @@ const WITHDRAWALS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * whether the site's plan leaves swoop out: the plan gate's 402, sent only
+ * while plans are enforced. no retry changes it, an upgrade does.
+ */
+export function isPlanRefusal(status: number, code: string | null): boolean {
+  return status === 402 && code === 'plan_required';
+}
+
+/**
  * whether a refused request withdraws the session for good. only the api's
- * own policy answer does: a 403 carrying one of its codes. everything else may
- * come back — a lapsed login (401), a 403 from an edge in front of the app
- * (no code), a record already gone (404), a machine briefly offline (409), a
- * rate limit, a bad moment.
+ * own answer does: a 403 carrying one of its policy codes, or the plan's 402.
+ * everything else may come back — a lapsed login (401), a 403 from an edge in
+ * front of the app (no code), a record already gone (404), a machine briefly
+ * offline (409), a rate limit, a bad moment.
  */
 export function isWithdrawal(status: number, code: string | null): boolean {
-  return status === 403 && code !== null && WITHDRAWALS.has(code);
+  return isPlanRefusal(status, code) || (status === 403 && code !== null && WITHDRAWALS.has(code));
 }

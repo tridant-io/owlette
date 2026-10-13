@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useSyncExternalStore } from 'react';
-import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay, MonitorOff } from 'lucide-react';
+import Link from 'next/link';
+import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay, MonitorOff, type LucideIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,6 +22,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import RestartScheduleDialog from '@/components/RestartScheduleDialog';
 import type { RestartSchedule } from '@/hooks/useFirestore';
@@ -82,6 +84,42 @@ interface MachineContextMenuProps {
   onSiteSettings?: () => void;
   onViewDisplays?: () => void;
   rebootSchedule?: RestartSchedule;
+  /**
+   * the machine falls outside the viewer's plan (see `useSitePlan`): the menu
+   * keeps only alerts, the token and removal, which no plan gates.
+   */
+  planLocked?: boolean;
+  /**
+   * the viewer's plan leaves out control: restart and shutdown collapse into
+   * one row linking to the plan page, and live view and screenshot go.
+   * cancelling and scheduling restarts stay, as every plan may.
+   */
+  controlLocked?: boolean;
+  /** the viewer's plan leaves out swoop: its row links to the plan page instead. */
+  swoopLocked?: boolean;
+}
+
+/** a feature the viewer's plan leaves out: its row links to the plan page instead. */
+function UpgradeMenuItem({
+  icon: Icon,
+  label,
+  tier,
+  testId,
+}: {
+  icon: LucideIcon;
+  label: string;
+  tier: 'core' | 'pro';
+  testId: string;
+}) {
+  return (
+    <DropdownMenuItem asChild onClick={(e) => e.stopPropagation()} data-testid={testId} className="cursor-pointer">
+      <Link href="/settings/plan">
+        <Icon className="mr-2 h-4 w-4" />
+        {label}
+        <span className="ml-auto text-xs text-muted-foreground">part of {tier}</span>
+      </Link>
+    </DropdownMenuItem>
+  );
 }
 
 export function MachineContextMenu({
@@ -107,6 +145,9 @@ export function MachineContextMenu({
   onSiteSettings,
   onViewDisplays,
   rebootSchedule,
+  planLocked,
+  controlLocked,
+  swoopLocked,
 }: MachineContextMenuProps) {
   const [showRevokeDialog, setShowRevokeDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
@@ -118,6 +159,21 @@ export function MachineContextMenu({
   const { userPreferences, updateUserPreferences } = useAuth();
   const isMuted = userPreferences.mutedMachines.includes(machineId);
   const watching = isOnline && swoopCapable && !swoopOff ? (swoopViewers ?? 0) : 0;
+  const showScreen = isOnline && !planLocked && (swoopCapable || !controlLocked);
+  const showViewDisplays = !!onViewDisplays && !planLocked;
+  const scheduleRestartsItem = (
+    <DropdownMenuItem
+      onClick={(e) => {
+        e.stopPropagation();
+        setShowRestartScheduleDialog(true);
+      }}
+      data-testid="machine-context-menu-schedule-restarts"
+      className="text-warning focus:bg-warning-surface focus:text-warning cursor-pointer"
+    >
+      <Settings2 className="mr-2 h-4 w-4" />
+      schedule restarts
+    </DropdownMenuItem>
+  );
   // the machine this browser runs on, once its streamer has said so
   const onThisMachine = useSyncExternalStore(
     subscribeThisMachine,
@@ -264,8 +320,9 @@ export function MachineContextMenu({
             <p>machine options</p>
           </TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" className="border-border bg-raised w-52">
-          {isOnline && isSiteAdmin && (
+        {/* wider for the "remote control · part of core" row, which overflows w-52 */}
+        <DropdownMenuContent align="end" className={cn('border-border bg-raised', controlLocked ? 'w-60' : 'w-52')}>
+          {isOnline && isSiteAdmin && !planLocked && (
             <>
               {rebooting ? (
                 <DropdownMenuItem
@@ -293,6 +350,16 @@ export function MachineContextMenu({
                   <XCircle className="mr-2 h-4 w-4" />
                   cancel shutdown
                 </DropdownMenuItem>
+              ) : controlLocked ? (
+                <>
+                  <UpgradeMenuItem
+                    icon={RotateCcw}
+                    label="remote control"
+                    tier="core"
+                    testId="machine-context-menu-control-upgrade"
+                  />
+                  {scheduleRestartsItem}
+                </>
               ) : (
                 <>
                   {/* a split row: restart now, or schedule restarts. each half lights
@@ -348,27 +415,17 @@ export function MachineContextMenu({
               <DropdownMenuSeparator className="bg-border" />
             </>
           )}
-          {!isOnline && isSiteAdmin && (
+          {!isOnline && isSiteAdmin && !planLocked && (
             <>
               {/* Offline machines can still be scheduled: the restart schedule is
                   written to the config doc and the agent applies it from local
                   cache once it reconnects. The live restart/shutdown commands
                   above stay gated on `isOnline` because they need the agent up. */}
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowRestartScheduleDialog(true);
-                }}
-                data-testid="machine-context-menu-schedule-restarts"
-                className="text-warning focus:bg-warning-surface focus:text-warning cursor-pointer"
-              >
-                <Settings2 className="mr-2 h-4 w-4" />
-                schedule restarts
-              </DropdownMenuItem>
+              {scheduleRestartsItem}
               <DropdownMenuSeparator className="bg-border" />
             </>
           )}
-          {isOnline && (
+          {showScreen && (
             <>
               {/* Swoop supersedes live view on a machine that can stream; the
                   slideshow stays for every agent that can't, so the menu never
@@ -376,8 +433,9 @@ export function MachineContextMenu({
                   entry people reach for, the still is the fallback. It alone
                   wears the brand colour, so the eye lands on it first. With
                   the site's swoop off, live view comes back and the swoop row
-                  says how to turn it on. */}
-              {swoopCapable && swoopOff && (isSiteAdmin ? (
+                  says how to turn it on. A plan without swoop links to the plan
+                  page instead, since turning the switch on would not help. */}
+              {swoopCapable && swoopOff && !swoopLocked && (isSiteAdmin ? (
                 <DropdownMenuItem
                   onClick={(e) => {
                     e.stopPropagation();
@@ -398,7 +456,14 @@ export function MachineContextMenu({
                   </span>
                 </DropdownMenuItem>
               ))}
-              {swoopCapable && !swoopOff ? (
+              {swoopCapable && swoopLocked ? (
+                <UpgradeMenuItem
+                  icon={MonitorPlay}
+                  label="swoop"
+                  tier="pro"
+                  testId="machine-context-menu-swoop-upgrade"
+                />
+              ) : swoopCapable && !swoopOff ? (
                 // a split row, as restart's: swoop in this browser, or in the desktop app
                 <div className="flex items-stretch gap-1">
                   <DropdownMenuItem
@@ -446,7 +511,7 @@ export function MachineContextMenu({
                     </>
                   )}
                 </div>
-              ) : (
+              ) : !controlLocked && (
                 <DropdownMenuItem
                   onClick={(e) => {
                     e.stopPropagation();
@@ -459,23 +524,26 @@ export function MachineContextMenu({
                   live view
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onScreenshot?.();
-                }}
-                className="text-info focus:bg-info-surface focus:text-info cursor-pointer"
-              >
-                <Camera className="mr-2 h-4 w-4" />
-                screenshot
-              </DropdownMenuItem>
+              {!controlLocked && (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onScreenshot?.();
+                  }}
+                  data-testid="machine-context-menu-screenshot"
+                  className="text-info focus:bg-info-surface focus:text-info cursor-pointer"
+                >
+                  <Camera className="mr-2 h-4 w-4" />
+                  screenshot
+                </DropdownMenuItem>
+              )}
             </>
           )}
-          {onViewDisplays && (
+          {showViewDisplays && (
             <DropdownMenuItem
               onClick={(e) => {
                 e.stopPropagation();
-                onViewDisplays();
+                onViewDisplays?.();
               }}
               data-testid="machine-context-menu-view-displays"
               className="text-[var(--series-display)] focus:bg-info-surface focus:text-[var(--series-display)] cursor-pointer"
@@ -484,7 +552,7 @@ export function MachineContextMenu({
               view displays
             </DropdownMenuItem>
           )}
-          {(isOnline || onViewDisplays) && (
+          {(showScreen || showViewDisplays) && (
             <DropdownMenuSeparator className="bg-border" />
           )}
           <DropdownMenuItem

@@ -138,27 +138,52 @@ export function wrapEmailLayout(content: string, options: EmailLayoutOptions = {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>owlette</title></head><body style="margin:0;padding:0;background-color:${EMAIL_COLORS.bodyBg};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;">${preheaderHtml}<table width="100%" bgcolor="${EMAIL_COLORS.bodyBg}" cellpadding="0" cellspacing="0" role="presentation" style="background-color:${EMAIL_COLORS.bodyBg};"><tr><td align="center" style="padding:32px 16px;"><table width="600" style="max-width:600px;background-color:${EMAIL_COLORS.cardBg};border-radius:8px;border:1px solid ${EMAIL_COLORS.border};" cellpadding="0" cellspacing="0" role="presentation"><tr><td style="padding:28px 32px 20px;text-align:center;border-bottom:1px solid ${EMAIL_COLORS.border};"><a href="https://owlette.app" style="text-decoration:none;"><img src="${logoUrl}" width="48" height="48" alt="owlette" style="display:block;margin:0 auto 12px;border-radius:50%;"></a><table cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto;"><tr><td><a href="https://owlette.app" style="color:${EMAIL_COLORS.cyan};font-size:20px;font-weight:700;text-transform:lowercase;letter-spacing:0.5px;text-decoration:none;line-height:1;">owlette</a></td>${envBadgeHtml}</tr></table></td></tr><tr><td style="padding:28px 32px;color:${EMAIL_COLORS.text};font-size:14px;line-height:1.7;">${content}</td></tr><tr><td style="padding:20px 32px;border-top:1px solid ${EMAIL_COLORS.border};text-align:center;">${actionsHtml}<p style="color:${EMAIL_COLORS.muted};font-size:11px;margin:0;"><a href="https://owlette.app" style="color:${EMAIL_COLORS.cyan};text-decoration:none;">owlette.app</a></p></td></tr></table></td></tr></table></body></html>`;
 }
 
+/** Cyan call-to-action button for a transactional email's one link. */
+function emailCtaButton(url: string, label: string): string {
+  return (
+    `<table cellpadding="0" cellspacing="0" role="presentation" style="margin:24px 0;">` +
+    `<tr><td style="border-radius:6px;background:${EMAIL_COLORS.cyan};">` +
+    `<a href="${url}" style="display:inline-block;padding:12px 28px;color:${EMAIL_COLORS.bodyBg};text-decoration:none;font-weight:700;font-size:14px;border-radius:6px;">${label}</a>` +
+    `</td></tr></table>`
+  );
+}
+
+/** The same link as plain text, for clients that strip or block the button. */
+function emailLinkFallback(url: string): string {
+  return `<p style="margin:0;color:${EMAIL_COLORS.muted};font-size:12px;">if the button doesn't work, copy and paste this link into your browser:<br><span style="color:${EMAIL_COLORS.cyan};word-break:break-all;">${url}</span></p>`;
+}
+
 /**
  * Branded password-reset email — replaces Firebase's plain built-in template.
  * `resetUrl` is the in-app /reset-password link carrying the oobCode; `expiryMinutes` is
  * body copy only (Firebase codes default to 1 hour). Transactional — no unsubscribe link.
  */
 export function buildPasswordResetEmail(resetUrl: string, expiryMinutes = 60): string {
-  const ctaButton =
-    `<table cellpadding="0" cellspacing="0" role="presentation" style="margin:24px 0;">` +
-    `<tr><td style="border-radius:6px;background:${EMAIL_COLORS.cyan};">` +
-    `<a href="${resetUrl}" style="display:inline-block;padding:12px 28px;color:${EMAIL_COLORS.bodyBg};text-decoration:none;font-weight:700;font-size:14px;border-radius:6px;">reset password</a>` +
-    `</td></tr></table>`;
-
   const content = `
     <h2 style="color:${EMAIL_COLORS.cyan};margin:0 0 12px;font-size:18px;font-weight:700;text-transform:lowercase;">reset your password</h2>
     <p style="margin:0 0 8px;color:${EMAIL_COLORS.muted};">we received a request to reset the password for your owlette account. click the button below to choose a new one.</p>
-    ${ctaButton}
+    ${emailCtaButton(resetUrl, 'reset password')}
     <p style="margin:0 0 12px;color:${EMAIL_COLORS.muted};font-size:13px;">this link expires in ${expiryMinutes} minutes and can only be used once. if you didn't request a password reset, you can safely ignore this email — your password won't change.</p>
-    <p style="margin:0;color:${EMAIL_COLORS.muted};font-size:12px;">if the button doesn't work, copy and paste this link into your browser:<br><span style="color:${EMAIL_COLORS.cyan};word-break:break-all;">${resetUrl}</span></p>
+    ${emailLinkFallback(resetUrl)}
   `;
 
   return wrapEmailLayout(content, { preheader: 'reset your owlette password' });
+}
+
+/**
+ * Branded email-verification email for password sign-ups. `verifyUrl` is the in-app
+ * /verify-email link carrying the oobCode. Transactional — no unsubscribe link.
+ */
+export function buildEmailVerificationEmail(verifyUrl: string): string {
+  const content = `
+    <h2 style="color:${EMAIL_COLORS.cyan};margin:0 0 12px;font-size:18px;font-weight:700;text-transform:lowercase;">verify your email</h2>
+    <p style="margin:0 0 8px;color:${EMAIL_COLORS.muted};">thanks for signing up for owlette. confirm this is your email address by clicking the button below.</p>
+    ${emailCtaButton(verifyUrl, 'verify email')}
+    <p style="margin:0 0 12px;color:${EMAIL_COLORS.muted};font-size:13px;">the link can only be used once. if you didn't create an owlette account, you can safely ignore this email.</p>
+    ${emailLinkFallback(verifyUrl)}
+  `;
+
+  return wrapEmailLayout(content, { preheader: 'confirm your email address for owlette' });
 }
 
 /**
