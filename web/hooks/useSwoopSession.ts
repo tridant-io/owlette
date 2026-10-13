@@ -43,7 +43,7 @@ import {
 import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
 import { leaseFailure, SwoopLeaseRefused } from '@/lib/swoop/lease';
 import { createSwoopIdentity, createSwoopPeer, type SwoopNoPath, type SwoopPeer } from '@/lib/swoop/peer';
-import { backoffDelayMs, isTransientEnd, isWithdrawal } from '@/lib/swoop/backoff';
+import { backoffDelayMs, isPlanRefusal, isTransientEnd, isWithdrawal } from '@/lib/swoop/backoff';
 import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import { clearThisMachine, markThisMachine } from '@/lib/swoop/thisMachine';
@@ -515,7 +515,15 @@ export function useSwoopSession(
           body: JSON.stringify({ viewerId: grant.viewerId, fp }),
         },
       );
-      if (!res.ok) throw leaseFailure(res.status, await res.json().catch(() => ({})));
+      if (!res.ok) {
+        const problem = (await res.json().catch(() => ({}))) as { code?: unknown };
+        // the stage names a plan refusal and the way to upgrade; every other
+        // withdrawal ends on the api's own sentence.
+        if (isPlanRefusal(res.status, typeof problem.code === 'string' ? problem.code : null) && !disposed) {
+          setRefusal('plan_required');
+        }
+        throw leaseFailure(res.status, problem);
+      }
       const body = (await res.json()) as { data: SwoopLease };
       leaseExpiresAt = body.data.expiresAt;
       return body.data;
@@ -586,10 +594,10 @@ export function useSwoopSession(
           }
           return null;
         }
-        // only the api's own answer is final: a policy refusal, a request it
-        // could not read, a site or machine that is not there. a lapsed login,
-        // a machine briefly offline, an edge in front of the app or a bad
-        // moment may all come back, and the ladder waits them out.
+        // only the api's own answer is final: a policy or plan refusal, a
+        // request it could not read, a site or machine that is not there. a
+        // lapsed login, a machine briefly offline, an edge in front of the app
+        // or a bad moment may all come back, and the ladder waits them out.
         const final = isWithdrawal(res.status, code) || res.status === 400 || res.status === 404;
         if (final && !disposed) setRefusal(code);
         fail(res.status === 401 ? 'sign in again to resume.' : detail, !final);

@@ -1,5 +1,6 @@
 import {
   backoffDelayMs,
+  isPlanRefusal,
   isSwoopEndReason,
   isTransientEnd,
   isWithdrawal,
@@ -50,6 +51,10 @@ describe('isWithdrawal', () => {
     [403, 'capability_missing', true],
     [403, 'members_may_not_watch', true],
     [403, 'api_key_not_permitted', true],
+    // the plan gate: no retry changes the plan.
+    [402, 'plan_required', true],
+    [402, null, false],
+    [403, 'plan_required', false],
     // an edge in front of the app refuses with no problem code of the api's.
     [403, null, false],
     [403, 'forbidden', false],
@@ -62,6 +67,15 @@ describe('isWithdrawal', () => {
 
   it.each(table)('%i %s → final %s', (status, code, final) => {
     expect(isWithdrawal(status, code)).toBe(final);
+  });
+});
+
+describe('isPlanRefusal', () => {
+  it('is the plan gate’s 402 and nothing else', () => {
+    expect(isPlanRefusal(402, 'plan_required')).toBe(true);
+    expect(isPlanRefusal(402, null)).toBe(false);
+    expect(isPlanRefusal(403, 'plan_required')).toBe(false);
+    expect(isPlanRefusal(403, 'swoop_disabled')).toBe(false);
   });
 });
 

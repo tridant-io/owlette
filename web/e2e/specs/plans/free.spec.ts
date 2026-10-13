@@ -255,6 +255,15 @@ test.describe('core', () => {
     expect(reboot.status).toBe(202);
     expect(await pendingTypes()).toEqual(['reboot_machine']);
   });
+
+  test('the swoop viewer says swoop is part of pro, offers the owner an upgrade, and stops', async ({ page }) => {
+    await signIn(page);
+    await page.goto(`/swoop/${SITE_ID}/${LIVE_MACHINE}`);
+    const notice = page.getByRole('alert').filter({ hasText: 'swoop is part of pro.' });
+    await expect(notice).toBeVisible();
+    await expect(notice.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
+    await expect(notice).not.toContainText(/reconnecting in|turn it on/);
+  });
 });
 
 test.describe('no entitlement doc', () => {

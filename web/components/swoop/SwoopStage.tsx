@@ -41,10 +41,15 @@ export interface SwoopStageProps {
   error?: string | null;
   /** seconds until the next automatic reconnect, while one is scheduled. */
   retryIn?: number | null;
-  /** the api's code for a refusal that is final; `swoop_disabled` says where to turn swoop on. */
+  /**
+   * the api's code for a refusal that is final; `swoop_disabled` says where to
+   * turn swoop on, `plan_required` where to upgrade.
+   */
   refusal?: string | null;
   /** where this user turns swoop on for the site; null for one who cannot. */
   settingsHref?: string | null;
+  /** where this user upgrades the site's plan; null for one who doesn't pay for it. */
+  upgradeHref?: string | null;
   /** connecting found no media path; the stage says so instead of a bare "connecting". */
   noPath?: SwoopNoPath | null;
   /** what the page is doing about a frozen picture; the stage says it over the picture. */
@@ -133,6 +138,7 @@ export function SwoopStage({
   retryIn = null,
   refusal = null,
   settingsHref = null,
+  upgradeHref = null,
   noPath,
   stall = 'none',
   stageRef,
@@ -207,6 +213,8 @@ export function SwoopStage({
   // an ended or failed session is not connecting: it says why, and the way on.
   const settled = state === 'ended' || state === 'error';
   const swoopOff = refusal === 'swoop_disabled';
+  // the site's plan leaves swoop out, so its switch would not help and an upgrade would.
+  const planLocked = refusal === 'plan_required';
   // the picture behind a stall notice is the frozen frame, so it sits on a wash of the stage.
   const washed = `${NOTICE} bg-swoop-stage/80`;
 
@@ -269,12 +277,22 @@ export function SwoopStage({
               {settingsHref ? 'turn it on in site settings.' : 'ask a site owner or admin to turn it on.'}
             </span>
           )}
+          {planLocked && (
+            <span className={NOTICE_DETAIL}>
+              {upgradeHref ? 'swoop is part of pro.' : 'swoop is part of pro. ask the site owner to upgrade.'}
+            </span>
+          )}
           {/* text lines carry leading above and below their ink and the buttons' edge does not,
               so the same gap reads 7px tighter there; measured at these sizes */}
           <span className="pointer-events-auto mt-[7px] flex gap-2">
             {swoopOff && settingsHref && (
               <Button asChild size="sm">
                 <Link href={settingsHref}>open site settings</Link>
+              </Button>
+            )}
+            {planLocked && upgradeHref && (
+              <Button asChild size="sm">
+                <Link href={upgradeHref}>upgrade</Link>
               </Button>
             )}
             <Button asChild variant="outline" size="sm">

@@ -368,6 +368,31 @@ describe('SwoopStage — a session that failed or ended', () => {
     expect(screen.queryByText(/turn it on/)).toBeNull();
     expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
   });
+
+  it('says a plan refusal is about the plan, with the way to upgrade, not the swoop switch', () => {
+    renderStage({
+      state: 'error',
+      error: "your plan doesn't include swoop. upgrade to continue.",
+      refusal: 'plan_required',
+      settingsHref: '/dashboard?settings=site-1',
+      upgradeHref: '/settings/plan',
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro.');
+    expect(screen.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
+    expect(screen.queryByText(/turn it on/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
+  });
+
+  it('tells someone who does not pay for the site to ask its owner, with no upgrade link', () => {
+    renderStage({
+      state: 'error',
+      error: "your plan doesn't include swoop. upgrade to continue.",
+      refusal: 'plan_required',
+      settingsHref: '/dashboard?settings=site-1',
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');
+    expect(screen.queryByRole('link', { name: 'upgrade' })).toBeNull();
+  });
 });
 
 describe('SwoopStage — a picture that froze', () => {
