@@ -11,6 +11,21 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — owlette free, the pro trial and per-machine billing, for after the beta
+
+The pricing page shows three plans for after the beta: owlette free, with one
+machine and one site, live status, metrics, crash-restart and updates; and
+core and pro, billed per active machine per month. Every account will start
+with a 14-day pro trial, no card. A new plans page in the docs covers each
+plan, the trial, what counts as an active machine, what happens when a
+subscription ends, and the `plan_required` (402) error. Nothing is enforced
+or billed during the beta: the plan limits ship switched off.
+
+### added — email verification at sign-up
+
+An email-and-password sign-up is sent a link to verify its address, and a
+banner offers to send it again until it is opened. Nothing waits on it.
+
 ### fixed — a Mac shows its own disks and network, not simulator volumes and tunnels
 
 A Mac listed every volume macOS mounts for itself, including the iOS simulator
@@ -40,21 +55,6 @@ with no picture it now stops and says what to check: that the machine is on
 the network, and on a Mac, that the owlette app is running and macOS is not
 asking to allow screen recording. **reconnect** tries again. A slow connection from another
 network still gets the ten minutes to come through.
-
-### added — owlette free, the pro trial and per-machine billing, for after the beta
-
-The pricing page shows three plans for after the beta: owlette free, with one
-machine and one site, live status, metrics, crash-restart and updates; and
-core and pro, billed per active machine per month. Every account will start
-with a 14-day pro trial, no card. A new plans page in the docs covers each
-plan, the trial, what counts as an active machine, what happens when a
-subscription ends, and the `plan_required` (402) error. Nothing is enforced
-or billed during the beta: the plan limits ship switched off.
-
-### added — email verification at sign-up
-
-An email-and-password sign-up is sent a link to verify its address, and a
-banner offers to send it again until it is opened. Nothing waits on it.
 
 ## [4.1.10] - 2026-10-12
 
