@@ -11,6 +11,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — swoop stops asking a machine that never answers
+
+A machine whose swoop could not start, such as a Mac waiting for someone to
+allow screen recording, never answered the viewer, and the viewer asked again
+about every 45 seconds for as long as the tab stayed open. After ten minutes
+with no picture it now stops and says what to check: that the machine is on
+the network, and on a Mac, that the owlette app is running and macOS is not
+asking to allow screen recording. **reconnect** tries again. A slow connection from another
+network still gets the ten minutes to come through.
+
 ### added — owlette free, the pro trial and per-machine billing, for after the beta
 
 The pricing page shows three plans for after the beta: owlette free, with one
