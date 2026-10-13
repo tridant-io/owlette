@@ -367,7 +367,7 @@ def _get_system_info(params, config):
             os_release = '11'
 
     return {
-        'hostname': socket.gethostname(),
+        'hostname': shared_utils.get_hostname(),
         'os': f"{platform.system()} {os_release}",
         'os_version': platform.version(),
         'architecture': platform.machine(),
@@ -504,7 +504,7 @@ def _get_network_info(params, config):
         interfaces.append(iface)
 
     return {
-        'hostname': socket.gethostname(),
+        'hostname': shared_utils.get_hostname(),
         'interfaces': interfaces,
     }
 
@@ -614,7 +614,7 @@ def _get_agent_health(params, config):
         'checked_at': state.checked_at,
         'checks': state.probe_results,
         'version': shared_utils.get_app_version(),
-        'hostname': socket.gethostname(),
+        'hostname': shared_utils.get_hostname(),
         'uptime_seconds': int(time.time() - psutil.boot_time()),
     }
 

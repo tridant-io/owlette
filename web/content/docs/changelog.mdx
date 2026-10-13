@@ -16,6 +16,17 @@ main network, and each one appearing or vanishing reloaded the machine's hardwar
 details. A Mac now lists its startup and data volumes, external drives and real
 network interfaces only.
 
+### fixed — two Macs on one network no longer pair as one machine
+
+A Mac took its machine name from the hostname its network handed out, and some
+routers give every Mac the same one, such as `Mac.localdomain`. Two Macs on one
+network then paired onto one machine on the dashboard, each overwriting the
+other, and the dot in the name kept swoop from opening that machine. A Mac now
+takes its name from its local network name (System Settings, General, Sharing),
+which macOS keeps unique on the network. A Mac already paired keeps its name;
+leave the site from the owlette app and pair again to take the new one, on each
+of two Macs that shared one machine.
+
 ### added — owlette free, the pro trial and per-machine billing, for after the beta
 
 The pricing page shows three plans for after the beta: owlette free, with one

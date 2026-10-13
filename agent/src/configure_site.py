@@ -822,13 +822,12 @@ def build_report_data(category: str, description: str) -> dict:
         logging.warning(f"Failed to gather system info: {e}")
 
     import platform
-    import socket
 
     return {
         'category': category,
         'title': 'agent feedback',
         'description': description,
-        'hostname': socket.gethostname(),
+        'hostname': shared_utils.get_hostname(),
         'siteId': firebase_cfg.get('site_id', ''),
         'os': platform.platform(),
         'systemInfo': system_info,

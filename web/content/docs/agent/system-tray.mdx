@@ -47,7 +47,7 @@ the rows above the separator are read-only status, apart from the swoop kill on 
 | menu item | description |
 |-----------|-------------|
 | **owlette v&lt;version&gt;** | version of the *agent* installed on this machine |
-| **hostname: &lt;host&gt;** | the machine's name as the dashboard shows it: `COMPUTERNAME` on Windows, the kernel's hostname on macOS and Linux, without a Mac's `.local` suffix |
+| **hostname: &lt;host&gt;** | the machine's name as the dashboard shows it: `COMPUTERNAME` on Windows, the local network name on macOS (System Settings, General, Sharing), the kernel's hostname on Linux |
 | **service: &lt;state&gt;** | whether the service is `running`, `stopped`, or in `error` |
 | **status: &lt;cloud status&gt;** | whether the service is reaching owlette — `connected to <site>`, `disconnected from <site>`, `disabled`, `starting`, `not responding`, or a health probe's error code. a further row appears under it when a health probe has something to report |
 | **swoop: &lt;who&gt;** | only while a [swoop](/docs/dashboard/swoop) session is capturing this screen: `swoop: 2 viewers watching, 1 in control`, or `swoop: 1 viewer watching` with nobody in control. it disappears when the capture stops, and the tooltip carries the same line |
