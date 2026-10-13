@@ -11,6 +11,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — a Mac shows its own disks and network, not simulator volumes and tunnels
+
+A Mac listed every volume macOS mounts for itself, including the iOS simulator
+runtimes Xcode installs, and every VPN and AirDrop interface. A simulator volume,
+nearly full by design, could show as the machine's main disk and a tunnel as its
+main network, and each one appearing or vanishing reloaded the machine's hardware
+details. A Mac now lists its startup and data volumes, external drives and real
+network interfaces only.
+
 ## [4.1.10] - 2026-10-12
 
 ### fixed — a re-paired machine shows its hardware again
