@@ -11,6 +11,7 @@ Rules every task obeys: glossary words (hoot, viewer, session, step-up, kill; sa
   - Done when: `spike-g0.md` records the numbers and names the thread the readback should live on; the spike code is reverted or left behind the flag.
 
 - [ ] **Task 0.2: Hoot-only mode feasibility (no encoder, no room)**
+  - **Status 2026-10-12:** since 4.1.9 (#361) a Windows machine without NVENC encodes H.264 through Media Foundation (`mf-hw`, then `mf-sw` at 720p30), so hoot-only mode no longer has to skip encoder selection to work there. The still path, on-demand capture and the no-room-dial half still stand: hoot wants JPEG stills, and a drive needs no signalling peer.
   - Files: `agent/swoop/src/session/mod.rs` (the `drive()` codec gate at ~1238-1250 and the room dial at ~1512-1547), `agent/swoop/src/encode/select.rs`, `dev/active/hoot-drives-swoop/spike-g0.md`
   - Do: Read-only analysis plus a local experiment: force the codec gate and the room dial to be skipped when the bundle carries `hoot` and no human viewer is present; confirm capture can start on demand (`CaptureGate`) without a roster viewer holding it, and that `SharedInput::accept` can be reached by a roster viewer the service added. Note every place that assumes a room or an encoder exists (status, lingering, kill). Do not merge.
   - Done when: `spike-g0.md` lists the exact code sites to change for hoot-only mode and any blocker.
@@ -60,6 +61,7 @@ Rules every task obeys: glossary words (hoot, viewer, session, step-up, kill; sa
   - Done when: unit tests for refusal without a matching sid, secure-desktop drop, held-key release on leave; `cargo clippy` clean; PROTOCOL updated.
 
 - [ ] **Task 2.2: Hoot-only mode and the still readback (Windows + macOS)**
+  - **Status 2026-10-12:** since 4.1.9 (#361) a Windows machine without NVENC encodes H.264 through Media Foundation (`mf-hw`, then `mf-sw` at 720p30), so hoot-only mode no longer has to skip encoder selection to work there. The still path, on-demand capture and the no-room-dial half still stand: hoot wants JPEG stills, and a drive needs no signalling peer.
   - Files: per task 0.2's list; `agent/swoop/src/session/mod.rs`, `agent/swoop/src/encode/select.rs`, `agent/swoop/src/capture/mod.rs`, `agent/swoop/src/gpu/mod.rs`, `agent/swoop/src/gpu/vt_transfer.rs`, `agent/swoop/src/clipboard/wic.rs` (extract the encoder into `agent/swoop/src/image/` shared by clipboard and stills), new macOS BGRA transfer + ImageIO JPEG path
   - Do: When the bundle carries `hoot` and no human viewer is present: skip encoder selection and the room dial, keep lingering and kill semantics, run capture on demand per `still` (acquire one frame, release). When a human joins later, start the encoder and dial as today. Readback on the thread task 0.1 named. Downscale to `maxWidth`.
   - Done when: a Windows box without NVIDIA (or NVENC disabled by env) serves stills and input; the Mac serves stills; frame interval for a concurrent human viewer is unchanged within noise (measured, numbers in the task log).
