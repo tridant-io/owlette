@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.12] - 2026-10-13
+
 ### fixed — swoop's picture no longer smears, and an NVIDIA machine encodes on its GPU again
 
 Since 4.1.9 a Windows machine with an NVIDIA GPU streamed swoop through the
