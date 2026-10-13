@@ -2,7 +2,7 @@
 
 import { useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay, type LucideIcon } from 'lucide-react';
+import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay, MonitorOff, type LucideIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import RestartScheduleDialog from '@/components/RestartScheduleDialog';
 import type { RestartSchedule } from '@/hooks/useFirestore';
+import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
 
 interface MachineContextMenuProps {
@@ -53,18 +54,34 @@ interface MachineContextMenuProps {
   onLiveView?: () => void;
   /**
    * `capabilities.swoop === 1` from the heartbeat: the machine has a streamer
-   * installed. Swoop then replaces live view in the online block — exactly one
-   * of the two renders. Whether this user may actually get a session is decided
-   * server-side (site enablement, membersMayWatch, step-up), not here.
+   * installed. Swoop then replaces live view in the online block, unless the
+   * site has swoop off (`swoopOff`). Whether this user may actually get a
+   * session is still decided server-side (site enablement, membersMayWatch,
+   * step-up); `swoopOff` only stops the menu offering one the server refuses.
    */
   swoopCapable?: boolean;
   /**
    * live swoop viewers, mirrored onto the machine doc by the server from the
    * session records. counted on the swoop row and on the trigger only while the
-   * machine is online and swoop-capable, so a stale mirror never badges live view.
+   * machine is online, swoop-capable and its site has swoop on, so a stale
+   * mirror never badges live view.
    */
   swoopViewers?: number;
   onSwoop?: () => void;
+  /**
+   * opens the machine in the owlette swoop desktop app, signed in as this
+   * browser is: the swoop row's second half. inside the app there is none,
+   * since the row itself opens one of its windows there.
+   */
+  onSwoopApp?: () => void;
+  /**
+   * The site has swoop turned off, so a swoop-capable machine falls back to live
+   * view. Admins get a way to the switch, and members learn who can flip it,
+   * instead of a viewer the server refuses.
+   */
+  swoopOff?: boolean;
+  /** Opens the site's editor, where the swoop switch lives. */
+  onSiteSettings?: () => void;
   onViewDisplays?: () => void;
   rebootSchedule?: RestartSchedule;
   /**
@@ -123,6 +140,9 @@ export function MachineContextMenu({
   swoopCapable,
   swoopViewers,
   onSwoop,
+  onSwoopApp,
+  swoopOff,
+  onSiteSettings,
   onViewDisplays,
   rebootSchedule,
   planLocked,
@@ -138,7 +158,7 @@ export function MachineContextMenu({
   const [showRestartScheduleDialog, setShowRestartScheduleDialog] = useState(false);
   const { userPreferences, updateUserPreferences } = useAuth();
   const isMuted = userPreferences.mutedMachines.includes(machineId);
-  const watching = isOnline && swoopCapable ? (swoopViewers ?? 0) : 0;
+  const watching = isOnline && swoopCapable && !swoopOff ? (swoopViewers ?? 0) : 0;
   const showScreen = isOnline && !planLocked && (swoopCapable || !controlLocked);
   const showViewDisplays = !!onViewDisplays && !planLocked;
   const scheduleRestartsItem = (
@@ -160,6 +180,7 @@ export function MachineContextMenu({
     () => isThisMachine(siteId, machineId),
     () => false,
   );
+  const inApp = useViewerAppPlatform() !== null;
 
   const handleToggleMute = async () => {
     const mutedMachines = isMuted
@@ -192,11 +213,11 @@ export function MachineContextMenu({
       const revokedCount = data.revokedCount ?? 0;
       if (scope === 'all') {
         toast.success(`Tokens revoked for ${machineName}`, {
-          description: `revoked ${revokedCount} token(s) for this hostname. affected agents must re-register to reconnect.`,
+          description: `revoked ${revokedCount} token(s) for this hostname. the affected agents are leaving the site and must be paired again to reconnect.`,
         });
       } else if (revokedCount > 0) {
         toast.success(`Token revoked for ${machineName}`, {
-          description: 'revoked the most recently used token for this hostname; that agent must re-register to reconnect.',
+          description: 'revoked the most recently used token for this hostname; that agent is leaving the site and must be paired again to reconnect.',
         });
       } else {
         toast.info(`No live token for ${machineName}`, {
@@ -410,7 +431,31 @@ export function MachineContextMenu({
                   slideshow stays for every agent that can't, so the menu never
                   loses its screen entry. It leads: the live picture is the
                   entry people reach for, the still is the fallback. It alone
-                  wears the brand colour, so the eye lands on it first. */}
+                  wears the brand colour, so the eye lands on it first. With
+                  the site's swoop off, live view comes back and the swoop row
+                  says how to turn it on. A plan without swoop links to the plan
+                  page instead, since turning the switch on would not help. */}
+              {swoopCapable && swoopOff && !swoopLocked && (isSiteAdmin ? (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSiteSettings?.();
+                  }}
+                  data-testid="machine-context-menu-swoop-off"
+                  className="text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
+                >
+                  <MonitorPlay className="mr-2 h-4 w-4" />
+                  turn on swoop…
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem disabled data-testid="machine-context-menu-swoop-off" className="items-start">
+                  <MonitorOff className="mr-2 mt-0.5 h-4 w-4" />
+                  <span className="flex flex-col">
+                    swoop is off
+                    <span className="text-xs text-muted-foreground">ask a site owner or admin to turn it on</span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
               {swoopCapable && swoopLocked ? (
                 <UpgradeMenuItem
                   icon={MonitorPlay}
@@ -418,28 +463,54 @@ export function MachineContextMenu({
                   tier="pro"
                   testId="machine-context-menu-swoop-upgrade"
                 />
-              ) : swoopCapable ? (
-                <DropdownMenuItem
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!onThisMachine) onSwoop?.();
-                  }}
-                  disabled={onThisMachine}
-                  data-testid="machine-context-menu-swoop"
-                  className="text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
-                >
-                  <MonitorPlay className="mr-2 h-4 w-4" />
-                  swoop
-                  {onThisMachine && (
-                    <span className="ml-auto text-xs font-normal text-muted-foreground">you&apos;re on this machine</span>
+              ) : swoopCapable && !swoopOff ? (
+                // a split row, as restart's: swoop in this browser, or in the desktop app
+                <div className="flex items-stretch gap-1">
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!onThisMachine) onSwoop?.();
+                    }}
+                    disabled={onThisMachine}
+                    data-testid="machine-context-menu-swoop"
+                    className="flex-1 text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
+                  >
+                    <MonitorPlay className="mr-2 h-4 w-4" />
+                    swoop
+                    {onThisMachine && (
+                      <span className="ml-auto text-xs font-normal text-muted-foreground">you&apos;re on this machine</span>
+                    )}
+                    {watching > 0 && (
+                      <Badge className="ml-auto tabular-nums" data-testid="machine-context-menu-swoop-count">
+                        {watching}
+                        <span className="sr-only"> watching</span>
+                      </Badge>
+                    )}
+                  </DropdownMenuItem>
+                  {!inApp && onSwoopApp && !onThisMachine && (
+                    <>
+                      <div aria-hidden className="my-1.5 w-px bg-border" />
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSwoopApp();
+                            }}
+                            aria-label="open in the owlette swoop desktop app"
+                            data-testid="machine-context-menu-swoop-app"
+                            className="w-8 justify-center px-0 text-muted-foreground focus:bg-primary/15 focus:text-primary cursor-pointer"
+                          >
+                            <Monitor className="h-3.5 w-3.5 text-current" />
+                          </DropdownMenuItem>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>open in the owlette swoop desktop app</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </>
                   )}
-                  {watching > 0 && (
-                    <Badge className="ml-auto tabular-nums" data-testid="machine-context-menu-swoop-count">
-                      {watching}
-                      <span className="sr-only"> watching</span>
-                    </Badge>
-                  )}
-                </DropdownMenuItem>
+                </div>
               ) : !controlLocked && (
                 <DropdownMenuItem
                   onClick={(e) => {
@@ -533,7 +604,7 @@ export function MachineContextMenu({
           <DialogHeader>
             <DialogTitle>revoke token for {machineName}?</DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              revoking disconnects the agent, which must re-register to reconnect.
+              revoking cuts the agent off: it leaves this site, drops its credentials and goes offline within a minute. to reconnect it must be paired again with a new phrase.
               <br /><br />
               if this hostname was re-paired, or if more than one machine shares it, there may be several tokens:
               <br />

@@ -164,7 +164,7 @@ firebase use
 
 ## swoop (remote desktop)
 
-[swoop](/docs/dashboard/swoop) streams a machine's screen to a browser and carries keyboard, mouse, clipboard and audio. the web app authorises each session; it never carries the media.
+[swoop](/docs/dashboard/swoop) streams a machine's screen to a browser, or to [owlette swoop](/docs/dashboard/swoop#owlette-swoop), the desktop viewer app that shows the same viewer page, and carries keyboard, mouse, clipboard and audio. the web app authorises each session; it never carries the media.
 
 ### its parts
 
@@ -180,7 +180,7 @@ capture and encoding differ by platform:
 
 | platform | capture | encode | started |
 |---|---|---|---|
-| Windows | DXGI desktop duplication | NVENC (H.264 or HEVC) | by the service, with its own SYSTEM token placed in the console session: that is what lets it see and drive UAC prompts and the lock and sign-in screens |
+| Windows | DXGI desktop duplication | NVENC (H.264 or HEVC); without it, Media Foundation (H.264): the GPU's hardware encoder, or the CPU at up to 720p30 | by the service, with its own SYSTEM token placed in the console session: that is what lets it see and drive UAC prompts and the lock and sign-in screens |
 | macOS | ScreenCaptureKit | VideoToolbox (H.264 or HEVC) | by the desktop app, at the agent's request, as the app's own child, so it runs under the app's Screen Recording and Accessibility grants. the session bundle travels over a unix socket, never a file |
 | Linux | none yet | none | not shipped: the Linux package carries no streamer, so the agent reports `capabilities.swoop: 0` |
 
@@ -602,7 +602,7 @@ every agent from 3.0.0 on registers the roost v2 handlers `sync_pull`, `cancel_s
 | **agent** | Python 3.11 (bundled: 3.11.8 on Windows, 3.11.16 on macOS and Linux), psutil, pywin32 on Windows |
 | **service hosting** | owlette-host (Rust) on Windows, launchd on macOS, systemd on Linux |
 | **desktop app** | Tauri 2 (Rust, with WebView2, WKWebView or WebKitGTK), React 19, TypeScript |
-| **swoop streamer** | Rust, str0m (WebRTC), NVENC on Windows, VideoToolbox on macOS, Opus |
+| **swoop streamer** | Rust, str0m (WebRTC), NVENC then Media Foundation on Windows, VideoToolbox on macOS, Opus |
 | **swoop signalling** | Cloudflare Workers with Durable Objects; Cloudflare STUN and Realtime TURN |
 | **web** | Next.js 16, React 19, TypeScript 5, Tailwind CSS 4 |
 | **UI components** | shadcn/ui (Radix UI), Recharts, Lucide React |

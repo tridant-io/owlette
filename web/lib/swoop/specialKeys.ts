@@ -13,6 +13,7 @@
 import type { MachineOsFamily } from '@/lib/machineOs';
 import type { InputCapture } from './input';
 import { encodeControlMessage } from './protocol';
+import { viewerAppHasNativeKeys, viewerAppPlatform, type ViewerAppPlatform } from './viewerApp';
 
 export interface SpecialKey {
   id: string;
@@ -56,11 +57,24 @@ const MACOS_KEYS: readonly SpecialKey[] = [
 
 const LINUX_KEYS: readonly SpecialKey[] = WINDOWS_KEYS.filter((key) => !key.sas);
 
+/**
+ * what owlette swoop hands the machine itself in fullscreen, by the system it
+ * runs on (`desktop/viewer/src/keys_macos.rs`). cmd+tab is not among them:
+ * with switching off, macos swallows the tab.
+ */
+const NATIVE_KEY_IDS: Readonly<Partial<Record<ViewerAppPlatform, ReadonlySet<string>>>> = {
+  mac: new Set(['cmd-q']),
+};
+
 /** the menu for a machine running `hostOs`. */
 export function specialKeysFor(hostOs: MachineOsFamily, fullscreen = false): readonly SpecialKey[] {
   const keys = hostOs === 'macos' ? MACOS_KEYS : hostOs === 'linux' ? LINUX_KEYS : WINDOWS_KEYS;
-  // under keyboard lock, which rides fullscreen, the real key arrives.
-  return fullscreen ? keys.filter((key) => !key.hold) : keys;
+  if (!fullscreen) return keys;
+  const platform = viewerAppHasNativeKeys() ? viewerAppPlatform() : null;
+  const native = platform ? NATIVE_KEY_IDS[platform] : undefined;
+  // under keyboard lock, which rides fullscreen, the real key arrives, and so
+  // does what owlette swoop captures itself.
+  return keys.filter((key) => !key.hold && !native?.has(key.id));
 }
 
 export interface SpecialKeyTarget {

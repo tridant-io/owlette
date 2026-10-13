@@ -1278,29 +1278,14 @@ mod tests {
 
     /// Every NAL unit of an Annex-B buffer, with its type.
     fn nal_units(data: &[u8], codec: Codec) -> Vec<(u8, std::ops::Range<usize>)> {
-        let mut starts = Vec::new();
-        let mut i = 0;
-        while i + 3 <= data.len() {
-            if data[i..i + 3] == [0, 0, 1] {
-                starts.push(i + 3);
-                i += 3;
-            } else {
-                i += 1;
-            }
-        }
-        starts
-            .iter()
-            .enumerate()
-            .map(|(n, &start)| {
-                let mut end = starts.get(n + 1).map_or(data.len(), |&next| next - 3);
-                while end > start && data[end - 1] == 0 {
-                    end -= 1;
-                }
+        h264_sps::nal_ranges(data)
+            .into_iter()
+            .map(|range| {
                 let ty = match codec {
-                    Codec::H264 => data[start] & 0x1f,
-                    Codec::H265 => (data[start] >> 1) & 0x3f,
+                    Codec::H264 => data[range.start] & 0x1f,
+                    Codec::H265 => (data[range.start] >> 1) & 0x3f,
                 };
-                (ty, start..end)
+                (ty, range)
             })
             .collect()
     }

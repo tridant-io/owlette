@@ -109,7 +109,7 @@ const killHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
 
     // First, so there is no window left open for the seconds the stop takes.
     // A failure here is logged and the kill goes on: a stream that keeps
-    // running is worse than a window that outlives its 12 hours.
+    // running is worse than a window that outlives its 7 days.
     try {
       await revokeStepUpWindows({ siteId, machineId });
     } catch (err) {

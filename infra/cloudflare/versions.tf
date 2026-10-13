@@ -33,5 +33,6 @@ terraform {
 
 # Authentication: the provider reads the CLOUDFLARE_API_TOKEN env var automatically.
 # Mint a token scoped to: Account › Load Balancing: Monitors and Pools (Edit) +
-# Zone › Load Balancers (Edit) for the owlette.app zone. Never put the token in a file.
+# Zone › Load Balancers (Edit) + Zone › Transform Rules (Edit) for the owlette.app
+# zone. Never put the token in a file.
 provider "cloudflare" {}

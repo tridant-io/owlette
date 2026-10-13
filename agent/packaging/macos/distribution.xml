@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   the owlette installer product (tri-platform 5.1): two component packages,
-  the runtime under the data root and the app in /Applications. Apple silicon
+  the runtime under the data root and the apps in /Applications (owlette.app
+  and owlette swoop.app, both in app.owlette.app; build.sh). Apple silicon
   only and macOS 15 and up (the app's own floor and spike 0.2's box), refused
   before anything lands otherwise. `__VERSION__` is filled in by build.sh.
 -->

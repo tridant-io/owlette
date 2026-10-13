@@ -18,11 +18,16 @@
  */
 
 import { test, expect, type Page, type Locator } from '@playwright/test';
+import { Timestamp } from 'firebase-admin/firestore';
+import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
 import { seedMachine } from '../../helpers/seed';
 
 const SITE_ID = 'site-A';
 const BASELINE_MACHINE_ID = 'e2e-machine-baseline';
+// A live agent token for the baseline machine, so the revoke below has a
+// credential to delete and an agent to cut off.
+const BASELINE_TOKEN_ID = 'e2e-machine-baseline-token';
 const REBOOTING_MACHINE_ID = 'e2e-machine-rebooting';
 const PENDING_MACHINE_ID = 'e2e-machine-pending';
 // not '...-pending-offline': cardFor filters on hasText, so an id that CONTAINS
@@ -40,6 +45,16 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, OFFLINE_PENDING_MACHINE_ID, {
     rebootPending: true,
     heartbeatOffsetSec: 600,
+  });
+  await getAdminDb().collection('agent_refresh_tokens').doc(BASELINE_TOKEN_ID).set({
+    siteId: SITE_ID,
+    machineId: BASELINE_MACHINE_ID,
+    version: '4.1.7',
+    createdBy: 'e2e',
+    createdAt: Timestamp.now(),
+    lastUsed: Timestamp.now(),
+    expiresAt: null,
+    agentUid: `agent_${SITE_ID}_${BASELINE_MACHINE_ID}`,
   });
 });
 
@@ -152,7 +167,7 @@ test.describe('machine card — admin on site-A', () => {
     await expect(menu.getByTestId('machine-context-menu-revoke-token')).toBeVisible();
   });
 
-  test('site admin can actually revoke a machine token (route accepts the call)', async ({ page }) => {
+  test('site admin can actually revoke a machine token, and the agent is told to unpair', async ({ page }) => {
     // The menu item is gated on isSiteAdmin, so the route must accept a site
     // admin. Rendering alone is not the contract — before AGENT_TOKEN_REVOKE
     // this endpoint 403'd every admin who clicked it. The call runs inside the
@@ -160,18 +175,33 @@ test.describe('machine card — admin on site-A', () => {
     // Playwright's request context drops the Secure session cookie on http
     // loopback, so page.request would 401 regardless of the capability.
     await page.goto('/dashboard');
-    const status = await page.evaluate(
+    const result = await page.evaluate(
       async ({ siteId, machineId }) => {
         const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/agent-tokens/revoke`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ machineId, latestOnly: true }),
         });
-        return res.status;
+        return { status: res.status, body: await res.json() };
       },
       { siteId: SITE_ID, machineId: BASELINE_MACHINE_ID },
     );
-    expect(status).toBe(200);
+    expect(result.status).toBe(200);
+    expect(result.body.revokedCount).toBe(1);
+
+    // #327: the token doc going is invisible to a live agent for up to an hour.
+    // The revoke also has to land in the pending map the agent polls.
+    const db = getAdminDb();
+    expect((await db.collection('agent_refresh_tokens').doc(BASELINE_TOKEN_ID).get()).exists).toBe(false);
+    const pending = await db
+      .collection('sites').doc(SITE_ID)
+      .collection('machines').doc(BASELINE_MACHINE_ID)
+      .collection('commands').doc('pending')
+      .get();
+    const commands = Object.values(pending.data() ?? {}) as Array<{ type?: string; status?: string }>;
+    // At least one, not exactly one: a CI retry re-seeds the token but the
+    // pending map from the first attempt is never cleared.
+    expect(commands.filter((cmd) => cmd.type === 'unpair' && cmd.status === 'pending').length).toBeGreaterThanOrEqual(1);
   });
 
   test('cancel-countdown pill during active reboot is clickable', async ({ page }) => {

@@ -472,6 +472,73 @@ class TestLeaveSite:
         host.assert_not_called()
 
 
+# unpair — the server cut this machine off
+
+
+class TestUnpair:
+    CONFIG = {
+        'firebase': {
+            'enabled': True,
+            'site_id': 'default_site',
+            'project_id': 'owlette-dev-3838a',
+        },
+        'environment': 'development',
+        'processes': [],
+    }
+
+    def _run(self, *, cleared=True, missing_cache=False):
+        config = json.loads(json.dumps(self.CONFIG))
+        store = MagicMock()
+        store.clear_tokens.return_value = cleared
+        saved = {}
+
+        with patch.object(configure_site.shared_utils, 'load_config', return_value=config), \
+             patch.object(configure_site.shared_utils, 'save_config',
+                          side_effect=lambda cfg: saved.update({'config': cfg})), \
+             patch.object(configure_site.shared_utils, 'get_data_path',
+                          return_value='C:\\ProgramData\\Owlette\\cache\\firebase_cache.json'), \
+             patch.object(configure_site.shared_utils, 'retire_machine_id') as retire, \
+             patch.object(configure_site.os.path, 'exists', return_value=not missing_cache), \
+             patch.object(configure_site.os, 'remove') as remove, \
+             patch('secure_storage.get_storage', return_value=store):
+            configure_site.unpair('the agent token was revoked from the dashboard')
+
+        return saved.get('config'), store, remove, retire
+
+    def test_switches_cloud_sync_off_so_the_service_loop_stops_the_client(self):
+        # #327: the loop's "firebase disabled" branch is what stops the cloud
+        # client and flushes online: false; this is the switch it watches
+        config, _store, _remove, _retire = self._run()
+
+        assert config['firebase']['enabled'] is False
+        assert config['firebase']['site_id'] == ''
+
+    def test_drops_the_cached_cloud_config_and_the_credentials(self):
+        _config, store, remove, _retire = self._run()
+
+        remove.assert_called_once()
+        store.clear_tokens.assert_called_once()
+
+    def test_keeps_the_machine_id_so_a_re_pair_lands_on_the_same_row(self):
+        # a leave retires the id because it deletes the document; a revoke
+        # leaves the row standing, offline, for the admin to see
+        _config, _store, _remove, retire = self._run()
+
+        retire.assert_not_called()
+
+    def test_a_token_store_that_will_not_clear_does_not_undo_the_detach(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            config, _store, _remove, _retire = self._run(cleared=False)
+
+        assert config['firebase']['enabled'] is False
+        assert 'token store could not be removed' in caplog.text
+
+    def test_a_missing_cache_is_nothing_to_remove(self):
+        _config, _store, remove, _retire = self._run(missing_cache=True)
+
+        remove.assert_not_called()
+
+
 # --report-issue
 
 

@@ -43,5 +43,5 @@ jobs:
       - name: check every hook, skill and agent
         run: node scripts/check-claude-hooks.mjs
 
-      - name: push-target tells pushes and merges from mentions
+      - name: hooks tell which repo a commit, push or merge landed in
         run: node --test scripts/__tests__/push-target.test.mjs

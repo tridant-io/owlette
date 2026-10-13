@@ -163,6 +163,7 @@ every platform splits owlette into an install root (the code, replaced by every 
 | install root | `C:\ProgramData\Owlette\` | `/Library/Application Support/Owlette/runtime/` | `/opt/owlette/` |
 | desktop app | `C:\ProgramData\Owlette\app\owlette-desktop.exe` | `/Applications/owlette.app` | `/usr/bin/owlette-desktop` |
 | swoop streamer | `C:\ProgramData\Owlette\swoop\owlette-swoop.exe` | inside the app, `owlette.app/Contents/MacOS/owlette-swoop` | — |
+| [owlette swoop](/docs/dashboard/swoop#owlette-swoop) (the swoop viewer app) | `C:\ProgramData\Owlette\app\owlette-swoop-viewer.exe` | `/Applications/owlette swoop.app` | `/usr/bin/owlette-swoop-viewer` |
 | service definition | `OwletteService`, registered by `tools\owlette-host.exe` | `/Library/LaunchDaemons/app.owlette.agent.plist` | `/usr/lib/systemd/system/owlette-agent.service` |
 | what starts the app at login | the service, and the `Owlette` shortcut in the user's Startup folder | `/Library/LaunchAgents/app.owlette.desktop.plist` | `/usr/lib/systemd/user/owlette-desktop.service` |
 | group the app's account needs | — | `_owlette` | `owlette` |

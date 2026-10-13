@@ -79,7 +79,8 @@ import {
   type StallTick,
   type SwoopStallReport,
 } from '@/lib/swoop/video/stall';
-import type { SwoopStepUpProof } from '@/lib/swoop/stepUp';
+import type { SwoopStepUpAnswer, SwoopStepUpProof } from '@/lib/swoop/stepUp';
+import { isViewerApp } from '@/lib/swoop/viewerApp';
 
 /**
  * the reconnect ladder: 2 s, 4 s, … 30 s between sessions, reset after one
@@ -151,13 +152,15 @@ export interface SwoopStepUpControls {
   required: boolean;
   /** false when the account holds no second factor — it cannot take control. */
   enrolled: boolean;
-  submitProof: (proof: SwoopStepUpProof) => Promise<void>;
+  submitProof: (answer: SwoopStepUpAnswer) => Promise<void>;
   cancel: () => void;
 }
 
 export interface UseSwoopSession {
   state: SwoopSessionState;
   error: string | null;
+  /** the api's code when it refused the session for good, such as `swoop_disabled`; the stage explains it. */
+  refusal: string | null;
   stats: SwoopStats;
   /**
    * the live session, once the peer is up. this is what every toolbar, menu and
@@ -275,6 +278,7 @@ export function useSwoopSession(
 
   const [state, setState] = useState<SwoopSessionState>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const [stats, setStats] = useState<SwoopStats>(EMPTY_STATS);
   const [stepUpRequired, setStepUpRequired] = useState(false);
   const [session, setSession] = useState<SwoopSession | null>(null);
@@ -303,8 +307,9 @@ export function useSwoopSession(
   const abandonRef = useRef<() => void>(() => {});
   const stoppedRef = useRef(false);
 
-  const submitProof = useCallback(async (proof: SwoopStepUpProof) => {
-    proofRef.current = proof;
+  const submitProof = useCallback(async (answer: SwoopStepUpAnswer) => {
+    // a window opened in the browser is the server's to find: that retry sends no proof
+    proofRef.current = 'kind' in answer ? null : answer;
     setStepUpRequired(false);
     // exactly one retry, never a loop: a second `step_up_required` re-opens the
     // dialog through the same path and the operator decides again.
@@ -378,6 +383,13 @@ export function useSwoopSession(
     writeContinuity(siteId, machineId, null);
     endRef.current('closed');
   }, [clearRetry, siteId, machineId]);
+
+  // owlette swoop fires this before it closes a swoop window, so the session ends with its DELETE.
+  useEffect(() => {
+    if (!isViewerApp()) return;
+    window.addEventListener('owlette:close', end);
+    return () => window.removeEventListener('owlette:close', end);
+  }, [end]);
 
   // the countdown the page shows, once a second.
   useEffect(() => {
@@ -579,6 +591,7 @@ export function useSwoopSession(
         // a machine briefly offline, an edge in front of the app or a bad
         // moment may all come back, and the ladder waits them out.
         const final = isWithdrawal(res.status, code) || res.status === 400 || res.status === 404;
+        if (final && !disposed) setRefusal(code);
         fail(res.status === 401 ? 'sign in again to resume.' : detail, !final);
         return null;
       }
@@ -595,6 +608,7 @@ export function useSwoopSession(
 
       setState('authorizing');
       setError(null);
+      setRefusal(null);
 
       const identity = await createSwoopIdentity();
       if (disposed) return;
@@ -1020,5 +1034,5 @@ export function useSwoopSession(
     [stepUpRequired, enrolled, submitProof, cancel],
   );
 
-  return { state, error, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath };
+  return { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath };
 }

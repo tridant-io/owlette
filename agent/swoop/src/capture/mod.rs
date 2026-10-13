@@ -32,6 +32,8 @@ use crate::gpu::Frame;
 // macOS captures through ScreenCaptureKit; Task 5.1 wires it under the seam.
 #[cfg(target_os = "macos")]
 pub mod sck;
+// a synthetic source for the `testhooks` build only; it renders into d3d11
+#[cfg(all(windows, feature = "testhooks"))]
 pub mod testpattern;
 
 /// Blocking `AcquireNextFrame` timeout in milliseconds.

@@ -56,6 +56,8 @@ the streamer writes `logs/swoop/swoop.log` itself, on the platforms that host sw
 
 the app's log covers the window and the tray icon — startup, status polling, service control, pairing dialogs, and on macOS and Linux the jobs it runs for the service. it belongs to whoever the app runs as, typically the machine's auto-login account, not the account the service runs as. it rotates at 4 MB and keeps 4 files (`owlette-desktop_<date>.log`), and its timestamps are local time, so they line up with `service.log` — a field report usually wants both.
 
+[owlette swoop](/docs/dashboard/swoop#owlette-swoop), the swoop viewer app, keeps its own per-user log the same way, `owlette-swoop-viewer.log` under `app.owlette.swoop-viewer` in place of `app.owlette.desktop` in the paths above (on Windows `%LOCALAPPDATA%\app.owlette.swoop-viewer\logs\owlette-swoop-viewer.log`). it records each page it opens and each window it makes, never a URL's query.
+
 <Callout type="info" title={"logs removed in 3.0.0"}>
 
 `gui.log`, `tray.log`, and `report_issue.log` no longer exist — the Python programs that wrote them were replaced by the desktop app. upgrading prunes any left behind.

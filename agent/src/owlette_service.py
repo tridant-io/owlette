@@ -109,6 +109,11 @@ SCM_STOP_POLL_INTERVAL = 0.25
 # full tick before an operator's edit even began uploading.
 LOCAL_CONFIG_POLL_INTERVAL = 0.5
 
+# the tray's "kill all swoop sessions on this machine" (desktop tray.rs), read on
+# the local config watcher's tick and audited under this reason.
+SWOOP_KILL_FLAG = 'tmp/swoop_kill.flag'
+SWOOP_KILL_LOCAL_TRAY = 'local_tray'
+
 # Shutdown budget once STOP_PENDING appears; overruns log a warning. MUST stay in
 # step with supervisor::CHILD_STOP_GRACE in agent/host, which terminates us after
 # exactly this long.
@@ -1308,6 +1313,13 @@ class OwletteService:
         except Exception as e:
             logging.warning(f"Failed to register site handlers: {e}")
 
+        # unpair: the dashboard revoked this machine's agent token.
+        try:
+            from pairing_commands import register_handlers as _register_pairing_handlers
+            _register_pairing_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register pairing handlers: {e}")
+
         self.firebase_client = None
 
         # install-tree hardening: main() does the start-up repair and sets
@@ -1363,7 +1375,7 @@ class OwletteService:
             logging.info(f"Initializing Firebase client - site: {site_id}, project: {project_id}")
 
             from auth_manager import AuthManager
-            auth_manager = AuthManager(api_base=api_base)
+            auth_manager = AuthManager(api_base=api_base, on_revoked=self.unpair)
 
             if not auth_manager.is_authenticated():
                 logging.error("Agent not authenticated - no refresh token found")
@@ -1387,6 +1399,7 @@ class OwletteService:
 
             self.firebase_client.register_command_callback(self.handle_firebase_command)
             self.firebase_client.register_config_update_callback(self.handle_config_update)
+            self.firebase_client.register_removed_callback(self._on_removed_from_site)
 
             # Sync config: pull from Firestore (source of truth), or seed if new machine
             sync_result = self.firebase_client.sync_config_on_startup()
@@ -3043,6 +3056,47 @@ class OwletteService:
                 logging.debug(f"[SHUTDOWN] swoop kill failed: {e}")
         self._swoop_shutdown.set()
 
+    def unpair(self, reason):
+        """Leave the site because the server cut this machine off.
+
+        Swoop is ended here because the cloud-client stop the main loop runs
+        does not reach it: a viewer must not keep a picture of a machine the
+        site has just revoked, and the doorbell would keep minting with a
+        credential the server now refuses. Swoop then stays down until the
+        service next starts, as it already does after an in-place re-pair.
+        Hoot is ended for the same reason: it holds its own access token for
+        up to an hour, and site members could keep chatting with and running
+        tools on a revoked machine through it. A relaunch exits on its own
+        once the config carries no site.
+        """
+        configure_site.unpair(reason)
+        self._stop_swoop()
+        if self._is_cortex_alive():
+            try:
+                psutil.Process(self.cortex_pid).terminate()
+                logging.info("Hoot process ended: this machine left its site")
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                logging.warning(f"Could not end the hoot process: {e}")
+
+    # How long a removal waits for hoot to exit before the cloud client deletes
+    # the machine row again: off Windows, terminate is SIGTERM and hoot answers
+    # it with an `offline` write of its own, which must land before that delete.
+    REMOVED_HOOT_EXIT_TIMEOUT_SECONDS = 5.0
+
+    def _on_removed_from_site(self, reason):
+        """The dashboard removed this machine (#326): leave the site, then wait
+        for hoot's exit so the cloud client's final delete is the last write."""
+        pid = self.cortex_pid if self._is_cortex_alive() else None
+        self.unpair(reason)
+        if pid is None:
+            return
+        try:
+            psutil.Process(pid).wait(timeout=self.REMOVED_HOOT_EXIT_TIMEOUT_SECONDS)
+        except psutil.TimeoutExpired:
+            logging.warning("Hoot did not exit in time; its last write may put the removed row back")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
     def _check_console_session(self):
         """Tell swoop when the active console session changes. Runs on the 5s tick.
 
@@ -3439,6 +3493,37 @@ class OwletteService:
                 target=_repair, name='acl-session-repair', daemon=True).start()
         except Exception as e:
             logging.warning(f"Could not start the session ACL repair (non-fatal): {e}")
+
+    def _check_tray_swoop_kill(self):
+        """end every swoop session when the tray asks, through tmp/swoop_kill.flag.
+
+        the desktop app's "kill all swoop sessions on this machine": the same
+        manager kill a dashboard swoop_kill without a sid makes, audited as
+        local_tray. windows only, like the restart flag — off it tmp/ is
+        group-writable, so a flag there is nobody's word, and the tray does not
+        offer the item. never raises.
+        """
+        if sys.platform != 'win32':
+            return
+        flag = shared_utils.get_data_path(SWOOP_KILL_FLAG)
+        if not os.path.isfile(flag):
+            return
+        try:
+            os.remove(flag)
+        except OSError as e:
+            # retried next tick rather than obeyed: a flag that cannot be
+            # removed would end every session that starts after it
+            logging.warning(f"Could not remove the swoop kill flag: {e}")
+            return
+        manager = self.swoop_manager
+        if manager is None:
+            logging.info("Tray asked to end swoop sessions; swoop is not running")
+            return
+        logging.info("Tray asked to end every swoop session on this machine")
+        try:
+            manager.kill(SWOOP_KILL_LOCAL_TRAY)
+        except Exception as e:
+            logging.error(f"Tray swoop kill failed: {e}")
 
     def _check_console_session_acls(self):
         """Start a session ACL repair when the console session or its user has
@@ -5034,8 +5119,9 @@ class OwletteService:
         assumes a single invoker — single-flight dispatch, the mtime baseline
         CAS — so the main loop must not call it as well.
 
-        Each tick also looks at the console session (_check_console_session_acls),
-        which never raises.
+        Each tick also looks at the console session (_check_console_session_acls)
+        and the tray's swoop kill flag (_check_tray_swoop_kill), neither of which
+        raises.
 
         Runs on its own daemon thread, like the SCM stop watcher, and stops with
         self.is_alive.
@@ -5057,6 +5143,7 @@ class OwletteService:
                             f"({consecutive_errors}): {e}"
                         )
                 self._check_console_session_acls()
+                self._check_tray_swoop_kill()
                 time.sleep(LOCAL_CONFIG_POLL_INTERVAL)
 
         thread = threading.Thread(
@@ -9226,6 +9313,7 @@ class OwletteService:
                 self.firebase_client.register_command_callback(self.handle_firebase_command)
 
                 self.firebase_client.register_config_update_callback(self.handle_config_update)
+                self.firebase_client.register_removed_callback(self._on_removed_from_site)
 
                 # Before the config sync, which routinely takes 15s: until this
                 # runs the status file says disconnected and the tray shows a red

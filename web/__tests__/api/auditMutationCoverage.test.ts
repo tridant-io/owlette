@@ -50,6 +50,16 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'agent/swoop/events',
   // internal-secret endpoint called by the alert cloud function; sends notifications only.
   'alerts/trigger',
+  // app-link: the caller hands its own session to an owlette swoop window — sign-in, same class
+  // as auth/session. Single-use `app_links` record only; no resource or security state changes.
+  'auth/app-link',
+  // app-link: the caller approves a sign-in an owlette swoop window started for its own account;
+  // sign-in, same class as auth/session.
+  'auth/app-link/approve',
+  // app-link: unauthenticated code → custom-token exchange; the sign-in itself, no actor yet.
+  'auth/app-link/exchange',
+  // app-link: unauthenticated pending-code issuance, bootstrap step of the cold-start sign-in.
+  'auth/app-link/start',
   // public unauthenticated password-reset email send; no actor to attribute, enumeration-safe by design.
   'auth/forgot-password',
   // session create/destroy (sign-in / sign-out); the authentication act, not a resource mutation.

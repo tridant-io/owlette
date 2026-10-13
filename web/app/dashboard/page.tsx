@@ -49,6 +49,8 @@ import { LoadingWord } from '@/components/LoadingWord';
 import { FallingFeather } from '@/components/FallingFeather';
 import type { Process } from '@/hooks/useFirestore';
 import { useScrollFade } from '@/hooks/useScrollFade';
+import { useSwoopSettings } from '@/hooks/useSwoopSettings';
+import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 
 // Code-split: deferring parse+compile of the detail panels until a cell is clicked keeps
 // the grid-template-rows slide animation inside its frame budget. `ssr: false` because
@@ -118,6 +120,7 @@ export default function DashboardPage() {
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
   const [viewType, setViewType] = useState<ViewType>('card');
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
@@ -732,6 +735,19 @@ export default function DashboardPage() {
   // the last viewed site.
   useEffect(() => {
     if (!sitesLoading && sites.length > 0 && !currentSiteId) {
+      // `?settings=<siteId>`, the swoop viewer's way back to the switch: that site,
+      // with its editor open for an admin. read once, then dropped from the url.
+      const settingsFor = new URLSearchParams(window.location.search).get('settings');
+      if (settingsFor) window.history.replaceState(null, '', window.location.pathname);
+      if (settingsFor && sites.some(s => s.id === settingsFor)) {
+        setCurrentSiteId(settingsFor);
+        updateLastSite(settingsFor);
+        if (isSiteAdmin(settingsFor)) {
+          setManageEditSiteId(settingsFor);
+          setManageDialogOpen(true);
+        }
+        return;
+      }
       const savedSite = lastSiteId || localStorage.getItem('owlette_current_site');
       if (savedSite && sites.find(s => s.id === savedSite)) {
         setCurrentSiteId(savedSite);
@@ -739,7 +755,7 @@ export default function DashboardPage() {
         setCurrentSiteId(sites[0].id);
       }
     }
-  }, [sites, sitesLoading, currentSiteId, lastSiteId]);
+  }, [sites, sitesLoading, currentSiteId, lastSiteId, updateLastSite, isSiteAdmin]);
 
   const handleSiteChange = (siteId: string) => {
     setCurrentSiteId(siteId);
@@ -775,6 +791,8 @@ export default function DashboardPage() {
       'noopener',
     );
   };
+
+  const openSwoopApp = (machineId: string) => openInViewerApp(currentSiteId, machineId);
 
   // The panel opens above the machine list, so on a phone a tap on any card but
   // the first would open it off-screen.
@@ -869,6 +887,14 @@ export default function DashboardPage() {
   const onScreenshot = useStableCallback(openScreenshot);
   const onLiveView = useStableCallback(openLiveView);
   const onSwoop = useStableCallback(openSwoop);
+  const onSwoopApp = useStableCallback(openSwoopApp);
+  const onSiteSettings = useStableCallback(() => {
+    setManageEditSiteId(currentSiteId);
+    setManageDialogOpen(true);
+  });
+  const swoopSettings = useSwoopSettings(currentSiteId);
+  // not while loading: the hook reads off until the snapshot lands.
+  const swoopOff = !swoopSettings.loading && !swoopSettings.settings.enabled;
   // The online flag is read when the dialog opens, not when the row was bound.
   const onRemoveMachineById = useStableCallback((machineId: string) => {
     const machine = machines.find((m) => m.machineId === machineId);
@@ -902,10 +928,12 @@ export default function DashboardPage() {
     onScreenshot: () => onScreenshot(id),
     onLiveView: () => onLiveView(id),
     onSwoop: () => onSwoop(id),
+    onSwoopApp: () => onSwoopApp(id),
   }])), [
     machineIdsKey, toggleMachineExpanded, onEditProcess, onDuplicateProcess, onCreateProcess,
     onKillProcess, onRestartProcess, onSetLaunchMode, onConfigureSchedule, onRemoveMachineById,
     onMetricClick, onRestartMachine, onShutdownMachine, onCancelRestart, onScreenshot, onLiveView, onSwoop,
+    onSwoopApp,
   ]);
 
   // sites the viewer doesn't own get no plan treatment here: their owner's
@@ -960,7 +988,11 @@ export default function DashboardPage() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => setManageDialogOpen(true)}
+        onManageSites={() => {
+          setManageEditSiteId(undefined);
+          setManageDialogOpen(true);
+        }}
+        onSiteSettings={onSiteSettings}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
       />
@@ -969,6 +1001,7 @@ export default function DashboardPage() {
       <ManageSitesDialog
         open={manageDialogOpen}
         onOpenChange={setManageDialogOpen}
+        editSiteId={manageEditSiteId}
         sites={sites}
         currentSiteId={currentSiteId}
         machineCount={machines.length}
@@ -1221,6 +1254,9 @@ export default function DashboardPage() {
                   onScreenshot={onScreenshot}
                   onLiveView={onLiveView}
                   onSwoop={onSwoop}
+                  onSwoopApp={onSwoopApp}
+                  swoopOff={swoopOff}
+                  onSiteSettings={onSiteSettings}
                   sitePlan={sitePlan}
                 />
               </div>
@@ -1253,6 +1289,8 @@ export default function DashboardPage() {
                         siteTimeFormat={userPreferences.timeFormat || '12h'}
                         userPreferences={temperaturePrefs}
                         isSiteAdmin={isSiteAdmin(currentSiteId)}
+                        swoopOff={swoopOff}
+                        onSiteSettings={onSiteSettings}
                         planLimit={sitePlan.machineLimitFor(machine.machineId)}
                         controlLocked={sitePlan.controlLocked}
                         swoopLocked={sitePlan.swoopLocked}

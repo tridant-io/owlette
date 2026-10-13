@@ -1,7 +1,7 @@
 ---
 title: "platform authentication internals"
 description: "how people and machines prove who they are to owlette: browser sessions, device-code pairing and agent tokens on Windows, macOS and Linux, passkeys, mandatory two-factor, and per-site roles. scoped API keys are covered in API authentication."
-keywords: ["login", "sign in", "cookie", "session secret", "pairing phrase", "device code", "machine token", "refresh token", "tokens.enc", "fido2", "totp", "2fa", "mfa", "remember this device", "rbac", "permissions", "superadmin", "owner"]
+keywords: ["login", "sign in", "cookie", "session secret", "pairing phrase", "device code", "machine token", "refresh token", "tokens.enc", "fido2", "totp", "2fa", "mfa", "remember this device", "rbac", "permissions", "superadmin", "owner", "owlette swoop", "app-link", "sign in with your browser", "verify in your browser"]
 ---
 
 owlette has four ways in: a browser session for people, device-code pairing and refresh tokens for agents, passkeys, and the two-factor check every account must pass. scoped `owk_*` API keys, bearer headers and API error behaviour are in [API authentication](/docs/api/authentication).
@@ -33,7 +33,7 @@ sessions are [iron-session](https://github.com/vvo/iron-session) cookies: sealed
 | property | value |
 |----------|-------|
 | **name** | `__session` |
-| **holds** | the user ID, the session's expiry and its 2FA state (`mfaRequired`, `mfaVerified`, `mfaCompletedAt`, `mfaSatisfiedBy`, `requiresMfaSetup`). no role |
+| **holds** | the user ID, the session's expiry and its 2FA state (`mfaRequired`, `mfaVerified`, `mfaCompletedAt`, `mfaSatisfiedBy`, `mfaNetwork`, `requiresMfaSetup`). no role |
 | **sealing** | iron-session v8's defaults: AES-256-CBC with an HMAC-SHA256 integrity check, keyed by `SESSION_SECRET`. the secret must be at least 32 characters; the server throws on load without it |
 | **flags** | `HttpOnly`, `SameSite=Lax`, path `/`, and `Secure` in production |
 | **lifetime** | `POST /api/auth/session` takes `durationDays`, 1 to 30 (default 7), for the session's own expiry, but the cookie's max age is fixed at 7 days, so a longer session still ends with the cookie |
@@ -43,6 +43,19 @@ sessions are [iron-session](https://github.com/vvo/iron-session) cookies: sealed
 ### remembering a device
 
 clearing a code at `/verify-2fa` with **trust this device** (`trustDevice: true`) sets a second cookie, `owlette_device_trust`, for 30 days. it holds a random 256-bit token; the server keeps only its SHA-256 hash, in `users/{uid}/trustedDevices/{hash}`. a later sign-in from that browser starts MFA-verified, recorded as `mfaSatisfiedBy: "device-trust"`, so [swoop's](/docs/dashboard/swoop#the-second-factor) step-up, which wants a live ceremony, still asks. dropping to zero factors, and a superadmin reset, revoke every trust record.
+
+### signing in owlette swoop
+
+[owlette swoop](/docs/dashboard/swoop#owlette-swoop), the desktop viewer app, keeps its own cookie jar, apart from the browser's, so it signs in through a browser that already holds a session, with a one-time code. a code is 32 random bytes, stored only as its SHA-256 in `app_links/{hash}` (server only) and never logged.
+
+- **from the dashboard**: `POST /api/auth/app-link`, from a session that has passed two-factor, mints an approved code that lives 60 seconds. it rides the `owlette-swoop://<host>/app-link?code=…&next=/swoop/<site>/<machine>` link, and the app's `/app-link` page exchanges it
+- **from the app**: **sign in with your browser** calls `POST /api/auth/app-link/start`, which returns a pending code, a poll secret and the page `/app-link/approve?code=…`, all good for 10 minutes. the app opens that page in the system browser, where a user whose session has passed two-factor approves it, and polls `POST /api/auth/app-link/exchange` with the code and its secret
+
+an exchange is single use, never names the uid, and answers a Firebase custom token whose `appLinkMfa` claim carries the approver's `mfaSatisfiedBy`, and `appLinkMfaAt` the time the approver passed its second factor. `POST /api/auth/session` honours the claims only for a custom-token sign-in made in the last 5 minutes, so the app's session has the approver's two-factor state and the time of the approver's ceremony, not of the hand-off: a ceremony under five minutes old counts as swoop's step-up for the machines opened in those five minutes, and a browser signed in days ago hands the app no step-up by approving. a `device-trust` approver therefore gives a `device-trust` app session, which answers swoop's step-up with a code in the app; any other can use **verify in your browser**, which passes the ceremony at `/swoop/<site>/<machine>/verify` in the system browser and opens the same 7-day window for that user and machine while the app polls `GET …/swoop/step-up`.
+
+### the network a second factor was passed on
+
+swoop control is tied to the networks you verified: a new network asks once. Cloudflare adds the client's ASN (`X-Owlette-Asn`) and a secret shared with the origin (`X-Owlette-Edge`, checked against `EDGE_SHARED_SECRET`) to every request; a request without a matching secret has network `unknown`, which never counts as verified. every second factor passed, at sign-in or at swoop's prompt, adds its network to `users/{uid}/verified_networks/{key}` (`asn:<n>`) for 7 days, and the session keeps it as `mfaNetwork` beside `mfaCompletedAt`; an app-link sign-in carries the approver's as `appLinkMfaNet`. `SWOOP_NETWORK_BINDING` sets the mode: `log` (the default) only records each control request's network, `enforce` makes an unverified network ask for the step-up and lets the sign-in's own ceremony stand in only on its own network, `off` does neither. see [swoop](/docs/dashboard/swoop#the-second-factor).
 
 ---
 
@@ -99,14 +112,14 @@ how the phrase reaches the machine depends on its platform:
 | **how** | `Owlette-Installer-v<version>.exe /ADD=<phrase> /SILENT`. on dev.owlette.app the dashboard's command carries `/SERVER=dev` too | `config/pairing.json` in the data root before the package installs, with `phrase` and optionally `server` and `kiosk_user` | the same |
 | **what runs it** | the installer runs `configure_site.py --add` | the package's postinstall runs `configure_site.py --preseed` in the background | the package's postinst does the same |
 
-the **generate code** dialog still says silent install is Windows only; the preseed is the macOS and Linux equivalent, and [installation](/docs/agent/installation#the-pairing-preseed-macos-and-linux) has the recipe. `kiosk_user` is only reported in the pairing log: it does not add that account to the `owlette` or `_owlette` group, which you still do by hand. a machine that already has a site is never re-paired by the file; `OWLETTE_ADD=<phrase>` in the environment of `configure_site.py --preseed` takes the file's place and does re-pair it.
+the **generate code** dialog shows both: the Windows command, and the preseed's contents for macOS and Linux; [installation](/docs/agent/installation#the-pairing-preseed-macos-and-linux) has the paths and commands. `kiosk_user` is only reported in the pairing log: it does not add that account to the `owlette` or `_owlette` group, which you still do by hand. a machine that already has a site is never re-paired by the file; `OWLETTE_ADD=<phrase>` in the environment of `configure_site.py --preseed` takes the file's place and does re-pair it.
 
 ### the add machine dialog
 
 the **+** (**add machine**) button on the dashboard opens two tabs, both for the site you have selected:
 
 - **enter code**: type the phrase a machine is showing and **authorize**. the dialog posts it to the authorize route with the site ID, and the machine's next poll completes the pairing
-- **generate code**: makes a pre-authorized phrase, as above, and shows it with the silent install command. it expires 10 minutes after it was made
+- **generate code**: makes a pre-authorized phrase, as above, and shows it with the Windows silent install command and the macOS and Linux pairing preseed. it expires 10 minutes after it was made
 
 every site member sees the button, but authorizing needs `MACHINE_ENROLL`, so a plain member's attempt is refused. generating a phrase spends two requests from the budget below.
 

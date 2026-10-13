@@ -1,19 +1,21 @@
 #!/bin/bash
 # the owlette package for linux (tri-platform 5.2, multi-platform releases
 # 1.2): one `Owlette-Installer-v<ver>.deb` — the service runtime under
-# /opt/owlette, its system unit, the app's user unit, the polkit rule, and the
+# /opt/owlette, its system unit, the app's user unit, the polkit rule, the
 # desktop app itself (the Tauri build's deb, unpacked into the payload with
-# its Depends carried over). the package stays `owlette-agent` and provides,
-# replaces and conflicts with the old `owlette` app package, so a box on the
-# two-package install upgrades in one apt-get install. runs on the
+# its Depends carried over) and owlette swoop, the viewer app (the binary from
+# its own Tauri deb, with our launcher). the package stays `owlette-agent` and
+# provides, replaces and conflicts with the old `owlette` app package, so a box
+# on the two-package install upgrades in one apt-get install. runs on the
 # architecture it packages for (x86_64 or aarch64) with the Tauri build
 # dependencies, cargo and node installed; nothing here needs root, and
 # dpkg-deb owns the payload to root itself.
 #
 #   agent/build/linux/build.sh [--skip-app]
 #
-# --skip-app reuses the newest deb under desktop/src-tauri/target/release/
-# bundle/deb instead of building the app.
+# --skip-app reuses the newest debs under desktop/src-tauri/target/release/
+# bundle/deb and desktop/viewer/target/release/bundle/deb instead of building
+# the two apps.
 #
 # release order (CLAUDE.md): the version is read from agent/VERSION, so bump
 # and commit before building — the file name and the payload carry it.
@@ -98,6 +100,29 @@ dpkg-deb -x "${APP_DEB}" "${PAYLOAD}"
 APP_DEPENDS="$(dpkg-deb -f "${APP_DEB}" Depends)"
 [ -n "${APP_DEPENDS}" ] || { echo "build.sh: ${APP_DEB##*/} declares no Depends" >&2; exit 1; }
 
+# --- owlette swoop, the viewer app ------------------------------------------------
+# a second Tauri crate with no frontend, run from the app's node_modules. only
+# its binary joins the payload: the launcher is ours (packaging/linux), one
+# menu entry that wears the desktop app's icon and claims owlette-swoop://, in
+# place of the bundler's second one.
+if [ "${SKIP_APP}" = "0" ]; then
+  say "building owlette swoop"
+  ( cd "${REPO}/desktop/viewer" && ../node_modules/.bin/tauri build --bundles deb --ci )
+fi
+VIEWER_DEB="$(ls -t "${REPO}"/desktop/viewer/target/release/bundle/deb/*.deb 2>/dev/null | head -1 || true)"
+[ -n "${VIEWER_DEB}" ] || { echo "build.sh: no owlette swoop .deb under desktop/viewer/target/release/bundle/deb" >&2; exit 1; }
+say "merging owlette-swoop-viewer from ${VIEWER_DEB##*/} into the payload"
+dpkg-deb -x "${VIEWER_DEB}" "${WORK}/viewer"
+[ -x "${WORK}/viewer/usr/bin/owlette-swoop-viewer" ] \
+  || { echo "build.sh: ${VIEWER_DEB##*/} has no usr/bin/owlette-swoop-viewer" >&2; exit 1; }
+install -Dm755 "${WORK}/viewer/usr/bin/owlette-swoop-viewer" "${PAYLOAD}/usr/bin/owlette-swoop-viewer"
+install -Dm644 "${PACKAGING}/owlette-swoop-viewer.desktop" "${PAYLOAD}/usr/share/applications/owlette-swoop-viewer.desktop"
+VIEWER_DEPENDS="$(dpkg-deb -f "${VIEWER_DEB}" Depends)"
+[ -n "${VIEWER_DEPENDS}" ] || { echo "build.sh: ${VIEWER_DEB##*/} declares no Depends" >&2; exit 1; }
+# one Depends for both apps, each library once
+DEPENDS="$(printf '%s,%s' "${APP_DEPENDS}" "${VIEWER_DEPENDS}" | tr ',' '\n' \
+  | sed 's/^ *//; s/ *$//' | awk 'NF && !seen[$0]++' | paste -sd, - | sed 's/,/, /g')"
+
 # --- the package ------------------------------------------------------------------
 cp "${PACKAGING}/owlette-agent.service" "${PAYLOAD}/usr/lib/systemd/system/"
 cp "${PACKAGING}/owlette-desktop.service" "${PAYLOAD}/usr/lib/systemd/user/"
@@ -113,17 +138,18 @@ Section: admin
 Priority: optional
 Architecture: ${ARCH}
 Installed-Size: ${SIZE_KB}
-Depends: ${APP_DEPENDS}, polkitd | policykit-1
+Depends: ${DEPENDS}, polkitd | policykit-1
 Provides: owlette
 Replaces: owlette
 Conflicts: owlette
 Maintainer: Tridant <support@owlette.app>
 Homepage: https://owlette.app
-Description: owlette — the process monitoring and remote management service and its app
+Description: owlette — the process monitoring and remote management service and its apps
  The owlette service with its own Python runtime under /opt/owlette, the
  systemd unit that runs it, the desktop app with the user unit that starts it
- for every login, and the polkit rule that lets the owlette group control the
- service. Supersedes the separate owlette app package.
+ for every login, owlette swoop (the app owlette-swoop:// links open), and the
+ polkit rule that lets the owlette group control the service. Supersedes the
+ separate owlette app package.
 EOF
 
 say "building ${DEB##*/}"

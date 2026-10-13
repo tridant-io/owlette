@@ -6,6 +6,7 @@ import {
   LogOut,
   Menu,
   Monitor,
+  MonitorPlay,
   Moon,
   RotateCcw,
   RotateCw,
@@ -29,7 +30,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { openExternalUrl, openOwlettePath } from '@/lib/agentCli'
-import { OWLETTE_FILES, appearanceTheme, setAppearanceTheme } from '@/lib/ipc'
+import {
+  OWLETTE_FILES,
+  appearanceTheme,
+  openSwoopViewer,
+  setAppearanceTheme,
+  swoopViewerInstalled,
+} from '@/lib/ipc'
 import { MENU_SURFACE } from '@/lib/surfaces'
 import { DEFAULT_THEME, THEMES, type ThemeChoice } from '@/lib/theme'
 
@@ -72,6 +79,9 @@ interface AppMenuProps {
  *
  * appearance is a submenu so it costs the menu one quiet row. the host owns it:
  * it stores the choice and sets the window theme, and the page follows.
+ *
+ * swoop opens owlette swoop, the viewer app, and leads the menu: it is the row
+ * people reach for. it is there only when the host finds the app installed.
  */
 export function AppMenu({
   paired,
@@ -98,7 +108,16 @@ export function AppMenu({
     })
   }, [])
 
+  const openSwoop = useCallback(() => {
+    void openSwoopViewer().catch((cause: unknown) => {
+      toast.error('could not open the owlette swoop desktop app', {
+        description: cause instanceof Error ? cause.message : String(cause),
+      })
+    })
+  }, [])
+
   const [appearance, setAppearance] = useState<ThemeChoice>(DEFAULT_THEME)
+  const [swoopInstalled, setSwoopInstalled] = useState(false)
 
   useEffect(() => {
     let disposed = false
@@ -108,6 +127,13 @@ export function AppMenu({
       })
       .catch(() => {
         // no bridge (browser dev run) or an unreadable file: the default stands
+      })
+    void swoopViewerInstalled()
+      .then((installed) => {
+        if (!disposed) setSwoopInstalled(installed)
+      })
+      .catch(() => {
+        // no bridge: no app to open, so the row stays hidden
       })
     return () => {
       disposed = true
@@ -134,6 +160,15 @@ export function AppMenu({
         <Menu className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className={`${MENU_SURFACE} w-52`}>
+        {swoopInstalled && (
+          <>
+            <DropdownMenuItem data-testid="menu-swoop" onSelect={openSwoop}>
+              <MonitorPlay aria-hidden className="size-4" />
+              swoop
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         {paired ? (
           <DropdownMenuItem data-testid="menu-leave-site" onSelect={onLeaveSite}>
             <LogOut aria-hidden className="size-4" />

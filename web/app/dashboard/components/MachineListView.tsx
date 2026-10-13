@@ -260,6 +260,10 @@ interface MachineRowProps {
   onScreenshot?: () => void;
   onLiveView?: () => void;
   onSwoop?: () => void;
+  onSwoopApp?: () => void;
+  /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
+  swoopOff?: boolean;
+  onSiteSettings?: () => void;
   showLocalClock?: boolean;
   /** Column-dropdown selection (cpu/disk/gpu/nic). Unset kinds fall back to the machine's
    * reported primary device, which is also what "auto (most active)" selects. */
@@ -297,6 +301,9 @@ export const MachineRow = memo(function MachineRow({
   onScreenshot,
   onLiveView,
   onSwoop,
+  onSwoopApp,
+  swoopOff,
+  onSiteSettings,
   showLocalClock,
   listPref,
   planLimit,
@@ -758,6 +765,9 @@ export const MachineRow = memo(function MachineRow({
               swoopCapable={machine.capabilities?.swoop === 1}
               swoopViewers={machine.swoopViewers}
               onSwoop={onSwoop}
+              onSwoopApp={onSwoopApp}
+              swoopOff={swoopOff}
+              onSiteSettings={onSiteSettings}
               onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}
               rebootSchedule={machine.rebootSchedule}
               planLocked={planLocked}

@@ -400,6 +400,165 @@ describe('escape twice, the keyboard way off the stage', () => {
   });
 });
 
+describe('escape held for two seconds, the way out of fullscreen in owlette swoop', () => {
+  const APP_UA = 'Mozilla/5.0 owlette-swoop-viewer/0.0.0';
+  const BROWSER_UA = 'Mozilla/5.0 Chrome/140.0';
+  let exitFullscreen: jest.Mock;
+  let exitPointerLock: jest.Mock;
+
+  /** a capture on a fullscreen stage, under the given user agent. */
+  const fullscreenHarness = (ua: string): Harness => {
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(ua);
+    const h = harness();
+    Object.defineProperty(document, 'fullscreenElement', { value: h.target, configurable: true });
+    return h;
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    exitFullscreen = jest.fn(() => Promise.resolve());
+    exitPointerLock = jest.fn();
+    Object.defineProperty(document, 'exitFullscreen', { value: exitFullscreen, configurable: true });
+    Object.defineProperty(document, 'exitPointerLock', { value: exitPointerLock, configurable: true });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+    Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+    Reflect.deleteProperty(document, 'exitFullscreen');
+    Reflect.deleteProperty(document, 'exitPointerLock');
+  });
+
+  it('leaves fullscreen and lets go of the pointer two seconds into the hold, however it repeats', () => {
+    const h = fullscreenHarness(APP_UA);
+    setPointerLock(h.target);
+
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+    jest.advanceTimersByTime(1000);
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape', { repeat: true }));
+    jest.advanceTimersByTime(999);
+    expect(exitFullscreen).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(1);
+    expect(exitFullscreen).toHaveBeenCalledTimes(1);
+    expect(exitPointerLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing when escape is let go at 1.9 s', () => {
+    const h = fullscreenHarness(APP_UA);
+
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+    jest.advanceTimersByTime(1900);
+    h.target.dispatchEvent(keyEvent('keyup', 'Escape'));
+    jest.advanceTimersByTime(10_000);
+
+    expect(exitFullscreen).not.toHaveBeenCalled();
+  });
+
+  it('never arms in a browser, which owns its own escape hold', () => {
+    const h = fullscreenHarness(BROWSER_UA);
+
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+    expect(jest.getTimerCount()).toBe(0);
+    jest.advanceTimersByTime(10_000);
+
+    expect(exitFullscreen).not.toHaveBeenCalled();
+    expect(h.sent()).toEqual([{ t: 'k', code: 'Escape', down: true, seq: 1, tsUs: TS_US }]);
+  });
+});
+
+describe('keys owlette swoop captures itself', () => {
+  // desktop/viewer/src/windows.rs: the macos build ends its ua with ` (keys)`
+  const MAC_APP =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) owlette-swoop-viewer/4.1.8 (keys)';
+  type NativeKeyHost = { __owletteNativeKey?: (code: string, down: boolean) => void };
+  const nativeKeyHost = (): NativeKeyHost => window as unknown as NativeKeyHost;
+  const keys = (h: Harness) => h.sent().map((m) => (m.t === 'k' ? `${m.code}:${m.down ? 'down' : 'up'}` : m.t));
+
+  /** a mac viewing a mac in the app, the stage focused as fullscreen leaves it. */
+  const appHarness = (options: Partial<Parameters<typeof attachInputCapture>[0]> = {}): Harness => {
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(MAC_APP);
+    const h = harness({ hostOs: 'macos', viewerIsMac: true, ...options });
+    h.target.tabIndex = -1;
+    h.target.focus();
+    return h;
+  };
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("sends the app's down, and the page's own keyup releases it", () => {
+    const h = appHarness();
+    h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
+    // macos hands over only the down; webkit gives the page the up
+    nativeKeyHost().__owletteNativeKey?.('KeyQ', true);
+    h.target.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    h.target.dispatchEvent(keyEvent('keyup', 'MetaLeft'));
+    expect(keys(h)).toEqual(['MetaLeft:down', 'KeyQ:down', 'KeyQ:up', 'MetaLeft:up']);
+
+    // nothing is left held for a blur to release
+    h.clear();
+    window.dispatchEvent(new Event('blur'));
+    expect(h.sent()).toHaveLength(0);
+  });
+
+  it('sends a second down of a held key once: a shortcut fires once on the host', () => {
+    const h = appHarness();
+    h.capture.nativeKey('KeyW', true);
+    h.capture.nativeKey('KeyW', true);
+    h.capture.nativeKey('KeyW', false);
+    expect(keys(h)).toEqual(['KeyW:down', 'KeyW:up']);
+  });
+
+  it('releases what it pressed on blur, with everything else', () => {
+    const h = appHarness();
+    h.capture.nativeKey('KeyQ', true);
+    h.clear();
+    window.dispatchEvent(new Event('blur'));
+    expect(keys(h)).toEqual(['KeyQ:up']);
+  });
+
+  it('goes through the modifier mapping, as a typed key does', () => {
+    const h = appHarness({ hostOs: 'windows' });
+    h.capture.nativeKey('MetaLeft', true);
+    h.target.dispatchEvent(keyEvent('keyup', 'MetaLeft'));
+    expect(keys(h)).toEqual(['ControlLeft:down', 'ControlLeft:up']);
+  });
+
+  it('takes no down while the stage lacks focus, since its keyup would never reach the stage', () => {
+    const h = appHarness();
+    h.target.blur();
+    h.capture.nativeKey('KeyQ', true);
+    expect(h.sent()).toHaveLength(0);
+  });
+
+  it('exists only in the app that says it captures keys, and goes on detach', () => {
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 Chrome/141.0');
+    const browser = harness();
+    expect(nativeKeyHost().__owletteNativeKey).toBeUndefined();
+    browser.capture.detach();
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0) owlette-swoop-viewer/4.1.8');
+    const windowsApp = harness();
+    expect(nativeKeyHost().__owletteNativeKey).toBeUndefined();
+    windowsApp.capture.detach();
+
+    const h = appHarness();
+    expect(nativeKeyHost().__owletteNativeKey).toBeDefined();
+    h.capture.detach();
+    expect(nativeKeyHost().__owletteNativeKey).toBeUndefined();
+    h.capture.nativeKey('KeyQ', true);
+    expect(keys(h)).toEqual([]);
+  });
+
+  it("leaves a newer capture's in place when an older one detaches", () => {
+    const older = appHarness();
+    const newer = appHarness();
+    older.capture.detach();
+    nativeKeyHost().__owletteNativeKey?.('KeyQ', true);
+    expect(keys(newer)).toEqual(['KeyQ:down']);
+  });
+});
+
 describe('a held modifier', () => {
   it('holds an armed modifier through the next key and releases it after', () => {
     const h = harness({ hostOs: 'macos' });

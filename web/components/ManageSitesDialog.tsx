@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Pencil, Trash2, Check, X, Plus, User, Search, ChevronDown } from 'lucide-react';
+import { Pencil, Trash2, Check, X, Plus, User, Search, ChevronDown, MonitorPlay, MonitorOff } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
 import { SiteMachinesList } from '@/components/SiteMachinesList';
@@ -143,9 +143,35 @@ function SiteSettingsSwitches({ siteId }: { siteId: string }) {
   );
 }
 
+/** A row's swoop state, so whether a site has swoop on reads without its editor. */
+function SiteSwoopState({ siteId }: { siteId: string }) {
+  const { settings, loading } = useSwoopSettings(siteId);
+  if (loading) return null;
+  const label = settings.enabled ? 'swoop on' : 'swoop off';
+  const Icon = settings.enabled ? MonitorPlay : MonitorOff;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          role="img"
+          aria-label={label}
+          className={`shrink-0 ${settings.enabled ? 'text-primary' : 'text-muted-foreground'}`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{label}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 interface ManageSitesDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Opened as "site settings": this site's editor is open from the start. */
+  editSiteId?: string;
   sites: Site[];
   currentSiteId: string;
   /** Count for the CURRENT site only. Present => the "machines" column shows,
@@ -161,6 +187,7 @@ interface ManageSitesDialogProps {
 export function ManageSitesDialog({
   open,
   onOpenChange,
+  editSiteId,
   sites,
   currentSiteId,
   machineCount,
@@ -247,6 +274,15 @@ export function ManageSitesDialog({
     setEditingName('');
     setEditingTimezone('UTC');
   };
+
+  // set during render, not in an effect, so the editor mounts with the dialog and
+  // its name field holds focus. starts false: a lazily loaded dialog can mount open.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    const site = open && editSiteId ? sites.find((s) => s.id === editSiteId) : undefined;
+    if (site) startEditingSite(site);
+  }
 
   const handleSaveSite = async (siteId: string) => {
     if (!editingName.trim()) {
@@ -409,7 +445,7 @@ export function ManageSitesDialog({
             </div>
             <div className="flex items-center justify-between gap-3">
               <DialogDescription className="text-muted-foreground">
-                edit site names, timezones, or delete sites
+                edit site names, timezones, swoop and keep screens awake, or delete sites
               </DialogDescription>
               {filter.trim() && (
                 <span className="shrink-0 text-xs text-muted-foreground">
@@ -466,6 +502,7 @@ export function ManageSitesDialog({
                               current
                             </span>
                           )}
+                          <SiteSwoopState siteId={site.id} />
                         </div>
 
                         {/* id — click to copy */}

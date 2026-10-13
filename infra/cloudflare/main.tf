@@ -106,3 +106,40 @@ resource "cloudflare_load_balancer" "owlette" {
     failover_across_pools = true
   }
 }
+
+# Request headers the edge adds before any origin fetch, on both app hosts:
+# X-Owlette-Asn is the client's network (its ASN) and X-Owlette-Edge is a
+# shared secret the origins compare against EDGE_SHARED_SECRET. Every origin
+# answers direct requests around cloudflare, where a client-supplied
+# CF-Connecting-IP is believed, so a request without the secret is treated as
+# one of unknown network. "set" overwrites a client's own copy of either header.
+# The rule matches the public host, so it also covers requests the load
+# balancer sends to the vercel standby.
+resource "cloudflare_ruleset" "edge_headers" {
+  zone_id     = var.zone_id
+  name        = "owlette edge headers"
+  description = "client asn and the edge secret to the origin"
+  kind        = "zone"
+  phase       = "http_request_late_transform"
+
+  rules {
+    description = "x-owlette-asn and x-owlette-edge on owlette.app and dev.owlette.app"
+    expression  = "http.host in {\"owlette.app\" \"dev.owlette.app\"}"
+    action      = "rewrite"
+    enabled     = true
+
+    action_parameters {
+      headers {
+        name       = "X-Owlette-Asn"
+        operation  = "set"
+        expression = "to_string(ip.src.asnum)"
+      }
+
+      headers {
+        name      = "X-Owlette-Edge"
+        operation = "set"
+        value     = var.edge_shared_secret
+      }
+    }
+  }
+}

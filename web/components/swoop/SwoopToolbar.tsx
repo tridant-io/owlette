@@ -1,10 +1,10 @@
 'use client';
 
 /**
- * the session bar: the machine's name, a badge only when something is wrong,
- * the one gesture that takes fullscreen, keyboard lock and pointer lock
- * together, and whatever menus the page hands it as children. every button is
- * an icon with a tooltip; the bar stays clean.
+ * the session bar: the way back to the dashboard, the machine's name, a badge
+ * only when something is wrong, the one gesture that takes fullscreen,
+ * keyboard lock and pointer lock together, and whatever menus the page hands
+ * it as children. every button is an icon with a tooltip; the bar stays clean.
  *
  * **all three locks ride one click, and the order is fixed.** keyboard lock is
  * only granted in js-initiated fullscreen, so fullscreen must be awaited first;
@@ -26,21 +26,35 @@
  * the badges run vertically, the buttons stack at the bottom, and a notice
  * that is a sentence becomes an icon that says it on hover. the name reads
  * toward the picture: up a left bar, down a right one.
+ *
+ * inside owlette swoop the bar is also the window's title bar: it drags the
+ * window, and on top it ends in the window's controls (on macos it starts
+ * after the traffic lights instead). on a side, the controls move to a slim
+ * strip across the top of the window that holds nothing else, so they cover as
+ * little of the picture as they can.
  */
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { Eye, Gauge, Info, Maximize, Minimize, PowerOff, RotateCcw } from 'lucide-react';
+import Link from 'next/link';
+import { ArrowLeft, Eye, Gauge, Info, Maximize, Minimize, PowerOff, RotateCcw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopBarMenuPlacement, menuPlacementFor } from '@/components/swoop/barMenuPlacement';
 import { BarTooltip } from '@/components/swoop/BarTooltip';
+import {
+  SwoopWindowControls,
+  SwoopWindowStrip,
+  TRAFFIC_LIGHTS_INSET_PX,
+  dragRegion,
+} from '@/components/swoop/SwoopWindowControls';
 import type { SwoopBarPosition } from '@/lib/swoop/barPosition';
 import { swoopClipboard } from '@/lib/swoop/clipboard';
 import { cn } from '@/lib/utils';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock, keyboardLock } from '@/lib/swoop/keyboardLock';
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
+import { useViewerAppNativeKeys, useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 const subscribeNever = (): (() => void) => () => {};
 
 /** an app-level round trip above this, or a delay rise above it, is a poor connection. */
@@ -158,6 +172,9 @@ export function SwoopToolbar({
   // the supported case and hydration corrects it once, without a second render
   // pass on every browser that does support it.
   const lockSupported = useSyncExternalStore(subscribeNever, hasKeyboardLock, () => true);
+  const nativeKeys = useViewerAppNativeKeys();
+  // null in a browser, where the bar is only the session's
+  const platform = useViewerAppPlatform();
 
   useEffect(() => {
     const sync = () => {
@@ -220,51 +237,83 @@ export function SwoopToolbar({
   );
 
   return (
-    <div
-      ref={ref}
-      data-testid="session-bar"
-      className={cn(
-        'flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2',
-        'md:bar-side:w-11 md:bar-side:shrink-0 md:bar-side:flex-col md:bar-side:flex-nowrap md:bar-side:border-b-0',
-        'md:bar-side:px-0 md:bar-side:py-3 md:bar-left:border-r md:bar-right:border-l',
-      )}
-    >
-      <span
-        className={cn('truncate text-sm font-medium text-foreground md:bar-side:min-h-0', VERTICAL)}
-        title={machineId}
+    <SwoopBarMenuPlacement.Provider value={menuPlacementFor(position)}>
+      <div
+        ref={ref}
+        data-testid="session-bar"
+        {...(platform ? dragRegion : {})}
+        className={cn(
+          // the same 48 px as the picker's header, so the two bars line up window to window
+          // the bottom rule is an inset shadow, not a border: the box stays exactly 48 px, so
+          // every icon's centre is the bar's centre (a border would add its own pixel below)
+          'flex min-h-12 flex-wrap items-center gap-2 bg-card px-3 py-2 shadow-[inset_0_-1px_0_0_var(--border)] md:bar-side:min-h-0 md:bar-side:shadow-none',
+          // in the app a session opens in the picker's window, whose header has the bar's
+          // height and tone: the bar stays put and only what is on it fades in
+          platform && '[&>*]:motion-safe:animate-in [&>*]:fade-in-0 [&>*]:animation-duration-300',
+          'md:bar-side:w-11 md:bar-side:shrink-0 md:bar-side:flex-col md:bar-side:flex-nowrap md:bar-side:border-b-0',
+          'md:bar-side:px-0 md:bar-side:py-3 md:bar-left:border-r md:bar-right:border-l',
+          // a side bar starts below the strip's controls on the edge they share
+          platform === 'mac' && 'md:bar-left:pt-11',
+          (platform === 'windows' || platform === 'linux') && 'md:bar-right:pt-11',
+        )}
       >
-        {machineId}
-      </span>
+        {platform === 'mac' && (
+          <span
+            aria-hidden
+            data-testid="traffic-lights-inset"
+            className="-ml-3 shrink-0 self-stretch md:bar-side:hidden"
+            style={{ width: TRAFFIC_LIGHTS_INSET_PX }}
+          />
+        )}
+        {/* the way out in every state, a refused or failed session included.
+            leaving unmounts the page, which ends a live session properly.
+            inside the owlette swoop desktop app the way back is its picker. */}
+        <BarTooltip label={platform ? 'back to machines' : 'back to dashboard'}>
+          <Button asChild variant="ghost" size="icon-sm">
+            <Link
+              href={platform ? '/swoop' : '/dashboard'}
+              aria-label={platform ? 'back to machines' : 'back to dashboard'}
+            >
+              <ArrowLeft aria-hidden />
+            </Link>
+          </Button>
+        </BarTooltip>
 
-      {badge && (
-        <Badge variant={badge.tone} data-testid="session-badge" className={VERTICAL}>
-          {badge.label}
-        </Badge>
-      )}
+        <span
+          className={cn('truncate text-sm font-medium text-foreground md:bar-side:min-h-0', VERTICAL)}
+          title={machineId}
+        >
+          {machineId}
+        </span>
 
-      {session && !session.ctl && (
-        <Badge variant="outline" className={VERTICAL}>
-          <Eye aria-hidden />
-          view only
-        </Badge>
-      )}
+        {badge && (
+          <Badge variant={badge.tone} data-testid="session-badge" className={VERTICAL}>
+            {badge.label}
+          </Badge>
+        )}
 
-      {notice && <Notice text={notice} />}
-      {!hostReads && (
-        <Notice
-          text="the machine's clipboard is not shared: on a mac, allow owlette under paste from other apps in system settings"
-          testId="clipboard-notice"
-        />
-      )}
-      {clipboardHeld && (
-        <Notice
-          text="your browser held back the machine's copy: click the picture to take it, or allow the clipboard for this site"
-          testId="clipboard-held-notice"
-        />
-      )}
+        {session && !session.ctl && (
+          <Badge variant="outline" className={VERTICAL}>
+            <Eye aria-hidden />
+            view only
+          </Badge>
+        )}
 
-      <div className="ml-auto flex items-center gap-1 md:bar-side:ml-0 md:bar-side:mt-auto md:bar-side:flex-col">
-        <SwoopBarMenuPlacement.Provider value={menuPlacementFor(position)}>
+        {notice && <Notice text={notice} />}
+        {!hostReads && (
+          <Notice
+            text="the machine's clipboard is not shared: on a mac, allow owlette under paste from other apps in system settings"
+            testId="clipboard-notice"
+          />
+        )}
+        {clipboardHeld && (
+          <Notice
+            text="your browser held back the machine's copy: click the picture to take it, or allow the clipboard for this site"
+            testId="clipboard-held-notice"
+          />
+        )}
+
+        <div className="ml-auto flex items-center gap-1 md:bar-side:ml-0 md:bar-side:mt-auto md:bar-side:flex-col">
           {children}
 
           <BarTooltip label={statsOpen ? 'hide latency stats' : 'latency stats'}>
@@ -281,15 +330,17 @@ export function SwoopToolbar({
 
           {/* keyboard lock is chromium-only and brave ships with it off: the
               tooltip says which case this browser is, and the keyboard menu
-              covers the rest either way. */}
+              covers the rest either way. owlette swoop captures keys itself. */}
           <BarTooltip
             label={
               <p className="max-w-xs">
                 {fullscreen
                   ? 'exit fullscreen'
-                  : lockSupported
-                    ? 'fullscreen captures the keyboard and mouse: shortcuts like alt+tab go to the machine.'
-                    : 'fullscreen captures the mouse; this browser keeps its own shortcuts (alt+tab, ctrl+w). the keyboard menu sends those.'}
+                  : nativeKeys
+                    ? `fullscreen: the app hands every shortcut it can to the machine; hold esc to come back.${platform === 'mac' ? ' cmd+tab stays on this mac.' : ''}`
+                    : lockSupported
+                      ? 'fullscreen captures the keyboard and mouse: shortcuts like alt+tab go to the machine.'
+                      : 'fullscreen captures the mouse; this browser keeps its own shortcuts (alt+tab, ctrl+w). the keyboard menu sends those.'}
               </p>
             }
           >
@@ -304,8 +355,8 @@ export function SwoopToolbar({
             </Button>
           </BarTooltip>
 
-          {/* swoop runs in its own tab, so the only way on from an ended or failed
-              session is another one; "end" has nothing left to end there. */}
+          {/* an ended or failed session has nothing left to end: the way on is
+              another one, or the way back. */}
           {state === 'ended' || state === 'error' ? (
             reconnectButton
           ) : (
@@ -318,8 +369,12 @@ export function SwoopToolbar({
               </BarTooltip>
             </>
           )}
-        </SwoopBarMenuPlacement.Provider>
+        </div>
+
+        <SwoopWindowControls className="-my-2 -mr-3 self-stretch md:bar-side:hidden" />
+        {/* fixed to the window, so it takes no room in the bar */}
+        <SwoopWindowStrip className="hidden md:bar-side:flex" />
       </div>
-    </div>
+    </SwoopBarMenuPlacement.Provider>
   );
 }

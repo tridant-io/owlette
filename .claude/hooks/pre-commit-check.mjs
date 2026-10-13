@@ -1,20 +1,21 @@
 /**
  * PreToolUse hook — pre-commit build check.
  *
- * On git commit/push, reads session-edits.json and runs tsc + jest for web/
- * changes and py_compile + pytest for agent/ changes. Blocks on any error.
+ * On a git commit/push in this repo, reads this session's entries in
+ * session-edits.json and runs tsc + jest for web/ changes and py_compile +
+ * pytest for agent/ changes. Blocks on any error. Commits in other repos, and
+ * other sessions' edits, are not this session's to gate.
  */
 
-import { readFileSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { execSync } from 'child_process'
 import { agentPython, AGENT_VENV_SETUP_HINT } from './lib/agent-python.mjs'
+import { sessionEdits } from './lib/edit-log.mjs'
 import { deny } from './lib/hook-output.mjs'
+import { COMMIT_OR_PUSH, landsInProject } from './lib/push-target.mjs'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const SESSION_FILE = join(__dirname, '..', 'session-edits.json')
-const PROJECT_ROOT = join(__dirname, '..', '..')
+const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 let input = ''
 for await (const chunk of process.stdin) {
@@ -23,15 +24,12 @@ for await (const chunk of process.stdin) {
 
 try {
   const data = JSON.parse(input)
-  const toolInput = data.tool_input || {}
 
-  const command = toolInput.command || ''
-  const isCommit = /\bgit\s+(commit|push)\b/.test(command)
   // No output on a pass: an "allow" here would skip the permission prompt for
   // every Bash call in the repo, which is what the old `approve` did.
-  if (!isCommit) process.exit(0)
+  if (!landsInProject(data, COMMIT_OR_PUSH)) process.exit(0)
 
-  const editedFiles = getEditedFiles()
+  const editedFiles = sessionEdits(data.session_id)
   if (editedFiles.length === 0) process.exit(0)
 
   const hasWeb = editedFiles.some(f => /[/\\]web[/\\]/.test(f))
@@ -157,14 +155,3 @@ try {
 }
 
 process.exit(0)
-
-function getEditedFiles() {
-  if (!existsSync(SESSION_FILE)) return []
-  try {
-    const entries = JSON.parse(readFileSync(SESSION_FILE, 'utf-8'))
-    const seen = new Set()
-    return entries
-      .map(e => e.path)
-      .filter(p => { if (seen.has(p)) return false; seen.add(p); return true })
-  } catch { return [] }
-}

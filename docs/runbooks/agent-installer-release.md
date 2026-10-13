@@ -413,7 +413,7 @@ The signing decision is deferred. Treat it as a business and product call, not a
 - If using CI artifacts for rollout, download them from the GitHub Release.
 - The signed, notarized pkg comes only from CI: the Apple secrets live in the tag-restricted `release` environment, and a run without them stops at `build-macos` with nothing attested.
 - The fleet update sends each machine the file for its own platform; a machine whose platform the version has no file for is skipped and named. A version missing a platform's file leaves that platform's machines on their current version.
-- The silent install (`/ADD=`) is Windows only; macOS and Linux pair from the app after installing.
+- The silent install (`/ADD=`) is Windows only; macOS and Linux spend a generated phrase through a `config/pairing.json` preseed, which the dashboard's generate-code tab renders.
 - Demoting to an older version may require rerunning the 3-step finalize.
 - A set-latest-only admin endpoint may exist, but this runbook does not confirm it.
 - Soft-delete is gated by a minimum of 2 active versions.

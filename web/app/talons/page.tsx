@@ -66,6 +66,7 @@ export default function TalonsPage() {
   } = useTalonPresets(currentSiteId || null);
 
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -162,7 +163,14 @@ export default function TalonsPage() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => setManageDialogOpen(true)}
+        onManageSites={() => {
+          setManageEditSiteId(undefined);
+          setManageDialogOpen(true);
+        }}
+        onSiteSettings={() => {
+          setManageEditSiteId(currentSiteId);
+          setManageDialogOpen(true);
+        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
       />
@@ -170,6 +178,7 @@ export default function TalonsPage() {
       <ManageSitesDialog
         open={manageDialogOpen}
         onOpenChange={setManageDialogOpen}
+        editSiteId={manageEditSiteId}
         sites={sites}
         currentSiteId={currentSiteId}
         onUpdateSite={updateSite}

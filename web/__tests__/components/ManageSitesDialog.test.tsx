@@ -26,8 +26,9 @@ jest.mock('@/hooks/useUserManagement', () => ({
 }));
 
 // the switches follow these snapshots; swoop off and keep awake on are each one's default.
+let swoopEnabled = false;
 jest.mock('@/hooks/useSwoopSettings', () => ({
-  useSwoopSettings: () => ({ settings: { enabled: false }, loading: false }),
+  useSwoopSettings: () => ({ settings: { enabled: swoopEnabled }, loading: false }),
 }));
 jest.mock('@/hooks/useDisplaySettings', () => ({
   useDisplaySettings: () => ({ settings: { keepAwake: true }, loading: false }),
@@ -55,13 +56,14 @@ const fetchMock = jest.fn();
 
 beforeEach(() => {
   siteAdmin = true;
+  swoopEnabled = false;
   fetchMock.mockReset().mockResolvedValue({ ok: true, json: async () => ({}) });
   global.fetch = fetchMock as unknown as typeof fetch;
   toastSuccess.mockReset();
   toastError.mockReset();
 });
 
-function renderDialog() {
+function renderDialog(props: Partial<React.ComponentProps<typeof ManageSitesDialog>> = {}) {
   const user = userEvent.setup();
   render(
     <TooltipProvider>
@@ -73,6 +75,7 @@ function renderDialog() {
         onUpdateSite={jest.fn()}
         onDeleteSite={jest.fn()}
         onCreateSite={jest.fn()}
+        {...props}
       />
     </TooltipProvider>,
   );
@@ -119,6 +122,35 @@ describe('where the switches live', () => {
 
     expect(screen.getByTestId('site-machines-list')).toBeInTheDocument();
     expect(screen.queryByRole('switch')).toBeNull();
+  });
+});
+
+// site settings opens the dialog straight onto the current site's editor, and
+// every row says whether swoop is on without opening its editor.
+describe('reaching the swoop switch', () => {
+  it("opens on the site's editor when opened as site settings", () => {
+    renderDialog({ editSiteId: SITE.id });
+
+    expect(screen.getByRole('button', { name: 'edit Site A' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByLabelText('site name')).toHaveFocus();
+    expect(swoopSwitch()).toBeInTheDocument();
+  });
+
+  it('opens on the list otherwise', () => {
+    renderDialog();
+
+    expect(screen.getByRole('button', { name: 'edit Site A' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('switch')).toBeNull();
+  });
+
+  it.each([
+    [false, 'swoop off'],
+    [true, 'swoop on'],
+  ])('shows swoop enabled=%p on the row as %p', (enabled, label) => {
+    swoopEnabled = enabled;
+    renderDialog();
+
+    expect(screen.getByRole('img', { name: label })).toBeInTheDocument();
   });
 });
 

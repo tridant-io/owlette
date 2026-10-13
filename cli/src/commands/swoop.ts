@@ -1,6 +1,8 @@
 /**
  * `owlette swoop <machineId> --site <siteId>` — open the swoop remote-desktop
- * viewer for a machine.
+ * viewer for a machine, in owlette swoop (the desktop viewer app) when it is
+ * installed and the profile points at owlette.app or dev.owlette.app, else in
+ * the browser.
  *
  * Drives one read: GET /api/sites/{siteId}/machines/{machineId}, to prove the
  * machine exists and the caller may reach it before a browser window opens on
@@ -8,7 +10,7 @@
  *
  * The cli never mints a viewer token and never touches the media path. Starting
  * a session, the second-factor step-up that control requires, and the WebRTC
- * connection all happen in the browser — an api key cannot start a swoop
+ * connection all happen in the viewer page — an api key cannot start a swoop
  * session at all (`api_key_not_permitted`), so there is nothing here to hand it.
  */
 
@@ -17,6 +19,9 @@ import { loadConfig } from '../config';
 import { fetchWithTimeout } from '../lib/http';
 import { errLine, isJson, printJson, printLine } from '../lib/output';
 import { openBrowser } from '../lib/openBrowser';
+import { findViewerApp, launchViewerApp, viewerAppAcceptsUrl } from '../lib/viewerApp';
+
+type Viewer = 'app' | 'browser';
 
 interface MachineCapabilities {
   swoop?: number;
@@ -33,9 +38,10 @@ interface MachineDetail {
 export function registerSwoopCommand(program: Command): void {
   program
     .command('swoop <machineId>')
-    .description('open the swoop remote-desktop viewer for a machine in your browser')
+    .description('open the swoop remote-desktop viewer for a machine in owlette swoop, else your browser')
     .requiredOption('--site <siteId>', 'site id that owns the machine')
-    .option('--no-open', 'print the viewer url without opening a browser')
+    .option('--no-open', 'print the viewer url and open nothing')
+    .option('--browser', 'open in the browser even when owlette swoop is installed')
     .action(async (machineId: string, opts, cmd) => {
       const { apiUrl, token, json } = resolveAuth(cmd);
       if (!token) return;
@@ -61,14 +67,15 @@ export function registerSwoopCommand(program: Command): void {
 
       const url = `${apiUrl}/swoop/${encodeURIComponent(siteId)}/${encodeURIComponent(machineId)}`;
       const open = opts.open !== false;
+      const viewer = open ? await openViewer(url, opts.browser === true) : null;
 
       if (json) {
-        printJson({ siteId, machineId, url, opened: open });
+        printJson({ siteId, machineId, url, opened: open, viewer });
       } else {
         printLine(url);
       }
 
-      // Only the browser can tell whether a session is admitted, so every
+      // Only the viewer page can tell whether a session is admitted, so every
       // caveat below is a note rather than a refusal.
       if (!json) {
         if (swoopCapability === undefined) {
@@ -79,11 +86,18 @@ export function registerSwoopCommand(program: Command): void {
         if (machine.online === false) {
           errLine(`owlette: machine ${machineId} is offline; swoop cannot reach it until it reconnects.`);
         }
-        errLine('owlette: taking control asks for a second factor in the browser.');
+        errLine('owlette: taking control asks for a second factor in the viewer.');
+        if (viewer === 'app') errLine('owlette: opened in the owlette swoop desktop app.');
+        if (viewer === 'browser') errLine('owlette: opened in your browser.');
       }
-
-      if (open) openBrowser(url);
     });
+}
+
+async function openViewer(url: string, browserOnly: boolean): Promise<Viewer> {
+  const exe = browserOnly || !viewerAppAcceptsUrl(url) ? null : findViewerApp();
+  if (exe && (await launchViewerApp(exe, url))) return 'app';
+  openBrowser(url);
+  return 'browser';
 }
 
 function resolveAuth(cmd: Command): { apiUrl: string; token: string | null; json: boolean } {

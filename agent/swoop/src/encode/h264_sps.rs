@@ -18,6 +18,42 @@
 /// `nal_unit_type` of a sequence parameter set.
 pub const NAL_SPS: u8 = 7;
 
+/// Every NAL unit of an Annex-B buffer as the byte range of its payload: the
+/// header byte(s) in, the start code and the zeros a 4-byte start code leads
+/// with out. Codec-agnostic, so the HEVC callers read their own two-byte type
+/// from it; [`nal_units`] is the H.264 reading.
+pub fn nal_ranges(data: &[u8]) -> Vec<std::ops::Range<usize>> {
+    let mut starts = Vec::new();
+    let mut i = 0usize;
+    while i + 2 < data.len() {
+        if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+            starts.push(i + 3);
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    starts
+        .iter()
+        .enumerate()
+        .filter_map(|(n, &start)| {
+            let mut end = starts.get(n + 1).map_or(data.len(), |&next| next - 3);
+            while end > start && data[end - 1] == 0 {
+                end -= 1;
+            }
+            (end > start).then_some(start..end)
+        })
+        .collect()
+}
+
+/// Every H.264 NAL unit of an Annex-B buffer, with its `nal_unit_type`.
+pub fn nal_units(data: &[u8]) -> Vec<(u8, std::ops::Range<usize>)> {
+    nal_ranges(data)
+        .into_iter()
+        .map(|range| (data[range.start] & 0x1f, range))
+        .collect()
+}
+
 /// The values of `bitstream_restriction` that come before the two this module
 /// rewrites, as the spec infers them when the block is absent (H.264 E.2.1):
 /// motion vectors may cross picture boundaries, `max_bytes_per_pic_denom` 2,
@@ -403,6 +439,19 @@ impl BitWriter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn annexb_splitting_handles_three_and_four_byte_start_codes() {
+        let data = [0, 0, 0, 1, 0x67, 0x42, 0, 0, 1, 0x65, 0xAA, 0xBB];
+        let nals = super::nal_units(&data);
+        assert_eq!(nals.len(), 2);
+        assert_eq!(nals[0].0, super::NAL_SPS);
+        assert_eq!(&data[nals[0].1.clone()], &[0x67, 0x42]);
+        assert_eq!(nals[1].0, 5);
+        assert_eq!(&data[nals[1].1.clone()], &[0x65, 0xAA, 0xBB]);
+        // a start code with nothing after it is no unit
+        assert!(super::nal_ranges(&[0, 0, 1, 0, 0, 1]).is_empty());
+    }
+
     use super::*;
 
     use serde::Deserialize;

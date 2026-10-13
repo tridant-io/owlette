@@ -24,6 +24,10 @@ const API_DIR = join(ROOT, 'app', 'api');
 const INTERNAL_ROUTES = new Set([
   '/api/auth/session',
   '/api/auth/verify-email',
+  '/api/auth/app-link',
+  '/api/auth/app-link/start',
+  '/api/auth/app-link/approve',
+  '/api/auth/app-link/exchange',
   '/api/mfa/setup',
   '/api/mfa/verify-setup',
   '/api/mfa/verify-login',

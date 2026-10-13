@@ -1,5 +1,5 @@
 # swoop across the internet — Tasks
-**Progress**: 6/9 complete
+**Progress**: 7/9 complete
 
 ## Wave 1: STUN on both ends
 
@@ -69,10 +69,14 @@
   - Do: coturn on the kiosk VM (lab only, long-term credentials); an ignored live test from B4A allocates, permits,
     binds and echoes through it. Repeat against Cloudflare when the owner's key exists.
   - Done when: the readings are in `proof.md`.
+  - **Status 2026-10-11:** the coturn half is in `proof.md` (allocation only; the lab's private addresses rule out
+    permissions and relayed media). The Cloudflare key now exists on railway-dev, railway-prod and vercel-prod, so
+    the Cloudflare half is unblocked and owed.
 
 ## Wave 4: ship it
 
-- [ ] **Task 4.1: Docs and release** `[agent]` (docs and changelog done 2026-10-09; release pending)
+- [x] **Task 4.1: Docs and release** `[agent]` (docs and changelog done 2026-10-09; released in 4.1.8 to dev
+  2026-10-10; TEC-A4D, TEC-B4A, TEC-MBA and owlette-kiosk report 4.1.8, read from the dev api 2026-10-11)
   - Order: the web with the viewer change (the browser's stage 2 no longer stands down for a host relay) must be
     live in an environment before its machines get 4.1.8; an old web with a new host leaves a UDP-blocked viewer
     without its browser relay. Dev deploys the web on merge; at the prod promotion, web first, then the installer.
@@ -84,6 +88,8 @@
     railway-dev (`.claude/skills/env-management.md`); one swoop session from a phone on a cellular network, with and
     without the key.
   - Done when: both sessions are recorded in `proof.md`.
+  - **Status 2026-10-11:** the key is created and set on railway-dev, railway-prod and vercel-prod. The cellular
+    sessions are owed; #328 (5G hotspot) stays open until that rerun.
 
 ## Log
 ### 2026-10-04

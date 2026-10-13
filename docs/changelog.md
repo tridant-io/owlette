@@ -11,33 +11,6 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
-### fixed — swoop connects from strict networks through the relay
-
-A swoop session from a phone hotspot or another strict network failed with
-"even the relay could not get through" although a relay was set up: the
-machine's side never used it, so a viewer whose router allows no inbound path
-had nothing to connect to. From agent 4.1.8 the machine takes a relayed
-address of its own on the TURN server and offers it to the viewer, so a viewer
-behind any router reaches it; the browser's own relay is still tried when
-nothing has connected after three seconds, so a network that allows only TCP
-gets through too. The machine's network has to allow UDP out to the relay on
-port 3478. When no path comes up, the viewer now says which end never reached
-the relay instead of blaming the viewer's network, and the machine's swoop log
-says whether it gathered a relay candidate and why not. Fixes #328.
-
-### changed — agent installers download from download.tridant.io
-
-Agent installers are moving from Firebase Storage to
-`https://download.tridant.io/owlette/`, with permanent links that never
-change. A firewall or proxy that allows hosts by name must allow
-`download.tridant.io` on port 443, or machines cannot update. Versions
-published before the move keep their old links. A published installer is
-never replaced: uploading the same version again is refused, so a fix gets a
-new version number. Every version that becomes latest is also listed in
-tridant id's owlette release log, and a deleted or rolled-back version is
-pulled from it; `/admin/installers` shows each version's status there and can
-retry a failed one.
-
 ### added — owlette free, the pro trial and per-machine billing, for after the beta
 
 The pricing page shows three plans for after the beta: owlette free, with one
@@ -52,6 +25,196 @@ or billed during the beta: the plan limits ship switched off.
 
 An email-and-password sign-up is sent a link to verify its address, and a
 banner offers to send it again until it is opened. Nothing waits on it.
+
+## [4.1.9] - 2026-10-12
+
+### added — swoop hosts on Windows machines without an NVIDIA GPU
+
+A Windows machine with no NVIDIA GPU can now host a swoop session. NVENC still
+comes first and gives the best picture; without it the streamer encodes h264
+through Media Foundation, which ships with Windows: on an Intel or AMD GPU's
+hardware encoder, or, on a machine with none, such as a virtual machine, on the
+CPU at up to 1280x720 and 30 frames a second on two threads, so the machine's
+own work keeps the rest of it. A bigger screen is scaled down to fit. A Windows
+N edition without the Media Feature Pack still needs an NVIDIA GPU.
+
+### changed — a second factor you just passed is the step-up, and a step-up lasts 7 days
+
+A second factor passed at sign-in in the last five minutes now counts as swoop's
+step-up for the machines opened in those five minutes, so the first machine
+after signing in takes control without asking again. That holds for owlette
+swoop signed in from a browser that has just passed one; approving the app from
+a browser that signed in earlier still asks. One step-up now covers a machine
+for 7 days instead of 12 hours. A remembered browser still asks, a kill still
+closes every window on the machine, and a step-up a sign-in stood in for is
+recorded on the audit trail (`step_up_opened`).
+
+### changed — swoop control is tied to the networks you verified (watching only, for now)
+
+Each second factor you pass records the network it ran on (the ISP, not the
+address), and every control request now logs whether it came from one of those
+networks. Nothing is refused yet: this is a two-week observation before swoop
+starts asking once on a new network. Cloudflare adds the network to each
+request; a request that reached an origin around Cloudflare counts as an
+unknown network.
+
+### fixed — a request that reached an origin around Cloudflare could pick its own rate-limit bucket
+
+The origins also answer requests that bypass Cloudflare, and there a
+client-supplied CF-Connecting-IP header chose the per-IP bucket on the sign-in
+and pairing limits. The header now counts only when the request carries the
+edge's shared secret; otherwise the proxy's own view of the address is used.
+
+### fixed — owlette swoop has a sign-in of its own
+
+owlette swoop's sign-in is now a minimal card of its own: no site footer, the
+window draggable anywhere, browser sign-in first and email and password behind
+a link. Its pages render right on the first paint instead of flashing the
+site's layout, and the signed-in email no longer wraps.
+
+### fixed — the swoop picker's loading notice
+
+In owlette swoop the loading text sat just under the title bar; it now sits
+centred in the window with the same spinner as the stage's "connecting" notice.
+
+### fixed — "not you?" on the verify and approve pages
+
+The pages that verify a second factor and approve a device now offer "not you?
+sign in as someone else".
+
+## [4.1.8] - 2026-10-10
+
+### added — owlette swoop, the desktop app for swoop
+
+owlette swoop shows the swoop viewer in a window of its own instead of a
+browser tab: native fullscreen (hold esc for two seconds to leave it), the
+session bar as the window's title bar, and a machine picker at `/swoop` laid
+out as a grid of cards. A session opens in the same window; right-click a card
+for a new one. Closing a window ends its session.
+
+Open it from **swoop** in the owlette app's tray menu or window menu, from the
+monitor icon beside **swoop** in a machine's menu or on a picker card, or with
+`owlette swoop` in the CLI, which uses the browser when the app is not
+installed. Opened from the dashboard, the app arrives signed in as you; started
+on its own, it offers **sign in with your browser**, and taking control offers
+**verify in your browser** for the second factor. On Windows the clipboard
+works both ways without a permission prompt, and while a session captures the
+tray offers **kill all swoop sessions on this machine**. Every agent installer
+now carries the app on Windows, macOS and Linux and registers
+`owlette-swoop://` links; a download for computers without the agent is not
+published yet.
+
+Known gaps: Windows gets h264 only in the app; the machine's cursor stays soft
+until the streamer sends it at full size; cmd+tab cannot be sent from macOS
+(use the keyboard menu); and the app has no pointer lock on macOS. (#325)
+
+### changed — swoop's switch is easier to find
+
+The site switcher has a **site settings** item that opens the current site's
+settings, swoop switch included, without going through the list of every
+site. On a site with swoop off, the menu of a machine that can stream offers
+a site owner or admin **turn on swoop…**, which opens those settings, and
+tells a member that swoop is off and to ask a site owner or admin. Both get
+live view in the meantime. Each row in manage sites shows whether that site
+has swoop on.
+
+### fixed — the desktop app's appearance submenu opens
+
+Choosing **appearance** in the desktop app's menu highlighted the row and
+showed nothing: the submenu was drawn inside the menu panel and clipped by
+its edge. It now opens beside the menu like any other submenu.
+
+### fixed — revoking a token now cuts the agent off
+
+**revoke token** on a machine, and **revoke** on the agent tokens page,
+deleted the token but changed nothing on the machine for up to an hour: the
+agent kept syncing on its one-hour access token, and the dashboard kept
+showing it online with live metrics. The server now also queues an `unpair`
+command, and an agent on this release acts on it within a minute: it confirms
+with the server that its token is gone, leaves the site, drops its
+credentials, ends any swoop session and the hoot process, and goes offline,
+and the owlette app on the machine offers **join site**. A machine sharing the hostname whose own
+token survived ignores the command. An agent that is offline at the time
+leaves the site the moment the server refuses its next refresh. Agents on
+4.1.7 or earlier still only wipe their token store at that refresh.
+
+### fixed — removing a machine from the dashboard now sticks
+
+**remove machine** on an online machine deleted its records and token, but
+the agent was never told: it kept writing on its one-hour access token and
+each heartbeat put the machine straight back on the dashboard, online with
+live metrics. An agent on this release notices within seconds that its config
+was deleted along with the machine, stops writing, leaves the site, drops its
+credentials, ends hoot, and deletes the row once more in case a heartbeat had
+already put it back; the owlette app on the machine offers **join site**. The
+dialog and docs now say what happens, and that pairing again from the app is
+enough. An agent on 4.1.7 or earlier still writes the machine back and stops
+only when its access token expires, within the hour; remove it again then.
+(#326)
+
+### fixed — a generated pairing phrase works on macOS and Linux
+
+**add machine → generate code** showed only the Windows `/ADD=` command and
+told macOS and Linux to pair from the app, so a phrase generated for an
+unattended install had no use there; the pairing preseed is the only way
+those platforms can spend one. The tab now also shows the preseed, ready to
+copy, with `"server": "dev"` when the code was generated on dev.owlette.app:
+save it as `config/pairing.json` in the data root before installing the
+package. Fixes #322.
+
+### added — pair with dev.owlette.app from the app
+
+The app's **join a site** dialog could only pair a new machine with
+owlette.app; reaching dev.owlette.app took the `/SERVER=dev` installer flag
+on Windows or a pairing preseed on macOS and Linux. Now clicking the "join a
+site" title five times switches the pairing to dev: the `dev` badge appears
+and a dev phrase is requested; a click on the badge goes back to owlette.app.
+Nothing in the dialog advertises it, so customers see no choice. The flag and
+the preseed stay for unattended installs. Fixes #321.
+
+### fixed — swoop connects from strict networks through the relay
+
+A swoop session from a phone hotspot or another strict network failed with
+"even the relay could not get through" although a relay was set up: the
+machine's side never used it, so a viewer whose router allows no inbound path
+had nothing to connect to. From agent 4.1.8 the machine takes a relayed
+address of its own on the TURN server and offers it to the viewer, so a viewer
+behind any router reaches it; the browser's own relay is still tried when
+nothing has connected after three seconds, so a network that allows only TCP
+gets through too. The machine's network has to allow UDP out to the relay on
+port 3478. When no path comes up, the viewer now says which end never reached
+the relay instead of blaming the viewer's network, and the machine's swoop log
+says whether it gathered a relay candidate and why not. Fixes #328.
+
+### added — backup codes download as a file
+
+The backup codes screen at the end of two-factor setup has a **download
+codes** button next to **copy all codes**. It saves the ten codes, and the
+account they belong to, as `owlette-backup-codes.txt`, so a sheet that is
+shown only once no longer has to survive on the clipboard.
+
+### changed — agent installers download from download.tridant.io
+
+Agent installers are moving from Firebase Storage to
+`https://download.tridant.io/owlette/`, with permanent links that never
+change. A firewall or proxy that allows hosts by name must allow
+`download.tridant.io` on port 443, or machines cannot update. Versions
+published before the move keep their old links. A published installer is
+never replaced: uploading the same version again is refused, so a fix gets a
+new version number. Every version that becomes latest is also listed in
+tridant id's owlette release log, and a deleted or rolled-back version is
+pulled from it; `/admin/installers` shows each version's status there and can
+retry a failed one.
+
+### fixed — the swoop viewer says why it cannot start, and has a way back
+
+Opening swoop on a site where it is turned off showed a "connecting" spinner
+that never stopped, with the reason in small text at the bottom and no clear
+way out. The viewer now stops and says why in the middle of the screen. When
+swoop is off for the site, site admins get a link to the site's settings and
+members are told to ask a site owner or admin. A back-to-dashboard arrow
+starts the session bar in every state, and an ended or failed session also
+offers a back to dashboard button.
 
 ### fixed — a frozen swoop picture recovers on its own
 

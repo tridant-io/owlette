@@ -1,19 +1,41 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Plus, Loader2, CheckCircle2, Copy, Monitor, Terminal, RefreshCw } from 'lucide-react';
+import { Plus, Loader2, CheckCircle2, Monitor, Terminal, RefreshCw } from 'lucide-react';
+import { CopyButton } from '@/components/CopyButton';
 import DownloadButton from '@/components/DownloadButton';
 import { toast } from '@/lib/toast';
 import { useInstallerVersion } from '@/hooks/useInstallerVersion';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
-import { serverFlagFor } from '@/lib/environment';
+import { pairingPreseedFor, serverFlagFor } from '@/lib/environment';
 
 type AddMachineTab = 'enter' | 'generate';
+
+/** Text to paste on the target machine; the text shown is the text copied. */
+function CopyField({ label, value, children }: { label: string; value: string; children?: ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <Label className="text-muted-foreground text-xs">{label}</Label>
+      <div className="flex items-center gap-2">
+        <div className="flex-1 bg-muted/50 border border-border rounded-md px-3 py-2 font-mono text-xs text-muted-foreground break-all">
+          {value}
+        </div>
+        <CopyButton
+          value={value}
+          tooltipLabel={`copy ${label}`}
+          successMessage={`${label} copied`}
+          className="border-border text-foreground shrink-0"
+        />
+      </div>
+      {children}
+    </div>
+  );
+}
 
 interface AddMachineButtonProps {
   currentSiteId: string;
@@ -59,14 +81,13 @@ export function AddMachineButton({
   } = useDeviceCodeAuthorize(currentSiteId);
 
   /**
-   * The `/SERVER=` flag for the environment this dashboard *is*. Without it a
-   * phrase minted on dev.owlette.app produces a command that installs against
-   * production (the installer defaults to prod), the phrase is never found, and
-   * the mistake travels to every machine the command is pasted into. One
-   * expression feeds both the rendered command and the clipboard copy so the
-   * two cannot diverge.
+   * The host whose environment both commands name (`/SERVER=dev`,
+   * `"server": "dev"`). Without it a phrase minted on dev.owlette.app produces
+   * commands that install against production (the installer and a fresh
+   * preseed default to prod), the phrase is never found, and the mistake
+   * travels to every machine the command is pasted into.
    */
-  const serverFlag = typeof window === 'undefined' ? '' : serverFlagFor(window.location.host);
+  const host = typeof window === 'undefined' ? '' : window.location.host;
 
   // Generate Code tab state
   const [generatedPhrase, setGeneratedPhrase] = useState('');
@@ -129,11 +150,6 @@ export function AddMachineButton({
     } finally {
       setIsGenerating(false);
     }
-  };
-
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} copied to clipboard`);
   };
 
   return (
@@ -281,42 +297,36 @@ export function AddMachineButton({
                       <div className="flex-1 bg-muted/50 border border-border rounded-md px-3 py-2 font-mono text-foreground">
                         {generatedPhrase}
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyToClipboard(generatedPhrase, 'Phrase')}
-                        aria-label="copy pairing phrase"
-                        className="border-border text-foreground cursor-pointer shrink-0"
-                      >
-                        <Copy className="h-4 w-4" />
-                      </Button>
+                      <CopyButton
+                        value={generatedPhrase}
+                        tooltipLabel="copy pairing phrase"
+                        successMessage="pairing phrase copied"
+                        className="border-border text-foreground shrink-0"
+                      />
                     </div>
                   </div>
 
-                  {/* Command with copy */}
-                  <div className="space-y-2">
-                    <Label className="text-muted-foreground text-xs">silent install command</Label>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 bg-muted/50 border border-border rounded-md px-3 py-2 font-mono text-xs text-muted-foreground break-all">
-                        Owlette-Installer-v{version ?? '...'}.exe /ADD={generatedPhrase}{serverFlag} /SILENT
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyToClipboard(
-                          `Owlette-Installer-v${version}.exe /ADD=${generatedPhrase}${serverFlag} /SILENT`,
-                          'Command'
-                        )}
-                        aria-label="copy silent install command"
-                        className="border-border text-foreground cursor-pointer shrink-0"
-                      >
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                    </div>
+                  <CopyField
+                    label="windows silent install command"
+                    value={`Owlette-Installer-v${version ?? '...'}.exe /ADD=${generatedPhrase}${serverFlagFor(host)} /SILENT`}
+                  />
+
+                  <CopyField
+                    label="macos / linux pairing preseed"
+                    value={pairingPreseedFor(generatedPhrase, host)}
+                  >
                     <p className="text-xs text-muted-foreground">
-                      silent install is windows only; on macos and linux pair from the app after installing
+                      save it as config/pairing.json in the data root before installing the package.{' '}
+                      <a
+                        href="/docs/agent/installation#the-pairing-preseed-macos-and-linux"
+                        target="_blank"
+                        rel="noopener"
+                        className="underline underline-offset-2"
+                      >
+                        paths and commands
+                      </a>
                     </p>
-                  </div>
+                  </CopyField>
 
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-muted-foreground">
@@ -341,9 +351,9 @@ export function AddMachineButton({
                       bulk deployment
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      generate a pre-authorized pairing phrase. use it with the installer&apos;s
+                      generate a pre-authorized pairing phrase. use it with the windows installer&apos;s
                       <code className="mx-1 px-1 py-0.5 bg-card-sunken rounded text-foreground">/ADD=</code>
-                      flag to silently add machines to this site.
+                      flag, or in a pairing preseed on macos and linux, to add machines to this site unattended.
                     </p>
                   </div>
                   <Button

@@ -17,7 +17,7 @@ description: "Owlette agent build and release: build_installer_full/quick.bat, I
 |--|-----------|------------|
 | **Script** | `build_installer_full.bat` | `build_installer_quick.bat` |
 | **Duration** | 5-10 min (longer on a cold cargo cache) | ~30 sec |
-| **When** | First build, dependency changes, desktop app or swoop changes | Agent source changes only (it re-copies the desktop and swoop exes, and rebuilds owlette-host when cargo is present) |
+| **When** | First build, dependency changes, desktop app, owlette swoop or swoop changes | Agent source changes only (it re-copies the desktop app, owlette swoop and swoop streamer exes, and rebuilds owlette-host when cargo is present) |
 
 **Prerequisites**: Inno Setup 6 (`%ISCC%`, `iscc.exe` on PATH, or `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`); Node 22 + npm; the Rust toolchain (rustup — the full build prepends `%USERPROFILE%\.cargo\bin` to PATH itself, so cargo does not have to be on the system PATH); MSVC C++ build tools; cmake (on PATH or the one inside Visual Studio) for the swoop streamer's opus.
 
@@ -27,7 +27,8 @@ Step 6 of the full build compiles `desktop/` and step 8 copies the binary to `bu
 
 - The build runs **`npx tauri build --no-bundle`**. Inno Setup is this product's packager; letting the Tauri bundler run would demand NSIS/WiX and produce a second installer we do not ship.
 - `npm ci` runs **only when `desktop/node_modules` is absent**. `npm ci` deletes `node_modules` before repopulating it, which would pull the tree out from under a dev server or a parallel build on a developer machine.
-- The **quick build does not compile it** — it only re-copies `desktop/src-tauri/target/release/owlette-desktop.exe` if one is there, and fails loudly when the package has no desktop app at all (Inno errors on an empty `app\*` source anyway).
+- Step 6 also builds **owlette swoop, the viewer app** (`desktop/viewer`: `..\node_modules\.bin\tauri build --no-bundle --ci`, from the desktop app's node_modules; the crate has no package.json), and step 8 copies it beside the desktop app as `{app}\app\owlette-swoop-viewer.exe`, where the desktop app's tray and menu look for it. The `.iss` registers `owlette-swoop://` for it under `HKA\Software\Classes` (HKLM in this admin install; `uninsdeletekey`), adds a `{group}\owlette swoop` shortcut with no AppUserModelID, and kills it with the desktop app before an upgrade and at uninstall. A debug build of the viewer registers the scheme in HKCU, which shadows HKLM on a dev box: `reg delete HKCU\Software\Classes\owlette-swoop /f`. `scripts/vm/18d-verify-swoop-viewer.ps1` proves install → link opens the app → uninstall clean on the e2e VM.
+- The **quick build does not compile either app** — it only re-copies `desktop/src-tauri/target/release/owlette-desktop.exe` and `desktop/viewer/target/release/owlette-swoop-viewer.exe` if they are there, and fails loudly when the package lacks either (Inno errors on an empty `app\*` source anyway).
 - Step 7 also builds the **swoop streamer** (`cargo build --release --features audio-opus` in `agent/swoop`, which needs cmake) into `{app}\swoop\owlette-swoop.exe`, the path `shared_utils.get_swoop_exe_path()` resolves.
 - The full build **deletes `claude_agent_sdk/_bundled/claude.exe`** (242 MB) after pip install. It reappears on every clean install, which is why it is scripted; hoot fetches its own CLI on demand instead.
 - The installer probes for the **WebView2 Evergreen runtime** and runs the bundled `vendor\MicrosoftEdgeWebview2Setup.exe` (`/silent /install`) when it is missing — LTSC/IoT kiosk images often lack it, and the app cannot create a window without it. Never fatal; the service works regardless.
@@ -40,12 +41,15 @@ Runs on an Apple silicon Mac with the Command Line Tools, Node, cargo and **cmak
 - **It compiles the swoop streamer first**: `cargo build --release --locked --no-default-features --features encode-videotoolbox,audio-opus` in `agent/swoop` (the default `nvenc` feature is Windows-only), then stages the binary as `desktop/src-tauri/binaries/owlette-swoop-aarch64-apple-darwin`. cmake builds the opus that `audio-opus` vendors, and cmake 4 refuses it without `CMAKE_POLICY_VERSION_MINIMUM=3.5`, which the script sets on its own cargo call.
 - **The streamer is a Tauri sidecar**: `bundle.externalBin`, declared only in `tauri.macos.conf.json`, so the bundler copies it to `owlette.app/Contents/MacOS/owlette-swoop` and signs it with the app's identity and hardened runtime. Windows and Linux builds never see it. `tauri-build` will not compile the desktop crate on macOS without the staged file, so a macOS `cargo check` or `cargo test` of `desktop/src-tauri` needs the streamer built and staged first, as the CI leg does.
 - **It checks the sidecar** before packaging and fails the build if it is missing from the bundle, prints a version other than `agent/VERSION` (the agent refuses a mismatched streamer at spawn), or, when signed, fails `codesign --verify --strict`, lacks the hardened runtime, or carries another team than the app's.
-- `--skip-app` reuses the last app bundle, sidecar included: neither the app nor the streamer is rebuilt.
+- **owlette swoop.app**, the viewer app, is built next (`--bundles app` in `desktop/viewer`, no sidecar) and signed by Tauri with the same `APPLE_SIGNING_IDENTITY`. The build fails if its `Info.plist` lacks the `owlette-swoop` URL type (tauri-plugin-deep-link writes it) or, when signed, if it lacks the hardened runtime or the app's team. Both bundles go in the one `app.owlette.app` component package, both `BundleIsRelocatable=false`, and the build fails unless that package holds exactly two.
+- `--skip-app` reuses the last app bundles, sidecar included: neither app nor the streamer is rebuilt.
 - The signed, notarized pkg comes only from the `v*`-tag CI build (`.github/workflows/build-installer.yml`, job `build-macos`); a local run without the signing identities makes an unsigned pkg.
 
 ### The Linux deb (`agent/build/linux/build.sh`)
 
 Runs on Ubuntu 24.04. Output: `agent/build/linux/Owlette-Installer-v<version>.deb`. On an aarch64 host it builds an arm64 deb under the same file name, and `upload-installer.mjs` maps every `.deb` to `linux_x64` — only upload an x86_64 build.
+
+- The desktop app's Tauri deb is unpacked into the payload whole. owlette swoop's deb (`--bundles deb` in `desktop/viewer`) gives only its binary, `/usr/bin/owlette-swoop-viewer`; its launcher is `agent/packaging/linux/owlette-swoop-viewer.desktop` (the desktop app's icon, `MimeType=x-scheme-handler/owlette-swoop;`), not the bundler's. Both debs' Depends are merged, each library once, and postinst runs `update-desktop-database` when present.
 
 ### Version Bump Flow
 
@@ -234,9 +238,9 @@ node scripts/upload-installer.mjs --env dev --version X.Y.Z --set-latest \
 | File | Purpose | Danger Level |
 |------|---------|-------------|
 | `owlette_installer.iss` | Inno Setup script — install/uninstall/upgrade logic, pairing handoff, WebView2 and PawnIO checks | High |
-| `build_installer_full.bat` | Downloads Python, pip, deps; builds the desktop app, the service host and the swoop streamer; assembles package | Medium |
-| `build_installer_quick.bat` | Copies source + desktop and swoop exes, rebuilds owlette-host when cargo is present, compiles installer (fast iteration) | Low |
-| `desktop/` | Tauri 2 app — tray icon, config window, reboot prompt (replaced the python UI in 3.0.0) | Medium |
+| `build_installer_full.bat` | Downloads Python, pip, deps; builds the desktop app, owlette swoop, the service host and the swoop streamer; assembles package | Medium |
+| `build_installer_quick.bat` | Copies source + the desktop app, owlette swoop and swoop exes, rebuilds owlette-host when cargo is present, compiles installer (fast iteration) | Low |
+| `desktop/` | Tauri 2 app — tray icon, config window, reboot prompt (replaced the python UI in 3.0.0); `desktop/viewer/` is owlette swoop, the viewer app | Medium |
 | `agent/vendor/` | Third-party binaries shipped with the build (the WebView2 bootstrapper and the PawnIO 2.2.0 driver installer; the NSSM zip went with 3.0.0). Their SHA256s are recorded in `.iss` comments; no build step re-verifies them | Low |
 | `scripts/install.bat` | Service registration — calls `owlette-host install` (run during install) | High |
 | `src/owlette_runner.py` | Host↔service bridge, SCM stop watcher, exit codes | High |
@@ -270,7 +274,7 @@ Web dashboard sends update_owlette (refused without checksum_sha256)
 
 ## Upgrades In Place
 
-There is no config backup/restore: `[Files]` never touches `config\config.json` or `.tokens.enc`, so they survive as they are. What makes an upgrade safe is `InitializeSetup`: `net stop OwletteService` (synchronous) and a check that it reached Stopped, then killing owlette-host/nssm, owlette-swoop, owlette-desktop and the install's python/pythonw, removing the legacy `R0python` services, and polling up to 30s for `libcrypto-3.dll` to unlock before any file is copied.
+There is no config backup/restore: `[Files]` never touches `config\config.json` or `.tokens.enc`, so they survive as they are. What makes an upgrade safe is `InitializeSetup`: `net stop OwletteService` (synchronous) and a check that it reached Stopped, then killing owlette-host/nssm, owlette-swoop, owlette-desktop, owlette-swoop-viewer and the install's python/pythonw, removing the legacy `R0python` services, and polling up to 30s for `libcrypto-3.dll` to unlock before any file is copied.
 
 **This is the most fragile part of the build system.** Reordering that stop/kill/unlock sequence is how upgrades end in "DeleteFile failed" mid-copy.
 

@@ -11,6 +11,9 @@ import { Footer } from "@/components/Footer";
 import SentryInit from "@/components/SentryInit";
 import { SecurityVersionBanner } from "@/components/SecurityVersionBanner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BAR_POSITION_BOOT_SCRIPT } from '@/lib/swoop/barPosition';
+import { viewerAppHasNativeKeys, viewerAppPlatform } from '@/lib/swoop/viewerApp';
+import { ViewerAppProvider } from '@/contexts/ViewerAppContext';
 
 const geist = Geist({
   variable: "--font-geist",
@@ -91,7 +94,11 @@ export default async function RootLayout({
   // Reading request headers opts the app into per-request rendering so the
   // proxy CSP nonce can be applied to Next.js framework inline scripts, and
   // to the theme script, which strict-dynamic blocks without it.
-  const nonce = (await headers()).get('x-nonce') ?? undefined;
+  const requestHeaders = await headers();
+  const nonce = requestHeaders.get('x-nonce') ?? undefined;
+  // owlette swoop is told apart here, from its ua token, so its pages are the
+  // app's in the server's html instead of turning into them after hydration
+  const userAgent = requestHeaders.get('user-agent') ?? '';
   // Validate Firebase environment variables
   // In development: logs warnings
   // In production: throws error if misconfigured
@@ -143,18 +150,22 @@ export default async function RootLayout({
 
 
 -->` }} style={{ display: 'none' }} />
+        {/* the swoop bar's side, before a session page's first paint; a no-op on every other path */}
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: BAR_POSITION_BOOT_SCRIPT }} />
         <ThemeProvider nonce={nonce}>
           <SentryInit />
           <SecurityVersionBanner />
-          <ErrorBoundary>
-            <LazyAuthProvider>
-              <TooltipProvider delayDuration={300}>
-                {children}
-                <Footer />
-                <Toaster />
-              </TooltipProvider>
-            </LazyAuthProvider>
-          </ErrorBoundary>
+          <ViewerAppProvider platform={viewerAppPlatform(userAgent)} nativeKeys={viewerAppHasNativeKeys(userAgent)}>
+            <ErrorBoundary>
+              <LazyAuthProvider>
+                <TooltipProvider delayDuration={300}>
+                  {children}
+                  <Footer />
+                  <Toaster />
+                </TooltipProvider>
+              </LazyAuthProvider>
+            </ErrorBoundary>
+          </ViewerAppProvider>
         </ThemeProvider>
       </body>
     </html>

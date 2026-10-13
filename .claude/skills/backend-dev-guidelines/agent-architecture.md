@@ -216,6 +216,7 @@ FirebaseClient
 - `start()` / `stop()` — lifecycle management
 - `register_command_callback(fn)` — service registers command handler
 - `register_config_update_callback(fn)` — service registers config handler
+- `register_removed_callback(fn)` — service registers what leaves the site once the dashboard removed this machine (its config doc vanished); the client stops every write and deletes its row again
 - `log_event(action, level, process_name=None, details=None, ...)` — log events for web dashboard
 - `send_process_alert(process_name, error_message, event_type)` — fire-and-forget alert via `/api/agent/alert` (daemon thread, non-blocking)
 - `finish_command(cmd_id, cmd_data, result)` / `update_command_progress(...)` — terminal and progress writes for commands
@@ -232,7 +233,7 @@ DISCONNECTED → CONNECTING → CONNECTED
                     ↓
                  BACKOFF → (wait) → RECONNECTING
 
-Any state → FATAL_ERROR (machine removed, auth revoked) — backs off FATAL_ERROR_BACKOFF = 3600s and still retries
+FATAL_ERROR exists but nothing enters it; errors that look fatal (revoked credential, site gone) only lengthen the backoff to FATAL_ERROR_BACKOFF = 3600s and still retry. A dashboard removal is handled by FirebaseClient, a refused refresh by AuthManager(on_revoked=...)
 ```
 
 **Exponential backoff**: base=30s, max=3600s, formula: `min(current * 2, MAX)`, jitter: 50-100% (prevents thundering herd from multiple agents reconnecting simultaneously)
