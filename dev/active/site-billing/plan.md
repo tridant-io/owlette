@@ -22,7 +22,7 @@ Owlette's plan gating (#317, merged 2026-10-13 as 9c929f97) assumes "the site ow
 
 ### Decisions (owner, 2026-10-13)
 1. Only the site owner can change a site's billing.
-2. Billing periods anchored to the 1st (asked of tridant on #76; not supported yet).
+2. Billing periods run on calendar months from the 1st, 00:00 UTC (built by tridant on staging 2026-10-13; the first part month is prorated by days; a mid-trial subscription bills from the trial end).
 3. Core's "1 site" cap is dropped: under per-site billing every Core site is billed on its own. Pricing copy says "per site".
 4. Ownership transfer stops billing at the period end; the new owner upgrades again.
 5. The API-key mint-time plan gate is dropped; keys are checked per site on every request (`requireApiKeyPlan`).
@@ -39,19 +39,18 @@ Owlette's plan gating (#317, merged 2026-10-13 as 9c929f97) assumes "the site ow
 5. Billing page, return page, upgrade dialog; site settings entry and trial banner.
 6. Docs and pricing copy; bulk trial route; e2e; cleanup of the owner-pays code; full verification.
 7. Staging proof on dev.owlette.app (owner steps marked).
-8. Blocked: link an existing tridant account (tridant-id#75 ask 5).
+8. Link an existing tridant account: moved to the "continue with tridant" plan (tridant accepts a fresh OIDC ID token as link consent).
 
 Task detail: `tasks.md`.
 
 ## Risks
 - **#317's parser rejects every live answer** (booleans), so it fails open today. Fixed in 1.1; the tests must use tridant's real shapes.
-- **A transferred, unbilled site stays under the old owner's tridant org** (`POST /v1/sites` answers `409 site_belongs_to_another_org`; only billing can move a site). It keeps reading the old owner's trial. Asked of tridant; until then logged, not fatal.
+- **A transferred site stays under the old owner's tridant org until its billing period ends.** tridant now moves an idle site on `POST /v1/sites` (`moved: true`); while billing still runs it answers `409 site_belongs_to_another_org` with `reason: site_running`, and the daily job retries. Was: **a transferred, unbilled site stays under the old owner's tridant org** (`POST /v1/sites` answers `409 site_belongs_to_another_org`; only billing can move a site). It keeps reading the old owner's trial. Asked of tridant; until then logged, not fatal.
 - **A Core site bought mid-trial reads Pro until the trial ends** (tridant merges the trial licence). Accepted.
 - **`DELETE` leaves `billing.cancel_at_period_end` false** (it reads the subscription flag). Use `billing.ends_at`.
 - **tridant refuses localhost return URLs**, so a real checkout only completes on dev.owlette.app. Local dev and e2e use the fake.
 - **Free counting reads one site answer per owned site.** Cached and bounded by the owner's site count; fails open per site.
 - **Fulfilment failures are not retried by tridant** (`status:'failed'`); the return page says so and support resolves it.
-- **No calendar-month anchoring yet** in tridant; copy says "billing period" until it lands.
 - **Turning `PLAN_ENFORCEMENT` on for dev affects every dev user.** Owner go at wave 7.
 
 ## Success Criteria

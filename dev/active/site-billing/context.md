@@ -38,4 +38,4 @@
 ## Next Steps
 1. Run Wave 1 (four parallel tasks) in the worktree.
 2. Owner: create the staging key (Task 7.1) any time before Wave 7.
-3. Watch tridant-id#75/#76 for Davor's answers: billing anchored to the 1st, the site-move ask, link consent by OIDC token (ask 5).
+3. tridant-id#75/#76 are closed (2026-10-13): calendar months from the 1st with a prorated first month, idle-site moves on `POST /v1/sites` (`moved:true`, else `409` with `reason`), the old checkout/store/portal send Owlette to owlette.app, the Stripe portal for site-billed orgs has no cancel or plan change, and ID-token link consent. The OIDC client secret comes from Davor to the owner directly.
