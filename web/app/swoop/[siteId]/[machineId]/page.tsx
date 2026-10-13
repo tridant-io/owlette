@@ -53,7 +53,7 @@ export default function SwoopPage({
   const { siteId, machineId } = use(params);
   const { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath } =
     useSwoopSession(siteId, machineId);
-  const { isSiteAdmin } = useAuth();
+  const { isSiteAdmin, isSiteOwner } = useAuth();
   // the keyboard follows the machine's system. no hook reads one machine
   // document, so this takes it off the site's list; an agent that reports no
   // system is a windows one.
@@ -144,6 +144,8 @@ export default function SwoopPage({
           retryIn={retryIn}
           refusal={refusal}
           settingsHref={isSiteAdmin(siteId) ? `/dashboard?settings=${encodeURIComponent(siteId)}` : null}
+          // a site runs on its owner's plan, so only the owner is sent to upgrade it
+          upgradeHref={isSiteOwner(siteId) ? '/settings/plan' : null}
           noPath={noPath}
           stall={stats.stall.recovery}
           stageRef={stageRef}

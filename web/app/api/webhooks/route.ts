@@ -79,7 +79,9 @@ export async function POST(request: NextRequest) {
 
     // Membership + scope are not enough: creating a subscription is a site-admin
     // action (WEBHOOK_MANAGE), so a plain member on the site is refused here.
-    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId);
+    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId, {
+      create: true,
+    });
     if (capabilityError) return capabilityError;
 
     const parsed = await readAndParseJsonBody(request);

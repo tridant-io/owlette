@@ -12,6 +12,7 @@ import type { ApiKeyListItem } from '@/lib/apiKeyTypes';
 import { ApiKeyCreateForm } from '@/components/ApiKeyCreateForm';
 import { ApiKeyScopeEditor } from '@/components/ApiKeyScopeEditor';
 import { KeyCard } from '@/app/settings/api-keys/KeyCard';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 /**
  * One panel for api keys, mounted in both places keys are managed.
@@ -34,6 +35,7 @@ interface Props {
 
 export function ApiKeysManager({ compact = false }: Props) {
   const { keys, loading, refresh, createKey, updateKey } = useApiKeys();
+  const keysGated = usePlanGated('api_keys');
   const [creating, setCreating] = useState(false);
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
@@ -152,20 +154,23 @@ export function ApiKeysManager({ compact = false }: Props) {
       )}
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
+        {/* wraps so a phone puts the upgrade note under the label, not beside it */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <Label className="text-foreground">your keys</Label>
           {!showForm && (
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                setEditingKeyId(null);
-                setCreating(true);
-              }}
-              className="cursor-pointer"
-            >
-              <Plus className="mr-1 h-3.5 w-3.5" /> create key
-            </Button>
+            <UpgradeGate flag="api_keys" variant="inline">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setEditingKeyId(null);
+                  setCreating(true);
+                }}
+                className="cursor-pointer"
+              >
+                <Plus className="mr-1 h-3.5 w-3.5" /> create key
+              </Button>
+            </UpgradeGate>
           )}
         </div>
 
@@ -182,7 +187,8 @@ export function ApiKeysManager({ compact = false }: Props) {
                 create a scoped key to start automating against the roost api.
               </p>
             </div>
-            {!showForm && (
+            {/* the row above already carries the upgrade note */}
+            {!showForm && !keysGated && (
               <Button
                 type="button"
                 size="sm"

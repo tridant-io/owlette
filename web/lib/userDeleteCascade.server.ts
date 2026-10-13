@@ -198,6 +198,7 @@ export async function performUserDeleteCascade(
         // the caller holds USER_DELETE, and the departing user is by definition
         // the current owner of every site in `ownedSites`.
         actorIsSuperadmin: true,
+        skipPlanCheck: true,
       });
 
       if (!outcome.ok) {

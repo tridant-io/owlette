@@ -31,6 +31,7 @@ import { Bell, Plus, Trash2, Loader2, Zap, Pencil, Sparkles, X } from 'lucide-re
 import { toast } from '@/lib/toast';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { CompactButton } from '@/components/admin/CompactButton';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 /**
  * [B4.3] Display-alerts launch banner cutoff — 30 days after launch. Auto-hides
@@ -145,6 +146,9 @@ export default function AlertsPage() {
   const { sites } = useSites(user?.uid, userSites, isSuperadmin);
 
   const [selectedSiteId, setSelectedSiteId] = useState<string>('');
+  // alert rules ride on control, the core flag (plan.md decision 4)
+  const siteOwner = sites.find((s) => s.id === selectedSiteId)?.owner ?? null;
+  const rulesGated = usePlanGated('control', siteOwner);
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -200,8 +204,9 @@ export default function AlertsPage() {
   }, [selectedSiteId, fetchRules]);
 
   // Persist rules through the site-scoped API.
-  const saveRules = async (updatedRules: AlertRule[]) => {
-    if (!db || !selectedSiteId) return;
+  // resolves false when the save failed, so callers don't confirm a change that didn't land.
+  const saveRules = async (updatedRules: AlertRule[]): Promise<boolean> => {
+    if (!db || !selectedSiteId) return false;
     setSaving(true);
     try {
       const response = await fetch(`/api/sites/${encodeURIComponent(selectedSiteId)}/alerts`, {
@@ -210,12 +215,15 @@ export default function AlertsPage() {
         body: JSON.stringify({ rules: updatedRules }),
       });
       if (!response.ok) {
-        throw new Error('Failed to save alert rules');
+        const body = await response.json().catch(() => ({}));
+        throw new Error(typeof body.detail === 'string' ? body.detail : 'Failed to save alert rules');
       }
       setRules(updatedRules);
+      return true;
     } catch (err: unknown) {
       console.error('Failed to save alert rules:', err);
-      toast.error('Failed to save alert rules');
+      toast.error(err instanceof Error ? err.message : 'Failed to save alert rules');
+      return false;
     } finally {
       setSaving(false);
     }
@@ -295,7 +303,7 @@ export default function AlertsPage() {
       updatedRules = [...rules, rule];
     }
 
-    await saveRules(updatedRules);
+    if (!(await saveRules(updatedRules))) return;
     setDialogOpen(false);
     toast.success(editingRule ? 'Rule updated' : 'Rule created');
   };
@@ -310,10 +318,10 @@ export default function AlertsPage() {
   const handleDeleteConfirm = async () => {
     if (!ruleToDelete) return;
     const updatedRules = rules.filter((r) => r.id !== ruleToDelete.id);
-    await saveRules(updatedRules);
+    const saved = await saveRules(updatedRules);
     setDeleteDialogOpen(false);
     setRuleToDelete(null);
-    toast.success('Rule deleted');
+    if (saved) toast.success('Rule deleted');
   };
 
   const handleAddPreset = async (preset: Omit<AlertRule, 'id'>) => {
@@ -323,8 +331,7 @@ export default function AlertsPage() {
     }
     const rule: AlertRule = { ...preset, id: generateId() };
     const updatedRules = [...rules, rule];
-    await saveRules(updatedRules);
-    toast.success(`Preset "${preset.name}" added`);
+    if (await saveRules(updatedRules)) toast.success(`Preset "${preset.name}" added`);
   };
 
   if (loading) {
@@ -394,28 +401,31 @@ export default function AlertsPage() {
                 </Select>
               )}
 
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer" disabled={saving}>
-                    <Zap className="h-4 w-4 mr-2" />
-                    presets
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="bg-card border-border text-foreground">
-                  {PRESET_TEMPLATES.map((preset) => (
-                    <DropdownMenuItem
-                      key={preset.name}
-                      onClick={() => handleAddPreset(preset)}
-                      className="cursor-pointer"
-                    >
-                      {preset.name} ({preset.metric.replace('_', ' ')} {preset.operator} {preset.value})
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {/* in the toolbar, not the actions: on a phone the actions share the title's row */}
+              <UpgradeGate flag="control" siteOwner={siteOwner} feature="alert rules" variant="inline">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer" disabled={saving}>
+                      <Zap className="h-4 w-4 mr-2" />
+                      presets
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="bg-card border-border text-foreground">
+                    {PRESET_TEMPLATES.map((preset) => (
+                      <DropdownMenuItem
+                        key={preset.name}
+                        onClick={() => handleAddPreset(preset)}
+                        className="cursor-pointer"
+                      >
+                        {preset.name} ({preset.metric.replace('_', ' ')} {preset.operator} {preset.value})
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </UpgradeGate>
             </>
           }
-          actions={<CompactButton icon={Plus} label="create rule" onClick={openCreateDialog} disabled={saving} />}
+          actions={!rulesGated && <CompactButton icon={Plus} label="create rule" onClick={openCreateDialog} disabled={saving} />}
         />
 
         {/* Empty state */}
@@ -427,34 +437,37 @@ export default function AlertsPage() {
               create alert rules to get notified when machine metrics like CPU, memory, disk, or
               GPU exceed your defined thresholds.
             </p>
-            <div className="flex flex-wrap justify-center gap-3">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer">
-                    <Zap className="h-4 w-4 mr-2" />
-                    add from presets
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="center" className="bg-card border-border text-foreground">
-                  {PRESET_TEMPLATES.map((preset) => (
-                    <DropdownMenuItem
-                      key={preset.name}
-                      onClick={() => handleAddPreset(preset)}
-                      className="cursor-pointer"
-                    >
-                      {preset.name} ({preset.metric.replace('_', ' ')} {preset.operator} {preset.value})
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Button
-                onClick={openCreateDialog}
-                className="cursor-pointer"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                create rule
-              </Button>
-            </div>
+            {/* the header already carries the upgrade note */}
+            {!rulesGated && (
+              <div className="flex flex-wrap justify-center gap-3">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer">
+                      <Zap className="h-4 w-4 mr-2" />
+                      add from presets
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="center" className="bg-card border-border text-foreground">
+                    {PRESET_TEMPLATES.map((preset) => (
+                      <DropdownMenuItem
+                        key={preset.name}
+                        onClick={() => handleAddPreset(preset)}
+                        className="cursor-pointer"
+                      >
+                        {preset.name} ({preset.metric.replace('_', ' ')} {preset.operator} {preset.value})
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  onClick={openCreateDialog}
+                  className="cursor-pointer"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  create rule
+                </Button>
+              </div>
+            )}
           </div>
         )}
 

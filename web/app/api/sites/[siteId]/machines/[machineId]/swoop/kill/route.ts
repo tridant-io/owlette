@@ -12,9 +12,9 @@
  *      not a reason to give up on killing, and `requestSwoopSession` queues this
  *      one type even for an offline machine (plan.md D11).
  *
- * Deliberately NOT gated on the site's swoop settings: stopping a stream has to
- * work after the feature has been switched off, which is exactly when an
- * operator wants it most. The capability check is the whole gate.
+ * Deliberately NOT gated on the site's swoop settings or the payer's plan:
+ * stopping a stream has to work after the feature has been switched off, which
+ * is exactly when an operator wants it most. The capability check is the whole gate.
  *
  * It also closes every open step-up window on the machine, and the session
  * records themselves, before either path runs. A kill the operator it cut off
@@ -182,4 +182,5 @@ export const POST = authorizedSiteHandler<SwoopRouteParams>({
   targetKind: 'machine',
   targetIdParam: 'machineId',
   apiKeyScope: { resource: 'machine', idParam: 'machineId', permission: 'write' },
+  planExempt: true,
 })(killHandler);

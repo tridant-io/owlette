@@ -43,7 +43,7 @@ success means the installation stays up, and when it doesn't, the operator finds
 - **agent platforms** (checked against the live API on 2026-10-01): owlette.app (prod) serves only the Windows installer, 3.3.7. dev serves 4.0.6 for Windows, macOS (Apple silicon, macOS 15+) and Linux (Ubuntu 24.04). `web/lib/product-facts.ts` still says Windows-only. public claims must match what prod actually serves, so the macOS/Linux claim waits for the dev→prod promotion.
 - **architecture constraints**: there is no direct link between agent and dashboard; Firestore is the message bus. the agent connects outbound on port 443 only, with no inbound ports or VPN, and keeps recovering locally while offline.
 - **unattended by definition**: nothing on a managed machine may demand a human. no unattended UAC prompts, no dialogs that block recovery.
-- **status and pricing**: in beta and free during beta. tier prices and the founders rate are single-sourced in `web/lib/product-facts.ts`, and every surface composes from it. `docs/roadmap.md` quotes older numbers and is not the authority.
+- **status and pricing**: in beta and free during beta. after beta, every account starts with a 14-day pro trial, no card, then falls back to owlette free (1 machine, 1 site: live status, metrics, crash-restart and updates) unless it picks core or pro, billed per active machine per month. a machine counts if it was online at any point in the billing period. tier prices, the founders rate, the free limits and the trial length are single-sourced in `PRICING_FACTS` (`web/lib/product-facts.ts`), and every surface composes from it. `docs/roadmap.md` quotes older numbers and is not the authority.
 - **license**: FSL-1.1-Apache-2.0.
 
 ## Brand Commitments

@@ -13,9 +13,14 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import SwoopPage from '@/app/swoop/[siteId]/[machineId]/page';
 
 let siteAdmin = false;
+let siteOwner = false;
 
 jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mfaFactors: { totp: true, passkeys: 0 }, isSiteAdmin: () => siteAdmin }),
+  useAuth: () => ({
+    mfaFactors: { totp: true, passkeys: 0 },
+    isSiteAdmin: () => siteAdmin,
+    isSiteOwner: () => siteOwner,
+  }),
 }));
 
 jest.mock('@/hooks/useFirestore', () => ({
@@ -36,11 +41,14 @@ jest.mock('@/lib/swoop/peer', () => ({
 
 const SITE = 'site 1';
 const refusal = { code: 'swoop_disabled', detail: 'swoop is not enabled for this site.' };
+let reply: { status: number; body: unknown };
 
 beforeEach(() => {
   siteAdmin = false;
+  siteOwner = false;
+  reply = { status: 403, body: refusal };
   (globalThis as unknown as { fetch: typeof fetch }).fetch = jest.fn(
-    async () => ({ ok: false, status: 403, json: async () => refusal }) as Response,
+    async () => ({ ok: false, status: reply.status, json: async () => reply.body }) as Response,
   ) as unknown as typeof fetch;
 });
 
@@ -79,6 +87,31 @@ it('tells a member who can turn it on, with no settings link', async () => {
   const notice = await openViewer();
   expect(notice).toHaveTextContent('ask a site owner or admin to turn it on.');
   expect(within(notice).queryByRole('link', { name: 'open site settings' })).toBeNull();
+});
+
+it('a plan without swoop says so and links the owner to the plan, not the switch, and does not retry', async () => {
+  siteAdmin = true;
+  siteOwner = true;
+  reply = {
+    status: 402,
+    body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
+  };
+  const notice = await openViewer();
+  expect(notice).toHaveTextContent('swoop is part of pro.');
+  expect(within(notice).getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
+  expect(notice).not.toHaveTextContent(/turn it on|reconnecting in/);
+  expect(within(notice).queryByRole('link', { name: 'open site settings' })).toBeNull();
+});
+
+it('a member on a site whose plan leaves swoop out is told to ask the owner, with no upgrade link', async () => {
+  siteAdmin = true;
+  reply = {
+    status: 402,
+    body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
+  };
+  const notice = await openViewer();
+  expect(notice).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');
+  expect(within(notice).queryByRole('link', { name: 'upgrade' })).toBeNull();
 });
 
 it('the way back to the dashboard is in the notice and on the bar', async () => {
