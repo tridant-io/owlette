@@ -2,7 +2,6 @@ import os
 import stat
 import sys
 import threading
-import socket
 import requests
 
 # Add the src directory to Python path so imports work when running as service
@@ -2982,7 +2981,7 @@ class OwletteService:
             'errorMessage': error_message,
             'eventType': event_type,
             'machineId': shared_utils.get_machine_id(),
-            'machineName': socket.gethostname(),
+            'machineName': shared_utils.get_hostname(),
             'timestamp': time.time(),
         }
 
