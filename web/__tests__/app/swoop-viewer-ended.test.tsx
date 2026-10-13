@@ -24,7 +24,7 @@ const mockRouter = { push: jest.fn(), replace: jest.fn(), prefetch: jest.fn() };
 jest.mock('next/navigation', () => ({ useRouter: () => mockRouter }));
 
 jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mfaFactors: { totp: true, passkeys: 0 }, isSiteAdmin: () => false }),
+  useAuth: () => ({ mfaFactors: { totp: true, passkeys: 0 }, isSiteAdmin: () => false, isSiteOwner: () => false }),
 }));
 
 jest.mock('@/hooks/useFirestore', () => ({
