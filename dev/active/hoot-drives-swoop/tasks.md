@@ -1,5 +1,5 @@
 # hoot drives a machine through swoop — Tasks
-**Progress**: 0/22 complete
+**Progress**: 0/23 complete
 
 Rules every task obeys: glossary words (hoot, viewer, session, step-up, kill; say "hoot drives" or "hoot in control", never "remote control"); lowercase UI copy; no new packages without asking; never touch `firestore.rules` without asking; never log typed text; Windows and macOS only.
 
