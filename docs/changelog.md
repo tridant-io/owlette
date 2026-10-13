@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.10] - 2026-10-12
+
 ### fixed — a re-paired machine shows its hardware again
 
 A machine removed and paired again, or moved to another site, kept showing
