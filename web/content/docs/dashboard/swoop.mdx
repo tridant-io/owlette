@@ -208,7 +208,7 @@ the app keeps its own sign-in, apart from your browser's, and you rarely meet it
 ## how long a session lasts
 
 - a session has **no time limit**: it lasts as long as the tab or owlette swoop window that started it
-- a dropped network does not end it. after a short drop the same session picks up where it was; after a longer one, a sleeping laptop or a machine that stops answering, the viewer starts a new session on its own, on a growing delay (up to 30 seconds between attempts), and says so while it waits
+- a dropped network does not end it. after a short drop the same session picks up where it was; after a longer one, a sleeping laptop or a machine that stops answering, the viewer starts a new session on its own, on a growing delay (up to 30 seconds between attempts), and says so while it waits. a machine that leaves every attempt unanswered for ten minutes, with no picture in between, stops the retries; **reconnect** starts them again
 - an update or restart of the machine's agent sends the viewer to reconnect too, once the agent is back. agents older than 4.0.4 end the session instead, and so does the update from one of them
 - what does end it: the **end** button, closing the tab or the window, an admin's kill, another tab or device opening swoop on the same machine, or the lease check below refusing
 - a viewer holds a **5-minute lease**, renewed silently while the tab or window is open. the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
@@ -259,7 +259,7 @@ a Mac hosts swoop on Apple silicon with macOS 15 or later, from agent 4.1.0. a s
 
 **someone must be logged in.** swoop shows and controls the logged-in user's desktop, and macOS does not let it reach the login window. logging out or switching users ends the session.
 
-**the owlette app must be running.** the agent runs as root with no display of its own, so it asks the owlette app to start the streamer, and the streamer runs under the app's grants. with the app not running, the agent refuses to start one (it logs `desktop_not_running`), and the viewer reports that the machine did not answer and keeps retrying. quitting the app ends a live session; the viewer starts its next one once the app is back. the app starts at every login, and if someone quits it from its menu it stays closed until they reopen it or log in again.
+**the owlette app must be running.** the agent runs as root with no display of its own, so it asks the owlette app to start the streamer, and the streamer runs under the app's grants. with the app not running, the agent refuses to start one (it logs `desktop_not_running`), and the viewer reports that the machine did not answer and keeps retrying. after ten minutes with no picture it stops and says to check the machine in person; **reconnect** tries again. quitting the app ends a live session; the viewer starts its next one once the app is back. the app starts at every login, and if someone quits it from its menu it stays closed until they reopen it or log in again.
 
 **a Mac paired before 4.0.6 may need pairing again.** macOS names a machine `Name.local`, which the API's machine ID rule does not allow, so a Mac paired under that name has every swoop token refused. a Mac pairing for the first time now takes its ID without `.local`; one already paired as `Name.local` keeps that ID until you pair it again.
 
