@@ -104,6 +104,43 @@ def test_a_mac_identity_is_seeded_without_the_local_suffix(data_root, monkeypatc
     assert (data_root / 'config' / 'machine_id').read_text(encoding='utf-8') == 'TEC-MBA'
 
 
+def _scutil(monkeypatch, answer):
+    """A Mac whose network hands it `Mac.localdomain` and whose LocalHostName
+    is `answer`; an exception class makes scutil fail that way."""
+    monkeypatch.setattr(shared_utils, '_IS_MACOS', True)
+    monkeypatch.setattr(shared_utils.socket, 'gethostname', lambda: 'Mac.localdomain')
+
+    def check_output(argv, **kwargs):
+        assert argv == ['scutil', '--get', 'LocalHostName']
+        if isinstance(answer, type):
+            raise answer('scutil failed')
+        return answer
+    monkeypatch.setattr(shared_utils.subprocess, 'check_output', check_output)
+
+
+def test_a_mac_is_named_by_its_local_hostname_not_the_network(data_root, monkeypatch):
+    """Two Macs on one router both answered `Mac.localdomain` and paired onto
+    one machine doc (Bryant Place, 2026-10-12). LocalHostName is unique on the
+    LAN and has no dot."""
+    _scutil(monkeypatch, 'CPUs-MacBook-Pro\n')
+
+    assert shared_utils.get_hostname() == 'CPUs-MacBook-Pro'
+    assert shared_utils.get_machine_id() == 'CPUs-MacBook-Pro'
+
+
+@pytest.mark.parametrize('failure', [OSError, shared_utils.subprocess.SubprocessError])
+def test_a_mac_without_a_local_hostname_falls_back_to_the_network_name(data_root, monkeypatch, failure):
+    _scutil(monkeypatch, failure)
+
+    assert shared_utils.get_hostname() == 'Mac.localdomain'
+
+
+def test_an_empty_local_hostname_falls_back_to_the_network_name(data_root, monkeypatch):
+    _scutil(monkeypatch, '\n')
+
+    assert shared_utils.get_hostname() == 'Mac.localdomain'
+
+
 def test_the_local_suffix_is_kept_off_macos(data_root, monkeypatch):
     monkeypatch.setattr(shared_utils.sys, 'platform', 'linux')
     monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'kiosk.local')

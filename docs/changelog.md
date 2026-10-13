@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.11] - 2026-10-13
+
 ### added — owlette free, the pro trial and per-machine billing, for after the beta
 
 The pricing page shows three plans for after the beta: owlette free, with one
@@ -25,6 +27,36 @@ or billed during the beta: the plan limits ship switched off.
 
 An email-and-password sign-up is sent a link to verify its address, and a
 banner offers to send it again until it is opened. Nothing waits on it.
+
+### fixed — a Mac shows its own disks and network, not simulator volumes and tunnels
+
+A Mac listed every volume macOS mounts for itself, including the iOS simulator
+runtimes Xcode installs, and every VPN and AirDrop interface. A simulator volume,
+nearly full by design, could show as the machine's main disk and a tunnel as its
+main network, and each one appearing or vanishing reloaded the machine's hardware
+details. A Mac now lists its startup and data volumes, external drives and real
+network interfaces only.
+
+### fixed — two Macs on one network no longer pair as one machine
+
+A Mac took its machine name from the hostname its network handed out, and some
+routers give every Mac the same one, such as `Mac.localdomain`. Two Macs on one
+network then paired onto one machine on the dashboard, each overwriting the
+other, and the dot in the name kept swoop from opening that machine. A Mac now
+takes its name from its local network name (System Settings, General, Sharing),
+which macOS keeps unique on the network. A Mac already paired keeps its name;
+leave the site from the owlette app and pair again to take the new one, on each
+of two Macs that shared one machine.
+
+### fixed — swoop stops asking a machine that never answers
+
+A machine whose swoop could not start, such as a Mac waiting for someone to
+allow screen recording, never answered the viewer, and the viewer asked again
+about every 45 seconds for as long as the tab stayed open. After ten minutes
+with no picture it now stops and says what to check: that the machine is on
+the network, and on a Mac, that the owlette app is running and macOS is not
+asking to allow screen recording. **reconnect** tries again. A slow connection from another
+network still gets the ten minutes to come through.
 
 ## [4.1.10] - 2026-10-12
 

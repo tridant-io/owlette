@@ -331,6 +331,84 @@ describe('useSwoopSession — how a session ends', () => {
     expect(deletes()).toHaveLength(0);
   });
 
+  describe('a machine that never answers', () => {
+    // the faked peer never times out on its own: each `silent()` is a run whose
+    // offer went unanswered. the ladder's next run starts within 30 s, and the
+    // clock then moves on without firing every timer a live session holds.
+    const silent = () => act(() => wired.peer!.onError!('host_silent'));
+
+    async function laterBy(ms: number) {
+      await advance(30_000);
+      jest.setSystemTime(Date.now() + ms);
+    }
+
+    async function picture() {
+      act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+      await flush();
+    }
+
+    it('stops retrying after ten minutes without a picture, and says what to check', async () => {
+      // bryant place's m5 max: every streamer failed before it answered, and the
+      // tab asked again about every 45 s for two hours (2026-10-12)
+      await open();
+      silent();
+      await laterBy(10 * 60_000);
+      expect(mints()).toHaveLength(2);
+      silent();
+
+      expect(swoop.state).toBe('error');
+      expect(swoop.error).toMatch(/has not answered for ten minutes/);
+      expect(swoop.retryIn).toBeNull();
+      await advance(10 * 60_000);
+      expect(mints()).toHaveLength(2);
+    });
+
+    it('a picture in between starts the ten minutes again', async () => {
+      await open();
+      silent();
+      await laterBy(9 * 60_000);
+      await picture();
+      expect(swoop.state).toBe('connected');
+
+      silent();
+      await laterBy(9 * 60_000);
+      silent();
+      expect(swoop.error).toBe('this machine did not answer.');
+      expect(swoop.retryIn).not.toBeNull();
+    });
+
+    it('any other end in between starts the ten minutes again', async () => {
+      // a reboot: the machine goes offline for longer than the limit, and its
+      // first offer once it is back must not stop the viewer on the spot
+      await open();
+      silent();
+      mint = { status: 409, body: { code: 'machine_offline', detail: 'this machine is offline; swoop cannot reach it until it reconnects.' } };
+      await laterBy(11 * 60_000);
+      expect(swoop.error).toBe('this machine is offline; swoop cannot reach it until it reconnects.');
+
+      mint = { status: 201, body: { data: GRANT } };
+      await advance(30_000);
+      silent();
+      expect(swoop.error).toBe('this machine did not answer.');
+      expect(swoop.retryIn).not.toBeNull();
+    });
+
+    it('a reconnect after it stopped tries again', async () => {
+      await open();
+      silent();
+      await laterBy(10 * 60_000);
+      silent();
+      expect(swoop.retryIn).toBeNull();
+      const tries = mints().length;
+
+      act(() => swoop.reconnect());
+      await flush();
+      expect(mints()).toHaveLength(tries + 1);
+      act(() => wired.peer!.onError!('host_silent'));
+      expect(swoop.retryIn).not.toBeNull();
+    });
+  });
+
   it('tells the peer when an answer can come back over signalling', async () => {
     await open();
 

@@ -245,6 +245,19 @@ class _CrossProcessLock:
         self.fd = None
 
 def get_hostname():
+    """This machine's name. On macOS the kernel hostname is whatever the
+    network hands out — a router answers `Mac.localdomain` to every Mac, so two
+    of them paired onto one machine doc — and LocalHostName is the name the Mac
+    keeps unique on its LAN."""
+    if _IS_MACOS:
+        try:
+            name = subprocess.check_output(
+                ['scutil', '--get', 'LocalHostName'], text=True, timeout=5
+            ).strip()
+            if name:
+                return name
+        except (OSError, subprocess.SubprocessError) as e:
+            logging.debug(f"scutil LocalHostName failed: {e}")
     return socket.gethostname()
 
 # `(osFamily, arch)` the way the fleet spells them: the machine document's

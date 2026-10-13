@@ -1275,12 +1275,12 @@ fn agent_version(install_root: &Path) -> String {
     .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
-/// The machine's name as the fleet records it: `COMPUTERNAME` on Windows;
-/// the kernel's hostname on the other two, the same call the agent's
-/// `socket.gethostname()` makes, with the agent's own rule for a Mac applied
-/// to it, so the tray and the machine card agree (`TEC-MBA`). A launchd or
-/// systemd child has no `HOSTNAME` in its environment and macOS has no
-/// `/etc/hostname`, so those are fallbacks only.
+/// The machine's name as the fleet records it, by the agent's
+/// `shared_utils.get_hostname` rule so the tray and the machine card agree:
+/// `COMPUTERNAME` on Windows, a Mac's LocalHostName (`TEC-MBA`), and the
+/// kernel's hostname on Linux and as a Mac's fallback, without a Mac's `.local`
+/// suffix. A launchd or systemd child has no `HOSTNAME` in its environment and
+/// macOS has no `/etc/hostname`, so those are fallbacks only.
 pub(crate) fn hostname() -> String {
   let from_env = if cfg!(windows) {
     "COMPUTERNAME"
@@ -1288,6 +1288,10 @@ pub(crate) fn hostname() -> String {
     "HOSTNAME"
   };
   let mac = cfg!(target_os = "macos");
+  #[cfg(target_os = "macos")]
+  if let Some(name) = mac_local_hostname() {
+    return name;
+  }
   #[cfg(unix)]
   if let Some(name) = unix_hostname() {
     return identity_name(&name, mac).to_string();
@@ -1319,6 +1323,18 @@ fn identity_name(name: &str, mac: bool) -> &str {
     Some(tail) if mac && cut > 0 && tail.eq_ignore_ascii_case(SUFFIX) => &name[..cut],
     _ => name,
   }
+}
+
+/// The name a Mac keeps unique on its LAN; the kernel hostname is whatever the
+/// network hands out, and a router can answer `Mac.localdomain` to every Mac.
+#[cfg(target_os = "macos")]
+fn mac_local_hostname() -> Option<String> {
+  let output = std::process::Command::new("scutil")
+    .args(["--get", "LocalHostName"])
+    .output()
+    .ok()?;
+  let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  (output.status.success() && !name.is_empty()).then_some(name)
 }
 
 #[cfg(unix)]
@@ -1531,16 +1547,27 @@ mod tests {
   const RUNNING: bool = true;
   const STOPPED: bool = false;
 
-  /// A launchd or systemd child carries no HOSTNAME and macOS has no
-  /// /etc/hostname: the kernel's name is what keeps the menu from "unknown".
-  #[cfg(unix)]
+  /// A systemd child carries no HOSTNAME, so the kernel's name is what keeps
+  /// the menu from "unknown".
+  #[cfg(all(unix, not(target_os = "macos")))]
   #[test]
   fn the_hostname_comes_from_the_kernel_without_an_environment() {
     std::env::remove_var("HOSTNAME");
     let name = hostname();
     assert_ne!(name, "unknown");
     let kernel = unix_hostname().expect("the kernel has a hostname");
-    assert_eq!(name, identity_name(&kernel, cfg!(target_os = "macos")));
+    assert_eq!(name, identity_name(&kernel, false));
+  }
+
+  /// Two Macs on one router both had the kernel hostname `Mac.localdomain`
+  /// (Bryant Place, 2026-10-12); the menu shows the LocalHostName the agent
+  /// now takes its identity from.
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn a_mac_is_named_by_its_local_hostname() {
+    let local = mac_local_hostname().expect("a mac has a LocalHostName");
+    assert_eq!(hostname(), local);
+    assert!(!local.contains('.'), "{local}");
   }
 
   /// The agent's rule, so the menu and the machine card show one name.

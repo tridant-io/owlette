@@ -218,7 +218,7 @@ each machine reports these about itself:
 
 | field | where you see it | what it is |
 |-------|------------------|------------|
-| **machine name** | the card and row title | the machine's ID: its hostname when it was first paired. it is kept from then on, so renaming the computer later does not create a second machine |
+| **machine name** | the card and row title | the machine's ID: its hostname when it was first paired, and on a Mac its local network name. it is kept from then on, so renaming the computer later does not create a second machine |
 | **OS** (`osVersion`) | under the name on the card and the row | the operating system as people name it: `Windows 11 Pro 24H2`, `macOS 15.6`, `Ubuntu 24.04.5 LTS`. the list view shortens it to fit; the full string is in its tooltip |
 | **platform** (`osFamily`) | not shown on its own | `windows`, `macos` or `linux`. it decides what the dashboard offers for the machine — the process dialog's path label and Windows-only fields, the installer an update sends, swoop's keyboard mapping. an agent that reports none is treated as Windows |
 | **architecture** (`arch`) | not shown on its own | `x64` or `arm64`. with the platform, it picks the installer file a fleet update sends |
