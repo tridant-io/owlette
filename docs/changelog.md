@@ -11,6 +11,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — a re-paired machine shows its hardware again
+
+A machine removed and paired again, or moved to another site, kept showing
+`CPU0` in place of its processor's name, with no disk or GPU details, until its
+hardware changed. The agent remembered on disk what it had last uploaded and
+skipped the upload for the new machine record. It now uploads the hardware
+profile, the display profile and the display-modes catalogue once each time it
+starts or pairs, then only when they change.
+
 ## [4.1.9] - 2026-10-12
 
 ### added — swoop hosts on Windows machines without an NVIDIA GPU
