@@ -89,14 +89,15 @@ Worktree: `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branc
   - Depends on: Tasks 1.2, 1.3, 1.4, 2.1
 
 - [ ] **Task 3.2: site lifecycle**
-  - Files: `web/lib/actions/createSite.server.ts`, `web/lib/actions/transferSiteOwnership.server.ts`, `web/lib/actions/deleteSite.server.ts`, `web/lib/userDeleteCascade.server.ts`, `web/__tests__/lib/actions/UserRole.assignSite.removeSite.deleteUser.bootstrapUser.createSite.updateSite.deleteSite.test.ts`, `web/__tests__/lib/actions/transferSiteOwnership.test.ts`, `web/__tests__/lib/userDeleteCascade.test.ts`
+  - Files: `web/lib/actions/createSite.server.ts`, `web/lib/actions/transferSiteOwnership.server.ts`, `web/lib/actions/deleteSite.server.ts`, `web/lib/userDeleteCascade.server.ts`, `web/lib/planTrial.server.ts` (add `reconcileSiteRegistration`), `web/lib/planUsage.server.ts` (call it from `runPlanDaily`), `web/__tests__/lib/actions/UserRole.assignSite.removeSite.deleteUser.bootstrapUser.createSite.updateSite.deleteSite.test.ts`, `web/__tests__/lib/actions/transferSiteOwnership.test.ts`, `web/__tests__/lib/userDeleteCascade.test.ts`, `web/__tests__/lib/planTrial.server.test.ts`, `web/__tests__/lib/planUsage.server.test.ts`
   - Do:
     - createSite: keep `siteSlotAvailable(ownerUid)` (now counts free sites); after the batch commits, `registerSite(ownerUid, siteId, name)` best effort.
     - transferSiteOwnership: replace `successorPlanRefusal` with: if the site is free now and the successor has no free-site slot → the existing 402 refusal; otherwise allow. After the transaction, if the site has a billing pointer: `stopSite` (best effort) and set `pointer.endsAt`; then `registerSite(successorUid, …)`. `skipPlanCheck` keeps its meaning.
     - deleteSite: before deleting, `stopSite` when a pointer exists (ignore `site_not_billed`).
     - userDeleteCascade: after the transfers, `unlinkAccount(uid)` best effort.
-  - Done when: tests cover each hook, including best-effort failures not blocking the action.
-  - Depends on: Tasks 1.2, 2.1, 2.2
+    - `reconcileSiteRegistration(siteId, siteData, answer)` in `planTrial.server.ts`, called per site from `runPlanDaily`: when the site answer's `orgId` differs from the owner's `plan_accounts/{owner}.orgId` (or the answer is `resolved:false` while the owner has an `orgId`) and the answer has no `billing`, call `registerSite`. Log `409 site_belongs_to_another_org` and carry on (tridant-id#75 follow-up asks tridant to move unbilled sites). This is how a transferred site reaches its new owner's org once its old billing period ends.
+  - Done when: tests cover each hook, including best-effort failures not blocking the action, and the reconcile cases.
+  - Depends on: Tasks 1.2, 2.1, 2.2, 2.3
 
 - [ ] **Task 3.3: account plan API with the lazy trial**
   - Files: `web/app/api/account/plan/route.ts`, `web/lib/plan.server.ts` (the `PlanResponse` wire type only), `web/openapi.yaml` (`/api/account/plan`, `AccountPlanResponse`), `web/__tests__/api/account/plan.test.ts`
