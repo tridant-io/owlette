@@ -271,6 +271,7 @@ every route that an external scheduler must call, in one place. all are `GET` an
 | `/api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_display_alerts` into digest email |
 | `/api/cron/status-ping` | `* * * * *` | `X-Cron-Secret` | writes status pings and publishes them to Instatus |
 | `/api/cron/talons` | `* * * * *` | `X-Cron-Secret` | fires schedule-triggered and delayed talons, recovers stale runs, and fires due hoot follow-ups |
+| `/api/cron/plan-daily` | `0 3 * * *` | `X-Cron-Secret` | records each site owner's active machines for the previous day and the plan snapshot that scheduled rollouts check, and deletes usage older than 100 days. plans are not enforced during the beta; see [plans](/docs/plans) |
 | `/api/cron/retention` | `0 4 * * *` | `X-Cron-Secret` | deletes metrics, logs and talon run history past 400 days |
 | `/api/cron/swoop-retention` | `30 4 * * *` | `X-Cron-Secret` | closes abandoned swoop session records and deletes those older than 30 days |
 | `/api/cron/api-key-expiry` | `0 8 * * *` | `X-Cron-Secret` | emails API key owners 14, 3 and 0 days before a key expires |
@@ -278,7 +279,7 @@ every route that an external scheduler must call, in one place. all are `GET` an
 
 <Callout type="warning" title={"almost every failure here is silent"}>
 
-an unscheduled job does not error: the work simply never happens. alert digests let their queue grow, talons on a schedule never fire, offline machines are never reported, and `/api/cron/retention` keeps data past the window the privacy policy states.
+an unscheduled job does not error: the work simply never happens. alert digests let their queue grow, talons on a schedule never fire, offline machines are never reported, active machines are never counted, and `/api/cron/retention` keeps data past the window the privacy policy states.
 
 `/api/hoot/escalation` is the odd one out: it takes `Authorization: Bearer <CRON_SECRET>`, **not** `X-Cron-Secret`. schedules still pointing at `/api/cortex/escalation` keep working, since it is an alias for the same handler; use the `/api/hoot/` path for anything new.
 

@@ -20,6 +20,9 @@
  *
  * And what a screen reader hears — "thinking" and an awaited approval in a status
  * region, a reply once its turn ends — and the pasted-image lightbox's focus.
+ *
+ * And the empty chat's suggestions, which fill the composer, so they go when the
+ * plan leaves hoot out and there is no composer.
  */
 import React from 'react';
 import { render, screen } from '@testing-library/react';
@@ -676,5 +679,21 @@ describe('ChatWindow — a pasted image', () => {
     await user.click(screen.getByRole('button', { name: 'close image' }));
 
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('ChatWindow — the empty chat', () => {
+  it('offers suggestions to fill the composer', () => {
+    renderChat({ messages: [] });
+
+    expect(screen.getByRole('heading', { name: 'hoot' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button')).toHaveLength(4);
+  });
+
+  it('drops them when there is no composer to fill', () => {
+    renderChat({ messages: [], hideSuggestions: true });
+
+    expect(screen.getByRole('heading', { name: 'hoot' })).toBeInTheDocument();
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
 });
