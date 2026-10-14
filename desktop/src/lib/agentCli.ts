@@ -249,7 +249,7 @@ export async function startAgentRun(
 
 /**
  * Run a mode to completion, rejecting with something worth showing. For modes
- * with no progress to render — leave, report-issue, dismiss-reboot.
+ * that need no cancel handle — leave, report-issue, dismiss-reboot.
  */
 export async function runAgent(
   mode: AgentMode,

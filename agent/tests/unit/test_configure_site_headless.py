@@ -12,6 +12,7 @@ Two things are being protected here:
 """
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -622,7 +623,7 @@ class TestReportIssueAttachLogs:
     """The web API and the bucket are stood in for; every call is recorded."""
 
     def _run(self, tmp_path, *, attach=True, zip_error=None, upload_url_status=200,
-             put_statuses=(200,), report_statuses=(200,)):
+             put_statuses=(200,), report_statuses=(200,), headless=False):
         payload = tmp_path / 'feedback.json'
         fields = {'category': 'bug', 'description': 'it broke'}
         if attach is not None:
@@ -665,7 +666,10 @@ class TestReportIssueAttachLogs:
              patch.object(log_bundle, 'build_log_zip', side_effect=build_zip) as build, \
              patch('requests.post', side_effect=post), \
              patch('requests.put', side_effect=put):
-            code = configure_site.run_report_issue(str(payload))
+            if headless:
+                code = configure_site._run_headless_mode(_args(report_issue=str(payload)))
+            else:
+                code = configure_site.run_report_issue(str(payload))
 
         reports = [p for p in posts if p['url'].endswith('/api/bug-report')]
         return SimpleNamespace(code=code, build=build, zips=zips, posts=posts,
@@ -778,6 +782,60 @@ class TestReportIssueAttachLogs:
         assert run.code == 1
         assert len(run.reports) == 1
         assert '400' in _events(capsys)[-1]['value']
+
+    def test_a_failed_attach_is_kept_in_the_report_log(self, tmp_path, capsys):
+        with _report_data_root(tmp_path) as log:
+            run = self._run(tmp_path, put_statuses=(403,), headless=True)
+            logging.getLogger('urllib3.connectionpool').warning(
+                'Retrying after a reset: %s', _SIGNED_URL)
+
+        assert run.code == 0
+        text = log.read_text(encoding='utf-8')
+        assert ' - WARNING - Issue logs could not be attached: the upload to storage failed' in text
+        assert 'issue submitted via API: r1' in text
+        # neither the signed url nor the operator's words reach the file
+        assert 'sekrit' not in text
+        assert 'it broke' not in text
+        captured = capsys.readouterr()
+        # stdout stays the event stream alone; stderr still gets the warning
+        events = [json.loads(line) for line in captured.out.splitlines()]
+        assert events[-1] == {'event': 'done', 'value': {'category': 'bug', 'logsAttached': False}}
+        assert 'Issue logs could not be attached' in captured.err
+
+    def test_a_report_log_that_cannot_be_opened_does_not_stop_the_report(
+            self, tmp_path, capsys):
+        root = logging.getLogger()
+        with _report_data_root(tmp_path) as log:
+            before = root.handlers[:]
+            with patch.object(configure_site, 'RotatingFileHandler',
+                              side_effect=PermissionError('denied')):
+                run = self._run(tmp_path, put_statuses=(403,), headless=True)
+            assert root.handlers == before
+
+        assert run.code == 0
+        assert not log.exists()
+        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        assert 'logs could not be attached' in run.reports[0]['json']['description']
+
+
+@contextlib.contextmanager
+def _report_data_root(tmp_path):
+    """A data root of the test's own, yielding its report log; the root logger
+    is put back as it was found."""
+    data = tmp_path / 'data'
+    (data / 'logs').mkdir(parents=True)
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    try:
+        with patch.object(configure_site.shared_utils, 'get_data_path',
+                          side_effect=lambda name=None: str(data / name) if name else str(data)):
+            yield data / 'logs' / 'submit_issue.log'
+    finally:
+        for handler in root.handlers[:]:
+            if handler not in handlers:
+                root.removeHandler(handler)
+                handler.close()
+        root.setLevel(level)
 
 
 # --reboot-now / --dismiss-reboot
