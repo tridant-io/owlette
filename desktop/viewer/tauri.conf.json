@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "owlette swoop",
   "mainBinaryName": "owlette-swoop-viewer",
-  "version": "4.1.12",
+  "version": "4.1.13",
   "identifier": "app.owlette.swoop-viewer",
   "build": {
     "frontendDist": "dist"
