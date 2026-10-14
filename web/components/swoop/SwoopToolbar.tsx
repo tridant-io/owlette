@@ -316,11 +316,11 @@ export function SwoopToolbar({
         <div className="ml-auto flex items-center gap-1 md:bar-side:ml-0 md:bar-side:mt-auto md:bar-side:flex-col">
           {children}
 
-          <BarTooltip label={statsOpen ? 'hide latency stats' : 'latency stats'}>
+          <BarTooltip label="stats">
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label={statsOpen ? 'hide latency stats' : 'show latency stats'}
+              aria-label="latency stats"
               aria-pressed={statsOpen}
               onClick={onToggleStats}
             >
