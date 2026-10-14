@@ -138,6 +138,29 @@ describe('POST /api/bug-report', () => {
     expect(html).not.toContain('/api/admin/issues/');
   });
 
+  describe('recipient', () => {
+    afterEach(() => {
+      delete process.env.ISSUE_EMAIL;
+    });
+
+    it('mails ISSUE_EMAIL when it is set', async () => {
+      process.env.ISSUE_EMAIL = 'issues@example.test';
+      asAgent();
+      await report();
+      expect(mockSend.mock.calls[0][0]).toMatchObject({ to: 'issues@example.test' });
+    });
+
+    it.each([
+      ['unset', undefined],
+      ['empty', ''],
+    ])('falls back to ADMIN_EMAIL_* when ISSUE_EMAIL is %s', async (_label, value) => {
+      if (value !== undefined) process.env.ISSUE_EMAIL = value;
+      asAgent();
+      await report();
+      expect(mockSend.mock.calls[0][0]).toMatchObject({ to: 'support@example.test' });
+    });
+  });
+
   it.each([
     ['another machine', `issues/${SITE}/machine-b/0b5c1f2e-8a6d-4c3e-9f1a-2b3c4d5e6f70.zip`],
     ['another site', `issues/site-2/${MACHINE}/0b5c1f2e-8a6d-4c3e-9f1a-2b3c4d5e6f70.zip`],

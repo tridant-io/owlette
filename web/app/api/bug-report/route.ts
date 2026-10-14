@@ -10,7 +10,8 @@ import { ISSUE_LOGS_RETENTION_DAYS, headIssueLogs } from '@/lib/issueLogsStorage
 
 /**
  * POST /api/bug-report — writes the top-level `bug_reports` doc and emails
- * ADMIN_EMAIL. Body: title (<=200), category, description (<=50,000), browserUA,
+ * ISSUE_EMAIL, or ADMIN_EMAIL when that is unset. Body: title (<=200),
+ * category, description (<=50,000), browserUA,
  * pageUrl, and from an agent only, logsKey.
  *
  * An agent is recognised by its verified token's `role=agent` claim, never by
@@ -194,11 +195,12 @@ export const POST = withRateLimit(
 
       // non-blocking
       const resendClient = getResend();
-      if (resendClient && ADMIN_EMAIL) {
+      const issueEmail = process.env.ISSUE_EMAIL || ADMIN_EMAIL;
+      if (resendClient && issueEmail) {
         const categoryLabel = CATEGORY_LABELS[category] || category;
         resendClient.emails.send({
           from: FROM_EMAIL,
-          to: ADMIN_EMAIL,
+          to: issueEmail,
           subject: `[${ENV_LABEL}] feedback: ${categoryLabel} — ${title.trim()}`,
           html: buildBugReportEmail(
             category,

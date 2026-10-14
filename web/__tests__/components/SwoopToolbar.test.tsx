@@ -102,6 +102,27 @@ describe('SwoopToolbar', () => {
     }
   });
 
+  it('shows the stats button pressed while the stats are open, under one name', () => {
+    const bar = (statsOpen: boolean) => (
+      <TooltipProvider>
+        <SwoopToolbar
+          session={null}
+          machineId="TEC-B4A"
+          state="connected"
+          error={null}
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={statsOpen}
+          onToggleStats={() => {}}
+        />
+      </TooltipProvider>
+    );
+    const { rerender } = render(bar(false));
+    expect(screen.getByRole('button', { name: 'latency stats' })).toHaveAttribute('aria-pressed', 'false');
+    rerender(bar(true));
+    expect(screen.getByRole('button', { name: 'latency stats' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('badges a lost connection, with the countdown while a retry is scheduled', () => {
     const { unmount } = render(
       <TooltipProvider>

@@ -62,21 +62,19 @@ beforeEach(() => {
 })
 
 describe('AppMenu', () => {
-  it('carries the four legacy overflow items, in order, in lowercase', async () => {
+  it('lists its items in the owner\'s order, in lowercase, the site action last', async () => {
     setup(true)
 
     const items = await screen.findAllByRole('menuitem')
-    // owlette_gui._toggle_overflow_menu listed config / logs / docs / feedback;
-    // the site action is the row the legacy footer owned.
     expect(items.map((item) => item.textContent)).toEqual([
-      'leave site',
-      'config',
-      'logs',
       'docs',
       'submit issue',
+      'config',
+      'logs',
       'appearance',
       'restart service',
       'reload window',
+      'leave site',
     ])
   })
 

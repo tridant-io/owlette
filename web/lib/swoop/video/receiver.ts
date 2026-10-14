@@ -298,8 +298,9 @@ export class SwoopReceiver {
 
   /**
    * the video receiver's inbound-rtp counters, reduced to the stall report's
-   * allow-list. read only around a stall, never on a timer: `getStats()` is
-   * not free.
+   * allow-list. `getStats()` is not free, so it is read around a stall and once
+   * a second for `feedback.ts`'s drop count, scoped to this receiver, and
+   * never on a faster timer.
    */
   async inboundStats(): Promise<InboundVideoStats | null> {
     if (!this.rtpReceiver) return null;

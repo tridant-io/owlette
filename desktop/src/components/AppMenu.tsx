@@ -65,8 +65,8 @@ interface AppMenuProps {
 }
 
 /**
- * The overflow menu: config, logs, docs, feedback (the legacy GUI's `···` items,
- * same order) plus the site action.
+ * The overflow menu: swoop, then docs, submit issue, config and logs, then the
+ * app's own settings and recovery, and the site action last on its own.
  *
  * The site action lives BOTH here and in the footer, for different readers —
  * this menu is where someone who knows the app looks for `leave site`, the
@@ -169,18 +169,14 @@ export function AppMenu({
             <DropdownMenuSeparator />
           </>
         )}
-        {paired ? (
-          <DropdownMenuItem data-testid="menu-leave-site" onSelect={onLeaveSite}>
-            <LogOut aria-hidden className="size-4" />
-            leave site
-          </DropdownMenuItem>
-        ) : (
-          <DropdownMenuItem data-testid="menu-join-site" onSelect={onJoinSite}>
-            <LogIn aria-hidden className="size-4" />
-            join site
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuSeparator />
+        <DropdownMenuItem data-testid="menu-docs" onSelect={openDocs}>
+          <BookOpen aria-hidden className="size-4" />
+          docs
+        </DropdownMenuItem>
+        <DropdownMenuItem data-testid="menu-report-issue" onSelect={onReportIssue}>
+          <Bug aria-hidden className="size-4" />
+          submit issue
+        </DropdownMenuItem>
         <DropdownMenuItem
           data-testid="menu-config"
           onSelect={() => open(OWLETTE_FILES.config, 'config.json')}
@@ -191,14 +187,6 @@ export function AppMenu({
         <DropdownMenuItem data-testid="menu-logs" onSelect={() => open(LOGS_DIR, 'the logs folder')}>
           <ScrollText aria-hidden className="size-4" />
           logs
-        </DropdownMenuItem>
-        <DropdownMenuItem data-testid="menu-docs" onSelect={openDocs}>
-          <BookOpen aria-hidden className="size-4" />
-          docs
-        </DropdownMenuItem>
-        <DropdownMenuItem data-testid="menu-report-issue" onSelect={onReportIssue}>
-          <Bug aria-hidden className="size-4" />
-          submit issue
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuSub>
@@ -246,6 +234,18 @@ export function AppMenu({
           <RotateCw aria-hidden className="size-4" />
           reload window
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {paired ? (
+          <DropdownMenuItem data-testid="menu-leave-site" onSelect={onLeaveSite}>
+            <LogOut aria-hidden className="size-4" />
+            leave site
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem data-testid="menu-join-site" onSelect={onJoinSite}>
+            <LogIn aria-hidden className="size-4" />
+            join site
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
