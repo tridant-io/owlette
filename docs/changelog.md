@@ -11,6 +11,33 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.14] - 2026-10-14
+
+### added — submit issue shows what it is doing, and can go to its own inbox
+
+Sending an issue from the desktop app now shows a spinner and names each step,
+collecting system info, zipping and uploading the logs, then submitting, so a
+send that takes a minute no longer looks frozen. Each send is logged to
+`submit_issue.log` in the machine's logs, including why logs could not be
+attached. The new optional `ISSUE_EMAIL` setting sends issue alerts to their own
+inbox; without it they go where they went before.
+
+### changed — the app menu is reordered, and swoop's stats button shows when it is on
+
+The desktop app's menu now reads swoop; docs, submit issue, config, logs;
+appearance, start on login, restart service, reload window; and leave site last,
+on its own. swoop's stats button stays pressed while the stats are open, so a
+second click to hide them is obvious, and its tooltip just says stats.
+
+### fixed — swoop keeps its quality on a busy screen
+
+swoop counted every frame your screen did not get round to drawing as lost on
+the network. On a moving picture at 60 fps, two frames often arrive within one
+refresh of a 60 Hz screen and only the second is drawn, so swoop lowered the
+picture's quality every two seconds, even on a wired network where nothing was
+lost, and a busy screen went soft and blocky. swoop now counts only frames that
+were really lost.
+
 ## [4.1.13] - 2026-10-13
 
 ### added — send the machine's logs with an issue
