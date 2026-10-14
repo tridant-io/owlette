@@ -29,7 +29,9 @@ const buttonVariants = cva(
         outline:
           "btn-sweep border bg-background shadow-xs hover:text-secondary-foreground dark:bg-input dark:hover:text-secondary-foreground",
         secondary: "btn-sweep bg-secondary text-secondary-foreground",
-        ghost: "btn-sweep hover:text-secondary-foreground",
+        // pressed is a toggle that is on (`aria-pressed`): filled, so a second
+        // click reads as turning it off.
+        ghost: "btn-sweep hover:text-secondary-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground",
         // a quiet destructive action, for icon-only controls: red glyph, no fill.
         "ghost-destructive": "btn-sweep text-destructive hover:text-destructive",
         // link opts out of the button sweep — .hl-link gives it the
