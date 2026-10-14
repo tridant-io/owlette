@@ -6,7 +6,7 @@
  * (`../videos/16-logs-and-troubleshooting.video.ts`, which ends at b06). b07 is
  * the only beat that leaves the browser: "two last resorts. in the dashboard,
  * the help menu opens owlette's full docs … and on the machine, the owlette app
- * has submit bug report." The first sentence is a web shot; this file films the
+ * has submit issue." The first sentence is a web shot; this file films the
  * second.
  *
  * VO duration, ffprobe of
@@ -48,7 +48,7 @@ test.afterEach(async () => {
   take = null;
 });
 
-test('episode 16 — logs & troubleshooting, submit bug report', async () => {
+test('episode 16 — logs & troubleshooting, submit issue', async () => {
   seedVideoScenario(SCRATCH_ROOT, 'paired');
   take = await startTake();
 
@@ -67,7 +67,7 @@ test('episode 16 — logs & troubleshooting, submit bug report', async () => {
     await clickWithCursor(page, page.getByTestId('menu-report-issue'));
     const dialog = page.getByTestId('report-issue-dialog');
     await expect(dialog).toBeVisible();
-    await narrate(page, 'b07 submit bug report — logs attached automatically', 3);
+    await narrate(page, 'b07 submit issue — logs attached automatically', 3);
 
     // Open the category list so the choices are on camera, then take the one
     // the dialog opens on — re-picking the default keeps the form deterministic.

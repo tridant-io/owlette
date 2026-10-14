@@ -227,7 +227,7 @@ test('leaving a site: the confirmation', async () => {
   await expect(dialog).toBeHidden()
 })
 
-test('the bug report dialog', async () => {
+test('the submit issue dialog', async () => {
   await useScenario('paired')
   await selectProcess('gallery show')
 
@@ -242,6 +242,11 @@ test('the bug report dialog', async () => {
   // (`ReportIssueDialog.MAX_DESCRIPTION`, 1000).
   await expect(page.getByTestId('report-remaining')).toHaveText('1000 characters left')
   await expect(page.getByRole('button', { name: 'submit', exact: true })).toBeDisabled()
+  // the logs consent in its shipped state: unticked, with the copy saying what it sends
+  const attachLogs = page.getByTestId('report-attach-logs')
+  await expect(attachLogs).toBeVisible()
+  await expect(attachLogs).toHaveAttribute('aria-checked', 'false')
+  await expect(dialog.getByText('seen only by owlette support', { exact: false })).toBeVisible()
   await clearFocus()
   await page.mouse.move(POINTER_PARK.x, POINTER_PARK.y)
 

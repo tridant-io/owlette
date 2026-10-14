@@ -32,7 +32,7 @@ pywinauto/PowerShell. The split, beat by beat:
 | 3 b05 the pairing phrase | all of it | — |
 | 3 b06 opening the pairing page | the dialog half | owlette.app/add in a browser (web) |
 | 3 b10 if pairing doesn't go through | menu → join site → fresh phrase | start menu → Owlette (native) |
-| 16 b07 when you're still stuck | submit bug report, end to end | dashboard help menu → /docs (web) |
+| 16 b07 when you're still stuck | submit issue, end to end | dashboard help menu → /docs (web) |
 
 Three of those are structural, not laziness:
 

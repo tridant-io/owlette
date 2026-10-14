@@ -73,7 +73,7 @@ describe('AppMenu', () => {
       'config',
       'logs',
       'docs',
-      'submit bug report',
+      'submit issue',
       'appearance',
       'restart service',
       'reload window',

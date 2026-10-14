@@ -24,13 +24,14 @@ IPC + network round-trips are unbounded and would stall the main loop.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import logging
 import os
 import shutil
 import stat
 import time
-from typing import Any, Callable, Optional
+from typing import Any, BinaryIO, Callable, Optional, Union
 
 import requests
 
@@ -243,43 +244,52 @@ def request_upload_url(
 
 def upload_to_signed_url(
     upload_url: str,
-    image_bytes: bytes,
+    body: Union[bytes, Callable[[], BinaryIO]],
     content_type: str = DEFAULT_CONTENT_TYPE,
     max_attempts: int = MAX_UPLOAD_ATTEMPTS,
     backoff_s: float = INITIAL_BACKOFF_S,
     sleep_fn: Any = time.sleep,
-    timeout_s: int = UPLOAD_TIMEOUT_S,
+    timeout_s: Union[float, tuple[float, float]] = UPLOAD_TIMEOUT_S,
+    content_length: Optional[int] = None,
 ) -> None:
     """
     PUT to the signed URL, retrying 5xx + network errors with backoff. 4xx
     fails fast — a bad signature or expired url never recovers on retry.
+
+    `body` is the bytes, or a callable that opens a fresh file per attempt so
+    a retry streams it from the start; `content_length` is then the length
+    the url was signed for. Network errors are named by type only: requests
+    puts the url, signature and all, in its messages.
     """
-    last_exc: Optional[Exception] = None
+    headers = {'Content-Type': content_type}
+    if content_length is not None:
+        headers['Content-Length'] = str(content_length)
+    last_error = ''
     for attempt in range(1, max_attempts + 1):
         try:
-            resp = requests.put(
-                upload_url,
-                data=image_bytes,
-                headers={'Content-Type': content_type},
-                timeout=timeout_s,
-            )
+            opened = body() if callable(body) else contextlib.nullcontext(body)
+            with opened as data:
+                resp = requests.put(
+                    upload_url,
+                    data=data,
+                    headers=headers,
+                    timeout=timeout_s,
+                )
             if 200 <= resp.status_code < 300:
                 return
             if 400 <= resp.status_code < 500:
                 raise ScreenshotCaptureError(
                     f"upload: signed-url rejected: {resp.status_code} {resp.text[:200]}"
                 )
-            last_exc = ScreenshotCaptureError(
-                f"upload: signed-url 5xx: {resp.status_code} {resp.text[:200]}"
-            )
+            last_error = f"upload: signed-url 5xx: {resp.status_code} {resp.text[:200]}"
         except requests.RequestException as e:
-            last_exc = e
+            last_error = type(e).__name__
 
         if attempt < max_attempts:
             sleep_fn(backoff_s * (2 ** (attempt - 1)))
 
     raise ScreenshotCaptureError(
-        f"upload: failed after {max_attempts} attempts: {last_exc}"
+        f"upload: failed after {max_attempts} attempts: {last_error}"
     )
 
 
@@ -396,7 +406,7 @@ def capture_and_upload(
 
     upload_to_signed_url(
         upload_url=issued['uploadUrl'],
-        image_bytes=image_bytes,
+        body=image_bytes,
         content_type=content_type,
         max_attempts=max_upload_attempts,
         timeout_s=request_timeout_s or UPLOAD_TIMEOUT_S,

@@ -22,7 +22,7 @@ const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm
 const CRUMB_DIVIDER = <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-muted-foreground/60" />;
 
 const FEEDBACK_LABELS = [
-  'report a bug',
+  'submit issue',
   'share feedback',
   'tell us how terrible we\'re doing',
   'yell into the void',
@@ -112,7 +112,7 @@ export function PageHeader({
   const { user, signOut, isSuperadmin, administersAnySite, isSiteAdmin } = useAuth();
   const { plan } = usePlan();
   const [reportBugOpen, setReportBugOpen] = useState(false);
-  const [feedbackLabel, setFeedbackLabel] = useState('report a bug');
+  const [feedbackLabel, setFeedbackLabel] = useState('submit issue');
   const [feedbackFading, setFeedbackFading] = useState(false);
   const [helpMenuOpen, setHelpMenuOpen] = useState(false);
   const [openMenuCount, setOpenMenuCount] = useState(0);

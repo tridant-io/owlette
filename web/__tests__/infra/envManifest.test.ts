@@ -231,3 +231,34 @@ describe('scripts/env-manifest.json — installer release keys', () => {
     expect(problems).toEqual([]);
   });
 });
+
+/** the R2 token for logs attached to issue reports, scoped to the two issue-logs buckets. */
+const ISSUE_LOGS_VARS: readonly string[] = ['ISSUE_LOGS_R2_ACCESS_KEY_ID', 'ISSUE_LOGS_R2_SECRET_ACCESS_KEY'];
+
+describe('scripts/env-manifest.json — issue logs keys', () => {
+  it('registers both as secret on all three deploy surfaces, naming the bucket scope', () => {
+    const problems: string[] = [];
+    for (const name of ISSUE_LOGS_VARS) {
+      const entry = manifest.vars[name];
+      if (!entry) {
+        problems.push(`${name} — missing from "vars", so \`sync-env.mjs check\` never reports it absent.`);
+        continue;
+      }
+      if (entry.class !== 'secret') {
+        problems.push(`${name} — class is "${entry.class}", expected "secret".`);
+      }
+      const declared = [...(entry.targets ?? [])].sort();
+      if (declared.join(',') !== [...ALL_TARGETS].sort().join(',')) {
+        problems.push(`${name} — targets are [${declared.join(', ')}], expected [${ALL_TARGETS.join(', ')}].`);
+      }
+      if (!entry.note || !/bucket scope|issue-logs buckets/.test(entry.note)) {
+        problems.push(`${name} — the note must name the bucket scope the token is limited to.`);
+      }
+      const extra = Object.keys(entry).filter((field) => !ALLOWED_ENTRY_FIELDS.includes(field));
+      if (extra.length > 0) {
+        problems.push(`${name} — unexpected field(s) ${extra.join(', ')}; values live in the provider.`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+});

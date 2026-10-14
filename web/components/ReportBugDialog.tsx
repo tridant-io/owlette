@@ -11,7 +11,7 @@ import { toast } from '@/lib/toast';
 import { Loader2 } from 'lucide-react';
 
 const DIALOG_TITLES = [
-  'report a bug',
+  'submit issue',
   'share feedback',
   'tell us how terrible we\'re doing',
   'yell into the void',
@@ -24,7 +24,7 @@ const DIALOG_TITLES = [
 const DIALOG_SUBTITLES = [
   'help us improve owlette by reporting issues or requesting features.',
   'we promise not to cry. probably.',
-  'every bug report makes an owl slightly less confused.',
+  'every issue makes an owl slightly less confused.',
   'our therapist says we need to hear this.',
   'be honest. we\'re wearing our thick skin today.',
   'turning your frustration into features since 2024.',
@@ -117,14 +117,14 @@ export function ReportBugDialog({ open, onOpenChange }: ReportBugDialogProps) {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'failed to submit report');
+        throw new Error(data.error || 'failed to submit issue');
       }
 
-      toast.success('report submitted — thank you!');
+      toast.success('issue submitted — thank you!');
       resetForm();
       onOpenChange(false);
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'failed to submit report';
+      const message = error instanceof Error ? error.message : 'failed to submit issue';
       toast.error(message);
     } finally {
       setSubmitting(false);

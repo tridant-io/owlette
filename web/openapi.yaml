@@ -394,6 +394,53 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
 
+  /api/admin/issues/{id}/logs:
+    get:
+      operationId: downloadIssueLogs
+      tags: [Utility]
+      summary: download the logs attached to an issue
+      description: |
+        Redirects to a 15-minute presigned download of the logs zip a machine
+        attached to an issue (`owlette-logs-<hostname>-<YYYY-MM-DD>.zip`). The
+        issue's alert email links here. Each download writes an audit row
+        naming the caller and the issue, and one in the issue's site audit log
+        naming the actor only as `owlette_support`; if either write fails the
+        route answers 503 and no url is minted. Logs are kept 30 days.
+
+        ### Authentication and scopes
+
+        Superadmin only. Sessions and Firebase ID tokens need the superadmin
+        role; an API key additionally needs `user=*:admin`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The issue's `bug_reports` document id.
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,128}$'
+      responses:
+        '302':
+          description: Redirect to the presigned download.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '410':
+          description: 'The logs have expired or are gone from storage (`code: issue_logs_expired`).'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+
   /api/platform/email/config:
     get:
       operationId: getPlatformEmailConfig
@@ -6721,6 +6768,64 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
+  /api/sites/{siteId}/machines/{machineId}/issue-logs/upload-url:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+    post:
+      operationId: mintIssueLogsUploadUrl
+      tags: [Machines]
+      summary: mint a 15-minute signed write url for an issue's logs zip
+      description: |
+        Agent-internal. When a person submits an issue with "attach logs"
+        ticked, the agent asks here for a presigned PUT, uploads the zip to
+        it, then names the returned `key` as `logsKey` in the issue it posts.
+        `size` is the zip's exact byte count; content-length is signed into
+        the url, so the PUT must send exactly that many bytes with
+        `Content-Type: application/zip`. Keys are
+        `issues/{siteId}/{machineId}/{uuid}.zip`; objects are deleted 30 days
+        after upload.
+
+        ### Authentication and scopes
+
+        Only the machine's own agent: its Firebase ID token, with site and
+        machine claims matching the path. Site members' sessions and API keys
+        get 403. Rate limited 5/h per machine.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [size]
+              properties:
+                size:
+                  type: integer
+                  minimum: 1
+                  maximum: 52428800
+      responses:
+        '200':
+          description: Signed upload url issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [uploadUrl, key, expiresIn]
+                properties:
+                  uploadUrl: { type: string, format: uri }
+                  key: { type: string }
+                  expiresIn:
+                    type: integer
+                    description: Seconds until `uploadUrl` expires.
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
 
   /api/sites/{siteId}/machines/{machineId}/screenshots/upload-url:
