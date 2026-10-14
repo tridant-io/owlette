@@ -11,20 +11,37 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.13] - 2026-10-13
+
 ### added — send the machine's logs with an issue
 
 The desktop app's submit issue dialog has an **attach logs** box, unticked by
 default. Tick it and the machine's logs from the last 14 days, swoop's and the
 desktop app's own included, go to owlette support as one zip with the issue: no
 copying the logs folder by hand and no administrator password. The zip is kept
-30 days and only owlette support can open it; every download is audited. If the logs cannot be sent, the issue still is,
-with the reason. An issue from the desktop app now also records the machine and
-site it came from.
+30 days and only owlette support can open it; every download is audited. If
+the logs cannot be sent, the issue still is, with the reason. An issue from the
+desktop app now also records the machine and site it came from.
 
 ### changed — "submit bug report" is now "submit issue"
 
 The desktop app's menu and the dashboard's help menu both say **submit issue**.
 It still takes feature requests and feedback.
+
+### fixed — swoop's picture no longer smears, and an NVIDIA machine encodes on its GPU again
+
+Since 4.1.9 a Windows machine with an NVIDIA GPU streamed swoop through the
+slower Windows encoder instead of NVENC, because checking for that encoder broke
+NVENC for the rest of the session. It also lost H.265. That encoder runs a little
+over its bitrate, and each frame swoop then held back left a hole the browser
+could not see, so the picture smeared, sometimes for seconds, until the next
+keyframe. Each hole was also mistaken for a bad network and cut the bitrate.
+
+swoop now uses NVENC again on NVIDIA machines. After a lost frame it sends
+nothing but a keyframe, so a viewer sees a brief pause instead of a smear. It
+leaves the encoder room above its bitrate and no longer cuts the bitrate for
+frames it held back itself. A 30 fps stream now uses its full bitrate, and
+renewing swoop's connection to the server no longer pauses the picture.
 
 ## [4.1.11] - 2026-10-13
 

@@ -491,6 +491,40 @@ struct AudioLeg {
 
 // ----------------------------------------------------------------- peer ---
 
+/// Whether a peer may be sent a delta.
+///
+/// A frame that never reaches the viewer — refused by the pacer, refused by
+/// the transport, or reported lost by a PLI or an `idr` — is a hole in its
+/// reference chain, and every delta after it decodes against a picture the
+/// viewer never had. Chrome cannot see that hole: H.264 and H.265 continuity is
+/// the RTP sequence number, and a frame never handed to str0m consumes none, so
+/// it sends no PLI and paints the smear until the next keyframe (TEC-B4A,
+/// 2026-10-13: one hole stood for 14 s). So after a hole nothing but an IRAP
+/// goes out, and the stream freezes for a keyframe instead of smearing.
+#[derive(Debug, Default, Clone, Copy)]
+struct IrapGate {
+    irap_sent: bool,
+    hole: bool,
+}
+
+impl IrapGate {
+    fn hole(&mut self) {
+        self.hole = true;
+    }
+
+    /// A frame reached the transport; an IRAP closes any hole before it.
+    fn written(&mut self, is_irap: bool) {
+        if is_irap {
+            self.irap_sent = true;
+            self.hole = false;
+        }
+    }
+
+    fn wants_irap(&self) -> bool {
+        !self.irap_sent || self.hole
+    }
+}
+
 /// One viewer's peer connection.
 ///
 /// Driven from exactly one thread: [`accept_offer`](Self::accept_offer), then
@@ -541,8 +575,7 @@ pub struct RtcPeer {
     /// Emitted on the next poll: candidates are gathered while answering, and
     /// the caller's event vector only exists inside `poll`.
     pending_events: VecDeque<PeerEvent>,
-    keyframe_requested: bool,
-    irap_sent: bool,
+    gate: IrapGate,
     /// The first frame's capture tick, so RTP time starts near zero.
     rtp_base_qpc: Option<i64>,
     last_rtp_90k: Option<u32>,
@@ -669,8 +702,7 @@ impl RtcPeer {
             relay: None,
             sending_from: None,
             pending_events: VecDeque::new(),
-            keyframe_requested: false,
-            irap_sent: false,
+            gate: IrapGate::default(),
             rtp_base_qpc: None,
             last_rtp_90k: None,
             stats: PeerStats::default(),
@@ -705,6 +737,20 @@ impl RtcPeer {
     pub fn set_bitrate_ceiling(&mut self, bitrate_bps: u32) {
         self.pacer
             .set_ceiling(Instant::now(), u64::from(bitrate_bps));
+    }
+
+    /// The frame rate this peer's tier is encoded at, which sizes the pacer's
+    /// burst: a 30 fps frame is twice a 60 fps one at the same rate.
+    pub fn set_frame_rate(&mut self, fps: u32) {
+        self.pacer.set_frame_rate(Instant::now(), fps);
+    }
+
+    /// This viewer lost its place in the stream — its `idr` on
+    /// `swoop-control`, or frames it never got while ICE was down — so nothing
+    /// but an IRAP goes to it from here, exactly as after a PLI. Holding only:
+    /// the keyframe itself is the session's to ask for.
+    pub fn hold_for_irap(&mut self) {
+        self.gate.hole();
     }
 
     /// This peer's local DTLS certificate fingerprint, in the spelling SDP
@@ -1322,7 +1368,7 @@ impl RtcPeer {
                 }
             }
             Event::KeyframeRequest(_) => {
-                self.keyframe_requested = true;
+                self.gate.hole();
                 self.stats.keyframe_requests += 1;
                 events.push(PeerEvent::KeyframeRequest);
             }
@@ -1426,6 +1472,20 @@ impl RtcPeer {
         true
     }
 
+    /// The pacer's verdict on one frame. A refused one is a hole in this
+    /// peer's reference chain, so the gate holds every delta after it.
+    fn admit(&mut self, now: Instant, frame: &EncodedFrame) -> bool {
+        if self.pacer.admit(now, frame.data.len(), frame.is_irap) == Admission::DropOverBudget {
+            self.gate.hole();
+            self.pending_events.push_back(PeerEvent::FrameDropped {
+                frame_id: frame.frame_id,
+                bytes: frame.data.len(),
+            });
+            return false;
+        }
+        true
+    }
+
     /// 90 kHz media time for one frame, from the capture clock the front half
     /// stamped it with — not from send time, which would fold this thread's
     /// scheduling into the receiver's jitter estimate.
@@ -1445,38 +1505,37 @@ impl VideoSink for RtcPeer {
             return Ok(());
         };
         let now = Instant::now();
-        if self.pacer.admit(now, frame.data.len(), frame.is_irap) == Admission::DropOverBudget {
-            self.pending_events.push_back(PeerEvent::FrameDropped {
-                frame_id: frame.frame_id,
-                bytes: frame.data.len(),
-            });
+        if !self.admit(now, frame) {
             return Ok(());
         }
 
         let rtp = self.rtp_timestamp_90k(frame.captured_qpc);
-        let writer = self
+        let written = self
             .rtc
             .writer(mid)
-            .ok_or_else(|| anyhow!("no writer for mid {mid}"))?;
-        writer
-            .playout_delay(
-                MediaTime::from_hundredths(PLAYOUT_DELAY_MIN_MS / 10),
-                MediaTime::from_hundredths(PLAYOUT_DELAY_MAX_MS / 10),
-            )
-            .write(pt, now, MediaTime::from_90khz(rtp), frame.data.as_slice())
-            .map_err(|e| anyhow!("write frame {}: {e}", frame.frame_id))?;
+            .ok_or_else(|| anyhow!("no writer for mid {mid}"))
+            .and_then(|writer| {
+                writer
+                    .playout_delay(
+                        MediaTime::from_hundredths(PLAYOUT_DELAY_MIN_MS / 10),
+                        MediaTime::from_hundredths(PLAYOUT_DELAY_MAX_MS / 10),
+                    )
+                    .write(pt, now, MediaTime::from_90khz(rtp), frame.data.as_slice())
+                    .map_err(|e| anyhow!("write frame {}: {e}", frame.frame_id))
+            });
+        if let Err(e) = written {
+            self.gate.hole();
+            return Err(e);
+        }
 
         self.last_rtp_90k = Some(rtp as u32);
         self.stats.frames_written += 1;
-        if frame.is_irap {
-            self.irap_sent = true;
-            self.keyframe_requested = false;
-        }
+        self.gate.written(frame.is_irap);
         Ok(())
     }
 
     fn wants_irap(&self) -> bool {
-        !self.irap_sent || self.keyframe_requested
+        self.gate.wants_irap()
     }
 }
 
@@ -1624,6 +1683,54 @@ mod tests {
 
     fn loopback_peer() -> RtcPeer {
         RtcPeer::bind(loopback_config()).expect("bind on loopback")
+    }
+
+    fn frame(frame_id: u64, bytes: usize, is_irap: bool) -> EncodedFrame {
+        EncodedFrame {
+            data: vec![0; bytes],
+            is_irap,
+            codec: Codec::H264,
+            width: 1920,
+            height: 1080,
+            frame_id,
+            captured_qpc: 0,
+            encoded_qpc: 0,
+        }
+    }
+
+    /// The smear on TEC-B4A, 2026-10-13: a delta the pacer refused left a hole
+    /// Chrome cannot see, and the deltas behind it went out anyway.
+    #[test]
+    fn a_refused_delta_holds_every_later_delta_until_an_irap() {
+        let mut peer = loopback_peer();
+        let now = Instant::now();
+        assert!(peer.admit(now, &frame(0, 1_000, true)));
+        peer.gate.written(true);
+        assert!(!peer.wants_irap(), "streaming");
+
+        // far more than the bucket holds at 20 mbps
+        assert!(!peer.admit(now, &frame(1, 10_000_000, false)));
+        assert!(peer.wants_irap(), "a refused delta is a hole");
+        assert!(matches!(
+            peer.pending_events.pop_back(),
+            Some(PeerEvent::FrameDropped { frame_id: 1, .. })
+        ));
+
+        // a later delta that would fit changes nothing; only an irap closes it
+        peer.gate.written(false);
+        assert!(peer.wants_irap());
+        peer.gate.written(true);
+        assert!(!peer.wants_irap());
+    }
+
+    #[test]
+    fn a_viewer_that_lost_its_place_is_held_like_a_pli() {
+        let mut peer = loopback_peer();
+        peer.gate.written(true);
+        peer.hold_for_irap();
+        assert!(peer.wants_irap());
+        peer.gate.written(true);
+        assert!(!peer.wants_irap());
     }
 
     /// A loopback peer that asks a fake STUN server, that server, and the
