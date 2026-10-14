@@ -823,6 +823,7 @@ export function useSwoopSession(
         },
         peer,
         presenter,
+        inboundStats: async () => (await receiver?.inboundStats()) ?? null,
         send: sendOnChannel,
         onChannelMessage: (label, handler) => {
           const handlers = channelHandlers.get(label) ?? new Set<(data: unknown) => void>();

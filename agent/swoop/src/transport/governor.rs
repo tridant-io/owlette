@@ -83,7 +83,7 @@
 //!    A decision that moves the host's encoder is made from the host's own
 //!    arithmetic over raw samples, not from a scalar a viewer asserts.
 //! 2. **Frame gaps**, from a rise in `stats.framesDropped` — frames the viewer
-//!    never presented. Three or more in one report window; fewer are counted
+//!    never decoded. Three or more in one report window; fewer are counted
 //!    and not cut ([`GAP_CUT_THRESHOLD`] says why).
 //! 3. **The host's own refusals**, from [`PacerStats::dropped_over_budget`],
 //!    and the frames its peer withheld after one until the keyframe
@@ -232,11 +232,13 @@ const CUT_FACTOR: f64 = 0.80;
 const CLIMB_FACTOR: f64 = 1.05;
 
 /// Unexplained dropped frames in one report window below which the window is
-/// counted and not cut. `framesDropped` is the browser's own count, and it
-/// rises by one when the browser skips a late frame, a slow decode or a
-/// throttled paint as readily as for a loss on the path. Measured at gate M1
-/// on 2026-10-02, a Mac on Wi-Fi at 4K60 reported one dropped frame every two
-/// to four seconds; each was a 20 % cut, a two-second hold and a 2.5 MB
+/// counted and not cut. `framesDropped` is the viewer's count of frames it
+/// never decoded; until 2026-10-14 it was frames never painted, which rose
+/// for every frame the compositor skipped (two in one refresh at 60 fps on a
+/// 60 Hz screen) and cut a wired lan every two seconds (TEC-B4A). A late
+/// frame or a slow decode can still raise it as readily as a loss on the
+/// path. Measured at gate M1 on 2026-10-02, a Mac on Wi-Fi at 4K60 reported
+/// one dropped frame every two to four seconds; each was a 20 % cut, a two-second hold and a 2.5 MB
 /// recovery keyframe, 11 cuts in 40 s took a 50 Mbps target to 20, and the
 /// picture stuttered where the path was fine. Real loss is many frames a
 /// window, and real congestion is a delay rise, which rule 1 catches alone.

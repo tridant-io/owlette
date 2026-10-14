@@ -27,6 +27,7 @@ import type { SwoopPeer } from '@/lib/swoop/peer';
 import type { SwoopChannel } from '@/lib/swoop/protocol';
 import type { SwoopPresenter } from '@/lib/swoop/video/presenter';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';
+import type { InboundVideoStats } from '@/lib/swoop/video/stall';
 
 import { attachInputCapture, type InputCapture } from '@/lib/swoop/input';
 import { createSwoopFeedback, type SwoopFeedback } from '@/lib/swoop/feedback';
@@ -85,6 +86,8 @@ export interface SwoopSession {
   contentRect(): DOMRect;
   readonly peer: SwoopPeer;
   readonly presenter: SwoopPresenter;
+  /** the video receiver's inbound-rtp counters (`video/receiver.ts`), or null before a track. */
+  inboundStats(): Promise<InboundVideoStats | null>;
   /**
    * send on one of the five channels; false when that channel is not open.
    * every viewer→host payload in the protocol is json text — `swoop-meta` is
@@ -183,6 +186,7 @@ const feedbackFeature: SwoopFeature = {
       // already has. a path that is down is the peer's to restart instead.
       onSilence: () => session.end('peer_failed'),
       linkUp: () => session.peer.linkUp(),
+      framesDecoded: async () => (await session.inboundStats())?.framesDecoded ?? null,
     });
     const offFrame = session.onFrame((observation) => feedback.observeFrame(observation));
     const offMessage = session.onChannelMessage('swoop-feedback', (data) =>
