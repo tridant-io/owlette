@@ -104,6 +104,10 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'roosts/[roostId]/version-url',
   // read-only: lists the provider's available models for a supplied/stored key, writes nothing.
   'settings/llm-models',
+  // agent-only (the machine's own token): mints a signed PUT url for an issue's logs zip, writes
+  // nothing. The superadmin download, GET `admin/issues/[id]/logs`, is a read and so not scanned
+  // here; it writes its own blocking `global/audit_log` row and one in the issue's site audit log.
+  'sites/[siteId]/machines/[machineId]/issue-logs/upload-url',
   // agent-side screenshot pipeline (machine scope): publishes the uploaded object and records the capture.
   'sites/[siteId]/machines/[machineId]/screenshots/finalize',
   // agent-side screenshot pipeline (machine scope): mints a signed PUT url, writes nothing.

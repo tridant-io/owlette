@@ -3,10 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const runAgent = vi.fn()
 const toastSuccess = vi.fn()
+const toastWarning = vi.fn()
 
 vi.mock('@/lib/agentCli', () => ({ runAgent: (...args: unknown[]) => runAgent(...args) }))
 vi.mock('sonner', () => ({
-  toast: { success: (...args: unknown[]) => toastSuccess(...args) },
+  toast: {
+    success: (...args: unknown[]) => toastSuccess(...args),
+    warning: (...args: unknown[]) => toastWarning(...args),
+  },
 }))
 
 const { MAX_DESCRIPTION, ReportIssueDialog } = await import('./ReportIssueDialog')
@@ -21,6 +25,10 @@ function describeIssue(text: string) {
   fireEvent.change(screen.getByTestId('report-description'), { target: { value: text } })
 }
 
+function attachLogs() {
+  return screen.getByRole('checkbox', { name: 'attach logs' })
+}
+
 async function flush() {
   await act(async () => {
     await Promise.resolve()
@@ -28,9 +36,21 @@ async function flush() {
   })
 }
 
+function doneWith(value: Record<string, unknown>) {
+  return { code: 0, terminal: { event: 'done', value }, stderr: '' }
+}
+
+async function submitIssue(withLogs: boolean) {
+  describeIssue('swoop froze on the lobby wall')
+  if (withLogs) fireEvent.click(attachLogs())
+  fireEvent.click(screen.getByRole('button', { name: 'submit' }))
+  await flush()
+}
+
 beforeEach(() => {
   runAgent.mockReset().mockResolvedValue({ code: 0, terminal: null, stderr: '' })
   toastSuccess.mockReset()
+  toastWarning.mockReset()
 })
 
 describe('ReportIssueDialog', () => {
@@ -51,9 +71,78 @@ describe('ReportIssueDialog', () => {
     await flush()
 
     expect(runAgent).toHaveBeenCalledExactlyOnceWith('report-issue', {
-      payload: { category: 'bug', description: 'touchdesigner keeps dying overnight' },
+      payload: {
+        category: 'bug',
+        description: 'touchdesigner keeps dying overnight',
+        attachLogs: false,
+      },
     })
     expect(toastSuccess).toHaveBeenCalled()
+    expect(props.onClose).toHaveBeenCalledOnce()
+  })
+
+  it('leaves attach logs unticked until the operator opts in', () => {
+    // consent must be an act: a pre-ticked box is not valid consent under gdpr
+    open()
+    expect(attachLogs().getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByText(/kept 30 days, seen only by owlette support\./)).toBeTruthy()
+  })
+
+  it('asks for the log zip when attach logs is ticked', async () => {
+    open()
+    describeIssue('swoop froze on the lobby wall')
+    fireEvent.click(attachLogs())
+    expect(attachLogs().getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'submit' }))
+    await flush()
+
+    expect(runAgent).toHaveBeenCalledExactlyOnceWith('report-issue', {
+      payload: { category: 'bug', description: 'swoop froze on the lobby wall', attachLogs: true },
+    })
+  })
+
+  it('does not claim logs go automatically', () => {
+    open()
+    const description = screen.getByText(/help us improve owlette/)
+    expect(description.textContent).not.toMatch(/recent logs|automatically/)
+    expect(description.textContent).toContain('the last lines of the service log')
+  })
+
+  it('confirms a plain issue without mentioning the log zip', async () => {
+    runAgent.mockResolvedValue(doneWith({ category: 'bug' }))
+    const props = open()
+    await submitIssue(false)
+
+    expect(toastSuccess).toHaveBeenCalledExactlyOnceWith('thanks — your issue was sent', {
+      description: 'system info and the last lines of the service log went with it.',
+    })
+    expect(toastWarning).not.toHaveBeenCalled()
+    expect(props.onClose).toHaveBeenCalledOnce()
+  })
+
+  it('confirms the logs went when the agent attached them', async () => {
+    runAgent.mockResolvedValue(doneWith({ category: 'bug', logsAttached: true }))
+    const props = open()
+    await submitIssue(true)
+
+    expect(toastSuccess).toHaveBeenCalledExactlyOnceWith('thanks — your issue was sent', {
+      description: 'system info and the logs went with it.',
+    })
+    expect(toastWarning).not.toHaveBeenCalled()
+    expect(props.onClose).toHaveBeenCalledOnce()
+  })
+
+  it('warns when the issue went but the logs could not be attached', async () => {
+    runAgent.mockResolvedValue(doneWith({ category: 'bug', logsAttached: false }))
+    const props = open()
+    await submitIssue(true)
+
+    expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
+      'your issue was sent, but the logs could not be attached',
+      { description: 'try again, or send the logs folder another way.' },
+    )
+    expect(toastSuccess).not.toHaveBeenCalled()
     expect(props.onClose).toHaveBeenCalledOnce()
   })
 
@@ -89,6 +178,7 @@ describe('ReportIssueDialog', () => {
     const onClose = vi.fn()
     const view = render(<ReportIssueDialog open onClose={onClose} />)
     describeIssue('first attempt')
+    fireEvent.click(attachLogs())
 
     view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
     view.rerender(<ReportIssueDialog open onClose={onClose} />)
@@ -97,5 +187,6 @@ describe('ReportIssueDialog', () => {
     expect(screen.getByTestId('report-remaining').textContent).toBe(
       `${MAX_DESCRIPTION} characters left`,
     )
+    expect(attachLogs().getAttribute('aria-checked')).toBe('false')
   })
 })

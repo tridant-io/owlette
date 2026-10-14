@@ -1,17 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { requireSession, ApiAuthError } from '@/lib/apiAuth.server';
 import { withRateLimit } from '@/lib/withRateLimit';
-import { getResend, FROM_EMAIL, ENV_LABEL } from '@/lib/resendClient.server';
+import { getResend, FROM_EMAIL, ENV_LABEL, trustedBaseUrl } from '@/lib/resendClient.server';
 import { wrapEmailLayout, emailDataTable, emailTimestamp, EMAIL_COLORS } from '@/lib/emailTemplates.server';
 import { apiError } from '@/lib/apiErrorResponse';
+import { ISSUE_LOGS_RETENTION_DAYS, headIssueLogs } from '@/lib/issueLogsStorage.server';
 
 /**
  * POST /api/bug-report — writes the top-level `bug_reports` doc and emails
- * ADMIN_EMAIL. Body: title (<=200), category, description (<=5000), browserUA,
- * pageUrl.
+ * ADMIN_EMAIL. Body: title (<=200), category, description (<=50,000), browserUA,
+ * pageUrl, and from an agent only, logsKey.
+ *
+ * An agent is recognised by its verified token's `role=agent` claim, never by
+ * browserUA, and its report records the token's site and machine. `logsKey` names
+ * a zip the agent uploaded through `issue-logs/upload-url`; it must sit under that
+ * same machine's prefix and exist, else 400, and the agent resends without it.
  */
+
+// the uuid file name `issueLogsKey` mints; no further path segments
+const LOGS_KEY_FILE_RE = /^[A-Za-z0-9-]+\.zip$/;
 
 const VALID_CATEGORIES = ['bug', 'feature_request', 'other', 'compliment', 'rant'] as const;
 
@@ -38,6 +47,7 @@ function buildBugReportEmail(
   userEmail: string,
   source: string,
   pageUrl: string,
+  logsUrl: string | null,
 ): string {
   const categoryLabel = CATEGORY_LABELS[category] || category;
   const color = category === 'compliment' ? EMAIL_COLORS.cyan
@@ -55,6 +65,7 @@ function buildBugReportEmail(
       { label: 'time', value: emailTimestamp() },
       { label: 'environment', value: ENV_LABEL },
     ])}
+    ${logsUrl ? `<p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};">logs are attached to this issue: <a href="${logsUrl}" style="color:${EMAIL_COLORS.cyan};">download logs</a> (superadmin only, kept ${ISSUE_LOGS_RETENTION_DAYS} days).</p>` : ''}
     <div style="margin:20px 0 0;padding:16px;background:${EMAIL_COLORS.altRow};border-radius:8px;border:1px solid ${EMAIL_COLORS.border};">
       <p style="margin:0 0 8px;color:${EMAIL_COLORS.muted};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;">description</p>
       <p style="margin:0;color:${EMAIL_COLORS.text};font-size:14px;line-height:1.6;white-space:pre-wrap;">${description.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>
@@ -68,6 +79,7 @@ export const POST = withRateLimit(
     try {
       // session first, then Bearer — web users and agents both post here
       let userId: string;
+      let agent: { siteId: string; machineId: string } | null = null;
       try {
         userId = await requireSession(request);
       } catch {
@@ -79,13 +91,20 @@ export const POST = withRateLimit(
         try {
           const decoded = await getAdminAuth().verifyIdToken(token);
           userId = decoded.uid;
+          if (
+            decoded.role === 'agent' &&
+            typeof decoded.site_id === 'string' &&
+            typeof decoded.machine_id === 'string'
+          ) {
+            agent = { siteId: decoded.site_id, machineId: decoded.machine_id };
+          }
         } catch {
           return NextResponse.json({ error: 'Unauthorized: Invalid token' }, { status: 401 });
         }
       }
 
       const body = await request.json();
-      const { title, category, description, browserUA, pageUrl } = body;
+      const { title, category, description, browserUA, pageUrl, logsKey } = body;
 
       if (!title || typeof title !== 'string' || title.trim().length === 0) {
         return NextResponse.json({ error: 'Title is required' }, { status: 400 });
@@ -107,9 +126,35 @@ export const POST = withRateLimit(
         return NextResponse.json({ error: `Description must be ${maxDescLength} characters or less` }, { status: 400 });
       }
 
-      // agents identify themselves via browserUA
+      let logs: { key: string; size: number; expiresAt: Timestamp } | null = null;
+      if (logsKey !== undefined && logsKey !== null) {
+        const prefix = agent ? `issues/${agent.siteId}/${agent.machineId}/` : null;
+        if (
+          !prefix ||
+          typeof logsKey !== 'string' ||
+          !logsKey.startsWith(prefix) ||
+          !LOGS_KEY_FILE_RE.test(logsKey.slice(prefix.length))
+        ) {
+          return NextResponse.json({ error: "logsKey is not this machine's upload" }, { status: 400 });
+        }
+        // a storage error answers 400 as well: the agent resends without logs,
+        // and the issue itself still lands
+        const head = await headIssueLogs(logsKey).catch((err) => {
+          console.error('[bug-report] could not check the logs upload:', err);
+          return null;
+        });
+        if (!head) {
+          return NextResponse.json({ error: 'logsKey names no uploaded logs' }, { status: 400 });
+        }
+        logs = {
+          key: logsKey,
+          size: head.size,
+          expiresAt: Timestamp.fromMillis(Date.now() + ISSUE_LOGS_RETENTION_DAYS * 24 * 60 * 60 * 1000),
+        };
+      }
+
       const ua = typeof browserUA === 'string' ? browserUA.slice(0, 500) : '';
-      const isAgent = ua.startsWith('Owlette Agent');
+      const isAgent = agent !== null;
       const source = isAgent ? 'agent' : 'web';
 
       // agents have no email; browserUA identifies them instead
@@ -139,7 +184,10 @@ export const POST = withRateLimit(
         userEmail,
         browserUA: ua,
         pageUrl: typeof pageUrl === 'string' ? pageUrl.slice(0, 500) : '',
-        appVersion: process.env.npm_package_version || '2.4.2',
+        appVersion: process.env.NEXT_PUBLIC_APP_VERSION ?? null,
+        siteId: agent?.siteId ?? null,
+        machineId: agent?.machineId ?? null,
+        ...(logs ? { logs } : {}),
       });
 
       console.log(`[bug-report] Submitted by ${fromLabel}: ${title.trim()}`);
@@ -159,6 +207,7 @@ export const POST = withRateLimit(
             fromLabel,
             source,
             typeof pageUrl === 'string' ? pageUrl : '',
+            logs ? `${trustedBaseUrl()}/api/admin/issues/${docRef.id}/logs` : null,
           ),
         }).catch((err) => {
           console.error('[bug-report] Failed to send email notification:', err);

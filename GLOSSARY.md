@@ -68,6 +68,10 @@ _Avoid_: swoop host as a binary name, owlette-host
 The per-platform agent package (`Owlette-Installer-vX.Y.Z.exe`, `.pkg` or `.deb`) that installs or upgrades everything on a machine. During an upgrade it is the only new code that runs on an old machine.
 _Avoid_: setup, update package
 
+**Issue**:
+What a user files to reach owlette support, from the desktop app's menu or the dashboard's help menu ("submit issue"). One filed from the desktop app carries system info and the last lines of the service log. It is stored in `bug_reports` through `/api/bug-report`, names kept from before the rename.
+_Avoid_: bug report, feedback, ticket
+
 ### Pairing and access
 
 **Pairing**:
