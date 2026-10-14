@@ -229,6 +229,8 @@ describe('ReportIssueDialog progress', () => {
     run.emit('zipping logs')
     expect(screen.getByTestId('report-status').textContent).toBe('zipping logs')
     expect(screen.getByTestId('report-status').getAttribute('aria-live')).toBe('polite')
+    // in the button row, so it reads beside cancel and sending…
+    expect(screen.getByTestId('report-status').parentElement?.getAttribute('data-slot')).toBe('dialog-footer')
 
     run.emit('uploading logs')
     expect(screen.getByTestId('report-status').textContent).toBe('uploading logs')

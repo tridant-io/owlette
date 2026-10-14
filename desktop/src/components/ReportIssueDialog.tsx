@@ -195,13 +195,12 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
           </InlineNotice>
         )}
 
-        {submitting && (
-          <p className="text-xs text-muted-foreground" aria-live="polite" data-testid="report-status">
-            {status}
-          </p>
-        )}
-
-        <DialogFooter>
+        <DialogFooter className="sm:items-center">
+          {submitting && (
+            <p className="text-xs text-muted-foreground sm:mr-auto" aria-live="polite" data-testid="report-status">
+              {status}
+            </p>
+          )}
           <Button variant="outline" onClick={onClose} disabled={submitting}>
             cancel
           </Button>
