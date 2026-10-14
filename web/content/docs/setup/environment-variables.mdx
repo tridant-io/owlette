@@ -96,6 +96,7 @@ in production, a missing `TURNSTILE_SECRET` refuses every sign-up and password r
 | `RESEND_FROM_EMAIL` | verified sender address, such as `alerts@yourdomain.com` |
 | `ADMIN_EMAIL_PROD` | fallback admin address in production |
 | `ADMIN_EMAIL_DEV` | fallback admin address in development |
+| `ISSUE_EMAIL` | optional. where issue reports are mailed; unset, they go to `ADMIN_EMAIL_PROD` or `ADMIN_EMAIL_DEV` |
 | `SEND_WELCOME_EMAIL` | optional. only the exact string `true` sends a welcome email to new users; anything else, or unset, sends none |
 
 ---

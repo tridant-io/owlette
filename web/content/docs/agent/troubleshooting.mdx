@@ -32,6 +32,7 @@ the app menu's **logs** item opens this folder on every platform, and on Windows
 | **preseed pairing** | `pairing.log` | macOS, Linux | the background pairing a [pairing preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux) starts at install |
 | **token exchange (legacy)** | `oauth_debug.log` | all | written only by the old registration-code exchange, which phrase pairing does not use, so a current agent leaves it absent or stale. response bodies were never written — they carry tokens |
 | **app requests** | `privileged_requests.log` | macOS, Linux | an audit row for every request the desktop app made of the service — pair, leave, restart, reboot, issue — and whether it ran |
+| **submit issue** | `submit_issue.log` | all | each issue sent from the desktop app: zipping and uploading attached logs, and why they could not be attached. 1 MB, one backup. never the issue's text, a token or an upload link |
 | **self-update installer** | `installer_update.log` | Windows | the Inno Setup log written during a remote agent update |
 | **self-update installer** | `update_installer.log` | macOS | what `installer` printed while it applied an update |
 | **self-update installer** | `journalctl -u owlette-update` | Linux | not a file: the transient unit apt-get runs in during an update |

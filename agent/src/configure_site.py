@@ -45,6 +45,7 @@ import sys
 import tempfile
 import time
 import argparse
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
@@ -983,6 +984,36 @@ def _attach_logs() -> str:
             os.remove(zip_path)
         except OSError:
             pass
+
+
+def _log_report_to_file() -> None:
+    """Keep this run's log lines in `logs/submit_issue.log`.
+
+    The report runs as the console user on Windows, whose stderr the desktop
+    app keeps only for a run that ends without a terminal event, and as a root
+    child with stderr discarded on POSIX: without a file of its own, why an
+    attach failed is saved nowhere. On POSIX
+    the file is root's at the daemon's umask, like the service's own log.
+    Never raises — a log that cannot be opened must not cost the report.
+    """
+    try:
+        handler = RotatingFileHandler(
+            shared_utils.get_data_path('logs/submit_issue.log'),
+            maxBytes=1024 * 1024, backupCount=1,
+            encoding='utf-8', errors='backslashreplace')
+    except Exception:
+        return
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    # urllib3 names the request, the signed upload url's query and all
+    handler.addFilter(lambda record: not record.name.startswith(('urllib3', 'requests')))
+    root = logging.getLogger()
+    # any root handler retires logging's last-resort stderr writer, which the
+    # desktop app shows when a run ends without a terminal event
+    stderr = logging.StreamHandler()
+    stderr.setLevel(logging.WARNING)
+    root.addHandler(stderr)
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
 
 
 def run_report_issue(payload_path: str) -> int:
@@ -2035,6 +2066,7 @@ def _run_headless_mode(args) -> Optional[int]:
         if args.leave:
             return run_leave_site()
         if args.report_issue is not None:
+            _log_report_to_file()
             return run_report_issue(args.report_issue)
         if args.reboot_now:
             return run_reboot_now()

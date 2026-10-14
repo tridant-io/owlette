@@ -1,3 +1,4 @@
+import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -66,6 +67,7 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
   const [attachLogs, setAttachLogs] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [status, setStatus] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -74,6 +76,7 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
     setAttachLogs(false)
     setSubmitting(false)
     setError(null)
+    setStatus('')
   }, [open])
 
   const submit = useCallback(() => {
@@ -86,7 +89,12 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
     setSubmitting(true)
     setError(null)
 
-    void runAgent('report-issue', { payload: { category, description: trimmed, attachLogs } })
+    void runAgent('report-issue', {
+      payload: { category, description: trimmed, attachLogs },
+      onEvent: (event) => {
+        if (event.event === 'status') setStatus(event.value)
+      },
+    })
       .then((outcome) => {
         // partial: a done line from an older helper carries none of these fields
         const done: Partial<ReportIssueDone> =
@@ -109,7 +117,10 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
       .catch((cause: unknown) => {
         setError(cause instanceof Error ? cause.message : String(cause))
       })
-      .finally(() => setSubmitting(false))
+      .finally(() => {
+        setSubmitting(false)
+        setStatus('')
+      })
   }, [attachLogs, category, description, onClose])
 
   const remaining = MAX_DESCRIPTION - description.length
@@ -184,11 +195,20 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
           </InlineNotice>
         )}
 
+        {submitting && (
+          <p className="text-xs text-muted-foreground" aria-live="polite" data-testid="report-status">
+            {status}
+          </p>
+        )}
+
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={submitting}>
             cancel
           </Button>
           <Button onClick={submit} disabled={submitting || description.trim().length === 0}>
+            {submitting && (
+              <Loader2 aria-hidden className="animate-spin" data-testid="report-spinner" />
+            )}
             {submitting ? 'sending…' : 'submit'}
           </Button>
         </DialogFooter>

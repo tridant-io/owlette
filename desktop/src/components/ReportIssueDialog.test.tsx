@@ -76,6 +76,7 @@ describe('ReportIssueDialog', () => {
         description: 'touchdesigner keeps dying overnight',
         attachLogs: false,
       },
+      onEvent: expect.any(Function),
     })
     expect(toastSuccess).toHaveBeenCalled()
     expect(props.onClose).toHaveBeenCalledOnce()
@@ -99,6 +100,7 @@ describe('ReportIssueDialog', () => {
 
     expect(runAgent).toHaveBeenCalledExactlyOnceWith('report-issue', {
       payload: { category: 'bug', description: 'swoop froze on the lobby wall', attachLogs: true },
+      onEvent: expect.any(Function),
     })
   })
 
@@ -188,5 +190,71 @@ describe('ReportIssueDialog', () => {
       `${MAX_DESCRIPTION} characters left`,
     )
     expect(attachLogs().getAttribute('aria-checked')).toBe('false')
+  })
+})
+
+describe('ReportIssueDialog progress', () => {
+  // a run that stays in flight until the test finishes it, with its event sink
+  function holdRun() {
+    const run: { emit: (value: string) => void; finish: () => void } = {
+      emit: () => {},
+      finish: () => {},
+    }
+    runAgent.mockImplementation(
+      (_mode: string, options: { onEvent: (event: { event: string; value: string }) => void }) =>
+        new Promise((resolve) => {
+          run.emit = (value) => act(() => options.onEvent({ event: 'status', value }))
+          run.finish = () => resolve(doneWith({ category: 'bug' }))
+        }),
+    )
+    return run
+  }
+
+  it('spins in the submit button while sending', async () => {
+    holdRun()
+    open()
+    expect(screen.queryByTestId('report-spinner')).toBeNull()
+
+    await submitIssue(true)
+
+    const button = screen.getByRole('button', { name: 'sending…' })
+    expect(button.contains(screen.getByTestId('report-spinner'))).toBe(true)
+  })
+
+  it('shows the step the agent is on, as the agent words it', async () => {
+    const run = holdRun()
+    open()
+    await submitIssue(true)
+
+    run.emit('zipping logs')
+    expect(screen.getByTestId('report-status').textContent).toBe('zipping logs')
+    expect(screen.getByTestId('report-status').getAttribute('aria-live')).toBe('polite')
+
+    run.emit('uploading logs')
+    expect(screen.getByTestId('report-status').textContent).toBe('uploading logs')
+
+    run.finish()
+    await flush()
+    expect(screen.queryByTestId('report-status')).toBeNull()
+    expect(screen.queryByTestId('report-spinner')).toBeNull()
+  })
+
+  it('drops the last step when it opens again', async () => {
+    const onClose = vi.fn()
+    const run = holdRun()
+    const view = render(<ReportIssueDialog open onClose={onClose} />)
+    await submitIssue(false)
+    run.emit('submitting')
+    expect(screen.getByTestId('report-status').textContent).toBe('submitting')
+
+    view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
+    view.rerender(<ReportIssueDialog open onClose={onClose} />)
+
+    expect(screen.queryByTestId('report-status')).toBeNull()
+    expect(screen.queryByTestId('report-spinner')).toBeNull()
+
+    // the next send starts with no step until the agent names one
+    await submitIssue(false)
+    expect(screen.getByTestId('report-status').textContent).toBe('')
   })
 })
