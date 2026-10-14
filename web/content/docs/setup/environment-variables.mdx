@@ -149,6 +149,17 @@ agent installers go to R2 behind tridant's download host when these are set, rea
 
 the bucket and the public link follow the roost environment: `https://download.tridant.io/owlette/<file>` for `prod`, `https://download-staging.tridant.io/owlette/<file>` for `dev`. `R2_S3_ENDPOINT` is shared with roost.
 
+### issue logs
+
+the log zips a machine attaches to an issue (**attach logs** in the desktop app's submit issue dialog) go to R2, read in `web/lib/issueLogsStorage.server.ts`:
+
+| variable | format | what it does |
+|----------|--------|-------------|
+| `ISSUE_LOGS_R2_ACCESS_KEY_ID` | R2 access key ID | an R2 token with object read and write on `owlette-dev-issue-logs` and `owlette-prod-issue-logs` only. the same pair goes on every deployment |
+| `ISSUE_LOGS_R2_SECRET_ACCESS_KEY` | R2 secret access key | the matching secret |
+
+the bucket follows the roost environment: `owlette-prod-issue-logs` for `prod`, `owlette-dev-issue-logs` for `dev`. `R2_S3_ENDPOINT` is shared with roost. `scripts/provision-r2.mjs` creates both buckets and the rule that deletes every zip 30 days after upload. without the pair, the upload-url route fails and every issue goes out without its zip, with the reason in its text.
+
 ---
 
 ## URL configuration (required in production)
