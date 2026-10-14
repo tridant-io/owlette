@@ -835,14 +835,8 @@ def build_report_data(category: str, description: str) -> dict:
     }
 
 
-def submit_report(data: dict) -> None:
-    """POST a feedback report to `/api/bug-report`.
-
-    Ported from `report_issue.submit_report`. The agent's own access token is
-    the credential; the endpoint accepts it as a bearer token and files the
-    report under `bug_reports` with `source: 'agent'`.
-    """
-    import requests as http_requests
+def _web_session() -> tuple[str, str]:
+    """The web base URL and this agent's bearer token for its own API calls."""
     from auth_manager import AuthManager
 
     api_base = shared_utils.get_configured_api_base()
@@ -858,32 +852,62 @@ def submit_report(data: dict) -> None:
     web_base = api_base.rstrip('/')
     if web_base.endswith('/api'):
         web_base = web_base[:-len('/api')]
+    return web_base, token
 
-    description = data.get('description', '')
-    system_info = data.get('systemInfo', {})
-    log_tail = data.get('logTail', '')
-    if system_info:
-        description += f"\n\n--- system info ---\n{_format_system_info(system_info)}"
-    if log_tail:
-        description += f"\n\n--- recent logs (last ~100 lines) ---\n{log_tail}"
 
-    # The API rejects anything over 50 000 characters; trim the log tail rather
-    # than lose the report.
-    if len(description) > 50000:
-        description = description[:49950] + '\n\n[truncated]'
+def _logs_not_attached(reason: str) -> str:
+    """The line an issue carries when its log zip could not go with it."""
+    return f"\n\nlogs could not be attached: {reason}"
 
-    response = http_requests.post(
-        f"{web_base}/api/bug-report",
-        json={
+
+def submit_report(data: dict, logs_key: Optional[str] = None) -> bool:
+    """POST an issue to `/api/bug-report`; returns whether `logs_key` went with it.
+
+    Ported from `report_issue.submit_report`. The agent's own access token is
+    the credential; the endpoint accepts it as a bearer token and files the
+    issue under `bug_reports` with `source: 'agent'`. An issue whose
+    `logs_key` the server refuses is sent once more without it, so the issue
+    is never lost to its attachment.
+    """
+    import requests as http_requests
+
+    web_base, token = _web_session()
+
+    def post(description: str, key: Optional[str]):
+        system_info = data.get('systemInfo', {})
+        log_tail = data.get('logTail', '')
+        if system_info:
+            description += f"\n\n--- system info ---\n{_format_system_info(system_info)}"
+        if log_tail:
+            description += f"\n\n--- recent logs (last ~100 lines) ---\n{log_tail}"
+
+        # The API rejects anything over 50 000 characters; trim the log tail rather
+        # than lose the report.
+        if len(description) > 50000:
+            description = description[:49950] + '\n\n[truncated]'
+
+        body = {
             'title': data.get('title', 'agent feedback'),
             'category': data.get('category', 'other'),
             'description': description,
             'browserUA': f"Owlette Agent v{shared_utils.APP_VERSION} / {data.get('os', '')}",
             'pageUrl': f"agent://{data.get('hostname', 'unknown')}",
-        },
-        headers={'Authorization': f'Bearer {token}'},
-        timeout=15,
-    )
+        }
+        if key:
+            body['logsKey'] = key
+        return http_requests.post(
+            f"{web_base}/api/bug-report",
+            json=body,
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=15,
+        )
+
+    description = data.get('description', '')
+    response = post(description, logs_key)
+    if response.status_code == 400 and logs_key:
+        logging.warning("The server refused the attached logs (400); resending the issue without them")
+        logs_key = None
+        response = post(description + _logs_not_attached('the server refused them (400)'), None)
 
     if response.status_code != 200:
         try:
@@ -896,15 +920,79 @@ def submit_report(data: dict) -> None:
         report_id = response.json().get('id', 'unknown')
     except Exception:
         report_id = 'unknown'
-    logging.info(f"Bug report submitted via API: {report_id}")
+    logging.info(f"issue submitted via API: {report_id}")
+    return logs_key is not None
+
+
+def upload_issue_logs(zip_path: str, size: int) -> str:
+    """Upload the log zip through a presigned PUT and return its storage key."""
+    import requests as http_requests
+    from screenshot_capture import ScreenshotCaptureError, upload_to_signed_url
+
+    web_base, token = _web_session()
+    site_id = shared_utils.read_config().get('firebase', {}).get('site_id', '')
+    machine_id = shared_utils.get_machine_id()
+    try:
+        response = http_requests.post(
+            f"{web_base}/api/sites/{site_id}/machines/{machine_id}/issue-logs/upload-url",
+            json={'size': size},
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=15,
+        )
+    except http_requests.RequestException as e:
+        raise RuntimeError(f"upload url request failed: {type(e).__name__}") from None
+    if response.status_code != 200:
+        raise RuntimeError(f"upload url request failed ({response.status_code})")
+
+    try:
+        body = response.json()
+    except ValueError:
+        raise RuntimeError('upload url response is not json') from None
+    upload_url = body.get('uploadUrl') if isinstance(body, dict) else None
+    key = body.get('key') if isinstance(body, dict) else None
+    if not isinstance(upload_url, str) or not isinstance(key, str):
+        raise RuntimeError('upload url response is missing uploadUrl or key')
+
+    try:
+        upload_to_signed_url(
+            upload_url,
+            lambda: open(zip_path, 'rb'),
+            content_type='application/zip',
+            timeout_s=(30, 300),
+            content_length=size,
+        )
+    except ScreenshotCaptureError:
+        # storage's error reply can echo the signed request, and this reason lands in the issue
+        raise RuntimeError('the upload to storage failed') from None
+    return key
+
+
+def _attach_logs() -> str:
+    """Zip this machine's logs and upload them; returns the key. The zip is always removed."""
+    import log_bundle
+
+    fd, zip_path = tempfile.mkstemp(suffix='.zip')
+    os.close(fd)
+    try:
+        _emit('status', 'zipping logs')
+        bundle = log_bundle.build_log_zip(zip_path)
+        _emit('status', 'uploading logs')
+        return upload_issue_logs(zip_path, bundle['size'])
+    finally:
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
 
 
 def run_report_issue(payload_path: str) -> int:
     """Submit the feedback payload written by the desktop app.
 
-    The payload is `{"category": ..., "description": ...}` in a file under the
-    owlette tree; it is deleted as soon as it has been read so an operator's
-    description is not left lying on disk.
+    The payload is `{"category": ..., "description": ..., "attachLogs": bool}`
+    in a file under the owlette tree; it is deleted as soon as it has been read
+    so an operator's description is not left lying on disk. Logs that cannot
+    be attached never stop the issue: it goes without them and says why, and
+    `done` carries `logsAttached` whenever they were asked for.
     """
     try:
         with open(payload_path, 'r', encoding='utf-8') as f:
@@ -932,14 +1020,27 @@ def run_report_issue(payload_path: str) -> int:
         _emit('error', f"could not collect diagnostics: {e}")
         return 1
 
+    attach_logs = payload.get('attachLogs') is True
+    logs_key = None
+    if attach_logs:
+        try:
+            logs_key = _attach_logs()
+        except Exception as e:
+            reason = (str(e) or type(e).__name__)[:200]
+            logging.warning(f"Issue logs could not be attached: {reason}")
+            report['description'] = report.get('description', '') + _logs_not_attached(reason)
+
     _emit('status', 'submitting')
     try:
-        submit_report(report)
+        logs_attached = submit_report(report, logs_key)
     except Exception as e:
         _emit('error', str(e) or repr(e))
         return 1
 
-    _emit('done', {'category': category})
+    done = {'category': category}
+    if attach_logs:
+        done['logsAttached'] = logs_attached
+    _emit('done', done)
     return 0
 
 
@@ -1408,6 +1509,12 @@ def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Option
                   'description': payload.get('description')}
         if not all(isinstance(value, (str, type(None))) for value in report.values()):
             return _refuse(path, reply_path, 'carries a report field that is not text')
+        attach_logs = payload.get('attachLogs')
+        if attach_logs is not None:
+            if not isinstance(attach_logs, bool):
+                return _refuse(
+                    path, reply_path, 'carries an attachLogs that is not true or false')
+            report['attachLogs'] = attach_logs
     if not nonce or payload.get('nonce') != nonce:
         return _refuse(
             path, reply_path, 'does not quote the nonce the daemon last issued')

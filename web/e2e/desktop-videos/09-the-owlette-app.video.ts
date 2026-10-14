@@ -255,7 +255,7 @@ test('episode 9 — the owlette app', async () => {
       await highlight(page, page.getByTestId(item), 900);
       await page.waitForTimeout(300);
     }
-    await narrate(page, 'b08 join or leave, config, logs, docs, bug report', 7);
+    await narrate(page, 'b08 join or leave, config, logs, docs, submit issue', 7);
 
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('menu-leave-site')).toBeHidden();

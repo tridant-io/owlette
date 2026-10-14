@@ -30,6 +30,7 @@ import pytest
 # test_sync_state.py:10, test_command_router.py:8).
 import shared_utils  # noqa: F401  (import side effects: path bootstrapping)
 import configure_site
+import log_bundle
 
 
 # helpers
@@ -603,6 +604,180 @@ class TestReportIssue:
     ])
     def test_categories_are_normalised_to_what_the_api_accepts(self, raw, expected):
         assert configure_site._normalize_report_category(raw) == expected
+
+
+def _http(status, body=None):
+    response = MagicMock()
+    response.status_code = status
+    response.json.return_value = body if body is not None else {}
+    response.text = json.dumps(body if body is not None else {})
+    return response
+
+
+_SIGNED_URL = 'https://r2.example/owlette-dev-issue-logs/k.zip?X-Amz-Signature=sekrit'
+_LOGS_KEY = 'issues/site-1/m-1/abc.zip'
+
+
+class TestReportIssueAttachLogs:
+    """The web API and the bucket are stood in for; every call is recorded."""
+
+    def _run(self, tmp_path, *, attach=True, zip_error=None, upload_url_status=200,
+             put_statuses=(200,), report_statuses=(200,)):
+        payload = tmp_path / 'feedback.json'
+        fields = {'category': 'bug', 'description': 'it broke'}
+        if attach is not None:
+            fields['attachLogs'] = attach
+        payload.write_text(json.dumps(fields))
+
+        zips = []
+
+        def build_zip(dest):
+            zips.append(dest)
+            if zip_error:
+                raise zip_error
+            with open(dest, 'wb') as f:
+                f.write(b'PK' * 10)
+            return {'files': 1, 'size': 20, 'skipped': []}
+
+        posts, puts = [], []
+        report_responses = iter(report_statuses)
+        put_responses = iter(put_statuses)
+
+        def post(url, json=None, headers=None, timeout=None):
+            posts.append({'url': url, 'json': json, 'headers': headers})
+            if url.endswith('/upload-url'):
+                return _http(upload_url_status, {
+                    'uploadUrl': _SIGNED_URL, 'key': _LOGS_KEY, 'expiresIn': 900})
+            return _http(next(report_responses), {'success': True, 'id': 'r1'})
+
+        def put(url, data=None, headers=None, timeout=None):
+            puts.append({'url': url, 'body': data.read(), 'headers': headers, 'timeout': timeout})
+            return _http(next(put_responses))
+
+        with patch.object(configure_site, 'build_report_data',
+                          return_value={'description': 'it broke', 'siteId': 'site-1',
+                                        'hostname': 'box'}), \
+             patch.object(configure_site, '_web_session',
+                          return_value=('https://owlette.test', 'tok')), \
+             patch.object(configure_site.shared_utils, 'read_config',
+                          return_value={'firebase': {'site_id': 'site-1'}}), \
+             patch.object(configure_site.shared_utils, 'get_machine_id', return_value='m-1'), \
+             patch.object(log_bundle, 'build_log_zip', side_effect=build_zip) as build, \
+             patch('requests.post', side_effect=post), \
+             patch('requests.put', side_effect=put):
+            code = configure_site.run_report_issue(str(payload))
+
+        reports = [p for p in posts if p['url'].endswith('/api/bug-report')]
+        return SimpleNamespace(code=code, build=build, zips=zips, posts=posts,
+                               puts=puts, reports=reports)
+
+    @staticmethod
+    def _done(capsys):
+        events = _events(capsys)
+        assert events[-1]['event'] == 'done'
+        return events[-1]['value']
+
+    @pytest.mark.parametrize('attach', [None, False])
+    def test_without_attach_logs_nothing_is_zipped_or_uploaded(self, tmp_path, capsys, attach):
+        run = self._run(tmp_path, attach=attach)
+
+        assert run.code == 0
+        run.build.assert_not_called()
+        assert run.puts == []
+        assert [p['url'] for p in run.posts] == ['https://owlette.test/api/bug-report']
+        assert 'logsKey' not in run.reports[0]['json']
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'submitting']
+        # logs were not asked for, so the outcome says nothing about them
+        assert events[-1] == {'event': 'done', 'value': {'category': 'bug'}}
+
+    def test_attached_logs_are_uploaded_and_their_key_sent(self, tmp_path, capsys):
+        run = self._run(tmp_path)
+
+        assert run.code == 0
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'zipping logs', 'uploading logs',
+            'submitting']
+        assert events[-1] == {'event': 'done', 'value': {'category': 'bug', 'logsAttached': True}}
+        upload_url = run.posts[0]
+        assert upload_url['url'] == (
+            'https://owlette.test/api/sites/site-1/machines/m-1/issue-logs/upload-url')
+        assert upload_url['json'] == {'size': 20}
+        assert upload_url['headers'] == {'Authorization': 'Bearer tok'}
+        assert run.puts == [{
+            'url': _SIGNED_URL,
+            'body': b'PK' * 10,
+            'headers': {'Content-Type': 'application/zip', 'Content-Length': '20'},
+            'timeout': (30, 300),
+        }]
+        body = run.reports[0]['json']
+        assert body['logsKey'] == _LOGS_KEY
+        # the route takes the site from the token
+        assert 'siteId' not in body
+        assert 'logs could not be attached' not in body['description']
+        assert not os.path.exists(run.zips[0])
+
+    def test_an_old_server_without_the_route_still_gets_the_issue(self, tmp_path, capsys):
+        run = self._run(tmp_path, upload_url_status=404)
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        assert run.puts == []
+        body = run.reports[0]['json']
+        assert 'logsKey' not in body
+        assert body['description'].startswith(
+            'it broke\n\nlogs could not be attached: upload url request failed (404)')
+        assert not os.path.exists(run.zips[0])
+
+    def test_a_refused_put_is_not_retried_and_the_issue_still_goes(
+            self, tmp_path, caplog, capsys):
+        with caplog.at_level(logging.WARNING):
+            run = self._run(tmp_path, put_statuses=(403,))
+
+        assert run.code == 0
+        assert len(run.puts) == 1
+        body = run.reports[0]['json']
+        assert 'logsKey' not in body
+        assert 'logs could not be attached: the upload to storage failed' in body['description']
+        assert 'signed-url' not in body['description']
+        # the reason stays in the issue; the event only says the logs did not go
+        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        assert 'Issue logs could not be attached' in caplog.text
+        # the signed url carries a credential: it stays out of the issue and the log
+        assert 'sekrit' not in body['description']
+        assert 'sekrit' not in caplog.text
+        assert not os.path.exists(run.zips[0])
+
+    def test_a_zip_failure_still_sends_the_issue(self, tmp_path, capsys):
+        run = self._run(tmp_path, zip_error=OSError('disk full'))
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        assert run.puts == []
+        assert [p['url'] for p in run.posts] == ['https://owlette.test/api/bug-report']
+        assert 'logs could not be attached: disk full' in run.reports[0]['json']['description']
+        assert not os.path.exists(run.zips[0])
+
+    def test_a_refused_logs_key_is_resent_without_it(self, tmp_path, capsys):
+        run = self._run(tmp_path, report_statuses=(400, 200))
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        first, second = run.reports
+        assert first['json']['logsKey'] == _LOGS_KEY
+        assert 'logsKey' not in second['json']
+        assert second['json']['description'].startswith(
+            'it broke\n\nlogs could not be attached: the server refused them (400)')
+        assert not os.path.exists(run.zips[0])
+
+    def test_a_400_without_logs_is_not_resent(self, tmp_path, capsys):
+        run = self._run(tmp_path, attach=False, report_statuses=(400,))
+
+        assert run.code == 1
+        assert len(run.reports) == 1
+        assert '400' in _events(capsys)[-1]['value']
 
 
 # --reboot-now / --dismiss-reboot
@@ -1352,6 +1527,49 @@ class TestRequestSeam:
                             lambda *a, **k: pytest.fail('filed a report it could not read'))
         self._request(seam, 'report_issue', configure_site._request_nonce(),
                       category='bug', description={'text': 'nested'})
+
+        assert configure_site.drain_privileged_requests() == []
+        assert self._events(seam) == ['error']
+
+    def _staged_report(self, monkeypatch):
+        """The report each accepted request stages for `--report-issue`."""
+        staged = []
+
+        def fake_spawn(reply, *flags):
+            with open(flags[-1], encoding='utf-8') as f:
+                staged.append(json.load(f))
+            os.unlink(flags[-1])
+
+        monkeypatch.setattr(configure_site, '_spawn_into_reply', fake_spawn)
+        return staged
+
+    @pytest.mark.parametrize('attach_logs', [True, False])
+    def test_a_report_carries_attach_logs_through(self, seam, monkeypatch, attach_logs):
+        staged = self._staged_report(monkeypatch)
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', attachLogs=attach_logs)
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze',
+                           'attachLogs': attach_logs}]
+
+    def test_a_report_without_attach_logs_stages_none(self, seam, monkeypatch):
+        staged = self._staged_report(monkeypatch)
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze')
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze'}]
+
+    @pytest.mark.parametrize('attach_logs', ['yes', 'true', 1, 0])
+    def test_an_attach_logs_that_is_not_a_bool_is_refused(
+            self, seam, monkeypatch, attach_logs):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda *a, **k: pytest.fail('filed a report it could not read'))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', attachLogs=attach_logs)
 
         assert configure_site.drain_privileged_requests() == []
         assert self._events(seam) == ['error']

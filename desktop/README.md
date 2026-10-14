@@ -331,7 +331,7 @@ desktop/
    ├─ src/service_ctl.rs # service state / start / stop: the SCM, launchd or systemd
    ├─ src/seam.rs        # macOS / Linux: requests to the root daemon (pair, leave, restart, reboot)
    ├─ src/jobrunner.rs   # macOS / Linux: GUI jobs the daemon asks of the app (captures, notifications)
-   ├─ src/agent_cli.rs   # runs the agent's python CLI (pairing, leaving, bug reports) and streams progress
+   ├─ src/agent_cli.rs   # runs the agent's python CLI (pairing, leaving, issues) and streams progress
    ├─ src/tcc.rs         # macOS: reports the Screen Recording grant to the daemon
    ├─ src/awake.rs       # keep screens awake: the session's half (idle lock, screensaver)
    ├─ src/process_ctl.rs # WM_CLOSE-then-terminate with an identity check
@@ -366,7 +366,7 @@ reason `local_tray`. No elevation. macOS and Linux do not offer it yet: there
 the daemon refuses a flag the console user wrote, and the request seam has no
 kill verb. `exit` stops the service and quits; the stop needs administrator
 rights, so it raises one UAC prompt (the one elevation a click may cause). The window's menu (`AppMenu`) is `swoop`,
-the site action, `config`, `logs`, `docs`, `submit bug report`, `appearance`,
+the site action, `config`, `logs`, `docs`, `submit issue`, `appearance`,
 `start on login`, `restart service` and `reload window`. Both `swoop` entries
 open owlette swoop, the viewer app, on `<dashboard>/swoop` (`src/viewer_launch.rs`):
 the dashboard is the one `config.json`'s `firebase.api_base` names, and the app

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -37,13 +38,22 @@ const CATEGORIES = [
  */
 export const MAX_DESCRIPTION = 1000
 
+/**
+ * The `report-issue` run's done value. `logsAttached` is present only when logs were
+ * asked for: false means the issue went without them.
+ */
+interface ReportIssueDone {
+  category: string
+  logsAttached?: boolean
+}
+
 interface ReportIssueDialogProps {
   open: boolean
   onClose: () => void
 }
 
 /**
- * Feedback, with the machine's own diagnostics attached.
+ * An issue, with the machine's own diagnostics attached.
  *
  * Nothing is gathered here: `configure_site.py --report-issue` collects the system
  * metrics and the last ~100 lines of the service log and posts them with the agent's own
@@ -53,6 +63,7 @@ interface ReportIssueDialogProps {
 export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
   const [category, setCategory] = useState<string>('bug')
   const [description, setDescription] = useState('')
+  const [attachLogs, setAttachLogs] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -60,6 +71,7 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
     if (!open) return
     setCategory('bug')
     setDescription('')
+    setAttachLogs(false)
     setSubmitting(false)
     setError(null)
   }, [open])
@@ -74,18 +86,31 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
     setSubmitting(true)
     setError(null)
 
-    void runAgent('report-issue', { payload: { category, description: trimmed } })
-      .then(() => {
-        toast.success('thanks — your feedback was sent', {
-          description: 'system info and recent logs went with it.',
-        })
+    void runAgent('report-issue', { payload: { category, description: trimmed, attachLogs } })
+      .then((outcome) => {
+        // partial: a done line from an older helper carries none of these fields
+        const done: Partial<ReportIssueDone> =
+          outcome.terminal?.event === 'done' ? outcome.terminal.value : {}
+        if (done.logsAttached === false) {
+          toast.warning('your issue was sent, but the logs could not be attached', {
+            description: 'try again, or send the logs folder another way.',
+          })
+        } else if (done.logsAttached === true) {
+          toast.success('thanks — your issue was sent', {
+            description: 'system info and the logs went with it.',
+          })
+        } else {
+          toast.success('thanks — your issue was sent', {
+            description: 'system info and the last lines of the service log went with it.',
+          })
+        }
         onClose()
       })
       .catch((cause: unknown) => {
         setError(cause instanceof Error ? cause.message : String(cause))
       })
       .finally(() => setSubmitting(false))
-  }, [category, description, onClose])
+  }, [attachLogs, category, description, onClose])
 
   const remaining = MAX_DESCRIPTION - description.length
 
@@ -93,9 +118,10 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
     <Dialog open={open} onOpenChange={(next) => !next && !submitting && onClose()}>
       <DialogContent className="sm:max-w-md" data-testid="report-issue-dialog">
         <DialogHeader>
-          <DialogTitle>submit bug report</DialogTitle>
+          <DialogTitle>submit issue</DialogTitle>
           <DialogDescription>
-            help us improve owlette. system info and recent logs are attached automatically.
+            help us improve owlette. system info and the last lines of the service log always go
+            with it.
           </DialogDescription>
         </DialogHeader>
 
@@ -129,6 +155,25 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
           />
           <p className="text-right text-xs text-muted-foreground" data-testid="report-remaining">
             {remaining} characters left
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="feedback-attach-logs"
+              checked={attachLogs}
+              disabled={submitting}
+              data-testid="report-attach-logs"
+              aria-describedby="feedback-attach-logs-help"
+              onCheckedChange={(checked) => setAttachLogs(checked === true)}
+            />
+            <Label htmlFor="feedback-attach-logs">attach logs</Label>
+          </div>
+          <p id="feedback-attach-logs-help" className="text-xs text-muted-foreground">
+            includes the service, swoop, hoot, pairing and installer logs from this machine plus
+            this app's log. they can contain hostnames, user names, file paths and process names.
+            kept 30 days, seen only by owlette support.
           </p>
         </div>
 

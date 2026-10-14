@@ -28,6 +28,10 @@ export type Role = 'member' | 'admin' | 'superadmin';
 export type SystemActorName =
   | 'cortex_autonomous'
   | 'cortex_provisioning'
+  // a superadmin's read of a customer's machine data, as the customer's own site
+  // audit row names it: the staff member's uid stays in the matching
+  // `global/audit_log` row (same correlationId). An audit SUBJECT only, like swoop_host.
+  | 'owlette_support'
   | 'scheduled_cleanup'
   // the swoop streamer reporting its own lifecycle and refusals through
   // `POST /api/agent/swoop/events`. An audit SUBJECT only — it invokes nothing,

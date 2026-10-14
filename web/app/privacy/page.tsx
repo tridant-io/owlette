@@ -202,6 +202,7 @@ export default function PrivacyPage() {
               <ul className="list-disc pl-6 mt-2 space-y-1">
                 <li><strong>account data:</strong> for as long as your account is active. when an account is deleted we immediately revoke its API keys, transfer any owned sites to a successor, clear its pending machine commands, and mark the account deleted so it can no longer sign in or reach your data. the underlying user record is then retained in a deleted state for audit and security purposes rather than erased outright &mdash; if you want the record itself erased, ask us and we will process it as an erasure request (see section 9).</li>
                 <li><strong>screenshots:</strong> automatically deleted 30 days after capture. the agent additionally keeps only the most recent 20 captures per machine in its history.</li>
+                <li><strong>issue logs:</strong> log files you choose to attach to an issue sent from the owlette desktop app are automatically deleted 30 days after upload. only owlette support staff can access them.</li>
                 <li><strong>queued machine commands:</strong> pending commands expire after 1 hour; completed command records are removed after 24 hours.</li>
                 <li><strong>machine metrics:</strong> automatically deleted 400 days after collection.</li>
                 <li><strong>event logs:</strong> automatically deleted 400 days after the logged event.</li>
@@ -248,7 +249,7 @@ export default function PrivacyPage() {
                     </tr>
                     <tr className="border-b border-border/50">
                       <td className="py-2 pr-4">Cloudflare</td>
-                      <td className="py-2 pr-4">DNS, load balancing, CDN, and object storage for deployment content</td>
+                      <td className="py-2 pr-4">DNS, load balancing, CDN, and object storage for deployment content and for diagnostic logs you choose to send to support</td>
                       <td className="py-2">global / USA</td>
                     </tr>
                     <tr className="border-b border-border/50">

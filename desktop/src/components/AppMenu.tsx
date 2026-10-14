@@ -198,7 +198,7 @@ export function AppMenu({
         </DropdownMenuItem>
         <DropdownMenuItem data-testid="menu-report-issue" onSelect={onReportIssue}>
           <Bug aria-hidden className="size-4" />
-          submit bug report
+          submit issue
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuSub>

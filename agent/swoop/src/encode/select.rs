@@ -4,9 +4,17 @@
 //! in-box software encoder (`mf-sw`), per codec. Everything that *decides* is
 //! a pure function over the [`BackendCaps`] a probe returned — [`chain_for`],
 //! [`select`], [`budget`] — so the whole table is unit-testable on a machine
-//! with no GPU at all. Only [`probe_all`] and [`create`] touch hardware, and
+//! with no GPU at all. Only the probes and [`create`] touch hardware, and
 //! they reach each backend through exactly two symbols, `probe()` and
 //! `create()`, so this file compiles with every optional encoder feature off.
+//!
+//! A session probes the chain lazily ([`probe_chain`], [`probe_further`]): a
+//! rung is probed only once every rung above it has failed or encodes nothing.
+//! Probing `mf-hw` activates NVIDIA's own H.264 MFT, and after that every
+//! `nvEncOpenEncodeSessionEx` in the process answers
+//! `NV_ENC_ERR_INVALID_VERSION` — measured on an RTX 2080 Ti (610.88), and
+//! what pinned an RTX 4070 Ti SUPER (576.80) to `mf-hw` on every session from
+//! 4.1.9 to 4.1.11. [`probe_all`] is for the `probe` verb's own process only.
 //!
 //! Nothing here reads `BackendCaps::max_fps`. It is fps at the backend's
 //! *largest* supported size by its own definition — 15 on this box's 2080 Ti,
@@ -162,36 +170,93 @@ pub fn codec_caps(caps: &[BackendCaps]) -> Vec<CodecCaps> {
         .collect()
 }
 
-/// The table without `backend`. A rung that probed fine and then could not
+/// The table with `backend` out. A rung that probed fine and then could not
 /// encode its first frame — the capture adapter has no encoder of its own, the
 /// driver refused the session — stays out for the rest of the session, so the
-/// next frame goes to the rung below it rather than to the same failure.
+/// next frame goes to the rung below it rather than to the same failure. It
+/// stays in the table with nothing to offer, so [`probe_further`] never
+/// probes it again.
 pub fn without(caps: &[BackendCaps], backend: &str) -> Vec<BackendCaps> {
     caps.iter()
-        .filter(|caps| caps.backend != backend)
         .cloned()
+        .map(|mut caps| {
+            if caps.backend == backend {
+                caps.codecs.clear();
+            }
+            caps
+        })
         .collect()
 }
 
-/// What every backend compiled into this build reports, in chain order.
+/// What a session probes at its start: the chain from the top, down to the
+/// first rung that encodes anything and no further.
+pub fn probe_chain() -> Vec<BackendCaps> {
+    let mut caps = Vec::new();
+    probe_further(&mut caps);
+    caps
+}
+
+/// Probe the next rungs `caps` has not probed yet, in chain order, down to the
+/// first that encodes anything. False when the chain is spent.
+pub fn probe_further(caps: &mut Vec<BackendCaps>) -> bool {
+    probe_further_with(caps, CHAIN, probe_on)
+}
+
+fn probe_further_with(
+    caps: &mut Vec<BackendCaps>,
+    chain: &[&'static str],
+    probe: impl Fn(&str) -> Option<BackendCaps>,
+) -> bool {
+    let mut added = false;
+    for &rung in chain {
+        if caps.iter().any(|c| c.backend == rung) {
+            continue;
+        }
+        let Some(found) = probe(rung) else {
+            continue;
+        };
+        let encodes = !found.codecs.is_empty();
+        caps.push(found);
+        added = true;
+        if encodes {
+            break;
+        }
+    }
+    added
+}
+
+/// One rung's own probe, or `None` when this build does not carry it.
+// the argument is unused when no backend is compiled in
+#[allow(unused_variables)]
+fn probe_on(backend: &str) -> Option<BackendCaps> {
+    #[cfg(all(windows, feature = "encode-nvenc"))]
+    if backend == "nvenc" {
+        return Some(crate::encode::nvenc::probe());
+    }
+    #[cfg(all(windows, feature = "encode-mf"))]
+    if backend == "mf-hw" {
+        return Some(crate::encode::mf::hw::probe());
+    }
+    #[cfg(all(windows, feature = "encode-mf"))]
+    if backend == "mf-sw" {
+        return Some(crate::encode::mf::sw::probe());
+    }
+    #[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]
+    if backend == "videotoolbox" {
+        return Some(crate::encode::videotoolbox::probe());
+    }
+    None
+}
+
+/// What every backend compiled into this build reports, in chain order — for
+/// the `probe` verb, a process that never encodes after it. A session uses
+/// [`probe_chain`]: see the module head for what probing every rung breaks.
 ///
-/// The only hardware call in the selection path. Each `probe()` is expected to
+/// Each `probe()` is expected to
 /// answer on a machine its vendor never touched — that is how a non-NVIDIA box
 /// gets an empty NVENC entry rather than a failure to start.
-// both allows are the cfg gating: with no backend compiled in nothing pushes,
-// and with one the pushes cannot collapse into a `vec![]` literal
-#[allow(unused_mut, clippy::vec_init_then_push)]
 pub fn probe_all() -> Vec<BackendCaps> {
-    let mut caps: Vec<BackendCaps> = Vec::new();
-    #[cfg(all(windows, feature = "encode-nvenc"))]
-    caps.push(crate::encode::nvenc::probe());
-    #[cfg(all(windows, feature = "encode-mf"))]
-    caps.push(crate::encode::mf::hw::probe());
-    #[cfg(all(windows, feature = "encode-mf"))]
-    caps.push(crate::encode::mf::sw::probe());
-    #[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]
-    caps.push(crate::encode::videotoolbox::probe());
-    caps
+    CHAIN.iter().filter_map(|rung| probe_on(rung)).collect()
 }
 
 /// `None` when this build does not carry `backend` — a probed table always
@@ -223,20 +288,40 @@ fn create_on(backend: &str, cfg: &EncoderConfig) -> Option<anyhow::Result<Box<dy
 ///
 /// A backend that probed fine can still refuse a session — NVENC answers
 /// `0x887A0001` when another process holds the encoder — so a refusal costs one
-/// rung rather than the session.
+/// rung rather than the session: once every probed rung has refused, the rungs
+/// below are probed into `caps` and tried in turn.
 pub fn create(
-    caps: &[BackendCaps],
+    caps: &mut Vec<BackendCaps>,
     cfg: &EncoderConfig,
 ) -> anyhow::Result<(&'static str, Box<dyn Encoder>)> {
+    create_with(caps, cfg, CHAIN, probe_on)
+}
+
+fn create_with(
+    caps: &mut Vec<BackendCaps>,
+    cfg: &EncoderConfig,
+    chain: &[&'static str],
+    probe: impl Fn(&str) -> Option<BackendCaps>,
+) -> anyhow::Result<(&'static str, Box<dyn Encoder>)> {
     let mut last: Option<anyhow::Error> = None;
-    for backend in chain_for(caps, cfg.codec, cfg.width, cfg.height) {
-        match create_on(backend, cfg) {
-            Some(Ok(encoder)) => return Ok((backend, encoder)),
-            Some(Err(e)) => {
-                ::log::warn!("swoop: encoder {backend} refused the session: {e:#}");
-                last = Some(e);
+    let mut tried: Vec<&'static str> = Vec::new();
+    loop {
+        for backend in chain_for(caps, cfg.codec, cfg.width, cfg.height) {
+            if tried.contains(&backend) {
+                continue;
             }
-            None => {}
+            tried.push(backend);
+            match create_on(backend, cfg) {
+                Some(Ok(encoder)) => return Ok((backend, encoder)),
+                Some(Err(e)) => {
+                    ::log::warn!("swoop: encoder {backend} refused the session: {e:#}");
+                    last = Some(e);
+                }
+                None => {}
+            }
+        }
+        if !probe_further_with(caps, chain, &probe) {
+            break;
         }
     }
     Err(last.unwrap_or_else(|| {
@@ -532,6 +617,74 @@ mod tests {
         assert!(codec_caps(&without(&left, "mf-sw")).is_empty());
     }
 
+    /// A probe over a fixed machine that records every rung it is asked for.
+    #[cfg(windows)]
+    fn recording<'a>(
+        machine: &'a [BackendCaps],
+        asked: &'a std::cell::RefCell<Vec<String>>,
+    ) -> impl Fn(&str) -> Option<BackendCaps> + Copy + 'a {
+        move |rung| {
+            asked.borrow_mut().push(rung.to_owned());
+            machine.iter().find(|c| c.backend == rung).cloned()
+        }
+    }
+
+    #[cfg(windows)]
+    const WINDOWS_CHAIN: &[&str] = &["nvenc", "mf-hw", "mf-sw"];
+
+    /// 4.1.9-4.1.11 probed every rung up front, and probing NVIDIA's MFT broke
+    /// NVENC for the rest of the process: every NVIDIA host streamed on mf-hw.
+    #[cfg(windows)]
+    #[test]
+    fn a_session_probes_no_rung_below_the_first_that_encodes() {
+        let machine = [
+            nvidia(),
+            vec![
+                caps("mf-hw", &[(Codec::H264, 4096, 4096)], 4),
+                caps("mf-sw", &[(Codec::H264, 1280, 720)], 4),
+            ],
+        ]
+        .concat();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let probe = recording(&machine, &asked);
+
+        let mut caps = Vec::new();
+        assert!(probe_further_with(&mut caps, WINDOWS_CHAIN, probe));
+        assert_eq!(*asked.borrow(), ["nvenc"], "a working nvenc is the only rung touched");
+
+        // nvenc fails its first frame: out, and only now is the next rung probed
+        caps = without(&caps, "nvenc");
+        assert!(probe_further_with(&mut caps, WINDOWS_CHAIN, probe));
+        assert_eq!(*asked.borrow(), ["nvenc", "mf-hw"]);
+        assert_eq!(
+            select(&caps, &[Codec::H265, Codec::H264], 1920, 1080).map(|s| s.backend),
+            Some("mf-hw")
+        );
+
+        caps = without(&caps, "mf-hw");
+        assert!(probe_further_with(&mut caps, WINDOWS_CHAIN, probe));
+        assert_eq!(*asked.borrow(), ["nvenc", "mf-hw", "mf-sw"]);
+        caps = without(&caps, "mf-sw");
+        assert!(!probe_further_with(&mut caps, WINDOWS_CHAIN, probe), "the chain is spent");
+        assert!(codec_caps(&caps).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_box_without_nvenc_probes_down_to_its_hardware_mft_and_stops() {
+        let machine = vec![
+            caps("nvenc", &[], 0),
+            caps("mf-hw", &[(Codec::H264, 4096, 4096)], 4),
+            caps("mf-sw", &[(Codec::H264, 1280, 720)], 4),
+        ];
+        let asked = std::cell::RefCell::new(Vec::new());
+        let probe = recording(&machine, &asked);
+        let mut caps = Vec::new();
+        assert!(probe_further_with(&mut caps, WINDOWS_CHAIN, probe));
+        assert_eq!(*asked.borrow(), ["nvenc", "mf-hw"]);
+        assert_eq!(budget(&caps), 4, "the budget is the rung that encodes");
+    }
+
     #[cfg(windows)]
     #[test]
     fn the_budget_is_the_top_rungs_and_never_a_sum() {
@@ -558,8 +711,8 @@ mod tests {
             fps: 30,
             bitrate_bps: 8_000_000,
         };
-        let table = vec![caps("vt", &[(Codec::H264, 4096, 4096)], 2)];
-        let Err(err) = create(&table, &cfg) else {
+        let mut table = vec![caps("vt", &[(Codec::H264, 4096, 4096)], 2)];
+        let Err(err) = create_with(&mut table, &cfg, &[], |_| None) else {
             panic!("no build carries a vt backend");
         };
         let typed = err

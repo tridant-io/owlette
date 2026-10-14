@@ -8,10 +8,10 @@
 //! no prompt: a request is the app's because the console user owns it, nobody
 //! else can write it, and it quotes the one-shot nonce the daemon last issued.
 //!
-//! A request is `{"verb", "nonce"}`, plus `server` on a `pair` and `category`
-//! and `description` on a `report_issue`, written 0600 as `<id>.json.tmp` and
-//! renamed into place — the daemon reads a `.json` the moment it appears. The
-//! answer is `<id>.result`, the JSON-line protocol the
+//! A request is `{"verb", "nonce"}`, plus `server` on a `pair` and `category`,
+//! `description` and `attachLogs` on a `report_issue`, written 0600 as
+//! `<id>.json.tmp` and renamed into place — the daemon reads a `.json` the
+//! moment it appears. The answer is `<id>.result`, the JSON-line protocol the
 //! agent's headless modes write to stdout, read as it grows until a terminal
 //! event (`authorized`, `done` or `error`). Only then is it removed: a `pair`
 //! keeps writing into it for the ten minutes it polls.
@@ -75,7 +75,9 @@ impl Verb {
   pub fn budget(self) -> Duration {
     match self {
       Verb::Pair => Duration::from_secs(660),
-      Verb::Leave | Verb::ReportIssue => Duration::from_secs(180),
+      // the zip upload on a slow uplink.
+      Verb::ReportIssue => Duration::from_secs(600),
+      Verb::Leave => Duration::from_secs(180),
       Verb::DismissReboot => Duration::from_secs(90),
       Verb::CancelPair | Verb::Restart | Verb::Reboot => Duration::from_secs(30),
     }
@@ -449,13 +451,25 @@ mod tests {
   fn a_report_carries_its_fields_but_never_in_place_of_the_verb_or_the_nonce() {
     let root = Root::new("report");
     let daemon = fake_daemon(&root, lines(&[r#"{"event": "done", "value": {"category": "bug"}}"#]), Duration::ZERO);
-    let report = json!({ "category": "bug", "description": "it broke", "verb": "reboot", "nonce": "planted" });
+    let report = json!({
+      "category": "bug",
+      "description": "it broke",
+      "attachLogs": true,
+      "verb": "reboot",
+      "nonce": "planted"
+    });
 
     let terminal = root.seam().ask(Verb::ReportIssue, Some(&report), &mut |_| {}).expect("answered");
 
     assert_eq!(
       daemon.join().unwrap().body,
-      json!({ "verb": "report_issue", "nonce": "n-1", "category": "bug", "description": "it broke" })
+      json!({
+        "verb": "report_issue",
+        "nonce": "n-1",
+        "category": "bug",
+        "description": "it broke",
+        "attachLogs": true
+      })
     );
     assert_eq!(terminal["event"], "done");
   }
@@ -570,10 +584,14 @@ mod tests {
       Verb::Reboot,
       Verb::Leave,
       Verb::DismissReboot,
+      Verb::ReportIssue,
     ]
     .iter()
     .map(|verb| verb.name())
     .collect();
-    assert_eq!(names, ["pair", "cancel_pair", "restart", "reboot", "leave", "dismiss_reboot"]);
+    assert_eq!(
+      names,
+      ["pair", "cancel_pair", "restart", "reboot", "leave", "dismiss_reboot", "report_issue"]
+    );
   }
 }

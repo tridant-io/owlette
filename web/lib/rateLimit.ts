@@ -144,6 +144,20 @@ export const screenshotUploadRateLimit = redis
   : null;
 
 /**
+ * Issue-log upload urls: 5/hr per machine, keyed on the machine for the same
+ * NAT reason as screenshots. A person submits an issue by hand, so five an
+ * hour is generous, and each url can land up to 50 MB in the bucket.
+ */
+export const issueLogsUploadRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(5, '1 h'),
+      prefix: 'issue-logs-upload',
+      analytics: true,
+    })
+  : null;
+
+/**
  * Swoop stall reports: 1 per 30 s per session. A report is one log line about
  * a frozen picture, and a page declares a stall at most once per episode.
  */
