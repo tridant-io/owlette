@@ -1,6 +1,6 @@
 [package]
 name = "owlette-swoop-viewer"
-version = "4.1.14"
+version = "4.1.15"
 description = "owlette swoop, the app that hosts owlette.app's swoop viewer in native windows"
 authors = ["Tridant Inc."]
 license = "FSL-1.1-Apache-2.0"
