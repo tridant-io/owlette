@@ -146,7 +146,7 @@ export const screenshotUploadRateLimit = redis
 /**
  * Issue-log upload urls: 5/hr per machine, keyed on the machine for the same
  * NAT reason as screenshots. A person submits an issue by hand, so five an
- * hour is generous, and each url can land up to 50 MB in the bucket.
+ * hour is generous, and each url can land up to 150 MiB in the bucket.
  */
 export const issueLogsUploadRateLimit = redis
   ? new Ratelimit({

@@ -1,4 +1,5 @@
 import { ImagePlus, X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { InlineNotice } from '@/components/ui/inline-notice'
 import { Label } from '@/components/ui/label'
@@ -11,10 +12,19 @@ interface IssueScreenshotsProps {
   notices: string[]
   onAdd: () => void
   onRemove: (id: string) => void
+  /** More buttons for the same row, set to its right. */
+  children?: ReactNode
 }
 
 /** The screenshots part of the issue dialog; the dialog owns the staged files. */
-export function IssueScreenshots({ screenshots, busy, notices, onAdd, onRemove }: IssueScreenshotsProps) {
+export function IssueScreenshots({
+  screenshots,
+  busy,
+  notices,
+  onAdd,
+  onRemove,
+  children,
+}: IssueScreenshotsProps) {
   const full = screenshots.length >= MAX_SCREENSHOTS
 
   return (
@@ -49,12 +59,13 @@ export function IssueScreenshots({ screenshots, busy, notices, onAdd, onRemove }
         </ul>
       )}
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <Button variant="outline" size="sm" onClick={onAdd} disabled={busy || full}>
           <ImagePlus aria-hidden />
           add screenshots
         </Button>
         <span className="text-xs text-muted-foreground">or paste an image</span>
+        {children && <div className="ml-auto">{children}</div>}
       </div>
 
       {notices.length > 0 && (

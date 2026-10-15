@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react'
 import { toast } from 'sonner'
 import { IssueScreenshots } from '@/components/IssueScreenshots'
+import { AddVideoButton, IssueVideo } from '@/components/IssueVideo'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -27,9 +28,12 @@ import { runAgent } from '@/lib/agentCli'
 import {
   discardScreenshots,
   MAX_SCREENSHOTS,
+  MAX_VIDEOS,
   stageScreenshotFromBytes,
   stageScreenshotFromPath,
+  stageVideoFromPath,
   type StagedScreenshot,
+  type StagedVideo,
 } from '@/lib/issueScreenshots'
 
 /** Categories the web API accepts (`web/app/api/bug-report/route.ts`). */
@@ -50,13 +54,14 @@ export const MAX_DESCRIPTION = 1000
 
 /**
  * The `report-issue` run's done value. `logsAttached` is present only when logs were
- * asked for: false means the issue went without them. `screenshotsAttached` is present
- * only when screenshots were sent.
+ * asked for: false means the issue went without them. `screenshotsAttached` and
+ * `videosAttached` are present only when screenshots or a video were sent.
  */
 interface ReportIssueDone {
   category: string
   logsAttached?: boolean
   screenshotsAttached?: number
+  videosAttached?: number
 }
 
 /** One image to stage, named for the notice if it is refused. */
@@ -67,6 +72,15 @@ interface ScreenshotSource {
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
+}
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() || path
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function listOf(items: string[]): string {
+  return items.length > 2 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : items.join(' and ')
 }
 
 function forget(ids: string[]) {
@@ -97,14 +111,23 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
   const [screenshots, setScreenshots] = useState<StagedScreenshot[]>([])
   const [staging, setStaging] = useState(false)
   const [screenshotNotices, setScreenshotNotices] = useState<string[]>([])
+  const [video, setVideo] = useState<StagedVideo | null>(null)
+  const [stagingVideo, setStagingVideo] = useState(false)
+  const [videoNotice, setVideoNotice] = useState<string | null>(null)
   // the staged files still ours to discard, read outside render by the close cleanup
   const stagedRef = useRef<StagedScreenshot[]>([])
+  const videoRef = useRef<StagedVideo | null>(null)
   // bumped on every close, so a staging that lands after it is discarded, not shown
   const visitRef = useRef(0)
 
   const keepScreenshots = useCallback((next: StagedScreenshot[]) => {
     stagedRef.current = next
     setScreenshots(next)
+  }, [])
+
+  const keepVideo = useCallback((next: StagedVideo | null) => {
+    videoRef.current = next
+    setVideo(next)
   }, [])
 
   // reset while rendering the reopen, so the last visit never flashes
@@ -121,6 +144,9 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
       setScreenshots([])
       setStaging(false)
       setScreenshotNotices([])
+      setVideo(null)
+      setStagingVideo(false)
+      setVideoNotice(null)
     }
   }
 
@@ -129,8 +155,9 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
     return () => {
       // closed or unmounted without sending: nothing will use the staged files now
       visitRef.current += 1
-      forget(stagedRef.current.map((shot) => shot.id))
+      forget([...stagedRef.current.map((shot) => shot.id), ...(videoRef.current ? [videoRef.current.id] : [])])
       stagedRef.current = []
+      videoRef.current = null
     }
   }, [open])
 
@@ -174,13 +201,46 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
         const paths = picked === null ? [] : Array.isArray(picked) ? picked : [picked]
         return stage(
           paths.map((path) => ({
-            label: path.split(/[\\/]/).pop() || path,
+            label: fileName(path),
             stage: () => stageScreenshotFromPath(path),
           })),
         )
       })
       .catch((cause: unknown) => setScreenshotNotices([message(cause)]))
   }, [stage])
+
+  const pickVideo = useCallback(() => {
+    void openPicker({
+      multiple: false,
+      filters: [{ name: 'videos', extensions: ['mp4', 'mov', 'webm'] }],
+    })
+      .then(async (path) => {
+        if (path === null) return
+        const visit = visitRef.current
+        setStagingVideo(true)
+        setVideoNotice(null)
+        try {
+          const staged = await stageVideoFromPath(path)
+          if (visit !== visitRef.current) {
+            forget([staged.id])
+            return
+          }
+          keepVideo(staged)
+        } catch (cause) {
+          if (visit === visitRef.current) setVideoNotice(`${fileName(path)}: ${message(cause)}`)
+        } finally {
+          if (visit === visitRef.current) setStagingVideo(false)
+        }
+      })
+      .catch((cause: unknown) => setVideoNotice(message(cause)))
+  }, [keepVideo])
+
+  const removeVideo = () => {
+    if (videoRef.current) forget([videoRef.current.id])
+    keepVideo(null)
+  }
+
+  const busy = submitting || staging || stagingVideo
 
   const pasteScreenshots = (event: ClipboardEvent) => {
     const items = Array.from(event.clipboardData?.items ?? [])
@@ -192,7 +252,7 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
       .filter((file): file is File => file !== null)
     if (files.length === 0) return
     event.preventDefault()
-    if (submitting || staging) return
+    if (busy) return
     void stage(
       files.map((file) => ({
         label: 'pasted image',
@@ -216,9 +276,10 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
     setSubmitting(true)
     setError(null)
     const sent = screenshots.map((shot) => shot.id)
+    const sentVideos = video ? [video.id] : []
 
     void runAgent('report-issue', {
-      payload: { category, description: trimmed, attachLogs, screenshots: sent },
+      payload: { category, description: trimmed, attachLogs, screenshots: sent, videos: sentVideos },
       onEvent: (event) => {
         if (event.event === 'status') setStatus(event.value)
       },
@@ -226,48 +287,55 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
       .then((outcome) => {
         // the agent deletes what it was sent once the issue is filed, attached or not
         keepScreenshots([])
+        keepVideo(null)
         // partial: a done line from an older helper carries none of these fields
         const done: Partial<ReportIssueDone> =
           outcome.terminal?.event === 'done' ? outcome.terminal.value : {}
         const attachedShots = done.screenshotsAttached
-        const screenshotsFailed = sent.length > 0 && attachedShots === 0
-        if (done.logsAttached === false && screenshotsFailed) {
-          toast.warning('your issue was sent, but the logs and screenshots could not be attached', {
-            description: 'try again, or send them another way.',
-          })
-        } else if (screenshotsFailed) {
-          toast.warning('your issue was sent, but the screenshots could not be attached', {
-            description: 'try again, or send them another way.',
-          })
-        } else if (attachedShots !== undefined && attachedShots < sent.length) {
+        const missedShots = attachedShots === undefined ? 0 : sent.length - attachedShots
+        const logsFailed = done.logsAttached === false
+        const videoFailed = sentVideos.length > 0 && done.videosAttached === 0
+        // one toast names everything that did not go
+        const failed = [
+          ...(logsFailed ? ['the logs'] : []),
+          ...(missedShots <= 0
+            ? []
+            : attachedShots === 0
+              ? ['the screenshots']
+              : [`${missedShots} of ${sent.length} screenshots`]),
+          ...(videoFailed ? ['the video'] : []),
+        ]
+        if (failed.length === 1 && missedShots > 0 && attachedShots) {
           toast.warning(
             `your issue was sent, but only ${attachedShots} of ${sent.length} screenshots could be attached`,
             { description: 'try again, or send them another way.' },
           )
-        } else if (done.logsAttached === false) {
-          toast.warning('your issue was sent, but the logs could not be attached', {
-            description: 'try again, or send the logs folder another way.',
+        } else if (failed.length > 0) {
+          const resend =
+            failed.length > 1 ? 'them' : logsFailed ? 'the logs folder' : videoFailed ? 'it' : 'them'
+          toast.warning(`your issue was sent, but ${listOf(failed)} could not be attached`, {
+            description: `try again, or send ${resend} another way.`,
           })
         } else {
           const went = [
             'system info',
             done.logsAttached === true ? 'the logs' : 'the last lines of the service log',
             ...(attachedShots ? [`${attachedShots} screenshot${attachedShots === 1 ? '' : 's'}`] : []),
+            ...(done.videosAttached === 1 ? ['a video'] : []),
           ]
-          const list = went.length > 2 ? `${went.slice(0, -1).join(', ')} and ${went.at(-1)}` : went.join(' and ')
-          toast.success('thanks — your issue was sent', { description: `${list} went with it.` })
+          toast.success('thanks — your issue was sent', { description: `${listOf(went)} went with it.` })
         }
         onClose()
       })
       .catch((cause: unknown) => {
-        // the issue was not filed, so the agent kept the screenshots: they stay for a retry
+        // the issue was not filed, so the agent kept the attachments: they stay for a retry
         setError(message(cause))
       })
       .finally(() => {
         setSubmitting(false)
         setStatus('')
       })
-  }, [attachLogs, category, description, keepScreenshots, onClose, screenshots])
+  }, [attachLogs, category, description, keepScreenshots, keepVideo, onClose, screenshots, video])
 
   const remaining = MAX_DESCRIPTION - description.length
 
@@ -321,11 +389,19 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
 
         <IssueScreenshots
           screenshots={screenshots}
-          busy={submitting || staging}
+          busy={busy}
           notices={screenshotNotices}
           onAdd={pickScreenshots}
           onRemove={removeScreenshot}
-        />
+        >
+          <AddVideoButton
+            disabled={busy || Number(video !== null) >= MAX_VIDEOS}
+            staging={stagingVideo}
+            onAdd={pickVideo}
+          />
+        </IssueScreenshots>
+
+        <IssueVideo video={video} busy={busy} notice={videoNotice} onRemove={removeVideo} />
 
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
@@ -365,7 +441,7 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
           </Button>
           <Button
             onClick={submit}
-            disabled={submitting || staging || description.trim().length === 0}
+            disabled={busy || description.trim().length === 0}
           >
             {submitting && (
               <Loader2 aria-hidden className="animate-spin" data-testid="report-spinner" />

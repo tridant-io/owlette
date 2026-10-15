@@ -9,6 +9,7 @@
 import {
   headIssueLogs,
   ISSUE_LOGS_E2E_SIZE,
+  ISSUE_LOGS_MAX_BYTES,
   issueLogsKey,
   presignIssueLogsDownload,
   presignIssueLogsUpload,
@@ -39,6 +40,13 @@ afterEach(() => {
   }
 });
 
+describe('ISSUE_LOGS_MAX_BYTES', () => {
+  it("is 150 MiB, room for the agent's largest zip", () => {
+    expect(ISSUE_LOGS_MAX_BYTES).toBe(150 * 1024 * 1024);
+    expect(ISSUE_LOGS_MAX_BYTES).toBeGreaterThanOrEqual(150_000_000);
+  });
+});
+
 describe('issueLogsKey', () => {
   it('is issues/{siteId}/{machineId}/{uuid}.zip, fresh each call', () => {
     const key = issueLogsKey('site-1', 'MACHINE-A');
@@ -54,13 +62,13 @@ describe('issueLogsKey', () => {
 });
 
 describe('presignIssueLogsUpload', () => {
-  it('signs content-length and content-type into a 15 minute PUT on the env bucket', async () => {
+  it('signs content-length and content-type into a 30 minute PUT on the env bucket', async () => {
     const key = 'issues/site-1/m/abc.zip';
     const url = new URL(await presignIssueLogsUpload(key, 4096));
     expect(url.pathname).toBe(`/owlette-dev-issue-logs/${key}`);
     const signed = url.searchParams.get('X-Amz-SignedHeaders')?.split(';') ?? [];
     expect(signed).toEqual(expect.arrayContaining(['content-length', 'content-type', 'host']));
-    expect(url.searchParams.get('X-Amz-Expires')).toBe('900');
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('1800');
     expect(url.searchParams.has('x-amz-checksum-crc32')).toBe(false);
   });
 });

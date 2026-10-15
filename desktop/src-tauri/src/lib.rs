@@ -112,6 +112,7 @@ pub fn run() {
       commands::open_owlette_path,
       commands::open_external_url,
       commands::stage_issue_screenshot,
+      commands::stage_issue_video,
       commands::discard_issue_screenshots,
       commands::swoop_viewer_installed,
       commands::open_swoop_viewer,

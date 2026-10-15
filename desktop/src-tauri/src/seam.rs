@@ -75,8 +75,8 @@ impl Verb {
   pub fn budget(self) -> Duration {
     match self {
       Verb::Pair => Duration::from_secs(660),
-      // the zip upload on a slow uplink.
-      Verb::ReportIssue => Duration::from_secs(600),
+      // a 150 MB upload on a slow uplink.
+      Verb::ReportIssue => Duration::from_secs(1800),
       Verb::Leave => Duration::from_secs(180),
       Verb::DismissReboot => Duration::from_secs(90),
       Verb::CancelPair | Verb::Restart | Verb::Reboot => Duration::from_secs(30),

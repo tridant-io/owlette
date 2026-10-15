@@ -173,6 +173,69 @@ describe('POST /api/bug-report', () => {
     expect(html).not.toContain('logs and');
   });
 
+  it.each([
+    [undefined, undefined, '>a video is attached to this issue: <a'],
+    [undefined, true, '>logs and a video are attached to this issue: <a'],
+    [1, undefined, '>1 screenshot and a video are attached to this issue: <a'],
+    [2, undefined, '>2 screenshots and a video are attached to this issue: <a'],
+    [1, true, '>logs, 1 screenshot and a video are attached to this issue: <a'],
+    [2, true, '>logs, 2 screenshots and a video are attached to this issue: <a'],
+  ])('names a video, screenshots %s, logs %s, on the record and in the email', async (n, logs, wording) => {
+    asAgent();
+    const res = await report({ logsKey: KEY, videos: 1, screenshots: n, logs });
+
+    expect(res.status).toBe(200);
+    const record = written[0].data.logs as { screenshots?: number; videos?: number };
+    expect(record.videos).toBe(1);
+    expect(record.screenshots).toBe(n);
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).toContain(wording);
+    expect(html).toContain('download attachments</a> (superadmin only, kept 30 days)');
+    expect(html).not.toContain('download logs');
+  });
+
+  it.each([
+    ['zero', 0],
+    ['over the limit', 2],
+    ['negative', -1],
+    ['not an integer', 1.5],
+    ['a numeric string', '1'],
+    ['a boolean', true],
+    ['an array', [1]],
+    ['null', null],
+  ])('ignores a videos field that is %s', async (_label, value) => {
+    asAgent();
+    const res = await report({ logsKey: KEY, videos: value });
+
+    expect(res.status).toBe(200);
+    expect(written[0].data.logs).not.toHaveProperty('videos');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).toContain('>logs are attached to this issue: <a');
+    expect(html).not.toContain('video');
+  });
+
+  it('counts no video without an attached zip', async () => {
+    asAgent();
+    const res = await report({ videos: 1, logs: true });
+
+    expect(res.status).toBe(200);
+    expect(written[0].data).not.toHaveProperty('logs');
+    expect(written[0].data).not.toHaveProperty('videos');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).not.toContain('video');
+  });
+
+  it('ignores a video from a user session', async () => {
+    mockRequireSession.mockResolvedValue('user-1');
+    const res = await report({ videos: 1 }, {});
+
+    expect(res.status).toBe(200);
+    expect(written[0].data).not.toHaveProperty('logs');
+    expect(written[0].data).not.toHaveProperty('videos');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).not.toContain('video');
+  });
+
   it('mentions no logs without an attached zip, whatever the logs field says', async () => {
     asAgent();
     await report({ logs: true, screenshots: 2 });

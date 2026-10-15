@@ -16,7 +16,7 @@ use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Manager, State};
 
 use crate::agent_cli::{self, Runs};
-use crate::issue_attachments::{self, Staged};
+use crate::issue_attachments::{self, Staged, StagedVideo};
 use crate::json_io::{self, WriteOutcome};
 use crate::paths::{self, ISSUE_ATTACHMENTS_REL, SERVICE_STATUS_REL};
 use crate::process_ctl::{self, TerminateOutcome, DEFAULT_GRACEFUL_TIMEOUT};
@@ -272,7 +272,14 @@ pub fn stage_issue_screenshot(request: Request<'_>) -> Result<Staged, String> {
   }
 }
 
-/// Delete staged screenshots by id; returns how many were removed.
+/// Stage a video the operator picked for an issue report.
+#[tauri::command(async)]
+pub fn stage_issue_video(path: String) -> Result<StagedVideo, String> {
+  let dir = paths::resolve_in_root(&paths::data_root(), ISSUE_ATTACHMENTS_REL)?;
+  issue_attachments::stage_video(&dir, Path::new(&path))
+}
+
+/// Delete staged screenshots or videos by id; returns how many were removed.
 #[tauri::command(async)]
 pub fn discard_issue_screenshots(ids: Vec<String>) -> Result<usize, String> {
   let dir = paths::resolve_in_root(&paths::data_root(), ISSUE_ATTACHMENTS_REL)?;
