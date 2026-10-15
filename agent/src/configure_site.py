@@ -856,19 +856,22 @@ def _web_session() -> tuple[str, str]:
     return web_base, token
 
 
-def _logs_not_attached(reason: str) -> str:
-    """The line an issue carries when its log zip could not go with it."""
-    return f"\n\nlogs could not be attached: {reason}"
+def _attachments_not_sent(reason: str) -> str:
+    """The line an issue carries when its zip could not go with it."""
+    return f"\n\nattachments could not be sent: {reason}"
 
 
-def submit_report(data: dict, logs_key: Optional[str] = None) -> bool:
+def submit_report(data: dict, logs_key: Optional[str] = None, screenshots: int = 0,
+                  logs: bool = False) -> bool:
     """POST an issue to `/api/bug-report`; returns whether `logs_key` went with it.
 
     Ported from `report_issue.submit_report`. The agent's own access token is
     the credential; the endpoint accepts it as a bearer token and files the
     issue under `bug_reports` with `source: 'agent'`. An issue whose
     `logs_key` the server refuses is sent once more without it, so the issue
-    is never lost to its attachment.
+    is never lost to its attachment. `screenshots` is how many the zip holds
+    and `logs` whether it holds any logs; the body's `screenshots` and `logs`
+    fields and the issue's line say so only while the zip goes with it.
     """
     import requests as http_requests
 
@@ -877,6 +880,8 @@ def submit_report(data: dict, logs_key: Optional[str] = None) -> bool:
     def post(description: str, key: Optional[str]):
         system_info = data.get('systemInfo', {})
         log_tail = data.get('logTail', '')
+        if key and screenshots:
+            description += f"\n\nscreenshots attached: {screenshots}"
         if system_info:
             description += f"\n\n--- system info ---\n{_format_system_info(system_info)}"
         if log_tail:
@@ -896,6 +901,10 @@ def submit_report(data: dict, logs_key: Optional[str] = None) -> bool:
         }
         if key:
             body['logsKey'] = key
+            if screenshots:
+                body['screenshots'] = screenshots
+            if logs:
+                body['logs'] = True
         return http_requests.post(
             f"{web_base}/api/bug-report",
             json=body,
@@ -906,9 +915,9 @@ def submit_report(data: dict, logs_key: Optional[str] = None) -> bool:
     description = data.get('description', '')
     response = post(description, logs_key)
     if response.status_code == 400 and logs_key:
-        logging.warning("The server refused the attached logs (400); resending the issue without them")
+        logging.warning("The server refused the attachments (400); resending the issue without them")
         logs_key = None
-        response = post(description + _logs_not_attached('the server refused them (400)'), None)
+        response = post(description + _attachments_not_sent('the server refused them (400)'), None)
 
     if response.status_code != 200:
         try:
@@ -968,17 +977,26 @@ def upload_issue_logs(zip_path: str, size: int) -> str:
     return key
 
 
-def _attach_logs() -> str:
-    """Zip this machine's logs and upload them; returns the key. The zip is always removed."""
+def _attach(include_logs: bool, screenshots: list) -> tuple[str, int, bool]:
+    """Zip the staged screenshots and, if asked, this machine's logs, and upload
+    them; returns the key, how many screenshots the zip holds and whether it
+    holds any logs. The zip is always removed."""
     import log_bundle
 
     fd, zip_path = tempfile.mkstemp(suffix='.zip')
     os.close(fd)
     try:
-        _emit('status', 'zipping logs')
-        bundle = log_bundle.build_log_zip(zip_path)
-        _emit('status', 'uploading logs')
-        return upload_issue_logs(zip_path, bundle['size'])
+        if screenshots:
+            _emit('status', 'adding screenshots')
+        if include_logs:
+            _emit('status', 'zipping logs')
+        bundle = log_bundle.build_log_zip(
+            zip_path, screenshots=screenshots, include_logs=include_logs)
+        if not include_logs and not bundle['screenshots']:
+            raise RuntimeError('no screenshot could be read')
+        _emit('status', 'uploading attachments')
+        has_logs = bundle['files'] > bundle['screenshots']
+        return upload_issue_logs(zip_path, bundle['size']), bundle['screenshots'], has_logs
     finally:
         try:
             os.remove(zip_path)
@@ -1019,12 +1037,19 @@ def _log_report_to_file() -> None:
 def run_report_issue(payload_path: str) -> int:
     """Submit the feedback payload written by the desktop app.
 
-    The payload is `{"category": ..., "description": ..., "attachLogs": bool}`
-    in a file under the owlette tree; it is deleted as soon as it has been read
-    so an operator's description is not left lying on disk. Logs that cannot
-    be attached never stop the issue: it goes without them and says why, and
-    `done` carries `logsAttached` whenever they were asked for.
+    The payload is `{"category": ..., "description": ..., "attachLogs": bool,
+    "screenshots": [name, ...]}` in a file under the owlette tree; it is deleted
+    as soon as it has been read so an operator's description is not left lying
+    on disk. The screenshots are names the desktop app staged in
+    `ipc/issue-attachments/`, deleted once the issue is filed, whether or not
+    they went with it; a run that could not file the issue keeps them for the
+    app's retry.
+    Attachments that cannot be sent never stop the issue: it goes without them
+    and says why, and `done` carries `logsAttached` whenever logs were asked
+    for and `screenshotsAttached` whenever screenshots were.
     """
+    import log_bundle
+
     try:
         with open(payload_path, 'r', encoding='utf-8') as f:
             payload = json.load(f)
@@ -1037,6 +1062,19 @@ def run_report_issue(payload_path: str) -> int:
         except OSError:
             pass
 
+    named = payload.get('screenshots')
+    screenshots = [] if named is None else log_bundle.screenshot_ids(named)
+    if screenshots is None:
+        _emit('error', 'the report names screenshots owlette did not stage.')
+        return 1
+    code = _send_report(payload, screenshots)
+    if code == 0 and screenshots:
+        log_bundle.discard_screenshots(screenshots)
+    return code
+
+
+def _send_report(payload: dict, screenshots: list) -> int:
+    """`run_report_issue` once its payload is read and its screenshots checked."""
     description = str(payload.get('description') or '').strip()
     if not description:
         _emit('error', 'please describe the issue before submitting.')
@@ -1053,24 +1091,28 @@ def run_report_issue(payload_path: str) -> int:
 
     attach_logs = payload.get('attachLogs') is True
     logs_key = None
-    if attach_logs:
+    shots = 0
+    has_logs = False
+    if attach_logs or screenshots:
         try:
-            logs_key = _attach_logs()
+            logs_key, shots, has_logs = _attach(attach_logs, screenshots)
         except Exception as e:
             reason = (str(e) or type(e).__name__)[:200]
-            logging.warning(f"Issue logs could not be attached: {reason}")
-            report['description'] = report.get('description', '') + _logs_not_attached(reason)
+            logging.warning(f"Issue attachments could not be sent: {reason}")
+            report['description'] = report.get('description', '') + _attachments_not_sent(reason)
 
     _emit('status', 'submitting')
     try:
-        logs_attached = submit_report(report, logs_key)
+        attached = submit_report(report, logs_key, shots, has_logs)
     except Exception as e:
         _emit('error', str(e) or repr(e))
         return 1
 
     done = {'category': category}
     if attach_logs:
-        done['logsAttached'] = logs_attached
+        done['logsAttached'] = attached
+    if screenshots:
+        done['screenshotsAttached'] = shots if attached else 0
     _emit('done', done)
     return 0
 
@@ -1381,9 +1423,10 @@ REQUEST_REPLY_SUFFIX = '.result'
 # A request is one verb and one nonce, a `pair` may name its server, and a
 # `report_issue` carries a description the app caps at 1000 UTF-16 units. JSON
 # grows a unit to at most six bytes (a control character as \u00XX), so a
-# report is under 6.2 KB. The directory is group-writable, so the size of what
-# turns up in it is not the daemon's to trust: without a bound the drain reads
-# whatever was planted there straight into memory.
+# report is under 6.2 KB; its five screenshot names add under 250 bytes. The
+# directory is group-writable, so the size of what turns up in it is not the
+# daemon's to trust: without a bound the drain reads whatever was planted there
+# straight into memory.
 REQUEST_MAX_BYTES = 8192
 # How far back the rate limit reads. Every accepted request appends a row and
 # nothing ages the file out, so an app asking on every tick grows it for as long
@@ -1546,6 +1589,15 @@ def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Option
                 return _refuse(
                     path, reply_path, 'carries an attachLogs that is not true or false')
             report['attachLogs'] = attach_logs
+        screenshots = payload.get('screenshots')
+        if screenshots is not None:
+            import log_bundle
+
+            screenshots = log_bundle.screenshot_ids(screenshots)
+            if screenshots is None:
+                return _refuse(path, reply_path,
+                               'carries screenshots that are not up to five staged names')
+            report['screenshots'] = screenshots
     if not nonce or payload.get('nonce') != nonce:
         return _refuse(
             path, reply_path, 'does not quote the nonce the daemon last issued')

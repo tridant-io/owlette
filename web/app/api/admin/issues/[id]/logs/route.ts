@@ -61,10 +61,10 @@ function hostname(pageUrl: string | undefined): string {
   return pageUrl?.startsWith('agent://') ? pageUrl.slice('agent://'.length) : '';
 }
 
-/** `owlette-logs-<hostname>-<YYYY-MM-DD>.zip` */
+/** `owlette-issue-<hostname>-<YYYY-MM-DD>.zip`; it may hold screenshots as well as logs */
 function downloadName(host: string): string {
   const day = new Date().toISOString().slice(0, 10);
-  return `owlette-logs-${host || 'machine'}-${day}.zip`;
+  return `owlette-issue-${host || 'machine'}-${day}.zip`;
 }
 
 export async function GET(request: NextRequest, { params }: RouteParams) {

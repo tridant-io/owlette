@@ -11,6 +11,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.16] - 2026-10-15
+
+### added — screenshots on submitted issues
+
+You can now add up to 5 screenshots to an issue from the desktop app's submit
+issue dialog, by picking files or pasting an image. PNG, JPEG and WebP images
+up to 8 MB each are accepted. They travel in the same zip as attached logs,
+with or without attach logs ticked, and like the logs they are kept 30 days and
+seen only by owlette support.
+
 ## [4.1.15] - 2026-10-14
 
 ### added — attached logs cover more of the machine

@@ -12,16 +12,23 @@ import { ISSUE_LOGS_RETENTION_DAYS, headIssueLogs } from '@/lib/issueLogsStorage
  * POST /api/bug-report — writes the top-level `bug_reports` doc and emails
  * ISSUE_EMAIL, or ADMIN_EMAIL when that is unset. Body: title (<=200),
  * category, description (<=50,000), browserUA,
- * pageUrl, and from an agent only, logsKey.
+ * pageUrl, and from an agent only, logsKey, screenshots and logs.
  *
  * An agent is recognised by its verified token's `role=agent` claim, never by
  * browserUA, and its report records the token's site and machine. `logsKey` names
  * a zip the agent uploaded through `issue-logs/upload-url`; it must sit under that
  * same machine's prefix and exist, else 400, and the agent resends without it.
+ * The zip may hold screenshots too; the agent then sends `screenshots`, their
+ * count (1-5), and `logs: true` when it holds logs as well, both read only
+ * alongside an accepted logsKey. The description's `screenshots attached: N`
+ * line is for people and never parsed.
  */
 
 // the uuid file name `issueLogsKey` mints; no further path segments
 const LOGS_KEY_FILE_RE = /^[A-Za-z0-9-]+\.zip$/;
+
+// the most screenshots the desktop app lets an issue carry
+const MAX_SCREENSHOTS = 5;
 
 const VALID_CATEGORIES = ['bug', 'feature_request', 'other', 'compliment', 'rant'] as const;
 
@@ -41,6 +48,14 @@ const ADMIN_EMAIL = isProduction
   ? process.env.ADMIN_EMAIL_PROD
   : process.env.ADMIN_EMAIL_DEV;
 
+function attachmentsLine(url: string, screenshots: number, hasLogs: boolean): string {
+  const link = (text: string) => `<a href="${url}" style="color:${EMAIL_COLORS.cyan};">${text}</a>`;
+  if (!screenshots) return `logs are attached to this issue: ${link('download logs')}`;
+  const count = `${screenshots} screenshot${screenshots === 1 ? '' : 's'}`;
+  const what = hasLogs ? `logs and ${count} are` : `${count} ${screenshots === 1 ? 'is' : 'are'}`;
+  return `${what} attached to this issue: ${link('download attachments')}`;
+}
+
 function buildBugReportEmail(
   category: string,
   title: string,
@@ -49,6 +64,8 @@ function buildBugReportEmail(
   source: string,
   pageUrl: string,
   logsUrl: string | null,
+  screenshots: number,
+  hasLogs: boolean,
 ): string {
   const categoryLabel = CATEGORY_LABELS[category] || category;
   const color = category === 'compliment' ? EMAIL_COLORS.cyan
@@ -66,7 +83,7 @@ function buildBugReportEmail(
       { label: 'time', value: emailTimestamp() },
       { label: 'environment', value: ENV_LABEL },
     ])}
-    ${logsUrl ? `<p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};">logs are attached to this issue: <a href="${logsUrl}" style="color:${EMAIL_COLORS.cyan};">download logs</a> (superadmin only, kept ${ISSUE_LOGS_RETENTION_DAYS} days).</p>` : ''}
+    ${logsUrl ? `<p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};">${attachmentsLine(logsUrl, screenshots, hasLogs)} (superadmin only, kept ${ISSUE_LOGS_RETENTION_DAYS} days).</p>` : ''}
     <div style="margin:20px 0 0;padding:16px;background:${EMAIL_COLORS.altRow};border-radius:8px;border:1px solid ${EMAIL_COLORS.border};">
       <p style="margin:0 0 8px;color:${EMAIL_COLORS.muted};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;">description</p>
       <p style="margin:0;color:${EMAIL_COLORS.text};font-size:14px;line-height:1.6;white-space:pre-wrap;">${description.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>
@@ -127,7 +144,8 @@ export const POST = withRateLimit(
         return NextResponse.json({ error: `Description must be ${maxDescLength} characters or less` }, { status: 400 });
       }
 
-      let logs: { key: string; size: number; expiresAt: Timestamp } | null = null;
+      let logs: { key: string; size: number; expiresAt: Timestamp; screenshots?: number } | null = null;
+      let zipHoldsLogs = false;
       if (logsKey !== undefined && logsKey !== null) {
         const prefix = agent ? `issues/${agent.siteId}/${agent.machineId}/` : null;
         if (
@@ -147,10 +165,19 @@ export const POST = withRateLimit(
         if (!head) {
           return NextResponse.json({ error: 'logsKey names no uploaded logs' }, { status: 400 });
         }
+        // prefix is set, so this is an agent; anything but an integer 1-5 counts as none
+        const sent: unknown = body.screenshots;
+        const screenshots =
+          typeof sent === 'number' && Number.isInteger(sent) && sent >= 1 && sent <= MAX_SCREENSHOTS
+            ? sent
+            : 0;
+        // an agent before 4.1.14 sends neither field, and its zip holds only logs
+        zipHoldsLogs = body.logs === true || !screenshots;
         logs = {
           key: logsKey,
           size: head.size,
           expiresAt: Timestamp.fromMillis(Date.now() + ISSUE_LOGS_RETENTION_DAYS * 24 * 60 * 60 * 1000),
+          ...(screenshots ? { screenshots } : {}),
         };
       }
 
@@ -210,6 +237,8 @@ export const POST = withRateLimit(
             source,
             typeof pageUrl === 'string' ? pageUrl : '',
             logs ? `${trustedBaseUrl()}/api/admin/issues/${docRef.id}/logs` : null,
+            logs?.screenshots ?? 0,
+            zipHoldsLogs,
           ),
         }).catch((err) => {
           console.error('[bug-report] Failed to send email notification:', err);
