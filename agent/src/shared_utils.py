@@ -1310,6 +1310,10 @@ def get_path(filename=None):
 
     return path
 
+def get_install_root():
+    """The install root: src lives at <install>/agent/src, two levels down."""
+    return os.path.dirname(os.path.dirname(get_path()))
+
 # Where the bundled interpreter lives on each POSIX platform. Windows resolves
 # its own from the install root so a relocated install still works; the macOS
 # and Linux payloads install to a fixed prefix and there is nothing to relocate.
@@ -1333,8 +1337,7 @@ def get_python_exe_path():
             return candidate
         raise FileNotFoundError(f"Python interpreter not found at {candidate}")
 
-    # src lives at <install>\agent\src — two levels up is the install root
-    install_root = os.path.dirname(os.path.dirname(get_path()))
+    install_root = get_install_root()
 
     pythonw_path = os.path.join(install_root, 'python', 'pythonw.exe')
     if os.path.exists(pythonw_path):

@@ -7,6 +7,17 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### added — attached logs cover more of the machine
+
+Ticking attach logs when you submit an issue now also sends owlette swoop's
+log, `tmp/status_writer.log`, and a list of the files in owlette's data folder
+with their sizes and dates, never their contents. On Windows it adds owlette's
+installer logs and crash events for owlette's own programs; on macOS, crash
+reports for owlette's programs and the installer log's lines about owlette; on
+Linux, the journals of the agent service and the self-update unit. Tokens and
+`config.json` still never go in, and the zip is still kept 30 days and seen only
+by owlette support.
+
 ## [4.1.14] - 2026-10-14
 
 ### added — submit issue shows what it is doing, and can go to its own inbox

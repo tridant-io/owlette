@@ -1,7 +1,7 @@
 ---
 title: "agent troubleshooting"
 description: "where the agent's logs are on Windows, macOS and Linux, how to run it in the foreground, how to start and stop the service, and fixes for the common problems."
-keywords: ["logs", "log file", "service.log", "journalctl", "launchctl", "systemctl", "service not running", "not connecting", "offline", "debug", "re-pair", "screen recording", "accessibility", "selfcheck", "submit issue", "attach logs", "send logs", "send logs to support", "export logs", "zip logs"]
+keywords: ["logs", "log file", "service.log", "journalctl", "launchctl", "systemctl", "service not running", "not connecting", "offline", "debug", "re-pair", "screen recording", "accessibility", "selfcheck", "submit issue", "attach logs", "send logs", "send logs to support", "export logs", "zip logs", "swoop viewer log", "crash events", "crash reports", "DiagnosticReports", "install.log", "journal", "owlette-update", "setup log"]
 ---
 
 ---
@@ -426,13 +426,21 @@ the app restarts the service without an administrator prompt on every platform. 
 
 when the tail of `service.log` is not enough, tick **attach logs** in the desktop app's **submit issue** dialog and the agent zips the machine's logs and sends them with the issue. the box starts unticked every time: nothing beyond the usual system info and log tail leaves the machine unless you tick it.
 
-the zip holds:
+on every platform the zip holds:
 
-- every file under `logs/` in the data root (see [log locations](#log-locations)) changed in the last 14 days, including `logs/swoop/` and `roost_scrub_reports/`
-- the desktop app's own log, `owlette-desktop.log` and its rotated files
+- every file under `logs/` in the data root (see [log locations](#log-locations)) changed in the last 14 days: the service, service host, swoop streamer (including `logs/swoop/`), hoot, pairing, installer and self-update logs, app requests, `roost_scrub_reports/` and `submit_issue.log`
+- `tmp/status_writer.log`
+- the desktop app's own log, `owlette-desktop.log`, and owlette swoop's log, `owlette-swoop-viewer.log`, with their rotated files
+- a listing of the data root: each file's name, size and modified date, never its contents
 - `manifest.txt`, which lists each file included with its size and modified time, and each file left out and why
 
-newest files go in first, up to 300 MB before compression, and the zip stops at 50 MB. links (symlinks and hard links) are skipped, and nothing outside `logs/` is read, so tokens and `config.json` never go in. the logs can still contain hostnames, user names, file paths and process names.
+and on top of that:
+
+- **Windows:** the five newest owlette installer logs from the last 14 days (`Setup Log <date> #NNN.txt` in the signed-in user's `%TEMP%`, only those whose setup exe is owlette's own `Owlette-Installer-v<version>.exe`), and the Application event log's crash events for owlette's own programs
+- **macOS:** the ten newest crash reports from the last 14 days for owlette's own programs, from `/Library/Logs/DiagnosticReports` and the signed-in user's `~/Library/Logs/DiagnosticReports`, and the lines of `/var/log/install.log` that mention owlette
+- **Linux:** the systemd journals for the agent service, `owlette-agent`, and the self-update unit, `owlette-update`
+
+nothing else goes in: never a token, never `config/config.json`, never another program's files or log lines. links (symlinks and hard links) are skipped. newest files go in first, up to 300 MB before compression, and the zip stops at 50 MB. the logs can still contain hostnames, user names, file paths and process names.
 
 the zip is stored in Cloudflare R2 and deleted automatically 30 days after upload. only owlette support can download it, not the site's owners or admins. every download is audited.
 
