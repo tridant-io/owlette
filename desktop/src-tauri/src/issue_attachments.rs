@@ -1,4 +1,4 @@
-//! Screenshots and a video staged for a submitted issue
+//! Screenshots and videos staged for a submitted issue
 //! (dev/active/issue-screenshots, dev/active/issue-video).
 //!
 //! The app copies each file the operator adds into
@@ -19,8 +19,8 @@ use serde::Serialize;
 /// Largest image accepted, in bytes.
 pub const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Largest video accepted, in bytes.
-pub const MAX_VIDEO_BYTES: u64 = 100 * 1024 * 1024;
+/// Most one issue's screenshots and videos may take together, in bytes.
+pub const MAX_ATTACHMENT_BYTES: u64 = 100 * 1024 * 1024;
 
 /// Fresh names tried before giving up; a collision on 128 random bits means
 /// something other than chance is creating files there.
@@ -28,7 +28,7 @@ const NAME_ATTEMPTS: usize = 3;
 
 const REFUSED_TYPE: &str = "only png, jpeg or webp images";
 const REFUSED_VIDEO_TYPE: &str = "only mp4, mov or webm videos";
-const VIDEO_TOO_BIG: &str = "videos must be 100 MB or smaller";
+const ATTACHMENTS_TOO_BIG: &str = "attachments must total 100 MB or less";
 
 /// Bytes read to decide a video's type; webm names its doctype within these.
 const VIDEO_HEAD: u64 = 64;
@@ -150,17 +150,19 @@ pub fn is_staged_name(name: &str) -> bool {
     && matches!(ext, "png" | "jpg" | "webp" | "mp4" | "mov" | "webm")
 }
 
-/// Stage a video the operator picked, read as the operator. It is copied
-/// streaming, never held whole in memory.
-pub fn stage_video(dir: &Path, source: &Path) -> Result<StagedVideo, String> {
+/// Stage a video the operator picked, read as the operator, when it fits the
+/// `room` the issue's other attachments leave. It is copied streaming, never
+/// held whole in memory.
+pub fn stage_video(dir: &Path, source: &Path, room: u64) -> Result<StagedVideo, String> {
+  let limit = room.min(MAX_ATTACHMENT_BYTES);
   let cannot_read = |error: io::Error| format!("cannot read {}: {error}", source.display());
   let metadata = fs::metadata(source).map_err(cannot_read)?;
   // checked before opening: opening a fifo or a device would block or never end.
   if !metadata.is_file() {
     return Err(format!("{} is not a file", source.display()));
   }
-  if metadata.len() > MAX_VIDEO_BYTES {
-    return Err(VIDEO_TOO_BIG.to_string());
+  if metadata.len() > limit {
+    return Err(ATTACHMENTS_TOO_BIG.to_string());
   }
   let mut file = File::open(source).map_err(cannot_read)?;
   let mut head = Vec::new();
@@ -177,7 +179,7 @@ pub fn stage_video(dir: &Path, source: &Path) -> Result<StagedVideo, String> {
   let (id, staged) = create_staged(dir, kind.ext(), "video")?;
   let path = dir.join(&id);
   // the file can grow after the metadata check, so the cap holds while copying too.
-  let size = fill(staged, &path, head.as_slice().chain(file), MAX_VIDEO_BYTES)?;
+  let size = fill(staged, &path, head.as_slice().chain(file), limit)?;
   Ok(StagedVideo {
     id,
     size,
@@ -193,7 +195,7 @@ fn fill(mut file: File, path: &Path, reader: impl Read, limit: u64) -> Result<u6
     .map_err(|error| format!("cannot copy the video: {error}"))
     .and_then(|copied| {
       if copied > limit {
-        Err(VIDEO_TOO_BIG.to_string())
+        Err(ATTACHMENTS_TOO_BIG.to_string())
       } else {
         Ok(copied)
       }
@@ -572,7 +574,7 @@ mod tests {
   fn stage_video_bytes(scratch: &Scratch, name: &str, bytes: &[u8]) -> Result<StagedVideo, String> {
     let source = scratch.0.join(name);
     fs::write(&source, bytes).expect("source");
-    let staged = stage_video(&scratch.staging(), &source);
+    let staged = stage_video(&scratch.staging(), &source, MAX_ATTACHMENT_BYTES);
     fs::remove_file(&source).expect("remove source");
     staged
   }
@@ -649,12 +651,26 @@ mod tests {
     let dir = scratch.staging();
     let source = scratch.0.join("big.mp4");
     let file = File::create(&source).expect("source");
-    file.set_len(MAX_VIDEO_BYTES + 1).expect("grow");
+    file.set_len(MAX_ATTACHMENT_BYTES + 1).expect("grow");
     drop(file);
-    let refused = stage_video(&dir, &source);
+    let refused = stage_video(&dir, &source, MAX_ATTACHMENT_BYTES);
     fs::remove_file(&source).expect("remove source");
-    assert_eq!(refused.expect_err("too big"), VIDEO_TOO_BIG);
+    assert_eq!(refused.expect_err("too big"), ATTACHMENTS_TOO_BIG);
     assert_eq!(staged_count(&dir), 0);
+  }
+
+  #[test]
+  fn a_video_past_the_room_left_is_refused() {
+    let scratch = Scratch::new("video-room");
+    let dir = scratch.staging();
+    let source = scratch.0.join("clip.mp4");
+    fs::write(&source, MP4).expect("source");
+    let refused = stage_video(&dir, &source, MP4.len() as u64 - 1);
+    let staged = stage_video(&dir, &source, MP4.len() as u64);
+    fs::remove_file(&source).expect("remove source");
+    assert_eq!(refused.expect_err("no room"), ATTACHMENTS_TOO_BIG);
+    assert_eq!(staged.expect("fits").size, MP4.len() as u64);
+    assert_eq!(staged_count(&dir), 1);
   }
 
   #[test]
@@ -662,7 +678,7 @@ mod tests {
     let scratch = Scratch::new("video-dir");
     let source = scratch.0.join("folder.mp4");
     fs::create_dir(&source).expect("folder");
-    let refused = stage_video(&scratch.staging(), &source);
+    let refused = stage_video(&scratch.staging(), &source, MAX_ATTACHMENT_BYTES);
     fs::remove_dir(&source).expect("remove folder");
     assert!(refused.expect_err("refused").contains("is not a file"));
   }
@@ -702,7 +718,7 @@ mod tests {
       10,
     )
     .expect_err("over the limit");
-    assert_eq!(error, VIDEO_TOO_BIG);
+    assert_eq!(error, ATTACHMENTS_TOO_BIG);
     assert!(!over.exists());
 
     let exact = scratch.0.join("exact.mp4");

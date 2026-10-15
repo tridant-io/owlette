@@ -18,21 +18,24 @@ import { ISSUE_LOGS_RETENTION_DAYS, headIssueLogs } from '@/lib/issueLogsStorage
  * browserUA, and its report records the token's site and machine. `logsKey` names
  * a zip the agent uploaded through `issue-logs/upload-url`; it must sit under that
  * same machine's prefix and exist, else 400, and the agent resends without it.
- * The zip may hold screenshots and a video too; the agent then sends
- * `screenshots`, their count (1-5), `videos: 1`, and `logs: true` when it holds
- * logs as well, all read only alongside an accepted logsKey. The description's
- * `screenshots attached: N` and `video attached: 1` lines are for people and
- * never parsed.
+ * The zip may hold screenshots and videos too; the agent then sends their
+ * counts as `screenshots` (1-10) and `videos` (1-20), and `logs: true` when it
+ * holds logs as well, all read only alongside an accepted logsKey. The
+ * description's `screenshots attached: N` and `videos attached: N` lines are
+ * for people and never parsed.
  */
 
 // the uuid file name `issueLogsKey` mints; no further path segments
 const LOGS_KEY_FILE_RE = /^[A-Za-z0-9-]+\.zip$/;
 
-// the most screenshots the desktop app lets an issue carry
-const MAX_SCREENSHOTS = 5;
+// the most screenshots and videos the agent puts in one issue's zip
+const MAX_SCREENSHOTS = 10;
+const MAX_VIDEOS = 20;
 
-// the only video count the desktop app sends
-const MAX_VIDEOS = 1;
+// an integer 1 to max, else 0: none
+function attachedCount(sent: unknown, max: number): number {
+  return typeof sent === 'number' && Number.isInteger(sent) && sent >= 1 && sent <= max ? sent : 0;
+}
 
 const VALID_CATEGORIES = ['bug', 'feature_request', 'other', 'compliment', 'rant'] as const;
 
@@ -58,11 +61,11 @@ function attachmentsLine(url: string, screenshots: number, videos: number, hasLo
   const parts = [
     ...(hasLogs ? ['logs'] : []),
     ...(screenshots ? [`${screenshots} screenshot${screenshots === 1 ? '' : 's'}`] : []),
-    ...(videos ? ['a video'] : []),
+    ...(videos ? [`${videos} video${videos === 1 ? '' : 's'}`] : []),
   ];
   const last = parts.pop();
   const what = parts.length ? `${parts.join(', ')} and ${last}` : last;
-  const plural = parts.length > 0 || screenshots > 1;
+  const plural = parts.length > 0 || screenshots + videos > 1;
   return `${what} ${plural ? 'are' : 'is'} attached to this issue: ${link('download attachments')}`;
 }
 
@@ -176,14 +179,9 @@ export const POST = withRateLimit(
         if (!head) {
           return NextResponse.json({ error: 'logsKey names no uploaded logs' }, { status: 400 });
         }
-        // prefix is set, so this is an agent; anything but an integer 1-5 counts as none
-        const sent: unknown = body.screenshots;
-        const screenshots =
-          typeof sent === 'number' && Number.isInteger(sent) && sent >= 1 && sent <= MAX_SCREENSHOTS
-            ? sent
-            : 0;
-        // anything but exactly 1 counts as none
-        const videos = body.videos === MAX_VIDEOS ? MAX_VIDEOS : 0;
+        // prefix is set, so this is an agent
+        const screenshots = attachedCount(body.screenshots, MAX_SCREENSHOTS);
+        const videos = attachedCount(body.videos, MAX_VIDEOS);
         // an agent before 4.1.14 sends none of these fields, and its zip holds only logs
         zipHoldsLogs = body.logs === true || (!screenshots && !videos);
         logs = {

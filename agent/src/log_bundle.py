@@ -111,11 +111,13 @@ _DIR_FLAGS = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLL
 
 # the desktop app's staging folder and limits (desktop/src-tauri/src/issue_attachments.rs)
 SCREENSHOTS_DIR = 'ipc/issue-attachments'
-MAX_SCREENSHOTS = 5
+MAX_SCREENSHOTS = 10
 SCREENSHOT_MAX_BYTES = 8 * 1024 * 1024
 _SCREENSHOT_NAME = re.compile(r'[0-9a-f]{32}\.(?:png|jpg|webp)')
-MAX_VIDEOS = 1
-VIDEO_MAX_BYTES = 100 * 1024 * 1024
+# the byte limit is what holds videos back; this only bounds the list of names
+MAX_VIDEOS = 20
+# screenshots and videos together, leaving the zip's last 45 MB to the logs
+ATTACHMENTS_MAX_BYTES = 100 * 1024 * 1024
 _VIDEO_NAME = re.compile(r'[0-9a-f]{32}\.(?:mp4|mov|webm)')
 # enough to tell the formats apart: webm names its doctype within the ebml header
 VIDEO_HEAD_BYTES = 64
@@ -256,9 +258,10 @@ def _add_staged(zf: zipfile.ZipFile, out, screenshots: Sequence[str], videos: Se
     screenshots' bytes and how many screenshots and videos went in.
 
     Stored, not deflated: images and video are compressed already. One that
-    fails a check is a manifest line and goes in whole or not at all, except a
-    video that shrinks while it is copied: its entry is written by then, so it
-    stays in the zip but is not counted and is named in the manifest.
+    fails a check, or would take them all past ATTACHMENTS_MAX_BYTES, is a
+    manifest line and goes in whole or not at all, except a video that shrinks
+    while it is copied: its entry is written by then, so it stays in the zip but
+    is not counted and is named in the manifest.
     """
     labels = [f'screenshot {name}' for name in screenshots] + [f'video {name}' for name in videos]
     if not labels:
@@ -274,6 +277,7 @@ def _add_staged(zf: zipfile.ZipFile, out, screenshots: Sequence[str], videos: Se
         skipped.extend((label, f'could not be opened: {e.strerror or e}') for label in labels)
         return 0, 0, 0
     added = 0
+    attached = 0
     shots = 0
     vids = 0
     try:
@@ -287,6 +291,9 @@ def _add_staged(zf: zipfile.ZipFile, out, screenshots: Sequence[str], videos: Se
             except _Skip as e:
                 skipped.append((label, str(e)))
                 continue
+            if attached + len(data) > ATTACHMENTS_MAX_BYTES:
+                skipped.append((label, 'would pass the 100 MB attachment limit'))
+                continue
             if out.tell() + len(data) + ENTRY_OVERHEAD_BYTES > ARCHIVE_CAP_BYTES:
                 skipped.append((label, 'would pass the 150 MB zip cap'))
                 continue
@@ -295,16 +302,23 @@ def _add_staged(zf: zipfile.ZipFile, out, screenshots: Sequence[str], videos: Se
             zf.writestr(arcname, data, compress_type=zipfile.ZIP_STORED)
             included.append((arcname, len(data), mtime, ''))
             added += len(data)
+            attached += len(data)
         for name in videos:
             label = f'video {name}'
             if not _VIDEO_NAME.fullmatch(name):
                 skipped.append((label, 'is not a staged video name'))
                 continue
+            before = out.tell()
             try:
-                included.append(_add_video(zf, out, directory, name, owner_uid, vids + 1))
+                entry = _add_video(zf, out, directory, name, owner_uid, vids + 1,
+                                   ATTACHMENTS_MAX_BYTES - attached)
             except _Skip as e:
                 skipped.append((label, str(e)))
                 continue
+            finally:
+                # what reached the zip, so a video cut short still spends the limit
+                attached += out.tell() - before
+            included.append(entry)
             vids += 1
     finally:
         if isinstance(directory, int):
@@ -362,15 +376,16 @@ def _image_ext(data: bytes) -> str:
 
 
 def _add_video(zf: zipfile.ZipFile, out, directory: Union[str, int], name: str,
-               owner_uid: Optional[int], number: int) -> tuple[str, int, float, str]:
-    """One staged video copied into `videos/<number>.<ext>` once it has passed
-    every check; its manifest entry. Read a chunk at a time, never whole."""
+               owner_uid: Optional[int], number: int, room: int) -> tuple[str, int, float, str]:
+    """One staged video of at most `room` bytes copied into `videos/<number>.<ext>`
+    once it has passed every check; its manifest entry. Read a chunk at a time,
+    never whole."""
     by_fd = isinstance(directory, int)
     src, info = _open_checked(name if by_fd else os.path.join(directory, name), owner_uid,
                               directory if by_fd else None)
     try:
-        if info.st_size > VIDEO_MAX_BYTES:
-            raise _Skip('is larger than 100 MB')
+        if info.st_size > room:
+            raise _Skip('would pass the 100 MB attachment limit')
         try:
             head = os.read(src, min(VIDEO_HEAD_BYTES, info.st_size))
             os.lseek(src, 0, os.SEEK_SET)

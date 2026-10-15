@@ -10,16 +10,22 @@ const stageFromBytes = vi.fn()
 const stageVideo = vi.fn()
 const discard = vi.fn()
 
+const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+
 vi.mock('@/lib/agentCli', () => ({ runAgent: (...args: unknown[]) => runAgent(...args) }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: (...args: unknown[]) => pickFiles(...args) }))
-vi.mock('@/lib/issueScreenshots', () => ({
-  MAX_SCREENSHOTS: 5,
-  MAX_VIDEOS: 1,
-  MAX_VIDEO_BYTES: 100 * 1024 * 1024,
+vi.mock('@/lib/issueAttachments', () => ({
+  MAX_SCREENSHOTS: 10,
+  MAX_VIDEOS: 20,
+  MAX_ATTACHMENT_BYTES: 100 * 1024 * 1024,
+  IMAGE_EXTENSIONS: ['png', 'jpg', 'jpeg', 'webp'],
+  VIDEO_EXTENSIONS: ['mp4', 'mov', 'webm'],
+  isVideo: (attachment: object) => 'name' in attachment,
+  usedBytes: (attachments: { size: number }[]) => attachments.reduce((sum, a) => sum + a.size, 0),
   stageScreenshotFromPath: (...args: unknown[]) => stageFromPath(...args),
   stageScreenshotFromBytes: (...args: unknown[]) => stageFromBytes(...args),
   stageVideoFromPath: (...args: unknown[]) => stageVideo(...args),
-  discardScreenshots: (...args: unknown[]) => discard(...args),
+  discardAttachments: (...args: unknown[]) => discard(...args),
 }))
 vi.mock('sonner', () => ({
   toast: {
@@ -55,8 +61,8 @@ function doneWith(value: Record<string, unknown>) {
   return { code: 0, terminal: { event: 'done', value }, stderr: '' }
 }
 
-function staged(id: string) {
-  return { id, size: 3, kind: 'png', preview: `data:image/png;base64,${id}` }
+function staged(id: string, size = 3) {
+  return { id, size, kind: 'png', preview: `data:image/png;base64,${id}` }
 }
 
 // the mocked host names a staged file after the picked one, so tests can follow it
@@ -65,8 +71,8 @@ function idFor(path: string) {
 }
 
 // 5.3 MB, named as the host names it: the picked file's own name
-function stagedVideo(path: string) {
-  return { id: idFor(path), size: 5_557_453, kind: 'mp4', name: path.split('/').pop() }
+function stagedVideo(path: string, size = 5_557_453) {
+  return { id: idFor(path), size, kind: 'mp4', name: path.split('/').pop() }
 }
 
 // settles the picker, the staging and the state they land in
@@ -76,24 +82,18 @@ async function settle() {
   })
 }
 
-async function pick(paths: string[]) {
+function addButton() {
+  return screen.getByRole('button', { name: 'add screenshots or video' }) as HTMLButtonElement
+}
+
+async function pick(paths: string[] | string | null) {
   pickFiles.mockResolvedValueOnce(paths)
-  fireEvent.click(screen.getByRole('button', { name: 'add screenshots' }))
+  fireEvent.click(addButton())
   await settle()
 }
 
-async function pickVideo(path: string | null) {
-  pickFiles.mockResolvedValueOnce(path)
-  fireEvent.click(addVideo())
-  await settle()
-}
-
-function addVideo() {
-  return screen.getByRole('button', { name: 'add video' }) as HTMLButtonElement
-}
-
-function videoTile() {
-  return screen.queryByTestId('report-video')
+function videoTiles() {
+  return screen.queryAllByTestId('report-video')
 }
 
 function pasteImage(bytes = [1, 2, 3]) {
@@ -110,11 +110,15 @@ function pasteImage(bytes = [1, 2, 3]) {
 }
 
 function thumbnails() {
-  return screen.queryAllByRole('img', { name: /^screenshot \d$/ })
+  return screen.queryAllByRole('img', { name: /^screenshot \d+$/ })
 }
 
-function screenshotCount() {
-  return screen.getByTestId('report-screenshot-count').textContent
+function limitText() {
+  return screen.getByTestId('report-attachment-limit').textContent
+}
+
+function notice() {
+  return screen.getByTestId('report-attachment-notice').textContent
 }
 
 async function submitIssue(withLogs: boolean) {
@@ -364,69 +368,116 @@ describe('ReportIssueDialog progress', () => {
   })
 })
 
-describe('ReportIssueDialog screenshots', () => {
-  it('stages what the operator picks and shows a thumbnail of each', async () => {
+describe('ReportIssueDialog attachments', () => {
+  it('takes screenshots and videos from one button, beside its limit', async () => {
     open()
-    expect(screenshotCount()).toBe('0 of 5')
-    expect(screen.getByText('or paste an image')).toBeTruthy()
+    expect(limitText()).toBe('up to 100 MB, or paste an image')
 
-    await pick(['/shots/wall.png', '/shots/lobby.jpg'])
+    await pick(['/shots/wall.png', '/clips/glitch.mp4', '/shots/lobby.JPG'])
 
     expect(pickFiles).toHaveBeenCalledExactlyOnceWith({
       multiple: true,
-      filters: [{ name: 'images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      filters: [
+        { name: 'screenshots and videos', extensions: ['png', 'jpg', 'jpeg', 'webp', 'mp4', 'mov', 'webm'] },
+      ],
     })
-    expect(stageFromPath.mock.calls).toEqual([['/shots/wall.png'], ['/shots/lobby.jpg']])
+    expect(stageFromPath.mock.calls).toEqual([['/shots/wall.png'], ['/shots/lobby.JPG']])
+    expect(stageVideo).toHaveBeenCalledExactlyOnceWith('/clips/glitch.mp4', MAX_ATTACHMENT_BYTES - 3)
     expect(thumbnails().map((img) => img.getAttribute('src'))).toEqual([
       'data:image/png;base64,id-wall.png',
-      'data:image/png;base64,id-lobby.jpg',
+      'data:image/png;base64,id-lobby.JPG',
     ])
-    expect(screenshotCount()).toBe('2 of 5')
+    // screenshots are numbered on their own, past the video between them
+    expect(thumbnails().map((img) => img.getAttribute('alt'))).toEqual(['screenshot 1', 'screenshot 2'])
+    expect(videoTiles().map((tile) => tile.textContent)).toEqual(['5.3 MB'])
+    expect(videoTiles()[0].querySelector('[title="glitch.mp4"]')).toBeTruthy()
+    expect(limitText()).toBe('5.3 of 100 MB used')
+    expect(addButton().disabled).toBe(false)
   })
 
   it('stages nothing when the picker is dismissed', async () => {
     open()
-    fireEvent.click(screen.getByRole('button', { name: 'add screenshots' }))
-    await settle()
+    await pick(null)
 
     expect(stageFromPath).not.toHaveBeenCalled()
+    expect(stageVideo).not.toHaveBeenCalled()
     expect(thumbnails()).toHaveLength(0)
   })
 
-  it('discards a screenshot the operator removes', async () => {
+  it('discards what the operator removes', async () => {
     open()
-    await pick(['/shots/wall.png', '/shots/lobby.jpg'])
+    await pick(['/shots/wall.png', '/shots/lobby.jpg', '/clips/glitch.mp4'])
 
     fireEvent.click(screen.getAllByRole('button', { name: 'remove screenshot' })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'remove glitch.mp4' }))
 
-    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall.png'])
+    expect(discard.mock.calls).toEqual([[['id-wall.png']], [['id-glitch.mp4']]])
     expect(thumbnails().map((img) => img.getAttribute('src'))).toEqual([
       'data:image/png;base64,id-lobby.jpg',
     ])
-    expect(screenshotCount()).toBe('1 of 5')
+    expect(videoTiles()).toHaveLength(0)
+    expect(limitText()).toBe('0.1 of 100 MB used')
   })
 
-  it('stops at five and says so', async () => {
+  it('stops at ten screenshots and says so, and still takes videos', async () => {
     open()
-    await pick(['/s/1.png', '/s/2.png', '/s/3.png'])
-    await pick(['/s/4.png', '/s/5.png', '/s/6.png', '/s/7.png'])
+    await pick(Array.from({ length: 6 }, (_, i) => `/s/${i + 1}.png`))
+    await pick([...Array.from({ length: 6 }, (_, i) => `/s/${i + 7}.png`), '/clips/glitch.mp4'])
 
-    expect(stageFromPath).toHaveBeenCalledTimes(5)
-    expect(stageFromPath).not.toHaveBeenCalledWith('/s/6.png')
-    expect(thumbnails()).toHaveLength(5)
-    expect(screenshotCount()).toBe('5 of 5')
-    expect(screen.getByTestId('report-screenshot-notice').textContent).toBe(
-      'up to 5 screenshots per issue',
-    )
-    expect(
-      (screen.getByRole('button', { name: 'add screenshots' }) as HTMLButtonElement).disabled,
-    ).toBe(true)
+    expect(stageFromPath).toHaveBeenCalledTimes(10)
+    expect(stageFromPath).not.toHaveBeenCalledWith('/s/11.png')
+    expect(thumbnails()).toHaveLength(10)
+    expect(videoTiles()).toHaveLength(1)
+    expect(notice()).toBe('up to 10 screenshots per issue')
+    expect(addButton().disabled).toBe(false)
 
     // a paste at the limit is refused the same way, without staging
     pasteImage()
     await settle()
     expect(stageFromBytes).not.toHaveBeenCalled()
-    expect(thumbnails()).toHaveLength(5)
+    expect(thumbnails()).toHaveLength(10)
+  })
+
+  it('stops at twenty videos', async () => {
+    stageVideo.mockImplementation(async (path: string) => stagedVideo(path, 1000))
+    open()
+    await pick(Array.from({ length: 21 }, (_, i) => `/clips/${i + 1}.mov`))
+
+    expect(stageVideo).toHaveBeenCalledTimes(20)
+    expect(videoTiles()).toHaveLength(20)
+    expect(notice()).toBe('up to 20 videos per issue')
+  })
+
+  it('gives each video the room the attachments before it left', async () => {
+    open()
+    await pick(['/shots/wall.png', '/clips/a.mp4', '/clips/b.webm'])
+
+    expect(stageVideo.mock.calls).toEqual([
+      ['/clips/a.mp4', MAX_ATTACHMENT_BYTES - 3],
+      ['/clips/b.webm', MAX_ATTACHMENT_BYTES - 3 - 5_557_453],
+    ])
+  })
+
+  it('names a video the host refuses for want of room, and keeps the rest', async () => {
+    stageVideo.mockImplementation(async (path: string) => {
+      if (path.endsWith('huge.mp4')) throw 'attachments must total 100 MB or less'
+      return stagedVideo(path)
+    })
+    open()
+    await pick(['/clips/huge.mp4', '/clips/glitch.mp4'])
+
+    expect(notice()).toBe('huge.mp4: attachments must total 100 MB or less')
+    expect(videoTiles()).toHaveLength(1)
+  })
+
+  it('discards a screenshot that lands past the room left', async () => {
+    stageVideo.mockImplementation(async (path: string) => stagedVideo(path, MAX_ATTACHMENT_BYTES - 2))
+    open()
+    await pick(['/clips/long.mp4', '/shots/wall.png'])
+
+    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall.png'])
+    expect(thumbnails()).toHaveLength(0)
+    expect(notice()).toBe('wall.png: attachments must total 100 MB or less')
   })
 
   it('names a refused file and keeps the rest', async () => {
@@ -438,20 +489,16 @@ describe('ReportIssueDialog screenshots', () => {
     await pick(['/shots/wall.png', '/shots/notes.txt', '/shots/lobby.jpg'])
 
     expect(thumbnails()).toHaveLength(2)
-    expect(screenshotCount()).toBe('2 of 5')
-    expect(screen.getByTestId('report-screenshot-notice').textContent).toBe(
-      'notes.txt: only png, jpeg or webp images',
-    )
+    expect(notice()).toBe('notes.txt: only png, jpeg or webp images')
   })
 
   it('names a picked windows path by its file name', async () => {
-    stageFromPath.mockRejectedValue('images must be 8 MB or smaller')
+    stageVideo.mockRejectedValue('only mp4, mov or webm videos')
     open()
-    await pick(['C:\\Users\\op\\Pictures\\huge.png'])
+    await pick(['C:\\Users\\op\\Videos\\wall.mp4'])
 
-    expect(screen.getByTestId('report-screenshot-notice').textContent).toBe(
-      'huge.png: images must be 8 MB or smaller',
-    )
+    expect(stageVideo).toHaveBeenCalledWith('C:\\Users\\op\\Videos\\wall.mp4', MAX_ATTACHMENT_BYTES)
+    expect(notice()).toBe('wall.mp4: only mp4, mov or webm videos')
   })
 
   it('stages a pasted image', async () => {
@@ -497,9 +544,28 @@ describe('ReportIssueDialog screenshots', () => {
     expect(thumbnails()).toHaveLength(0)
   })
 
-  it('sends the staged ids in display order', async () => {
+  it('spins in the add button while files stage, and holds the submit', async () => {
+    let land: (value: unknown) => void = () => {}
+    stageVideo.mockReturnValue(new Promise((resolve) => (land = resolve)))
     open()
-    await pick(['/shots/wall.png', '/shots/lobby.jpg'])
+    describeIssue('swoop froze on the lobby wall')
+    await pick(['/clips/glitch.mp4'])
+
+    expect(addButton().disabled).toBe(true)
+    expect(addButton().contains(screen.getByTestId('report-attachment-spinner'))).toBe(true)
+    expect((screen.getByRole('button', { name: 'submit' }) as HTMLButtonElement).disabled).toBe(true)
+
+    land(stagedVideo('/clips/glitch.mp4'))
+    await settle()
+
+    expect(screen.queryByTestId('report-attachment-spinner')).toBeNull()
+    expect(videoTiles()).toHaveLength(1)
+    expect((screen.getByRole('button', { name: 'submit' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('sends the staged ids by kind, in the order they were added', async () => {
+    open()
+    await pick(['/shots/wall.png', '/clips/a.mp4', '/shots/lobby.jpg', '/clips/b.mov'])
     pasteImage()
     await settle()
     await submitIssue(false)
@@ -510,309 +576,75 @@ describe('ReportIssueDialog screenshots', () => {
         description: 'swoop froze on the lobby wall',
         attachLogs: false,
         screenshots: ['id-wall.png', 'id-lobby.jpg', 'pasted.png'],
-        videos: [],
+        videos: ['id-a.mp4', 'id-b.mov'],
       },
       onEvent: expect.any(Function),
     })
   })
 
-  it('leaves sent screenshots to the agent', async () => {
-    runAgent.mockResolvedValue(doneWith({ category: 'bug', screenshotsAttached: 1 }))
+  it('leaves sent attachments to the agent', async () => {
+    runAgent.mockResolvedValue(doneWith({ category: 'bug', screenshotsAttached: 1, videosAttached: 1 }))
     const onClose = vi.fn()
     const view = render(<ReportIssueDialog open onClose={onClose} />)
-    await pick(['/shots/wall.png'])
+    await pick(['/shots/wall.png', '/clips/glitch.mp4'])
     await submitIssue(false)
     view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
 
     expect(onClose).toHaveBeenCalledOnce()
     expect(toastSuccess).toHaveBeenCalledExactlyOnceWith('thanks — your issue was sent', {
-      description: 'system info, the last lines of the service log and 1 screenshot went with it.',
+      description: 'system info, the last lines of the service log, 1 screenshot and 1 video went with it.',
     })
     expect(toastWarning).not.toHaveBeenCalled()
     expect(discard).not.toHaveBeenCalled()
   })
 
-  it('names the logs and every screenshot that went', async () => {
-    runAgent.mockResolvedValue(doneWith({ category: 'bug', logsAttached: true, screenshotsAttached: 2 }))
+  it('names the logs and every attachment that went', async () => {
+    runAgent.mockResolvedValue(
+      doneWith({ category: 'bug', logsAttached: true, screenshotsAttached: 2, videosAttached: 2 }),
+    )
     render(<ReportIssueDialog open onClose={vi.fn()} />)
-    await pick(['/shots/wall.png', '/shots/lobby.jpg'])
+    await pick(['/shots/wall.png', '/shots/lobby.jpg', '/clips/a.mp4', '/clips/b.mp4'])
     await submitIssue(true)
 
     expect(toastSuccess).toHaveBeenCalledExactlyOnceWith('thanks — your issue was sent', {
-      description: 'system info, the logs and 2 screenshots went with it.',
+      description: 'system info, the logs, 2 screenshots and 2 videos went with it.',
     })
   })
 
-  it('discards staged screenshots on cancel', async () => {
+  it('discards staged attachments on cancel', async () => {
     const onClose = vi.fn()
     const view = render(<ReportIssueDialog open onClose={onClose} />)
-    await pick(['/shots/wall.png', '/shots/lobby.jpg'])
+    await pick(['/shots/wall.png', '/clips/glitch.mp4'])
 
     fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
     expect(onClose).toHaveBeenCalledOnce()
     view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
 
-    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall.png', 'id-lobby.jpg'])
+    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall.png', 'id-glitch.mp4'])
 
     // reopening starts empty, and does not discard again
     view.rerender(<ReportIssueDialog open onClose={onClose} />)
     expect(thumbnails()).toHaveLength(0)
-    expect(screenshotCount()).toBe('0 of 5')
+    expect(videoTiles()).toHaveLength(0)
+    expect(limitText()).toBe('up to 100 MB, or paste an image')
     expect(discard).toHaveBeenCalledOnce()
   })
 
-  it('discards staged screenshots when it unmounts', async () => {
+  it('discards staged attachments when it unmounts', async () => {
     const view = render(<ReportIssueDialog open onClose={vi.fn()} />)
-    await pick(['/shots/wall.png'])
+    await pick(['/shots/wall.png', '/clips/glitch.mp4'])
 
     view.unmount()
 
-    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall.png'])
+    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall.png', 'id-glitch.mp4'])
   })
 
-  it('discards a staging that lands after the dialog closed', async () => {
+  it('discards a staging that lands after the dialog closed, and stages no more', async () => {
     let land: (value: unknown) => void = () => {}
-    stageFromPath.mockReturnValue(new Promise((resolve) => (land = resolve)))
+    stageVideo.mockReturnValueOnce(new Promise((resolve) => (land = resolve)))
     const onClose = vi.fn()
     const view = render(<ReportIssueDialog open onClose={onClose} />)
-    await pick(['/shots/wall.png'])
-
-    view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
-    land(staged('id-late.png'))
-    await settle()
-    view.rerender(<ReportIssueDialog open onClose={onClose} />)
-
-    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-late.png'])
-    expect(thumbnails()).toHaveLength(0)
-  })
-
-  it('warns when the issue went but the screenshots could not be attached', async () => {
-    runAgent.mockResolvedValue(doneWith({ category: 'bug', screenshotsAttached: 0 }))
-    const props = open()
-    await pick(['/shots/wall.png'])
-    await submitIssue(false)
-
-    expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
-      'your issue was sent, but the screenshots could not be attached',
-      { description: 'try again, or send them another way.' },
-    )
-    expect(toastSuccess).not.toHaveBeenCalled()
-    expect(props.onClose).toHaveBeenCalledOnce()
-  })
-
-  it('warns once, naming both, when neither the logs nor the screenshots went', async () => {
-    runAgent.mockResolvedValue(
-      doneWith({ category: 'bug', logsAttached: false, screenshotsAttached: 0 }),
-    )
-    open()
-    await pick(['/shots/wall.png'])
-    await submitIssue(true)
-
-    expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
-      'your issue was sent, but the logs and the screenshots could not be attached',
-      { description: 'try again, or send them another way.' },
-    )
-    expect(toastSuccess).not.toHaveBeenCalled()
-  })
-
-  it('locks the screenshots while sending', async () => {
-    runAgent.mockReturnValue(new Promise(() => {}))
-    open()
-    await pick(['/shots/wall.png'])
-    await submitIssue(false)
-
-    expect(
-      (screen.getByRole('button', { name: 'add screenshots' }) as HTMLButtonElement).disabled,
-    ).toBe(true)
-    expect(
-      (screen.getByRole('button', { name: 'remove screenshot' }) as HTMLButtonElement).disabled,
-    ).toBe(true)
-
-    pasteImage()
-    await settle()
-    expect(stageFromBytes).not.toHaveBeenCalled()
-  })
-
-  it('keeps the screenshots when the send fails, so a retry sends them', async () => {
-    runAgent.mockRejectedValueOnce(new Error('owlette is not connected to a site'))
-    const onClose = vi.fn()
-    const view = render(<ReportIssueDialog open onClose={onClose} />)
-    await pick(['/shots/wall.png'])
-    await submitIssue(false)
-
-    expect(screen.getByTestId('report-error')).toBeTruthy()
-    expect(thumbnails()).toHaveLength(1)
-    expect(discard).not.toHaveBeenCalled()
-
-    runAgent.mockResolvedValueOnce(doneWith({ category: 'bug', screenshotsAttached: 1 }))
-    fireEvent.click(screen.getByRole('button', { name: 'submit' }))
-    await flush()
-
-    expect(runAgent).toHaveBeenCalledTimes(2)
-    expect(runAgent.mock.calls[1][1].payload.screenshots).toEqual(['id-wall.png'])
-    expect(onClose).toHaveBeenCalledOnce()
-    view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
-    // sent the second time, so the agent owns them now
-    expect(discard).not.toHaveBeenCalled()
-  })
-
-  it('discards the screenshots kept from a failed send when it is cancelled', async () => {
-    runAgent.mockRejectedValueOnce(new Error('owlette is not connected to a site'))
-    const onClose = vi.fn()
-    const view = render(<ReportIssueDialog open onClose={onClose} />)
-    await pick(['/shots/wall.png'])
-    await submitIssue(false)
-
-    fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
-    view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
-
-    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall.png'])
-  })
-
-  it('warns when only some of the screenshots could be attached', async () => {
-    runAgent.mockResolvedValue(doneWith({ category: 'bug', screenshotsAttached: 1 }))
-    const props = open()
-    await pick(['/shots/wall.png', '/shots/lobby.jpg', '/shots/desk.png'])
-    await submitIssue(false)
-
-    expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
-      'your issue was sent, but only 1 of 3 screenshots could be attached',
-      { description: 'try again, or send them another way.' },
-    )
-    expect(toastSuccess).not.toHaveBeenCalled()
-    expect(props.onClose).toHaveBeenCalledOnce()
-  })
-})
-
-describe('ReportIssueDialog video', () => {
-  it('stages the video the operator picks and shows it as a tile', async () => {
-    open()
-    expect(screen.getByText('one video, up to 100 MB')).toBeTruthy()
-    expect(videoTile()).toBeNull()
-
-    await pickVideo('/clips/wall-glitch.mp4')
-
-    expect(pickFiles).toHaveBeenCalledExactlyOnceWith({
-      multiple: false,
-      filters: [{ name: 'videos', extensions: ['mp4', 'mov', 'webm'] }],
-    })
-    expect(stageVideo).toHaveBeenCalledExactlyOnceWith('/clips/wall-glitch.mp4')
-    expect(videoTile()?.textContent).toBe('wall-glitch.mp45.3 MB')
-    expect(screen.getByRole('button', { name: 'remove video' })).toBeTruthy()
-  })
-
-  it('stages nothing when the picker is dismissed', async () => {
-    open()
-    await pickVideo(null)
-
-    expect(stageVideo).not.toHaveBeenCalled()
-    expect(videoTile()).toBeNull()
-    expect(addVideo().disabled).toBe(false)
-  })
-
-  it('takes one video only', async () => {
-    open()
-    await pickVideo('/clips/wall-glitch.mp4')
-
-    expect(addVideo().disabled).toBe(true)
-    // screenshots still go beside it
-    expect(
-      (screen.getByRole('button', { name: 'add screenshots' }) as HTMLButtonElement).disabled,
-    ).toBe(false)
-  })
-
-  it('discards a video the operator removes, and takes another', async () => {
-    open()
-    await pickVideo('/clips/wall-glitch.mp4')
-
-    fireEvent.click(screen.getByRole('button', { name: 'remove video' }))
-
-    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall-glitch.mp4'])
-    expect(videoTile()).toBeNull()
-    expect(addVideo().disabled).toBe(false)
-  })
-
-  it('spins in the add button while a video stages, and holds the submit', async () => {
-    let land: (value: unknown) => void = () => {}
-    stageVideo.mockReturnValue(new Promise((resolve) => (land = resolve)))
-    open()
-    describeIssue('swoop froze on the lobby wall')
-    await pickVideo('/clips/wall-glitch.mp4')
-
-    expect(addVideo().disabled).toBe(true)
-    expect(addVideo().contains(screen.getByTestId('report-video-spinner'))).toBe(true)
-    expect((screen.getByRole('button', { name: 'submit' }) as HTMLButtonElement).disabled).toBe(true)
-
-    land(stagedVideo('/clips/wall-glitch.mp4'))
-    await settle()
-
-    expect(screen.queryByTestId('report-video-spinner')).toBeNull()
-    expect(videoTile()).toBeTruthy()
-    expect((screen.getByRole('button', { name: 'submit' }) as HTMLButtonElement).disabled).toBe(false)
-  })
-
-  it('names a refused video by its file name', async () => {
-    stageVideo.mockRejectedValue('only mp4, mov or webm videos')
-    open()
-    await pickVideo('C:\\Users\\op\\Videos\\wall.avi')
-
-    expect(screen.getByTestId('report-video-notice').textContent).toBe(
-      'wall.avi: only mp4, mov or webm videos',
-    )
-    expect(videoTile()).toBeNull()
-    expect(addVideo().disabled).toBe(false)
-  })
-
-  it('sends the staged video id beside the screenshots', async () => {
-    open()
-    await pick(['/shots/wall.png'])
-    await pickVideo('/clips/wall-glitch.mp4')
-    await submitIssue(false)
-
-    expect(runAgent).toHaveBeenCalledExactlyOnceWith('report-issue', {
-      payload: {
-        category: 'bug',
-        description: 'swoop froze on the lobby wall',
-        attachLogs: false,
-        screenshots: ['id-wall.png'],
-        videos: ['id-wall-glitch.mp4'],
-      },
-      onEvent: expect.any(Function),
-    })
-  })
-
-  it('discards the staged video with the screenshots on cancel', async () => {
-    const onClose = vi.fn()
-    const view = render(<ReportIssueDialog open onClose={onClose} />)
-    await pick(['/shots/wall.png'])
-    await pickVideo('/clips/wall-glitch.mp4')
-
-    fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
-    view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
-
-    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall.png', 'id-wall-glitch.mp4'])
-
-    view.rerender(<ReportIssueDialog open onClose={onClose} />)
-    expect(videoTile()).toBeNull()
-    expect(addVideo().disabled).toBe(false)
-    expect(discard).toHaveBeenCalledOnce()
-  })
-
-  it('discards the staged video when it unmounts', async () => {
-    const view = render(<ReportIssueDialog open onClose={vi.fn()} />)
-    await pickVideo('/clips/wall-glitch.mp4')
-
-    view.unmount()
-
-    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall-glitch.mp4'])
-  })
-
-  it('discards a video staging that lands after the dialog closed', async () => {
-    let land: (value: unknown) => void = () => {}
-    stageVideo.mockReturnValue(new Promise((resolve) => (land = resolve)))
-    const onClose = vi.fn()
-    const view = render(<ReportIssueDialog open onClose={onClose} />)
-    await pickVideo('/clips/wall-glitch.mp4')
+    await pick(['/clips/glitch.mp4', '/shots/wall.png'])
 
     view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
     land(stagedVideo('/clips/late.mp4'))
@@ -820,95 +652,135 @@ describe('ReportIssueDialog video', () => {
     view.rerender(<ReportIssueDialog open onClose={onClose} />)
 
     expect(discard).toHaveBeenCalledExactlyOnceWith(['id-late.mp4'])
-    expect(videoTile()).toBeNull()
-    expect(screen.queryByTestId('report-video-spinner')).toBeNull()
+    expect(stageFromPath).not.toHaveBeenCalled()
+    expect(videoTiles()).toHaveLength(0)
+    expect(screen.queryByTestId('report-attachment-spinner')).toBeNull()
   })
 
-  it('locks the video while sending', async () => {
+  it('locks the attachments while sending', async () => {
     runAgent.mockReturnValue(new Promise(() => {}))
     open()
-    await pickVideo('/clips/wall-glitch.mp4')
+    await pick(['/shots/wall.png', '/clips/glitch.mp4'])
     await submitIssue(false)
 
-    expect(addVideo().disabled).toBe(true)
-    expect((screen.getByRole('button', { name: 'remove video' }) as HTMLButtonElement).disabled).toBe(
+    expect(addButton().disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'remove screenshot' }) as HTMLButtonElement).disabled).toBe(
       true,
     )
+    expect((screen.getByRole('button', { name: 'remove glitch.mp4' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+
+    pasteImage()
+    await settle()
+    expect(stageFromBytes).not.toHaveBeenCalled()
   })
 
-  it('keeps the video when the send fails, so a retry sends it', async () => {
+  it('keeps the attachments when the send fails, so a retry sends them', async () => {
     runAgent.mockRejectedValueOnce(new Error('owlette is not connected to a site'))
     const onClose = vi.fn()
     const view = render(<ReportIssueDialog open onClose={onClose} />)
-    await pickVideo('/clips/wall-glitch.mp4')
+    await pick(['/shots/wall.png', '/clips/glitch.mp4'])
     await submitIssue(false)
 
     expect(screen.getByTestId('report-error')).toBeTruthy()
-    expect(videoTile()).toBeTruthy()
+    expect(thumbnails()).toHaveLength(1)
+    expect(videoTiles()).toHaveLength(1)
     expect(discard).not.toHaveBeenCalled()
 
-    runAgent.mockResolvedValueOnce(doneWith({ category: 'bug', videosAttached: 1 }))
+    runAgent.mockResolvedValueOnce(doneWith({ category: 'bug', screenshotsAttached: 1, videosAttached: 1 }))
     fireEvent.click(screen.getByRole('button', { name: 'submit' }))
     await flush()
 
-    expect(runAgent.mock.calls[1][1].payload.videos).toEqual(['id-wall-glitch.mp4'])
+    expect(runAgent).toHaveBeenCalledTimes(2)
+    expect(runAgent.mock.calls[1][1].payload.screenshots).toEqual(['id-wall.png'])
+    expect(runAgent.mock.calls[1][1].payload.videos).toEqual(['id-glitch.mp4'])
     expect(onClose).toHaveBeenCalledOnce()
     view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
-    // sent the second time, so the agent owns it now
+    // sent the second time, so the agent owns them now
     expect(discard).not.toHaveBeenCalled()
   })
 
-  it('names the video among everything that went', async () => {
-    runAgent.mockResolvedValue(
-      doneWith({ category: 'bug', logsAttached: true, screenshotsAttached: 2, videosAttached: 1 }),
-    )
-    render(<ReportIssueDialog open onClose={vi.fn()} />)
-    await pick(['/shots/wall.png', '/shots/lobby.jpg'])
-    await pickVideo('/clips/wall-glitch.mp4')
-    await submitIssue(true)
-
-    expect(toastSuccess).toHaveBeenCalledExactlyOnceWith('thanks — your issue was sent', {
-      description: 'system info, the logs, 2 screenshots and a video went with it.',
-    })
-    expect(toastWarning).not.toHaveBeenCalled()
-  })
-
-  it('warns when the issue went but the video could not be attached', async () => {
-    runAgent.mockResolvedValue(doneWith({ category: 'bug', videosAttached: 0 }))
-    const props = open()
-    await pickVideo('/clips/wall-glitch.mp4')
+  it('discards the attachments kept from a failed send when it is cancelled', async () => {
+    runAgent.mockRejectedValueOnce(new Error('owlette is not connected to a site'))
+    const onClose = vi.fn()
+    const view = render(<ReportIssueDialog open onClose={onClose} />)
+    await pick(['/shots/wall.png'])
     await submitIssue(false)
 
+    fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
+    view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
+
+    expect(discard).toHaveBeenCalledExactlyOnceWith(['id-wall.png'])
+  })
+})
+
+describe('ReportIssueDialog attachments that did not go', () => {
+  async function sendWith(paths: string[], done: Record<string, unknown>, withLogs = false) {
+    runAgent.mockResolvedValue(doneWith({ category: 'bug', ...done }))
+    const props = open()
+    await pick(paths)
+    await submitIssue(withLogs)
+    return props
+  }
+
+  it('names the one screenshot that could not be attached', async () => {
+    const props = await sendWith(['/shots/wall.png'], { screenshotsAttached: 0 })
+
     expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
-      'your issue was sent, but the video could not be attached',
+      'your issue was sent, but the screenshot could not be attached',
       { description: 'try again, or send it another way.' },
     )
     expect(toastSuccess).not.toHaveBeenCalled()
     expect(props.onClose).toHaveBeenCalledOnce()
   })
 
-  it('warns once, naming the logs, the screenshots and the video', async () => {
-    runAgent.mockResolvedValue(
-      doneWith({ category: 'bug', logsAttached: false, screenshotsAttached: 0, videosAttached: 0 }),
-    )
-    open()
-    await pick(['/shots/wall.png'])
-    await pickVideo('/clips/wall-glitch.mp4')
-    await submitIssue(true)
+  it('counts the screenshots that could not be attached', async () => {
+    await sendWith(['/s/1.png', '/s/2.png', '/s/3.png'], { screenshotsAttached: 1 })
 
     expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
-      'your issue was sent, but the logs, the screenshots and the video could not be attached',
+      'your issue was sent, but 2 of 3 screenshots could not be attached',
+      { description: 'try again, or send them another way.' },
+    )
+  })
+
+  it('says it when one of several videos could not be attached', async () => {
+    await sendWith(['/clips/a.mp4', '/clips/b.mp4'], { videosAttached: 1 })
+
+    expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
+      'your issue was sent, but 1 of 2 videos could not be attached',
+      { description: 'try again, or send it another way.' },
+    )
+  })
+
+  it('names every video when none could be attached', async () => {
+    await sendWith(['/clips/a.mp4', '/clips/b.mp4'], { videosAttached: 0 })
+
+    expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
+      'your issue was sent, but the 2 videos could not be attached',
+      { description: 'try again, or send them another way.' },
+    )
+  })
+
+  it('warns once, naming the logs and the attachments', async () => {
+    await sendWith(
+      ['/shots/wall.png', '/clips/glitch.mp4'],
+      { logsAttached: false, screenshotsAttached: 0, videosAttached: 0 },
+      true,
+    )
+
+    expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
+      'your issue was sent, but the logs, the screenshot and the video could not be attached',
       { description: 'try again, or send them another way.' },
     )
     expect(toastSuccess).not.toHaveBeenCalled()
   })
 
   it('names the missing screenshots beside a video that did not go', async () => {
-    runAgent.mockResolvedValue(doneWith({ category: 'bug', screenshotsAttached: 1, videosAttached: 0 }))
-    open()
-    await pick(['/shots/wall.png', '/shots/lobby.jpg', '/shots/desk.png'])
-    await pickVideo('/clips/wall-glitch.mp4')
-    await submitIssue(false)
+    await sendWith(['/s/1.png', '/s/2.png', '/s/3.png', '/clips/glitch.mp4'], {
+      screenshotsAttached: 1,
+      videosAttached: 0,
+    })
 
     expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
       'your issue was sent, but 2 of 3 screenshots and the video could not be attached',

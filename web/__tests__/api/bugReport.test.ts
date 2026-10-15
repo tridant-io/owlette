@@ -174,19 +174,21 @@ describe('POST /api/bug-report', () => {
   });
 
   it.each([
-    [undefined, undefined, '>a video is attached to this issue: <a'],
-    [undefined, true, '>logs and a video are attached to this issue: <a'],
-    [1, undefined, '>1 screenshot and a video are attached to this issue: <a'],
-    [2, undefined, '>2 screenshots and a video are attached to this issue: <a'],
-    [1, true, '>logs, 1 screenshot and a video are attached to this issue: <a'],
-    [2, true, '>logs, 2 screenshots and a video are attached to this issue: <a'],
-  ])('names a video, screenshots %s, logs %s, on the record and in the email', async (n, logs, wording) => {
+    [1, undefined, undefined, '>1 video is attached to this issue: <a'],
+    [3, undefined, undefined, '>3 videos are attached to this issue: <a'],
+    [20, undefined, undefined, '>20 videos are attached to this issue: <a'],
+    [1, undefined, true, '>logs and 1 video are attached to this issue: <a'],
+    [1, 1, undefined, '>1 screenshot and 1 video are attached to this issue: <a'],
+    [2, 10, undefined, '>10 screenshots and 2 videos are attached to this issue: <a'],
+    [1, 1, true, '>logs, 1 screenshot and 1 video are attached to this issue: <a'],
+    [2, 2, true, '>logs, 2 screenshots and 2 videos are attached to this issue: <a'],
+  ])('names %s videos, screenshots %s, logs %s, on the record and in the email', async (videos, n, logs, wording) => {
     asAgent();
-    const res = await report({ logsKey: KEY, videos: 1, screenshots: n, logs });
+    const res = await report({ logsKey: KEY, videos, screenshots: n, logs });
 
     expect(res.status).toBe(200);
     const record = written[0].data.logs as { screenshots?: number; videos?: number };
-    expect(record.videos).toBe(1);
+    expect(record.videos).toBe(videos);
     expect(record.screenshots).toBe(n);
     const { html } = mockSend.mock.calls[0][0] as { html: string };
     expect(html).toContain(wording);
@@ -196,7 +198,7 @@ describe('POST /api/bug-report', () => {
 
   it.each([
     ['zero', 0],
-    ['over the limit', 2],
+    ['over the limit', 21],
     ['negative', -1],
     ['not an integer', 1.5],
     ['a numeric string', '1'],
@@ -247,7 +249,7 @@ describe('POST /api/bug-report', () => {
 
   it.each([
     ['zero', 0],
-    ['over the limit', 6],
+    ['over the limit', 11],
     ['negative', -1],
     ['not an integer', 2.5],
     ['a numeric string', '3'],
