@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.16] - 2026-10-15
+
 ### added — screenshots on submitted issues
 
 You can now add up to 5 screenshots to an issue from the desktop app's submit
