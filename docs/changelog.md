@@ -13,13 +13,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [4.1.17] - 2026-10-15
 
-### added — a video on submitted issues
+### added — videos on submitted issues
 
-You can now add one video to an issue from the submit issue dialog, picked from
-a file. MP4, MOV and WebM videos up to 100 MB are accepted. The video travels in
-the same zip as screenshots and attached logs, which can now reach 150 MB, and is
-kept 30 days and seen only by owlette support, like the rest. A large video takes
-a while to upload on a slow connection.
+The submit issue dialog now takes screenshots and videos from one add
+screenshots or video button. MP4, MOV and WebM videos go beside screenshots,
+now up to 10 rather than 5, 100 MB in all. They travel in the same zip as attached logs, which
+can now reach 150 MB, and are kept 30 days and seen only by owlette support,
+like the rest. A large video takes a while to upload on a slow connection.
 
 ### changed — the sent toast names the screenshots and video that went
 

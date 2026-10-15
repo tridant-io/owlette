@@ -3,6 +3,8 @@
 
 The owner asked to let users attach videos as well as screenshots, with a file size limit, and chose **1 video per issue, up to 100 MB**. This plan extends the screenshot design in dev/active/issue-screenshots/plan.md and keeps its security model: the app stages files under random ids, the request carries only ids, and the service reads only from the staging folder with the same checks.
 
+**Revised 2026-10-15, after the owner saw the preview:** one "add screenshots or video" button replaces the two, with its limit beside it. An issue takes up to 10 screenshots and any number of videos (a list cap of 20), 100 MiB in all, checked by the app (a video is staged within the room left) and again by the service. The "1 video" limits below are superseded.
+
 ## Contract (fixed)
 - **Limits:** 1 video per issue, up to 100 MiB (`100 * 1024 * 1024`). Recognised by magic bytes:
   - **mp4 or mov:** an ISO-BMFF `ftyp` box at offset 4. Major brand `qt  ` means `.mov`; every other brand (isom, mp41, mp42, avc1, iso2..iso6, M4V, dash, …) means `.mp4`.

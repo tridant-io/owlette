@@ -1181,8 +1181,8 @@ def test_no_console_user_leaves_the_screenshots_out(tree, monkeypatch):
 @pytest.mark.parametrize('value,valid', [
     ([], True),
     (['a' * 32 + '.png'], True),
-    ([f'{i:032x}.{ext}' for i, ext in enumerate(['png', 'jpg', 'webp', 'png', 'jpg'])], True),
-    (['a' * 32 + '.png'] * 6, False),
+    ([f'{i:032x}.{ext}' for i, ext in enumerate(['png', 'jpg', 'webp'] * 3 + ['png'])], True),
+    (['a' * 32 + '.png'] * 11, False),
     ('a' * 32 + '.png', False),
     (None, False),
     ([None], False),
@@ -1349,6 +1349,32 @@ def test_a_video_that_changes_while_it_is_read_is_not_counted(tree, monkeypatch,
     assert f'video {video}  changed while it was read' in manifest
 
 
+def test_a_video_cut_short_still_spends_the_100_mb(tree, monkeypatch):
+    chunk = 4096
+    data = MP4 + os.urandom(10 * chunk)
+    cut = _stage_video(tree, data)
+    after = _stage_video(tree, MOV, 'mov')
+    monkeypatch.setattr(log_bundle, 'CHUNK_BYTES', chunk)
+    # room for the next video only while the cut one's bytes in the zip go uncounted
+    monkeypatch.setattr(log_bundle, 'ATTACHMENTS_MAX_BYTES', len(data) + len(MOV) - 1)
+    reads = []
+    real_read = os.read
+
+    def read(fd, n):
+        reads.append(n)
+        # the head, then ten full chunks; the first video's last bytes never come
+        if len(reads) == 12:
+            return b''
+        return real_read(fd, n)
+
+    monkeypatch.setattr(log_bundle.os, 'read', read)
+
+    result, _, _, _ = _build(tree['root'], videos=[cut, after], include_logs=False)
+
+    assert result['videos'] == 0
+    assert _video_reason(result, after) == 'would pass the 100 MB attachment limit'
+
+
 @pytest.mark.parametrize('data', [
     b'GIF89a not a video at all',
     MP4[:11],
@@ -1389,22 +1415,56 @@ def test_a_video_past_100_mb_is_refused_unread(tree):
     video = _stage_video(tree, MP4)
     with open(_staging(tree) / video, 'r+b') as f:
         # sparse where the filesystem allows it; the size alone refuses it
-        f.truncate(log_bundle.VIDEO_MAX_BYTES + 1)
+        f.truncate(log_bundle.ATTACHMENTS_MAX_BYTES + 1)
 
     result, entries, _, dest = _build(tree['root'], videos=[video], include_logs=False)
 
     assert entries == ['manifest.txt']
-    assert _video_reason(result, video) == 'is larger than 100 MB'
+    assert _video_reason(result, video) == 'would pass the 100 MB attachment limit'
     assert dest.stat().st_size < 64 * 1024
 
 
 def test_a_video_at_the_limit_goes_in(tree, monkeypatch):
-    monkeypatch.setattr(log_bundle, 'VIDEO_MAX_BYTES', len(MP4))
+    monkeypatch.setattr(log_bundle, 'ATTACHMENTS_MAX_BYTES', len(MP4))
     video = _stage_video(tree, MP4)
 
     _, entries, _, _ = _build(tree['root'], videos=[video], include_logs=False)
 
     assert entries == ['videos/1.mp4', 'manifest.txt']
+
+
+def test_several_videos_go_in_numbered_in_order(tree):
+    videos = [_stage_video(tree, MP4), _stage_video(tree, MOV, 'mov'),
+              _stage_video(tree, WEBM, 'webm')]
+
+    result, entries, _, _ = _build(tree['root'], videos=videos, include_logs=False)
+
+    assert entries == ['videos/1.mp4', 'videos/2.mov', 'videos/3.webm', 'manifest.txt']
+    assert result['videos'] == 3
+
+
+def test_screenshots_and_videos_share_the_100_mb(tree, monkeypatch):
+    monkeypatch.setattr(log_bundle, 'ATTACHMENTS_MAX_BYTES', len(PNG) + len(MP4))
+    shots = _stage(tree, PNG)
+    first = _stage_video(tree, MP4)
+    second = _stage_video(tree, MOV, 'mov')
+
+    result, entries, _, _ = _build(tree['root'], screenshots=shots, videos=[first, second],
+                                   include_logs=False)
+
+    assert entries == ['screenshots/1.png', 'videos/1.mp4', 'manifest.txt']
+    assert _video_reason(result, second) == 'would pass the 100 MB attachment limit'
+    assert (result['screenshots'], result['videos']) == (1, 1)
+
+
+def test_a_screenshot_past_the_100_mb_left_is_refused(tree, monkeypatch):
+    monkeypatch.setattr(log_bundle, 'ATTACHMENTS_MAX_BYTES', len(PNG) + len(JPEG) - 1)
+    shots = _stage(tree, PNG, JPEG)
+
+    result, entries, _, _ = _build(tree['root'], screenshots=shots, include_logs=False)
+
+    assert entries == ['screenshots/1.png', 'manifest.txt']
+    assert _reasons(result)[f'screenshot {shots[1]}'] == 'would pass the 100 MB attachment limit'
 
 
 def test_a_video_that_would_pass_the_cap_is_left_out_whole(tree, monkeypatch):
@@ -1548,8 +1608,9 @@ def test_a_name_that_is_not_a_staged_video_is_never_opened(tree):
     (['a' * 32 + '.mp4'], True),
     (['a' * 32 + '.mov'], True),
     (['a' * 32 + '.webm'], True),
-    (['a' * 32 + '.mp4', 'b' * 32 + '.mp4'], False),
-    (['a' * 32 + '.mp4'] * 2, False),
+    (['a' * 32 + '.mp4', 'b' * 32 + '.mov'], True),
+    ([f'{i:032x}.webm' for i in range(20)], True),
+    (['a' * 32 + '.mp4'] * 21, False),
     ('a' * 32 + '.mp4', False),
     (None, False),
     ([None], False),
@@ -1559,7 +1620,7 @@ def test_a_name_that_is_not_a_staged_video_is_never_opened(tree):
     (['a' * 32 + '.mp4\n'], False),
     (['../' + 'a' * 29 + '.mp4'], False),
 ])
-def test_video_ids_take_only_one_staged_video_name(value, valid):
+def test_video_ids_take_only_staged_video_names(value, valid):
     assert (log_bundle.video_ids(value) == value) if valid else (
         log_bundle.video_ids(value) is None)
 

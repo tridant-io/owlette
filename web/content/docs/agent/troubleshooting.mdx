@@ -442,9 +442,7 @@ and on top of that:
 
 nothing else goes in: never a token, never `config/config.json`, never another program's files or log lines. links (symlinks and hard links) are skipped. newest files go in first, up to 300 MB before compression, and the zip stops at 150 MB. the logs can still contain hostnames, user names, file paths and process names.
 
-you can also add up to 5 screenshots to an issue, by picking files or pasting an image into the dialog. each must be a PNG, JPEG or WebP image of 8 MB or less. they go in the same zip under `screenshots/`, ahead of any logs, whether or not **attach logs** is ticked: with it unticked, the zip holds only the screenshots and `manifest.txt`. the issue's description then gains the line `screenshots attached: N`.
-
-you can add one video too, picked from a file (a video cannot be pasted). it must be an MP4, MOV or WebM file of 100 MB or less, and goes in the same zip as `videos/1.<ext>`, after the screenshots and ahead of any logs, whether or not **attach logs** is ticked. the issue's description then gains the line `video attached: 1`. a large video takes a while to upload on a slow connection, and the issue is sent once the upload finishes.
+you can also add screenshots and videos to an issue with **add screenshots or video**, or paste an image into the dialog (a video cannot be pasted). screenshots must be PNG, JPEG or WebP images of 8 MB or less, up to 10 of them; videos must be MP4, MOV or WebM files. together they can take up to 100 MB. they go in the same zip, the screenshots under `screenshots/` and then the videos under `videos/`, ahead of any logs, whether or not **attach logs** is ticked: with it unticked, the zip holds only them and `manifest.txt`. the issue's description then gains the lines `screenshots attached: N` and `videos attached: N`. a large video takes a while to upload on a slow connection, and the issue is sent once the upload finishes.
 
 the zip is stored in Cloudflare R2 and deleted automatically 30 days after upload. only owlette support can download it, not the site's owners or admins. every download is audited.
 

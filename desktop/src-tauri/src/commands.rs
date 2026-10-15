@@ -272,11 +272,12 @@ pub fn stage_issue_screenshot(request: Request<'_>) -> Result<Staged, String> {
   }
 }
 
-/// Stage a video the operator picked for an issue report.
+/// Stage a video the operator picked for an issue report, within the `room`
+/// in bytes the issue's other attachments leave.
 #[tauri::command(async)]
-pub fn stage_issue_video(path: String) -> Result<StagedVideo, String> {
+pub fn stage_issue_video(path: String, room: u64) -> Result<StagedVideo, String> {
   let dir = paths::resolve_in_root(&paths::data_root(), ISSUE_ATTACHMENTS_REL)?;
-  issue_attachments::stage_video(&dir, Path::new(&path))
+  issue_attachments::stage_video(&dir, Path::new(&path), room)
 }
 
 /// Delete staged screenshots or videos by id; returns how many were removed.

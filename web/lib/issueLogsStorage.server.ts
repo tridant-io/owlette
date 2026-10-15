@@ -15,7 +15,7 @@ import { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand } from 
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { currentEnv } from '@/lib/r2Client.server';
 
-// the agent caps its zip at 150,000,000 bytes, logs plus screenshots and a video
+// the agent caps its zip at 150,000,000 bytes, logs plus screenshots and videos
 export const ISSUE_LOGS_MAX_BYTES = 150 * 1024 * 1024;
 export const ISSUE_LOGS_RETENTION_DAYS = 30;
 

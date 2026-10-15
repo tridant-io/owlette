@@ -884,7 +884,7 @@ def submit_report(data: dict, logs_key: Optional[str] = None, screenshots: int =
         if key and screenshots:
             description += f"\n\nscreenshots attached: {screenshots}"
         if key and videos:
-            description += f"\n\nvideo attached: {videos}"
+            description += f"\n\nvideos attached: {videos}"
         if system_info:
             description += f"\n\n--- system info ---\n{_format_system_info(system_info)}"
         if log_tail:
@@ -1025,7 +1025,7 @@ def upload_issue_logs(zip_path: str, size: int) -> str:
 
 def _attach(include_logs: bool, screenshots: list,
             videos: list) -> tuple[str, int, int, bool]:
-    """Zip the staged screenshots and video and, if asked, this machine's logs,
+    """Zip the staged screenshots and videos and, if asked, this machine's logs,
     and upload them; returns the key, how many screenshots and videos the zip
     holds and whether it holds any logs. The zip is always removed."""
     import log_bundle
@@ -1033,10 +1033,8 @@ def _attach(include_logs: bool, screenshots: list,
     fd, zip_path = tempfile.mkstemp(suffix='.zip')
     os.close(fd)
     try:
-        if screenshots:
-            _emit('status', 'adding screenshots')
-        if videos:
-            _emit('status', 'adding video')
+        if screenshots or videos:
+            _emit('status', 'adding attachments')
         if include_logs:
             _emit('status', 'zipping logs')
         bundle = log_bundle.build_log_zip(
@@ -1090,16 +1088,16 @@ def run_report_issue(payload_path: str) -> int:
     """Submit the feedback payload written by the desktop app.
 
     The payload is `{"category": ..., "description": ..., "attachLogs": bool,
-    "screenshots": [name, ...], "videos": [name]}` in a file under the owlette
-    tree; it is deleted as soon as it has been read so an operator's
-    description is not left lying on disk. The screenshots and video are names
+    "screenshots": [name, ...], "videos": [name, ...]}` in a file under the
+    owlette tree; it is deleted as soon as it has been read so an operator's
+    description is not left lying on disk. The screenshots and videos are names
     the desktop app staged in `ipc/issue-attachments/`, deleted once the issue
     is filed, whether or not they went with it; a run that could not file the
     issue keeps them for the app's retry.
     Attachments that cannot be sent never stop the issue: it goes without them
     and says why, and `done` carries `logsAttached` whenever logs were asked
     for, `screenshotsAttached` whenever screenshots were and `videosAttached`
-    whenever a video was.
+    whenever videos were.
     """
     import log_bundle
 
@@ -1123,7 +1121,7 @@ def run_report_issue(payload_path: str) -> int:
     named = payload.get('videos')
     videos = [] if named is None else log_bundle.video_ids(named)
     if videos is None:
-        _emit('error', 'the report names a video owlette did not stage.')
+        _emit('error', 'the report names videos owlette did not stage.')
         return 1
     code = _send_report(payload, screenshots, videos)
     if code == 0 and (screenshots or videos):
@@ -1484,8 +1482,8 @@ REQUEST_REPLY_SUFFIX = '.result'
 # A request is one verb and one nonce, a `pair` may name its server, and a
 # `report_issue` carries a description the app caps at 1000 UTF-16 units. JSON
 # grows a unit to at most six bytes (a control character as \u00XX), so a
-# report is under 6.2 KB; its five screenshot names and one video name add
-# under 300 bytes. The directory is group-writable, so the size of what turns
+# report is under 6.2 KB; its ten screenshot names and twenty video names add
+# under 1.3 KB. The directory is group-writable, so the size of what turns
 # up in it is not the daemon's to trust: without a bound the drain reads
 # whatever was planted there straight into memory.
 REQUEST_MAX_BYTES = 8192
@@ -1657,14 +1655,14 @@ def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Option
             screenshots = log_bundle.screenshot_ids(screenshots)
             if screenshots is None:
                 return _refuse(path, reply_path,
-                               'carries screenshots that are not up to five staged names')
+                               'carries screenshots that are not up to ten staged names')
             report['screenshots'] = screenshots
         videos = payload.get('videos')
         if videos is not None:
             videos = log_bundle.video_ids(videos)
             if videos is None:
                 return _refuse(path, reply_path,
-                               'carries videos that are not up to one staged video name')
+                               'carries videos that are not up to twenty staged video names')
             report['videos'] = videos
     if not nonce or payload.get('nonce') != nonce:
         return _refuse(
