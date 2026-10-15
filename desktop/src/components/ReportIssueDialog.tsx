@@ -182,8 +182,9 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
             <Label htmlFor="feedback-attach-logs">attach logs</Label>
           </div>
           <p id="feedback-attach-logs-help" className="text-xs text-muted-foreground">
-            includes the service, swoop, hoot, pairing and installer logs from this machine plus
-            this app's log. they can contain hostnames, user names, file paths and process names.
+            includes this machine's owlette logs, owlette swoop's log, crash reports where the
+            system keeps them, and a file list. they can contain hostnames, user names, file paths
+            and process names.
             kept 30 days, seen only by owlette support.
           </p>
         </div>
@@ -195,13 +196,12 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
           </InlineNotice>
         )}
 
-        {submitting && (
-          <p className="text-xs text-muted-foreground" aria-live="polite" data-testid="report-status">
-            {status}
-          </p>
-        )}
-
-        <DialogFooter>
+        <DialogFooter className="sm:items-center">
+          {submitting && (
+            <p className="text-xs text-muted-foreground sm:mr-auto" aria-live="polite" data-testid="report-status">
+              {status}
+            </p>
+          )}
           <Button variant="outline" onClick={onClose} disabled={submitting}>
             cancel
           </Button>
