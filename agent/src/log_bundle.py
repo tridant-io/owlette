@@ -1,7 +1,10 @@
 """
-log_bundle — the zip of logs a "submit issue" with "attach logs" uploads.
+log_bundle — the zip a "submit issue" uploads with its screenshots or its logs.
 
-These sources, nothing else:
+The screenshots the desktop app staged in `ipc/issue-attachments/` go in first
+(`screenshots/<n>.<ext>`), each re-checked as an image of at most 8 MB.
+Without "attach logs" they and the manifest are all the zip holds. The logs are
+these sources, nothing else:
   * every regular file under the data root's `logs/` tree (`logs/<path>`);
   * the data root's `tmp/status_writer.log*` (`tmp/<file>`);
   * the desktop app's and owlette swoop's own logs (`desktop/<file>`, `viewer/<file>`);
@@ -19,9 +22,10 @@ console user's home, so a planted symlink or hard link there could pull
 `.tokens.enc` or `/etc/shadow` into a zip that leaves the machine. Every file is
 therefore opened without following links and checked on the descriptor: a
 regular file with one link, and under root a per-user log must belong to the
-console user. `logs/swoop` is group-writable, so the link checks apply to the
-data tree too, and on POSIX the data root's folders are read by descriptor so a
-directory swapped for a link after the listing cannot lead the walk out of them.
+console user, as must a staged screenshot. `logs/swoop` and `ipc/` are
+group-writable, so the link checks apply to the data tree too, and on POSIX the
+data root's folders are read by descriptor so a directory swapped for a link
+after the listing cannot lead the walk out of them.
 
 `manifest.txt` is written last and lists what went in and what was left out.
 """
@@ -42,7 +46,7 @@ import tempfile
 import threading
 import time
 import zipfile
-from typing import Callable, NamedTuple, Optional, Union
+from typing import Callable, NamedTuple, Optional, Sequence, Union
 
 import installer_utils
 import osadapter
@@ -103,6 +107,14 @@ HEAVY_DIRS = frozenset({'python', 'node_modules', 'site-packages'})
 
 _DIR_FLAGS = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
 
+# the desktop app's staging folder and limits (desktop/src-tauri/src/issue_attachments.rs)
+SCREENSHOTS_DIR = 'ipc/issue-attachments'
+MAX_SCREENSHOTS = 5
+SCREENSHOT_MAX_BYTES = 8 * 1024 * 1024
+_SCREENSHOT_NAME = re.compile(r'[0-9a-f]{32}\.(?:png|jpg|webp)')
+# room for a stored entry's headers when deciding whether a screenshot fits the cap
+ENTRY_OVERHEAD_BYTES = 1024
+
 
 class _Skip(Exception):
     """A source or file left out of the zip; the message is the manifest's reason."""
@@ -126,23 +138,28 @@ class _Candidate(NamedTuple):
     dir_fd: Optional[int] = None
 
 
-def build_log_zip(dest_path: str) -> dict:
-    """Write the log zip to `dest_path` (created or truncated, mode 0600).
+def build_log_zip(dest_path: str, screenshots: Sequence[str] = (),
+                  include_logs: bool = True) -> dict:
+    """Write the issue zip to `dest_path` (created or truncated, mode 0600): the
+    staged `screenshots` first, then the logs unless `include_logs` is False.
 
-    Returns `{files, size, skipped}`: the number of entries included besides
-    the manifest, the zip's size in bytes, and `(name, reason)` for everything
-    left out.
+    Returns `{files, size, skipped, screenshots}`: the number of entries
+    included besides the manifest, the zip's size in bytes, `(name, reason)`
+    for everything left out, and how many screenshots went in.
     """
     skipped: list[tuple[str, str]] = []
     dir_fds: list[int] = []
     try:
         now = time.time()
         cutoff = now - MAX_AGE_SECONDS
-        generated = _generated_entries(skipped)
-        # the small sources go in ahead of logs/: each is bounded on its own, and a
-        # runaway logs/ tree would otherwise spend the budget and the cap before them
-        fresh = (_fresh(_small_candidates(skipped, dir_fds, cutoff), cutoff, skipped)
-                 + _fresh(_machine_candidates(skipped, dir_fds), cutoff, skipped))
+        generated = []
+        fresh = []
+        if include_logs:
+            generated = _generated_entries(skipped)
+            # the small sources go in ahead of logs/: each is bounded on its own, and a
+            # runaway logs/ tree would otherwise spend the budget and the cap before them
+            fresh = (_fresh(_small_candidates(skipped, dir_fds, cutoff), cutoff, skipped)
+                     + _fresh(_machine_candidates(skipped, dir_fds), cutoff, skipped))
 
         included = []
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_BINARY', 0)
@@ -155,7 +172,8 @@ def build_log_zip(dest_path: str) -> dict:
         with os.fdopen(fd, 'wb') as out:
             with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED,
                                  compresslevel=COMPRESS_LEVEL) as zf:
-                uncompressed = 0
+                uncompressed = _add_screenshots(zf, out, screenshots, included, skipped)
+                shots = len(included)
                 for arcname, data, note in generated:
                     if out.tell() >= ARCHIVE_CAP_BYTES:
                         skipped.append((arcname, 'the zip reached its 50 MB cap'))
@@ -191,8 +209,141 @@ def build_log_zip(dest_path: str) -> dict:
         for dir_fd in dir_fds:
             os.close(dir_fd)
 
-    logger.info(f"Built the issue log zip: {len(included)} files, {size} bytes")
-    return {'files': len(included), 'size': size, 'skipped': skipped}
+    logger.info(f"Built the issue zip: {len(included)} files ({shots} screenshots), "
+                f"{size} bytes")
+    return {'files': len(included), 'size': size, 'skipped': skipped, 'screenshots': shots}
+
+
+def screenshot_ids(value) -> Optional[list[str]]:
+    """`value` without repeats, in first-seen order, when it is a list of at
+    most MAX_SCREENSHOTS staged screenshot names, else None. A name is joined
+    onto the staging folder, so nothing else may pass."""
+    if not isinstance(value, list) or len(value) > MAX_SCREENSHOTS:
+        return None
+    if not all(isinstance(name, str) and _SCREENSHOT_NAME.fullmatch(name) for name in value):
+        return None
+    return list(dict.fromkeys(value))
+
+
+def _add_screenshots(zf: zipfile.ZipFile, out, ids: Sequence[str], included: list,
+                     skipped: list) -> int:
+    """Each staged screenshot as `screenshots/<n>.<ext>`, numbered in the order
+    they go in; returns the bytes added.
+
+    Stored whole or not at all: an image cut at the cap is no use, and images
+    are compressed already. A screenshot that fails a check is a manifest line.
+    """
+    if not ids:
+        return 0
+    try:
+        # under root on POSIX the desktop app wrote them as the console user
+        owner_uid = None if os.name == 'nt' else _console_home()[1]
+        directory = _screenshot_dir()
+    except _Skip as e:
+        skipped.extend((f'screenshot {name}', str(e)) for name in ids)
+        return 0
+    except OSError as e:
+        skipped.extend((f'screenshot {name}', f'could not be opened: {e.strerror or e}')
+                       for name in ids)
+        return 0
+    added = 0
+    try:
+        for name in ids:
+            label = f'screenshot {name}'
+            if not _SCREENSHOT_NAME.fullmatch(name):
+                skipped.append((label, 'is not a staged screenshot name'))
+                continue
+            try:
+                data, mtime = _read_screenshot(directory, name, owner_uid)
+            except _Skip as e:
+                skipped.append((label, str(e)))
+                continue
+            if out.tell() + len(data) + ENTRY_OVERHEAD_BYTES > ARCHIVE_CAP_BYTES:
+                skipped.append((label, 'would pass the 50 MB zip cap'))
+                continue
+            arcname = f'screenshots/{len(included) + 1}.{_image_ext(data)}'
+            zf.writestr(arcname, data, compress_type=zipfile.ZIP_STORED)
+            included.append((arcname, len(data), mtime, ''))
+            added += len(data)
+    finally:
+        if isinstance(directory, int):
+            os.close(directory)
+    return added
+
+
+def _screenshot_dir() -> Union[str, int]:
+    """The staging folder: a path on Windows, and on POSIX a descriptor opened
+    without following a link, since `ipc/` is the group's to write."""
+    path = os.path.join(_data_root(), SCREENSHOTS_DIR)
+    return path if os.name == 'nt' else os.open(path, _DIR_FLAGS)
+
+
+def _read_screenshot(directory: Union[str, int], name: str,
+                     owner_uid: Optional[int]) -> tuple[bytes, float]:
+    """One staged screenshot's bytes and mtime, once it has passed every check."""
+    by_fd = isinstance(directory, int)
+    src, info = _open_checked(name if by_fd else os.path.join(directory, name), owner_uid,
+                              directory if by_fd else None)
+    try:
+        if info.st_size > SCREENSHOT_MAX_BYTES:
+            raise _Skip('is larger than 8 MB')
+        chunks = []
+        read = 0
+        while True:
+            try:
+                chunk = os.read(src, CHUNK_BYTES)
+            except OSError as e:
+                raise _Skip(f'could not be read: {e.strerror or e}')
+            if not chunk:
+                break
+            read += len(chunk)
+            if read > SCREENSHOT_MAX_BYTES:
+                raise _Skip('is larger than 8 MB')
+            chunks.append(chunk)
+    finally:
+        os.close(src)
+    data = b''.join(chunks)
+    if not _image_ext(data):
+        raise _Skip('is not a png, jpeg or webp image')
+    return data, info.st_mtime
+
+
+def _image_ext(data: bytes) -> str:
+    """The extension the magic bytes name, or '' for anything but png, jpeg or webp."""
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'png'
+    if data.startswith(b'\xff\xd8\xff'):
+        return 'jpg'
+    if len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'webp'
+    return ''
+
+
+def discard_screenshots(ids: Sequence[str]) -> None:
+    """Unlink each staged screenshot by its exact name; one already gone is fine."""
+    try:
+        directory = _screenshot_dir()
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        logger.warning(f"Could not open the screenshot staging folder: {e.strerror or e}")
+        return
+    by_fd = isinstance(directory, int)
+    try:
+        for name in ids:
+            if not _SCREENSHOT_NAME.fullmatch(name):
+                continue
+            try:
+                os.unlink(name if by_fd else os.path.join(directory, name),
+                          dir_fd=directory if by_fd else None)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.warning(f"Could not delete the staged screenshot {name}: "
+                               f"{e.strerror or e}")
+    finally:
+        if by_fd:
+            os.close(directory)
 
 
 def _fresh(candidates: list[_Candidate], cutoff: float, skipped: list) -> list[_Candidate]:

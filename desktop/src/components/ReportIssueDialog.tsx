@@ -1,6 +1,8 @@
+import { open as openPicker } from '@tauri-apps/plugin-dialog'
 import { Loader2 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react'
 import { toast } from 'sonner'
+import { IssueScreenshots } from '@/components/IssueScreenshots'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -22,6 +24,13 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { runAgent } from '@/lib/agentCli'
+import {
+  discardScreenshots,
+  MAX_SCREENSHOTS,
+  stageScreenshotFromBytes,
+  stageScreenshotFromPath,
+  type StagedScreenshot,
+} from '@/lib/issueScreenshots'
 
 /** Categories the web API accepts (`web/app/api/bug-report/route.ts`). */
 const CATEGORIES = [
@@ -41,11 +50,28 @@ export const MAX_DESCRIPTION = 1000
 
 /**
  * The `report-issue` run's done value. `logsAttached` is present only when logs were
- * asked for: false means the issue went without them.
+ * asked for: false means the issue went without them. `screenshotsAttached` is present
+ * only when screenshots were sent.
  */
 interface ReportIssueDone {
   category: string
   logsAttached?: boolean
+  screenshotsAttached?: number
+}
+
+/** One image to stage, named for the notice if it is refused. */
+interface ScreenshotSource {
+  label: string
+  stage: () => Promise<StagedScreenshot>
+}
+
+function message(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
+}
+
+function forget(ids: string[]) {
+  // best effort: a file left behind is harmless, and the operator cannot act on it
+  if (ids.length > 0) void discardScreenshots(ids).catch(() => {})
 }
 
 interface ReportIssueDialogProps {
@@ -68,16 +94,117 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState('')
+  const [screenshots, setScreenshots] = useState<StagedScreenshot[]>([])
+  const [staging, setStaging] = useState(false)
+  const [screenshotNotices, setScreenshotNotices] = useState<string[]>([])
+  // the staged files still ours to discard, read outside render by the close cleanup
+  const stagedRef = useRef<StagedScreenshot[]>([])
+  // bumped on every close, so a staging that lands after it is discarded, not shown
+  const visitRef = useRef(0)
+
+  const keepScreenshots = useCallback((next: StagedScreenshot[]) => {
+    stagedRef.current = next
+    setScreenshots(next)
+  }, [])
+
+  // reset while rendering the reopen, so the last visit never flashes
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setCategory('bug')
+      setDescription('')
+      setAttachLogs(false)
+      setSubmitting(false)
+      setError(null)
+      setStatus('')
+      setScreenshots([])
+      setStaging(false)
+      setScreenshotNotices([])
+    }
+  }
 
   useEffect(() => {
     if (!open) return
-    setCategory('bug')
-    setDescription('')
-    setAttachLogs(false)
-    setSubmitting(false)
-    setError(null)
-    setStatus('')
+    return () => {
+      // closed or unmounted without sending: nothing will use the staged files now
+      visitRef.current += 1
+      forget(stagedRef.current.map((shot) => shot.id))
+      stagedRef.current = []
+    }
   }, [open])
+
+  const stage = useCallback(
+    async (sources: ScreenshotSource[]) => {
+      const room = MAX_SCREENSHOTS - stagedRef.current.length
+      const taken = sources.slice(0, Math.max(room, 0))
+      const notices =
+        taken.length < sources.length ? [`up to ${MAX_SCREENSHOTS} screenshots per issue`] : []
+      if (taken.length === 0) {
+        setScreenshotNotices(notices)
+        return
+      }
+
+      const visit = visitRef.current
+      setStaging(true)
+      setScreenshotNotices([])
+      const results = await Promise.allSettled(taken.map((source) => source.stage()))
+      const staged = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
+      if (visit !== visitRef.current) {
+        forget(staged.map((shot) => shot.id))
+        return
+      }
+
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') notices.push(`${taken[index].label}: ${message(result.reason)}`)
+      })
+      keepScreenshots([...stagedRef.current, ...staged])
+      setScreenshotNotices(notices)
+      setStaging(false)
+    },
+    [keepScreenshots],
+  )
+
+  const pickScreenshots = useCallback(() => {
+    void openPicker({
+      multiple: true,
+      filters: [{ name: 'images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    })
+      .then((picked) => {
+        const paths = picked === null ? [] : Array.isArray(picked) ? picked : [picked]
+        return stage(
+          paths.map((path) => ({
+            label: path.split(/[\\/]/).pop() || path,
+            stage: () => stageScreenshotFromPath(path),
+          })),
+        )
+      })
+      .catch((cause: unknown) => setScreenshotNotices([message(cause)]))
+  }, [stage])
+
+  const pasteScreenshots = (event: ClipboardEvent) => {
+    const items = Array.from(event.clipboardData?.items ?? [])
+    // a copy from a web page or an office app carries an image beside its text; the text box wants it
+    if (items.some((item) => item.type === 'text/plain')) return
+    const files = items
+      .filter((item) => item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+    if (files.length === 0) return
+    event.preventDefault()
+    if (submitting || staging) return
+    void stage(
+      files.map((file) => ({
+        label: 'pasted image',
+        stage: async () => stageScreenshotFromBytes(new Uint8Array(await file.arrayBuffer())),
+      })),
+    )
+  }
+
+  const removeScreenshot = (id: string) => {
+    keepScreenshots(stagedRef.current.filter((shot) => shot.id !== id))
+    forget([id])
+  }
 
   const submit = useCallback(() => {
     const trimmed = description.trim()
@@ -88,18 +215,36 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
 
     setSubmitting(true)
     setError(null)
+    const sent = screenshots.map((shot) => shot.id)
 
     void runAgent('report-issue', {
-      payload: { category, description: trimmed, attachLogs },
+      payload: { category, description: trimmed, attachLogs, screenshots: sent },
       onEvent: (event) => {
         if (event.event === 'status') setStatus(event.value)
       },
     })
       .then((outcome) => {
+        // the agent deletes what it was sent once the issue is filed, attached or not
+        keepScreenshots([])
         // partial: a done line from an older helper carries none of these fields
         const done: Partial<ReportIssueDone> =
           outcome.terminal?.event === 'done' ? outcome.terminal.value : {}
-        if (done.logsAttached === false) {
+        const attachedShots = done.screenshotsAttached
+        const screenshotsFailed = sent.length > 0 && attachedShots === 0
+        if (done.logsAttached === false && screenshotsFailed) {
+          toast.warning('your issue was sent, but the logs and screenshots could not be attached', {
+            description: 'try again, or send them another way.',
+          })
+        } else if (screenshotsFailed) {
+          toast.warning('your issue was sent, but the screenshots could not be attached', {
+            description: 'try again, or send them another way.',
+          })
+        } else if (attachedShots !== undefined && attachedShots < sent.length) {
+          toast.warning(
+            `your issue was sent, but only ${attachedShots} of ${sent.length} screenshots could be attached`,
+            { description: 'try again, or send them another way.' },
+          )
+        } else if (done.logsAttached === false) {
           toast.warning('your issue was sent, but the logs could not be attached', {
             description: 'try again, or send the logs folder another way.',
           })
@@ -115,19 +260,24 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
         onClose()
       })
       .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : String(cause))
+        // the issue was not filed, so the agent kept the screenshots: they stay for a retry
+        setError(message(cause))
       })
       .finally(() => {
         setSubmitting(false)
         setStatus('')
       })
-  }, [attachLogs, category, description, onClose])
+  }, [attachLogs, category, description, keepScreenshots, onClose, screenshots])
 
   const remaining = MAX_DESCRIPTION - description.length
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !submitting && onClose()}>
-      <DialogContent className="sm:max-w-md" data-testid="report-issue-dialog">
+      <DialogContent
+        className="sm:max-w-md"
+        data-testid="report-issue-dialog"
+        onPaste={pasteScreenshots}
+      >
         <DialogHeader>
           <DialogTitle>submit issue</DialogTitle>
           <DialogDescription>
@@ -169,6 +319,14 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
           </p>
         </div>
 
+        <IssueScreenshots
+          screenshots={screenshots}
+          busy={submitting || staging}
+          notices={screenshotNotices}
+          onAdd={pickScreenshots}
+          onRemove={removeScreenshot}
+        />
+
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <Checkbox
@@ -205,7 +363,10 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
           <Button variant="outline" onClick={onClose} disabled={submitting}>
             cancel
           </Button>
-          <Button onClick={submit} disabled={submitting || description.trim().length === 0}>
+          <Button
+            onClick={submit}
+            disabled={submitting || staging || description.trim().length === 0}
+          >
             {submitting && (
               <Loader2 aria-hidden className="animate-spin" data-testid="report-spinner" />
             )}

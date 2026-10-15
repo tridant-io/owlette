@@ -623,22 +623,28 @@ class TestReportIssueAttachLogs:
     """The web API and the bucket are stood in for; every call is recorded."""
 
     def _run(self, tmp_path, *, attach=True, zip_error=None, upload_url_status=200,
-             put_statuses=(200,), report_statuses=(200,), headless=False):
+             put_statuses=(200,), report_statuses=(200,), headless=False,
+             screenshots=None, shots_in_zip=None, logs_in_zip=None,
+             description='it broke'):
         payload = tmp_path / 'feedback.json'
-        fields = {'category': 'bug', 'description': 'it broke'}
+        fields = {'category': 'bug', 'description': description}
         if attach is not None:
             fields['attachLogs'] = attach
+        if screenshots is not None:
+            fields['screenshots'] = screenshots
         payload.write_text(json.dumps(fields))
 
         zips = []
 
-        def build_zip(dest):
+        def build_zip(dest, screenshots=(), include_logs=True):
             zips.append(dest)
             if zip_error:
                 raise zip_error
             with open(dest, 'wb') as f:
                 f.write(b'PK' * 10)
-            return {'files': 1, 'size': 20, 'skipped': []}
+            shots = len(screenshots) if shots_in_zip is None else shots_in_zip
+            logs = int(include_logs) if logs_in_zip is None else logs_in_zip
+            return {'files': shots + logs, 'size': 20, 'skipped': [], 'screenshots': shots}
 
         posts, puts = [], []
         report_responses = iter(report_statuses)
@@ -664,6 +670,7 @@ class TestReportIssueAttachLogs:
                           return_value={'firebase': {'site_id': 'site-1'}}), \
              patch.object(configure_site.shared_utils, 'get_machine_id', return_value='m-1'), \
              patch.object(log_bundle, 'build_log_zip', side_effect=build_zip) as build, \
+             patch.object(log_bundle, '_data_root', return_value=str(tmp_path / 'data')), \
              patch('requests.post', side_effect=post), \
              patch('requests.put', side_effect=put):
             if headless:
@@ -702,7 +709,7 @@ class TestReportIssueAttachLogs:
         assert run.code == 0
         events = _events(capsys)
         assert [e['value'] for e in events if e['event'] == 'status'] == [
-            'collecting system info and recent logs', 'zipping logs', 'uploading logs',
+            'collecting system info and recent logs', 'zipping logs', 'uploading attachments',
             'submitting']
         assert events[-1] == {'event': 'done', 'value': {'category': 'bug', 'logsAttached': True}}
         upload_url = run.posts[0]
@@ -718,9 +725,10 @@ class TestReportIssueAttachLogs:
         }]
         body = run.reports[0]['json']
         assert body['logsKey'] == _LOGS_KEY
+        assert body['logs'] is True
         # the route takes the site from the token
         assert 'siteId' not in body
-        assert 'logs could not be attached' not in body['description']
+        assert 'attachments could not be sent' not in body['description']
         assert not os.path.exists(run.zips[0])
 
     def test_an_old_server_without_the_route_still_gets_the_issue(self, tmp_path, capsys):
@@ -731,8 +739,9 @@ class TestReportIssueAttachLogs:
         assert run.puts == []
         body = run.reports[0]['json']
         assert 'logsKey' not in body
+        assert 'logs' not in body
         assert body['description'].startswith(
-            'it broke\n\nlogs could not be attached: upload url request failed (404)')
+            'it broke\n\nattachments could not be sent: upload url request failed (404)')
         assert not os.path.exists(run.zips[0])
 
     def test_a_refused_put_is_not_retried_and_the_issue_still_goes(
@@ -744,11 +753,11 @@ class TestReportIssueAttachLogs:
         assert len(run.puts) == 1
         body = run.reports[0]['json']
         assert 'logsKey' not in body
-        assert 'logs could not be attached: the upload to storage failed' in body['description']
+        assert 'attachments could not be sent: the upload to storage failed' in body['description']
         assert 'signed-url' not in body['description']
         # the reason stays in the issue; the event only says the logs did not go
         assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
-        assert 'Issue logs could not be attached' in caplog.text
+        assert 'Issue attachments could not be sent' in caplog.text
         # the signed url carries a credential: it stays out of the issue and the log
         assert 'sekrit' not in body['description']
         assert 'sekrit' not in caplog.text
@@ -761,7 +770,7 @@ class TestReportIssueAttachLogs:
         assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
         assert run.puts == []
         assert [p['url'] for p in run.posts] == ['https://owlette.test/api/bug-report']
-        assert 'logs could not be attached: disk full' in run.reports[0]['json']['description']
+        assert 'attachments could not be sent: disk full' in run.reports[0]['json']['description']
         assert not os.path.exists(run.zips[0])
 
     def test_a_refused_logs_key_is_resent_without_it(self, tmp_path, capsys):
@@ -771,9 +780,11 @@ class TestReportIssueAttachLogs:
         assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
         first, second = run.reports
         assert first['json']['logsKey'] == _LOGS_KEY
+        assert first['json']['logs'] is True
         assert 'logsKey' not in second['json']
+        assert 'logs' not in second['json']
         assert second['json']['description'].startswith(
-            'it broke\n\nlogs could not be attached: the server refused them (400)')
+            'it broke\n\nattachments could not be sent: the server refused them (400)')
         assert not os.path.exists(run.zips[0])
 
     def test_a_400_without_logs_is_not_resent(self, tmp_path, capsys):
@@ -791,7 +802,7 @@ class TestReportIssueAttachLogs:
 
         assert run.code == 0
         text = log.read_text(encoding='utf-8')
-        assert ' - WARNING - Issue logs could not be attached: the upload to storage failed' in text
+        assert ' - WARNING - Issue attachments could not be sent: the upload to storage failed' in text
         assert 'issue submitted via API: r1' in text
         # neither the signed url nor the operator's words reach the file
         assert 'sekrit' not in text
@@ -800,7 +811,7 @@ class TestReportIssueAttachLogs:
         # stdout stays the event stream alone; stderr still gets the warning
         events = [json.loads(line) for line in captured.out.splitlines()]
         assert events[-1] == {'event': 'done', 'value': {'category': 'bug', 'logsAttached': False}}
-        assert 'Issue logs could not be attached' in captured.err
+        assert 'Issue attachments could not be sent' in captured.err
 
     def test_a_report_log_that_cannot_be_opened_does_not_stop_the_report(
             self, tmp_path, capsys):
@@ -815,7 +826,192 @@ class TestReportIssueAttachLogs:
         assert run.code == 0
         assert not log.exists()
         assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
-        assert 'logs could not be attached' in run.reports[0]['json']['description']
+        assert 'attachments could not be sent' in run.reports[0]['json']['description']
+
+    # screenshots
+
+    SHOTS = ['a' * 32 + '.png', 'b' * 32 + '.jpg']
+
+    def _stage(self, tmp_path, names=None):
+        """Staged screenshot files, plus a stranger the run must leave alone."""
+        staging = tmp_path / 'data' / 'ipc' / 'issue-attachments'
+        staging.mkdir(parents=True)
+        for name in names or self.SHOTS:
+            (staging / name).write_bytes(b'image')
+        (staging / ('c' * 32 + '.png')).write_bytes(b'not this run')
+        return staging
+
+    def _left(self, staging):
+        return sorted(p.name for p in staging.iterdir())
+
+    def test_screenshots_without_logs_go_in_a_zip_of_their_own(self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS)
+
+        assert run.code == 0
+        run.build.assert_called_once_with(
+            run.zips[0], screenshots=self.SHOTS, include_logs=False)
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'adding screenshots',
+            'uploading attachments', 'submitting']
+        # logs were not asked for, so the outcome says nothing about them
+        assert events[-1] == {'event': 'done',
+                              'value': {'category': 'bug', 'screenshotsAttached': 2}}
+        body = run.reports[0]['json']
+        assert body['logsKey'] == _LOGS_KEY
+        # the count rides as its own integer field; the line is for people
+        assert body['screenshots'] == 2 and type(body['screenshots']) is int
+        # the zip holds no logs, so the body does not say it does
+        assert 'logs' not in body
+        assert body['description'].startswith('it broke\n\nscreenshots attached: 2')
+        assert self._left(staging) == ['c' * 32 + '.png']
+        assert not os.path.exists(run.zips[0])
+
+    def test_screenshots_and_logs_share_one_zip(self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, screenshots=self.SHOTS)
+
+        run.build.assert_called_once_with(
+            run.zips[0], screenshots=self.SHOTS, include_logs=True)
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'adding screenshots', 'zipping logs',
+            'uploading attachments', 'submitting']
+        assert events[-1]['value'] == {
+            'category': 'bug', 'logsAttached': True, 'screenshotsAttached': 2}
+        assert len(run.puts) == 1
+        body = run.reports[0]['json']
+        assert body['screenshots'] == 2
+        assert body['logs'] is True
+        assert 'screenshots attached: 2' in body['description']
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    def test_asked_for_logs_that_never_made_the_zip_are_not_claimed(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, screenshots=self.SHOTS, logs_in_zip=0)
+
+        body = run.reports[0]['json']
+        assert body['screenshots'] == 2
+        assert 'logs' not in body
+
+    def test_the_count_is_what_went_in_the_zip(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, screenshots=self.SHOTS, shots_in_zip=1)
+
+        assert self._done(capsys) == {
+            'category': 'bug', 'logsAttached': True, 'screenshotsAttached': 1}
+        assert run.reports[0]['json']['screenshots'] == 1
+        assert 'screenshots attached: 1' in run.reports[0]['json']['description']
+
+    def test_logs_without_screenshots_say_nothing_of_them(self, tmp_path, capsys):
+        run = self._run(tmp_path)
+
+        run.build.assert_called_once_with(run.zips[0], screenshots=[], include_logs=True)
+        assert 'screenshots' not in run.reports[0]['json']
+        assert 'screenshots attached' not in run.reports[0]['json']['description']
+        assert 'screenshotsAttached' not in self._done(capsys)
+
+    def test_a_filed_issue_whose_upload_failed_still_deletes_the_staged_screenshots(
+            self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, put_statuses=(403,))
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'screenshotsAttached': 0}
+        body = run.reports[0]['json']
+        assert 'logsKey' not in body
+        assert 'screenshots' not in body
+        assert body['description'].startswith(
+            'it broke\n\nattachments could not be sent: the upload to storage failed')
+        assert 'screenshots attached' not in body['description']
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    def test_a_refused_key_drops_the_screenshots_line(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS,
+                        report_statuses=(400, 200))
+
+        first, second = run.reports
+        assert first['json']['screenshots'] == 2
+        assert 'screenshots' not in second['json']
+        assert 'screenshots attached: 2' in first['json']['description']
+        assert 'screenshots attached' not in second['json']['description']
+        assert 'attachments could not be sent: the server refused them (400)' in (
+            second['json']['description'])
+        assert self._done(capsys) == {'category': 'bug', 'screenshotsAttached': 0}
+
+    def test_no_readable_screenshot_and_no_logs_uploads_nothing(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, shots_in_zip=0)
+
+        assert run.puts == []
+        assert [p['url'] for p in run.posts] == ['https://owlette.test/api/bug-report']
+        assert 'attachments could not be sent: no screenshot could be read' in (
+            run.reports[0]['json']['description'])
+        assert self._done(capsys) == {'category': 'bug', 'screenshotsAttached': 0}
+
+    def test_a_rejected_report_keeps_the_staged_screenshots_for_a_retry(
+            self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, report_statuses=(500,))
+
+        assert run.code == 1
+        assert _events(capsys)[-1]['event'] == 'error'
+        assert self._left(staging) == sorted(self.SHOTS + ['c' * 32 + '.png'])
+
+    def test_a_report_refused_before_sending_keeps_the_staged_screenshots(
+            self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, description='  ')
+
+        assert run.code == 1
+        assert run.posts == []
+        assert _events(capsys)[-1]['event'] == 'error'
+        assert self._left(staging) == sorted(self.SHOTS + ['c' * 32 + '.png'])
+
+    def test_a_repeated_screenshot_goes_in_once(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS + self.SHOTS[:1])
+
+        run.build.assert_called_once_with(
+            run.zips[0], screenshots=self.SHOTS, include_logs=False)
+        assert run.reports[0]['json']['screenshots'] == 2
+
+    def test_a_screenshot_already_gone_is_not_an_error(self, tmp_path, capsys):
+        staging = self._stage(tmp_path, names=self.SHOTS[:1])
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, shots_in_zip=1)
+
+        assert run.code == 0
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    @pytest.mark.parametrize('screenshots', [
+        'a' * 32 + '.png',
+        ['../' + 'a' * 29 + '.png'],
+        ['A' * 32 + '.png'],
+        ['a' * 32 + '.gif'],
+        ['a' * 32 + '.png'] * 6,
+    ])
+    def test_screenshots_that_are_not_staged_names_stop_the_report(
+            self, tmp_path, capsys, screenshots):
+        run = self._run(tmp_path, screenshots=screenshots)
+
+        assert run.code == 1
+        assert _events(capsys)[-1] == {
+            'event': 'error', 'value': 'the report names screenshots owlette did not stage.'}
+        assert run.posts == []
+        run.build.assert_not_called()
 
 
 @contextlib.contextmanager
@@ -1631,6 +1827,61 @@ class TestRequestSeam:
 
         assert configure_site.drain_privileged_requests() == []
         assert self._events(seam) == ['error']
+
+    @pytest.mark.parametrize('count', [0, 1, 5])
+    def test_a_report_carries_its_screenshots_through(self, seam, monkeypatch, count):
+        staged = self._staged_report(monkeypatch)
+        names = [f'{i:032x}.{ext}' for i, ext in zip(range(count), ['png', 'jpg', 'webp'] * 2)]
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', screenshots=names)
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze', 'screenshots': names}]
+
+    def test_a_repeated_screenshot_is_passed_on_once(self, seam, monkeypatch):
+        staged = self._staged_report(monkeypatch)
+        a, b = 'a' * 32 + '.png', 'b' * 32 + '.jpg'
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', screenshots=[b, a, b])
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze', 'screenshots': [b, a]}]
+
+    @pytest.mark.parametrize('screenshots', [
+        'a' * 32 + '.png',
+        {'name': 'a' * 32 + '.png'},
+        [7],
+        ['a' * 32 + '.png'] * 6,
+        ['a' * 31 + '.png'],
+        ['a' * 32 + '.PNG'],
+        ['a' * 32 + '.png\n'],
+        ['g' * 32 + '.png'],
+        ['a' * 32 + '.jpeg'],
+        ['../../.tokens.enc'],
+        ['/etc/' + 'a' * 32 + '.png'],
+    ])
+    def test_screenshots_that_are_not_staged_names_are_refused(
+            self, seam, monkeypatch, screenshots):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda *a, **k: pytest.fail('filed a report it could not read'))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', screenshots=screenshots)
+
+        assert configure_site.drain_privileged_requests() == []
+        assert self._events(seam) == ['error']
+
+    def test_five_screenshots_and_the_apps_cap_fit_the_request_bound(self, seam, monkeypatch):
+        monkeypatch.setattr(configure_site, '_spawn_into_reply',
+                            lambda reply, *flags: os.unlink(flags[-1]))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='performance', description='\u0001' * 1000,
+                      attachLogs=True, screenshots=[f'{i:032x}.webp' for i in range(5)])
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert [row['outcome'] for row in rows] == ['executed']
 
     def test_a_report_at_the_apps_cap_fits_the_request_bound(self, seam, monkeypatch):
         # 1000 UTF-16 units, each escaped to the six bytes JSON can make of one.

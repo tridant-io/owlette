@@ -129,6 +129,105 @@ describe('POST /api/bug-report', () => {
     const { html } = mockSend.mock.calls[0][0] as { html: string };
     expect(html).toContain('/api/admin/issues/report-1/logs');
     expect(html).toContain('download logs');
+    expect(logs).not.toHaveProperty('screenshots');
+  });
+
+  it.each([
+    [1, true, 'logs and 1 screenshot are attached to this issue: <a'],
+    [5, true, 'logs and 5 screenshots are attached to this issue: <a'],
+    [1, undefined, '>1 screenshot is attached to this issue: <a'],
+    [5, undefined, '>5 screenshots are attached to this issue: <a'],
+  ])('counts %i screenshots, logs %s, on the record and in the email', async (n, logs, wording) => {
+    asAgent();
+    const res = await report({ logsKey: KEY, screenshots: n, logs });
+
+    expect(res.status).toBe(200);
+    expect((written[0].data.logs as { screenshots?: number }).screenshots).toBe(n);
+    // whether the zip holds logs is for the email only, not the record
+    expect(written[0].data.logs).not.toHaveProperty('hasLogs');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).toContain(wording);
+    expect(html).toContain('download attachments</a> (superadmin only, kept 30 days)');
+    expect(html).not.toContain('download logs');
+  });
+
+  it('says logs are attached when the agent sends logs without screenshots', async () => {
+    asAgent();
+    await report({ logsKey: KEY, logs: true });
+
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).toContain('>logs are attached to this issue: <a');
+    expect(html).toContain('download logs</a> (superadmin only, kept 30 days)');
+  });
+
+  it.each([
+    ['a string', 'true'],
+    ['a number', 1],
+    ['an object', { logs: true }],
+  ])('counts no logs beside screenshots for a logs field that is %s', async (_label, logs) => {
+    asAgent();
+    await report({ logsKey: KEY, screenshots: 2, logs });
+
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).toContain('>2 screenshots are attached to this issue: <a');
+    expect(html).not.toContain('logs and');
+  });
+
+  it('mentions no logs without an attached zip, whatever the logs field says', async () => {
+    asAgent();
+    await report({ logs: true, screenshots: 2 });
+
+    expect(written[0].data).not.toHaveProperty('logs');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).not.toContain('attached to this issue');
+  });
+
+  it.each([
+    ['zero', 0],
+    ['over the limit', 6],
+    ['negative', -1],
+    ['not an integer', 2.5],
+    ['a numeric string', '3'],
+    ['a boolean', true],
+    ['null', null],
+  ])('ignores a screenshots field that is %s', async (_label, value) => {
+    asAgent();
+    const res = await report({ logsKey: KEY, screenshots: value });
+
+    expect(res.status).toBe(200);
+    expect(written[0].data.logs).not.toHaveProperty('screenshots');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).toContain('download logs');
+  });
+
+  it('no longer reads the count from a description line', async () => {
+    asAgent();
+    await report({ logsKey: KEY, description: 'it stopped\n\nscreenshots attached: 3\n' });
+
+    expect(written[0].data.logs).not.toHaveProperty('screenshots');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).toContain('download logs');
+    expect(html).not.toContain('download attachments');
+  });
+
+  it('counts no screenshots without an attached zip', async () => {
+    asAgent();
+    await report({ screenshots: 2 });
+
+    expect(written[0].data).not.toHaveProperty('logs');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).not.toContain('download attachments');
+  });
+
+  it('ignores screenshots from a user session', async () => {
+    mockRequireSession.mockResolvedValue('user-1');
+    const res = await report({ screenshots: 2 }, {});
+
+    expect(res.status).toBe(200);
+    expect(written[0].data).not.toHaveProperty('logs');
+    expect(written[0].data).not.toHaveProperty('screenshots');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).not.toContain('screenshot');
   });
 
   it('sends no logs link when nothing is attached', async () => {

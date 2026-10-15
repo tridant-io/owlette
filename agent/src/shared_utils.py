@@ -1414,6 +1414,7 @@ def ensure_data_directories():
         get_data_path('ipc/results'),
         get_data_path('ipc/swoop'),
         get_data_path('ipc/requests'),
+        get_data_path('ipc/issue-attachments'),
     ]
     if not _IS_WINDOWS:
         # off windows the trio is an ordinary data-root directory; on windows

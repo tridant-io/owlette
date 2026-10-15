@@ -64,7 +64,7 @@ test.describe('as a superadmin', () => {
     const location = new URL(res.headers().location);
     expect(location.host).toBe('issue-logs.e2e.invalid');
     expect(location.pathname).toBe(`/${KEY}`);
-    expect(location.searchParams.get('filename')).toBe(`owlette-logs-KIOSK-01-${day}.zip`);
+    expect(location.searchParams.get('filename')).toBe(`owlette-issue-KIOSK-01-${day}.zip`);
 
     const audits = await getAdminDb()
       .collection('global/audit_log/entries')
