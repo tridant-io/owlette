@@ -1206,9 +1206,12 @@ class TestUploadProgress:
         return str(path)
 
     @staticmethod
-    def _clock(step):
+    def _clock(monkeypatch, step):
+        # only configure_site sees the fake clock: patching time.monotonic itself
+        # lets any other thread's call steal a tick and shift the lines
         ticks = iter(range(10 ** 6))
-        return lambda: next(ticks) * step
+        monkeypatch.setattr(configure_site, 'time', SimpleNamespace(
+            monotonic=lambda: next(ticks) * step, time=time.time, sleep=time.sleep))
 
     @staticmethod
     def _percents(capsys):
@@ -1225,7 +1228,7 @@ class TestUploadProgress:
             puts.append({'body': sent, 'headers': headers})
             return _http(200)
 
-        monkeypatch.setattr(configure_site.time, 'monotonic', self._clock(step))
+        self._clock(monkeypatch, step)
         with patch.object(configure_site, '_web_session',
                           return_value=('https://owlette.test', 'tok')), \
              patch.object(configure_site.shared_utils, 'read_config',
@@ -1271,7 +1274,7 @@ class TestUploadProgress:
         import requests
         from screenshot_capture import upload_to_signed_url
         monkeypatch.setattr(configure_site, 'UPLOAD_PROGRESS_MIN_BYTES', 1000)
-        monkeypatch.setattr(configure_site.time, 'monotonic', self._clock(10))
+        self._clock(monkeypatch, 10)
         size = 100_000
         zip_path = self._zip(tmp_path, size)
         attempts = []
