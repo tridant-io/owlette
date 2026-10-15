@@ -248,14 +248,14 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
           toast.warning('your issue was sent, but the logs could not be attached', {
             description: 'try again, or send the logs folder another way.',
           })
-        } else if (done.logsAttached === true) {
-          toast.success('thanks — your issue was sent', {
-            description: 'system info and the logs went with it.',
-          })
         } else {
-          toast.success('thanks — your issue was sent', {
-            description: 'system info and the last lines of the service log went with it.',
-          })
+          const went = [
+            'system info',
+            done.logsAttached === true ? 'the logs' : 'the last lines of the service log',
+            ...(attachedShots ? [`${attachedShots} screenshot${attachedShots === 1 ? '' : 's'}`] : []),
+          ]
+          const list = went.length > 2 ? `${went.slice(0, -1).join(', ')} and ${went.at(-1)}` : went.join(' and ')
+          toast.success('thanks — your issue was sent', { description: `${list} went with it.` })
         }
         onClose()
       })

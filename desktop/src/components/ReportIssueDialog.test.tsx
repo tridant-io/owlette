@@ -485,9 +485,22 @@ describe('ReportIssueDialog screenshots', () => {
     view.rerender(<ReportIssueDialog open={false} onClose={onClose} />)
 
     expect(onClose).toHaveBeenCalledOnce()
-    expect(toastSuccess).toHaveBeenCalledOnce()
+    expect(toastSuccess).toHaveBeenCalledExactlyOnceWith('thanks — your issue was sent', {
+      description: 'system info, the last lines of the service log and 1 screenshot went with it.',
+    })
     expect(toastWarning).not.toHaveBeenCalled()
     expect(discard).not.toHaveBeenCalled()
+  })
+
+  it('names the logs and every screenshot that went', async () => {
+    runAgent.mockResolvedValue(doneWith({ category: 'bug', logsAttached: true, screenshotsAttached: 2 }))
+    render(<ReportIssueDialog open onClose={vi.fn()} />)
+    await pick(['/shots/wall.png', '/shots/lobby.jpg'])
+    await submitIssue(true)
+
+    expect(toastSuccess).toHaveBeenCalledExactlyOnceWith('thanks — your issue was sent', {
+      description: 'system info, the logs and 2 screenshots went with it.',
+    })
   })
 
   it('discards staged screenshots on cancel', async () => {
