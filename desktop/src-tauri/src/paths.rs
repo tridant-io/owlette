@@ -37,6 +37,10 @@ pub const TRAY_PID_REL: &str = "tmp/tray.pid";
 /// mirror onto the machine.
 pub const KEEP_AWAKE_REPORT_REL: &str = "ipc/keep_awake.json";
 
+/// Screenshots staged for an issue report ([`crate::issue_attachments`]); the
+/// agent attaches them and deletes them after the send.
+pub const ISSUE_ATTACHMENTS_REL: &str = "ipc/issue-attachments";
+
 /// touched by the tray's "kill all swoop sessions on this machine": the service
 /// ends every session the way a dashboard kill does, audited `local_tray`
 /// (`owlette_service._check_tray_swoop_kill`). windows only, like the restart

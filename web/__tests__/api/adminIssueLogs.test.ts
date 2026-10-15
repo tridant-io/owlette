@@ -93,8 +93,8 @@ describe('GET /api/admin/issues/{id}/logs', () => {
 
     expect(res.status).toBe(302);
     const day = new Date().toISOString().slice(0, 10);
-    expect(mockPresign).toHaveBeenCalledWith(KEY, `owlette-logs-KIOSK-01-${day}.zip`);
-    expect(res.headers.get('location')).toBe(`https://r2.example/${KEY}?name=owlette-logs-KIOSK-01-${day}.zip`);
+    expect(mockPresign).toHaveBeenCalledWith(KEY, `owlette-issue-KIOSK-01-${day}.zip`);
+    expect(res.headers.get('location')).toBe(`https://r2.example/${KEY}?name=owlette-issue-KIOSK-01-${day}.zip`);
     expect(res.headers.get('cache-control')).toBe('no-store');
   });
 
@@ -221,6 +221,6 @@ describe('GET /api/admin/issues/{id}/logs', () => {
     signIn('staff-1', 'superadmin');
     seedIssue(10 * DAY, { pageUrl: '' });
     await download();
-    expect(mockPresign.mock.calls[0][1]).toMatch(/^owlette-logs-machine-\d{4}-\d{2}-\d{2}\.zip$/);
+    expect(mockPresign.mock.calls[0][1]).toMatch(/^owlette-issue-machine-\d{4}-\d{2}-\d{2}\.zip$/);
   });
 });

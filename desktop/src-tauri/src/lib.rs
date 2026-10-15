@@ -1,6 +1,7 @@
 mod agent_cli;
 mod awake;
 mod commands;
+mod issue_attachments;
 #[cfg(unix)]
 mod jobrunner;
 mod json_io;
@@ -110,6 +111,8 @@ pub fn run() {
       commands::agent_cli_cancel,
       commands::open_owlette_path,
       commands::open_external_url,
+      commands::stage_issue_screenshot,
+      commands::discard_issue_screenshots,
       commands::swoop_viewer_installed,
       commands::open_swoop_viewer,
       commands::log_event,

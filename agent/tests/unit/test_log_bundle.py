@@ -91,10 +91,10 @@ def _app_dirs(tree, owner_for):
     return lambda app_id: (str(tree['dirs'][app_id]), owner_for(app_id))
 
 
-def _build(tmp_path):
+def _build(tmp_path, **kwargs):
     dest = tmp_path / 'out' / 'logs.zip'
     dest.parent.mkdir(exist_ok=True)
-    result = log_bundle.build_log_zip(str(dest))
+    result = log_bundle.build_log_zip(str(dest), **kwargs)
     with zipfile.ZipFile(dest) as zf:
         names = zf.namelist()
         manifest = zf.read('manifest.txt').decode()
@@ -993,3 +993,235 @@ def test_an_install_log_link_is_refused(mac):
     assert reasons['system/install-owlette.txt from install.log'].startswith(
         'could not be opened')
     assert b'TOKEN-SECRET' not in _blob(dest)
+
+
+# screenshots
+
+PNG = b'\x89PNG\r\n\x1a\n' + b'png body'
+JPEG = b'\xff\xd8\xff\xe0' + b'jpeg body'
+WEBP = b'RIFF\x10\x00\x00\x00WEBPVP8 ' + b'webp body'
+EXT = {PNG: 'png', JPEG: 'jpg', WEBP: 'webp'}
+
+
+def _staging(tree):
+    staging = tree['data'] / 'ipc' / 'issue-attachments'
+    staging.mkdir(parents=True, exist_ok=True)
+    return staging
+
+
+def _stage(tree, *images):
+    """Each image staged under a fresh name, as the desktop app does; the names."""
+    staging = _staging(tree)
+    names = []
+    for image in images:
+        name = f'{len(list(staging.iterdir())):032x}.{EXT.get(image, "png")}'
+        (staging / name).write_bytes(image)
+        names.append(name)
+    return names
+
+
+def test_screenshots_go_in_first_in_their_order(tree):
+    names = _stage(tree, JPEG, PNG, WEBP)
+
+    result, entries, manifest, dest = _build(tree['root'], screenshots=names)
+
+    assert entries[:3] == ['screenshots/1.jpg', 'screenshots/2.png', 'screenshots/3.webp']
+    assert [_read(dest, e) for e in entries[:3]] == [JPEG, PNG, WEBP]
+    assert result['screenshots'] == 3
+    # the logs follow them
+    assert 'logs/service.log' in entries
+    assert 'screenshots/1.jpg' in manifest
+    with zipfile.ZipFile(dest) as zf:
+        assert zf.getinfo('screenshots/1.jpg').compress_type == zipfile.ZIP_STORED
+
+
+def test_screenshots_without_logs_are_all_the_zip_holds(tree):
+    names = _stage(tree, PNG)
+
+    result, entries, _, dest = _build(tree['root'], screenshots=names, include_logs=False)
+
+    assert entries == ['screenshots/1.png', 'manifest.txt']
+    assert result == {'files': 1, 'size': dest.stat().st_size, 'skipped': [], 'screenshots': 1}
+
+
+def test_no_screenshots_leaves_the_log_zip_as_it_was(tree):
+    result, entries, _, _ = _build(tree['root'])
+
+    assert result['screenshots'] == 0
+    assert not any(e.startswith('screenshots/') for e in entries)
+
+
+def test_a_screenshot_that_is_not_an_image_is_a_manifest_line(tree):
+    names = _stage(tree, b'GIF89a not allowed', PNG)
+
+    result, entries, _, _ = _build(tree['root'], screenshots=names, include_logs=False)
+
+    # numbered by what went in
+    assert entries == ['screenshots/1.png', 'manifest.txt']
+    assert _reasons(result) == {f'screenshot {names[0]}': 'is not a png, jpeg or webp image'}
+    assert result['screenshots'] == 1
+
+
+def test_a_screenshot_past_the_size_limit_is_a_manifest_line(tree, monkeypatch):
+    monkeypatch.setattr(log_bundle, 'SCREENSHOT_MAX_BYTES', len(PNG) - 1)
+    names = _stage(tree, PNG)
+
+    result, entries, _, _ = _build(tree['root'], screenshots=names, include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result) == {f'screenshot {names[0]}': 'is larger than 8 MB'}
+
+
+def test_a_screenshot_that_would_pass_the_cap_is_left_out_whole(tree, monkeypatch):
+    big = PNG + os.urandom(64 * 1024)
+    names = _stage(tree, big, big)
+    monkeypatch.setattr(log_bundle, 'ARCHIVE_CAP_BYTES', len(big) * 3 // 2)
+
+    result, entries, _, dest = _build(tree['root'], screenshots=names, include_logs=False)
+
+    assert entries == ['screenshots/1.png', 'manifest.txt']
+    assert _read(dest, 'screenshots/1.png') == big
+    assert _reasons(result) == {f'screenshot {names[1]}': 'would pass the 50 MB zip cap'}
+
+
+def test_a_missing_screenshot_is_a_manifest_line(tree):
+    _staging(tree)
+    name = 'f' * 32 + '.png'
+
+    result, entries, _, _ = _build(tree['root'], screenshots=[name], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result)[f'screenshot {name}'].startswith('could not be opened')
+
+
+def test_a_hard_linked_screenshot_is_refused(tree):
+    name = 'a' * 32 + '.png'
+    secret = tree['data'] / 'image-shaped-secret'
+    secret.write_bytes(PNG + b'SECRET')
+    os.link(secret, _staging(tree) / name)
+
+    result, entries, _, dest = _build(tree['root'], screenshots=[name], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result)[f'screenshot {name}'] == 'has 2 hard links'
+    assert b'SECRET' not in _blob(dest)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='O_NOFOLLOW is POSIX')
+def test_a_screenshot_link_is_refused(tree):
+    name = 'a' * 32 + '.png'
+    secret = tree['data'] / 'image-shaped-secret'
+    secret.write_bytes(PNG + b'SECRET')
+    os.symlink(secret, _staging(tree) / name)
+
+    result, entries, _, dest = _build(tree['root'], screenshots=[name], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result)[f'screenshot {name}'].startswith('could not be opened')
+    assert b'SECRET' not in _blob(dest)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='O_NOFOLLOW is POSIX')
+def test_a_staging_folder_swapped_for_a_link_is_not_followed(tree):
+    elsewhere = tree['root'] / 'elsewhere'
+    elsewhere.mkdir()
+    name = 'a' * 32 + '.png'
+    (elsewhere / name).write_bytes(PNG + b'SECRET')
+    (tree['data'] / 'ipc').mkdir()
+    os.symlink(elsewhere, tree['data'] / 'ipc' / 'issue-attachments')
+
+    result, entries, _, dest = _build(tree['root'], screenshots=[name], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result)[f'screenshot {name}'].startswith('could not be opened')
+    assert b'SECRET' not in _blob(dest)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='the owner check is POSIX')
+def test_a_screenshot_owned_by_another_uid_is_refused(tree, monkeypatch):
+    names = _stage(tree, PNG)
+    real_fstat = os.fstat
+    monkeypatch.setattr(log_bundle.os, 'fstat', lambda fd: _ForeignOwner(real_fstat(fd)))
+    monkeypatch.setattr(log_bundle, '_console_home', lambda: (str(tree['root']), 1000))
+
+    result, entries, _, _ = _build(tree['root'], screenshots=names, include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result)[f'screenshot {names[0]}'] == (
+        'is owned by uid 4242, not the console user')
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='the owner check is POSIX')
+def test_a_screenshot_owned_by_the_console_user_is_read(tree, monkeypatch):
+    names = _stage(tree, PNG)
+    owner = os.stat(_staging(tree) / names[0]).st_uid
+    monkeypatch.setattr(log_bundle, '_console_home', lambda: (str(tree['root']), owner))
+
+    result, entries, _, _ = _build(tree['root'], screenshots=names, include_logs=False)
+
+    assert entries == ['screenshots/1.png', 'manifest.txt']
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='the owner check is POSIX')
+def test_no_console_user_leaves_the_screenshots_out(tree, monkeypatch):
+    names = _stage(tree, PNG)
+
+    def nobody():
+        raise log_bundle._Skip('nobody is at a graphical session')
+
+    monkeypatch.setattr(log_bundle, '_console_home', nobody)
+
+    result, entries, _, _ = _build(tree['root'], screenshots=names, include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result) == {f'screenshot {names[0]}': 'nobody is at a graphical session'}
+
+
+@pytest.mark.parametrize('value,valid', [
+    ([], True),
+    (['a' * 32 + '.png'], True),
+    ([f'{i:032x}.{ext}' for i, ext in enumerate(['png', 'jpg', 'webp', 'png', 'jpg'])], True),
+    (['a' * 32 + '.png'] * 6, False),
+    ('a' * 32 + '.png', False),
+    (None, False),
+    ([None], False),
+    (['a' * 32 + '.png\n'], False),
+    (['A' * 32 + '.png'], False),
+    (['a' * 32 + '.jpeg'], False),
+    (['a' * 32], False),
+    (['../' + 'a' * 29 + '.png'], False),
+])
+def test_screenshot_ids_take_only_staged_names(value, valid):
+    assert (log_bundle.screenshot_ids(value) == value) if valid else (
+        log_bundle.screenshot_ids(value) is None)
+
+
+def test_screenshot_ids_drop_repeats_and_keep_the_first_order():
+    a, b, c = (f'{i:032x}.png' for i in range(3))
+    assert log_bundle.screenshot_ids([b, a, b, c, a]) == [b, a, c]
+
+
+def test_a_name_that_is_not_a_staged_one_is_never_opened(tree):
+    _staging(tree)
+
+    result, entries, _, dest = _build(
+        tree['root'], screenshots=['../../.tokens.enc'], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result) == {
+        'screenshot ../../.tokens.enc': 'is not a staged screenshot name'}
+    assert b'TOKEN-SECRET' not in _blob(dest)
+
+
+def test_discard_deletes_exactly_the_named_screenshots(tree):
+    names = _stage(tree, PNG, JPEG, WEBP)
+    (tree['data'] / 'ipc' / 'keep.png').write_bytes(PNG)
+
+    log_bundle.discard_screenshots(names[:2] + ['f' * 32 + '.png', '../keep.png'])
+
+    assert sorted(p.name for p in _staging(tree).iterdir()) == [names[2]]
+    assert (tree['data'] / 'ipc' / 'keep.png').exists()
+
+
+def test_discard_without_a_staging_folder_is_quiet(tree):
+    log_bundle.discard_screenshots(['a' * 32 + '.png'])
