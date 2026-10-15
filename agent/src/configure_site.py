@@ -862,16 +862,17 @@ def _attachments_not_sent(reason: str) -> str:
 
 
 def submit_report(data: dict, logs_key: Optional[str] = None, screenshots: int = 0,
-                  logs: bool = False) -> bool:
+                  logs: bool = False, videos: int = 0) -> bool:
     """POST an issue to `/api/bug-report`; returns whether `logs_key` went with it.
 
     Ported from `report_issue.submit_report`. The agent's own access token is
     the credential; the endpoint accepts it as a bearer token and files the
     issue under `bug_reports` with `source: 'agent'`. An issue whose
     `logs_key` the server refuses is sent once more without it, so the issue
-    is never lost to its attachment. `screenshots` is how many the zip holds
-    and `logs` whether it holds any logs; the body's `screenshots` and `logs`
-    fields and the issue's line say so only while the zip goes with it.
+    is never lost to its attachment. `screenshots` and `videos` are how many
+    the zip holds and `logs` whether it holds any logs; the body's
+    `screenshots`, `videos` and `logs` fields and the issue's lines say so only
+    while the zip goes with it.
     """
     import requests as http_requests
 
@@ -882,6 +883,8 @@ def submit_report(data: dict, logs_key: Optional[str] = None, screenshots: int =
         log_tail = data.get('logTail', '')
         if key and screenshots:
             description += f"\n\nscreenshots attached: {screenshots}"
+        if key and videos:
+            description += f"\n\nvideo attached: {videos}"
         if system_info:
             description += f"\n\n--- system info ---\n{_format_system_info(system_info)}"
         if log_tail:
@@ -903,6 +906,8 @@ def submit_report(data: dict, logs_key: Optional[str] = None, screenshots: int =
             body['logsKey'] = key
             if screenshots:
                 body['screenshots'] = screenshots
+            if videos:
+                body['videos'] = videos
             if logs:
                 body['logs'] = True
         return http_requests.post(
@@ -932,6 +937,47 @@ def submit_report(data: dict, logs_key: Optional[str] = None, screenshots: int =
         report_id = 'unknown'
     logging.info(f"issue submitted via API: {report_id}")
     return logs_key is not None
+
+
+# a smaller zip goes quickly enough that a bare "uploading attachments" says it all
+UPLOAD_PROGRESS_MIN_BYTES = 5 * 1024 * 1024
+UPLOAD_PROGRESS_STEP = 5
+UPLOAD_PROGRESS_INTERVAL_S = 1.0
+
+
+class _UploadProgress:
+    """The zip opened for one upload attempt, counting what is read out of it.
+
+    requests streams a file body through read(), so the count is what has gone
+    to storage; past UPLOAD_PROGRESS_MIN_BYTES it shows as a status line at
+    most every UPLOAD_PROGRESS_STEP percent and UPLOAD_PROGRESS_INTERVAL_S.
+    A retry opens a fresh one, so the count starts over with the upload.
+    """
+
+    def __init__(self, path: str, size: int):
+        self._file = open(path, 'rb')
+        self._size = size
+        self._read = 0
+        self._shown = 0
+        self._shown_at = time.monotonic()
+
+    def read(self, n: int = -1) -> bytes:
+        chunk = self._file.read(n)
+        self._read += len(chunk)
+        if self._size > UPLOAD_PROGRESS_MIN_BYTES:
+            percent = min(100, self._read * 100 // self._size)
+            now = time.monotonic()
+            if (percent >= self._shown + UPLOAD_PROGRESS_STEP
+                    and now - self._shown_at >= UPLOAD_PROGRESS_INTERVAL_S):
+                self._shown, self._shown_at = percent, now
+                _emit('status', f'uploading attachments ({percent}%)')
+        return chunk
+
+    def __enter__(self) -> '_UploadProgress':
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._file.close()
 
 
 def upload_issue_logs(zip_path: str, size: int) -> str:
@@ -966,7 +1012,7 @@ def upload_issue_logs(zip_path: str, size: int) -> str:
     try:
         upload_to_signed_url(
             upload_url,
-            lambda: open(zip_path, 'rb'),
+            lambda: _UploadProgress(zip_path, size),
             content_type='application/zip',
             timeout_s=(30, 300),
             content_length=size,
@@ -977,10 +1023,11 @@ def upload_issue_logs(zip_path: str, size: int) -> str:
     return key
 
 
-def _attach(include_logs: bool, screenshots: list) -> tuple[str, int, bool]:
-    """Zip the staged screenshots and, if asked, this machine's logs, and upload
-    them; returns the key, how many screenshots the zip holds and whether it
-    holds any logs. The zip is always removed."""
+def _attach(include_logs: bool, screenshots: list,
+            videos: list) -> tuple[str, int, int, bool]:
+    """Zip the staged screenshots and video and, if asked, this machine's logs,
+    and upload them; returns the key, how many screenshots and videos the zip
+    holds and whether it holds any logs. The zip is always removed."""
     import log_bundle
 
     fd, zip_path = tempfile.mkstemp(suffix='.zip')
@@ -988,15 +1035,20 @@ def _attach(include_logs: bool, screenshots: list) -> tuple[str, int, bool]:
     try:
         if screenshots:
             _emit('status', 'adding screenshots')
+        if videos:
+            _emit('status', 'adding video')
         if include_logs:
             _emit('status', 'zipping logs')
         bundle = log_bundle.build_log_zip(
-            zip_path, screenshots=screenshots, include_logs=include_logs)
-        if not include_logs and not bundle['screenshots']:
-            raise RuntimeError('no screenshot could be read')
+            zip_path, screenshots=screenshots, include_logs=include_logs, videos=videos)
+        shots, vids = bundle['screenshots'], bundle['videos']
+        if not include_logs and not shots and not vids:
+            asked = ' or '.join(kind for kind, named in (('screenshot', screenshots),
+                                                         ('video', videos)) if named)
+            raise RuntimeError(f'no {asked} could be read')
         _emit('status', 'uploading attachments')
-        has_logs = bundle['files'] > bundle['screenshots']
-        return upload_issue_logs(zip_path, bundle['size']), bundle['screenshots'], has_logs
+        has_logs = bundle['files'] > shots + vids
+        return upload_issue_logs(zip_path, bundle['size']), shots, vids, has_logs
     finally:
         try:
             os.remove(zip_path)
@@ -1038,15 +1090,16 @@ def run_report_issue(payload_path: str) -> int:
     """Submit the feedback payload written by the desktop app.
 
     The payload is `{"category": ..., "description": ..., "attachLogs": bool,
-    "screenshots": [name, ...]}` in a file under the owlette tree; it is deleted
-    as soon as it has been read so an operator's description is not left lying
-    on disk. The screenshots are names the desktop app staged in
-    `ipc/issue-attachments/`, deleted once the issue is filed, whether or not
-    they went with it; a run that could not file the issue keeps them for the
-    app's retry.
+    "screenshots": [name, ...], "videos": [name]}` in a file under the owlette
+    tree; it is deleted as soon as it has been read so an operator's
+    description is not left lying on disk. The screenshots and video are names
+    the desktop app staged in `ipc/issue-attachments/`, deleted once the issue
+    is filed, whether or not they went with it; a run that could not file the
+    issue keeps them for the app's retry.
     Attachments that cannot be sent never stop the issue: it goes without them
     and says why, and `done` carries `logsAttached` whenever logs were asked
-    for and `screenshotsAttached` whenever screenshots were.
+    for, `screenshotsAttached` whenever screenshots were and `videosAttached`
+    whenever a video was.
     """
     import log_bundle
 
@@ -1067,14 +1120,19 @@ def run_report_issue(payload_path: str) -> int:
     if screenshots is None:
         _emit('error', 'the report names screenshots owlette did not stage.')
         return 1
-    code = _send_report(payload, screenshots)
-    if code == 0 and screenshots:
-        log_bundle.discard_screenshots(screenshots)
+    named = payload.get('videos')
+    videos = [] if named is None else log_bundle.video_ids(named)
+    if videos is None:
+        _emit('error', 'the report names a video owlette did not stage.')
+        return 1
+    code = _send_report(payload, screenshots, videos)
+    if code == 0 and (screenshots or videos):
+        log_bundle.discard_staged(screenshots + videos)
     return code
 
 
-def _send_report(payload: dict, screenshots: list) -> int:
-    """`run_report_issue` once its payload is read and its screenshots checked."""
+def _send_report(payload: dict, screenshots: list, videos: list) -> int:
+    """`run_report_issue` once its payload is read and its screenshots and video checked."""
     description = str(payload.get('description') or '').strip()
     if not description:
         _emit('error', 'please describe the issue before submitting.')
@@ -1092,10 +1150,11 @@ def _send_report(payload: dict, screenshots: list) -> int:
     attach_logs = payload.get('attachLogs') is True
     logs_key = None
     shots = 0
+    vids = 0
     has_logs = False
-    if attach_logs or screenshots:
+    if attach_logs or screenshots or videos:
         try:
-            logs_key, shots, has_logs = _attach(attach_logs, screenshots)
+            logs_key, shots, vids, has_logs = _attach(attach_logs, screenshots, videos)
         except Exception as e:
             reason = (str(e) or type(e).__name__)[:200]
             logging.warning(f"Issue attachments could not be sent: {reason}")
@@ -1103,7 +1162,7 @@ def _send_report(payload: dict, screenshots: list) -> int:
 
     _emit('status', 'submitting')
     try:
-        attached = submit_report(report, logs_key, shots, has_logs)
+        attached = submit_report(report, logs_key, shots, has_logs, vids)
     except Exception as e:
         _emit('error', str(e) or repr(e))
         return 1
@@ -1113,6 +1172,8 @@ def _send_report(payload: dict, screenshots: list) -> int:
         done['logsAttached'] = attached
     if screenshots:
         done['screenshotsAttached'] = shots if attached else 0
+    if videos:
+        done['videosAttached'] = vids if attached else 0
     _emit('done', done)
     return 0
 
@@ -1423,10 +1484,10 @@ REQUEST_REPLY_SUFFIX = '.result'
 # A request is one verb and one nonce, a `pair` may name its server, and a
 # `report_issue` carries a description the app caps at 1000 UTF-16 units. JSON
 # grows a unit to at most six bytes (a control character as \u00XX), so a
-# report is under 6.2 KB; its five screenshot names add under 250 bytes. The
-# directory is group-writable, so the size of what turns up in it is not the
-# daemon's to trust: without a bound the drain reads whatever was planted there
-# straight into memory.
+# report is under 6.2 KB; its five screenshot names and one video name add
+# under 300 bytes. The directory is group-writable, so the size of what turns
+# up in it is not the daemon's to trust: without a bound the drain reads
+# whatever was planted there straight into memory.
 REQUEST_MAX_BYTES = 8192
 # How far back the rate limit reads. Every accepted request appends a row and
 # nothing ages the file out, so an app asking on every tick grows it for as long
@@ -1589,15 +1650,22 @@ def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Option
                 return _refuse(
                     path, reply_path, 'carries an attachLogs that is not true or false')
             report['attachLogs'] = attach_logs
+        import log_bundle
+
         screenshots = payload.get('screenshots')
         if screenshots is not None:
-            import log_bundle
-
             screenshots = log_bundle.screenshot_ids(screenshots)
             if screenshots is None:
                 return _refuse(path, reply_path,
                                'carries screenshots that are not up to five staged names')
             report['screenshots'] = screenshots
+        videos = payload.get('videos')
+        if videos is not None:
+            videos = log_bundle.video_ids(videos)
+            if videos is None:
+                return _refuse(path, reply_path,
+                               'carries videos that are not up to one staged video name')
+            report['videos'] = videos
     if not nonce or payload.get('nonce') != nonce:
         return _refuse(
             path, reply_path, 'does not quote the nonce the daemon last issued')
