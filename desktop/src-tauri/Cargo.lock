@@ -2509,7 +2509,7 @@ dependencies = [
 
 [[package]]
 name = "owlette-desktop"
-version = "4.1.16"
+version = "4.1.17"
 dependencies = [
  "libc",
  "log",

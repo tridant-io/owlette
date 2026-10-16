@@ -425,10 +425,10 @@ def test_compressed_cap_stops_adding(tree, monkeypatch):
 
     result, names, manifest, dest = _build(tree['root'])
 
-    capped = [n for n, r in result['skipped'] if r == 'the zip reached its 50 MB cap']
+    capped = [n for n, r in result['skipped'] if r == 'the zip reached its 150 MB cap']
     assert capped
     assert not set(capped) & set(names)
-    assert 'cut short at the 50 MB zip cap' in manifest
+    assert 'cut short at the 150 MB zip cap' in manifest
     # the overshoot is one chunk plus what deflate holds back plus the manifest
     assert dest.stat().st_size < cap + chunk + 128 * 1024
     assert result['files'] == len(names) - 1
@@ -437,9 +437,9 @@ def test_compressed_cap_stops_adding(tree, monkeypatch):
 
 
 def test_cap_leaves_room_under_the_upload_limit():
-    # the upload-url route refuses anything over 50 MiB
+    # the upload-url route refuses anything over 150 MiB
     overshoot = log_bundle.CHUNK_BYTES + 1024 * 1024
-    assert log_bundle.ARCHIVE_CAP_BYTES + overshoot <= 50 * 1024 * 1024
+    assert log_bundle.ARCHIVE_CAP_BYTES + overshoot <= 150 * 1024 * 1024
 
 
 # the data-root listing
@@ -1041,7 +1041,8 @@ def test_screenshots_without_logs_are_all_the_zip_holds(tree):
     result, entries, _, dest = _build(tree['root'], screenshots=names, include_logs=False)
 
     assert entries == ['screenshots/1.png', 'manifest.txt']
-    assert result == {'files': 1, 'size': dest.stat().st_size, 'skipped': [], 'screenshots': 1}
+    assert result == {'files': 1, 'size': dest.stat().st_size, 'skipped': [], 'screenshots': 1,
+                      'videos': 0}
 
 
 def test_no_screenshots_leaves_the_log_zip_as_it_was(tree):
@@ -1081,7 +1082,7 @@ def test_a_screenshot_that_would_pass_the_cap_is_left_out_whole(tree, monkeypatc
 
     assert entries == ['screenshots/1.png', 'manifest.txt']
     assert _read(dest, 'screenshots/1.png') == big
-    assert _reasons(result) == {f'screenshot {names[1]}': 'would pass the 50 MB zip cap'}
+    assert _reasons(result) == {f'screenshot {names[1]}': 'would pass the 150 MB zip cap'}
 
 
 def test_a_missing_screenshot_is_a_manifest_line(tree):
@@ -1180,8 +1181,8 @@ def test_no_console_user_leaves_the_screenshots_out(tree, monkeypatch):
 @pytest.mark.parametrize('value,valid', [
     ([], True),
     (['a' * 32 + '.png'], True),
-    ([f'{i:032x}.{ext}' for i, ext in enumerate(['png', 'jpg', 'webp', 'png', 'jpg'])], True),
-    (['a' * 32 + '.png'] * 6, False),
+    ([f'{i:032x}.{ext}' for i, ext in enumerate(['png', 'jpg', 'webp'] * 3 + ['png'])], True),
+    (['a' * 32 + '.png'] * 11, False),
     ('a' * 32 + '.png', False),
     (None, False),
     ([None], False),
@@ -1213,15 +1214,416 @@ def test_a_name_that_is_not_a_staged_one_is_never_opened(tree):
     assert b'TOKEN-SECRET' not in _blob(dest)
 
 
-def test_discard_deletes_exactly_the_named_screenshots(tree):
+def test_discard_deletes_exactly_the_named_screenshots_and_video(tree):
     names = _stage(tree, PNG, JPEG, WEBP)
+    video = _stage_video(tree, MP4)
     (tree['data'] / 'ipc' / 'keep.png').write_bytes(PNG)
 
-    log_bundle.discard_screenshots(names[:2] + ['f' * 32 + '.png', '../keep.png'])
+    log_bundle.discard_staged(names[:2] + [video, 'f' * 32 + '.png', '../keep.png'])
 
     assert sorted(p.name for p in _staging(tree).iterdir()) == [names[2]]
     assert (tree['data'] / 'ipc' / 'keep.png').exists()
 
 
 def test_discard_without_a_staging_folder_is_quiet(tree):
-    log_bundle.discard_screenshots(['a' * 32 + '.png'])
+    log_bundle.discard_staged(['a' * 32 + '.png', 'd' * 32 + '.mp4'])
+
+
+# a video
+
+MP4 = b'\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2' + b'mp4 body'
+MOV = b'\x00\x00\x00\x14ftypqt  \x00\x00\x02\x00qt  ' + b'mov body'
+M4V = b'\x00\x00\x00\x18ftypM4V \x00\x00\x00\x01M4V mp42' + b'm4v body'
+WEBM = (b'\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81\x01\x42\xf2\x81\x04'
+        b'\x42\xf3\x81\x08\x42\x82\x84webm' + b'webm body')
+
+
+def _stage_video(tree, data, ext='mp4'):
+    """`data` staged under a fresh name, as the desktop app does; the name."""
+    staging = _staging(tree)
+    name = f'{len(list(staging.iterdir())):032x}.{ext}'
+    (staging / name).write_bytes(data)
+    return name
+
+
+def _video_reason(result, name):
+    return _reasons(result)[f'video {name}']
+
+
+def test_the_video_goes_in_after_the_screenshots_and_before_the_logs(tree):
+    shots = _stage(tree, PNG, JPEG)
+    video = _stage_video(tree, MP4)
+
+    result, entries, manifest, dest = _build(tree['root'], screenshots=shots, videos=[video])
+
+    assert entries[:3] == ['screenshots/1.png', 'screenshots/2.jpg', 'videos/1.mp4']
+    assert entries[3:] and not any(e.startswith(('screenshots/', 'videos/')) for e in entries[3:])
+    assert 'logs/service.log' in entries
+    assert _read(dest, 'videos/1.mp4') == MP4
+    assert (result['screenshots'], result['videos']) == (2, 1)
+    assert f'videos/1.mp4  {len(MP4)} bytes' in manifest
+
+
+def test_a_video_without_logs_is_all_the_zip_holds(tree):
+    video = _stage_video(tree, WEBM, 'webm')
+
+    result, entries, _, dest = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert entries == ['videos/1.webm', 'manifest.txt']
+    assert result == {'files': 1, 'size': dest.stat().st_size, 'skipped': [], 'screenshots': 0,
+                      'videos': 1}
+
+
+@pytest.mark.parametrize('data,ext', [(MP4, 'mp4'), (MOV, 'mov'), (M4V, 'mp4'), (WEBM, 'webm')])
+def test_the_video_is_named_by_its_magic_bytes(tree, data, ext):
+    # the staged name says mp4 whatever it holds; the bytes decide
+    video = _stage_video(tree, data, 'mp4')
+
+    _, entries, _, dest = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert entries == [f'videos/1.{ext}', 'manifest.txt']
+    assert _read(dest, f'videos/1.{ext}') == data
+
+
+def test_the_video_is_stored_not_deflated(tree):
+    data = MP4 + bytes(256 * 1024)
+    video = _stage_video(tree, data)
+
+    _, _, _, dest = _build(tree['root'], videos=[video], include_logs=False)
+
+    with zipfile.ZipFile(dest) as zf:
+        info = zf.getinfo('videos/1.mp4')
+        assert info.compress_type == zipfile.ZIP_STORED
+        assert info.compress_size == info.file_size == len(data)
+        assert zf.testzip() is None
+    # zeros would deflate to almost nothing
+    assert dest.stat().st_size > len(data)
+
+
+def test_the_video_is_copied_a_chunk_at_a_time(tree, monkeypatch):
+    chunk = 4096
+    data = MP4 + os.urandom(10 * chunk)
+    video = _stage_video(tree, data)
+    monkeypatch.setattr(log_bundle, 'CHUNK_BYTES', chunk)
+    asked = []
+    real_read = os.read
+
+    def read(fd, n):
+        asked.append(n)
+        return real_read(fd, n)
+
+    monkeypatch.setattr(log_bundle.os, 'read', read)
+
+    _, _, _, dest = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert _read(dest, 'videos/1.mp4') == data
+    # never the whole file in one read: the head, then a chunk at a time
+    assert max(asked) <= chunk
+    assert len(asked) > len(data) // chunk
+
+
+@pytest.mark.parametrize('stop', ['shrank', 'read error'])
+def test_a_video_that_changes_while_it_is_read_is_not_counted(tree, monkeypatch, stop):
+    chunk = 4096
+    data = MP4 + os.urandom(10 * chunk)
+    video = _stage_video(tree, data)
+    monkeypatch.setattr(log_bundle, 'CHUNK_BYTES', chunk)
+    calls = []
+    real_read = os.read
+
+    def read(fd, n):
+        calls.append(n)
+        # the head, then one chunk, then the file is cut short under the copy
+        if len(calls) > 2:
+            if stop == 'read error':
+                raise OSError(5, 'input/output error')
+            return b''
+        return real_read(fd, n)
+
+    monkeypatch.setattr(log_bundle.os, 'read', read)
+
+    result, _, manifest, _ = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert (result['files'], result['videos']) == (0, 0)
+    assert _video_reason(result, video) == 'changed while it was read'
+    assert f'video {video}  changed while it was read' in manifest
+
+
+def test_a_video_cut_short_still_spends_the_100_mb(tree, monkeypatch):
+    chunk = 4096
+    data = MP4 + os.urandom(10 * chunk)
+    cut = _stage_video(tree, data)
+    after = _stage_video(tree, MOV, 'mov')
+    monkeypatch.setattr(log_bundle, 'CHUNK_BYTES', chunk)
+    # room for the next video only while the cut one's bytes in the zip go uncounted
+    monkeypatch.setattr(log_bundle, 'ATTACHMENTS_MAX_BYTES', len(data) + len(MOV) - 1)
+    reads = []
+    real_read = os.read
+
+    def read(fd, n):
+        reads.append(n)
+        # the head, then ten full chunks; the first video's last bytes never come
+        if len(reads) == 12:
+            return b''
+        return real_read(fd, n)
+
+    monkeypatch.setattr(log_bundle.os, 'read', read)
+
+    result, _, _, _ = _build(tree['root'], videos=[cut, after], include_logs=False)
+
+    assert result['videos'] == 0
+    assert _video_reason(result, after) == 'would pass the 100 MB attachment limit'
+
+
+@pytest.mark.parametrize('data', [
+    b'GIF89a not a video at all',
+    MP4[:11],
+    b'\x00\x00\x00\x18ftpyisom\x00\x00\x02\x00',
+    WEBM.replace(b'webm', b'matroska'),
+    PNG,
+])
+def test_a_video_that_is_not_mp4_mov_or_webm_is_a_manifest_line(tree, data):
+    video = _stage_video(tree, data)
+
+    result, entries, _, _ = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert result['videos'] == 0
+    assert _video_reason(result, video) == 'is not an mp4, mov or webm video'
+
+
+@pytest.mark.parametrize('brand', [b'heic', b'heix', b'heim', b'heis', b'mif1', b'msf1',
+                                   b'avif', b'avis'])
+def test_a_heif_or_avif_still_is_not_a_video(tree, brand):
+    video = _stage_video(tree, b'\x00\x00\x00\x18ftyp' + brand + b'\x00\x00\x00\x00mif1miaf')
+
+    result, entries, _, _ = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _video_reason(result, video) == 'is not an mp4, mov or webm video'
+
+
+def test_hevc_is_a_video_brand(tree):
+    video = _stage_video(tree, b'\x00\x00\x00\x18ftyphevc\x00\x00\x00\x00hevcmp42body')
+
+    _, entries, _, _ = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert entries == ['videos/1.mp4', 'manifest.txt']
+
+
+def test_a_video_past_100_mb_is_refused_unread(tree):
+    video = _stage_video(tree, MP4)
+    with open(_staging(tree) / video, 'r+b') as f:
+        # sparse where the filesystem allows it; the size alone refuses it
+        f.truncate(log_bundle.ATTACHMENTS_MAX_BYTES + 1)
+
+    result, entries, _, dest = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _video_reason(result, video) == 'would pass the 100 MB attachment limit'
+    assert dest.stat().st_size < 64 * 1024
+
+
+def test_a_video_at_the_limit_goes_in(tree, monkeypatch):
+    monkeypatch.setattr(log_bundle, 'ATTACHMENTS_MAX_BYTES', len(MP4))
+    video = _stage_video(tree, MP4)
+
+    _, entries, _, _ = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert entries == ['videos/1.mp4', 'manifest.txt']
+
+
+def test_several_videos_go_in_numbered_in_order(tree):
+    videos = [_stage_video(tree, MP4), _stage_video(tree, MOV, 'mov'),
+              _stage_video(tree, WEBM, 'webm')]
+
+    result, entries, _, _ = _build(tree['root'], videos=videos, include_logs=False)
+
+    assert entries == ['videos/1.mp4', 'videos/2.mov', 'videos/3.webm', 'manifest.txt']
+    assert result['videos'] == 3
+
+
+def test_screenshots_and_videos_share_the_100_mb(tree, monkeypatch):
+    monkeypatch.setattr(log_bundle, 'ATTACHMENTS_MAX_BYTES', len(PNG) + len(MP4))
+    shots = _stage(tree, PNG)
+    first = _stage_video(tree, MP4)
+    second = _stage_video(tree, MOV, 'mov')
+
+    result, entries, _, _ = _build(tree['root'], screenshots=shots, videos=[first, second],
+                                   include_logs=False)
+
+    assert entries == ['screenshots/1.png', 'videos/1.mp4', 'manifest.txt']
+    assert _video_reason(result, second) == 'would pass the 100 MB attachment limit'
+    assert (result['screenshots'], result['videos']) == (1, 1)
+
+
+def test_a_screenshot_past_the_100_mb_left_is_refused(tree, monkeypatch):
+    monkeypatch.setattr(log_bundle, 'ATTACHMENTS_MAX_BYTES', len(PNG) + len(JPEG) - 1)
+    shots = _stage(tree, PNG, JPEG)
+
+    result, entries, _, _ = _build(tree['root'], screenshots=shots, include_logs=False)
+
+    assert entries == ['screenshots/1.png', 'manifest.txt']
+    assert _reasons(result)[f'screenshot {shots[1]}'] == 'would pass the 100 MB attachment limit'
+
+
+def test_a_video_that_would_pass_the_cap_is_left_out_whole(tree, monkeypatch):
+    data = MP4 + os.urandom(64 * 1024)
+    video = _stage_video(tree, data)
+    monkeypatch.setattr(log_bundle, 'ARCHIVE_CAP_BYTES', len(data))
+
+    result, entries, _, _ = _build(tree['root'], videos=[video])
+
+    assert not any(e.startswith('videos/') for e in entries)
+    assert _video_reason(result, video) == 'would pass the 150 MB zip cap'
+    # the logs still go in
+    assert 'logs/service.log' in entries
+
+
+def test_the_cap_cuts_the_logs_not_the_video(tree, monkeypatch):
+    data = MP4 + os.urandom(256 * 1024)
+    video = _stage_video(tree, data)
+    monkeypatch.setattr(log_bundle, 'ARCHIVE_CAP_BYTES', len(data) + 128 * 1024)
+    monkeypatch.setattr(log_bundle, 'CHUNK_BYTES', 64 * 1024)
+    now = time.time()
+    for i in range(4):
+        path = tree['logs'] / f'noise{i}.log'
+        path.write_bytes(os.urandom(200 * 1024))
+        os.utime(path, (now - i, now - i))
+
+    result, _, _, dest = _build(tree['root'], videos=[video])
+
+    assert _read(dest, 'videos/1.mp4') == data
+    assert result['videos'] == 1
+    capped = [n for n, r in result['skipped'] if r == 'the zip reached its 150 MB cap']
+    assert capped and not any(n.startswith('video') for n in capped)
+
+
+def test_the_video_leaves_the_logs_uncompressed_budget_alone(tree, monkeypatch):
+    video = _stage_video(tree, MP4 + bytes(256 * 1024))
+    monkeypatch.setattr(log_bundle, 'UNCOMPRESSED_BUDGET_BYTES', 128 * 1024)
+
+    result, entries, _, _ = _build(tree['root'], videos=[video])
+
+    assert 'videos/1.mp4' in entries
+    assert 'logs/service.log' in entries
+    assert not [n for n, r in result['skipped'] if 'uncompressed budget' in r]
+
+
+def test_a_missing_video_is_a_manifest_line(tree):
+    _staging(tree)
+    name = 'f' * 32 + '.mp4'
+
+    result, entries, _, _ = _build(tree['root'], videos=[name], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _video_reason(result, name).startswith('could not be opened')
+
+
+def test_a_hard_linked_video_is_refused(tree):
+    name = 'a' * 32 + '.mp4'
+    secret = tree['data'] / 'video-shaped-secret'
+    secret.write_bytes(MP4 + b'SECRET')
+    os.link(secret, _staging(tree) / name)
+
+    result, entries, _, dest = _build(tree['root'], videos=[name], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _video_reason(result, name) == 'has 2 hard links'
+    assert b'SECRET' not in _blob(dest)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='O_NOFOLLOW is POSIX')
+def test_a_video_link_is_refused(tree):
+    name = 'a' * 32 + '.mp4'
+    secret = tree['data'] / 'video-shaped-secret'
+    secret.write_bytes(MP4 + b'SECRET')
+    os.symlink(secret, _staging(tree) / name)
+
+    result, entries, _, dest = _build(tree['root'], videos=[name], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _video_reason(result, name).startswith('could not be opened')
+    assert b'SECRET' not in _blob(dest)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='the owner check is POSIX')
+def test_a_video_owned_by_another_uid_is_refused(tree, monkeypatch):
+    video = _stage_video(tree, MP4)
+    real_fstat = os.fstat
+    monkeypatch.setattr(log_bundle.os, 'fstat', lambda fd: _ForeignOwner(real_fstat(fd)))
+    monkeypatch.setattr(log_bundle, '_console_home', lambda: (str(tree['root']), 1000))
+
+    result, entries, _, _ = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _video_reason(result, video) == 'is owned by uid 4242, not the console user'
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='the owner check is POSIX')
+def test_a_video_owned_by_the_console_user_is_read(tree, monkeypatch):
+    video = _stage_video(tree, MP4)
+    owner = os.stat(_staging(tree) / video).st_uid
+    monkeypatch.setattr(log_bundle, '_console_home', lambda: (str(tree['root']), owner))
+
+    _, entries, _, _ = _build(tree['root'], videos=[video], include_logs=False)
+
+    assert entries == ['videos/1.mp4', 'manifest.txt']
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='the owner check is POSIX')
+def test_no_console_user_leaves_the_screenshots_and_video_out(tree, monkeypatch):
+    shots = _stage(tree, PNG)
+    video = _stage_video(tree, MP4)
+
+    def nobody():
+        raise log_bundle._Skip('nobody is at a graphical session')
+
+    monkeypatch.setattr(log_bundle, '_console_home', nobody)
+
+    result, entries, _, _ = _build(tree['root'], screenshots=shots, videos=[video],
+                                   include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result) == {f'screenshot {shots[0]}': 'nobody is at a graphical session',
+                                f'video {video}': 'nobody is at a graphical session'}
+
+
+def test_a_name_that_is_not_a_staged_video_is_never_opened(tree):
+    _staging(tree)
+    screenshot = 'a' * 32 + '.png'
+
+    result, entries, _, dest = _build(
+        tree['root'], videos=['../../.tokens.enc', screenshot], include_logs=False)
+
+    assert entries == ['manifest.txt']
+    assert _reasons(result) == {
+        'video ../../.tokens.enc': 'is not a staged video name',
+        f'video {screenshot}': 'is not a staged video name'}
+    assert b'TOKEN-SECRET' not in _blob(dest)
+
+
+@pytest.mark.parametrize('value,valid', [
+    ([], True),
+    (['a' * 32 + '.mp4'], True),
+    (['a' * 32 + '.mov'], True),
+    (['a' * 32 + '.webm'], True),
+    (['a' * 32 + '.mp4', 'b' * 32 + '.mov'], True),
+    ([f'{i:032x}.webm' for i in range(20)], True),
+    (['a' * 32 + '.mp4'] * 21, False),
+    ('a' * 32 + '.mp4', False),
+    (None, False),
+    ([None], False),
+    (['a' * 32 + '.png'], False),
+    (['a' * 32 + '.mkv'], False),
+    (['A' * 32 + '.mp4'], False),
+    (['a' * 32 + '.mp4\n'], False),
+    (['../' + 'a' * 29 + '.mp4'], False),
+])
+def test_video_ids_take_only_staged_video_names(value, valid):
+    assert (log_bundle.video_ids(value) == value) if valid else (
+        log_bundle.video_ids(value) is None)
+
+
+def test_screenshot_ids_refuse_a_video_name():
+    assert log_bundle.screenshot_ids(['a' * 32 + '.mp4']) is None

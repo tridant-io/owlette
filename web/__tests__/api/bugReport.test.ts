@@ -173,6 +173,71 @@ describe('POST /api/bug-report', () => {
     expect(html).not.toContain('logs and');
   });
 
+  it.each([
+    [1, undefined, undefined, '>1 video is attached to this issue: <a'],
+    [3, undefined, undefined, '>3 videos are attached to this issue: <a'],
+    [20, undefined, undefined, '>20 videos are attached to this issue: <a'],
+    [1, undefined, true, '>logs and 1 video are attached to this issue: <a'],
+    [1, 1, undefined, '>1 screenshot and 1 video are attached to this issue: <a'],
+    [2, 10, undefined, '>10 screenshots and 2 videos are attached to this issue: <a'],
+    [1, 1, true, '>logs, 1 screenshot and 1 video are attached to this issue: <a'],
+    [2, 2, true, '>logs, 2 screenshots and 2 videos are attached to this issue: <a'],
+  ])('names %s videos, screenshots %s, logs %s, on the record and in the email', async (videos, n, logs, wording) => {
+    asAgent();
+    const res = await report({ logsKey: KEY, videos, screenshots: n, logs });
+
+    expect(res.status).toBe(200);
+    const record = written[0].data.logs as { screenshots?: number; videos?: number };
+    expect(record.videos).toBe(videos);
+    expect(record.screenshots).toBe(n);
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).toContain(wording);
+    expect(html).toContain('download attachments</a> (superadmin only, kept 30 days)');
+    expect(html).not.toContain('download logs');
+  });
+
+  it.each([
+    ['zero', 0],
+    ['over the limit', 21],
+    ['negative', -1],
+    ['not an integer', 1.5],
+    ['a numeric string', '1'],
+    ['a boolean', true],
+    ['an array', [1]],
+    ['null', null],
+  ])('ignores a videos field that is %s', async (_label, value) => {
+    asAgent();
+    const res = await report({ logsKey: KEY, videos: value });
+
+    expect(res.status).toBe(200);
+    expect(written[0].data.logs).not.toHaveProperty('videos');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).toContain('>logs are attached to this issue: <a');
+    expect(html).not.toContain('video');
+  });
+
+  it('counts no video without an attached zip', async () => {
+    asAgent();
+    const res = await report({ videos: 1, logs: true });
+
+    expect(res.status).toBe(200);
+    expect(written[0].data).not.toHaveProperty('logs');
+    expect(written[0].data).not.toHaveProperty('videos');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).not.toContain('video');
+  });
+
+  it('ignores a video from a user session', async () => {
+    mockRequireSession.mockResolvedValue('user-1');
+    const res = await report({ videos: 1 }, {});
+
+    expect(res.status).toBe(200);
+    expect(written[0].data).not.toHaveProperty('logs');
+    expect(written[0].data).not.toHaveProperty('videos');
+    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    expect(html).not.toContain('video');
+  });
+
   it('mentions no logs without an attached zip, whatever the logs field says', async () => {
     asAgent();
     await report({ logs: true, screenshots: 2 });
@@ -184,7 +249,7 @@ describe('POST /api/bug-report', () => {
 
   it.each([
     ['zero', 0],
-    ['over the limit', 6],
+    ['over the limit', 11],
     ['negative', -1],
     ['not an integer', 2.5],
     ['a numeric string', '3'],

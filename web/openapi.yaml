@@ -6777,10 +6777,10 @@ paths:
     post:
       operationId: mintIssueLogsUploadUrl
       tags: [Machines]
-      summary: mint a 15-minute signed write url for an issue's logs zip
+      summary: mint a 30-minute signed write url for an issue's attachments zip
       description: |
-        Agent-internal. When a person submits an issue with "attach logs"
-        ticked, the agent asks here for a presigned PUT, uploads the zip to
+        Agent-internal. When a person submits an issue with any attachment,
+        the agent asks here for a 30-minute presigned PUT, uploads the zip to
         it, then names the returned `key` as `logsKey` in the issue it posts.
         `size` is the zip's exact byte count; content-length is signed into
         the url, so the PUT must send exactly that many bytes with
@@ -6806,7 +6806,7 @@ paths:
                 size:
                   type: integer
                   minimum: 1
-                  maximum: 52428800
+                  maximum: 157286400
       responses:
         '200':
           description: Signed upload url issued.

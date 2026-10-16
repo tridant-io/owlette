@@ -87,7 +87,7 @@ describe('POST issue-logs/upload-url', () => {
     expect(body.key).toMatch(new RegExp(`^issues/${SITE}/${MACHINE}/[0-9a-f-]{36}\\.zip$`));
     expect(body.uploadUrl).toContain(body.key);
     expect(body.uploadUrl).toContain('size=4096');
-    expect(body.expiresIn).toBe(900);
+    expect(body.expiresIn).toBe(1800);
     expect(res.headers.get('RateLimit-Remaining')).toBe('4');
   });
 
@@ -147,6 +147,18 @@ describe('POST issue-logs/upload-url', () => {
   it('accepts exactly the cap', async () => {
     asAgent();
     expect((await call({ size: ISSUE_LOGS_MAX_BYTES })).status).toBe(200);
+  });
+
+  it("accepts the agent's largest zip, 150,000,000 bytes", async () => {
+    asAgent();
+    expect((await call({ size: 150_000_000 })).status).toBe(200);
+  });
+
+  it('names the cap in the validation message', async () => {
+    asAgent();
+    const res = await call({ size: ISSUE_LOGS_MAX_BYTES + 1 });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('1 to 157286400');
   });
 
   it('429s the sixth url in the window, keyed on the machine', async () => {

@@ -15,10 +15,13 @@ import { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand } from 
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { currentEnv } from '@/lib/r2Client.server';
 
-export const ISSUE_LOGS_MAX_BYTES = 50 * 1024 * 1024;
+// the agent caps its zip at 150,000,000 bytes, logs plus screenshots and videos
+export const ISSUE_LOGS_MAX_BYTES = 150 * 1024 * 1024;
 export const ISSUE_LOGS_RETENTION_DAYS = 30;
 
-export const ISSUE_LOGS_URL_TTL_SECONDS = 15 * 60;
+export const ISSUE_LOGS_DOWNLOAD_TTL_SECONDS = 15 * 60;
+// matches the desktop's 30-minute send budget, so a retry of a slow video upload is still signed
+export const ISSUE_LOGS_UPLOAD_TTL_SECONDS = 30 * 60;
 
 // what a HEAD reports for any issues/ key under OWLETTE_E2E, where no real R2 exists
 export const ISSUE_LOGS_E2E_SIZE = 1024;
@@ -82,7 +85,7 @@ export async function presignIssueLogsUpload(key: string, size: number): Promise
   return getSignedUrl(
     issueLogsClient(),
     new PutObjectCommand({ Bucket: bucket(), Key: key, ContentLength: size, ContentType: 'application/zip' }),
-    { expiresIn: ISSUE_LOGS_URL_TTL_SECONDS, signableHeaders: new Set(['content-type', 'content-length']) },
+    { expiresIn: ISSUE_LOGS_UPLOAD_TTL_SECONDS, signableHeaders: new Set(['content-type', 'content-length']) },
   );
 }
 
@@ -110,6 +113,6 @@ export async function presignIssueLogsDownload(key: string, filename: string): P
       Key: key,
       ResponseContentDisposition: `attachment; filename="${safeName}"`,
     }),
-    { expiresIn: ISSUE_LOGS_URL_TTL_SECONDS },
+    { expiresIn: ISSUE_LOGS_DOWNLOAD_TTL_SECONDS },
   );
 }

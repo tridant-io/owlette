@@ -1,9 +1,11 @@
 """
-log_bundle — the zip a "submit issue" uploads with its screenshots or its logs.
+log_bundle — the zip a "submit issue" uploads with its screenshots, video or logs.
 
 The screenshots the desktop app staged in `ipc/issue-attachments/` go in first
-(`screenshots/<n>.<ext>`), each re-checked as an image of at most 8 MB.
-Without "attach logs" they and the manifest are all the zip holds. The logs are
+(`screenshots/<n>.<ext>`), each re-checked as an image of at most 8 MB, then
+the staged video (`videos/1.<ext>`), re-checked as an mp4, mov or webm of at
+most 100 MB and copied in a chunk at a time. Without "attach logs" they and
+the manifest are all the zip holds. The logs are
 these sources, nothing else:
   * every regular file under the data root's `logs/` tree (`logs/<path>`);
   * the data root's `tmp/status_writer.log*` (`tmp/<file>`);
@@ -22,7 +24,7 @@ console user's home, so a planted symlink or hard link there could pull
 `.tokens.enc` or `/etc/shadow` into a zip that leaves the machine. Every file is
 therefore opened without following links and checked on the descriptor: a
 regular file with one link, and under root a per-user log must belong to the
-console user, as must a staged screenshot. `logs/swoop` and `ipc/` are
+console user, as must a staged screenshot or video. `logs/swoop` and `ipc/` are
 group-writable, so the link checks apply to the data tree too, and on POSIX the
 data root's folders are read by descriptor so a directory swapped for a link
 after the listing cannot lead the walk out of them.
@@ -58,8 +60,8 @@ logger = logging.getLogger(__name__)
 MAX_AGE_SECONDS = 14 * 24 * 3600
 # bounds the read and the deflate time on a box with a runaway log
 UNCOMPRESSED_BUDGET_BYTES = 300 * 1000 * 1000
-# decimal mb keeps the zip under the upload route's 50 MiB limit with room for the manifest
-ARCHIVE_CAP_BYTES = 50 * 1000 * 1000
+# decimal mb keeps the zip under the upload route's 150 MiB limit with room for the manifest
+ARCHIVE_CAP_BYTES = 150 * 1000 * 1000
 # deflate's middle ground: logs compress well and level 9 buys little for its cpu
 COMPRESS_LEVEL = 6
 # the cap is checked per chunk, so this is also the most one entry overshoots it
@@ -109,10 +111,21 @@ _DIR_FLAGS = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLL
 
 # the desktop app's staging folder and limits (desktop/src-tauri/src/issue_attachments.rs)
 SCREENSHOTS_DIR = 'ipc/issue-attachments'
-MAX_SCREENSHOTS = 5
+MAX_SCREENSHOTS = 10
 SCREENSHOT_MAX_BYTES = 8 * 1024 * 1024
 _SCREENSHOT_NAME = re.compile(r'[0-9a-f]{32}\.(?:png|jpg|webp)')
-# room for a stored entry's headers when deciding whether a screenshot fits the cap
+# the byte limit is what holds videos back; this only bounds the list of names
+MAX_VIDEOS = 20
+# screenshots and videos together, leaving the zip's last 45 MB to the logs
+ATTACHMENTS_MAX_BYTES = 100 * 1024 * 1024
+_VIDEO_NAME = re.compile(r'[0-9a-f]{32}\.(?:mp4|mov|webm)')
+# enough to tell the formats apart: webm names its doctype within the ebml header
+VIDEO_HEAD_BYTES = 64
+# heif and avif stills share the iso-bmff ftyp box with video; their major brands say so
+# (the same set as desktop/src-tauri/src/issue_attachments.rs)
+_IMAGE_BRANDS = frozenset({b'heic', b'heix', b'heim', b'heis', b'mif1', b'msf1', b'avif',
+                           b'avis'})
+# room for a stored entry's headers when deciding whether a screenshot or video fits the cap
 ENTRY_OVERHEAD_BYTES = 1024
 
 
@@ -139,13 +152,15 @@ class _Candidate(NamedTuple):
 
 
 def build_log_zip(dest_path: str, screenshots: Sequence[str] = (),
-                  include_logs: bool = True) -> dict:
+                  include_logs: bool = True, videos: Sequence[str] = ()) -> dict:
     """Write the issue zip to `dest_path` (created or truncated, mode 0600): the
-    staged `screenshots` first, then the logs unless `include_logs` is False.
+    staged `screenshots` first, then the staged `videos`, then the logs unless
+    `include_logs` is False.
 
-    Returns `{files, size, skipped, screenshots}`: the number of entries
-    included besides the manifest, the zip's size in bytes, `(name, reason)`
-    for everything left out, and how many screenshots went in.
+    Returns `{files, size, skipped, screenshots, videos}`: the number of
+    entries included besides the manifest, the zip's size in bytes,
+    `(name, reason)` for everything left out, and how many screenshots and
+    videos went in.
     """
     skipped: list[tuple[str, str]] = []
     dir_fds: list[int] = []
@@ -172,11 +187,11 @@ def build_log_zip(dest_path: str, screenshots: Sequence[str] = (),
         with os.fdopen(fd, 'wb') as out:
             with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED,
                                  compresslevel=COMPRESS_LEVEL) as zf:
-                uncompressed = _add_screenshots(zf, out, screenshots, included, skipped)
-                shots = len(included)
+                uncompressed, shots, vids = _add_staged(
+                    zf, out, screenshots, videos, included, skipped)
                 for arcname, data, note in generated:
                     if out.tell() >= ARCHIVE_CAP_BYTES:
-                        skipped.append((arcname, 'the zip reached its 50 MB cap'))
+                        skipped.append((arcname, 'the zip reached its 150 MB cap'))
                     elif uncompressed + len(data) > UNCOMPRESSED_BUDGET_BYTES:
                         skipped.append((arcname, 'past the 300 MB uncompressed budget'))
                     else:
@@ -185,7 +200,7 @@ def build_log_zip(dest_path: str, screenshots: Sequence[str] = (),
                         included.append((arcname, len(data), now, note))
                 for candidate in fresh:
                     if out.tell() >= ARCHIVE_CAP_BYTES:
-                        skipped.append((candidate.arcname, 'the zip reached its 50 MB cap'))
+                        skipped.append((candidate.arcname, 'the zip reached its 150 MB cap'))
                         continue
                     try:
                         src, info = _open_checked(
@@ -209,46 +224,64 @@ def build_log_zip(dest_path: str, screenshots: Sequence[str] = (),
         for dir_fd in dir_fds:
             os.close(dir_fd)
 
-    logger.info(f"Built the issue zip: {len(included)} files ({shots} screenshots), "
-                f"{size} bytes")
-    return {'files': len(included), 'size': size, 'skipped': skipped, 'screenshots': shots}
+    logger.info(f"Built the issue zip: {len(included)} files ({shots} screenshots, "
+                f"{vids} videos), {size} bytes")
+    return {'files': len(included), 'size': size, 'skipped': skipped, 'screenshots': shots,
+            'videos': vids}
 
 
 def screenshot_ids(value) -> Optional[list[str]]:
+    """`value` deduplicated when it is up to MAX_SCREENSHOTS staged screenshot names, else None."""
+    return _staged_ids(value, _SCREENSHOT_NAME, MAX_SCREENSHOTS)
+
+
+def video_ids(value) -> Optional[list[str]]:
+    """`value` deduplicated when it is up to MAX_VIDEOS staged video names, else None."""
+    return _staged_ids(value, _VIDEO_NAME, MAX_VIDEOS)
+
+
+def _staged_ids(value, pattern: re.Pattern, limit: int) -> Optional[list[str]]:
     """`value` without repeats, in first-seen order, when it is a list of at
-    most MAX_SCREENSHOTS staged screenshot names, else None. A name is joined
-    onto the staging folder, so nothing else may pass."""
-    if not isinstance(value, list) or len(value) > MAX_SCREENSHOTS:
+    most `limit` names `pattern` matches, else None. A name is joined onto the
+    staging folder, so nothing else may pass."""
+    if not isinstance(value, list) or len(value) > limit:
         return None
-    if not all(isinstance(name, str) and _SCREENSHOT_NAME.fullmatch(name) for name in value):
+    if not all(isinstance(name, str) and pattern.fullmatch(name) for name in value):
         return None
     return list(dict.fromkeys(value))
 
 
-def _add_screenshots(zf: zipfile.ZipFile, out, ids: Sequence[str], included: list,
-                     skipped: list) -> int:
+def _add_staged(zf: zipfile.ZipFile, out, screenshots: Sequence[str], videos: Sequence[str],
+                included: list, skipped: list) -> tuple[int, int, int]:
     """Each staged screenshot as `screenshots/<n>.<ext>`, numbered in the order
-    they go in; returns the bytes added.
+    they go in, then each staged video as `videos/<n>.<ext>`; returns the
+    screenshots' bytes and how many screenshots and videos went in.
 
-    Stored whole or not at all: an image cut at the cap is no use, and images
-    are compressed already. A screenshot that fails a check is a manifest line.
+    Stored, not deflated: images and video are compressed already. One that
+    fails a check, or would take them all past ATTACHMENTS_MAX_BYTES, is a
+    manifest line and goes in whole or not at all, except a video that shrinks
+    while it is copied: its entry is written by then, so it stays in the zip but
+    is not counted and is named in the manifest.
     """
-    if not ids:
-        return 0
+    labels = [f'screenshot {name}' for name in screenshots] + [f'video {name}' for name in videos]
+    if not labels:
+        return 0, 0, 0
     try:
         # under root on POSIX the desktop app wrote them as the console user
         owner_uid = None if os.name == 'nt' else _console_home()[1]
         directory = _screenshot_dir()
     except _Skip as e:
-        skipped.extend((f'screenshot {name}', str(e)) for name in ids)
-        return 0
+        skipped.extend((label, str(e)) for label in labels)
+        return 0, 0, 0
     except OSError as e:
-        skipped.extend((f'screenshot {name}', f'could not be opened: {e.strerror or e}')
-                       for name in ids)
-        return 0
+        skipped.extend((label, f'could not be opened: {e.strerror or e}') for label in labels)
+        return 0, 0, 0
     added = 0
+    attached = 0
+    shots = 0
+    vids = 0
     try:
-        for name in ids:
+        for name in screenshots:
             label = f'screenshot {name}'
             if not _SCREENSHOT_NAME.fullmatch(name):
                 skipped.append((label, 'is not a staged screenshot name'))
@@ -258,17 +291,40 @@ def _add_screenshots(zf: zipfile.ZipFile, out, ids: Sequence[str], included: lis
             except _Skip as e:
                 skipped.append((label, str(e)))
                 continue
-            if out.tell() + len(data) + ENTRY_OVERHEAD_BYTES > ARCHIVE_CAP_BYTES:
-                skipped.append((label, 'would pass the 50 MB zip cap'))
+            if attached + len(data) > ATTACHMENTS_MAX_BYTES:
+                skipped.append((label, 'would pass the 100 MB attachment limit'))
                 continue
-            arcname = f'screenshots/{len(included) + 1}.{_image_ext(data)}'
+            if out.tell() + len(data) + ENTRY_OVERHEAD_BYTES > ARCHIVE_CAP_BYTES:
+                skipped.append((label, 'would pass the 150 MB zip cap'))
+                continue
+            shots += 1
+            arcname = f'screenshots/{shots}.{_image_ext(data)}'
             zf.writestr(arcname, data, compress_type=zipfile.ZIP_STORED)
             included.append((arcname, len(data), mtime, ''))
             added += len(data)
+            attached += len(data)
+        for name in videos:
+            label = f'video {name}'
+            if not _VIDEO_NAME.fullmatch(name):
+                skipped.append((label, 'is not a staged video name'))
+                continue
+            before = out.tell()
+            try:
+                entry = _add_video(zf, out, directory, name, owner_uid, vids + 1,
+                                   ATTACHMENTS_MAX_BYTES - attached)
+            except _Skip as e:
+                skipped.append((label, str(e)))
+                continue
+            finally:
+                # what reached the zip, so a video cut short still spends the limit
+                attached += out.tell() - before
+            included.append(entry)
+            vids += 1
     finally:
         if isinstance(directory, int):
             os.close(directory)
-    return added
+    # a video is stored, not deflated, so it leaves the logs' budget alone
+    return added, shots, vids
 
 
 def _screenshot_dir() -> Union[str, int]:
@@ -319,8 +375,53 @@ def _image_ext(data: bytes) -> str:
     return ''
 
 
-def discard_screenshots(ids: Sequence[str]) -> None:
-    """Unlink each staged screenshot by its exact name; one already gone is fine."""
+def _add_video(zf: zipfile.ZipFile, out, directory: Union[str, int], name: str,
+               owner_uid: Optional[int], number: int, room: int) -> tuple[str, int, float, str]:
+    """One staged video of at most `room` bytes copied into `videos/<number>.<ext>`
+    once it has passed every check; its manifest entry. Read a chunk at a time,
+    never whole."""
+    by_fd = isinstance(directory, int)
+    src, info = _open_checked(name if by_fd else os.path.join(directory, name), owner_uid,
+                              directory if by_fd else None)
+    try:
+        if info.st_size > room:
+            raise _Skip('would pass the 100 MB attachment limit')
+        try:
+            head = os.read(src, min(VIDEO_HEAD_BYTES, info.st_size))
+            os.lseek(src, 0, os.SEEK_SET)
+        except OSError as e:
+            raise _Skip(f'could not be read: {e.strerror or e}')
+        ext = _video_ext(head)
+        if not ext:
+            raise _Skip('is not an mp4, mov or webm video')
+        if out.tell() + info.st_size + ENTRY_OVERHEAD_BYTES > ARCHIVE_CAP_BYTES:
+            raise _Skip('would pass the 150 MB zip cap')
+        entry = zipfile.ZipInfo(f'videos/{number}.{ext}', time.localtime()[:6])
+        entry.compress_type = zipfile.ZIP_STORED
+        # the copy stops at the size checked above, so a file still growing stays under both caps
+        written, note = _copy(src, info.st_size, zf, entry, out, force_zip64=True)
+    finally:
+        os.close(src)
+    if written < info.st_size:
+        # the short entry is in the zip already and an entry can't be taken back out,
+        # so it is only left uncounted
+        raise _Skip('changed while it was read')
+    return entry.filename, written, info.st_mtime, note
+
+
+def _video_ext(head: bytes) -> str:
+    """The extension the magic bytes name, or '' for anything but mp4, mov or webm."""
+    if len(head) >= 12 and head[4:8] == b'ftyp':
+        if head[8:12] in _IMAGE_BRANDS:
+            return ''
+        return 'mov' if head[8:12] == b'qt  ' else 'mp4'
+    if head.startswith(b'\x1a\x45\xdf\xa3') and b'webm' in head[:VIDEO_HEAD_BYTES]:
+        return 'webm'
+    return ''
+
+
+def discard_staged(ids: Sequence[str]) -> None:
+    """Unlink each staged screenshot or video by its exact name; one already gone is fine."""
     try:
         directory = _screenshot_dir()
     except FileNotFoundError:
@@ -331,7 +432,7 @@ def discard_screenshots(ids: Sequence[str]) -> None:
     by_fd = isinstance(directory, int)
     try:
         for name in ids:
-            if not _SCREENSHOT_NAME.fullmatch(name):
+            if not (_SCREENSHOT_NAME.fullmatch(name) or _VIDEO_NAME.fullmatch(name)):
                 continue
             try:
                 os.unlink(name if by_fd else os.path.join(directory, name),
@@ -339,7 +440,7 @@ def discard_screenshots(ids: Sequence[str]) -> None:
             except FileNotFoundError:
                 pass
             except OSError as e:
-                logger.warning(f"Could not delete the staged screenshot {name}: "
+                logger.warning(f"Could not delete the staged attachment {name}: "
                                f"{e.strerror or e}")
     finally:
         if by_fd:
@@ -910,7 +1011,8 @@ def _open_checked(path: str, owner_uid: Optional[int],
     return fd, info
 
 
-def _copy(src: int, size: int, zf: zipfile.ZipFile, arcname: str, out) -> tuple[int, str]:
+def _copy(src: int, size: int, zf: zipfile.ZipFile, arcname: Union[str, zipfile.ZipInfo],
+          out, force_zip64: bool = False) -> tuple[int, str]:
     """Copy up to `size` bytes of `src` into the entry `arcname`.
 
     Returns the bytes copied and a manifest note when the entry is short: a
@@ -918,7 +1020,7 @@ def _copy(src: int, size: int, zf: zipfile.ZipFile, arcname: str, out) -> tuple[
     """
     written = 0
     note = ''
-    with zf.open(arcname, 'w') as entry:
+    with zf.open(arcname, 'w', force_zip64=force_zip64) as entry:
         while written < size:
             try:
                 chunk = os.read(src, min(CHUNK_BYTES, size - written))
@@ -930,7 +1032,7 @@ def _copy(src: int, size: int, zf: zipfile.ZipFile, arcname: str, out) -> tuple[
             entry.write(chunk)
             written += len(chunk)
             if out.tell() >= ARCHIVE_CAP_BYTES and written < size:
-                note = 'cut short at the 50 MB zip cap'
+                note = 'cut short at the 150 MB zip cap'
                 break
     return written, note
 
