@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 export default function PrivacyPage() {
-  const lastUpdated = 'September 14, 2026';
+  const lastUpdated = 'October 15, 2026';
   const router = useRouter();
 
   return (
@@ -202,6 +202,7 @@ export default function PrivacyPage() {
               <ul className="list-disc pl-6 mt-2 space-y-1">
                 <li><strong>account data:</strong> for as long as your account is active. when an account is deleted we immediately revoke its API keys, transfer any owned sites to a successor, clear its pending machine commands, and mark the account deleted so it can no longer sign in or reach your data. the underlying user record is then retained in a deleted state for audit and security purposes rather than erased outright &mdash; if you want the record itself erased, ask us and we will process it as an erasure request (see section 9).</li>
                 <li><strong>screenshots:</strong> automatically deleted 30 days after capture. the agent additionally keeps only the most recent 20 captures per machine in its history.</li>
+                <li><strong>issue logs:</strong> log files you choose to attach to an issue sent from the owlette desktop app are automatically deleted 30 days after upload. only owlette support staff can access them. support staff may use an AI assistant (Anthropic&apos;s Claude) to help diagnose any issue you submit, which sends the issue and its attachments to Anthropic.</li>
                 <li><strong>queued machine commands:</strong> pending commands expire after 1 hour; completed command records are removed after 24 hours.</li>
                 <li><strong>machine metrics:</strong> automatically deleted 400 days after collection.</li>
                 <li><strong>event logs:</strong> automatically deleted 400 days after the logged event.</li>
@@ -248,7 +249,7 @@ export default function PrivacyPage() {
                     </tr>
                     <tr className="border-b border-border/50">
                       <td className="py-2 pr-4">Cloudflare</td>
-                      <td className="py-2 pr-4">DNS, load balancing, CDN, and object storage for deployment content</td>
+                      <td className="py-2 pr-4">DNS, load balancing, CDN, and object storage for deployment content and for diagnostic logs you choose to send to support</td>
                       <td className="py-2">global / USA</td>
                     </tr>
                     <tr className="border-b border-border/50">
@@ -271,6 +272,11 @@ export default function PrivacyPage() {
                       <td className="py-2 pr-4">public service status page</td>
                       <td className="py-2">USA / EU</td>
                     </tr>
+                    <tr className="border-b border-border/50">
+                      <td className="py-2 pr-4">Anthropic</td>
+                      <td className="py-2 pr-4">support triage of issues you submit (see section 6)</td>
+                      <td className="py-2">USA</td>
+                    </tr>
                     <tr>
                       <td className="py-2 pr-4">Anthropic, OpenAI</td>
                       <td className="py-2 pr-4">hoot AI assistant &mdash; only if you enable it (see section 8)</td>
@@ -290,8 +296,10 @@ export default function PrivacyPage() {
               <p>
                 hoot is optional and off unless enabled for your site. hoot uses{' '}
                 <strong>your own API key</strong> for an AI provider (currently Anthropic or OpenAI) &mdash;
-                we do not provide a shared key and we do not send your data to any AI provider unless
-                you have supplied a key and enabled the feature.
+                we do not provide a shared key, and hoot sends nothing to any AI provider unless you
+                have supplied a key and enabled the feature. separately, when you submit an issue,
+                owlette support may use an AI assistant (Anthropic&apos;s Claude) to help diagnose it
+                (see section 6).
               </p>
               <p className="mt-4">when hoot is enabled and you send a message:</p>
               <ul className="list-disc pl-6 mt-2 space-y-1">

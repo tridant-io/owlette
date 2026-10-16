@@ -51,7 +51,7 @@ the desktop app, `/usr/bin/owlette-desktop`, is started at every graphical login
 
 on macOS and Linux the service runs as root with no display of its own, so anything that has to happen on screen is a job it hands the desktop app through the data folder: a notification on both, and on a Mac a screenshot and starting the [swoop](/docs/dashboard/swoop) streamer, which is what gives them the app's Screen Recording and Accessibility grants. Linux has no screen capture yet — see [platform support](/docs/reference/platform-support#screens). with the app not running, those come back refused as `desktop_not_running`.
 
-the same channel runs the other way for what the app may not do as an ordinary user: pairing, leaving a site, restarting the machine, dismissing a pending restart, filing a bug report and, on macOS, restarting the service are requests the app drops for the service to carry out. nothing on that path asks for `sudo` or an administrator password. on Linux the app restarts the service with `systemctl` directly, under a polkit rule the package installs that lets the `owlette` group start, stop and restart `owlette-agent.service` and nothing else.
+the same channel runs the other way for what the app may not do as an ordinary user: pairing, leaving a site, restarting the machine, dismissing a pending restart, submitting an issue and, on macOS, restarting the service are requests the app drops for the service to carry out. nothing on that path asks for `sudo` or an administrator password. on Linux the app restarts the service with `systemctl` directly, under a polkit rule the package installs that lets the `owlette` group start, stop and restart `owlette-agent.service` and nothing else.
 
 ### the process tree
 
@@ -97,7 +97,7 @@ started in the signed-in user's session:
 
 launched on demand:
   └── configure_site.py (device-code pairing, and the back end for the desktop
-        app's join and leave site, bug reports and reboot control)
+        app's join and leave site, submit issue and reboot control)
 ```
 
 see the [hoot tools reference](/docs/reference/hoot-tools) for the current tool list.
@@ -163,6 +163,7 @@ every platform splits owlette into an install root (the code, replaced by every 
 | install root | `C:\ProgramData\Owlette\` | `/Library/Application Support/Owlette/runtime/` | `/opt/owlette/` |
 | desktop app | `C:\ProgramData\Owlette\app\owlette-desktop.exe` | `/Applications/owlette.app` | `/usr/bin/owlette-desktop` |
 | swoop streamer | `C:\ProgramData\Owlette\swoop\owlette-swoop.exe` | inside the app, `owlette.app/Contents/MacOS/owlette-swoop` | — |
+| [owlette swoop](/docs/dashboard/swoop#owlette-swoop) (the swoop viewer app) | `C:\ProgramData\Owlette\app\owlette-swoop-viewer.exe` | `/Applications/owlette swoop.app` | `/usr/bin/owlette-swoop-viewer` |
 | service definition | `OwletteService`, registered by `tools\owlette-host.exe` | `/Library/LaunchDaemons/app.owlette.agent.plist` | `/usr/lib/systemd/system/owlette-agent.service` |
 | what starts the app at login | the service, and the `Owlette` shortcut in the user's Startup folder | `/Library/LaunchAgents/app.owlette.desktop.plist` | `/usr/lib/systemd/user/owlette-desktop.service` |
 | group the app's account needs | — | `_owlette` | `owlette` |

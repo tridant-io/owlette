@@ -15,6 +15,7 @@
  */
 
 import { use, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
 import {
@@ -24,6 +25,8 @@ import {
   subscribeBarPosition,
   type SwoopBarPosition,
 } from '@/lib/swoop/barPosition';
+import { isViewerApp } from '@/lib/swoop/viewerApp';
+import { closeViewerWindow, isSessionWindow } from '@/lib/swoop/viewerWindow';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
@@ -39,6 +42,9 @@ import { SwoopBarPositionMenu } from '@/components/swoop/SwoopBarPositionMenu';
 
 const barOnTop = (): SwoopBarPosition => 'top';
 
+/** long enough to read "session ended" before owlette swoop's window moves on. */
+const ENDED_RETURN_MS = 800;
+
 export default function SwoopPage({
   params,
 }: {
@@ -47,7 +53,7 @@ export default function SwoopPage({
   const { siteId, machineId } = use(params);
   const { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath } =
     useSwoopSession(siteId, machineId);
-  const { isSiteAdmin } = useAuth();
+  const { isSiteAdmin, isSiteOwner } = useAuth();
   // the keyboard follows the machine's system. no hook reads one machine
   // document, so this takes it off the site's list; an agent that reports no
   // system is a windows one.
@@ -75,6 +81,37 @@ export default function SwoopPage({
     video.addEventListener('resize', onResize);
     return () => video.removeEventListener('resize', onResize);
   }, [videoRef]);
+  // a disconnected session (not one counting down to a reconnect) gives
+  // fullscreen back, in a browser and in the app alike: the bar and the way on
+  // are out of reach while it holds. this runs before the return below, so a
+  // window never closes or moves on in fullscreen.
+  const disconnected = (state === 'ended' || state === 'error') && retryIn === null;
+  useEffect(() => {
+    if (!disconnected || !document.fullscreenElement) return;
+    document.exitPointerLock?.();
+    void document.exitFullscreen().catch(() => undefined);
+  }, [disconnected]);
+  // in owlette swoop a session that is over gives its window back: the main
+  // window returns to the picker, a session's own window closes (through the
+  // app's close handshake). one counting down to a reconnect is not over, and a
+  // refusal or failure keeps its notice and the way back.
+  const router = useRouter();
+  // only a session that ran is over: a refusal that arrives before any picture
+  // (the same machine, swoop off, a cancelled step-up) also lands in `ended`, and
+  // its notice must stay up with the way back (owner ruling).
+  const ran = useRef(false);
+  useEffect(() => {
+    if (state === 'connected') ran.current = true;
+  }, [state]);
+  const over = disconnected && state === 'ended';
+  useEffect(() => {
+    if (!over || !ran.current || !isViewerApp()) return;
+    const timer = setTimeout(() => {
+      if (isSessionWindow()) closeViewerWindow();
+      else router.replace('/swoop');
+    }, ENDED_RETURN_MS);
+    return () => clearTimeout(timer);
+  }, [over, router]);
 
   return (
     <main className="flex h-full w-full flex-col md:bar-left:flex-row md:bar-right:flex-row-reverse">
@@ -107,6 +144,8 @@ export default function SwoopPage({
           retryIn={retryIn}
           refusal={refusal}
           settingsHref={isSiteAdmin(siteId) ? `/dashboard?settings=${encodeURIComponent(siteId)}` : null}
+          // a site runs on its owner's plan, so only the owner is sent to upgrade it
+          upgradeHref={isSiteOwner(siteId) ? '/settings/plan' : null}
           noPath={noPath}
           stall={stats.stall.recovery}
           stageRef={stageRef}

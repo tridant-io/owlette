@@ -11,13 +11,21 @@
  *   - the step-up window says whether a live second-factor ceremony has
  *     happened recently enough to control.
  *
- * The step-up window CANNOT be opened from a timestamp. `session.mfaCompletedAt`
+ * The step-up window CANNOT be opened from a timestamp alone. `session.mfaCompletedAt`
  * is set to `now` when a session is born from a 30-day device-trust cookie with
  * no ceremony performed (`lib/sessionManager.server.ts`, the `deviceTrusted`
  * arm of `resolveMfaOnSessionCreate`), so any freshness check against it passes
  * for a stolen cookie. `openStepUpWindow` therefore takes the OUTCOME of
  * `verifyMfaProof` / `verifyPasskeyStepUpAssertion` and validates it at runtime
  * as well as in the types.
+ *
+ * One ceremony counts without a proof in the request: the sign-in's own, when it
+ * was minutes ago (owner, 2026-10-10 — a second factor passed at sign-in must not
+ * be asked for again two minutes later). `openStepUpWindowFromCeremony` reads the
+ * timestamp only beside `sessionPassedMfaCeremony`, which a device-trust birth
+ * never satisfies, and every writer that pairs a ceremony satisfier with
+ * `mfaCompletedAt` stamps it at or before that ceremony. So the time can
+ * understate how recent the second factor was, never overstate it.
  *
  * The window is stored against the (user, machine) pair, NOT against one login
  * session. A page reload ends a swoop session and starts a new one, and a
@@ -30,9 +38,9 @@
  * device-trust-born session is refused the window however live it is, and is
  * sent through the ceremony — which then stamps that session, so ITS reloads
  * cost nothing. The claim the window makes is therefore unchanged: "this user
- * proved possession of a second factor within the last 12 hours, for this
+ * proved possession of a second factor within the last 7 days, for this
  * machine, and the session asking also proved one". It is never "proved once,
- * trusted forever" — the 12 hours run from the ceremony, reuse does not
+ * trusted forever" — the 7 days run from the ceremony, reuse does not
  * extend them, and the window is a NECESSARY condition that
  * `evaluateSwoopAccess` consults only after site enablement, the machine
  * exclusion list and the capability have all already passed.
@@ -43,6 +51,8 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { Capability, hasCapability, type Actor, type SiteRole } from '@/lib/capabilities';
 import { deriveMfaEnrolled, readMfaFactors } from '@/lib/mfaFactors.server';
 import type { MfaProofOutcome } from '@/lib/mfaProof.server';
+import { networkRecord, type RequestNetwork } from '@/lib/network.server';
+import { requireEntitlement } from '@/lib/plan.server';
 import { createHash } from 'crypto';
 
 /** `sites/{siteId}/settings/swoop`. */
@@ -56,11 +66,25 @@ export const SWOOP_LEASE_GRACE_SECONDS = 30;
 
 /**
  * How long one live ceremony authorises control for, measured from the
- * ceremony. A working day: 10 minutes made every fresh tab a passkey prompt
- * (owner, 2026-09-25), and the same-tab case is covered separately by
- * continuity (`continuity.server.ts`).
+ * ceremony. A week (owner, 2026-10-10, as the balance of security and
+ * convenience), up from a working day, itself up from 10 minutes that made
+ * every fresh tab a passkey prompt (2026-09-25). What bounds a week is what
+ * bounded a day: reuse needs a login
+ * session that itself passed a ceremony, so a device-trust cookie never
+ * inherits a window; a kill closes every window on the machine, and losing the
+ * last factor closes them all; and every control session is audited. The
+ * same-tab case is covered separately by continuity (`continuity.server.ts`).
  */
-export const SWOOP_STEP_UP_WINDOW_MS = 12 * 60 * 60 * 1000;
+export const SWOOP_STEP_UP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * How recent the sign-in's own ceremony must be to stand in for the step-up on a
+ * machine with no window open (`openStepUpWindowFromCeremony`). Long enough to
+ * cover signing in and opening the first machine, including owlette swoop's
+ * hand-off from the browser; short enough that a sign-in from earlier in the day
+ * still asks.
+ */
+export const SWOOP_FRESH_CEREMONY_MS = 5 * 60 * 1000;
 
 const STEP_UP_COLLECTION = 'swoop_step_up';
 const STEP_UP_REVOCATION_COLLECTION = 'swoop_step_up_revocations';
@@ -137,7 +161,14 @@ export async function loadSwoopSettings(siteId: string): Promise<SwoopSiteSettin
     .collection('settings')
     .doc(SWOOP_SETTINGS_DOC)
     .get();
-  return parseSwoopSettings(snap.exists ? snap.data() : null);
+  const settings = parseSwoopSettings(snap.exists ? snap.data() : null);
+  // a payer without swoop reads as off, so every disabled path refuses, the
+  // agent doorbell's designed 403 included. the stored switch is left alone so
+  // an upgrade brings swoop back as the site had it.
+  if (settings.enabled && (await requireEntitlement(siteId, 'owlette.swoop'))) {
+    return { ...settings, enabled: false };
+  }
+  return settings;
 }
 
 // ------------------------------------------------------------------- decision
@@ -159,7 +190,10 @@ export interface SwoopAccessInput {
   /** `ctx.auth.keyContext !== null` — an api-key caller. */
   viaApiKey: boolean;
   settings: SwoopSiteSettings;
-  /** Result of `hasOpenStepUpWindow`. Only consulted for control. */
+  /**
+   * Result of `hasOpenStepUpWindow`, and, where it is enforced, of the network
+   * binding (`lib/swoop/networks.server.ts`). Only consulted for control.
+   */
   stepUpOpen?: boolean;
 }
 
@@ -273,6 +307,8 @@ const STEP_UP_FACTORS: ReadonlySet<string> = new Set(['totp', 'backup_code', 'pa
  */
 export async function openStepUpWindow(args: StepUpTarget & {
   proof: MfaProofOutcome;
+  /** the network the ceremony ran on, recorded for the log; null when network binding is off. */
+  network?: RequestNetwork | null;
   nowMs?: number;
 }): Promise<number> {
   const proof = args.proof as { ok?: unknown; factorUsed?: unknown } | null | undefined;
@@ -298,6 +334,75 @@ export async function openStepUpWindow(args: StepUpTarget & {
     openedAt: now,
     expiresAt,
     factorUsed: proof.factorUsed,
+    openedBy: 'ceremony',
+    ...(args.network ? { network: networkRecord(args.network) } : {}),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  return expiresAt;
+}
+
+/** The login session's ceremony, as the server's own session cookie records it. */
+export interface SignInCeremony {
+  /** `sessionPassedMfaCeremony()` for the login session behind the request. */
+  sessionPassedCeremony: boolean;
+  /** that session's `mfaCompletedAt`. */
+  ceremonyAt: number | undefined;
+  /** that session's `mfaNetwork`: the network its ceremony ran on (`lib/swoop/networks.server.ts`). */
+  ceremonyNetwork?: string;
+}
+
+function ceremonyIsFresh(ceremony: SignInCeremony, nowMs: number): ceremony is SignInCeremony & {
+  ceremonyAt: number;
+} {
+  return (
+    ceremony.sessionPassedCeremony === true &&
+    typeof ceremony.ceremonyAt === 'number' &&
+    ceremony.ceremonyAt <= nowMs &&
+    nowMs - ceremony.ceremonyAt <= SWOOP_FRESH_CEREMONY_MS
+  );
+}
+
+/**
+ * Does the sign-in's own ceremony stand in for the step-up on this machine?
+ * Only within `SWOOP_FRESH_CEREMONY_MS` of it, only for a session that ran it
+ * (never a device-trust birth), only while the account holds a factor, and only
+ * when no kill on the machine came after it: a kill closes every window opened
+ * before it, and a sign-in that predates the kill must not reopen one.
+ */
+export async function freshCeremonyCovers(
+  args: StepUpTarget & SignInCeremony & { nowMs?: number },
+): Promise<boolean> {
+  // no reads at all for the common case, a sign-in from earlier in the day.
+  if (!ceremonyIsFresh(args, args.nowMs ?? Date.now())) return false;
+  const [revokedAt, enrolled] = await Promise.all([
+    stepUpRevokedAt(args.siteId, args.machineId),
+    hasEnrolledFactor(args.userId),
+  ]);
+  return enrolled && args.ceremonyAt > revokedAt;
+}
+
+/**
+ * Open the window from the sign-in's own ceremony, once `freshCeremonyCovers`
+ * has said it may. The window rests on that ceremony, so `openedAt` is the
+ * ceremony's time and the 7 days run from it; afterwards it is any other
+ * window. Freshness is checked again here at runtime, as `openStepUpWindow`
+ * checks its proof.
+ */
+export async function openStepUpWindowFromCeremony(
+  args: StepUpTarget & SignInCeremony & { network?: RequestNetwork | null; nowMs?: number },
+): Promise<number> {
+  if (!ceremonyIsFresh(args, args.nowMs ?? Date.now())) {
+    throw new SwoopPolicyError('fresh_ceremony_invalid');
+  }
+  if (!(await hasEnrolledFactor(args.userId))) {
+    throw new SwoopPolicyError('no_mfa_factors');
+  }
+  const expiresAt = args.ceremonyAt + SWOOP_STEP_UP_WINDOW_MS;
+  await stepUpRef(args.userId, stepUpMachineBinding(args)).set({
+    openedAt: args.ceremonyAt,
+    expiresAt,
+    openedBy: 'fresh_sign_in',
+    ...(args.network ? { network: networkRecord(args.network) } : {}),
     updatedAt: FieldValue.serverTimestamp(),
   });
   return expiresAt;
@@ -345,16 +450,24 @@ export async function stepUpRevokedAt(siteId: string, machineId: string): Promis
  *
  * Four things can close a window, and all four are read here rather than
  * trusted to have deleted the document: the asking session not having run a
- * ceremony, the 12 hours lapsing, a kill on the machine, and the account
+ * ceremony, the 7 days lapsing, a kill on the machine, and the account
  * losing its last second factor. A missing or malformed field reads as closed.
  */
 export async function hasOpenStepUpWindow(
   args: StepUpTarget & { sessionPassedCeremony: boolean; nowMs?: number },
 ): Promise<boolean> {
+  return (await stepUpWindowState(args)).open;
+}
+
+/** `hasOpenStepUpWindow`, and the network an open window was opened on, for the log. */
+export async function stepUpWindowState(
+  args: StepUpTarget & { sessionPassedCeremony: boolean; nowMs?: number },
+): Promise<{ open: boolean; network: string | null }> {
+  const closed = { open: false, network: null };
   // First, and before any read: a session born from the 30-day device-trust
   // cookie ran no ceremony, so it inherits nothing — plan.md D10. It costs that
   // session no Firestore round trip either.
-  if (!args.sessionPassedCeremony) return false;
+  if (!args.sessionPassedCeremony) return closed;
 
   const [snap, revokedAt, enrolled] = await Promise.all([
     stepUpRef(args.userId, stepUpMachineBinding(args)).get(),
@@ -363,17 +476,19 @@ export async function hasOpenStepUpWindow(
   ]);
   // A window opened before the last factor was removed must not outlive it —
   // an account with zero factors cannot control, window or not.
-  if (!enrolled || !snap.exists) return false;
+  if (!enrolled || !snap.exists) return closed;
 
   const data = snap.data() ?? {};
   const openedAt = data.openedAt;
   const expiresAt = data.expiresAt;
-  if (typeof openedAt !== 'number' || typeof expiresAt !== 'number') return false;
-  if (openedAt <= revokedAt) return false;
+  if (typeof openedAt !== 'number' || typeof expiresAt !== 'number') return closed;
+  if (openedAt <= revokedAt) return closed;
 
   // The window's length is the READER's constant: whatever is stored can only
-  // shorten it, never stretch it past 12 hours from the ceremony.
-  return Math.min(expiresAt, openedAt + SWOOP_STEP_UP_WINDOW_MS) > (args.nowMs ?? Date.now());
+  // shorten it, never stretch it past 7 days from the ceremony.
+  if (Math.min(expiresAt, openedAt + SWOOP_STEP_UP_WINDOW_MS) <= (args.nowMs ?? Date.now())) return closed;
+  const network: unknown = data.network?.key;
+  return { open: true, network: typeof network === 'string' ? network : null };
 }
 
 /**

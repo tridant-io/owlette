@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * provision-r2 — create the four roost R2 buckets (wave 0.5). Idempotent; safe to re-run.
+ * provision-r2 — create the four roost R2 buckets (wave 0.5) and the two issue-logs buckets,
+ * with the issue-logs 30-day lifecycle rule. Idempotent; safe to re-run.
  * Reads CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_R2_API_TOKEN from `.claude/.env.local` or env.
  *
  * Does NOT mint the app's S3-compatible access keys — that's a one-time dashboard visit
@@ -20,34 +21,74 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const ENV_FILE = join(ROOT, '.claude', '.env.local');
 
+/**
+ * Logs and attachments on issue reports (web/lib/issueLogsStorage.server.ts). The agent PUTs
+ * its log zip from the machine, but dashboard issue attachments upload straight from the
+ * browser on a presigned PUT, so these buckets need a PUT-only CORS rule of their own.
+ */
+const ISSUE_LOGS_BUCKETS = [
+  'owlette-prod-issue-logs',
+  'owlette-dev-issue-logs',
+];
+
+/** matches ISSUE_LOGS_RETENTION_DAYS in web/lib/issueLogsStorage.server.ts. */
+const ISSUE_LOGS_RETENTION_DAYS = 30;
+
 const BUCKETS = [
   'owlette-prod-content',
   'owlette-prod-manifests',
   'owlette-dev-content',
   'owlette-dev-manifests',
-];
-
-/**
- * Content buckets take direct browser uploads (presigned PUT) so they need CORS.
- * Manifests only move server-side (`putManifestBody` in web/lib/r2Client.server.ts) and
- * agent-side, so manifest buckets stay CORS-less — fewer origins a rogue page can reach.
- */
-const CORS_ENABLED_BUCKETS = [
-  'owlette-prod-content',
-  'owlette-dev-content',
+  ...ISSUE_LOGS_BUCKETS,
 ];
 
 // Next dev falls back to 3001, 3002… when the primary port is taken, so allow a small
 // range — otherwise port-hopping shows up as a CORS preflight failure on roost uploads
 // (which PUT to R2 straight from the browser). Re-run this script after adding a port.
-const CORS_ALLOWED_ORIGINS = [
-  ...[3000, 3001, 3002, 3003, 3100].flatMap((port) => [
-    `http://localhost:${port}`,
-    `http://127.0.0.1:${port}`,
-  ]),
-  'https://dev.owlette.app',
-  'https://owlette.app',
-];
+const LOCAL_ORIGINS = [3000, 3001, 3002, 3003, 3100].flatMap((port) => [
+  `http://localhost:${port}`,
+  `http://127.0.0.1:${port}`,
+]);
+// The Vercel failover is reached as https://owlette.app, so it needs no origin of its own.
+const HOSTED_ORIGINS = ['https://dev.owlette.app', 'https://owlette.app'];
+
+/**
+ * Content buckets take roost's browser uploads: a HEAD dedup probe, the PUT and a GET
+ * download; ETag is exposed for a future multipart client.
+ */
+const CONTENT_CORS_RULE = {
+  allowed: {
+    origins: [...LOCAL_ORIGINS, ...HOSTED_ORIGINS],
+    methods: ['GET', 'PUT', 'HEAD'],
+    headers: ['*'],
+  },
+  exposeHeaders: ['ETag'],
+  maxAgeSeconds: 3600,
+};
+
+/**
+ * Issue-logs buckets only take the dashboard's attachment PUT, whose one non-simple
+ * header is the signed content-type. Downloads are presigned redirects the browser
+ * follows as a navigation, which CORS never sees. Local dev uploads to the dev bucket.
+ */
+function issueLogsCorsRule(origins) {
+  return {
+    allowed: { origins, methods: ['PUT'], headers: ['content-type'] },
+    maxAgeSeconds: 3600,
+  };
+}
+
+/**
+ * The CORS rule per bucket. Manifests only move server-side (`putManifestBody` in
+ * web/lib/r2Client.server.ts) and agent-side, so manifest buckets stay CORS-less — fewer
+ * origins a rogue page can reach.
+ */
+const CORS_RULES = {
+  'owlette-prod-content': CONTENT_CORS_RULE,
+  'owlette-dev-content': CONTENT_CORS_RULE,
+  'owlette-prod-issue-logs': issueLogsCorsRule(HOSTED_ORIGINS),
+  'owlette-dev-issue-logs': issueLogsCorsRule([...LOCAL_ORIGINS, ...HOSTED_ORIGINS]),
+};
 
 /** R2 jurisdiction — 'default' (automatic) / 'eu' / 'fedramp'. Start default. */
 const JURISDICTION = 'default';
@@ -163,29 +204,42 @@ class CfApi {
   }
 
   /**
-   * Apply CORS rules to a bucket. R2's CORS endpoint is a full-replace PUT — no merging,
-   * so this function is the source of truth for which origins can reach the bucket.
-   * Methods are scoped to what the browser needs (HEAD dedup probe, PUT upload, GET
-   * download); ETag is exposed for a future multipart client.
+   * Apply one CORS rule to a bucket. R2's CORS endpoint is a full-replace PUT — no merging,
+   * so `CORS_RULES` is the source of truth for which origins can reach each bucket.
    */
-  async putBucketCors(bucketName) {
-    const rules = {
+  async putBucketCors(bucketName, rule) {
+    const { status, json } = await this.call(
+      'PUT',
+      `/accounts/${this.accountId}/r2/buckets/${bucketName}/cors`,
+      { rules: [rule] },
+    );
+    if (status === 200 && json?.success) return { ok: true };
+    const msg = json?.errors?.[0]?.message || `HTTP ${status}`;
+    return { ok: false, reason: msg };
+  }
+
+  /**
+   * Delete every object `days` after upload. Like CORS, R2's lifecycle endpoint is a
+   * full-replace PUT, so this rule set is the bucket's whole policy: it also replaces R2's
+   * default 7-day multipart abort, which is restated here. maxAge is in seconds.
+   */
+  async putBucketLifecycle(bucketName, days) {
+    const DAY = 24 * 60 * 60;
+    const body = {
       rules: [
         {
-          allowed: {
-            origins: CORS_ALLOWED_ORIGINS,
-            methods: ['GET', 'PUT', 'HEAD'],
-            headers: ['*'],
-          },
-          exposeHeaders: ['ETag'],
-          maxAgeSeconds: 3600,
+          id: `delete-after-${days}-days`,
+          enabled: true,
+          conditions: { prefix: '' },
+          deleteObjectsTransition: { condition: { type: 'Age', maxAge: days * DAY } },
+          abortMultipartUploadsTransition: { condition: { type: 'Age', maxAge: 7 * DAY } },
         },
       ],
     };
     const { status, json } = await this.call(
       'PUT',
-      `/accounts/${this.accountId}/r2/buckets/${bucketName}/cors`,
-      rules,
+      `/accounts/${this.accountId}/r2/buckets/${bucketName}/lifecycle`,
+      body,
     );
     if (status === 200 && json?.success) return { ok: true };
     const msg = json?.errors?.[0]?.message || `HTTP ${status}`;
@@ -244,13 +298,24 @@ async function main() {
     }
   }
 
-  console.log(`→ applying CORS rules to content buckets (origins: ${CORS_ALLOWED_ORIGINS.length})…`);
-  for (const name of CORS_ENABLED_BUCKETS) {
-    const result = await api.putBucketCors(name);
+  console.log('→ applying CORS rules to content + issue-logs buckets…');
+  for (const [name, rule] of Object.entries(CORS_RULES)) {
+    const result = await api.putBucketCors(name, rule);
     if (result.ok) {
-      console.log(`  ✓ CORS applied: ${name}`);
+      console.log(`  ✓ CORS applied: ${name} (${rule.allowed.methods.join('/')}, ${rule.allowed.origins.length} origins)`);
     } else {
       console.error(`  ✗ CORS failed on ${name}: ${result.reason}`);
+      process.exit(1);
+    }
+  }
+
+  console.log(`→ applying the ${ISSUE_LOGS_RETENTION_DAYS}-day lifecycle rule to issue-logs buckets…`);
+  for (const name of ISSUE_LOGS_BUCKETS) {
+    const result = await api.putBucketLifecycle(name, ISSUE_LOGS_RETENTION_DAYS);
+    if (result.ok) {
+      console.log(`  ✓ lifecycle applied: ${name}`);
+    } else {
+      console.error(`  ✗ lifecycle failed on ${name}: ${result.reason}`);
       process.exit(1);
     }
   }
@@ -292,6 +357,19 @@ async function main() {
   console.log('    R2_S3_ACCESS_KEY_ID=<access key>');
   console.log('    R2_S3_SECRET_ACCESS_KEY=<secret>');
   console.log(`    R2_S3_ENDPOINT=https://${api.accountId}.r2.cloudflarestorage.com`);
+  console.log('');
+  console.log('─── and a separate token for the issue-logs buckets ───');
+  console.log('  issue-report logs get their own token, as the installer buckets do;');
+  console.log('  do NOT add these buckets to owlette-app-r2.');
+  console.log('');
+  console.log('  dashboard → R2 → Manage R2 API Tokens → Create API Token');
+  console.log('    Name:         owlette-issue-logs-r2');
+  console.log('    Permissions:  Object Read & Write');
+  console.log(`    Specify bucket(s): only ${ISSUE_LOGS_BUCKETS.join(', ')}`);
+  console.log('');
+  console.log('  set it on railway-dev, railway-prod and vercel-prod as:');
+  console.log('    ISSUE_LOGS_R2_ACCESS_KEY_ID=<access key>');
+  console.log('    ISSUE_LOGS_R2_SECRET_ACCESS_KEY=<secret>');
   console.log('');
 }
 

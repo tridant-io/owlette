@@ -1,7 +1,7 @@
 ---
 title: "Firestore data model"
 description: "every Firestore collection owlette reads or writes: what each document holds, who writes it, and what the security rules let a browser or an agent touch directly."
-keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions"]
+keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "pairedAt"]
 ---
 
 each section below lists a path, its fields, and its **access**: what `firestore.rules` lets a signed-in browser or a paired agent do directly. *server only* means the rules deny the path, or it falls through to the deny-all rule at the bottom, and only route handlers, Cloud Functions and workers reach it through the Admin SDK. the Admin SDK bypasses the rules, so every server write enforces its own checks.
@@ -65,6 +65,7 @@ firestore/
 |   |-- passkeys/{credentialId}
 |   |-- trustedDevices/{tokenHash}
 |   |-- swoop_step_up/{key}
+|   |-- verified_networks/{key}
 |   `-- account_deletion/operation
 |-- chats/{chatId}                                 rules
 |   |-- stream/current                             rules
@@ -78,7 +79,9 @@ firestore/
 |-- agent_refresh_tokens/{tokenHash}               rules
 |-- agent_tokens/{tokenId}                         rules
 |-- device_codes/{phrase}                          rules
-`-- cli_device_codes, idempotency_cache, pending_*_alerts, ... (see platform)
+|-- billing_usage/{payerUid}/days/{YYYY-MM-DD}
+|-- plan_snapshot/{payerUid}
+`-- app_links, cli_device_codes, idempotency_cache, pending_*_alerts, ... (see platform)
 ```
 
 ---
@@ -92,7 +95,7 @@ the site. **access**: site members read; writes are server only.
 | field | type | notes |
 | --- | --- | --- |
 | `name` | string | site display name. |
-| `owner` | string | uid of the user who created the site. **legacy**: still written on creation, but no rule consults it — access comes from `members`. |
+| `owner` | string | uid of the site's owner: the creator, moved by an ownership transfer. no rule consults it — access comes from `members` — but it names the site's payer, whose plan applies to the site once [plans](/docs/plans) are enforced. |
 | `createdAt` | timestamp | creation time. |
 | `timezone` | string | IANA timezone for site-scoped scheduling. |
 | `timeFormat` | string | `12h` or `24h`, the site's clock format. |
@@ -159,7 +162,7 @@ security-boundary audit records. **access**: site admins read; client writes are
 | `target` | map | `{ kind, id, ... }`. |
 | `outcome` | string | `allow`, `deny` or `error`. |
 | `timestamp` | timestamp | |
-| `metadata` | map | optional. swoop records name their event here, in `metadata.event`: `session_started`, `session_ended`, `session_denied`, `lease_denied`, `step_up_failed`, and host events. |
+| `metadata` | map | optional. swoop records name their event here, in `metadata.event`: `session_started`, `session_ended`, `session_denied`, `lease_denied`, `step_up_failed`, `step_up_opened` (a step-up the sign-in's own second factor stood in for, `metadata.reason: fresh_sign_in`), `step_up_network_check` (the network a control request came from: `mode`, `key`, `prefix`, `viaEdge`, `match`, `windowNetwork`; always outcome `allow`, the decision's own row says what happened), and host events. |
 | `denyReason`, `errorCode`, `enforcementBypassed` | string, string, boolean | optional. |
 
 hash-chained records from the `recordAuditEvent` function land in the same collection under their hash, with `sites/{siteId}/audit_log_meta/head` (`{ hash, recordedAt }`, server only) as the chain head.
@@ -203,6 +206,7 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | `siteId` | string | owning site. |
 | `online` | boolean | agent-reported online flag. the dashboard also checks heartbeat age. |
 | `lastHeartbeat` | timestamp | updated with each heartbeat. |
+| `pairedAt` | timestamp | written by the server when the machine first receives credentials, and kept on a re-pair. after a plan lapses, the machine with the earliest one stays live in the dashboard. missing on machines paired before it existed. |
 | `agent_version` | string | agent build version. |
 | `osFamily` | string | `windows`, `macos` or `linux`, written on every heartbeat. an unrecognized platform is reported verbatim; the dashboard treats that, and an absent field (agents before 4.0.0), as `windows`. |
 | `arch` | string | `x64` or `arm64` (an unrecognized value verbatim). with `osFamily`, it picks the installer a fleet update sends. |
@@ -669,7 +673,8 @@ dashboard layout memory. **access**: the owner reads and writes their own. one d
 | `users/{uid}/api_keys/{keyId}` | the owner reads; writes are server only | `name`, `keyHash`, `keyPrefix`, `environment`, `scopes`, `expiresAt` (ms), `createdAt`, `lastUsedAt`, `expiredMarkedAt`, `rotatedAt`, `rotatedFromKeyId`, `retiresAt`, `revokedAt`, `expiryNoticedStages`. |
 | `users/{uid}/passkeys/{credentialId}` | server only | passkey credentials and their metadata. |
 | `users/{uid}/trustedDevices/{tokenHash}` | server only | SHA-256-hashed "trust this device for 30 days" tokens. the raw token lives only in the HTTP-only `owlette_device_trust` cookie; records expire after about 30 days and are revoked when two-factor is disabled or the account is deleted. |
-| `users/{uid}/swoop_step_up/{key}` | server only | an open swoop control window for one machine: `{ openedAt, expiresAt, factorUsed (totp, backup_code or passkey), updatedAt }`, 12 hours from `openedAt`. |
+| `users/{uid}/swoop_step_up/{key}` | server only | an open swoop control window for one machine: `{ openedAt, expiresAt, openedBy, factorUsed, network, updatedAt }`, 7 days from `openedAt`. `openedBy` is `ceremony` (a step-up, with `factorUsed` totp, backup_code or passkey) or `fresh_sign_in` (the sign-in's own second factor, under five minutes old, with `openedAt` the time it was passed and no `factorUsed`). `network` (`{ key, prefix, asn }`) is the network it was opened from, absent when network binding is off. |
+| `users/{uid}/verified_networks/{key}` | server only | a network the user passed a second factor on, keyed `asn:<n>`: `{ firstSeenAt, lastVerifiedAt, asn, label }` (ms). it counts for swoop control for 7 days after `lastVerifiedAt`, checked on read; nothing expires it, and deleting the account removes it. the first entry for a key emails the user while network binding is enforced. |
 | `users/{uid}/account_deletion/operation` | server only | progress of a self-service account deletion. |
 
 ---
@@ -683,19 +688,30 @@ these are server only unless noted.
 | `api_keys/{keyHash}` | the API key lookup: `{ userId, keyId, environment, scopes, expiresAt, retiresAt, revokedAt }`. the rules deny it explicitly. |
 | `agent_refresh_tokens/{tokenHash}` | hashed agent refresh tokens: `siteId`, `machineId`, `version`, `createdBy`, `createdAt`, `lastUsed`, `agentUid`, and for rotation `predecessorHash`, `supersededAt`, `supersededBy`, `retiresAt`. `expiresAt` absent means the token never expires. see [token management](/docs/dashboard/admin/token-management). |
 | `agent_tokens/{tokenId}` | legacy registration codes, still written by the installer-generation and setup-token routes. |
-| `device_codes/{phrase}` | a pairing phrase's state, alive for 10 minutes and deleted once the agent consumes it: `deviceCodeHash`, `wrapVersion`, `machineId`, `version`, `status`, `createdAt`, `expiresAt`, `siteId`, `authorizedBy`, `authorizedAt`, `encryptedCredentials`, `preauthorizedIntent`, `deferTokenMint`. see [authentication](/docs/reference/authentication). |
+| `device_codes/{phrase}` | a pairing phrase's state, alive for 10 minutes and deleted once the agent consumes it: `deviceCodeHash`, `wrapVersion`, `machineId`, `version`, `status`, `createdAt`, `expiresAt`, `siteId`, `authorizedBy`, `authorizedAt`, `encryptedCredentials`, `preauthorizedIntent`, `deferTokenMint`. `status` is `refused`, with the message in `refusedReason`, when the plan's machine limit turned the authorization down. see [authentication](/docs/reference/authentication). |
 | `cli_device_codes/{phrase}` | the CLI's sign-in phrase: `deviceCodeHash`, `status`, `createdAt`, `expiresAt` (10 minutes), `authorizedBy`, `authorizedAt`, `siteId`, `keyId`, `encryptedCredentials`. |
+| `app_links/{codeHash}` | a one-time code that signs in [owlette swoop](/docs/reference/authentication#signing-in-owlette-swoop), keyed by the code's SHA-256: `status` (`pending`, `approved` or `used`), `createdAt`, `expiresAt` (60 seconds for a code from the dashboard, 10 minutes for one the app started), `secretHash` (an app-started code only), and once approved the approver's `uid`, `mfaSatisfiedBy` and `mfaCompletedAt`, then `usedAt`. an expired record is refused when read, not swept. |
 | `mfa_pending/{uid}` | a TOTP setup secret while enrollment is in progress. |
 | `webauthn_challenges/{challengeId}` | single-use passkey challenges. |
 | `idempotency_cache/{hash}` | stored responses for `Idempotency-Key` requests, 24 hours: `userId`, `environment`, `key`, `bodyHash`, `method`, `path`, `query`, `status`, `headers`, `body`, `expiresAt`, `createdAt`. swept daily. |
 | `sites/{siteId}/rate_limits/{bucket}/subjects/{subject}/capabilities/{capability}/shards/{n}` | rate-limit counters, `{ count, windowStart }`. `rate_limit_observations/{id}` records hits in observe-only mode. |
 | `sites/{siteId}/alert_cooldowns/{ruleId}_{machineId}` | `{ lastTriggered }`, unix seconds, so a threshold rule respects its cooldown. |
 | `pending_process_alerts/{id}`, `pending_display_alerts/{id}` | alert queues written by `/api/agent/alert` and drained by the process-alert and display-alert digest crons. |
-| `bug_reports/{reportId}` | user and agent bug reports. |
+| `bug_reports/{reportId}` | issues filed from the dashboard and the desktop app: `number`, `source` (`web` or `agent`), `category`, `title`, `description`, `status`, `createdAt`, `userId`, `userEmail`, `browserUA`, `pageUrl`, `appVersion`, and `siteId` and `machineId` from the machine's token (`null` for one from the dashboard). when no `title` is sent, or the desktop app sends its placeholder `agent feedback`, it is the first line of the description's text, cut to 120 characters, or the category's label when there is no text. `number` is the issue's `#N`, taken from `counters/bug_reports` in the same transaction that writes the issue; issues from before numbering get one from `scripts/migrations/backfill-issue-numbers.mjs`. `status` is `new`, `triaged`, `fixed` or `wontfix`, and starts as `new`. setting it writes `triageNote` (up to 2,000 characters, when a note was given), `statusUpdatedAt`, and `statusUpdatedBy`, the user ID of the superadmin who set it. `logs` `{ key, size, expiresAt, hasLogs, screenshots?, videos? }` names the [log zip](/docs/agent/troubleshooting#sending-logs-to-support) in R2 when one was attached, with `hasLogs` saying whether it holds the machine's logs, and `screenshots` (1 to 10) and `videos` (1 to 20) when the agent's report says the zip holds them; an issue from before `hasLogs` was stored holds logs when it names no screenshots or videos. the object is deleted 30 days after upload. an issue from the dashboard has no `logs`; `files` `[{ key, ext, kind, size }]` lists the screenshots and videos its user uploaded, each its own object in R2 under `issues/web/{uid}/`, with `kind` `screenshot` or `video` and `size` in bytes as R2 reported it, and `filesExpireAt` is 30 days after the issue was sent. the objects are deleted 30 days after upload. |
+| `counters/bug_reports` | `{ next }`, the last issue number handed out in this environment. each environment numbers its issues on its own. |
 | `global/security_config` | platform security kill switches. |
 | `global/audit_log/entries/{entryId}` | platform audit records for actions outside any site. |
 | `status_pings/{ms}` | status-page probe results. |
 | `dmca_notices/{id}` | notices from `POST /api/legal/dmca`. |
+
+### plans
+
+two server-only collections, written by the daily `/api/cron/plan-daily` job at 03:00 UTC and keyed by the payer, the uid in a site's `owner`. both fall through to the deny-all rule. nothing is billed or withheld from them until [plans](/docs/plans) are enforced; until then every snapshot reads `enforced: false`.
+
+| path | holds |
+| --- | --- |
+| `billing_usage/{payerUid}/days/{YYYY-MM-DD}` | `{ machineIds, updatedAt }`: the machines across the payer's sites whose `lastHeartbeat` fell in the 26 hours before the run, recorded against the previous UTC day as an array union, so a rerun adds nothing. a billing period's active machines are the distinct IDs across its days. documents older than 100 days are deleted. |
+| `plan_snapshot/{payerUid}` | `{ enforced, control, roost, resolvedAt }`: the payer's plan as last resolved, overwritten each run. Cloud Functions cannot ask the plan service, so the scheduled-rollout function reads this instead: a due rollout scheduled before `resolvedAt` is aborted, with the reason, when `enforced` is `true` and `control` or `roost` is `false`. no snapshot means allow. |
 
 ---
 

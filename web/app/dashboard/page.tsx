@@ -42,11 +42,15 @@ import { nextDuplicateName } from '@/lib/processNaming';
 import { AddMachineButton } from './components/AddMachineButton';
 import { SiteTimeConfirmBanner } from './components/SiteTimeConfirmBanner';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
+import { usePlan } from '@/hooks/usePlan';
+import { useSitePlan } from '@/hooks/useSitePlan';
+import { UpdateOwletteButton } from '@/components/UpdateOwletteButton';
 import { LoadingWord } from '@/components/LoadingWord';
 import { FallingFeather } from '@/components/FallingFeather';
 import type { Process } from '@/hooks/useFirestore';
 import { useScrollFade } from '@/hooks/useScrollFade';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
+import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 
 // Code-split: deferring parse+compile of the detail panels until a cell is clicked keeps
 // the grid-template-rows slide animation inside its frame budget. `ssr: false` because
@@ -788,6 +792,8 @@ export default function DashboardPage() {
     );
   };
 
+  const openSwoopApp = (machineId: string) => openInViewerApp(currentSiteId, machineId);
+
   // The panel opens above the machine list, so on a phone a tap on any card but
   // the first would open it off-screen.
   const revealDetailPanel = () => {
@@ -881,6 +887,7 @@ export default function DashboardPage() {
   const onScreenshot = useStableCallback(openScreenshot);
   const onLiveView = useStableCallback(openLiveView);
   const onSwoop = useStableCallback(openSwoop);
+  const onSwoopApp = useStableCallback(openSwoopApp);
   const onSiteSettings = useStableCallback(() => {
     setManageEditSiteId(currentSiteId);
     setManageDialogOpen(true);
@@ -921,11 +928,23 @@ export default function DashboardPage() {
     onScreenshot: () => onScreenshot(id),
     onLiveView: () => onLiveView(id),
     onSwoop: () => onSwoop(id),
+    onSwoopApp: () => onSwoopApp(id),
   }])), [
     machineIdsKey, toggleMachineExpanded, onEditProcess, onDuplicateProcess, onCreateProcess,
     onKillProcess, onRestartProcess, onSetLaunchMode, onConfigureSchedule, onRemoveMachineById,
     onMetricClick, onRestartMachine, onShutdownMachine, onCancelRestart, onScreenshot, onLiveView, onSwoop,
+    onSwoopApp,
   ]);
+
+  // sites the viewer doesn't own get no plan treatment here: their owner's
+  // plan applies, which this browser can't read, and the server gates every
+  // action on it regardless.
+  const sitePlan = useSitePlan(
+    currentSiteId,
+    sites.find((s) => s.id === currentSiteId)?.owner,
+    machinesLoading ? null : machineIdsKey,
+  );
+  const { plan } = usePlan();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -1104,6 +1123,7 @@ export default function DashboardPage() {
                   machineName={heldDetailPanel.machineName}
                   siteId={currentSiteId}
                   capabilities={machines.find((m) => m.machineId === heldDetailPanel.machineId)?.capabilities}
+                  controlLocked={sitePlan.controlLocked}
                   onClose={handleCloseDetailPanel}
                 />
               ) : (
@@ -1154,6 +1174,12 @@ export default function DashboardPage() {
               <h2 className="text-lg md:text-xl font-bold text-foreground">machines</h2>
 
               <div className="flex items-center gap-2">
+                {/* with plans on, deployments can be outside the plan, and the
+                    deployments page was the only way to update; every plan may
+                    update, so the dashboard offers it too. */}
+                {plan?.enforced && isSiteAdmin(currentSiteId) && (
+                  <UpdateOwletteButton siteId={currentSiteId} machines={machines} compact />
+                )}
                 {/* Add Machine Button */}
                 <AddMachineButton
                   currentSiteId={currentSiteId}
@@ -1228,8 +1254,10 @@ export default function DashboardPage() {
                   onScreenshot={onScreenshot}
                   onLiveView={onLiveView}
                   onSwoop={onSwoop}
+                  onSwoopApp={onSwoopApp}
                   swoopOff={swoopOff}
                   onSiteSettings={onSiteSettings}
+                  sitePlan={sitePlan}
                 />
               </div>
             )}
@@ -1263,6 +1291,9 @@ export default function DashboardPage() {
                         isSiteAdmin={isSiteAdmin(currentSiteId)}
                         swoopOff={swoopOff}
                         onSiteSettings={onSiteSettings}
+                        planLimit={sitePlan.machineLimitFor(machine.machineId)}
+                        controlLocked={sitePlan.controlLocked}
+                        swoopLocked={sitePlan.swoopLocked}
                       />
                     ))}
                   </TableBody>

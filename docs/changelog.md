@@ -11,6 +11,28 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — numbered issues, an issue page and an issues API
+
+Every issue now gets a number, and the confirmation names it: "issue #42
+submitted — thank you!" in the dashboard, and "your issue was sent as #42" in
+the desktop app. Quote it when you follow up with owlette support. The issue
+email is shorter and links to a page for that issue, where owlette support sees
+its system info, log tail and attachments and sets its status. Superadmins can
+also list, read and triage issues through the owlette API with an API key that
+holds the new superadmin-only `issue` scope; an existing key gains it by
+ticking issue read and write when you edit it.
+
+### added — screenshots and videos on dashboard issues
+
+The dashboard's submit issue dialog now matches the desktop app's: a category,
+a description, and screenshots and videos, added with add screenshots or video
+or pasted, within the same limits of 10 screenshots and 100 MB in all. It no
+longer asks for a title, the category picker spans the dialog, and there is no
+attach logs box, since only the desktop app can send logs. The files are kept
+30 days and seen only by owlette support. Issues from the desktop app now get a
+real title from the first line of their description instead of all reading
+"agent feedback".
+
 ### fixed — cancel on the two-factor screen reaches the login page
 
 **cancel and sign out** on the two-factor screen signed the user out but
@@ -18,6 +40,256 @@ could leave them on that screen with only a "signed out" toast: the browser
 signed out before the server session ended, so the trip to the login page
 bounced straight back. Sign-out now ends the session first, and cancel opens
 the login page with a full page load.
+
+## [4.1.17] - 2026-10-15
+
+### added — videos on submitted issues
+
+The submit issue dialog now takes screenshots and videos from one add
+screenshots or video button. MP4, MOV and WebM videos go beside screenshots,
+now up to 10 rather than 5, 100 MB in all. They travel in the same zip as attached logs, which
+can now reach 150 MB, and are kept 30 days and seen only by owlette support,
+like the rest. A large video takes a while to upload on a slow connection.
+
+### changed — the sent toast names the screenshots and video that went
+
+After sending an issue, the confirmation lists everything that went with it,
+for example "system info, the logs and 2 screenshots went with it."
+
+## [4.1.16] - 2026-10-15
+
+### added — screenshots on submitted issues
+
+You can now add up to 5 screenshots to an issue from the desktop app's submit
+issue dialog, by picking files or pasting an image. PNG, JPEG and WebP images
+up to 8 MB each are accepted. They travel in the same zip as attached logs,
+with or without attach logs ticked, and like the logs they are kept 30 days and
+seen only by owlette support.
+
+## [4.1.15] - 2026-10-14
+
+### added — attached logs cover more of the machine
+
+Ticking attach logs when you submit an issue now also sends owlette swoop's
+log, `tmp/status_writer.log`, and a list of the files in owlette's data folder
+with their sizes and dates, never their contents. On Windows it adds owlette's
+installer logs and crash events for owlette's own programs; on macOS, crash
+reports for owlette's programs and the installer log's lines about owlette; on
+Linux, the journals of the agent service and the self-update unit. Tokens and
+`config.json` still never go in, and the zip is still kept 30 days and seen only
+by owlette support.
+
+### changed — submit issue's progress reads beside its buttons
+
+The step submit issue is on now sits in the button row, left of cancel, instead
+of on a line of its own above it.
+
+## [4.1.14] - 2026-10-14
+
+### added — submit issue shows what it is doing, and can go to its own inbox
+
+Sending an issue from the desktop app now shows a spinner and names each step,
+collecting system info, zipping and uploading the logs, then submitting, so a
+send that takes a minute no longer looks frozen. Each send is logged to
+`submit_issue.log` in the machine's logs, including why logs could not be
+attached. The new optional `ISSUE_EMAIL` setting sends issue alerts to their own
+inbox; without it they go where they went before.
+
+### changed — the app menu is reordered, and swoop's stats button shows when it is on
+
+The desktop app's menu now reads swoop; docs, submit issue, config, logs;
+appearance, start on login, restart service, reload window; and leave site last,
+on its own. swoop's stats button stays pressed while the stats are open, so a
+second click to hide them is obvious, and its tooltip just says stats.
+
+### fixed — swoop keeps its quality on a busy screen
+
+swoop counted every frame your screen did not get round to drawing as lost on
+the network. On a moving picture at 60 fps, two frames often arrive within one
+refresh of a 60 Hz screen and only the second is drawn, so swoop lowered the
+picture's quality every two seconds, even on a wired network where nothing was
+lost, and a busy screen went soft and blocky. swoop now counts only frames that
+were really lost.
+
+## [4.1.13] - 2026-10-13
+
+### added — send the machine's logs with an issue
+
+The desktop app's submit issue dialog has an **attach logs** box, unticked by
+default. Tick it and the machine's logs from the last 14 days, swoop's and the
+desktop app's own included, go to owlette support as one zip with the issue: no
+copying the logs folder by hand and no administrator password. The zip is kept
+30 days and only owlette support can open it; every download is audited. If
+the logs cannot be sent, the issue still is, with the reason. An issue from the
+desktop app now also records the machine and site it came from.
+
+### changed — "submit bug report" is now "submit issue"
+
+The desktop app's menu and the dashboard's help menu both say **submit issue**.
+It still takes feature requests and feedback.
+
+### fixed — swoop's picture no longer smears, and an NVIDIA machine encodes on its GPU again
+
+Since 4.1.9 a Windows machine with an NVIDIA GPU streamed swoop through the
+slower Windows encoder instead of NVENC, because checking for that encoder broke
+NVENC for the rest of the session. It also lost H.265. That encoder runs a little
+over its bitrate, and each frame swoop then held back left a hole the browser
+could not see, so the picture smeared, sometimes for seconds, until the next
+keyframe. Each hole was also mistaken for a bad network and cut the bitrate.
+
+swoop now uses NVENC again on NVIDIA machines. After a lost frame it sends
+nothing but a keyframe, so a viewer sees a brief pause instead of a smear. It
+leaves the encoder room above its bitrate and no longer cuts the bitrate for
+frames it held back itself. A 30 fps stream now uses its full bitrate, and
+renewing swoop's connection to the server no longer pauses the picture.
+
+## [4.1.11] - 2026-10-13
+
+### added — owlette free, the pro trial and per-machine billing, for after the beta
+
+The pricing page shows three plans for after the beta: owlette free, with one
+machine and one site, live status, metrics, crash-restart and updates; and
+core and pro, billed per active machine per month. Every account will start
+with a 14-day pro trial, no card. A new plans page in the docs covers each
+plan, the trial, what counts as an active machine, what happens when a
+subscription ends, and the `plan_required` (402) error. Nothing is enforced
+or billed during the beta: the plan limits ship switched off.
+
+### added — email verification at sign-up
+
+An email-and-password sign-up is sent a link to verify its address, and a
+banner offers to send it again until it is opened. Nothing waits on it.
+
+### fixed — a Mac shows its own disks and network, not simulator volumes and tunnels
+
+A Mac listed every volume macOS mounts for itself, including the iOS simulator
+runtimes Xcode installs, and every VPN and AirDrop interface. A simulator volume,
+nearly full by design, could show as the machine's main disk and a tunnel as its
+main network, and each one appearing or vanishing reloaded the machine's hardware
+details. A Mac now lists its startup and data volumes, external drives and real
+network interfaces only.
+
+### fixed — two Macs on one network no longer pair as one machine
+
+A Mac took its machine name from the hostname its network handed out, and some
+routers give every Mac the same one, such as `Mac.localdomain`. Two Macs on one
+network then paired onto one machine on the dashboard, each overwriting the
+other, and the dot in the name kept swoop from opening that machine. A Mac now
+takes its name from its local network name (System Settings, General, Sharing),
+which macOS keeps unique on the network. A Mac already paired keeps its name;
+leave the site from the owlette app and pair again to take the new one, on each
+of two Macs that shared one machine.
+
+### fixed — swoop stops asking a machine that never answers
+
+A machine whose swoop could not start, such as a Mac waiting for someone to
+allow screen recording, never answered the viewer, and the viewer asked again
+about every 45 seconds for as long as the tab stayed open. After ten minutes
+with no picture it now stops and says what to check: that the machine is on
+the network, and on a Mac, that the owlette app is running and macOS is not
+asking to allow screen recording. **reconnect** tries again. A slow connection from another
+network still gets the ten minutes to come through.
+
+## [4.1.10] - 2026-10-12
+
+### fixed — a re-paired machine shows its hardware again
+
+A machine removed and paired again, or moved to another site, kept showing
+`CPU0` in place of its processor's name, with no disk or GPU details, until its
+hardware changed. The agent remembered on disk what it had last uploaded and
+skipped the upload for the new machine record. It now uploads the hardware
+profile, the display profile and the display-modes catalogue once each time it
+starts or pairs, then only when they change.
+
+### fixed — owlette swoop opens on the server its machine is paired with
+
+Started for the first time from the Start menu, Applications or the Dock, owlette
+swoop always opened owlette.app, even on a computer paired with
+dev.owlette.app, so signing in there failed. With no server remembered from an
+earlier link, it now opens the one the owlette agent on the same computer is
+paired with, and owlette.app on a computer without the agent.
+
+## [4.1.9] - 2026-10-12
+
+### added — swoop hosts on Windows machines without an NVIDIA GPU
+
+A Windows machine with no NVIDIA GPU can now host a swoop session. NVENC still
+comes first and gives the best picture; without it the streamer encodes h264
+through Media Foundation, which ships with Windows: on an Intel or AMD GPU's
+hardware encoder, or, on a machine with none, such as a virtual machine, on the
+CPU at up to 1280x720 and 30 frames a second on two threads, so the machine's
+own work keeps the rest of it. A bigger screen is scaled down to fit. A Windows
+N edition without the Media Feature Pack still needs an NVIDIA GPU.
+
+### changed — a second factor you just passed is the step-up, and a step-up lasts 7 days
+
+A second factor passed at sign-in in the last five minutes now counts as swoop's
+step-up for the machines opened in those five minutes, so the first machine
+after signing in takes control without asking again. That holds for owlette
+swoop signed in from a browser that has just passed one; approving the app from
+a browser that signed in earlier still asks. One step-up now covers a machine
+for 7 days instead of 12 hours. A remembered browser still asks, a kill still
+closes every window on the machine, and a step-up a sign-in stood in for is
+recorded on the audit trail (`step_up_opened`).
+
+### changed — swoop control is tied to the networks you verified (watching only, for now)
+
+Each second factor you pass records the network it ran on (the ISP, not the
+address), and every control request now logs whether it came from one of those
+networks. Nothing is refused yet: this is a two-week observation before swoop
+starts asking once on a new network. Cloudflare adds the network to each
+request; a request that reached an origin around Cloudflare counts as an
+unknown network.
+
+### fixed — a request that reached an origin around Cloudflare could pick its own rate-limit bucket
+
+The origins also answer requests that bypass Cloudflare, and there a
+client-supplied CF-Connecting-IP header chose the per-IP bucket on the sign-in
+and pairing limits. The header now counts only when the request carries the
+edge's shared secret; otherwise the proxy's own view of the address is used.
+
+### fixed — owlette swoop has a sign-in of its own
+
+owlette swoop's sign-in is now a minimal card of its own: no site footer, the
+window draggable anywhere, browser sign-in first and email and password behind
+a link. Its pages render right on the first paint instead of flashing the
+site's layout, and the signed-in email no longer wraps.
+
+### fixed — the swoop picker's loading notice
+
+In owlette swoop the loading text sat just under the title bar; it now sits
+centred in the window with the same spinner as the stage's "connecting" notice.
+
+### fixed — "not you?" on the verify and approve pages
+
+The pages that verify a second factor and approve a device now offer "not you?
+sign in as someone else".
+
+## [4.1.8] - 2026-10-10
+
+### added — owlette swoop, the desktop app for swoop
+
+owlette swoop shows the swoop viewer in a window of its own instead of a
+browser tab: native fullscreen (hold esc for two seconds to leave it), the
+session bar as the window's title bar, and a machine picker at `/swoop` laid
+out as a grid of cards. A session opens in the same window; right-click a card
+for a new one. Closing a window ends its session.
+
+Open it from **swoop** in the owlette app's tray menu or window menu, from the
+monitor icon beside **swoop** in a machine's menu or on a picker card, or with
+`owlette swoop` in the CLI, which uses the browser when the app is not
+installed. Opened from the dashboard, the app arrives signed in as you; started
+on its own, it offers **sign in with your browser**, and taking control offers
+**verify in your browser** for the second factor. On Windows the clipboard
+works both ways without a permission prompt, and while a session captures the
+tray offers **kill all swoop sessions on this machine**. Every agent installer
+now carries the app on Windows, macOS and Linux and registers
+`owlette-swoop://` links; a download for computers without the agent is not
+published yet.
+
+Known gaps: Windows gets h264 only in the app; the machine's cursor stays soft
+until the streamer sends it at full size; cmd+tab cannot be sent from macOS
+(use the keyboard menu); and the app has no pointer lock on macOS. (#325)
 
 ### changed — swoop's switch is easier to find
 
@@ -72,6 +344,16 @@ those platforms can spend one. The tab now also shows the preseed, ready to
 copy, with `"server": "dev"` when the code was generated on dev.owlette.app:
 save it as `config/pairing.json` in the data root before installing the
 package. Fixes #322.
+
+### added — pair with dev.owlette.app from the app
+
+The app's **join a site** dialog could only pair a new machine with
+owlette.app; reaching dev.owlette.app took the `/SERVER=dev` installer flag
+on Windows or a pairing preseed on macOS and Linux. Now clicking the "join a
+site" title five times switches the pairing to dev: the `dev` badge appears
+and a dev phrase is requested; a click on the badge goes back to owlette.app.
+Nothing in the dialog advertises it, so customers see no choice. The flag and
+the preseed stay for unattended installs. Fixes #321.
 
 ### fixed — swoop connects from strict networks through the relay
 

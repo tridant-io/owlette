@@ -17,8 +17,8 @@ interface VersionHistoryProps {
   roostId: string;
   siteId: string;
   currentVersionId: string | null;
-  /** Opens the parent's "+ new version" push modal pre-populated for this roost. */
-  onNewVersion: () => void;
+  /** Opens the parent's "+ new version" push modal pre-populated for this roost; absent, no button. */
+  onNewVersion?: () => void;
   /** Monotonic refresh token — bump to force a re-fetch (upload, edit). */
   refreshKey?: number;
   /**
@@ -152,15 +152,17 @@ export function VersionHistory({
           )}
           <span>version history</span>
         </button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onNewVersion}
-          className="h-7 px-2 text-xs border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
-        >
-          <Plus className="h-3 w-3 mr-1" />
-          new version
-        </Button>
+        {onNewVersion && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onNewVersion}
+            className="h-7 px-2 text-xs border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
+          >
+            <Plus className="h-3 w-3 mr-1" />
+            new version
+          </Button>
+        )}
       </div>
 
       {!open ? null : loading && displayVersions.length === 0 ? (

@@ -6,6 +6,8 @@ Roughly prioritized. Not a commitment — just a living list of what's next.
 
 ## next up — right after swoop on macOS ships
 
+- **native swoop viewer (#325): landed on dev** as owlette swoop, the desktop viewer app (ADR 0012); still owed: Windows key capture, a published standalone download (`/download/swoop-viewer` points at the docs until then), a session tried on Linux, the viewer's HEVC check fixed for WebKit, and full-size cursor bitmaps from the streamer so the cursor is sharp.
+
 - **hoot drives a machine through swoop.** *Extremely important: the owner's pick for the sprint that follows
   swoop on macOS (2026-09-30).* With an admin's explicit authorization, hoot sees a machine's screen and sends it
   clicks and keys through the swoop streamer, so it can operate any app on the machine, not only the processes
@@ -19,7 +21,9 @@ Roughly prioritized. Not a commitment — just a living list of what's next.
   - every action logged with the user who authorized the session;
   - limits hoot cannot lift itself: no passkey step-up on its own, no change to its own authorization.
 
-  Plan it with `/plan` as its own initiative once swoop on macOS (`dev/active/swoop-macos`) is released.
+  Planned 2026-10-11 at `dev/active/hoot-drives-swoop/` (tracked): hoot joins a swoop session as a viewer over the
+  service's stdin pipe to the streamer, stills on request, a human step-up per drive in the chat's approval card,
+  blocking audit per action, Windows and macOS only. Wave 0 (streamer still path, hoot-only mode) gates the rest.
 
 ---
 

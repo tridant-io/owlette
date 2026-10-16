@@ -827,6 +827,82 @@ class TestDisplayProfileOffWindows:
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
+class TestProfilesUploadOncePerClient:
+    """A re-pair builds a new client, often onto the same site and machine id,
+    and removing a machine deletes its hardware docs. A hash persisted on disk
+    by the old client made the new one skip the upload for good, so the
+    dashboard showed `CPU0` for an `Apple M5 Max` (Bryant Place, 2026-10-12)."""
+
+    @staticmethod
+    def _client(mock_auth_manager, data_dir):
+        rest = MagicMock(spec=FirestoreRestClient)
+        rest.collection.return_value = MagicMock()
+        with patch("firebase_client.FirestoreRestClient", return_value=rest), \
+             patch("firebase_client.shared_utils") as mock_su:
+            mock_su.get_data_path.side_effect = lambda rel: str(data_dir / rel)
+            mock_su.get_machine_id.return_value = "TEST-MACHINE"
+            mock_su.APP_VERSION = "4.1.9"
+            client = FirebaseClient(
+                auth_manager=mock_auth_manager,
+                project_id="test-project",
+                site_id="test-site",
+            )
+        client.db = rest
+        client.connection_manager._state = ConnectionState.CONNECTED
+        return client
+
+    def test_a_new_client_uploads_the_hardware_profile_again(
+        self, mock_auth_manager, tmp_path, monkeypatch,
+    ):
+        import hardware_profile
+        monkeypatch.setattr(hardware_profile, 'build_profile', lambda: {
+            'signatureHash': 'hw-hash', 'cpus': [{'id': 'CPU0', 'model': 'Apple M5 Max'}],
+        })
+        for _ in range(2):
+            client = self._client(mock_auth_manager, tmp_path)
+            client._ensure_profile()
+            client.db.collection.assert_called_once_with('sites')
+
+    def test_the_same_client_does_not_upload_an_unchanged_profile_twice(
+        self, mock_auth_manager, tmp_path, monkeypatch,
+    ):
+        import hardware_profile
+        monkeypatch.setattr(hardware_profile, 'build_profile', lambda: {'signatureHash': 'hw-hash'})
+        client = self._client(mock_auth_manager, tmp_path)
+        client._ensure_profile()
+        client._last_profile_check = 0.0
+        client._ensure_profile()
+        client.db.collection.assert_called_once_with('sites')
+
+    @pytest.mark.windows(reason='patches display_manager, which is windows-only')
+    def test_a_new_client_uploads_the_display_profile_again(
+        self, mock_auth_manager, tmp_path, monkeypatch,
+    ):
+        import display_manager
+        import nvapi_display
+        monkeypatch.setattr(display_manager, 'build_display_profile', lambda: {'monitors': [{}]})
+        monkeypatch.setattr(display_manager, 'display_signature', lambda profile: 'display-hash')
+        monkeypatch.setattr(nvapi_display, 'detect_mosaic', lambda: None)
+        monkeypatch.setattr(nvapi_display, 'detect_sync', lambda: None)
+        for _ in range(2):
+            client = self._client(mock_auth_manager, tmp_path)
+            client._ensure_display_profile()
+            client.db.collection.assert_called_once_with('sites')
+
+    @pytest.mark.windows(reason='patches display_manager, which is windows-only')
+    def test_a_new_client_uploads_the_display_modes_again(
+        self, mock_auth_manager, tmp_path, monkeypatch,
+    ):
+        import display_manager
+        monkeypatch.setattr(display_manager, 'enumerate_modes_via_user_session', lambda: {
+            'ok': True, 'signatureHash': 'modes-hash', 'byEdidHash': {'edid-1': {'modes': []}},
+            'enumerationFailed': False,
+        })
+        for _ in range(2):
+            client = self._client(mock_auth_manager, tmp_path)
+            assert client._ensure_display_modes_catalogue()['uploaded'] is True
+
+
 # TestSendDisplayAlert — the funnels hand every audit action to
 # `send_display_alert`; this gate decides which reach the API. An action with no
 # `DISPLAY_EVENT_ROUTING` entry hits the endpoint's generic branch, which writes

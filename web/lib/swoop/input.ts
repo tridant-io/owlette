@@ -46,8 +46,12 @@ import {
   type ModifierMapping,
 } from '@/lib/swoop/keymap';
 import { encodeInputMessage, type InputMessage } from '@/lib/swoop/protocol';
+import { isViewerApp, viewerAppHasNativeKeys } from '@/lib/swoop/viewerApp';
 
 export type InputMode = 'scancode' | 'text';
+
+/** where owlette swoop calls with the keys it captures itself. */
+type NativeKeyHost = Window & { __owletteNativeKey?: (code: string, down: boolean) => void };
 
 /** an input message before it takes its place in the channel's sequence. */
 type Unsequenced<T> = T extends InputMessage ? Omit<T, 'seq'> : never;
@@ -69,6 +73,9 @@ const ESCAPE_SYNTH_WINDOW_MS = 250;
 
 /** a second escape tap this soon after the first is the keyboard leaving the stage. */
 const ESCAPE_TWICE_WINDOW_MS = 500;
+
+/** owlette swoop has no browser escape hold, so escape held this long leaves fullscreen there. */
+const ESCAPE_HOLD_MS = 2000;
 
 const TICK_FALLBACK_MS = 16;
 
@@ -150,6 +157,14 @@ export interface InputCapture {
    * else by `releaseAll`.
    */
   holdNextKey(code: string): void;
+  /**
+   * a key owlette swoop took before the page could see it (an os shortcut a
+   * webview never gets), by its `KeyboardEvent.code`. it goes the way a typed
+   * key does, through the mapping and into what is held, so the page's own
+   * keyup for it releases it: macos hands over only the down. the app calls
+   * it as `window.__owletteNativeKey`, which exists only inside the app.
+   */
+  nativeKey(code: string, down: boolean): void;
   detach(): void;
 }
 
@@ -197,6 +212,12 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   let lastEscapeTapMs = -Infinity;
   let detached = false;
   const escapeTwiceListeners = new Set<() => void>();
+  const holdEscapeToExit = isViewerApp();
+  let escapeHold: ReturnType<typeof setTimeout> | null = null;
+  const clearEscapeHold = (): void => {
+    if (escapeHold !== null) clearTimeout(escapeHold);
+    escapeHold = null;
+  };
 
   const queue: InputMessage[] = [];
   const heldKeys = new Set<string>();
@@ -311,6 +332,40 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     flush();
   };
 
+  /** a `KeyboardEvent.code` as the host gets it, or null when the host cannot inject it. */
+  const hostCode = (eventCode: string): string | null => {
+    const code = applyModifierMapping(eventCode, hostOs, viewerIsMac, modifierMapping);
+    return isInjectable(code) ? code : null;
+  };
+
+  const pressKey = (code: string): void => {
+    heldKeys.add(code);
+    key(code, true, nowUs());
+    if (armed !== null && code !== armed) armedKeyDown = true;
+  };
+
+  const releaseKey = (code: string): void => {
+    // a key we never saw go down still gets its release: the host tracks state,
+    // and a spurious release is cheaper than a stuck key.
+    heldKeys.delete(code);
+    key(code, false, nowUs());
+    if (armedKeyDown && code !== armed) releaseArmed();
+  };
+
+  const nativeKey = (eventCode: string, down: boolean): void => {
+    if (detached) return;
+    const code = hostCode(eventCode);
+    if (code === null) return;
+    if (!down) {
+      releaseKey(code);
+      return;
+    }
+    // its keyup goes wherever focus is, and only the stage's reaches us
+    if (composing || !target.contains(doc.activeElement)) return;
+    // a shortcut held down fires once on the host: a second down is a repeat
+    if (!heldKeys.has(code)) pressKey(code);
+  };
+
   const onKeyDown = (event: KeyboardEvent): void => {
     if (composing || event.isComposing) return;
     if (BROWSER_RESERVED.has(event.code)) return;
@@ -318,6 +373,17 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       lastEscapeMs = nowMs();
       // a held escape repeats; only separate taps count towards leaving.
       if (!event.repeat) {
+        if (holdEscapeToExit && doc.fullscreenElement) {
+          clearEscapeHold();
+          escapeHold = setTimeout(() => {
+            escapeHold = null;
+            if (locked) {
+              exitRequested = true;
+              doc.exitPointerLock?.();
+            }
+            void doc.exitFullscreen().catch(() => undefined);
+          }, ESCAPE_HOLD_MS);
+        }
         const leaving =
           escapeTwiceListeners.size > 0 &&
           !doc.fullscreenElement &&
@@ -334,26 +400,19 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       event.preventDefault();
     }
 
-    const code = applyModifierMapping(event.code, hostOs, viewerIsMac, modifierMapping);
-    if (!isInjectable(code)) return;
+    const code = hostCode(event.code);
     // auto-repeat is forwarded: SendInput injects discrete events, so nothing
     // on the host side repeats a held key for us.
-    heldKeys.add(code);
-    key(code, true, nowUs());
-    if (armed !== null && code !== armed) armedKeyDown = true;
+    if (code !== null) pressKey(code);
   };
 
   const onKeyUp = (event: KeyboardEvent): void => {
     if (BROWSER_RESERVED.has(event.code)) return;
-    if (event.code !== 'Escape') event.preventDefault();
+    if (event.code === 'Escape') clearEscapeHold();
+    else event.preventDefault();
 
-    const code = applyModifierMapping(event.code, hostOs, viewerIsMac, modifierMapping);
-    if (!isInjectable(code)) return;
-    // a key we never saw go down still gets its release: the host tracks state,
-    // and a spurious release is cheaper than a stuck key.
-    heldKeys.delete(code);
-    key(code, false, nowUs());
-    if (armedKeyDown && code !== armed) releaseArmed();
+    const code = hostCode(event.code);
+    if (code !== null) releaseKey(code);
   };
 
   const onPointerMove = (event: PointerEvent): void => {
@@ -449,7 +508,11 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     composing = false;
   };
 
-  const onBlur = (): void => releaseAll();
+  // an escape released while the window is elsewhere never sends its keyup here.
+  const onBlur = (): void => {
+    clearEscapeHold();
+    releaseAll();
+  };
   const onVisibilityChange = (): void => {
     if (doc.visibilityState === 'hidden') releaseAll();
   };
@@ -491,6 +554,10 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   doc.addEventListener('visibilitychange', onVisibilityChange);
   doc.addEventListener('pointerlockchange', onPointerLockChange);
   view?.addEventListener('blur', onBlur);
+
+  // never in a browser: only the app calls it
+  const nativeKeyHost = viewerAppHasNativeKeys() ? (view as NativeKeyHost | null) : null;
+  if (nativeKeyHost) nativeKeyHost.__owletteNativeKey = nativeKey;
 
   const cancelSchedule = (options.schedule ?? defaultSchedule)(flush);
 
@@ -556,10 +623,12 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     releaseAll,
     pressChord,
     holdNextKey,
+    nativeKey,
 
     detach(): void {
       if (detached) return;
       detached = true;
+      clearEscapeHold();
       releaseAll();
       cancelSchedule();
       target.removeEventListener('keydown', onKeyDown);
@@ -576,6 +645,8 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       doc.removeEventListener('visibilitychange', onVisibilityChange);
       doc.removeEventListener('pointerlockchange', onPointerLockChange);
       view?.removeEventListener('blur', onBlur);
+      // a newer capture's keeps its place
+      if (nativeKeyHost?.__owletteNativeKey === nativeKey) delete nativeKeyHost.__owletteNativeKey;
     },
   };
 }

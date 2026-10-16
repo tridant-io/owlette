@@ -83,11 +83,12 @@
 //!    A decision that moves the host's encoder is made from the host's own
 //!    arithmetic over raw samples, not from a scalar a viewer asserts.
 //! 2. **Frame gaps**, from a rise in `stats.framesDropped` — frames the viewer
-//!    never presented. Three or more in one report window; fewer are counted
+//!    never decoded. Three or more in one report window; fewer are counted
 //!    and not cut ([`GAP_CUT_THRESHOLD`] says why).
-//! 3. **The host's own refusals**, from [`PacerStats::dropped_over_budget`]. A
-//!    frame the admission gate refused is congestion the host caused itself,
-//!    and it counts the same as the viewer reporting one missing.
+//! 3. **The host's own refusals**, from [`PacerStats::dropped_over_budget`],
+//!    and the frames its peer withheld after one until the keyframe
+//!    ([`Governor::on_frame_withheld`]). Each is a gap at the viewer the host
+//!    made itself, matched against the viewer's count and never cut for.
 //!
 //! Two fields `stats` also carries are read by nothing here, on purpose.
 //! `rttMs` is a real measurement (`feedback.ts` refuses to send one before a
@@ -145,8 +146,9 @@
 //!   ceiling is the top rung, so narrowing by it makes a resolution move a
 //!   re-plan that changes nothing. At the top rung the two are the same cap.
 //! - **Frame rate moved**: feed the encoder at most [`QualityRung::fps`] frames
-//!   a second. It is a capture-side decision, not an `EncoderConfig` one —
-//!   `fps` there sizes rate control and drops nothing.
+//!   a second, and open a new encoder at that rate: `EncoderConfig::fps` sizes
+//!   rate control, and a constant-bitrate encoder opened at 60 and fed 30
+//!   spends half its target.
 //!
 //! **Both actuators are wired.** `session/mod.rs`'s `apply_ladder` drains
 //! [`Governor::take_ladder`] after every report and after a `quality` message,
@@ -230,11 +232,13 @@ const CUT_FACTOR: f64 = 0.80;
 const CLIMB_FACTOR: f64 = 1.05;
 
 /// Unexplained dropped frames in one report window below which the window is
-/// counted and not cut. `framesDropped` is the browser's own count, and it
-/// rises by one when the browser skips a late frame, a slow decode or a
-/// throttled paint as readily as for a loss on the path. Measured at gate M1
-/// on 2026-10-02, a Mac on Wi-Fi at 4K60 reported one dropped frame every two
-/// to four seconds; each was a 20 % cut, a two-second hold and a 2.5 MB
+/// counted and not cut. `framesDropped` is the viewer's count of frames it
+/// never decoded; until 2026-10-14 it was frames never painted, which rose
+/// for every frame the compositor skipped (two in one refresh at 60 fps on a
+/// 60 Hz screen) and cut a wired lan every two seconds (TEC-B4A). A late
+/// frame or a slow decode can still raise it as readily as a loss on the
+/// path. Measured at gate M1 on 2026-10-02, a Mac on Wi-Fi at 4K60 reported
+/// one dropped frame every two to four seconds; each was a 20 % cut, a two-second hold and a 2.5 MB
 /// recovery keyframe, 11 cuts in 40 s took a 50 Mbps target to 20, and the
 /// picture stuttered where the path was fine. Real loss is many frames a
 /// window, and real congestion is a delay rise, which rule 1 catches alone.
@@ -330,9 +334,9 @@ pub struct LadderChange {
 }
 
 impl LadderChange {
-    /// A resolution move is a new encoder and a fresh IRAP out of it; a frame
-    /// rate move is a capture-side decision the running encoder never hears
-    /// about. The caller owes a different thing for each.
+    /// A resolution move is a new encoder at a new size. A frame-rate move is
+    /// a new encoder too, at the new rate, which the tier set carries; this
+    /// says only whether the size has to be re-planned.
     pub fn needs_new_encoder(&self) -> bool {
         self.rung.resolution != self.previous.resolution
     }
@@ -430,9 +434,9 @@ pub struct Governor {
     last_dropped_over_budget: u64,
     /// Viewer-reported gaps since the last report, not yet judged.
     pending_gap_rise: u64,
-    /// Refusals the pacer made that no viewer gap has been matched to yet.
-    /// A refused frame is a gap at the viewer a moment later, and that gap is
-    /// the host's own doing — not the path's.
+    /// Frames the host refused or withheld that no viewer gap has been matched
+    /// to yet. Each is a gap at the viewer a moment later, and that gap is the
+    /// host's own doing — not the path's.
     unmatched_refusals: u64,
     /// Set by anything degrading between reports, cleared by each evaluation.
     degraded: bool,
@@ -643,6 +647,18 @@ impl Governor {
             self.sent.pop_front();
         }
         self.sent.push_back((frame_id, send_us));
+    }
+
+    /// A frame this viewer's peer held back until its next IRAP, after a hole
+    /// in its stream. The viewer counts it missing like any other, so it is
+    /// matched like a refusal: one refused delta withholds every frame up to
+    /// the keyframe, and judging only the refusal itself read that run as the
+    /// path's loss and cut 20% for it (TEC-B4A, 2026-10-13, 1,973 cuts in a
+    /// day). Nothing before the first frame sent is a gap the viewer can count.
+    pub fn on_frame_withheld(&mut self) {
+        if !self.sent.is_empty() {
+            self.unmatched_refusals = self.unmatched_refusals.saturating_add(1);
+        }
     }
 
     /// One `swoop-feedback` message from the viewer. `ping`/`pong` is the
@@ -1190,6 +1206,40 @@ mod tests {
         f.governor.on_feedback(f.now, &stats(5));
         assert_eq!(f.report(GOOD), Some(16_000_000));
         assert_eq!(f.governor.stats().frame_gaps, 1);
+    }
+
+    #[test]
+    fn the_frames_a_hole_withholds_until_its_keyframe_are_the_hosts_not_the_paths() {
+        let mut f = Fixture::new();
+        f.report(GOOD);
+        let stats = |frames_dropped| Feedback::Stats {
+            decode_queue: 0,
+            frames_dropped,
+            jitter_ms: 0.0,
+            rtt_ms: 7.0,
+            width_css: 1920,
+            height_css: 1080,
+        };
+        f.governor.on_feedback(f.now, &stats(0));
+        f.report(GOOD);
+
+        // one refusal, then nine deltas held back for the keyframe: the viewer
+        // reports all ten missing, and none of them is the path's.
+        f.pacer.dropped_over_budget += 1;
+        for _ in 0..9 {
+            f.governor.on_frame_withheld();
+        }
+        f.governor.on_feedback(f.now, &stats(10));
+        assert_eq!(f.report(GOOD), None);
+        assert_eq!(f.governor.stats().frame_gaps, 0);
+        assert_eq!(f.governor.stats().cuts, 0);
+    }
+
+    #[test]
+    fn frames_withheld_before_the_first_one_sent_are_never_credited() {
+        let mut governor = Governor::new(GovernorConfig::new(CONFIGURED));
+        governor.on_frame_withheld();
+        assert_eq!(governor.unmatched_refusals, 0);
     }
 
     #[test]

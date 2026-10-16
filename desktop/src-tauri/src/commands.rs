@@ -8,17 +8,21 @@
 //! runs to completion on one worker thread — keeps the main thread free during a
 //! mutex wait and satisfies Windows' acquire/release-on-the-same-thread rule.
 
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
+use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Manager, State};
 
 use crate::agent_cli::{self, Runs};
+use crate::issue_attachments::{self, Staged, StagedVideo};
 use crate::json_io::{self, WriteOutcome};
-use crate::paths::{self, SERVICE_STATUS_REL};
+use crate::paths::{self, ISSUE_ATTACHMENTS_REL, SERVICE_STATUS_REL};
 use crate::process_ctl::{self, TerminateOutcome, DEFAULT_GRACEFUL_TIMEOUT};
 use crate::service_ctl::{self, ServiceCommandOutcome, ServiceStatus};
 use crate::shell_open;
+use crate::viewer_launch;
 use crate::window_state::{self, DetailSections, LayoutState, ThemeChoice};
 
 /// Absolute path of the owlette data root (`%PROGRAMDATA%\Owlette`). The frontend
@@ -251,10 +255,54 @@ pub fn open_owlette_path(path: String) -> Result<(), String> {
   shell_open::open_in_tree(&path)
 }
 
+/// Stage a screenshot for an issue report. The body is either `{ path }`, a
+/// file the operator picked, or the raw bytes of a pasted image.
+#[tauri::command(async)]
+pub fn stage_issue_screenshot(request: Request<'_>) -> Result<Staged, String> {
+  let dir = paths::resolve_in_root(&paths::data_root(), ISSUE_ATTACHMENTS_REL)?;
+  match request.body() {
+    InvokeBody::Raw(bytes) => issue_attachments::stage_bytes(&dir, bytes),
+    InvokeBody::Json(body) => {
+      let path = body
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "expected a file path or image bytes".to_string())?;
+      issue_attachments::stage_file(&dir, Path::new(path))
+    }
+  }
+}
+
+/// Stage a video the operator picked for an issue report, within the `room`
+/// in bytes the issue's other attachments leave.
+#[tauri::command(async)]
+pub fn stage_issue_video(path: String, room: u64) -> Result<StagedVideo, String> {
+  let dir = paths::resolve_in_root(&paths::data_root(), ISSUE_ATTACHMENTS_REL)?;
+  issue_attachments::stage_video(&dir, Path::new(&path), room)
+}
+
+/// Delete staged screenshots or videos by id; returns how many were removed.
+#[tauri::command(async)]
+pub fn discard_issue_screenshots(ids: Vec<String>) -> Result<usize, String> {
+  let dir = paths::resolve_in_root(&paths::data_root(), ISSUE_ATTACHMENTS_REL)?;
+  issue_attachments::discard(&dir, &ids)
+}
+
 /// Open an `http(s)` link in the default browser.
 #[tauri::command(async)]
 pub fn open_external_url(url: String) -> Result<(), String> {
   shell_open::open_url(&url)
+}
+
+/// Whether owlette swoop, the viewer app, is installed where this app looks for it.
+#[tauri::command(async)]
+pub fn swoop_viewer_installed() -> bool {
+  viewer_launch::viewer_installed()
+}
+
+/// Open owlette swoop on the swoop picker of this machine's dashboard.
+#[tauri::command(async)]
+pub fn open_swoop_viewer() -> Result<(), String> {
+  viewer_launch::open_picker()
 }
 
 /// Open macOS's Screen Recording pane, for the permission notice.

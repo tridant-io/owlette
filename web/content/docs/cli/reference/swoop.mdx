@@ -1,26 +1,29 @@
 ---
 title: "swoop"
-description: "swoop opens the remote-desktop viewer for one machine in your browser. it reads the machine record, prints the viewer URL and opens it, nothing else. the session itself, and the second factor control asks for, happen in the browser. tier: [ready]."
-keywords: ["remote desktop", "open viewer", "remote control", "screen sharing"]
+description: "swoop opens the remote-desktop viewer for one machine in owlette swoop, the desktop viewer app, when it is installed and the profile points at owlette.app or dev.owlette.app, and in your browser otherwise. it reads the machine record, prints the viewer URL and opens it, nothing else. the session itself, and the second factor control asks for, happen in the viewer page. tier: [ready]."
+keywords: ["remote desktop", "open viewer", "remote control", "screen sharing", "viewer app", "owlette swoop", "desktop app", "open in browser"]
 ---
 
-`owlette swoop <machineId> --site <siteId>` hands you the viewer page for a machine and opens it in your browser.
+`owlette swoop <machineId> --site <siteId>` hands you the viewer page for a machine and opens it in owlette swoop, or in your browser when the app is not installed.
 
-the command is a launcher, not a client. it makes exactly one API call, the machine read, to prove the machine exists, that you can reach it and that it can stream, so a typo does not open a dead page. it never starts a session, never mints a viewer token and never touches the media path. all of that happens in the browser, where a second factor can actually be presented.
+the command is a launcher, not a viewer. it makes exactly one API call, the machine read, to prove the machine exists, that you can reach it and that it can stream, so a typo does not open a dead page. it never starts a session, never mints a viewer token and never touches the media path. all of that happens in the viewer page, where a second factor can actually be presented.
+
+owlette swoop is the desktop viewer app: it shows the same viewer page in its own window. the command looks for it in `%LOCALAPPDATA%\owlette swoop\` and then `%ProgramData%\Owlette\app\` on Windows, in `/Applications/owlette swoop.app` on macOS and on `PATH` (`owlette-swoop-viewer`) on Linux. the app opens only owlette.app and dev.owlette.app, so it is used only when the active profile points at one of them. when the profile points elsewhere, the app is not there, or you pass `--browser`, the URL opens in your browser. either way the command only opens a URL.
 
 ---
 
 ## swoop
 
 ```bash
-owlette swoop <machineId> --site <siteId> [--no-open] [--json]
+owlette swoop <machineId> --site <siteId> [--browser] [--no-open] [--json]
 ```
 
 | argument / flag | type | required | description |
 |---|---|---|---|
 | `<machineId>` | string | yes | machine to open the viewer for |
 | `--site <siteId>` | string | yes | site ID that owns the machine |
-| `--no-open` | flag | no | print the URL and do not open a browser |
+| `--browser` | flag | no | open in the browser even when owlette swoop is installed |
+| `--no-open` | flag | no | print the URL and open nothing |
 | `--json` | flag | no | the global flag: emit the URL as JSON instead of a bare line |
 
 the URL is `<apiUrl>/swoop/<siteId>/<machineId>`, where `<apiUrl>` is the host the active profile points at.
@@ -31,6 +34,11 @@ the URL is `<apiUrl>/swoop/<siteId>/<machineId>`, where `<apiUrl>` is the host t
 # open the viewer
 owlette swoop m-1 --site site-1
 # https://owlette.app/swoop/site-1/m-1
+```
+
+```bash
+# skip owlette swoop and use the browser
+owlette swoop m-1 --site site-1 --browser
 ```
 
 ```bash
@@ -50,28 +58,31 @@ the `--json` envelope is:
   "siteId": "site-1",
   "machineId": "m-1",
   "url": "https://owlette.app/swoop/site-1/m-1",
-  "opened": true
+  "opened": true,
+  "viewer": "app"
 }
 ```
 
-`opened` is `false` under `--no-open`.
+`viewer` is `app` when owlette swoop opened the URL and `browser` when your browser did. under `--no-open`, `opened` is `false` and `viewer` is `null`.
 
-human mode prints the URL alone on stdout and its notes on stderr, so `owlette swoop … | …` stays clean. the notes are: that taking control asks for a second factor in the browser (always), that the machine is offline, and that the machine record carries no capabilities. `--json` prints no notes.
+human mode prints the URL alone on stdout and its notes on stderr, so `owlette swoop … | …` stays clean. the notes are: that taking control asks for a second factor in the viewer (always), that the machine is offline, that the machine record carries no capabilities, and where the URL opened (`opened in owlette swoop` or `opened in your browser`). `--json` prints no notes.
 
 backing: `GET /api/sites/{siteId}/machines/{machineId}`.
 
 ---
 
-## what the browser does, and this command does not
+## what the viewer page does, and this command does not
+
+the viewer page is the same in an owlette swoop window and in a browser tab.
 
 | step | where it happens |
 |---|---|
 | resolve the machine, check it reports the swoop capability | CLI |
-| start the session (`POST …/swoop/sessions`) | browser |
-| second-factor step-up, if you take control | browser |
-| viewer token, key exchange, ICE, the video itself | browser |
-| renew the 5-minute lease | browser |
-| end the session | browser |
+| start the session (`POST …/swoop/sessions`) | viewer page |
+| second-factor step-up, if you take control | viewer page |
+| viewer token, key exchange, ICE, the video itself | viewer page |
+| renew the 5-minute lease | viewer page |
+| end the session | viewer page |
 
 an API key cannot start a swoop session at all: every session route refuses one with `403` and `code: api_key_not_permitted`. that is why this command stops at the URL; there is nothing a key could be handed.
 
@@ -91,6 +102,6 @@ an API key cannot start a swoop session at all: every session route refuses one 
 - **tier**: `[ready]`
 - **capability**: the viewer needs a machine that reports `capabilities.swoop: 1`. one that reports `0` is refused with exit `1` and "does not report the swoop capability". that covers every Linux machine, which has no streamer, and a Mac without a current Screen Recording grant, as well as an agent too old to stream; see [which machines can host it](/docs/dashboard/swoop#which-machines-can-host-it). when the record carries no capabilities at all, the CLI says so on stderr and still hands over the URL, and the viewer refuses on its own if the machine cannot stream
 - **offline machines**: the URL is still printed, with a note. swoop cannot reach a machine until it reconnects
-- **opening the browser is best effort**: on a headless box nothing opens and nothing fails, because the URL is already on stdout. `--no-open` makes that explicit
+- **opening is best effort**: when owlette swoop is found but does not start, the browser opens instead. on a headless box nothing opens and nothing fails, because the URL is on stdout. `--no-open` makes that explicit
 - **replaces `machine live-view`**: the old screenshot-slideshow verb is a stub that points here
 - **related**: [machine](/docs/cli/reference/machine) (find machine IDs, screenshots, reboot), [swoop in the dashboard](/docs/dashboard/swoop) (what the viewer can do, and who may use it), [overview](/docs/cli/overview) (global flags and JSON output)

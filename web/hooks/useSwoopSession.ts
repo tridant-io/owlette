@@ -43,7 +43,7 @@ import {
 import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
 import { leaseFailure, SwoopLeaseRefused } from '@/lib/swoop/lease';
 import { createSwoopIdentity, createSwoopPeer, type SwoopNoPath, type SwoopPeer } from '@/lib/swoop/peer';
-import { backoffDelayMs, isTransientEnd, isWithdrawal } from '@/lib/swoop/backoff';
+import { backoffDelayMs, isPlanRefusal, isTransientEnd, isWithdrawal } from '@/lib/swoop/backoff';
 import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import { clearThisMachine, markThisMachine } from '@/lib/swoop/thisMachine';
@@ -79,7 +79,8 @@ import {
   type StallTick,
   type SwoopStallReport,
 } from '@/lib/swoop/video/stall';
-import type { SwoopStepUpProof } from '@/lib/swoop/stepUp';
+import type { SwoopStepUpAnswer, SwoopStepUpProof } from '@/lib/swoop/stepUp';
+import { isViewerApp } from '@/lib/swoop/viewerApp';
 
 /**
  * the reconnect ladder: 2 s, 4 s, … 30 s between sessions, reset after one
@@ -90,6 +91,17 @@ import type { SwoopStepUpProof } from '@/lib/swoop/stepUp';
  */
 const RETRY_LADDER = { baseMs: 2000, capMs: 30000 };
 const RETRY_RESET_MS = 5 * 60 * 1000;
+
+/**
+ * how long a machine may leave every offer unanswered, with no picture, before
+ * the tab stops asking. a machine whose streamer fails before it answers is
+ * otherwise asked again every 45 s for as long as the tab is open (bryant
+ * place's m5 max, two hours, 2026-10-12); a slow path off the lan still gets a
+ * picture within a few tries (davor, amber-opal), so this is time, not tries.
+ */
+const HOST_SILENT_LIMIT_MS = 10 * 60 * 1000;
+const HOST_SILENT_FINAL =
+  'this machine has not answered for ten minutes, so swoop stopped trying. check that it is on the network; on a Mac, the owlette app must be running and macOS may be asking someone to allow screen recording.';
 
 /**
  * a frozen picture is replaced with a new session on its own at most this
@@ -151,7 +163,7 @@ export interface SwoopStepUpControls {
   required: boolean;
   /** false when the account holds no second factor — it cannot take control. */
   enrolled: boolean;
-  submitProof: (proof: SwoopStepUpProof) => Promise<void>;
+  submitProof: (answer: SwoopStepUpAnswer) => Promise<void>;
   cancel: () => void;
 }
 
@@ -293,6 +305,8 @@ export function useSwoopSession(
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // when this tab last replaced a frozen picture's session on its own; see `STALL_RECOVERY_CAP`.
   const stallReconnectsRef = useRef<number[]>([]);
+  // when the machine first left an offer unanswered since its last picture; see `HOST_SILENT_LIMIT_MS`.
+  const silentSinceRef = useRef<number | null>(null);
 
   const setStall = useCallback((patch: Partial<SwoopStallStats>) => {
     setStats((prev) => ({ ...prev, stall: { ...prev.stall, ...patch } }));
@@ -306,8 +320,9 @@ export function useSwoopSession(
   const abandonRef = useRef<() => void>(() => {});
   const stoppedRef = useRef(false);
 
-  const submitProof = useCallback(async (proof: SwoopStepUpProof) => {
-    proofRef.current = proof;
+  const submitProof = useCallback(async (answer: SwoopStepUpAnswer) => {
+    // a window opened in the browser is the server's to find: that retry sends no proof
+    proofRef.current = 'kind' in answer ? null : answer;
     setStepUpRequired(false);
     // exactly one retry, never a loop: a second `step_up_required` re-opens the
     // dialog through the same path and the operator decides again.
@@ -352,6 +367,7 @@ export function useSwoopSession(
    */
   const reconnect = useCallback(() => {
     stallReconnectsRef.current = [];
+    silentSinceRef.current = null;
     abandonRef.current();
     startNext();
   }, [startNext]);
@@ -381,6 +397,13 @@ export function useSwoopSession(
     writeContinuity(siteId, machineId, null);
     endRef.current('closed');
   }, [clearRetry, siteId, machineId]);
+
+  // owlette swoop fires this before it closes a swoop window, so the session ends with its DELETE.
+  useEffect(() => {
+    if (!isViewerApp()) return;
+    window.addEventListener('owlette:close', end);
+    return () => window.removeEventListener('owlette:close', end);
+  }, [end]);
 
   // the countdown the page shows, once a second.
   useEffect(() => {
@@ -416,6 +439,8 @@ export function useSwoopSession(
     // the create route already minted one, good for 60 s. spend it on the first
     // dial rather than asking the lease route for a second.
     let pendingJwt: string | null = null;
+    // this run ends on an unanswered offer; any other end starts `HOST_SILENT_LIMIT_MS` again.
+    let silentEnd = false;
 
     const detachers: SwoopDetach[] = [];
     // the overlay's per-stage numbers come off one frame, resampled on the
@@ -474,6 +499,7 @@ export function useSwoopSession(
     const leave = (reason: string, next: 'ended' | 'error', message?: string) => {
       if (disposed) return;
       teardown(reason);
+      if (!silentEnd) silentSinceRef.current = null;
       if (message !== undefined) setError(message);
       setState(next);
       // only the stall's own end leaves its notice up, for the reconnect it waits on.
@@ -506,7 +532,15 @@ export function useSwoopSession(
           body: JSON.stringify({ viewerId: grant.viewerId, fp }),
         },
       );
-      if (!res.ok) throw leaseFailure(res.status, await res.json().catch(() => ({})));
+      if (!res.ok) {
+        const problem = (await res.json().catch(() => ({}))) as { code?: unknown };
+        // the stage names a plan refusal and the way to upgrade; every other
+        // withdrawal ends on the api's own sentence.
+        if (isPlanRefusal(res.status, typeof problem.code === 'string' ? problem.code : null) && !disposed) {
+          setRefusal('plan_required');
+        }
+        throw leaseFailure(res.status, problem);
+      }
       const body = (await res.json()) as { data: SwoopLease };
       leaseExpiresAt = body.data.expiresAt;
       return body.data;
@@ -577,10 +611,10 @@ export function useSwoopSession(
           }
           return null;
         }
-        // only the api's own answer is final: a policy refusal, a request it
-        // could not read, a site or machine that is not there. a lapsed login,
-        // a machine briefly offline, an edge in front of the app or a bad
-        // moment may all come back, and the ladder waits them out.
+        // only the api's own answer is final: a policy or plan refusal, a
+        // request it could not read, a site or machine that is not there. a
+        // lapsed login, a machine briefly offline, an edge in front of the app
+        // or a bad moment may all come back, and the ladder waits them out.
         const final = isWithdrawal(res.status, code) || res.status === 400 || res.status === 404;
         if (final && !disposed) setRefusal(code);
         fail(res.status === 401 ? 'sign in again to resume.' : detail, !final);
@@ -712,6 +746,7 @@ export function useSwoopSession(
           void receiver?.start().then(() => {
             if (disposed) return;
             connected = true;
+            silentSinceRef.current = null;
             setState('connected');
             // a picture from it is a session the machine let in, so a record
             // naming it as this browser's own is stale
@@ -732,7 +767,13 @@ export function useSwoopSession(
           } else if (code === 'playout_delay_not_negotiated') {
             fail('this machine did not agree the low-latency terms swoop requires.', false);
           } else if (code === 'host_silent') {
-            fail('this machine did not answer.', true);
+            silentEnd = true;
+            silentSinceRef.current ??= Date.now();
+            if (Date.now() - silentSinceRef.current >= HOST_SILENT_LIMIT_MS) {
+              fail(HOST_SILENT_FINAL, false);
+            } else {
+              fail('this machine did not answer.', true);
+            }
           } else {
             fail('the connection to this machine failed.', true);
           }
@@ -782,6 +823,7 @@ export function useSwoopSession(
         },
         peer,
         presenter,
+        inboundStats: async () => (await receiver?.inboundStats()) ?? null,
         send: sendOnChannel,
         onChannelMessage: (label, handler) => {
           const handlers = channelHandlers.get(label) ?? new Set<(data: unknown) => void>();

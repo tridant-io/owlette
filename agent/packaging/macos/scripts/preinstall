@@ -22,5 +22,6 @@ for uid in $(ps -axo uid= -o comm= | awk '$2 ~ /loginwindow$/ {print $1}' | sort
   fi
 done
 pkill -x owlette-desktop 2>/dev/null || true
+pkill -x owlette-swoop-viewer 2>/dev/null || true
 
 exit 0

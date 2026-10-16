@@ -50,7 +50,9 @@ header and `docs/runbooks/upgrade-2.12.0.md` first. Their gitignored
 `migrate-roles` · `migrate-profiles` · `migrate-synced-folders-to-roosts` ·
 `migrate-manifest-to-version` · `backfill-mfa-factors` ·
 `backfill-site-owner-membership` · `audit-legacy-api-keys` ·
-`replace-legacy-api-key`
+`replace-legacy-api-key` · `backfill-issue-numbers` (numbers unnumbered
+issues from `counters/bug_reports`; dry run unless `--write
+--confirm-project=<id>`, safe to re-run)
 
 ## vm/ — Hyper-V capture & e2e VM pipeline
 

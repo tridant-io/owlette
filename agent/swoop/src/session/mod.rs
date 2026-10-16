@@ -83,7 +83,11 @@
 //! ([`crate::transport::pacer`]) never reaches the decoder either, and the hole
 //! it leaves in the reference chain is the same hole a lost packet leaves — so
 //! a refusal asks for a keyframe through the same [`IdrPolicy`], which is what
-//! keeps a storm of refusals to one keyframe per window.
+//! keeps a storm of refusals to one keyframe per window. Until it lands that
+//! peer is sent nothing but an IRAP (`IrapGate` in [`crate::transport::rtc`]):
+//! Chrome cannot see a hole the host made, so a delta sent across one is a
+//! smear, and a held one is a short freeze. Each held frame asks again, so a
+//! request the window turned down is never lost.
 //!
 //! The floor is the opposite problem: a still desktop produces no frames at all
 //! (`DXGI_ERROR_WAIT_TIMEOUT`, and a genuinely idle output measured 0.28
@@ -971,7 +975,13 @@ mod host {
         self, Control, Event, Exit, ExitReason, GovernorPhase, HostEventKind, KillReason,
         LeftReason, MediaPath,
     };
-    use crate::platform::{self, CaptureSource, DesktopWatcher, Downscaler, InputInjector};
+    use crate::platform::{self, DesktopWatcher, Downscaler, InputInjector};
+    #[cfg(not(all(windows, feature = "testhooks")))]
+    use crate::platform::CaptureSource;
+    // a `testhooks` build opens its capture passes through the test pattern's
+    // seam, which is the desktop unless the bundle asked for the pattern
+    #[cfg(all(windows, feature = "testhooks"))]
+    use crate::capture::testpattern::{self, PassSource as CaptureSource};
     use crate::bundle::Secret;
     use crate::signal::client::{Effect, SignalTransport};
     use crate::signal::messages::channel::{
@@ -1104,6 +1114,10 @@ mod host {
         /// Which backend the selection chain actually opened on. Sent when it
         /// changes, which on a machine with one compiled backend is once.
         Backend(&'static str),
+        /// A rung failed its first frame and is out for the rest of the
+        /// session: the per-codec limits of what is left, which the tiers are
+        /// re-planned from — the rung below may cap smaller.
+        Rungs(Vec<CodecCaps>),
         /// Trigger 4 of `release_all`: the input thread's injector followed the
         /// desktop. The held sets are the session's, so the ups are too.
         DesktopSwitched,
@@ -1211,13 +1225,20 @@ mod host {
 
         // The test-only hook, which only a `testhooks` build parses at all.
         #[cfg(feature = "testhooks")]
-        if let Some(exit) = refuse_unbuilt_overrides(bundle.overrides.as_ref()) {
+        if let Some(exit) = refuse_unknown_overrides(bundle.overrides.as_ref()) {
             return (exit, ExitReason::Error);
         }
 
         // Locally before the network: a box that cannot capture or encode
         // should say so with 12 or 13 rather than after a room round trip.
-        let outputs = match platform::enumerate_outputs() {
+        #[cfg(all(windows, feature = "testhooks"))]
+        let enumerated = match bundle.overrides.as_ref().and_then(|o| o.source.as_deref()) {
+            Some(testpattern::SOURCE) => Ok(vec![testpattern::output()]),
+            _ => platform::enumerate_outputs(),
+        };
+        #[cfg(not(all(windows, feature = "testhooks")))]
+        let enumerated = platform::enumerate_outputs();
+        let outputs = match enumerated {
             Ok(outputs) if !outputs.is_empty() => outputs,
             Ok(_) => {
                 ::log::error!("swoop: no attached output to duplicate");
@@ -1235,11 +1256,10 @@ mod host {
         // sessions until the driver refuses in order to count them, and the
         // capture thread opens a new encoder on every resolution rung, every
         // retarget and every ACCESS_LOST recovery.
-        let caps = select::probe_all();
-        let codec_caps: Vec<CodecCaps> = caps
-            .iter()
-            .flat_map(|backend| backend.codecs.iter().cloned())
-            .collect();
+        let caps = select::probe_chain();
+        #[cfg(feature = "testhooks")]
+        let caps = overridden_caps(caps, bundle.overrides.as_ref());
+        let codec_caps = select::codec_caps(&caps);
         let codecs: Vec<Codec> = codec_caps.iter().map(|c| c.codec).collect();
         // D14's admission cap and tier count, measured here because `caps` is
         // about to be handed to the capture thread.
@@ -1400,24 +1420,62 @@ mod host {
         outcome
     }
 
-    /// The bundle's `overrides` names a test source and a test encoder, and
-    /// both are still stubs — Task 8.7 fills `capture::testpattern` and Task 7.2
-    /// fills `encode::soft`. Until they exist there is nothing to select, and
-    /// quietly streaming the real desktop instead is how a ci run that proved
-    /// nothing looks like one that passed. The names are fixed vocabulary, not
-    /// bundle secrets, so they may be logged.
+    /// The bundle's `overrides`, checked against what this build can honour.
+    /// A source or an encoder it cannot is refused, never ignored: quietly
+    /// streaming the real desktop, or on whatever rung the chain picks, is how
+    /// a ci run that proved nothing looks like one that passed. A refused name
+    /// is not logged — it is a bundle field like any other.
     #[cfg(feature = "testhooks")]
-    fn refuse_unbuilt_overrides(overrides: Option<&crate::bundle::Overrides>) -> Option<Exit> {
+    fn refuse_unknown_overrides(overrides: Option<&crate::bundle::Overrides>) -> Option<Exit> {
         let overrides = overrides?;
-        if let Some(source) = overrides.source.as_deref() {
-            ::log::error!("swoop: override source {source:?} is not built yet (task 8.7)");
+        #[cfg(windows)]
+        let pattern = Some(testpattern::SOURCE);
+        // the pattern renders into a d3d11 texture
+        #[cfg(not(windows))]
+        let pattern: Option<&str> = None;
+        if overrides.source.is_some() && overrides.source.as_deref() != pattern {
+            ::log::error!("swoop: the override source is not one this build has");
             return Some(Exit::NoCaptureSource);
         }
         if let Some(encoder) = overrides.encoder.as_deref() {
-            ::log::error!("swoop: override encoder {encoder:?} is not built yet (task 7.2)");
-            return Some(Exit::NoEncoder);
+            if override_backend(encoder).is_none() {
+                ::log::error!("swoop: the override encoder is not a rung of this build's chain");
+                return Some(Exit::NoEncoder);
+            }
         }
         None
+    }
+
+    /// The rung an override names. `soft` is the chain's last rung, the
+    /// software floor, whatever this system calls it — the protocol's golden
+    /// bundle names it that way.
+    #[cfg(feature = "testhooks")]
+    fn override_backend(name: &str) -> Option<&'static str> {
+        if name == "soft" {
+            return select::CHAIN.last().copied();
+        }
+        select::CHAIN.iter().find(|backend| **backend == name).copied()
+    }
+
+    /// The probed backends, narrowed to the one an override names, probing
+    /// down the chain to it when the session's own probe stopped above it. A
+    /// rung this machine does not have leaves nothing, which is exit 13.
+    #[cfg(feature = "testhooks")]
+    fn overridden_caps(
+        mut caps: Vec<BackendCaps>,
+        overrides: Option<&crate::bundle::Overrides>,
+    ) -> Vec<BackendCaps> {
+        match overrides
+            .and_then(|o| o.encoder.as_deref())
+            .and_then(override_backend)
+        {
+            Some(backend) => {
+                ::log::info!("swoop: encoding only on {backend} (test override)");
+                while !caps.iter().any(|c| c.backend == backend) && select::probe_further(&mut caps) {}
+                caps.into_iter().filter(|c| c.backend == backend).collect()
+            }
+            None => caps,
+        }
     }
 
     /// §6's `status.testOverride`, as one short string. The names are fixed
@@ -1602,6 +1660,7 @@ mod host {
             bind_addr: local_bind_addr(),
             signal_down_since: None,
             token_asked_at: None,
+            redialing: None,
             idle_since: Some(w.started),
             capture: CaptureGate::open(),
             denials: Denials::default(),
@@ -1676,6 +1735,8 @@ mod host {
         /// session outlives its socket and only a viewerless one exits.
         signal_down_since: Option<Instant>,
         token_asked_at: Option<Instant>,
+        /// A re-dial in flight on its own thread, and where its socket lands.
+        redialing: Option<Receiver<Result<RoomSocket, String>>>,
         site: String,
         machine: String,
         out: io::Stdout,
@@ -1918,6 +1979,7 @@ mod host {
                 if let Some(end) = self.pump_service() {
                     return end;
                 }
+                self.pump_redial();
                 if let Some(end) = self.pump_socket() {
                     return end;
                 }
@@ -1949,20 +2011,42 @@ mod host {
         /// picture; the room replays their joins, which the client already
         /// holds. A failed dial keeps the old socket — it works until its token
         /// expires, and the service retries the mint before then.
+        ///
+        /// The dial is a blocking tls and websocket handshake, so it runs on its
+        /// own thread: on this one it stalled every peer and the capture queue
+        /// behind it, about a second each time (352 re-dials and 63 frames
+        /// refused at once on TEC-B4A, 2026-10-13). A newer token replaces a
+        /// dial still in flight, whose socket is then dropped unused.
         fn redial(&mut self, host_token: &Secret) {
-            let handshake = match Handshake::with_token(
-                &self.signal_url,
-                &self.site,
-                &self.machine,
-                host_token.expose(),
+            if let Err(e) =
+                Handshake::with_token(&self.signal_url, &self.site, &self.machine, host_token.expose())
+            {
+                ::log::warn!("swoop: token refresh refused, room unchanged ({e})");
+                return;
+            }
+            match dial_in_background(
+                self.signal_url.clone(),
+                self.site.clone(),
+                self.machine.clone(),
+                host_token.clone(),
             ) {
-                Ok(handshake) => handshake,
-                Err(e) => {
-                    ::log::warn!("swoop: token refresh refused, room unchanged ({e})");
-                    return;
-                }
+                Ok(dialing) => self.redialing = Some(dialing),
+                Err(e) => ::log::warn!("swoop: could not start the re-dial ({e}); keeping the old socket"),
+            }
+        }
+
+        /// The re-dial's answer, once it has one.
+        fn pump_redial(&mut self) {
+            let Some(dialing) = &self.redialing else {
+                return;
             };
-            match RoomSocket::dial(&handshake) {
+            let dialed = match dialing.try_recv() {
+                Ok(dialed) => dialed,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => Err("the dial thread ended".to_owned()),
+            };
+            self.redialing = None;
+            match dialed {
                 Ok(socket) => {
                     self.socket = socket;
                     match self.signal_down_since.take() {
@@ -2412,6 +2496,15 @@ mod host {
                         self.retier();
                     }
                     Ok(FromWorker::Backend(backend)) => self.encoder = Some(backend),
+                    // A viewer already on a codec no rung left encodes gets no
+                    // picture; its freeze watchdog reconnects it, and the new
+                    // offer is matched against what is left.
+                    Ok(FromWorker::Rungs(codec_caps)) => {
+                        self.codecs = codec_caps.iter().map(|c| c.codec).collect();
+                        self.codec_caps = codec_caps;
+                        self.tiers_sent.clear();
+                        self.retier();
+                    }
                     // Trigger 4 of `release_all`. The injector follows on the
                     // input thread because a desktop association belongs to the
                     // thread that made it; the held sets are here, so the ups are
@@ -2489,6 +2582,20 @@ mod host {
             // next viewer of that class waits out somebody else's window.
             self.keyframes.retain(&self.plan);
             self.tiers = tier_encodes(&self.plan, &rates, &self.codec_caps, self.source);
+            // Each member's pacer bursts in its tier's frames, not 60 fps ones.
+            for tier in &self.plan.tiers {
+                let Some(fps) = self.tiers.iter().find(|t| t.codec == tier.codec).map(|t| t.fps)
+                else {
+                    continue;
+                };
+                for id in &tier.viewers {
+                    if let Some(peer) =
+                        self.viewers.iter_mut().find(|v| v.id == *id).and_then(|v| v.peer.as_mut())
+                    {
+                        peer.set_frame_rate(fps);
+                    }
+                }
+            }
             if self.tiers == self.tiers_sent {
                 return;
             }
@@ -2530,7 +2637,8 @@ mod host {
             /// afterwards.
             enum Outcome {
                 Skipped,
-                /// The peer has no recovery point yet and this frame is not one.
+                /// Withheld until an IRAP: the peer has none yet, or a hole
+                /// since its last, and this frame is a delta or did not go.
                 NeedsIrap,
                 /// Written, with the rtp timestamp that is the browser's join key.
                 Sent(u32),
@@ -2558,12 +2666,12 @@ mod host {
             let frame_id = frame.frame_id as u32;
             let now = Instant::now();
             if !frame.is_irap {
-                let rate = self
+                let (rate, fps) = self
                     .tiers
                     .iter()
                     .find(|t| t.codec == frame.codec)
-                    .map_or(0, |t| t.bitrate_bps);
-                if rate > 0 && moved(frame.data.len(), rate, TARGET_FPS) {
+                    .map_or((0, TARGET_FPS), |t| (t.bitrate_bps, t.fps));
+                if rate > 0 && moved(frame.data.len(), rate, fps) {
                     self.settle = Some((frame.codec, now));
                 }
             }
@@ -2577,8 +2685,13 @@ mod host {
                     None => Outcome::Skipped,
                     Some(peer) if peer.state() != PeerState::Connected => Outcome::Skipped,
                     // ICE lost its pair: a frame now only fills the uplink on its
-                    // way nowhere, and the reconnect asks for the keyframe.
-                    Some(_) if v.ice.down_for(now).is_some() => Outcome::Skipped,
+                    // way nowhere, and the reconnect asks for the keyframe. The
+                    // frames it never got are a hole like any other, so the
+                    // peer holds deltas until that keyframe lands.
+                    Some(peer) if v.ice.down_for(now).is_some() => {
+                        peer.hold_for_irap();
+                        Outcome::Skipped
+                    }
                     // Never the first thing a decoder sees: a delta whose
                     // references it never had is a black stream, not a lost
                     // frame. One IRAP answers every viewer waiting on one.
@@ -2586,9 +2699,10 @@ mod host {
                     Some(peer) => {
                         let before = peer.stats().frames_written;
                         match peer.send(&frame) {
+                            // A hole the peer now holds every delta behind.
                             Err(e) => {
                                 ::log::warn!("swoop: frame {} not sent: {e}", frame.frame_id);
-                                Outcome::Skipped
+                                Outcome::NeedsIrap
                             }
                             // The pacer refused it, or the track is not writable
                             // yet. No record either: the browser would otherwise
@@ -2601,6 +2715,8 @@ mod host {
                 let rtp = match outcome {
                     Outcome::Skipped => continue,
                     Outcome::NeedsIrap => {
+                        // The viewer will count it missing; it is the host's.
+                        v.governor.on_frame_withheld();
                         needs_irap = true;
                         continue;
                     }
@@ -3191,8 +3307,16 @@ mod host {
                         }
                     }
                 }
+                // The viewer saw a gap and drops everything until an IRAP, so
+                // its peer holds deltas until one is written, as for a PLI —
+                // and keeps asking, so a request the cooldown turned down is
+                // asked again on the next frame rather than lost.
                 ControlMessage::Idr => {
-                    if let Some(codec) = self.viewer(viewer).map(|v| v.codec) {
+                    if let Some(v) = self.viewer_mut(viewer) {
+                        if let Some(peer) = v.peer.as_mut() {
+                            peer.hold_for_irap();
+                        }
+                        let codec = v.codec;
                         self.request_idr(codec);
                     }
                 }
@@ -3431,6 +3555,14 @@ mod host {
         /// ([`TierKeyframes`]), so three viewers of one class reporting the same
         /// loss cost one IRAP between them.
         fn request_idr(&mut self, codec: Codec) {
+            // The policy books an ask as on its way, and a booked ask holds the
+            // next ones off until an IRAP or its deadline; one a full queue then
+            // lost would freeze a gated viewer for that long. The session is the
+            // queue's only sender, so a free slot here is still free below, and
+            // a gated peer asks again on its next frame.
+            if self.capture_tx.is_full() {
+                return;
+            }
             if !self.keyframes.request(codec, Instant::now()) {
                 return;
             }
@@ -3456,9 +3588,9 @@ mod host {
         /// device and the backend refuses a foreign texture (spike 3.7), so it
         /// goes through `retier`, whose `Tiers` drops the old encoder and the
         /// scaler and forces the irap that §4 requires of a resolution change.
-        /// A frame-rate move is a capture-side decision the running encoder
-        /// never hears about. Both are the same call here, because a tier is
-        /// sized and paced for the narrowest of its members either way.
+        /// A frame-rate move is a new encoder at the new rate, by the same
+        /// road. Both are the same call here, because a tier is sized and paced
+        /// for the narrowest of its members either way.
         fn apply_ladder(&mut self, viewer: &str) {
             let moved = self
                 .viewer_mut(viewer)
@@ -3869,6 +4001,9 @@ mod host {
     struct TierPass {
         want: TierEncode,
         encoder: Option<Box<dyn Encoder>>,
+        /// The rung `encoder` opened on, until it has taken a frame: a failure
+        /// before then is the rung's, and it leaves the chain.
+        unproven: Option<&'static str>,
         /// This tier's own downscaler: two tiers can be two sizes, and a scaler
         /// belongs to the size it was opened for.
         scaler: Option<Downscaler>,
@@ -3884,6 +4019,7 @@ mod host {
             Self {
                 want,
                 encoder: None,
+                unproven: None,
                 scaler: None,
                 // A new tier's first frame is a recovery point or its viewers
                 // see nothing at all.
@@ -3895,10 +4031,16 @@ mod host {
 
         /// A size change is a **new encoder**: the backend refuses a foreign
         /// texture and §4 requires an IRAP with nothing from the old one after
-        /// it. Rate and frame rate move in place.
+        /// it. So is a frame-rate change: rate control is sized for the rate an
+        /// encoder was opened at (NVENC's `frameRateNum`, the MFT's media type),
+        /// and a constant-bitrate one told 60 and fed 30 spends half its target
+        /// (TEC-B4A's 30 fps rows, 2026-10-13). The bitrate moves in place.
         fn retarget(&mut self, want: TierEncode) {
-            if (self.want.width, self.want.height) != (want.width, want.height) {
+            if (self.want.width, self.want.height, self.want.fps)
+                != (want.width, want.height, want.fps)
+            {
                 self.encoder = None;
+                self.unproven = None;
                 self.scaler = None;
                 self.force_irap = true;
             } else if self.want.bitrate_bps != want.bitrate_bps {
@@ -3916,13 +4058,14 @@ mod host {
         /// encode at all.
         fn rebuild(&mut self) {
             self.encoder = None;
+            self.unproven = None;
             self.scaler = None;
             self.force_irap = true;
         }
     }
 
     /// Apply a new tier set to the running encoders, keeping every one whose
-    /// codec and size are unchanged. A tier the set does not name has lost its
+    /// codec, size and frame rate are unchanged. A tier the set does not name has lost its
     /// last viewer and its encoder closes here.
     fn apply_tiers(tiers: &mut Vec<TierPass>, wanted: &[TierEncode], now: Instant) {
         let mut next: Vec<TierPass> = Vec::with_capacity(wanted.len());
@@ -4194,7 +4337,9 @@ mod host {
                         codec: tier.want.codec,
                         width,
                         height,
-                        fps: TARGET_FPS,
+                        // The rate it is fed at: a constant-bitrate encoder
+                        // told 60 and handed 30 spends half its target.
+                        fps: tier.want.fps,
                         // A rebuild is a new encoder, so the governor's current
                         // target is re-applied here rather than inherited.
                         bitrate_bps: tier.want.bitrate_bps,
@@ -4202,7 +4347,14 @@ mod host {
                     // The chain, not NVENC: `select::create` walks down it, so a
                     // backend that probed fine and then refused the session
                     // costs one rung rather than the session.
-                    match select::create(&ctx.caps, &cfg) {
+                    let probed = ctx.caps.len();
+                    let created = select::create(&mut ctx.caps, &cfg);
+                    // rungs probed because every one above refused to open: the
+                    // session plans its tiers from what is left
+                    if ctx.caps.len() != probed {
+                        let _ = ctx.tx.try_send(FromWorker::Rungs(select::codec_caps(&ctx.caps)));
+                    }
+                    match created {
                         Ok((backend, mut created)) => {
                             // A backend that finishes frames on its own thread
                             // hands them straight to the session; the rest
@@ -4211,6 +4363,7 @@ mod host {
                             let drops = Arc::clone(&ctx.drops);
                             created.set_sink(Box::new(move |frame| hand_over(&tx, &drops, frame)));
                             tier.encoder = Some(created);
+                            tier.unproven = Some(backend);
                             if ctx.backend != Some(backend) {
                                 ctx.backend = Some(backend);
                                 ::log::info!("swoop: encoding on {backend}");
@@ -4234,6 +4387,7 @@ mod host {
                         // encoder that runs a frame behind is not a stalled
                         // desktop.
                         tier.floor.fed(now);
+                        tier.unproven = None;
                         // Cleared on the submit the encoder accepted, not on
                         // an answer: a backend that delivers through its sink
                         // answers nothing here, and the forced frame is in
@@ -4251,6 +4405,14 @@ mod host {
                         // DeviceChanged and SizeChanged both mean the surface
                         // moved under the session: drop it and open a new one.
                         ::log::warn!("swoop: encode failed: {e}");
+                        // On its first frame it is the rung that failed, not
+                        // the surface, and opening it again fails the same way.
+                        if let Some(backend) = tier.unproven.take() {
+                            ::log::warn!("swoop: {backend} is out for the rest of this session");
+                            ctx.caps = select::without(&ctx.caps, backend);
+                            select::probe_further(&mut ctx.caps);
+                            let _ = ctx.tx.try_send(FromWorker::Rungs(select::codec_caps(&ctx.caps)));
+                        }
                         tier.rebuild();
                         rebuilt = true;
                     }
@@ -4508,6 +4670,26 @@ mod host {
         )
     }
 
+    /// Dial the room on a thread of its own and hand back where the socket
+    /// lands. The handshake was checked by the caller; the thread only waits.
+    fn dial_in_background(
+        signal_url: String,
+        site: String,
+        machine: String,
+        host_token: Secret,
+    ) -> io::Result<Receiver<Result<RoomSocket, String>>> {
+        let (tx, rx) = bounded(1);
+        thread::Builder::new()
+            .name("swoop-redial".into())
+            .spawn(move || {
+                let dialed = Handshake::with_token(&signal_url, &site, &machine, host_token.expose())
+                    .map_err(|e| e.to_string())
+                    .and_then(|handshake| RoomSocket::dial(&handshake).map_err(|e| e.to_string()));
+                let _ = tx.send(dialed);
+            })?;
+        Ok(rx)
+    }
+
     /// One frame interval at `fps`, for the capture loop's rate gate. A rung of
     /// zero is not a rung — `quality::MIN_LADDER_FPS` is the bottom — but the
     /// clamp is here rather than trusted, because the divisor is the one thing
@@ -4579,6 +4761,65 @@ mod host {
             let offer = "a=candidate:1 1 udp 1 127.0.0.1 5000 typ host\r\n";
             assert_eq!(bind_addr_toward_offer(offer), Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)));
             assert_eq!(bind_addr_toward_offer("v=0\r\n"), None);
+        }
+
+        /// The re-dial's handshake ran on the session thread and stalled every
+        /// peer behind it for about a second at a time (TEC-B4A, 2026-10-13).
+        #[test]
+        fn a_redial_never_waits_on_the_room() {
+            let room = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a silent room");
+            let url = format!(
+                "ws://{}/v1/room/site/machine",
+                room.local_addr().expect("its address")
+            );
+            let started = Instant::now();
+            let dialing = dial_in_background(
+                url,
+                "site".to_owned(),
+                "machine".to_owned(),
+                Secret::for_tests("token"),
+            )
+            .expect("the dial thread starts");
+            assert!(started.elapsed() < Duration::from_millis(100), "the caller waited");
+
+            let (held, _) = room.accept().expect("the dial reached the room");
+            assert!(
+                matches!(dialing.try_recv(), Err(TryRecvError::Empty)),
+                "still waiting on a room that says nothing"
+            );
+            drop(held);
+            drop(room);
+            assert!(matches!(
+                dialing.recv_timeout(Duration::from_secs(5)),
+                Ok(Err(_))
+            ));
+        }
+
+        #[test]
+        fn a_frame_rate_move_rebuilds_the_encoder_and_a_bitrate_move_does_not() {
+            let want = TierEncode {
+                codec: Codec::H264,
+                width: 1920,
+                height: 1080,
+                bitrate_bps: 20_000_000,
+                fps: 60,
+            };
+            let mut tier = TierPass::new(want, Instant::now());
+            tier.force_irap = false;
+
+            tier.retarget(TierEncode {
+                bitrate_bps: 16_000_000,
+                ..want
+            });
+            assert!(!tier.force_irap, "a bitrate moves in place");
+
+            tier.retarget(TierEncode {
+                bitrate_bps: 16_000_000,
+                fps: 30,
+                ..want
+            });
+            assert!(tier.force_irap, "a frame rate is a new encoder, opened at it");
+            assert_eq!(tier.want.fps, 30);
         }
 
         /// One tier at the session's own defaults, for the hardware tests that
@@ -4782,7 +5023,7 @@ mod host {
             let output = primary(&outputs).clone();
             let space = output.clone();
 
-            let backends = select::probe_all();
+            let backends = select::probe_chain();
             let caps: Vec<CodecCaps> = backends
                 .iter()
                 .flat_map(|backend| backend.codecs.iter().cloned())
@@ -4911,7 +5152,7 @@ mod host {
             assert!(!outputs.is_empty(), "no attached output to duplicate");
             let output = primary(&outputs).clone();
 
-            let backends = select::probe_all();
+            let backends = select::probe_chain();
             let caps: Vec<CodecCaps> = backends
                 .iter()
                 .flat_map(|backend| backend.codecs.iter().cloned())
@@ -5002,6 +5243,62 @@ mod host {
             assert!(still >= 2, "the floor did not feed a still desktop");
             assert_eq!(paused, 0, "capture kept running behind a cleared indicator");
             assert!(resumed >= 1, "the resume did not re-open the duplication");
+        }
+
+        // linux has no chain yet, so nothing to override
+        #[cfg(all(feature = "testhooks", any(windows, target_os = "macos")))]
+        #[test]
+        fn an_override_names_one_rung_and_soft_is_the_floor() {
+            use crate::bundle::Overrides;
+
+            let overrides = |source: Option<&str>, encoder: Option<&str>| Overrides {
+                source: source.map(str::to_owned),
+                encoder: encoder.map(str::to_owned),
+            };
+            let floor = *select::CHAIN.last().expect("a chain");
+            assert_eq!(override_backend("soft"), Some(floor));
+            assert_eq!(override_backend(select::CHAIN[0]), Some(select::CHAIN[0]));
+            assert_eq!(override_backend("x264"), None);
+
+            // what this build can honour passes; anything else is the exit it
+            // would have hit for real, never a quiet fallback
+            assert_eq!(refuse_unknown_overrides(None), None);
+            assert_eq!(
+                refuse_unknown_overrides(Some(&overrides(None, Some("soft")))),
+                None
+            );
+            assert_eq!(
+                refuse_unknown_overrides(Some(&overrides(None, Some("x264")))),
+                Some(Exit::NoEncoder)
+            );
+            assert_eq!(
+                refuse_unknown_overrides(Some(&overrides(Some("webcam"), None))),
+                Some(Exit::NoCaptureSource)
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                refuse_unknown_overrides(Some(&overrides(Some("testpattern"), Some("mf-sw")))),
+                None
+            );
+
+            let rung = |backend: &'static str| BackendCaps {
+                backend,
+                codecs: vec![CodecCaps {
+                    codec: Codec::H264,
+                    max_width: 1280,
+                    max_height: 720,
+                }],
+                accepts_bgra_texture: false,
+                max_fps: 30,
+                concurrent_sessions: 4,
+            };
+            let probed: Vec<BackendCaps> = select::CHAIN.iter().map(|b| rung(b)).collect();
+            let narrowed = overridden_caps(probed.clone(), Some(&overrides(None, Some("soft"))));
+            assert_eq!(
+                narrowed.iter().map(|c| c.backend).collect::<Vec<_>>(),
+                vec![floor]
+            );
+            assert_eq!(overridden_caps(probed.clone(), None).len(), probed.len());
         }
     }
 }

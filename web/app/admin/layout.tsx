@@ -11,7 +11,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useAuth } from '@/contexts/AuthContext';
 import { useDevicePrefFlag, useDevicePrefNumber } from '@/hooks/useDevicePrefFlag';
 import { useScrollFade } from '@/hooks/useScrollFade';
-import { requiredRoleForPath, visibleNavItems } from './navItems';
+import { groupNavItems, navItemMatches, requiredRoleForPath, visibleNavItems } from './navItems';
 
 /** Resizable sidebar bounds (lg+ expanded state only; the icon rail is fixed). */
 const SIDEBAR_MIN_W = 200;
@@ -19,8 +19,6 @@ const SIDEBAR_MAX_W = 480;
 const SIDEBAR_DEFAULT_W = 256;
 /** Dragging well past the minimum reads as "get rid of it" — collapse instead. */
 const SIDEBAR_COLLAPSE_AT_W = 150;
-/** Below this width the nav descriptions vanish so names keep their room. */
-const SIDEBAR_COMPACT_BELOW_W = 232;
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -86,10 +84,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     resizeRef.current = null;
     setResizing(false);
   };
-  // narrow-but-expanded drops descriptions so names keep their room (lg+ only)
-  const compactNav = !collapsed && sidebarWidth < SIDEBAR_COMPACT_BELOW_W;
-
-  const navItems = visibleNavItems(role, administersAnySite);
+  const navSections = groupNavItems(visibleNavItems(role, administersAnySite));
   const requiredRole = requiredRoleForPath(pathname);
 
   // Lazy initializer, not an effect: the first render needs the right back-target
@@ -165,7 +160,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           style={{ '--admin-sidebar-w': `${sidebarWidth}px` } as React.CSSProperties}
           className={`
           w-64 ${collapsed ? 'lg:w-20' : 'lg:w-[var(--admin-sidebar-w)]'} bg-card border-r border-border flex flex-col
-          fixed lg:relative inset-y-0 left-0 z-40
+          fixed lg:sticky lg:top-0 lg:h-screen inset-y-0 left-0 z-40
           transform ${resizing ? 'transition-none' : 'duration-200 ease-in-out'}
           ${mobileMenuOpen
             // visibility transitions on close only: on open the drawer must be
@@ -278,53 +273,66 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
           {/* Navigation Links */}
           {/* the drawer is viewport-tall, so on a short phone its nav scrolls */}
-          <nav className={`flex-1 min-h-0 overflow-y-auto lg:overflow-visible p-3 md:p-4 ${collapsed ? 'lg:p-2' : 'lg:p-4'}`}>
-            {navItems.map((item) => {
-              const isActive = pathname === item.href;
-              const Icon = item.icon;
+          <nav className={`flex-1 min-h-0 overflow-y-auto p-3 md:p-4 ${collapsed ? 'lg:p-2' : 'lg:p-4'}`}>
+            {navSections.map((section, index) => (
+              <div
+                key={section.group}
+                role="group"
+                aria-labelledby={`admin-nav-${section.group}`}
+                className={index > 0 ? 'mt-4' : undefined}
+              >
+                {/* the collapsed rail has no room for a heading, so a rule marks the section */}
+                <p
+                  id={`admin-nav-${section.group}`}
+                  className={`px-3 pb-1.5 text-xs font-medium text-muted-foreground ${collapsed ? 'lg:sr-only' : ''}`}
+                >
+                  {section.group}
+                </p>
+                {collapsed && index > 0 && (
+                  <div aria-hidden className="hidden lg:block mx-2 mb-3 border-t border-border" />
+                )}
+                {section.items.map((item) => {
+                  const isActive = navItemMatches(item, pathname);
+                  const Icon = item.icon;
 
-              return (
-                <Tooltip key={item.href}>
-                  <TooltipTrigger asChild>
-                    <Link
-                      href={item.href}
-                      onClick={() => setMobileMenuOpen(false)}
-                      // the collapsed rail hides the text, and the icon is aria-hidden
-                      aria-label={collapsed ? item.name : undefined}
-                      aria-current={isActive ? 'page' : undefined}
-                    >
-                      <div
-                        className={`
-                          flex items-start gap-3 p-2.5 md:p-3 ${collapsed ? 'lg:p-2 lg:justify-center' : 'lg:p-3 lg:justify-start'} rounded-lg cursor-pointer transition-colors mb-1 md:mb-2
-                          ${
-                            isActive
-                              ? 'bg-accent-cyan/10 dark:bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30'
-                              : 'text-foreground hover:bg-accent! hover:text-foreground!'
-                          }
-                        `}
-                      >
-                        <Icon className="h-5 w-5 mt-0.5 flex-shrink-0" />
-                        <div className={`block ${collapsed ? 'lg:hidden' : 'lg:block'}`}>
-                          <p className="font-medium text-sm">{item.name}</p>
-                          <p
-                            className={`text-xs mt-0.5 ${compactNav ? 'lg:hidden' : ''} ${
-                              isActive ? 'text-accent-cyan' : 'text-muted-foreground'
-                            }`}
+                  return (
+                    <Tooltip key={item.href}>
+                      <TooltipTrigger asChild>
+                        <Link
+                          href={item.href}
+                          onClick={() => setMobileMenuOpen(false)}
+                          // the collapsed rail hides the text, and the icon is aria-hidden
+                          aria-label={collapsed ? item.name : undefined}
+                          aria-current={isActive ? 'page' : undefined}
+                        >
+                          <div
+                            className={`
+                              flex items-center gap-3 px-3 py-2 ${collapsed ? 'lg:p-2 lg:justify-center' : 'lg:justify-start'} rounded-lg cursor-pointer transition-colors mb-0.5
+                              ${
+                                isActive
+                                  ? 'bg-accent-cyan/10 dark:bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30'
+                                  : 'border border-transparent text-foreground hover:bg-accent! hover:text-foreground!'
+                              }
+                            `}
                           >
-                            {item.description}
-                          </p>
-                        </div>
-                      </div>
-                    </Link>
-                  </TooltipTrigger>
-                  <TooltipContent side="right" className={collapsed ? 'hidden lg:block' : 'hidden'}>
-                    <p className="font-medium">{item.name}</p>
-                    {/* the light tooltip is inverse ink, so its muted line comes from the tooltip's own ink */}
-                    <p className="text-xs text-tooltip-foreground/70 dark:text-muted-foreground">{item.description}</p>
-                  </TooltipContent>
-                </Tooltip>
-              );
-            })}
+                            <Icon className="h-5 w-5 flex-shrink-0" />
+                            <span className={`font-medium text-sm ${collapsed ? 'lg:hidden' : ''}`}>{item.name}</span>
+                          </div>
+                        </Link>
+                      </TooltipTrigger>
+                      {/* the description lives here now; the collapsed rail also needs the name */}
+                      <TooltipContent side="right" className="hidden lg:block">
+                        {collapsed && <p className="font-medium">{item.name}</p>}
+                        {/* the light tooltip is inverse ink, so its muted line comes from the tooltip's own ink */}
+                        <p className={collapsed ? 'text-xs text-tooltip-foreground/70 dark:text-muted-foreground' : 'text-xs'}>
+                          {item.description}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
 
         </aside>

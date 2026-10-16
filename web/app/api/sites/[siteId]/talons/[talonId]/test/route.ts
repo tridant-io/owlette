@@ -8,8 +8,7 @@
  * overlap though: the engine's in-flight guard records a `skipped` run, returned
  * like any other.
  *
- * Not tier-gated: authoring a talon is pro-only, running an existing one isn't —
- * same posture as the scheduler, which sweeps a downgraded site's talons.
+ * plan-gated on `owlette.talons` by the wrapper's plan lockout, as authoring is.
  *
  * Capability: TALON_MANAGE with the write-class api-key default. talons wave 4.2.
  */

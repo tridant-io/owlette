@@ -245,6 +245,19 @@ class _CrossProcessLock:
         self.fd = None
 
 def get_hostname():
+    """This machine's name. On macOS the kernel hostname is whatever the
+    network hands out — a router answers `Mac.localdomain` to every Mac, so two
+    of them paired onto one machine doc — and LocalHostName is the name the Mac
+    keeps unique on its LAN."""
+    if _IS_MACOS:
+        try:
+            name = subprocess.check_output(
+                ['scutil', '--get', 'LocalHostName'], text=True, timeout=5
+            ).strip()
+            if name:
+                return name
+        except (OSError, subprocess.SubprocessError) as e:
+            logging.debug(f"scutil LocalHostName failed: {e}")
     return socket.gethostname()
 
 # `(osFamily, arch)` the way the fleet spells them: the machine document's
@@ -1297,6 +1310,10 @@ def get_path(filename=None):
 
     return path
 
+def get_install_root():
+    """The install root: src lives at <install>/agent/src, two levels down."""
+    return os.path.dirname(os.path.dirname(get_path()))
+
 # Where the bundled interpreter lives on each POSIX platform. Windows resolves
 # its own from the install root so a relocated install still works; the macOS
 # and Linux payloads install to a fixed prefix and there is nothing to relocate.
@@ -1320,8 +1337,7 @@ def get_python_exe_path():
             return candidate
         raise FileNotFoundError(f"Python interpreter not found at {candidate}")
 
-    # src lives at <install>\agent\src — two levels up is the install root
-    install_root = os.path.dirname(os.path.dirname(get_path()))
+    install_root = get_install_root()
 
     pythonw_path = os.path.join(install_root, 'python', 'pythonw.exe')
     if os.path.exists(pythonw_path):
@@ -1398,6 +1414,7 @@ def ensure_data_directories():
         get_data_path('ipc/results'),
         get_data_path('ipc/swoop'),
         get_data_path('ipc/requests'),
+        get_data_path('ipc/issue-attachments'),
     ]
     if not _IS_WINDOWS:
         # off windows the trio is an ordinary data-root directory; on windows

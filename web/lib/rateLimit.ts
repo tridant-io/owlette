@@ -6,6 +6,7 @@
 import { Ratelimit } from '@upstash/ratelimit';
 import { Redis } from '@upstash/redis';
 import { NextRequest } from 'next/server';
+import { edgeSecretConfigured, edgeVouches } from '@/lib/edge.server';
 
 // Missing credentials are tolerated so local dev works without Redis.
 let redis: Redis | null = null;
@@ -104,6 +105,16 @@ export const agentAlertRateLimit = redis
     })
   : null;
 
+/** Verification email resends: 5/hr per user — every call is a real email send. */
+export const verifyEmailRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(5, '1 h'),
+      prefix: 'verify-email',
+      analytics: true,
+    })
+  : null;
+
 /** Installer uploads: 5/hr per IP against storage abuse; 30/hr in dev. */
 export const uploadRateLimit = redis
   ? new Ratelimit({
@@ -128,6 +139,34 @@ export const screenshotUploadRateLimit = redis
       redis,
       limiter: Ratelimit.fixedWindow(1000, '1 h'),
       prefix: 'screenshot-upload',
+      analytics: true,
+    })
+  : null;
+
+/**
+ * Issue-log upload urls: 5/hr per machine, keyed on the machine for the same
+ * NAT reason as screenshots. A person submits an issue by hand, so five an
+ * hour is generous, and each url can land up to 150 MiB in the bucket.
+ */
+export const issueLogsUploadRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(5, '1 h'),
+      prefix: 'issue-logs-upload',
+      analytics: true,
+    })
+  : null;
+
+/**
+ * Web issue upload urls: 20/hr per user. One call signs a whole issue's
+ * screenshots and videos (up to 100 MB), so twenty covers retries and still
+ * bounds how much one account can land in the bucket.
+ */
+export const webIssueUploadRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(20, '1 h'),
+      prefix: 'web-issue-upload',
       analytics: true,
     })
   : null;
@@ -202,7 +241,10 @@ export function getDisplayAlertRateLimit(eventType: string) {
  * or appends are safe:
  *
  *   1. `CF-Connecting-IP` — rewritten at the Cloudflare edge, so a
- *      client-supplied value never survives. Authoritative in prod.
+ *      client-supplied value never survives there. But every origin also
+ *      answers requests that came around Cloudflare (measured 2026-10-10),
+ *      where the header is whatever the client sent, so with an edge secret
+ *      configured it counts only beside `X-Owlette-Edge` (`lib/edge.server.ts`).
  *   2. `X-Forwarded-For`, read RIGHT-TO-LEFT: each proxy appends, so the
  *      right-most entry is our own edge's and everything left of it is
  *      client-seeded. Reading left-most let a caller rotate the header to mint
@@ -215,7 +257,7 @@ export function getDisplayAlertRateLimit(eventType: string) {
  */
 export function getClientIp(request: NextRequest): string {
   const cfConnectingIp = request.headers.get('cf-connecting-ip');
-  if (cfConnectingIp) {
+  if (cfConnectingIp && (!edgeSecretConfigured() || edgeVouches(request.headers.get('x-owlette-edge')))) {
     return normalizeIp(cfConnectingIp);
   }
 

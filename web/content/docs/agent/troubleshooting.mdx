@@ -1,7 +1,7 @@
 ---
 title: "agent troubleshooting"
 description: "where the agent's logs are on Windows, macOS and Linux, how to run it in the foreground, how to start and stop the service, and fixes for the common problems."
-keywords: ["logs", "log file", "service.log", "journalctl", "launchctl", "systemctl", "service not running", "not connecting", "offline", "debug", "re-pair", "screen recording", "accessibility", "selfcheck"]
+keywords: ["logs", "log file", "service.log", "journalctl", "launchctl", "systemctl", "service not running", "not connecting", "offline", "debug", "re-pair", "screen recording", "accessibility", "selfcheck", "submit issue", "dashboard issue", "attach screenshots", "attach logs", "attach video", "send logs", "send logs to support", "export logs", "zip logs", "swoop viewer log", "crash events", "crash reports", "DiagnosticReports", "install.log", "journal", "owlette-update", "setup log"]
 ---
 
 ---
@@ -31,7 +31,8 @@ the app menu's **logs** item opens this folder on every platform, and on Windows
 | **pairing** | `pairing_debug.log` | all | device-code pairing and token setup |
 | **preseed pairing** | `pairing.log` | macOS, Linux | the background pairing a [pairing preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux) starts at install |
 | **token exchange (legacy)** | `oauth_debug.log` | all | written only by the old registration-code exchange, which phrase pairing does not use, so a current agent leaves it absent or stale. response bodies were never written — they carry tokens |
-| **app requests** | `privileged_requests.log` | macOS, Linux | an audit row for every request the desktop app made of the service — pair, leave, restart, reboot, bug report — and whether it ran |
+| **app requests** | `privileged_requests.log` | macOS, Linux | an audit row for every request the desktop app made of the service — pair, leave, restart, reboot, issue — and whether it ran |
+| **submit issue** | `submit_issue.log` | all | each issue sent from the desktop app: zipping and uploading attached logs, and why they could not be attached. 1 MB, one backup. never the issue's text, a token or an upload link |
 | **self-update installer** | `installer_update.log` | Windows | the Inno Setup log written during a remote agent update |
 | **self-update installer** | `update_installer.log` | macOS | what `installer` printed while it applied an update |
 | **self-update installer** | `journalctl -u owlette-update` | Linux | not a file: the transient unit apt-get runs in during an update |
@@ -55,6 +56,8 @@ the streamer writes `logs/swoop/swoop.log` itself, on the platforms that host sw
 | Linux | `~/.local/share/app.owlette.desktop/logs/owlette-desktop.log` (under `$XDG_DATA_HOME` when that is set) |
 
 the app's log covers the window and the tray icon — startup, status polling, service control, pairing dialogs, and on macOS and Linux the jobs it runs for the service. it belongs to whoever the app runs as, typically the machine's auto-login account, not the account the service runs as. it rotates at 4 MB and keeps 4 files (`owlette-desktop_<date>.log`), and its timestamps are local time, so they line up with `service.log` — a field report usually wants both.
+
+[owlette swoop](/docs/dashboard/swoop#owlette-swoop), the swoop viewer app, keeps its own per-user log the same way, `owlette-swoop-viewer.log` under `app.owlette.swoop-viewer` in place of `app.owlette.desktop` in the paths above (on Windows `%LOCALAPPDATA%\app.owlette.swoop-viewer\logs\owlette-swoop-viewer.log`). it records each page it opens and each window it makes, never a URL's query.
 
 <Callout type="info" title={"logs removed in 3.0.0"}>
 
@@ -419,11 +422,43 @@ the app restarts the service without an administrator prompt on every platform. 
 
 ---
 
+## sending logs to support
+
+when the tail of `service.log` is not enough, tick **attach logs** in the desktop app's **submit issue** dialog and the agent zips the machine's logs and sends them with the issue. the box starts unticked every time: nothing beyond the usual system info and log tail leaves the machine unless you tick it.
+
+on every platform the zip holds:
+
+- every file under `logs/` in the data root (see [log locations](#log-locations)) changed in the last 14 days: the service, service host, swoop streamer (including `logs/swoop/`), hoot, pairing, installer and self-update logs, app requests, `roost_scrub_reports/` and `submit_issue.log`
+- `tmp/status_writer.log`
+- the desktop app's own log, `owlette-desktop.log`, and owlette swoop's log, `owlette-swoop-viewer.log`, with their rotated files
+- a listing of the data root: each file's name, size and modified date, never its contents
+- `manifest.txt`, which lists each file included with its size and modified time, and each file left out and why
+
+and on top of that:
+
+- **Windows:** the five newest owlette installer logs from the last 14 days (`Setup Log <date> #NNN.txt` in the signed-in user's `%TEMP%`, only those whose setup exe is owlette's own `Owlette-Installer-v<version>.exe`), and the Application event log's crash events for owlette's own programs
+- **macOS:** the ten newest crash reports from the last 14 days for owlette's own programs, from `/Library/Logs/DiagnosticReports` and the signed-in user's `~/Library/Logs/DiagnosticReports`, and the lines of `/var/log/install.log` that mention owlette
+- **Linux:** the systemd journals for the agent service, `owlette-agent`, and the self-update unit, `owlette-update`
+
+nothing else goes in: never a token, never `config/config.json`, never another program's files or log lines. links (symlinks and hard links) are skipped. newest files go in first, up to 300 MB before compression, and the zip stops at 150 MB. the logs can still contain hostnames, user names, file paths and process names.
+
+you can also add screenshots and videos to an issue with **add screenshots or video**, or paste an image into the dialog (a video cannot be pasted). screenshots must be PNG, JPEG or WebP images of 8 MB or less, up to 10 of them; videos must be MP4, MOV or WebM files. together they can take up to 100 MB. they go in the same zip, the screenshots under `screenshots/` and then the videos under `videos/`, ahead of any logs, whether or not **attach logs** is ticked: with it unticked, the zip holds only them and `manifest.txt`. the issue's description then gains the lines `screenshots attached: N` and `videos attached: N`. a large video takes a while to upload on a slow connection, and the issue is sent once the upload finishes.
+
+the zip is stored in Cloudflare R2 and deleted automatically 30 days after upload. only owlette support can download it, not the site's owners or admins, and every download is audited. owlette support may use an AI assistant (Anthropic's Claude) to help diagnose the issue.
+
+if the zip cannot be built or uploaded, the issue is still sent without it, and its description ends with `attachments could not be sent: <reason>`. send the issue again later, or email the files from [log locations](#log-locations) to support.
+
+---
+
 ## getting help
 
-- use `submit bug report` in the desktop app's menu — it also takes feature requests and general feedback. the agent attaches the machine's system metrics and the last 100 lines of `service.log` automatically, along with the hostname and site ID, so the report arrives diagnosable.
+- use **submit issue** in the desktop app's menu — it also takes feature requests and general feedback. every issue carries the machine's system info and the last 100 lines of `service.log`, along with the hostname, machine ID and site ID, so it arrives diagnosable. to send the full logs too, tick **attach logs**; see [sending logs to support](#sending-logs-to-support).
 
-  ![the submit bug report dialog, with a category and a description field](/docs-screens/agent-report-issue.png)
+  ![the submit issue dialog, with a category and a description field](/docs-screens/agent-report-issue.png)
+
+  the dashboard's help menu has **submit issue** too. its dialog takes a category, a description, and screenshots and videos from **add screenshots or video** or a pasted image, within the desktop app's limits: up to 10 PNG, JPEG or WebP screenshots of 8 MB or less, and MP4, MOV or WebM videos, 100 MB together. there is no title; the issue is named after the first line of the description. it cannot attach logs: only the desktop app can. the files are kept 30 days and seen only by owlette support, and every download is audited. owlette support may use an AI assistant (Anthropic's Claude) to help diagnose the issue.
+
+  every issue gets a number, and the confirmation names it: "thanks — your issue was sent as #42" in the desktop app (versions after 4.1.17), "issue #42 submitted — thank you!" in the dashboard. owlette support sees the same number, so quote it when you follow up.
 
 - email us at [support@tridant.io](mailto:support@tridant.io)
 - file a bug or feature request on [GitHub](https://github.com/tridant-io/owlette/issues)

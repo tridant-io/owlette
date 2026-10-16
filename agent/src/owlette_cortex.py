@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import signal
-import socket
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -239,7 +238,7 @@ async def handle_chat_message(
     chat_id = message.get('chatId', '')
     user_content = message.get('content', '')
     images = message.get('images', [])
-    machine_name = message.get('machineName', socket.gethostname())
+    machine_name = message.get('machineName', shared_utils.get_hostname())
 
     logger.info(f"Processing chat message: chatId={chat_id}, len={len(user_content)}, images={len(images)}")
 
@@ -315,7 +314,7 @@ def build_autonomous_prompt(event: Dict[str, Any], config: dict) -> str:
     process_name = event.get('processName', 'Unknown')
     event_type = event.get('eventType', 'process_crash')
     error_message = event.get('errorMessage', 'No details available')
-    machine_name = event.get('machineName', socket.gethostname())
+    machine_name = event.get('machineName', shared_utils.get_hostname())
 
     action = 'crashed' if event_type == 'process_crash' else 'failed to start'
 
@@ -362,7 +361,8 @@ async def handle_autonomous_event(
 
     process_name = event.get('processName', 'Unknown')
     event_type = event.get('eventType', 'process_crash')
-    event_id = f"auto_{int(time.time()*1000)}_{socket.gethostname()}"
+    hostname = shared_utils.get_hostname()
+    event_id = f"auto_{int(time.time()*1000)}_{hostname}"
 
     logger.info(f"Autonomous investigation started: {process_name} ({event_type})")
 
@@ -370,7 +370,7 @@ async def handle_autonomous_event(
     firestore.write_cortex_status('thinking')
 
     firestore.write_autonomous_event(event_id, {
-        'machineName': event.get('machineName', socket.gethostname()),
+        'machineName': event.get('machineName', hostname),
         'processName': process_name,
         'eventType': event_type,
         'errorMessage': event.get('errorMessage', ''),
@@ -407,7 +407,7 @@ async def handle_autonomous_event(
         status = 'escalated' if needs_escalation else 'resolved'
 
         firestore.write_autonomous_event(event_id, {
-            'machineName': event.get('machineName', socket.gethostname()),
+            'machineName': event.get('machineName', hostname),
             'processName': process_name,
             'eventType': event_type,
             'errorMessage': event.get('errorMessage', ''),
@@ -427,7 +427,7 @@ async def handle_autonomous_event(
     except Exception as e:
         logger.error(f"Autonomous investigation error: {e}")
         firestore.write_autonomous_event(event_id, {
-            'machineName': event.get('machineName', socket.gethostname()),
+            'machineName': event.get('machineName', hostname),
             'processName': process_name,
             'eventType': event_type,
             'errorMessage': event.get('errorMessage', ''),

@@ -78,10 +78,10 @@ what the launch mode says. and restart, kill and delete all ask you to confirm, 
 wording that tells you what happens next.
 
 ## [b08] the footer, the menu, and the cloud
-**SCREEN:** the footer sentence with its tone dot ("<HOSTNAME> is connected to <site>") and the service version on the right; cut to a machine with the service stopped to show the "start service" button, and an unpaired one to show "join site". Open the hamburger: join or leave site, config, logs, docs, submit bug report, start on login, restart service, reload window. Split screen: edit a launch mode in the app, and the dashboard's machine card updating about a second later.
+**SCREEN:** the footer sentence with its tone dot ("<HOSTNAME> is connected to <site>") and the service version on the right; cut to a machine with the service stopped to show the "start service" button, and an unpaired one to show "join site". Open the hamburger: join or leave site, config, logs, docs, submit issue, start on login, restart service, reload window. Split screen: edit a launch mode in the app, and the dashboard's machine card updating about a second later.
 **VOICEOVER:**
 along the bottom, one line: is this machine connected, and to which site — plus a button
 when it needs one, start service or join site. the hamburger menu has the rest — join or
-leave a site, the config file, the logs folder, docs, and submit a bug report. edit
+leave a site, the config file, the logs folder, docs, and submit an issue. edit
 anything here and it's in the cloud about a second later. next: getting software onto a
 whole fleet.

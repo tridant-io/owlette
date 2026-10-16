@@ -258,13 +258,14 @@ class FirebaseClient:
         self._last_heartbeat_time: float = 0.0
 
         # Hardware profile state (schemaVersion 1). _last_profile_check is
-        # monotonic secs; _cached_profile_hash is lazily read from
-        # profile_hash.json; _last_primary feeds compute_primary hysteresis.
+        # monotonic secs; _last_primary feeds compute_primary hysteresis.
+        # _cached_profile_hash is the last hash this client uploaded, in memory
+        # only: a re-pair builds a new client whose machine doc may have lost
+        # its hardware docs, so a hash kept on disk would skip that upload.
         self._last_profile_check: float = 0.0
         self._cached_profile: Optional[Dict] = None
         self._cached_profile_hash: Optional[str] = None
         self._last_primary: Optional[Dict] = None
-        self._profile_hash_path: str = shared_utils.get_data_path('tmp/profile_hash.json')
 
         # Buffers alerts whose fire-and-forget POST failed; drained by the
         # connection-state listener on the next CONNECTED. In-memory only (a
@@ -274,19 +275,17 @@ class FirebaseClient:
         self._PENDING_ALERTS_MAX = 100
 
         # Display profile state (schemaVersion 1). Same shape as the hardware
-        # cache: rate-limited rebuild, signature-hashed upload, hash persisted on
-        # disk. Writes go to hardware/display only — never online/lastHeartbeat.
+        # cache: rate-limited rebuild, signature-hashed upload, hash in memory.
+        # Writes go to hardware/display only — never online/lastHeartbeat.
         self._last_display_check: float = 0.0
         self._cached_display_profile: Optional[Dict] = None
         self._cached_display_hash: Optional[str] = None
-        self._display_hash_path: str = shared_utils.get_data_path('.display_profile_hash')
 
         # Display-modes catalogue: on-demand only (dashboard sends
         # enumerate_display_modes when the editor opens). signatureHash matches the
         # display profile's, so unchanged topology is a no-op upload; separate hash
-        # file so either cache can be invalidated alone.
+        # so either cache can be invalidated alone.
         self._cached_display_modes_hash: Optional[str] = None
-        self._display_modes_hash_path: str = shared_utils.get_data_path('.display_modes_hash')
 
         self._load_cached_config()
         self.connection_manager.connect()
@@ -1139,29 +1138,6 @@ class FirebaseClient:
     PROGRESS_THROTTLE_SECONDS = 30.0
     PROGRESS_THROTTLE_PERCENT = 5
 
-    def _load_cached_profile_hash(self) -> Optional[str]:
-        """Load the cached profile signature hash from disk (once per process)."""
-        if self._cached_profile_hash is not None:
-            return self._cached_profile_hash
-        try:
-            data = shared_utils.read_json_from_file(self._profile_hash_path)
-            if isinstance(data, dict):
-                hash_val = data.get('signatureHash')
-                if isinstance(hash_val, str) and hash_val:
-                    self._cached_profile_hash = hash_val
-        except Exception as e:
-            self.logger.debug(f"No cached profile hash available: {e}")
-        return self._cached_profile_hash
-
-    def _write_cached_profile_hash(self, signature_hash: str):
-        """Persist the profile signature hash to disk."""
-        try:
-            os.makedirs(os.path.dirname(self._profile_hash_path), exist_ok=True)
-            shared_utils.write_json_to_file({'signatureHash': signature_hash}, self._profile_hash_path)
-            self._cached_profile_hash = signature_hash
-        except Exception as e:
-            self.logger.warning(f"Failed to persist profile hash: {e}")
-
     def _ensure_profile(self) -> Optional[Dict[str, Any]]:
         """
         Keep sites/{siteId}/machines/{machineId}/hardware/profile current.
@@ -1190,8 +1166,7 @@ class FirebaseClient:
         if not signature:
             return profile
 
-        cached_hash = self._load_cached_profile_hash()
-        if signature == cached_hash:
+        if signature == self._cached_profile_hash:
             return profile
 
         # Signature changed — upload. Offline: keep cache, retry next tick.
@@ -1203,60 +1178,12 @@ class FirebaseClient:
                 .collection('machines').document(self.machine_id)\
                 .collection('hardware').document('profile')
             profile_ref.set(profile, merge=False)
-            self._write_cached_profile_hash(signature)
+            self._cached_profile_hash = signature
             self.logger.info(f"Hardware profile uploaded (hash={signature[:12]})")
         except Exception as e:
             self.logger.warning(f"Failed to upload hardware profile: {e}")
 
         return profile
-
-    def _load_cached_display_hash(self) -> Optional[str]:
-        """Load the cached display profile signature hash from disk (once per process)."""
-        if self._cached_display_hash is not None:
-            return self._cached_display_hash
-        try:
-            data = shared_utils.read_json_from_file(self._display_hash_path)
-            if isinstance(data, dict):
-                hash_val = data.get('signatureHash')
-                if isinstance(hash_val, str) and hash_val:
-                    self._cached_display_hash = hash_val
-        except Exception as e:
-            self.logger.debug(f"No cached display profile hash available: {e}")
-        return self._cached_display_hash
-
-    def _write_cached_display_hash(self, signature_hash: str):
-        """Persist the display profile signature hash to disk."""
-        try:
-            os.makedirs(os.path.dirname(self._display_hash_path), exist_ok=True)
-            shared_utils.write_json_to_file({'signatureHash': signature_hash}, self._display_hash_path)
-            self._cached_display_hash = signature_hash
-        except Exception as e:
-            self.logger.warning(f"Failed to persist display profile hash: {e}")
-
-    def _load_cached_display_modes_hash(self) -> Optional[str]:
-        """Load the display-modes signature hash from disk, once per process."""
-        if self._cached_display_modes_hash is not None:
-            return self._cached_display_modes_hash
-        try:
-            data = shared_utils.read_json_from_file(self._display_modes_hash_path)
-            if isinstance(data, dict):
-                hash_val = data.get('signatureHash')
-                if isinstance(hash_val, str) and hash_val:
-                    self._cached_display_modes_hash = hash_val
-        except Exception as e:
-            self.logger.debug(f"No cached display-modes hash available: {e}")
-        return self._cached_display_modes_hash
-
-    def _write_cached_display_modes_hash(self, signature_hash: str):
-        """Persist the display-modes catalogue signature hash to disk."""
-        try:
-            os.makedirs(os.path.dirname(self._display_modes_hash_path), exist_ok=True)
-            shared_utils.write_json_to_file(
-                {'signatureHash': signature_hash}, self._display_modes_hash_path,
-            )
-            self._cached_display_modes_hash = signature_hash
-        except Exception as e:
-            self.logger.warning(f"Failed to persist display-modes hash: {e}")
 
     def _ensure_display_modes_catalogue(self, force: bool = False) -> Dict[str, Any]:
         """Enumerate supported modes per active monitor and upload, skipping when
@@ -1331,8 +1258,7 @@ class FirebaseClient:
             }
 
         # Cache-by-hash skip — the whole point of A3.2.
-        cached_hash = self._load_cached_display_modes_hash()
-        if not force and signature == cached_hash:
+        if not force and signature == self._cached_display_modes_hash:
             return {
                 'ok': True,
                 'uploaded': False,
@@ -1363,7 +1289,7 @@ class FirebaseClient:
                 .collection('machines').document(self.machine_id)\
                 .collection('hardware').document('displayModes')
             modes_ref.set(doc, merge=False)
-            self._write_cached_display_modes_hash(signature)
+            self._cached_display_modes_hash = signature
             self.logger.info(
                 f"Display modes catalogue uploaded "
                 f"(hash={signature[:12]}, monitors={monitor_count}, modes={mode_count})"
@@ -1508,8 +1434,7 @@ class FirebaseClient:
         if not signature:
             return profile
 
-        cached_hash = self._load_cached_display_hash()
-        if signature == cached_hash:
+        if signature == self._cached_display_hash:
             return profile
 
         # Signature changed — upload. Offline: keep cache, retry next tick.
@@ -1521,7 +1446,7 @@ class FirebaseClient:
                 .collection('machines').document(self.machine_id)\
                 .collection('hardware').document('display')
             profile_ref.set(profile, merge=False)
-            self._write_cached_display_hash(signature)
+            self._cached_display_hash = signature
             self.logger.info(f"Display profile uploaded (hash={signature[:12]})")
         except Exception as e:
             self.logger.warning(f"Failed to upload display profile: {e}")

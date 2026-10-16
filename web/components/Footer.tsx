@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { usePathname } from "next/navigation";
+import { useViewerAppPlatform } from "@/hooks/useViewerAppPlatform";
 import { GITHUB_REPO_URL } from "@/lib/repoLinks";
 
 const RANDOM_EMOJIS = [
@@ -28,6 +29,7 @@ const RANDOM_EMOJIS = [
 
 export function Footer() {
   const pathname = usePathname();
+  const inViewerApp = useViewerAppPlatform() !== null;
   // Deterministically pick an emoji from the pathname so SSR and client render
   // the same glyph (no hydration mismatch) and the emoji changes per route.
   // The previous Math.random()-in-effect approach tripped
@@ -46,7 +48,10 @@ export function Footer() {
   // Hide footer on /swoop — a live remote session is full-window, and the root
   // layout renders this as a sibling of the page, so its own layout cannot
   // remove it.
+  // and on every page inside owlette swoop: the app's window is not a web page,
+  // so the site's links have no place in it.
   if (
+    inViewerApp ||
     pathname?.startsWith('/admin') ||
     pathname === '/' ||
     pathname?.startsWith('/hoot') ||

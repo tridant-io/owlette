@@ -27,6 +27,8 @@ type RouteParams = { siteId: string; deploymentId: string };
 export const POST = authorizedSiteHandler<RouteParams>({
   capability: 'DEPLOYMENT_MANAGE',
   siteIdParam: 'path',
+  // a deployment already running can always be stopped, whatever the plan
+  planExempt: true,
   // Opted in: enforced through the inner _shared gate until now, so without
   // this, removing that gate would drop the 400 on an unsupported
   // Roost-Version.

@@ -24,7 +24,12 @@ import { createElement } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SwoopStepUpDialog } from '@/components/swoop/SwoopStepUpDialog';
-import type { SwoopStepUpProps } from '@/lib/swoop/stepUp';
+import {
+  readStepUpWindow,
+  stepUpVerifyUrl,
+  submitStepUpProof,
+  type SwoopStepUpProps,
+} from '@/lib/swoop/stepUp';
 
 const startAuthentication = jest.fn();
 jest.mock('@simplewebauthn/browser', () => ({
@@ -148,5 +153,46 @@ describe('swoop step-up ceremony', () => {
     expect(screen.queryByLabelText(/authenticator code/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /use a passkey/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^confirm$/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('owlette swoop\'s browser check', () => {
+  const ROUTE = '/api/sites/site-1/machines/mach.one/swoop/step-up';
+
+  it('names the verify page absolutely, so the app sends it to the system browser', () => {
+    expect(stepUpVerifyUrl('site-1', 'mach.one', 'https://owlette.app')).toBe(
+      'https://owlette.app/swoop/site-1/mach.one/verify',
+    );
+  });
+
+  it('reads the window for this sign-in', async () => {
+    mockOptionsResponse({ ok: true, data: { open: true, sessionPassedCeremony: true } });
+
+    await expect(readStepUpWindow('site-1', 'mach.one')).resolves.toEqual({
+      open: true,
+      sessionPassedCeremony: true,
+    });
+    expect(global.fetch).toHaveBeenCalledWith(ROUTE);
+  });
+
+  it('posts the proof verbatim as mfaProof', async () => {
+    global.fetch = jest.fn(async () => ({ ok: true, status: 204 })) as unknown as typeof fetch;
+
+    await submitStepUpProof('site-1', 'mach.one', { code: '123456' });
+
+    expect(global.fetch).toHaveBeenCalledWith(ROUTE, expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ mfaProof: { code: '123456' } }),
+    }));
+  });
+
+  it.each([
+    [{ code: 'invalid_mfa_proof', error: 'invalid verification code' }, "that code didn't work. try again."],
+    [{ code: 'swoop_disabled', detail: 'swoop is not enabled for this site.' }, 'swoop is not enabled for this site.'],
+    [{ code: 'encryption_not_configured', error: 'MFA encryption not configured' }, "that didn't go through. try again."],
+  ])('says a refusal in plain words: %j', async (body, message) => {
+    mockOptionsResponse(body, false);
+
+    await expect(submitStepUpProof('site-1', 'mach.one', { code: '123456' })).rejects.toThrow(message);
   });
 });

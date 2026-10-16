@@ -63,7 +63,7 @@ legend:
 | `owlette machine shutdown <machineId>` | ready | [machine](/docs/cli/reference/machine) | `POST /api/sites/{siteId}/machines/{machineId}/commands` with `type=shutdown_machine` |
 | `owlette machine screenshot <machineId>` | ready | [machine](/docs/cli/reference/machine) | `POST /api/sites/{siteId}/machines/{machineId}/commands` with `type=capture_screenshot`, then `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}` until done, then the signed screenshot URL |
 | `owlette machine live-view <machineId>` | stub | [machine](/docs/cli/reference/machine) | no route; exits `3` with `future_plan` `public-api deferred: swoop` and points at `owlette swoop` |
-| `owlette swoop <machineId>` | ready | [swoop](/docs/cli/reference/swoop) | `GET /api/sites/{siteId}/machines/{machineId}`, then opens the viewer URL `/swoop/{siteId}/{machineId}` |
+| `owlette swoop <machineId>` | ready | [swoop](/docs/cli/reference/swoop) | `GET /api/sites/{siteId}/machines/{machineId}`, then opens the viewer URL `/swoop/{siteId}/{machineId}` in owlette swoop when it is installed, else in the browser |
 
 ## hoot chat
 

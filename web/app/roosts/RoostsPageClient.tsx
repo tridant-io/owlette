@@ -38,6 +38,7 @@ import { LoadingWord } from '@/components/LoadingWord';
 import { formatSiteScopedTimestamp } from '@/lib/timeUtils';
 import { RoostDetailPanel } from '@/components/roost/RoostDetailPanel';
 import { RoostMobileSheet } from '@/components/roost/RoostMobileSheet';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 const DESCRIPTION_PREVIEW_CAP = 40;
 
@@ -53,6 +54,7 @@ export default function RoostsPageClient() {
     sites,
     sitesLoading,
     currentSiteId,
+    currentSite,
     siteTimezone,
     hasNoSites,
     selectSite,
@@ -61,6 +63,8 @@ export default function RoostsPageClient() {
     updateSite,
     deleteSite,
   } = useCurrentSite();
+  const siteOwner = currentSite?.owner ?? null;
+  const roostGated = usePlanGated('roost', siteOwner);
   const [distributionDialogOpen, setDistributionDialogOpen] = useState(false);
   // When set, the dialog opens in "+ new version" mode for an existing roost.
   // null = normal "new roost" mode.
@@ -376,16 +380,18 @@ export default function RoostsPageClient() {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            <Button
-              onClick={() => {
-                setNewVersionContext(null);
-                setDistributionDialogOpen(true);
-              }}
-              className="cursor-pointer"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              new roost
-            </Button>
+            <UpgradeGate flag="roost" siteOwner={siteOwner} variant="inline">
+              <Button
+                onClick={() => {
+                  setNewVersionContext(null);
+                  setDistributionDialogOpen(true);
+                }}
+                className="cursor-pointer"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                new roost
+              </Button>
+            </UpgradeGate>
           </div>
         </div>
 
@@ -417,7 +423,8 @@ export default function RoostsPageClient() {
             ) : roosts.length === 0 ? (
               <EmptyStateUpload
                 machineCount={machines.length}
-                onNewRoost={() => {
+                // the header already carries the upgrade note
+                onNewRoost={roostGated ? undefined : () => {
                   setNewVersionContext(null);
                   setDistributionDialogOpen(true);
                 }}
@@ -604,7 +611,7 @@ export default function RoostsPageClient() {
                     machines={machines}
                     headingId="roost-detail-heading"
                     onClose={() => setSelectedRoostId(null)}
-                    onNewVersion={openNewVersionDialog}
+                    onNewVersion={roostGated ? undefined : openNewVersionDialog}
                     onResync={() => {
                       if (
                         displayRoost.currentVersionId &&
@@ -659,7 +666,7 @@ export default function RoostsPageClient() {
                 machines={machines}
                 headingId="roost-detail-heading"
                 onClose={() => setSelectedRoostId(null)}
-                onNewVersion={openNewVersionDialog}
+                onNewVersion={roostGated ? undefined : openNewVersionDialog}
                 onResync={() => {
                   if (
                     selectedRoost.currentVersionId &&

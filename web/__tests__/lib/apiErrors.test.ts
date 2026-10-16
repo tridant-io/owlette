@@ -12,6 +12,7 @@ import {
   problemNotFound,
   problemRateLimited,
   problemQuotaExceeded,
+  problemPlanRequired,
   ProblemType,
 } from '@/lib/apiErrors';
 
@@ -258,6 +259,21 @@ describe('apiErrors (rfc 7807 problem+json)', () => {
       expect(body.upgradeUrl).toBeUndefined();
     });
 
+    it('problemPlanRequired → 402 plan_required naming the entitlement', async () => {
+      const { status, body } = await readResponse(
+        problemPlanRequired("your plan doesn't include roost. upgrade to continue.", 'owlette.roost'),
+      );
+      expect(status).toBe(402);
+      expect(body).toMatchObject({
+        type: ProblemType.PlanRequired,
+        title: 'plan required',
+        detail: "your plan doesn't include roost. upgrade to continue.",
+        code: 'plan_required',
+        docsUrl: 'https://owlette.app/docs/api/errors#plan_required',
+        entitlement: 'owlette.roost',
+        upgradeUrl: '/settings/plan',
+      });
+    });
   });
 
   describe('requestId generation', () => {

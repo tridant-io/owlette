@@ -47,7 +47,7 @@ each release also receives a future Apache License, Version 2.0 grant on the sec
 ## setup sequence
 
 1. [Firebase setup](/docs/setup/firebase): create the project, enable Authentication, Firestore and Storage, and generate service-account credentials.
-2. **Cloudflare R2**: run `node scripts/provision-r2.mjs` to create the four roost buckets (`owlette-{prod,dev}-{content,manifests}`) and the content buckets' CORS rules. it reads `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_R2_API_TOKEN` from `.claude/.env.local`, and `--verify-only` checks without changing anything. then, in the Cloudflare dashboard under **R2 → manage R2 API tokens**, mint an S3 access key with object read and write on the four buckets.
+2. **Cloudflare R2**: run `node scripts/provision-r2.mjs` to create the four roost buckets (`owlette-{prod,dev}-{content,manifests}`) and the CORS rules on the content and issue-logs buckets. it reads `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_R2_API_TOKEN` from `.claude/.env.local`, and `--verify-only` checks without changing anything. then, in the Cloudflare dashboard under **R2 → manage R2 API tokens**, mint an S3 access key with object read and write on the four buckets.
 3. **Cloudflare Turnstile**: add a widget covering your dashboard hostnames. without its secret, production refuses every sign-up and password reset.
 4. [environment variables](/docs/setup/environment-variables): collect the Firebase client and admin values, session and encryption secrets, R2, Turnstile, Upstash, email, cron and, for swoop, its signing keys.
 5. [Firestore rules](/docs/setup/firestore-rules): deploy the repository's Firestore rules and indexes and the Storage rules.

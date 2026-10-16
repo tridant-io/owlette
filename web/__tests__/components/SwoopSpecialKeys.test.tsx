@@ -69,6 +69,43 @@ describe('SwoopSpecialKeys', () => {
     );
     expect(screen.queryByRole('menuitemradio')).toBeNull();
     expect(screen.queryByTestId('modifier-legend')).toBeNull();
+    expect(screen.getByTestId('special-keys-footer').textContent).toBe(
+      'these are the shortcuts your browser or your own windows keeps. in fullscreen most others reach the machine directly.',
+    );
+  });
+
+  describe('in the mac app, which hands the machine the shortcuts it captures itself', () => {
+    const MAC_KEYS_APP =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) owlette-swoop-viewer/4.1.8 (keys)';
+
+    beforeEach(() => {
+      jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(MAC_KEYS_APP);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+    });
+
+    it('says so, and that cmd+tab stays on the mac; outside fullscreen cmd+q is still on the menu', async () => {
+      await open('macos');
+      expect(screen.getByTestId('super-key-note').textContent).toBe(
+        'outside fullscreen your own mac keeps cmd. go fullscreen, or use "hold cmd for the next key" below.',
+      );
+      expect(screen.getByTestId('special-keys-footer').textContent).toBe(
+        'in fullscreen the app hands every shortcut it can to the machine; hold esc to come back. cmd+tab stays on this mac.',
+      );
+      expect(screen.getByRole('menuitem', { name: /^cmd \+ q/ })).toBeInTheDocument();
+    });
+
+    it('leaves cmd+q off the menu in fullscreen, and keeps cmd+tab and the screen lock', async () => {
+      Object.defineProperty(document, 'fullscreenElement', { value: document.body, configurable: true });
+      await open('macos');
+      expect(screen.queryByRole('menuitem', { name: /^cmd \+ q/ })).toBeNull();
+      expect(screen.getByRole('menuitem', { name: /^cmd \+ tab/ })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /^cmd \+ ctrl \+ q/ })).toBeInTheDocument();
+      expect(screen.queryByTestId('super-key-note')).toBeNull();
+    });
   });
 
   describe('where the keyboard goes when the menu closes', () => {

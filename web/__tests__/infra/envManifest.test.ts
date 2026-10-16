@@ -1,7 +1,7 @@
 /** @jest-environment node */
 
 /**
- * Registry test for the swoop keys in `scripts/env-manifest.json`.
+ * Registry test for the swoop and plan-enforcement keys in `scripts/env-manifest.json`.
  *
  * The manifest is the canonical list of env var NAMES + metadata — values live only in
  * Railway and Vercel. `sync-env.mjs` reads `class` and `targets` from it: `class` decides
@@ -15,7 +15,9 @@
  * vercel-prod, or with a different value, breaks nothing until a failover: swoop JWTs minted
  * by the standby origin fail verification at the signaling worker, per-viewer keys derive
  * differently, and doorbell rings 401. `must-match` is what tells an operator (and the sync
- * tool) that those three are catastrophic-if-divergent, not merely secret.
+ * tool) that those three are catastrophic-if-divergent, not merely secret. The plan keys
+ * fail the same way: a failover origin missing or differing on any one of the three serves
+ * with plan enforcement silently dropped.
  *
  * Node builtins + jest globals only. No import.meta — jest transpiles to CJS.
  */
@@ -150,6 +152,51 @@ describe('scripts/env-manifest.json — swoop keys', () => {
   });
 });
 
+/** not all secret, but all must-match: parity is what the plan gates need. */
+const PLAN_VARS: readonly string[] = ['TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY', 'PLAN_ENFORCEMENT'];
+
+describe('scripts/env-manifest.json — plan enforcement keys', () => {
+  it('registers all three as must-match on all three deploy surfaces', () => {
+    const problems: string[] = [];
+    for (const name of PLAN_VARS) {
+      const entry = manifest.vars[name];
+      if (!entry) {
+        problems.push(`${name} — missing from "vars", so \`sync-env.mjs check\` never reports it absent.`);
+        continue;
+      }
+      if (entry.class !== 'must-match') {
+        problems.push(
+          `${name} — class is "${entry.class}". A failover origin that lacks it or differs ` +
+            'silently drops plan enforcement, which is what "must-match" means.',
+        );
+      }
+      const declared = [...(entry.targets ?? [])].sort();
+      if (declared.join(',') !== [...ALL_TARGETS].sort().join(',')) {
+        problems.push(
+          `${name} — targets are [${declared.join(', ')}], expected [${ALL_TARGETS.join(', ')}].`,
+        );
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it('says in each note that a failover must not drop enforcement, and carries metadata only', () => {
+    const problems: string[] = [];
+    for (const name of PLAN_VARS) {
+      const entry = manifest.vars[name];
+      if (!entry) continue; // already reported above
+      if (!entry.note || entry.note.trim().length < 20 || !/failover/.test(entry.note)) {
+        problems.push(`${name} — the note must say what a failover without it breaks.`);
+      }
+      const extra = Object.keys(entry).filter((field) => !ALLOWED_ENTRY_FIELDS.includes(field));
+      if (extra.length > 0) {
+        problems.push(`${name} — unexpected field(s) ${extra.join(', ')}; values live in the provider.`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+});
+
 /** the keys installer releases need: R2 for the files, tridant id for the release log. */
 const INSTALLER_RELEASE_VARS: ReadonlyArray<{ name: string; class: string }> = [
   { name: 'INSTALLER_R2_ACCESS_KEY_ID', class: 'secret' },
@@ -175,6 +222,37 @@ describe('scripts/env-manifest.json — installer release keys', () => {
       const declared = [...(entry.targets ?? [])].sort();
       if (declared.join(',') !== [...ALL_TARGETS].sort().join(',')) {
         problems.push(`${name} — targets are [${declared.join(', ')}], expected [${ALL_TARGETS.join(', ')}].`);
+      }
+      const extra = Object.keys(entry).filter((field) => !ALLOWED_ENTRY_FIELDS.includes(field));
+      if (extra.length > 0) {
+        problems.push(`${name} — unexpected field(s) ${extra.join(', ')}; values live in the provider.`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+});
+
+/** the R2 token for logs attached to issue reports, scoped to the two issue-logs buckets. */
+const ISSUE_LOGS_VARS: readonly string[] = ['ISSUE_LOGS_R2_ACCESS_KEY_ID', 'ISSUE_LOGS_R2_SECRET_ACCESS_KEY'];
+
+describe('scripts/env-manifest.json — issue logs keys', () => {
+  it('registers both as secret on all three deploy surfaces, naming the bucket scope', () => {
+    const problems: string[] = [];
+    for (const name of ISSUE_LOGS_VARS) {
+      const entry = manifest.vars[name];
+      if (!entry) {
+        problems.push(`${name} — missing from "vars", so \`sync-env.mjs check\` never reports it absent.`);
+        continue;
+      }
+      if (entry.class !== 'secret') {
+        problems.push(`${name} — class is "${entry.class}", expected "secret".`);
+      }
+      const declared = [...(entry.targets ?? [])].sort();
+      if (declared.join(',') !== [...ALL_TARGETS].sort().join(',')) {
+        problems.push(`${name} — targets are [${declared.join(', ')}], expected [${ALL_TARGETS.join(', ')}].`);
+      }
+      if (!entry.note || !/bucket scope|issue-logs buckets/.test(entry.note)) {
+        problems.push(`${name} — the note must name the bucket scope the token is limited to.`);
       }
       const extra = Object.keys(entry).filter((field) => !ALLOWED_ENTRY_FIELDS.includes(field));
       if (extra.length > 0) {

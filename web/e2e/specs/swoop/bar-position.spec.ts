@@ -118,7 +118,7 @@ test.describe('swoop bar position — admin on site-A', () => {
     await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
     const bar = (await page.getByTestId('session-bar').boundingBox())!;
 
-    const toggle = page.getByRole('button', { name: 'show latency stats' });
+    const toggle = page.getByRole('button', { name: 'latency stats' });
     const button = (await toggle.boundingBox())!;
     await toggle.click();
     const stats = (await page.getByRole('complementary', { name: 'latency breakdown' }).boundingBox())!;
@@ -169,7 +169,7 @@ test.describe('swoop bar position — admin on site-A', () => {
       ['quality ceiling', 'quality'],
       ['send a key combination', 'send a key combination'],
       ['bar position', 'bar position'],
-      ['show latency stats', 'latency stats'],
+      ['latency stats', 'stats'],
       ['reconnect', 'reconnect'],
     ]) {
       // force: a disabled button lets the pointer through to the wrapper that

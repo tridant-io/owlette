@@ -45,6 +45,7 @@ import sys
 import tempfile
 import time
 import argparse
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
@@ -822,13 +823,12 @@ def build_report_data(category: str, description: str) -> dict:
         logging.warning(f"Failed to gather system info: {e}")
 
     import platform
-    import socket
 
     return {
         'category': category,
         'title': 'agent feedback',
         'description': description,
-        'hostname': socket.gethostname(),
+        'hostname': shared_utils.get_hostname(),
         'siteId': firebase_cfg.get('site_id', ''),
         'os': platform.platform(),
         'systemInfo': system_info,
@@ -836,14 +836,8 @@ def build_report_data(category: str, description: str) -> dict:
     }
 
 
-def submit_report(data: dict) -> None:
-    """POST a feedback report to `/api/bug-report`.
-
-    Ported from `report_issue.submit_report`. The agent's own access token is
-    the credential; the endpoint accepts it as a bearer token and files the
-    report under `bug_reports` with `source: 'agent'`.
-    """
-    import requests as http_requests
+def _web_session() -> tuple[str, str]:
+    """The web base URL and this agent's bearer token for its own API calls."""
     from auth_manager import AuthManager
 
     api_base = shared_utils.get_configured_api_base()
@@ -859,32 +853,82 @@ def submit_report(data: dict) -> None:
     web_base = api_base.rstrip('/')
     if web_base.endswith('/api'):
         web_base = web_base[:-len('/api')]
+    return web_base, token
 
-    description = data.get('description', '')
-    system_info = data.get('systemInfo', {})
-    log_tail = data.get('logTail', '')
-    if system_info:
-        description += f"\n\n--- system info ---\n{_format_system_info(system_info)}"
-    if log_tail:
-        description += f"\n\n--- recent logs (last ~100 lines) ---\n{log_tail}"
 
-    # The API rejects anything over 50 000 characters; trim the log tail rather
-    # than lose the report.
-    if len(description) > 50000:
-        description = description[:49950] + '\n\n[truncated]'
+def _attachments_not_sent(reason: str) -> str:
+    """The line an issue carries when its zip could not go with it."""
+    return f"\n\nattachments could not be sent: {reason}"
 
-    response = http_requests.post(
-        f"{web_base}/api/bug-report",
-        json={
+
+class _SubmittedIssue(NamedTuple):
+    logs_attached: bool
+    number: Optional[int]
+
+
+def submit_report(data: dict, logs_key: Optional[str] = None, screenshots: int = 0,
+                  logs: bool = False, videos: int = 0) -> _SubmittedIssue:
+    """POST an issue to `/api/bug-report`; returns whether `logs_key` went with it
+    and the issue's number, or None from a server that does not number issues.
+
+    Ported from `report_issue.submit_report`. The agent's own access token is
+    the credential; the endpoint accepts it as a bearer token and files the
+    issue under `bug_reports` with `source: 'agent'`. An issue whose
+    `logs_key` the server refuses is sent once more without it, so the issue
+    is never lost to its attachment. `screenshots` and `videos` are how many
+    the zip holds and `logs` whether it holds any logs; the body's
+    `screenshots`, `videos` and `logs` fields and the issue's lines say so only
+    while the zip goes with it.
+    """
+    import requests as http_requests
+
+    web_base, token = _web_session()
+
+    def post(description: str, key: Optional[str]):
+        system_info = data.get('systemInfo', {})
+        log_tail = data.get('logTail', '')
+        if key and screenshots:
+            description += f"\n\nscreenshots attached: {screenshots}"
+        if key and videos:
+            description += f"\n\nvideos attached: {videos}"
+        if system_info:
+            description += f"\n\n--- system info ---\n{_format_system_info(system_info)}"
+        if log_tail:
+            description += f"\n\n--- recent logs (last ~100 lines) ---\n{log_tail}"
+
+        # The API rejects anything over 50 000 characters; trim the log tail rather
+        # than lose the report.
+        if len(description) > 50000:
+            description = description[:49950] + '\n\n[truncated]'
+
+        body = {
             'title': data.get('title', 'agent feedback'),
             'category': data.get('category', 'other'),
             'description': description,
             'browserUA': f"Owlette Agent v{shared_utils.APP_VERSION} / {data.get('os', '')}",
             'pageUrl': f"agent://{data.get('hostname', 'unknown')}",
-        },
-        headers={'Authorization': f'Bearer {token}'},
-        timeout=15,
-    )
+        }
+        if key:
+            body['logsKey'] = key
+            if screenshots:
+                body['screenshots'] = screenshots
+            if videos:
+                body['videos'] = videos
+            if logs:
+                body['logs'] = True
+        return http_requests.post(
+            f"{web_base}/api/bug-report",
+            json=body,
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=15,
+        )
+
+    description = data.get('description', '')
+    response = post(description, logs_key)
+    if response.status_code == 400 and logs_key:
+        logging.warning("The server refused the attachments (400); resending the issue without them")
+        logs_key = None
+        response = post(description + _attachments_not_sent('the server refused them (400)'), None)
 
     if response.status_code != 200:
         try:
@@ -894,19 +938,180 @@ def submit_report(data: dict) -> None:
         raise RuntimeError(f"the server rejected the report ({response.status_code}): {error_msg}")
 
     try:
-        report_id = response.json().get('id', 'unknown')
+        result = response.json()
+        report_id = result.get('id', 'unknown')
+        number = result.get('number')
     except Exception:
-        report_id = 'unknown'
-    logging.info(f"Bug report submitted via API: {report_id}")
+        report_id, number = 'unknown', None
+    # bool is an int subclass; a true is no issue number
+    if isinstance(number, bool) or not isinstance(number, int):
+        number = None
+    logging.info(f"issue submitted via API: {report_id}")
+    return _SubmittedIssue(logs_key is not None, number)
+
+
+# a smaller zip goes quickly enough that a bare "uploading attachments" says it all
+UPLOAD_PROGRESS_MIN_BYTES = 5 * 1024 * 1024
+UPLOAD_PROGRESS_STEP = 5
+UPLOAD_PROGRESS_INTERVAL_S = 1.0
+
+
+class _UploadProgress:
+    """The zip opened for one upload attempt, counting what is read out of it.
+
+    requests streams a file body through read(), so the count is what has gone
+    to storage; past UPLOAD_PROGRESS_MIN_BYTES it shows as a status line at
+    most every UPLOAD_PROGRESS_STEP percent and UPLOAD_PROGRESS_INTERVAL_S.
+    A retry opens a fresh one, so the count starts over with the upload.
+    """
+
+    def __init__(self, path: str, size: int):
+        self._file = open(path, 'rb')
+        self._size = size
+        self._read = 0
+        self._shown = 0
+        self._shown_at = time.monotonic()
+
+    def read(self, n: int = -1) -> bytes:
+        chunk = self._file.read(n)
+        self._read += len(chunk)
+        if self._size > UPLOAD_PROGRESS_MIN_BYTES:
+            percent = min(100, self._read * 100 // self._size)
+            now = time.monotonic()
+            if (percent >= self._shown + UPLOAD_PROGRESS_STEP
+                    and now - self._shown_at >= UPLOAD_PROGRESS_INTERVAL_S):
+                self._shown, self._shown_at = percent, now
+                _emit('status', f'uploading attachments ({percent}%)')
+        return chunk
+
+    def __enter__(self) -> '_UploadProgress':
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._file.close()
+
+
+def upload_issue_logs(zip_path: str, size: int) -> str:
+    """Upload the log zip through a presigned PUT and return its storage key."""
+    import requests as http_requests
+    from screenshot_capture import ScreenshotCaptureError, upload_to_signed_url
+
+    web_base, token = _web_session()
+    site_id = shared_utils.read_config().get('firebase', {}).get('site_id', '')
+    machine_id = shared_utils.get_machine_id()
+    try:
+        response = http_requests.post(
+            f"{web_base}/api/sites/{site_id}/machines/{machine_id}/issue-logs/upload-url",
+            json={'size': size},
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=15,
+        )
+    except http_requests.RequestException as e:
+        raise RuntimeError(f"upload url request failed: {type(e).__name__}") from None
+    if response.status_code != 200:
+        raise RuntimeError(f"upload url request failed ({response.status_code})")
+
+    try:
+        body = response.json()
+    except ValueError:
+        raise RuntimeError('upload url response is not json') from None
+    upload_url = body.get('uploadUrl') if isinstance(body, dict) else None
+    key = body.get('key') if isinstance(body, dict) else None
+    if not isinstance(upload_url, str) or not isinstance(key, str):
+        raise RuntimeError('upload url response is missing uploadUrl or key')
+
+    try:
+        upload_to_signed_url(
+            upload_url,
+            lambda: _UploadProgress(zip_path, size),
+            content_type='application/zip',
+            timeout_s=(30, 300),
+            content_length=size,
+        )
+    except ScreenshotCaptureError:
+        # storage's error reply can echo the signed request, and this reason lands in the issue
+        raise RuntimeError('the upload to storage failed') from None
+    return key
+
+
+def _attach(include_logs: bool, screenshots: list,
+            videos: list) -> tuple[str, int, int, bool]:
+    """Zip the staged screenshots and videos and, if asked, this machine's logs,
+    and upload them; returns the key, how many screenshots and videos the zip
+    holds and whether it holds any logs. The zip is always removed."""
+    import log_bundle
+
+    fd, zip_path = tempfile.mkstemp(suffix='.zip')
+    os.close(fd)
+    try:
+        if screenshots or videos:
+            _emit('status', 'adding attachments')
+        if include_logs:
+            _emit('status', 'zipping logs')
+        bundle = log_bundle.build_log_zip(
+            zip_path, screenshots=screenshots, include_logs=include_logs, videos=videos)
+        shots, vids = bundle['screenshots'], bundle['videos']
+        if not include_logs and not shots and not vids:
+            asked = ' or '.join(kind for kind, named in (('screenshot', screenshots),
+                                                         ('video', videos)) if named)
+            raise RuntimeError(f'no {asked} could be read')
+        _emit('status', 'uploading attachments')
+        has_logs = bundle['files'] > shots + vids
+        return upload_issue_logs(zip_path, bundle['size']), shots, vids, has_logs
+    finally:
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+
+
+def _log_report_to_file() -> None:
+    """Keep this run's log lines in `logs/submit_issue.log`.
+
+    The report runs as the console user on Windows, whose stderr the desktop
+    app keeps only for a run that ends without a terminal event, and as a root
+    child with stderr discarded on POSIX: without a file of its own, why an
+    attach failed is saved nowhere. On POSIX
+    the file is root's at the daemon's umask, like the service's own log.
+    Never raises — a log that cannot be opened must not cost the report.
+    """
+    try:
+        handler = RotatingFileHandler(
+            shared_utils.get_data_path('logs/submit_issue.log'),
+            maxBytes=1024 * 1024, backupCount=1,
+            encoding='utf-8', errors='backslashreplace')
+    except Exception:
+        return
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    # urllib3 names the request, the signed upload url's query and all
+    handler.addFilter(lambda record: not record.name.startswith(('urllib3', 'requests')))
+    root = logging.getLogger()
+    # any root handler retires logging's last-resort stderr writer, which the
+    # desktop app shows when a run ends without a terminal event
+    stderr = logging.StreamHandler()
+    stderr.setLevel(logging.WARNING)
+    root.addHandler(stderr)
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
 
 
 def run_report_issue(payload_path: str) -> int:
     """Submit the feedback payload written by the desktop app.
 
-    The payload is `{"category": ..., "description": ...}` in a file under the
+    The payload is `{"category": ..., "description": ..., "attachLogs": bool,
+    "screenshots": [name, ...], "videos": [name, ...]}` in a file under the
     owlette tree; it is deleted as soon as it has been read so an operator's
-    description is not left lying on disk.
+    description is not left lying on disk. The screenshots and videos are names
+    the desktop app staged in `ipc/issue-attachments/`, deleted once the issue
+    is filed, whether or not they went with it; a run that could not file the
+    issue keeps them for the app's retry.
+    Attachments that cannot be sent never stop the issue: it goes without them
+    and says why, and `done` carries `logsAttached` whenever logs were asked
+    for, `screenshotsAttached` whenever screenshots were and `videosAttached`
+    whenever videos were.
     """
+    import log_bundle
+
     try:
         with open(payload_path, 'r', encoding='utf-8') as f:
             payload = json.load(f)
@@ -919,6 +1124,24 @@ def run_report_issue(payload_path: str) -> int:
         except OSError:
             pass
 
+    named = payload.get('screenshots')
+    screenshots = [] if named is None else log_bundle.screenshot_ids(named)
+    if screenshots is None:
+        _emit('error', 'the report names screenshots owlette did not stage.')
+        return 1
+    named = payload.get('videos')
+    videos = [] if named is None else log_bundle.video_ids(named)
+    if videos is None:
+        _emit('error', 'the report names videos owlette did not stage.')
+        return 1
+    code = _send_report(payload, screenshots, videos)
+    if code == 0 and (screenshots or videos):
+        log_bundle.discard_staged(screenshots + videos)
+    return code
+
+
+def _send_report(payload: dict, screenshots: list, videos: list) -> int:
+    """`run_report_issue` once its payload is read and its screenshots and video checked."""
     description = str(payload.get('description') or '').strip()
     if not description:
         _emit('error', 'please describe the issue before submitting.')
@@ -933,14 +1156,36 @@ def run_report_issue(payload_path: str) -> int:
         _emit('error', f"could not collect diagnostics: {e}")
         return 1
 
+    attach_logs = payload.get('attachLogs') is True
+    logs_key = None
+    shots = 0
+    vids = 0
+    has_logs = False
+    if attach_logs or screenshots or videos:
+        try:
+            logs_key, shots, vids, has_logs = _attach(attach_logs, screenshots, videos)
+        except Exception as e:
+            reason = (str(e) or type(e).__name__)[:200]
+            logging.warning(f"Issue attachments could not be sent: {reason}")
+            report['description'] = report.get('description', '') + _attachments_not_sent(reason)
+
     _emit('status', 'submitting')
     try:
-        submit_report(report)
+        attached, number = submit_report(report, logs_key, shots, has_logs, vids)
     except Exception as e:
         _emit('error', str(e) or repr(e))
         return 1
 
-    _emit('done', {'category': category})
+    done = {'category': category}
+    if number is not None:
+        done['issueNumber'] = number
+    if attach_logs:
+        done['logsAttached'] = attached
+    if screenshots:
+        done['screenshotsAttached'] = shots if attached else 0
+    if videos:
+        done['videosAttached'] = vids if attached else 0
+    _emit('done', done)
     return 0
 
 
@@ -1250,8 +1495,9 @@ REQUEST_REPLY_SUFFIX = '.result'
 # A request is one verb and one nonce, a `pair` may name its server, and a
 # `report_issue` carries a description the app caps at 1000 UTF-16 units. JSON
 # grows a unit to at most six bytes (a control character as \u00XX), so a
-# report is under 6.2 KB. The directory is group-writable, so the size of what
-# turns up in it is not the daemon's to trust: without a bound the drain reads
+# report is under 6.2 KB; its ten screenshot names and twenty video names add
+# under 1.3 KB. The directory is group-writable, so the size of what turns
+# up in it is not the daemon's to trust: without a bound the drain reads
 # whatever was planted there straight into memory.
 REQUEST_MAX_BYTES = 8192
 # How far back the rate limit reads. Every accepted request appends a row and
@@ -1409,6 +1655,28 @@ def _accept_request(path: str, reply_path: str, owner_uid, nonce: str) -> Option
                   'description': payload.get('description')}
         if not all(isinstance(value, (str, type(None))) for value in report.values()):
             return _refuse(path, reply_path, 'carries a report field that is not text')
+        attach_logs = payload.get('attachLogs')
+        if attach_logs is not None:
+            if not isinstance(attach_logs, bool):
+                return _refuse(
+                    path, reply_path, 'carries an attachLogs that is not true or false')
+            report['attachLogs'] = attach_logs
+        import log_bundle
+
+        screenshots = payload.get('screenshots')
+        if screenshots is not None:
+            screenshots = log_bundle.screenshot_ids(screenshots)
+            if screenshots is None:
+                return _refuse(path, reply_path,
+                               'carries screenshots that are not up to ten staged names')
+            report['screenshots'] = screenshots
+        videos = payload.get('videos')
+        if videos is not None:
+            videos = log_bundle.video_ids(videos)
+            if videos is None:
+                return _refuse(path, reply_path,
+                               'carries videos that are not up to twenty staged video names')
+            report['videos'] = videos
     if not nonce or payload.get('nonce') != nonce:
         return _refuse(
             path, reply_path, 'does not quote the nonce the daemon last issued')
@@ -1929,6 +2197,7 @@ def _run_headless_mode(args) -> Optional[int]:
         if args.leave:
             return run_leave_site()
         if args.report_issue is not None:
+            _log_report_to_file()
             return run_report_issue(args.report_issue)
         if args.reboot_now:
             return run_reboot_now()

@@ -103,7 +103,7 @@ Two Windows gotchas are worth knowing before touching `capture-tray-menu.ps1`:
 | `agent-menu.png` | The overflow menu, open, on a machine that belongs to a site | `agent/configuration.mdx` |
 | `agent-join-site.png` | The join-a-site dialog showing a pairing phrase | `agent/configuration.mdx` |
 | `agent-leave-site.png` | The leave-site dialog, confirm phase — before anything is stopped or deleted | `agent/configuration.mdx` *(pending)* |
-| `agent-report-issue.png` | The bug-report dialog, empty | `agent/configuration.mdx` *(pending)* |
+| `agent-report-issue.png` | The submit issue dialog, empty, with attach logs unticked | `agent/troubleshooting.mdx` |
 | `agent-launch-mode.png` | The settings panel for a scheduled process (segmented control + schedule summary) | `agent/configuration.mdx` |
 | `agent-schedule-editor.png` | The schedule editor dialog | `agent/configuration.mdx` |
 | `agent-how-to-run.png` | The `how to run` section opened: attempts, priority, visibility | `agent/configuration.mdx` *(pending)* |

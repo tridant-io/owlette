@@ -1,14 +1,23 @@
 /**
- * swoop — the session api and the viewer page's gates, against the emulators.
+ * swoop — the session api, the viewer page's gates and the media path, against
+ * the emulators.
  *
  * what this can and cannot prove: the emulator has no streamer, so a minted
- * session never gets a host and the page stays at "connecting". everything up
- * to that line is here — who may start a session, what a second factor buys,
- * what the record says, how it ends, and how two viewers share a machine —
- * and the media path itself is proven on real machines, not here.
+ * session left alone never gets a host and the page stays at "connecting".
+ * most of this file stops at that line — who may start a session, what a
+ * second factor buys, what the record says, how it ends, and how two viewers
+ * share a machine. the specs under "through a host" go past it with the fake
+ * host in `e2e/helpers/swoopHost.ts`: a real webrtc peer in a second page that
+ * plays the signal room and the streamer, so signalling, the host's admission
+ * and its check of the viewer jwt, the mac on its answer and a decoded h.264
+ * picture are all real. capture, the machine's encoder, input and the rate
+ * governor are not, and are proven on real machines.
  *
  * `storageState` is emptied and each test signs in itself: the fixture users
- * carry no second factor, and control needs one.
+ * carry no second factor, and control needs one. a second factor passed at
+ * sign-in under five minutes ago is itself the step-up, so the specs about the
+ * step-up date the sign-in's back (`ageSignInCeremony`), and one spec keeps it
+ * fresh.
  */
 
 import crypto from 'crypto';
@@ -17,6 +26,9 @@ import { authenticator } from 'otplib';
 import { getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import { grantMembership, seedMachine, seedSite, type TestUser } from '../../helpers/seed';
+import { ageSignInCeremony } from '../../helpers/signInCeremony';
+import { mintApiKey, revokeApiKey } from '../../helpers/apiKey';
+import { FakeSwoopHost, HOST_COLOUR, presentedPicture } from '../../helpers/swoopHost';
 
 authenticator.options = { step: 30, window: 1 };
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -31,6 +43,9 @@ const OFFLINE_ID = `mach-offline-${SUFFIX}`;
 const RETURNING_ID = `mach-returning-${SUFFIX}`;
 const RELOAD_ID = `mach-reload-${SUFFIX}`;
 const CODEC_ID = `mach-codec-${SUFFIX}`;
+const FRESH_ID = `mach-fresh-${SUFFIX}`;
+const LIVE_ID = `mach-live-${SUFFIX}`;
+const KILLED_ID = `mach-killed-${SUFFIX}`;
 const SESSIONS = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/sessions`;
 const KILL = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/kill`;
 
@@ -81,8 +96,17 @@ async function freshTotp(page: Page, secret: string, spent?: string): Promise<st
 /** the page's own refusal line, not next's route announcer. */
 const alertLine = (page: Page) => page.locator('p[role="alert"]');
 
-/** signs in; returns the totp code the sign-in spent, so the next ceremony can move past it. */
-async function signIn(page: Page, user: TestUser, secret?: string): Promise<string | undefined> {
+/**
+ * signs in; returns the totp code the sign-in spent, so the next ceremony can move
+ * past it. a totp sign-in is dated ten minutes back unless `fresh`, so the step-up
+ * still asks.
+ */
+async function signIn(
+  page: Page,
+  user: TestUser,
+  secret?: string,
+  { fresh = false }: { fresh?: boolean } = {},
+): Promise<string | undefined> {
   await page.goto('/login');
   await page.getByLabel(/email/i).fill(user.email);
   await page.getByLabel(/password/i).first().fill(user.password);
@@ -95,6 +119,7 @@ async function signIn(page: Page, user: TestUser, secret?: string): Promise<stri
     await page.getByRole('button', { name: /^verify$/i }).click();
   }
   await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+  if (secret && !fresh) await ageSignInCeremony(page);
   return spent;
 }
 
@@ -134,8 +159,8 @@ async function apiCall(page: Page, method: 'GET' | 'POST' | 'DELETE', path: stri
   );
 }
 
-async function readSession(page: Page, sid: string): Promise<Record<string, unknown>> {
-  const res = await apiCall(page, 'GET', `${SESSIONS}/${sid}`);
+async function readSession(page: Page, sid: string, machineId = MACHINE_ID): Promise<Record<string, unknown>> {
+  const res = await apiCall(page, 'GET', `/api/sites/${SITE_ID}/machines/${machineId}/swoop/sessions/${sid}`);
   expect(res.status, JSON.stringify(res.body)).toBe(200);
   return res.body.data as Record<string, unknown>;
 }
@@ -158,6 +183,9 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, RETURNING_ID, { displayName: `returning box ${SUFFIX}` });
   await seedMachine(SITE_ID, RELOAD_ID, { displayName: `reload box ${SUFFIX}` });
   await seedMachine(SITE_ID, CODEC_ID, { displayName: `codec box ${SUFFIX}` });
+  await seedMachine(SITE_ID, FRESH_ID, { displayName: `fresh box ${SUFFIX}` });
+  await seedMachine(SITE_ID, LIVE_ID, { displayName: `live box ${SUFFIX}` });
+  await seedMachine(SITE_ID, KILLED_ID, { displayName: `killed box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -242,7 +270,7 @@ test.describe('the viewer page', () => {
     await expect(page.getByRole('button', { name: /reconnect/i })).toBeVisible();
   });
 
-  test('a reload keeps control after the 12-hour window, without asking again', async ({ page }) => {
+  test('a reload keeps control after the 7-day window, without asking again', async ({ page }) => {
     const spent = await signIn(page, operator, operatorSecret);
     const sessions = `/api/sites/${SITE_ID}/machines/${RELOAD_ID}/swoop/sessions`;
     const minted = (r: { url(): string; request(): { method(): string }; status(): number }) =>
@@ -257,10 +285,10 @@ test.describe('the viewer page', () => {
     expect(((await (await first).json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
     await expect(dialog).toBeHidden();
 
-    // the 12 hours since the ceremony have passed: only the tab's own
+    // the 7 days since the ceremony have passed: only the tab's own
     // continuity can bring control back now.
     const windows = await getAdminDb().collection(`users/${operator.uid}/swoop_step_up`).get();
-    const lapsed = Date.now() - 13 * 60 * 60 * 1000;
+    const lapsed = Date.now() - 8 * 24 * 60 * 60 * 1000;
     await Promise.all(windows.docs.map((d) => d.ref.set({ openedAt: lapsed, expiresAt: lapsed + 1 }, { merge: true })));
 
     const again = page.waitForResponse(minted, { timeout: 45_000 });
@@ -269,6 +297,30 @@ test.describe('the viewer page', () => {
     expect((JSON.parse(response.request().postData() ?? '{}') as { continuity?: string }).continuity).toBeTruthy();
     expect(((await response.json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
     await expect(dialog).toBeHidden();
+  });
+
+  test('a second factor passed at sign-in moments ago is the step-up for the first machine', async ({ page }) => {
+    await signIn(page, operator, operatorSecret, { fresh: true });
+    const sessions = `/api/sites/${SITE_ID}/machines/${FRESH_ID}/swoop/sessions`;
+    const minted = page.waitForResponse(
+      (r) => r.url().endsWith(sessions) && r.request().method() === 'POST',
+      { timeout: 45_000 },
+    );
+    await page.goto(`/swoop/${SITE_ID}/${FRESH_ID}`);
+
+    const response = await minted;
+    expect(response.status(), await response.text()).toBe(201);
+    expect(response.request().postDataJSON()).not.toHaveProperty('mfaProof');
+    expect(((await response.json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+    await expect(page.getByText(/connecting/i).first()).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    // the window rests on the sign-in's own ceremony, and the trail says why it opened
+    const rows = await getAdminDb().collection(`sites/${SITE_ID}/audit_log`).where('target.id', '==', FRESH_ID).get();
+    const opened = rows.docs.map((d) => d.data()).filter((row) => row.metadata?.event === 'step_up_opened');
+    expect(opened.map((row) => [row.actor?.userId, row.metadata?.reason])).toEqual([[operator.uid, 'fresh_sign_in']]);
+
+    await page.getByRole('button', { name: /end session/i }).click();
   });
 
   test('a member is refused control and watches instead, with no ceremony', async ({ page }) => {
@@ -411,6 +463,103 @@ test.describe('the viewer page', () => {
   });
 });
 
+/** close enough to the host's colour once h.264 has had its say on it. */
+const nearHostColour = (pixel: [number, number, number]): boolean =>
+  pixel.every((channel, i) => Math.abs(channel - HOST_COLOUR[i]) <= 30);
+
+/**
+ * waits for the page to present the host's picture: playing, at the host's
+ * size, in its colour, and still moving.
+ */
+async function expectHostPicture(page: Page): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const shown = await presentedPicture(page);
+        return { playing: shown.playing, size: `${shown.width}x${shown.height}`, colour: nearHostColour(shown.pixel) };
+      },
+      { timeout: 30_000 },
+    )
+    .toEqual({ playing: true, size: '640x360', colour: true });
+  const frames = (await presentedPicture(page)).frames;
+  await expect.poll(async () => (await presentedPicture(page)).frames).toBeGreaterThan(frames);
+}
+
+/** the next successful mint for `machineId`, as the page makes it. */
+function nextGrant(page: Page, machineId: string): Promise<{ sid: string; viewerId: string; ctl: boolean }> {
+  return page
+    .waitForResponse(
+      (r) =>
+        r.url().endsWith(`/machines/${machineId}/swoop/sessions`) &&
+        r.request().method() === 'POST' &&
+        r.status() === 201,
+      { timeout: 45_000 },
+    )
+    .then(async (r) => ((await r.json()) as { data: { sid: string; viewerId: string; ctl: boolean } }).data);
+}
+
+test.describe('through a host', () => {
+  test('a session reaches a picture, from a host that checked who it streams to', async ({ page, browser }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: LIVE_ID });
+    try {
+      await signIn(page, watcher);
+      const granted = nextGrant(page, LIVE_ID);
+      await page.goto(`/swoop/${SITE_ID}/${LIVE_ID}`);
+      const grant = await granted;
+      expect(grant.ctl).toBe(false);
+
+      await expectHostPicture(page);
+      await expect(page.getByText(/connecting/i)).toHaveCount(0);
+      await expect(page.getByText(/view only/i)).toBeVisible();
+
+      // the host let in the viewer its token names, bound to the certificate
+      // the page offered with, and watch-only as the api decided.
+      expect(host.leases).toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: watcher.uid, ctl: false }]);
+      expect(await host.sentCodecs()).toEqual(['video/H264']);
+      expect(host.problems).toEqual([]);
+
+      const ended = page.waitForResponse(
+        (r) => r.url().includes(`/swoop/sessions/${grant.sid}`) && r.request().method() === 'DELETE',
+      );
+      await page.getByRole('button', { name: /end session/i }).click();
+      expect((await ended).status()).toBe(200);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  test('the kill switch ends a live session, and the page does not take it back', async ({ page, browser }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: KILLED_ID });
+    try {
+      // a fresh sign-in is the step-up, so control comes without a dialog.
+      await signIn(page, operator, operatorSecret, { fresh: true });
+      const granted = nextGrant(page, KILLED_ID);
+      await page.goto(`/swoop/${SITE_ID}/${KILLED_ID}`);
+      const grant = await granted;
+      expect(grant.ctl).toBe(true);
+      await expectHostPicture(page);
+      expect(host.leases).toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: operator.uid, ctl: true }]);
+
+      // no signal worker here, so the kill reaches the machine as its queued
+      // command, which the host takes the way the agent does.
+      const kill = await apiCall(page, 'POST', `/api/sites/${SITE_ID}/machines/${KILLED_ID}/swoop/kill`, {});
+      expect(kill.status, JSON.stringify(kill.body)).toBe(200);
+      expect((kill.body.data as { via: string }).via).toBe('command');
+
+      await expect(page.getByText('this session was ended from elsewhere.')).toBeVisible({ timeout: 20_000 });
+      // a kill is a decision: the page renders no countdown to a next session,
+      // which it would in the same render as the line above, only the button.
+      await expect(page.getByText(/reconnecting in/)).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /reconnect/i })).toBeVisible();
+      const record = await readSession(page, grant.sid, KILLED_ID);
+      expect([record.state, record.endReason]).toEqual(['ended', 'killed']);
+      expect(host.problems).toEqual([]);
+    } finally {
+      await host.stop();
+    }
+  });
+});
+
 test.describe('two viewers on one machine, over the api', () => {
   test('each holds a lease of its own, and one kill ends every session', async ({ page, browser }) => {
     const operatorPage = page;
@@ -508,5 +657,32 @@ test.describe('two viewers on one machine, over the api', () => {
     expect(afterKill.status).toBeGreaterThanOrEqual(400);
 
     await watcherContext.close();
+  });
+
+  test('an api key is refused a session and a kill, whatever its scope', async ({ request }) => {
+    const key = await mintApiKey({
+      ownerUid: operator.uid,
+      name: `swoop-${SUFFIX}`,
+      scopes: [
+        { resource: 'site', id: SITE_ID, permissions: ['read', 'write', 'admin'] },
+        { resource: 'machine', id: MACHINE_ID, permissions: ['read', 'write'] },
+      ],
+    });
+    try {
+      const headers = { Authorization: `Bearer ${key.rawKey}`, 'Content-Type': 'application/json' };
+      for (const control of [true, false]) {
+        const res = await request.post(SESSIONS, {
+          headers,
+          data: { control, fp: fingerprint(4), clientCaps: CLIENT_CAPS },
+        });
+        const body = (await res.json()) as { code?: string };
+        expect([res.status(), body.code], JSON.stringify(body)).toEqual([403, 'api_key_not_permitted']);
+      }
+      const kill = await request.post(KILL, { headers, data: {} });
+      const body = (await kill.json()) as { code?: string };
+      expect([kill.status(), body.code], JSON.stringify(body)).toEqual([403, 'api_key_not_permitted']);
+    } finally {
+      await revokeApiKey(key);
+    }
   });
 });

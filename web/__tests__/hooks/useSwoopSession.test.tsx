@@ -114,6 +114,7 @@ jest.mock('@/lib/swoop/features', () => ({
 }));
 
 import { useSwoopSession, type UseSwoopSession } from '@/hooks/useSwoopSession';
+import { STEP_UP_WINDOW_OPEN } from '@/lib/swoop/stepUp';
 
 const SITE = 'site-1';
 const MACHINE = 'machine-1';
@@ -279,6 +280,39 @@ describe('useSwoopSession — how a session ends', () => {
     expect(mints()).toHaveLength(1);
   });
 
+  it('a plan refusal on the mint is final, and names the plan', async () => {
+    mint = {
+      status: 402,
+      body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
+    };
+    await open();
+    expect(swoop.state).toBe('error');
+    expect(swoop.refusal).toBe('plan_required');
+    expect(swoop.retryIn).toBeNull();
+
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
+  it('a plan refusal on a renewal ends the session for good, and names the plan', async () => {
+    await open();
+    const mintToken = wired.signaling!.mintToken;
+    await act(async () => {
+      await mintToken();
+    });
+
+    lease = { status: 402, body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue." } };
+    await act(async () => {
+      await expect(mintToken()).rejects.toThrow("your plan doesn't include swoop. upgrade to continue.");
+    });
+    expect(swoop.state).toBe('ended');
+    expect(swoop.refusal).toBe('plan_required');
+    expect(swoop.retryIn).toBeNull();
+
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
   it('a withdrawal met while re-minting ends the session with its reason', async () => {
     await open();
     const mintToken = wired.signaling!.mintToken;
@@ -297,12 +331,128 @@ describe('useSwoopSession — how a session ends', () => {
     expect(deletes()).toHaveLength(0);
   });
 
+  describe('a machine that never answers', () => {
+    // the faked peer never times out on its own: each `silent()` is a run whose
+    // offer went unanswered. the ladder's next run starts within 30 s, and the
+    // clock then moves on without firing every timer a live session holds.
+    const silent = () => act(() => wired.peer!.onError!('host_silent'));
+
+    async function laterBy(ms: number) {
+      await advance(30_000);
+      jest.setSystemTime(Date.now() + ms);
+    }
+
+    async function picture() {
+      act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+      await flush();
+    }
+
+    it('stops retrying after ten minutes without a picture, and says what to check', async () => {
+      // bryant place's m5 max: every streamer failed before it answered, and the
+      // tab asked again about every 45 s for two hours (2026-10-12)
+      await open();
+      silent();
+      await laterBy(10 * 60_000);
+      expect(mints()).toHaveLength(2);
+      silent();
+
+      expect(swoop.state).toBe('error');
+      expect(swoop.error).toMatch(/has not answered for ten minutes/);
+      expect(swoop.retryIn).toBeNull();
+      await advance(10 * 60_000);
+      expect(mints()).toHaveLength(2);
+    });
+
+    it('a picture in between starts the ten minutes again', async () => {
+      await open();
+      silent();
+      await laterBy(9 * 60_000);
+      await picture();
+      expect(swoop.state).toBe('connected');
+
+      silent();
+      await laterBy(9 * 60_000);
+      silent();
+      expect(swoop.error).toBe('this machine did not answer.');
+      expect(swoop.retryIn).not.toBeNull();
+    });
+
+    it('any other end in between starts the ten minutes again', async () => {
+      // a reboot: the machine goes offline for longer than the limit, and its
+      // first offer once it is back must not stop the viewer on the spot
+      await open();
+      silent();
+      mint = { status: 409, body: { code: 'machine_offline', detail: 'this machine is offline; swoop cannot reach it until it reconnects.' } };
+      await laterBy(11 * 60_000);
+      expect(swoop.error).toBe('this machine is offline; swoop cannot reach it until it reconnects.');
+
+      mint = { status: 201, body: { data: GRANT } };
+      await advance(30_000);
+      silent();
+      expect(swoop.error).toBe('this machine did not answer.');
+      expect(swoop.retryIn).not.toBeNull();
+    });
+
+    it('a reconnect after it stopped tries again', async () => {
+      await open();
+      silent();
+      await laterBy(10 * 60_000);
+      silent();
+      expect(swoop.retryIn).toBeNull();
+      const tries = mints().length;
+
+      act(() => swoop.reconnect());
+      await flush();
+      expect(mints()).toHaveLength(tries + 1);
+      act(() => wired.peer!.onError!('host_silent'));
+      expect(swoop.retryIn).not.toBeNull();
+    });
+  });
+
   it('tells the peer when an answer can come back over signalling', async () => {
     await open();
 
     act(() => wired.signaling!.onStatus!('reconnecting'));
     act(() => wired.signaling!.onStatus!('open'));
     expect(wired.signalOpen).toEqual([false, true]);
+  });
+
+  describe('owlette swoop closing the window', () => {
+    let ua: jest.SpyInstance;
+    const close = () =>
+      act(() => {
+        window.dispatchEvent(new Event('owlette:close'));
+      });
+
+    beforeEach(() => {
+      ua = jest.spyOn(navigator, 'userAgent', 'get');
+    });
+    afterEach(() => ua.mockRestore());
+
+    it('ends the session in the app, with one DELETE saying closed', async () => {
+      ua.mockReturnValue('Mozilla/5.0 owlette-swoop-viewer/0.0.0');
+      const view = await open();
+
+      close();
+      expect(swoop.state).toBe('ended');
+      expect(swoop.retryIn).toBeNull();
+      view.unmount();
+      await advance(60_000);
+
+      expect(deletes()).toHaveLength(1);
+      expect(JSON.parse(String(deletes()[0][1]?.body))).toEqual({ endReason: 'closed', viewerReason: 'closed' });
+    });
+
+    it('does nothing in a browser', async () => {
+      ua.mockReturnValue('Mozilla/5.0 Chrome/140.0');
+      await open();
+
+      close();
+      expect(swoop.state).not.toBe('ended');
+      await advance(60_000);
+
+      expect(deletes()).toHaveLength(0);
+    });
   });
 });
 
@@ -337,6 +487,47 @@ describe('useSwoopSession — control across a reload of the tab', () => {
 
     await open();
     expect(mintBody(1).continuity).toBeUndefined();
+  });
+});
+
+describe('useSwoopSession — the step-up answer', () => {
+  const mintBody = (index: number) => JSON.parse(String(mints()[index][1]?.body)) as { mfaProof?: unknown };
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    mint = { status: 401, body: { code: 'step_up_required', detail: 'confirm your identity to take control.' } };
+  });
+
+  it('a proof rides on exactly one retry of the create', async () => {
+    await open();
+    expect(swoop.stepUp.required).toBe(true);
+
+    mint = { status: 201, body: { data: GRANT } };
+    await act(async () => {
+      await swoop.stepUp.submitProof({ code: '123456' });
+    });
+    await flush();
+
+    expect(mints()).toHaveLength(2);
+    expect(mintBody(1).mfaProof).toEqual({ code: '123456' });
+    expect(swoop.stepUp.required).toBe(false);
+    expect(wired.session).not.toBeNull();
+  });
+
+  it('a window opened in the browser retries the create once, with no proof in it', async () => {
+    await open();
+    expect(swoop.stepUp.required).toBe(true);
+
+    mint = { status: 201, body: { data: GRANT } };
+    await act(async () => {
+      await swoop.stepUp.submitProof(STEP_UP_WINDOW_OPEN);
+    });
+    await flush();
+
+    expect(mints()).toHaveLength(2);
+    expect(mintBody(1)).not.toHaveProperty('mfaProof');
+    expect(swoop.stepUp.required).toBe(false);
+    expect(wired.session).not.toBeNull();
   });
 });
 

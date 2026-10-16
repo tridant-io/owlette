@@ -3,6 +3,13 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { CopyButton } from '@/components/CopyButton';
 import { ChevronRight, Key, KeyRound, Loader2, Plus, X } from 'lucide-react';
@@ -12,6 +19,7 @@ import type { ApiKeyListItem } from '@/lib/apiKeyTypes';
 import { ApiKeyCreateForm } from '@/components/ApiKeyCreateForm';
 import { ApiKeyScopeEditor } from '@/components/ApiKeyScopeEditor';
 import { KeyCard } from '@/app/settings/api-keys/KeyCard';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 /**
  * One panel for api keys, mounted in both places keys are managed.
@@ -34,16 +42,13 @@ interface Props {
 
 export function ApiKeysManager({ compact = false }: Props) {
   const { keys, loading, refresh, createKey, updateKey } = useApiKeys();
+  const keysGated = usePlanGated('api_keys');
   const [creating, setCreating] = useState(false);
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   const [showRevoked, setShowRevoked] = useState(false);
   // One clock for the whole list so two rows can't disagree about "expiring soon".
   const [now] = useState(() => Date.now());
-
-  // Pre-expand when there is nothing to look at — an empty list with a
-  // collapsed form is a dead end.
-  const showForm = creating;
 
   // Revoke became a soft delete, so this list only ever grows. The split is
   // client-side on purpose: filtering revoked keys out of GET /api/keys would
@@ -90,9 +95,6 @@ export function ApiKeysManager({ compact = false }: Props) {
             refresh().catch(() => {});
           }}
           onEditScopes={(target) => {
-            // Only one form open at a time — the create form and an
-            // editor side by side both claim to be "the" scope picker.
-            setCreating(false);
             setEditingKeyId((current) => (current === target.id ? null : target.id));
           }}
         />
@@ -152,21 +154,19 @@ export function ApiKeysManager({ compact = false }: Props) {
       )}
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
+        {/* wraps so a phone puts the upgrade note under the label, not beside it */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <Label className="text-foreground">your keys</Label>
-          {!showForm && (
+          <UpgradeGate flag="api_keys" variant="inline">
             <Button
               type="button"
               size="sm"
-              onClick={() => {
-                setEditingKeyId(null);
-                setCreating(true);
-              }}
+              onClick={() => setCreating(true)}
               className="cursor-pointer"
             >
               <Plus className="mr-1 h-3.5 w-3.5" /> create key
             </Button>
-          )}
+          </UpgradeGate>
         </div>
 
         {loading ? (
@@ -182,14 +182,12 @@ export function ApiKeysManager({ compact = false }: Props) {
                 create a scoped key to start automating against the roost api.
               </p>
             </div>
-            {!showForm && (
+            {/* the row above already carries the upgrade note */}
+            {!keysGated && (
               <Button
                 type="button"
                 size="sm"
-                onClick={() => {
-                  setEditingKeyId(null);
-                  setCreating(true);
-                }}
+                onClick={() => setCreating(true)}
                 className="cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5 mr-1" /> create your first key
@@ -234,12 +232,19 @@ export function ApiKeysManager({ compact = false }: Props) {
         )}
       </div>
 
-      {showForm && (
-        <div className="space-y-2">
-          <Label className="text-foreground">create key</Label>
+      {/* in the account settings dialog this nests a second modal; radix
+          stacks them, so escape and the overlay close only this one. */}
+      <Dialog open={creating} onOpenChange={setCreating}>
+        <DialogContent className="border-border text-foreground sm:max-w-xl max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>create api key</DialogTitle>
+            <DialogDescription>
+              the raw key is shown once, right after creation. store it somewhere safe.
+            </DialogDescription>
+          </DialogHeader>
           <ApiKeyCreateForm onSubmit={handleCreate} onCancel={() => setCreating(false)} />
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

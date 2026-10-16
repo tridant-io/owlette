@@ -192,7 +192,7 @@ if errorlevel 1 (
 echo Dependencies installed successfully!
 
 :: ============================================================================
-:: Step 6: Build the desktop app (Tauri)
+:: Step 6: Build the desktop app and owlette swoop (Tauri)
 :: ============================================================================
 :: Replaces the old "copy tkinter/tcl from system Python 3.11" step: the python
 :: UI (owlette_gui.py / owlette_tray.py and friends) was deleted in 3.0.0, so the
@@ -201,7 +201,7 @@ echo Dependencies installed successfully!
 :: --no-bundle is deliberate: Inno Setup is this product's packager. Letting the
 :: Tauri bundler run would demand NSIS/WiX and produce a second, competing
 :: installer we do not ship. We want the release binary and nothing else.
-echo [6/9] Building the desktop app ^(Tauri, release^)...
+echo [6/9] Building the desktop app and owlette swoop ^(Tauri, release^)...
 
 set "DESKTOP_DIR=%~dp0..\desktop"
 if not exist "%DESKTOP_DIR%\src-tauri\Cargo.toml" (
@@ -256,6 +256,35 @@ if not exist "%DESKTOP_EXE%" (
     exit /b 1
 )
 echo Desktop app built OK
+
+:: owlette swoop, the viewer app: a second Tauri crate in desktop\viewer with no
+:: frontend and no package.json, so it runs the CLI from the desktop app's
+:: node_modules (installed above). --no-bundle for the same reason as above.
+set "VIEWER_DIR=%DESKTOP_DIR%\viewer"
+if not exist "%VIEWER_DIR%\Cargo.toml" (
+    echo ERROR: owlette swoop sources not found at "%VIEWER_DIR%"
+    pause
+    exit /b 1
+)
+
+pushd "%VIEWER_DIR%"
+echo Compiling owlette-swoop-viewer.exe...
+call "..\node_modules\.bin\tauri.cmd" build --no-bundle --ci
+if errorlevel 1 (
+    echo ERROR: tauri build failed in "%VIEWER_DIR%"
+    popd
+    pause
+    exit /b 1
+)
+popd
+
+set "VIEWER_EXE=%VIEWER_DIR%\target\release\owlette-swoop-viewer.exe"
+if not exist "%VIEWER_EXE%" (
+    echo ERROR: tauri build reported success but "%VIEWER_EXE%" is missing
+    pause
+    exit /b 1
+)
+echo owlette swoop built OK
 
 :: ============================================================================
 :: Step 7: Build the Rust binaries (service host + swoop streamer)
@@ -432,6 +461,17 @@ echo Copying desktop app...
 copy /Y "%DESKTOP_EXE%" build\installer_package\app\ >nul
 if errorlevel 1 (
     echo ERROR: Failed to copy "%DESKTOP_EXE%"
+    pause
+    exit /b 1
+)
+
+:: Copy owlette swoop beside it, {app}\app\owlette-swoop-viewer.exe: where the
+:: desktop app looks for it and what the installer's owlette-swoop:// key and
+:: Start-menu shortcut point at.
+echo Copying owlette swoop...
+copy /Y "%VIEWER_EXE%" build\installer_package\app\ >nul
+if errorlevel 1 (
+    echo ERROR: Failed to copy "%VIEWER_EXE%"
     pause
     exit /b 1
 )

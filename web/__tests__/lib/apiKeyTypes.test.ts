@@ -10,6 +10,7 @@ import {
   ALL_RESOURCES,
   SCOPE_PRESETS,
   SUPERADMIN_ONLY_RESOURCES,
+  SUPERADMIN_ONLY_RESOURCES_LABEL,
   scopeMatches,
   type ApiKeyScope,
 } from '@/lib/apiKeyTypes';
@@ -25,11 +26,16 @@ describe('ALL_RESOURCES', () => {
       'process',
       'user',
       'installer',
+      'issue',
     ]);
   });
 
-  it('flags `user` and `installer` as superadmin-only', () => {
-    expect([...SUPERADMIN_ONLY_RESOURCES].sort()).toEqual(['installer', 'user']);
+  it('flags `user`, `installer` and `issue` as superadmin-only', () => {
+    expect([...SUPERADMIN_ONLY_RESOURCES].sort()).toEqual(['installer', 'issue', 'user']);
+  });
+
+  it('names every superadmin-only resource in the 403 wording', () => {
+    expect(SUPERADMIN_ONLY_RESOURCES_LABEL).toBe('user, installer or issue');
   });
 });
 

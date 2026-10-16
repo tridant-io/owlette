@@ -135,3 +135,59 @@ class TestCollectCpusOffWindows:
         # Negative control: without the guard the stub is imported, WMI()
         # raises and the fallback logs it at WARNING on every rebuild.
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+# the mounts and interfaces Bryant Place's M5 Max reported on 2026-10-12
+MAC_MOUNTS = [
+    '/', '/System/Volumes/VM', '/System/Volumes/Preboot', '/System/Volumes/Update',
+    '/System/Volumes/xarts', '/System/Volumes/iSCPreboot', '/System/Volumes/Hardware',
+    '/System/Volumes/Data', '/Library/Developer/CoreSimulator/Volumes/iOS_23F77',
+    '/Library/Developer/CoreSimulator/Volumes/xrOS_23O470', '/Volumes/Backup',
+]
+MAC_NICS = ['en0', 'utun0', 'utun1', 'utun12', 'awdl0', 'llw0']
+
+
+def _partitions(mounts):
+    return [SimpleNamespace(device='/dev/disk3s1', mountpoint=m, fstype='apfs', opts='rw') for m in mounts]
+
+
+def _interfaces(monkeypatch, names):
+    import socket
+    monkeypatch.setattr(hardware_profile.psutil, 'net_if_stats', lambda: {
+        n: SimpleNamespace(isup=True, speed=0) for n in names})
+    monkeypatch.setattr(hardware_profile.psutil, 'net_if_addrs', lambda: {
+        n: [SimpleNamespace(family=socket.AF_INET6, address='fe80::1')] for n in names})
+
+
+@pytest.mark.unit
+class TestMacProfileNoise:
+    """A Mac mounts simulator runtimes and system helper volumes, and adds and
+    drops tunnels at will. In the profile they changed its signature seven times
+    a day and became the "primary" disk (a simulator volume, 97% full) and nic
+    (`utun0`)."""
+
+    @pytest.fixture(autouse=True)
+    def _disk_usage(self, monkeypatch):
+        monkeypatch.setattr(hardware_profile, '_disk_usage_with_timeout',
+                            lambda mount: SimpleNamespace(total=500 * 1024 ** 3))
+
+    def test_a_mac_profiles_only_its_own_volumes(self, monkeypatch):
+        monkeypatch.setattr(hardware_profile, '_IS_MACOS', True)
+        monkeypatch.setattr(hardware_profile.psutil, 'disk_partitions', lambda all=False: _partitions(MAC_MOUNTS))
+
+        assert [d['id'] for d in hardware_profile._collect_disks()] == [
+            '/', '/System/Volumes/Data', '/Volumes/Backup']
+
+    def test_a_mac_profiles_no_tunnels_or_wireless_side_channels(self, monkeypatch):
+        monkeypatch.setattr(hardware_profile, '_IS_MACOS', True)
+        _interfaces(monkeypatch, MAC_NICS)
+
+        assert [n['id'] for n in hardware_profile._collect_nics()] == ['en0']
+
+    def test_off_macos_nothing_is_filtered(self, monkeypatch):
+        monkeypatch.setattr(hardware_profile, '_IS_MACOS', False)
+        monkeypatch.setattr(hardware_profile.psutil, 'disk_partitions', lambda all=False: _partitions(MAC_MOUNTS))
+        _interfaces(monkeypatch, MAC_NICS)
+
+        assert len(hardware_profile._collect_disks()) == len(MAC_MOUNTS)
+        assert [n['id'] for n in hardware_profile._collect_nics()] == MAC_NICS

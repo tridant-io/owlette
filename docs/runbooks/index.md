@@ -13,6 +13,7 @@ Each runbook is self-contained - read the one that matches your situation.
 | "how do dev and main branches actually relate?" | [dev-to-prod-workflow.md](dev-to-prod-workflow.md) |
 | "I'm turning on Firebase App Check enforcement" | [app-check-rollout.md](app-check-rollout.md) |
 | "I'm enabling talons (the automations cron) for an environment" | [talons.md](talons.md) |
+| "I'm turning plan enforcement (owlette free, the trial, per-machine billing) on or off" | [plans-and-billing.md](plans-and-billing.md) |
 | "who owns the cron schedules, the load balancer, or anything else not deployed by a push?" | [manual-infrastructure.md](manual-infrastructure.md) |
 | "one site's roost distribution needs stopping right now" | [roost-kill-switch.md](roost-kill-switch.md) |
 | "capability or privileged rate-limit enforcement has to be flipped" | [security-boundary-kill-switches.md](security-boundary-kill-switches.md) |

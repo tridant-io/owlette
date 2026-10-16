@@ -384,12 +384,16 @@ describe('GET /api/cron/health-check', () => {
 
     expect(tapTalonMatcherMock).toHaveBeenCalledTimes(2);
     for (const machineId of ['SILENT-1', 'SILENT-2']) {
-      expect(tapTalonMatcherMock).toHaveBeenCalledWith(expect.anything(), 'node-pa', {
-        kind: 'event',
-        eventType: 'machine_offline',
-        machineId,
-      });
+      expect(tapTalonMatcherMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'node-pa',
+        { kind: 'event', eventType: 'machine_offline', machineId },
+        expect.anything(),
+      );
     }
+    // one plan memo for the whole run, so each payer is resolved once
+    const [first, second] = tapTalonMatcherMock.mock.calls.map((call: unknown[]) => call[3]);
+    expect(first).toBe(second);
   });
 
   it('does NOT email while the pending set is still settling (records pending, no email)', async () => {

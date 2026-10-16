@@ -1,7 +1,7 @@
 ---
 title: "platform authentication internals"
 description: "how people and machines prove who they are to owlette: browser sessions, device-code pairing and agent tokens on Windows, macOS and Linux, passkeys, mandatory two-factor, and per-site roles. scoped API keys are covered in API authentication."
-keywords: ["login", "sign in", "cookie", "session secret", "pairing phrase", "device code", "machine token", "refresh token", "tokens.enc", "fido2", "totp", "2fa", "mfa", "remember this device", "rbac", "permissions", "superadmin", "owner"]
+keywords: ["login", "sign in", "cookie", "session secret", "pairing phrase", "device code", "machine token", "refresh token", "tokens.enc", "fido2", "totp", "2fa", "mfa", "remember this device", "rbac", "permissions", "superadmin", "owner", "owlette swoop", "app-link", "sign in with your browser", "verify in your browser"]
 ---
 
 owlette has four ways in: a browser session for people, device-code pairing and refresh tokens for agents, passkeys, and the two-factor check every account must pass. scoped `owk_*` API keys, bearer headers and API error behaviour are in [API authentication](/docs/api/authentication).
@@ -33,7 +33,7 @@ sessions are [iron-session](https://github.com/vvo/iron-session) cookies: sealed
 | property | value |
 |----------|-------|
 | **name** | `__session` |
-| **holds** | the user ID, the session's expiry and its 2FA state (`mfaRequired`, `mfaVerified`, `mfaCompletedAt`, `mfaSatisfiedBy`, `requiresMfaSetup`). no role |
+| **holds** | the user ID, the session's expiry and its 2FA state (`mfaRequired`, `mfaVerified`, `mfaCompletedAt`, `mfaSatisfiedBy`, `mfaNetwork`, `requiresMfaSetup`). no role |
 | **sealing** | iron-session v8's defaults: AES-256-CBC with an HMAC-SHA256 integrity check, keyed by `SESSION_SECRET`. the secret must be at least 32 characters; the server throws on load without it |
 | **flags** | `HttpOnly`, `SameSite=Lax`, path `/`, and `Secure` in production |
 | **lifetime** | `POST /api/auth/session` takes `durationDays`, 1 to 30 (default 7), for the session's own expiry, but the cookie's max age is fixed at 7 days, so a longer session still ends with the cookie |
@@ -43,6 +43,19 @@ sessions are [iron-session](https://github.com/vvo/iron-session) cookies: sealed
 ### remembering a device
 
 clearing a code at `/verify-2fa` with **trust this device** (`trustDevice: true`) sets a second cookie, `owlette_device_trust`, for 30 days. it holds a random 256-bit token; the server keeps only its SHA-256 hash, in `users/{uid}/trustedDevices/{hash}`. a later sign-in from that browser starts MFA-verified, recorded as `mfaSatisfiedBy: "device-trust"`, so [swoop's](/docs/dashboard/swoop#the-second-factor) step-up, which wants a live ceremony, still asks. dropping to zero factors, and a superadmin reset, revoke every trust record.
+
+### signing in owlette swoop
+
+[owlette swoop](/docs/dashboard/swoop#owlette-swoop), the desktop viewer app, keeps its own cookie jar, apart from the browser's, so it signs in through a browser that already holds a session, with a one-time code. a code is 32 random bytes, stored only as its SHA-256 in `app_links/{hash}` (server only) and never logged.
+
+- **from the dashboard**: `POST /api/auth/app-link`, from a session that has passed two-factor, mints an approved code that lives 60 seconds. it rides the `owlette-swoop://<host>/app-link?code=…&next=/swoop/<site>/<machine>` link, and the app's `/app-link` page exchanges it
+- **from the app**: **sign in with your browser** calls `POST /api/auth/app-link/start`, which returns a pending code, a poll secret and the page `/app-link/approve?code=…`, all good for 10 minutes. the app opens that page in the system browser, where a user whose session has passed two-factor approves it, and polls `POST /api/auth/app-link/exchange` with the code and its secret
+
+an exchange is single use, never names the uid, and answers a Firebase custom token whose `appLinkMfa` claim carries the approver's `mfaSatisfiedBy`, and `appLinkMfaAt` the time the approver passed its second factor. `POST /api/auth/session` honours the claims only for a custom-token sign-in made in the last 5 minutes, so the app's session has the approver's two-factor state and the time of the approver's ceremony, not of the hand-off: a ceremony under five minutes old counts as swoop's step-up for the machines opened in those five minutes, and a browser signed in days ago hands the app no step-up by approving. a `device-trust` approver therefore gives a `device-trust` app session, which answers swoop's step-up with a code in the app; any other can use **verify in your browser**, which passes the ceremony at `/swoop/<site>/<machine>/verify` in the system browser and opens the same 7-day window for that user and machine while the app polls `GET …/swoop/step-up`.
+
+### the network a second factor was passed on
+
+swoop control is tied to the networks you verified: a new network asks once. Cloudflare adds the client's ASN (`X-Owlette-Asn`) and a secret shared with the origin (`X-Owlette-Edge`, checked against `EDGE_SHARED_SECRET`) to every request; a request without a matching secret has network `unknown`, which never counts as verified. every second factor passed, at sign-in or at swoop's prompt, adds its network to `users/{uid}/verified_networks/{key}` (`asn:<n>`) for 7 days, and the session keeps it as `mfaNetwork` beside `mfaCompletedAt`; an app-link sign-in carries the approver's as `appLinkMfaNet`. `SWOOP_NETWORK_BINDING` sets the mode: `log` (the default) only records each control request's network, `enforce` makes an unverified network ask for the step-up and lets the sign-in's own ceremony stand in only on its own network, `off` does neither. see [swoop](/docs/dashboard/swoop#the-second-factor).
 
 ---
 
@@ -335,7 +348,7 @@ what you can do on a site comes from your row in `sites/{siteId}/members/{uid}`:
 | **admin** | a member's, plus `MACHINE_EXEC_COMMAND`, `MACHINE_REMOTE_CONTROL`, `SWOOP_SETTINGS_MANAGE`, `MACHINE_CONFIG_WRITE`, `MACHINE_REMOVE`, `MACHINE_ENROLL`, `AGENT_TOKEN_REVOKE`, `DEPLOYMENT_MANAGE`, `DISTRIBUTION_MANAGE`, `UNINSTALL_TRIGGER`, `PRESET_MANAGE`, `WEBHOOK_MANAGE`, `SITE_LOGS_MANAGE`, `SITE_MEMBER_MANAGE`, `TALON_MANAGE` and `ALERT_RULES_MANAGE` |
 | **owner** | an admin's, plus `SITE_DELETE` |
 
-the platform capabilities, `USER_ROLE_MANAGE`, `USER_DELETE`, `INSTALLER_MANAGE`, `SYSTEM_PRESET_MANAGE` and `GLOBAL_SETTINGS_WRITE`, belong to superadmins alone. an **agent** reaches only its own site and machine, from its token's claims. server jobs act as system actors with fixed grants: unattended hoot (`cortex_autonomous`) may run commands and write machine config, the talon runner may run commands, and scheduled cleanup may remove machines and manage deployments.
+the platform capabilities, `USER_ROLE_MANAGE`, `USER_DELETE`, `INSTALLER_MANAGE`, `ISSUE_MANAGE`, `SYSTEM_PRESET_MANAGE` and `GLOBAL_SETTINGS_WRITE`, belong to superadmins alone. an **agent** reaches only its own site and machine, from its token's claims. server jobs act as system actors with fixed grants: unattended hoot (`cortex_autonomous`) may run commands and write machine config, the talon runner may run commands, and scheduled cleanup may remove machines and manage deployments.
 
 superadmins set global roles at `/admin/users` ([user management](/docs/dashboard/admin/user-management#the-role-model)); site owners and admins set site roles with `PATCH /api/sites/{siteId}/members/{uid}` — the members page shows its role control to superadmins only ([member management](/docs/dashboard/admin/member-management#what-the-roles-mean)).
 

@@ -7,11 +7,14 @@ import { useAuth } from '@/contexts/AuthContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
-import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, SlidersHorizontal } from 'lucide-react';
+import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard, SlidersHorizontal } from 'lucide-react';
 import { getUserShortName } from '@/lib/userUtils';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
+import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
+import { TrialBanner } from '@/components/plan/TrialBanner';
+import { usePlan } from '@/hooks/usePlan';
 
 const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
 
@@ -19,7 +22,7 @@ const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm
 const CRUMB_DIVIDER = <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-muted-foreground/60" />;
 
 const FEEDBACK_LABELS = [
-  'report a bug',
+  'submit issue',
   'share feedback',
   'tell us how terrible we\'re doing',
   'yell into the void',
@@ -82,7 +85,7 @@ interface Site {
 }
 
 interface PageHeaderProps {
-  currentPage: 'Dashboard' | 'Deploy' | 'Roost' | 'Logs' | 'Hoot' | 'Talons' | 'API Keys' | 'Webhooks' | 'dashboard' | 'deploy' | 'roost' | 'logs' | 'hoot' | 'talons' | 'api keys' | 'webhooks';
+  currentPage: 'Dashboard' | 'Deploy' | 'Roost' | 'Logs' | 'Hoot' | 'Talons' | 'API Keys' | 'Webhooks' | 'dashboard' | 'deploy' | 'roost' | 'logs' | 'hoot' | 'talons' | 'api keys' | 'webhooks' | 'plan';
   sites?: Site[];
   currentSiteId?: string;
   onSiteChange?: (siteId: string) => void;
@@ -107,8 +110,9 @@ export function PageHeader({
 }: PageHeaderProps) {
   const router = useRouter();
   const { user, signOut, isSuperadmin, administersAnySite, isSiteAdmin } = useAuth();
+  const { plan } = usePlan();
   const [reportBugOpen, setReportBugOpen] = useState(false);
-  const [feedbackLabel, setFeedbackLabel] = useState('report a bug');
+  const [feedbackLabel, setFeedbackLabel] = useState('submit issue');
   const [feedbackFading, setFeedbackFading] = useState(false);
   const [helpMenuOpen, setHelpMenuOpen] = useState(false);
   const [openMenuCount, setOpenMenuCount] = useState(0);
@@ -432,6 +436,15 @@ export function PageHeader({
                   account settings
                 </DropdownMenuItem>
               )}
+              {plan?.enforced && (
+                <DropdownMenuItem
+                  onClick={() => router.push('/settings/plan')}
+                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                >
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  plan
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onClick={async () => {
                   await signOut();
@@ -448,6 +461,8 @@ export function PageHeader({
         </div>
       </div>
     </header>
+    <VerifyEmailBanner />
+    <TrialBanner />
 
     {/* Mobile nav drawer — carries the site + page switchers (and the help
         items) that the `md` bar shows inline. Plain fixed positioning rather

@@ -31,6 +31,10 @@ const PROTECTED_PATHS = [
   '/swoop',
   // /settings/* manages account + security state — needs completed MFA, not just password.
   '/settings',
+  // Approving hands this browser's account and MFA state to an owlette swoop window, so it
+  // needs both. `/app-link` itself is public (the app exchanges a code there) and is not
+  // matched: prefixes compare with startsWith.
+  '/app-link/approve',
 ] as const;
 
 // Must stay reachable while MFA is pending, or the challenge could never be completed.
@@ -177,9 +181,13 @@ export async function proxy(request: NextRequest) {
 
   // Protected pages: require auth AND a satisfied MFA gate.
   if (isProtectedPath) {
+    // The query rides along so the bounce-back lands where it started: /app-link/approve
+    // means nothing without its ?code=.
+    const returnTo = pathname + search;
+
     if (!isAuthenticated) {
       const loginUrl = new URL('/login', request.url);
-      loginUrl.searchParams.set('redirect', pathname);
+      loginUrl.searchParams.set('redirect', returnTo);
 
       if (process.env.NODE_ENV === 'development') {
         console.log('[Proxy] Redirecting to login from:', pathname);
@@ -217,7 +225,7 @@ export async function proxy(request: NextRequest) {
       const verifyUrl = new URL(MFA_CHALLENGE_PATH, request.url);
       // Preserve the destination for post-challenge bounce-back. `redirect` matches the login
       // contract; verify-2fa also accepts the historical `return` param.
-      verifyUrl.searchParams.set('redirect', pathname);
+      verifyUrl.searchParams.set('redirect', returnTo);
 
       if (process.env.NODE_ENV === 'development') {
         console.log('[Proxy] MFA required — redirecting to verify-2fa from:', pathname);

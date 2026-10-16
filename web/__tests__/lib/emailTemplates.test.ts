@@ -20,8 +20,28 @@ import {
   emailDataTable,
   wrapEmailLayout,
   buildDisplayDigestEmail,
+  buildEmailVerificationEmail,
+  buildIssueEmail,
+  buildPasswordResetEmail,
+  type IssueEmailInput,
   type PendingDisplayAlert,
 } from '@/lib/emailTemplates.server';
+
+const issueInput = (over: Partial<IssueEmailInput> = {}): IssueEmailInput => ({
+  number: 42,
+  categoryLabel: 'something broke',
+  title: 'viewer goes black',
+  text: 'the picture stayed black.\nreopening fixed it.',
+  from: 'dana@studio.example',
+  host: 'LOBBY-PC-01',
+  siteId: 'downtown-gallery',
+  appVersion: '4.1.13',
+  source: 'agent',
+  envLabel: 'DEVELOPMENT',
+  attachments: { screenshots: 3, videos: 1, logs: true },
+  issueUrl: 'https://dev.owlette.app/admin/issues/42',
+  ...over,
+});
 
 const displayAlert = (over: Partial<PendingDisplayAlert> = {}): PendingDisplayAlert => ({
   docId: 'd',
@@ -111,6 +131,117 @@ describe('wrapEmailLayout — manage alerts / unsubscribe footer', () => {
     expect(html).not.toContain('is made by');
     expect(html).not.toContain('automated message');
     expect(html).toContain('owlette.app');
+  });
+});
+
+describe('buildIssueEmail', () => {
+  it('puts the env, number, category and title in the subject', () => {
+    expect(buildIssueEmail(issueInput()).subject).toBe(
+      '[DEVELOPMENT] issue #42 · something broke — viewer goes black',
+    );
+  });
+
+  it('strips header-injection characters from the subject', () => {
+    const { subject } = buildIssueEmail(issueInput({ title: 'broke\r\nBcc: evil@x' }));
+    expect(subject).toBe('[DEVELOPMENT] issue #42 · something broke — broke Bcc: evil@x');
+  });
+
+  it('links one button to the issue page', () => {
+    const { html } = buildIssueEmail(issueInput());
+    expect(html).toContain('href="https://dev.owlette.app/admin/issues/42"');
+    expect(html).toContain('>open issue #42</a>');
+    expect(html.match(/<a href="https:\/\/dev\.owlette\.app\/admin\/issues/g)).toHaveLength(1);
+  });
+
+  it('escapes every user value', () => {
+    const evil = '<img src=x onerror=alert(1)>';
+    const { html } = buildIssueEmail(
+      issueInput({
+        title: evil,
+        text: evil,
+        from: evil,
+        host: evil,
+        siteId: evil,
+        categoryLabel: evil,
+        issueUrl: 'https://x/"><script>',
+      }),
+    );
+    expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('"><script>');
+    expect(html).toContain('&lt;img src=x');
+  });
+
+  it('keeps line breaks in the text as <br>', () => {
+    const { html } = buildIssueEmail(issueInput());
+    expect(html).toContain('the picture stayed black.<br>reopening fixed it.');
+  });
+
+  it('cuts long text at about 600 characters with an ellipsis', () => {
+    const words = Array.from({ length: 200 }, (_, i) => `word${i}`).join(' ');
+    const { html } = buildIssueEmail(issueInput({ text: words }));
+    // the body paragraph, not the preheader
+    const shown = html.match(/<p [^>]*>(word0 [^<]*)<\/p>/)?.[1] ?? '';
+    expect(shown.endsWith('…')).toBe(true);
+    expect(shown.length).toBeLessThanOrEqual(601);
+    expect(shown.length).toBeGreaterThan(480);
+    // ends on a whole word
+    expect(words.startsWith(`${shown.slice(0, -1)} `)).toBe(true);
+    expect(html).not.toContain('word199');
+  });
+
+  it('leaves text under the limit whole', () => {
+    const text = 'a'.repeat(600);
+    const { html } = buildIssueEmail(issueInput({ text }));
+    expect(html).toContain(text);
+    expect(html).not.toContain(`${text}…`);
+  });
+
+  it('carries no system info or log tail', () => {
+    const { html } = buildIssueEmail(issueInput());
+    expect(html).not.toContain('--- system info ---');
+    expect(html).not.toContain('--- recent logs');
+    expect(html).not.toMatch(/system info|log tail/);
+  });
+
+  it('uses the first line of the text as the preheader', () => {
+    const { html } = buildIssueEmail(issueInput({ text: '\n\nfirst line here\nsecond line' }));
+    expect(html).toMatch(/<div style="display:none;[^>]*>first line here<\/div>/);
+  });
+
+  it('summarises attachments on one line, and omits the row when there are none', () => {
+    expect(buildIssueEmail(issueInput()).html).toContain('logs, 3 screenshots and 1 video');
+    expect(
+      buildIssueEmail(issueInput({ attachments: { screenshots: 1, videos: 0, logs: false } })).html,
+    ).toContain('>1 screenshot<');
+    const none = buildIssueEmail(
+      issueInput({ attachments: { screenshots: 0, videos: 0, logs: false } }),
+    ).html;
+    expect(none).not.toContain('attached');
+  });
+
+  it('uses the shared button, which carries the Outlook fix', () => {
+    const { html } = buildIssueEmail(issueInput());
+    expect(html).toContain(
+      '<td bgcolor="#00bcd4" style="border-radius:6px;background:#00bcd4;mso-padding-alt:12px 28px;"><a href="https://dev.owlette.app/admin/issues/42"',
+    );
+  });
+
+  it('omits the machine and site facts a web issue does not have', () => {
+    const { html } = buildIssueEmail(issueInput({ host: null, siteId: null, source: 'web' }));
+    expect(html).not.toContain('>machine<');
+    expect(html).not.toContain('>site<');
+    expect(html).toContain('dashboard · 4.1.13');
+  });
+});
+
+describe('transactional email buttons', () => {
+  it.each([
+    ['password reset', buildPasswordResetEmail('https://dev.owlette.app/reset-password?oobCode=x')],
+    ['email verification', buildEmailVerificationEmail('https://dev.owlette.app/verify-email?oobCode=x')],
+  ])('the %s button carries bgcolor and mso-padding-alt for Outlook', (_name, html) => {
+    expect(html).toContain(
+      '<td bgcolor="#00bcd4" style="border-radius:6px;background:#00bcd4;mso-padding-alt:12px 28px;"><a href="https://dev.owlette.app/',
+    );
   });
 });
 

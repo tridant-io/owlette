@@ -30,6 +30,12 @@ variable "vercel_origin" {
   description = "Vercel origin hostname (STANDBY pool): vercel-origin.owlette.app, a DNS-only record pointing at Vercel. Also sent as that pool's Host header — Vercel holds a certificate for this name, not for owlette.app. Hostname only, no scheme."
 }
 
+variable "edge_shared_secret" {
+  type        = string
+  sensitive   = true
+  description = "Value of the X-Owlette-Edge request header; must equal EDGE_SHARED_SECRET on every origin. Supply it as TF_VAR_edge_shared_secret, never in terraform.tfvars."
+}
+
 variable "notification_email" {
   type        = string
   description = "Optional email for pool health notifications. Empty disables notifications."

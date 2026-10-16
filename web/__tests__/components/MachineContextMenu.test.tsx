@@ -55,11 +55,17 @@ jest.mock('@/lib/toast', () => ({
 
 async function openMenu(props: {
   isOnline?: boolean;
+  isSiteAdmin?: boolean;
+  rebooting?: boolean;
   swoopCapable?: boolean;
   swoopViewers?: number;
   onSwoop?: () => void;
+  onSwoopApp?: () => void;
   onLiveView?: () => void;
-  isSiteAdmin?: boolean;
+  onViewDisplays?: () => void;
+  planLocked?: boolean;
+  controlLocked?: boolean;
+  swoopLocked?: boolean;
   swoopOff?: boolean;
   onSiteSettings?: () => void;
 }) {
@@ -111,6 +117,62 @@ describe('MachineContextMenu — swoop entry', () => {
     await user.click(screen.getByTestId('machine-context-menu-swoop'));
 
     expect(onSwoop).toHaveBeenCalledTimes(1);
+  });
+});
+
+// the swoop row's second half opens the machine in the desktop app instead of
+// this browser; inside the app the row itself already opens one of its windows.
+describe('MachineContextMenu — the owlette swoop desktop app half', () => {
+  const APP_UA = 'Mozilla/5.0 Chrome/141.0.0.0 owlette-swoop-viewer/4.1.8';
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it('sits beside the swoop row as its own menu item', async () => {
+    await openMenu({ swoopCapable: true, onSwoopApp: jest.fn() });
+
+    const app = screen.getByRole('menuitem', { name: 'open in the owlette swoop desktop app' });
+    expect(app).toHaveAttribute('data-testid', 'machine-context-menu-swoop-app');
+    expect(app.parentElement).toContainElement(screen.getByTestId('machine-context-menu-swoop'));
+    expect(app).not.toHaveAttribute('aria-disabled');
+  });
+
+  it('opens the app, not the browser viewer', async () => {
+    const onSwoop = jest.fn();
+    const onSwoopApp = jest.fn();
+    const user = await openMenu({ swoopCapable: true, onSwoop, onSwoopApp });
+
+    await user.click(screen.getByTestId('machine-context-menu-swoop-app'));
+
+    expect(onSwoopApp).toHaveBeenCalledTimes(1);
+    expect(onSwoop).not.toHaveBeenCalled();
+  });
+
+  it('is not there inside the app', async () => {
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(APP_UA);
+    await openMenu({ swoopCapable: true, onSwoopApp: jest.fn() });
+
+    expect(screen.getByTestId('machine-context-menu-swoop')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-app')).not.toBeInTheDocument();
+  });
+
+  it('is not there on the machine this browser is on, so the hint keeps its room', async () => {
+    markThisMachine('site-A', 'kiosk-1');
+    await openMenu({ swoopCapable: true, onSwoopApp: jest.fn() });
+
+    expect(screen.queryByTestId('machine-context-menu-swoop-app')).toBeNull();
+    expect(screen.getByText("you're on this machine")).toBeInTheDocument();
+  });
+
+  it.each([
+    ['no streamer', { swoopCapable: false }],
+    ['swoop off for the site', { swoopCapable: true, swoopOff: true, isSiteAdmin: true }],
+  ])('is not there with %s', async (_label, props) => {
+    await openMenu({ ...props, onSwoopApp: jest.fn() });
+
+    expect(screen.queryByTestId('machine-context-menu-swoop-app')).not.toBeInTheDocument();
   });
 });
 
@@ -208,5 +270,85 @@ describe('MachineContextMenu — swoop viewer count', () => {
     expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-swoop-count')).not.toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-swoop-pill')).not.toBeInTheDocument();
+  });
+});
+
+// the viewer's own plan on a site they own (useSitePlan): server gates every
+// action regardless, so these only keep the menu from offering what would fail.
+describe('MachineContextMenu — plan', () => {
+  it('links a locked swoop to the plan page instead of opening a session', async () => {
+    await openMenu({ swoopCapable: true, swoopLocked: true });
+
+    const item = screen.getByTestId('machine-context-menu-swoop-upgrade');
+    expect(item).toHaveTextContent('swooppart of pro');
+    expect(item).toHaveAttribute('href', '/settings/plan');
+    expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
+  });
+
+  it('links a locked swoop to the plan page even with the site switch off, since turning it on would not help', async () => {
+    await openMenu({ swoopCapable: true, swoopLocked: true, swoopOff: true, isSiteAdmin: true, onSiteSettings: jest.fn() });
+
+    expect(screen.getByTestId('machine-context-menu-swoop-upgrade')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-off')).not.toBeInTheDocument();
+  });
+
+  it('drops live view and screenshot when control is out of the plan', async () => {
+    await openMenu({ controlLocked: true, onViewDisplays: jest.fn() });
+
+    expect(screen.queryByTestId('machine-context-menu-live-view')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-screenshot')).not.toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-view-displays')).toBeInTheDocument();
+  });
+
+  it('keeps a locked swoop row when control is out of the plan too, as on free', async () => {
+    await openMenu({ swoopCapable: true, swoopLocked: true, controlLocked: true });
+
+    expect(screen.getByTestId('machine-context-menu-swoop-upgrade')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-screenshot')).not.toBeInTheDocument();
+  });
+
+  it('keeps only alerts, the token and removal on a machine outside the plan', async () => {
+    await openMenu({ planLocked: true, isSiteAdmin: true, swoopCapable: true, onViewDisplays: jest.fn() });
+
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'mute alerts',
+      'revoke token',
+      'remove machine',
+    ]);
+  });
+
+  it('collapses restart and shutdown into one row linking to the plan page, keeping schedule restarts', async () => {
+    await openMenu({ controlLocked: true, isSiteAdmin: true, swoopCapable: true, swoopLocked: true, onViewDisplays: jest.fn() });
+
+    const row = screen.getByTestId('machine-context-menu-control-upgrade');
+    expect(row).toHaveTextContent('remote controlpart of core');
+    expect(row).toHaveAttribute('href', '/settings/plan');
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'remote controlpart of core',
+      'schedule restarts',
+      'swooppart of pro',
+      'view displays',
+      'mute alerts',
+      'revoke token',
+      'remove machine',
+    ]);
+  });
+
+  it('still offers cancelling a restart without control, which every plan may', async () => {
+    await openMenu({ controlLocked: true, isSiteAdmin: true, rebooting: true });
+
+    expect(screen.getByTestId('machine-context-menu-cancel-reboot')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-control-upgrade')).not.toBeInTheDocument();
+  });
+
+  it('offers everything as before when the plan leaves it all in', async () => {
+    await openMenu({ isSiteAdmin: true, onViewDisplays: jest.fn() });
+
+    expect(screen.getByTestId('machine-context-menu-reboot')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-shutdown')).toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-control-upgrade')).not.toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-screenshot')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-view-displays')).toBeInTheDocument();
   });
 });

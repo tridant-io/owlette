@@ -27,7 +27,11 @@ interface Harness {
   frame: (overrides?: Partial<FrameObservation>) => FrameObservation;
 }
 
-function harness(onSilence?: () => void, linkUp?: () => boolean): Harness {
+function harness(
+  onSilence?: () => void,
+  linkUp?: () => boolean,
+  framesDecoded?: () => Promise<number | null>,
+): Harness {
   let clock = 1_000;
   const sent: FeedbackMessage[] = [];
   const feedback = new SwoopFeedback({
@@ -37,6 +41,7 @@ function harness(onSilence?: () => void, linkUp?: () => boolean): Harness {
     reportIntervalMs: TICK_MS,
     onSilence,
     linkUp,
+    framesDecoded,
   });
 
   let answered = 0;
@@ -99,6 +104,11 @@ const of = <T extends FeedbackMessage['t']>(
   t: T,
 ): Extract<FeedbackMessage, { t: T }>[] =>
   sent.filter((m): m is Extract<FeedbackMessage, { t: T }> => m.t === t);
+
+/** let the stats reads the timers started settle. */
+const flush = async (): Promise<void> => {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+};
 
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
@@ -301,6 +311,138 @@ describe('swoop feedback reports', () => {
     h.advance(TICK_MS * 2);
     expect(h.feedback.diagnostics().framesDropped).toBe(3);
     expect(of(h.sent, 'stats')[0].framesDropped).toBe(3);
+  });
+
+  // TEC-B4A, 2026-10-13: a 60 fps picture on a 60 hz screen leaves frames
+  // decoded and never painted, the viewer reported each one dropped, and the
+  // host cut 20% every two seconds on a wired lan with nothing lost.
+  describe('with the decoder count', () => {
+    /** paint `ids` in order, then let one stats read land. */
+    async function paint(h: Harness, ids: number[]): Promise<void> {
+      for (const frameId of ids) h.feedback.observeFrame(h.frame({ frameId }));
+      h.advance(TICK_MS * 2);
+      await flush();
+    }
+
+    it('does not count a frame decoded and never painted as dropped', async () => {
+      let decoded = 100;
+      const h = harness(undefined, undefined, async () => decoded);
+      h.feedback.start();
+      h.answerPings();
+      await paint(h, [10]);
+      // 11 to 13 decoded and skipped by the compositor, 14 painted
+      decoded += 4;
+      await paint(h, [14]);
+      expect(h.feedback.diagnostics().framesDropped).toBe(0);
+    });
+
+    it('counts frames never decoded beyond the decoder lead', async () => {
+      let decoded = 100;
+      const h = harness(undefined, undefined, async () => decoded);
+      h.feedback.start();
+      h.answerPings();
+      await paint(h, [10]);
+      // 11 to 18 lost, 19 and 20 decoded
+      decoded += 2;
+      await paint(h, [20]);
+      expect(h.feedback.diagnostics().framesDropped).toBe(8 - 3);
+      h.advance(TICK_MS * 2);
+      expect(of(h.sent, 'stats').at(-1)?.framesDropped).toBe(5);
+    });
+
+    it('does not latch frames decoded ahead of the paint at the base as dropped', async () => {
+      let decoded = 103;
+      const h = harness(undefined, undefined, async () => decoded);
+      h.feedback.start();
+      h.answerPings();
+      // painted 10 while 11 to 13 are already decoded
+      await paint(h, [10]);
+      decoded += 57;
+      await paint(h, [70]);
+      expect(h.feedback.diagnostics().framesDropped).toBe(0);
+    });
+
+    // a frame-rate or resolution move opens a new encoder, whose ids start at
+    // zero; the decoder's count runs straight through it.
+    it('keeps counting losses after a new encoder starts its ids again', async () => {
+      let decoded = 30;
+      const h = harness(undefined, undefined, async () => decoded);
+      h.feedback.start();
+      h.answerPings();
+      await paint(h, [30]);
+      decoded += 1770;
+      await paint(h, [1800]);
+      // the new encoder's 0 to 45, all decoded
+      decoded += 46;
+      await paint(h, [45]);
+      // then 20 lost and one decoded
+      decoded += 1;
+      await paint(h, [66]);
+      expect(h.feedback.diagnostics().framesDropped).toBe(20 - 3);
+    });
+
+    it('does not count a small step back in the ids as loss', async () => {
+      let decoded = 100;
+      const h = harness(undefined, undefined, async () => decoded);
+      h.feedback.start();
+      h.answerPings();
+      await paint(h, [500]);
+      await paint(h, [499]);
+      decoded += 10;
+      await paint(h, [509]);
+      expect(h.feedback.diagnostics().framesDropped).toBe(0);
+    });
+
+    // a hidden tab or a minimised window stops the paint, not the decoder: the
+    // old encoder ran on to 1000 and a new one to 300 before a frame was painted
+    it('keeps counting after a new encoder it never saw start, behind a stalled paint', async () => {
+      let decoded = 100;
+      const h = harness(undefined, undefined, async () => decoded);
+      h.feedback.start();
+      h.answerPings();
+      await paint(h, [100]);
+      decoded += 900 + 301;
+      await paint(h, [300]);
+      // then 30 lost and one decoded
+      decoded += 1;
+      await paint(h, [331]);
+      expect(h.feedback.diagnostics().framesDropped).toBe(30 - 3);
+    });
+
+    it('does not let rebuilds with skipped tails hide later losses', async () => {
+      let decoded = 100;
+      const h = harness(undefined, undefined, async () => decoded);
+      h.feedback.start();
+      h.answerPings();
+      await paint(h, [10]);
+      for (let rebuild = 0; rebuild < 5; rebuild++) {
+        // the old run's last two decoded and never painted, then the new run
+        decoded += 2 + 11;
+        await paint(h, [5, 10]);
+      }
+      // then 6 lost and one decoded
+      decoded += 1;
+      await paint(h, [17]);
+      expect(h.feedback.diagnostics().framesDropped).toBe(6 - 3);
+    });
+
+    it('keeps what it counted when the decoder count starts over', async () => {
+      let decoded = 100;
+      const h = harness(undefined, undefined, async () => decoded);
+      h.feedback.start();
+      h.answerPings();
+      await paint(h, [10]);
+      decoded += 2;
+      await paint(h, [20]);
+      expect(h.feedback.diagnostics().framesDropped).toBe(5);
+
+      // a new receiver: its count starts over, and that read is its base
+      decoded = 1;
+      await paint(h, [21]);
+      decoded += 1;
+      await paint(h, [30]);
+      expect(h.feedback.diagnostics().framesDropped).toBe(5 + 8 - 3);
+    });
   });
 
   it('measures the delay rise against the best of the window, offset and all', () => {

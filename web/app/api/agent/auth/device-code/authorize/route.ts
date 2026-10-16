@@ -12,6 +12,7 @@ import {
   encryptDeviceCodeCredentials,
 } from '@/lib/deviceCodeCrypto';
 import logger from '@/lib/logger';
+import { machineLimitRefusal } from '@/lib/pairingPlan.server';
 
 /**
  * POST /api/agent/auth/device-code/authorize
@@ -21,8 +22,9 @@ import logger from '@/lib/logger';
  *
  * Body: `{ pairPhrase: string ("silver-compass-drift"), siteId: string }`
  * 200: `{ success: true, machineId: string | null }`
- * 400 bad fields/phrase · 401 unauthenticated · 403 no site access · 404 unknown or
- * expired phrase · 409 already authorized.
+ * 400 bad fields/phrase · 401 unauthenticated · 402 machine limit (the code is marked
+ * `refused`, so the agent's poll gets the same message) · 403 no site access · 404
+ * unknown or expired phrase · 409 already authorized.
  *
  * Audits `site_mutated` / `machine.pair` once the transaction commits. The siteId is
  * always known here; the machineId is not — a pre-authorized ("generate code") doc
@@ -55,7 +57,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     // identity plus a refresh token that never expires, and revoking one is
     // site-admin (AGENT_TOKEN_REVOKE). Issue and revoke have to sit at the same
     // bar, or a read-only member can create credentials it cannot take back.
-    await assertUserHasSiteCapability(userId, siteId, Capability.MACHINE_ENROLL);
+    const { siteData } = await assertUserHasSiteCapability(userId, siteId, Capability.MACHINE_ENROLL);
 
     // Transactional lookup+authorize, so two concurrent requests can't both read 'pending'
     // and authorize the same device code.
@@ -107,6 +109,12 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       const machineId = data.machineId;
       if (!machineId) {
         return { error: 'Invalid device code state for authorization.', status: 400 } as const;
+      }
+
+      const refusal = await machineLimitRefusal(siteId, machineId, siteData);
+      if (refusal) {
+        transaction.update(docRef, { status: 'refused', refusedReason: refusal });
+        return { error: refusal, status: 402 } as const;
       }
 
       // Unique agent user ID (same pattern as the exchange endpoint)

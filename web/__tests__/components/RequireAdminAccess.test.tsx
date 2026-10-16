@@ -44,7 +44,7 @@ jest.mock('@/contexts/AuthContext', () => ({
 }));
 
 import RequireAdminAccess from '@/components/RequireAdminAccess';
-import { visibleNavItems, requiredRoleForPath } from '@/app/admin/navItems';
+import { groupNavItems, navItemMatches, visibleNavItems, requiredRoleForPath } from '@/app/admin/navItems';
 
 const setAuth = (role: UserRole | null, overrides: Partial<typeof auth> = {}) => {
   auth = { user: { uid: 'u1' }, loading: false, role, ...overrides };
@@ -140,30 +140,63 @@ describe('RequireAdminAccess', () => {
   });
 });
 
+describe('navItemMatches', () => {
+  const issues = visibleNavItems('superadmin', false).find((item) => item.name === 'issues')!;
+
+  it.each([
+    ['/admin/issues', true],
+    ['/admin/issues/42', true],
+    ['/admin/issuesx', false],
+    ['/admin/installers', false],
+    [null, false],
+  ])('matches %p: %p', (pathname, expected) => {
+    expect(navItemMatches(issues, pathname)).toBe(expected);
+  });
+});
+
 describe('visibleNavItems', () => {
   it('gives a site administrator exactly the site-scoped destinations, members first', () => {
     expect(visibleNavItems('member', true).map((item) => item.name)).toEqual([
       'members',
       'agent tokens',
       'swoop',
-      'schedules',
       'alerts',
+      'schedules',
       'webhooks',
     ]);
   });
 
   it('gives a superadmin every destination, with no membership', () => {
     expect(visibleNavItems('superadmin', false).map((item) => item.name)).toEqual([
-      'installers',
-      'template library',
-      'members',
       'users',
+      'members',
+      'installers',
       'agent tokens',
       'swoop',
-      'schedules',
       'alerts',
+      'schedules',
+      'template library',
       'webhooks',
+      'issues',
       'email',
+    ]);
+  });
+
+  it('groups the destinations into the owner sections in order, dropping empty ones', () => {
+    expect(
+      groupNavItems(visibleNavItems('superadmin', false)).map(
+        ({ group, items }) => `${group}: ${items.map((item) => item.name).join(', ')}`,
+      ),
+    ).toEqual([
+      'people: users, members',
+      'fleet: installers, agent tokens, swoop',
+      'configuration: alerts, schedules, template library, webhooks',
+      'support: issues, email',
+    ]);
+    expect(groupNavItems(visibleNavItems('member', true)).map(({ group }) => group)).toEqual([
+      'people',
+      'fleet',
+      'configuration',
     ]);
   });
 
@@ -190,6 +223,7 @@ describe('requiredRoleForPath', () => {
   it('lets subpaths inherit their page requirement', () => {
     expect(requiredRoleForPath('/admin/schedules/abc123')).toBe('admin');
     expect(requiredRoleForPath('/admin/installers/3.2.3')).toBe('superadmin');
+    expect(requiredRoleForPath('/admin/issues/42')).toBe('superadmin');
   });
 
   it('fails closed on unknown paths and on prefix look-alikes', () => {

@@ -39,7 +39,8 @@ interface RoostDetailPanelProps {
    *  the targets section then renders an empty list until machines are wired in. */
   machines?: Machine[];
   onClose: () => void;
-  onNewVersion: (ctx: NewVersionContext) => void;
+  /** Absent when the plan leaves roost out; the page header carries the upgrade note. */
+  onNewVersion?: (ctx: NewVersionContext) => void;
   onResync: () => void;
   onDelete: () => void;
   onCopyRoostId: () => void;
@@ -241,14 +242,16 @@ export function RoostDetailPanel({
           roostCreatedAt={roost.createdAt}
           roostCreatedBy={roost.createdBy}
           refreshKey={refreshKey}
-          onNewVersion={() =>
-            onNewVersion({
-              roostId: roost.id,
-              name: roost.name,
-              extractPath: roost.extractPath,
-              targets: roost.targets,
-              currentVersionNumber: roost.currentVersionNumber,
-            })
+          onNewVersion={
+            onNewVersion &&
+            (() =>
+              onNewVersion({
+                roostId: roost.id,
+                name: roost.name,
+                extractPath: roost.extractPath,
+                targets: roost.targets,
+                currentVersionNumber: roost.currentVersionNumber,
+              }))
           }
         />
       </div>
