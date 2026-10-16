@@ -356,7 +356,9 @@ async function main() {
   console.log('  .claude/.env.local as:');
   console.log('    R2_S3_ACCESS_KEY_ID=<access key>');
   console.log('    R2_S3_SECRET_ACCESS_KEY=<secret>');
-  console.log(`    R2_S3_ENDPOINT=https://${api.accountId}.r2.cloudflarestorage.com`);
+  // the account id is printed as a placeholder: the real one comes from the
+  // environment, and a value from there must not reach a log (CodeQL 400).
+  console.log('    R2_S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com');
   console.log('');
   console.log('─── and a separate token for the issue-logs buckets ───');
   console.log('  issue-report logs get their own token, as the installer buckets do;');
