@@ -368,3 +368,8 @@ Shared contracts:
     - the skill no longer hard-codes a path;
     - narrower types.
   - After the fixes: tsc clean, jest 424 suites and 7928 tests, validate:api and check-claude-hooks pass.
+- Task 5.3 progress, 2026-10-15:
+  - PR #394 merged to dev (9c692cc3) with all 21 checks green, e2e included.
+  - The index was deployed to owlette-dev-3838a: `firebase deploy --only firestore:indexes --non-interactive`, no `--force`.
+  - The dev backfill was written: 25 issues numbered #1 to #25, and the counter's next is 25.
+  - dev.owlette.app `GET /api/admin/issues` with the dev key returns 403 `scope_insufficient`, so the route is deployed and gated. Waiting on the owner to tick issue read/write on that key.
