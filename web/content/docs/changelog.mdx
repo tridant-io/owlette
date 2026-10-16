@@ -37,6 +37,13 @@ signed out before the server session ended, so the trip to the login page
 bounced straight back. Sign-out now ends the session first, and cancel opens
 the login page with a full page load.
 
+### fixed — quieter macOS and Linux agent logs
+
+Four Windows-only probes (the swoop console-session check, the CPU and GPU
+temperature sensors, display enumeration and the display drift count) ran on
+every tick off Windows and logged their failure each time. They now skip on
+macOS and Linux, so the agent log there carries only what the machine does.
+
 ## [4.1.17] - 2026-10-15
 
 ### added — videos on submitted issues

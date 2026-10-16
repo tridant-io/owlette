@@ -705,6 +705,10 @@ def get_cpu_temperature():
     """
     if read_config(['temperature', 'enabled']) is False:
         return None
+    # librehardwaremonitor is a .net library over the pawnio driver, so windows
+    # only: elsewhere the read spun up a worker and logged a failure every pass.
+    if not _IS_WINDOWS:
+        return None
     try:
         import temp_sensors
 
@@ -735,26 +739,28 @@ def get_gpu_temperatures():
     if read_config(['temperature', 'enabled']) is False:
         return []
 
-    # 1. LibreHardwareMonitor via temp_sensors — NVIDIA, AMD, Intel
-    try:
-        import temp_sensors
-        all_temps = _temp_read_with_timeout("GPU_Temps", temp_sensors.read_gpu_temperatures)
+    # 1. LibreHardwareMonitor via temp_sensors — NVIDIA, AMD, Intel. windows
+    # only, as in get_cpu_temperature.
+    if _IS_WINDOWS:
+        try:
+            import temp_sensors
+            all_temps = _temp_read_with_timeout("GPU_Temps", temp_sensors.read_gpu_temperatures)
 
-        if all_temps:
-            temps = []
-            for i, temp in enumerate(all_temps):
-                if temp is not None and 0 < temp < 150:
-                    temps.append({
-                        'index': i,
-                        'temperature': float(temp)
-                    })
-            if temps:
-                return temps
+            if all_temps:
+                temps = []
+                for i, temp in enumerate(all_temps):
+                    if temp is not None and 0 < temp < 150:
+                        temps.append({
+                            'index': i,
+                            'temperature': float(temp)
+                        })
+                if temps:
+                    return temps
 
-    except ImportError:
-        logging.debug("[TEMP] HardwareMonitor not available")
-    except Exception as e:
-        logging.debug(f"[TEMP] sensor error: {e}")
+        except ImportError:
+            logging.debug("[TEMP] HardwareMonitor not available")
+        except Exception as e:
+            logging.debug(f"[TEMP] sensor error: {e}")
 
     # 2. pynvml — NVIDIA only. macos has no nvidia driver, so the read could only
     # fail there. a machine with no nvml library (linux without the nvidia

@@ -241,6 +241,53 @@ def test_swoop_capability_is_zero_when_the_streamer_is_absent(monkeypatch):
     assert payload["capabilities.displayRemoteApply"] == 1
 
 
+def _fake_display_manager(drift):
+    mod = MagicMock()
+    mod.compute_drift_count = MagicMock(return_value=drift)
+    return mod
+
+
+def test_display_drift_is_zero_off_windows_without_touching_display_manager(monkeypatch):
+    # display_manager asserts the windows x64 abi on import; on a mac that
+    # failed, and was logged, on every heartbeat (issue #27, #28 log tails).
+    monkeypatch.setattr(sys, "platform", "darwin")
+    fake = _fake_display_manager(drift=2)
+    fc = _make_client()
+    fc._cached_display_profile = {"monitors": [{"id": "a"}]}
+
+    with patch.dict(sys.modules, {"display_manager": fake}), \
+            patch.object(shared_utils, "read_config", return_value=[]):
+        assert fc._display_drift_count() == 0
+    fake.compute_drift_count.assert_not_called()
+
+
+def test_display_drift_comes_from_display_manager_on_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    fake = _fake_display_manager(drift=2)
+    fc = _make_client()
+    fc._cached_display_profile = {"monitors": [{"id": "a"}]}
+
+    with patch.dict(sys.modules, {"display_manager": fake}), \
+            patch.object(shared_utils, "read_config", return_value=[{"id": "b"}]):
+        assert fc._display_drift_count() == 2
+    fake.compute_drift_count.assert_called_once_with([{"id": "a"}], [{"id": "b"}])
+
+
+def test_display_profile_is_not_built_off_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    fc = _make_client()
+    fc._ensure_display_profile = FirebaseClient._ensure_display_profile.__get__(fc)
+    fc._cached_display_profile = None
+    fc._last_display_check = 0.0
+
+    with patch.dict(sys.modules, {"display_manager": _fake_display_manager(drift=0)}), \
+            patch.object(shared_utils, "read_config", return_value=None):
+        assert fc._ensure_display_profile() is None
+    # the gate sits ahead of the rate-limit stamp: nothing was attempted.
+    assert fc._last_display_check == 0.0
+    fc.logger.debug.assert_not_called()
+
+
 def test_swoop_command_types_are_on_the_fast_lane():
     """The slow lane queues behind an in-flight install — minutes, not seconds.
 
